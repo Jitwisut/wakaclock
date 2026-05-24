@@ -1,0 +1,99 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - text: 
+        - link "WakaTime Logo WakaTime" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - img "WakaTime Logo" [ref=e6]
+          - text: WakaTime
+      - generic [ref=e7]:
+        - list [ref=e8]:
+          - listitem [ref=e9]:
+            - link "Leaderboards" [ref=e10] [cursor=pointer]:
+              - /url: /leaders
+          - listitem [ref=e11]:
+            - link "Teams" [ref=e12] [cursor=pointer]:
+              - /url: /teams
+          - listitem [ref=e13]:
+            - link "Plugins" [ref=e14] [cursor=pointer]:
+              - /url: /plugins
+          - listitem [ref=e15]:
+            - link "Docs" [ref=e16] [cursor=pointer]:
+              - /url: /developers
+        - list [ref=e17]:
+          - listitem [ref=e18]:
+            - link "Sign Up" [ref=e19] [cursor=pointer]:
+              - /url: /signup
+  - generic [ref=e22]:
+    - generic [ref=e23]: Log in to WakaTime
+    - generic [ref=e26]:
+      - link " Log in with GitHub" [ref=e29] [cursor=pointer]:
+        - /url: /oauth/github/authorize?reason=login
+        - generic [ref=e30]: 
+        - text: Log in with GitHub
+      - generic [ref=e34]: or
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]: Email
+          - textbox "Email" [active] [ref=e41]
+        - generic [ref=e42]:
+          - generic [ref=e43]: Password
+          - generic [ref=e44]:
+            - textbox "Password" [ref=e45]
+            - link "Forgot your password?" [ref=e47] [cursor=pointer]:
+              - /url: /reset_password
+        - button "Log in" [ref=e50] [cursor=pointer]
+      - generic [ref=e52]:
+        - text: Don’t have an account?
+        - link "Sign up" [ref=e53] [cursor=pointer]:
+          - /url: /signup
+  - contentinfo [ref=e54]:
+    - generic [ref=e56]:
+      - list [ref=e58]:
+        - listitem [ref=e59]: © 2026 WakaTime
+        - listitem [ref=e60]:
+          - link "Terms" [ref=e61] [cursor=pointer]:
+            - /url: /terms
+        - listitem [ref=e62]:
+          - link "Privacy" [ref=e63] [cursor=pointer]:
+            - /url: /privacy
+        - listitem [ref=e64]:
+          - link "About" [ref=e65] [cursor=pointer]:
+            - /url: /about
+        - listitem [ref=e66]:
+          - link "Blog" [ref=e67] [cursor=pointer]:
+            - /url: /blog
+        - listitem [ref=e68]:
+          - link "Tutorials" [ref=e69] [cursor=pointer]:
+            - /url: https://wakatime.io
+      - list [ref=e71]:
+        - listitem [ref=e72]:
+          - link "" [ref=e73] [cursor=pointer]:
+            - /url: https://github.com/wakatime
+            - generic [ref=e74]: 
+        - listitem [ref=e75]:
+          - link "" [ref=e76] [cursor=pointer]:
+            - /url: https://www.reddit.com/r/WakaTime/
+            - generic [ref=e77]: 
+        - listitem [ref=e78]:
+          - link "X" [ref=e79] [cursor=pointer]:
+            - /url: https://x.com/intent/user?screen_name=WakaTime
+            - img "X" [ref=e80]
+        - listitem [ref=e82]:
+          - link [ref=e83] [cursor=pointer]:
+            - /url: https://wonderful.dev/c/WakaTime
+            - img [ref=e84]
+      - list [ref=e90]:
+        - listitem [ref=e91]:
+          - link "Supported IDEs" [ref=e92] [cursor=pointer]:
+            - /url: /plugins
+        - listitem [ref=e93]:
+          - link "Leaderboards" [ref=e94] [cursor=pointer]:
+            - /url: /leaders
+        - listitem [ref=e95]:
+          - link "Status" [ref=e96] [cursor=pointer]:
+            - /url: https://status.wakatime.com
+        - listitem [ref=e97]:
+          - link "Help" [ref=e98] [cursor=pointer]:
+            - /url: /help

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // -------------------------------------------------------------------------
+    // Language & Environment
+    // -------------------------------------------------------------------------
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // -------------------------------------------------------------------------
+    // Type Checking (Strict Mode)
+    // -------------------------------------------------------------------------
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "useUnknownInCatchVariables": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    // -------------------------------------------------------------------------
+    // Modules
+    // -------------------------------------------------------------------------
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": false,
+    // -------------------------------------------------------------------------
+    // Emit
+    // -------------------------------------------------------------------------
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "removeComments": false,
+    "importHelpers": false,
+    // -------------------------------------------------------------------------
+    // Interop Constraints
+    // -------------------------------------------------------------------------
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "checkJs": false,
+    // -------------------------------------------------------------------------
+    // Completeness
+    // -------------------------------------------------------------------------
+    "skipLibCheck": true,
+    // -------------------------------------------------------------------------
+    // Performance
+    // -------------------------------------------------------------------------
+    "incremental": true,
+    "tsBuildInfoFile": ".next/cache/tsbuildinfo.json",
+    // -------------------------------------------------------------------------
+    // Types
+    // -------------------------------------------------------------------------
+    "types": ["node"],
+    // -------------------------------------------------------------------------
+    // Next.js Plugin
+    // -------------------------------------------------------------------------
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    // -------------------------------------------------------------------------
+    // Path Aliases
+    // -------------------------------------------------------------------------
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  // ---------------------------------------------------------------------------
+  // Include
+  // ---------------------------------------------------------------------------
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    ".storybook/**/*.ts",
+    ".storybook/**/*.tsx",
+    ".storybook/**/*.mts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  // ---------------------------------------------------------------------------
+  // Exclude
+  // ---------------------------------------------------------------------------
+  "exclude": ["node_modules", "build", "coverage", "test-results", ".next"]
+}

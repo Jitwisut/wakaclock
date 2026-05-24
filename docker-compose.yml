@@ -1,0 +1,43 @@
+services:
+  # ClickHouse Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: wakaclock_clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: wakaclock
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD: default
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "9000:9000"   # Native protocol
+      - "8123:8123"   # HTTP interface
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ClickHouse Web UI
+  ch-ui:
+    image: ghcr.io/caioricciuti/ch-ui:latest
+    container_name: wakaclock_ch_ui
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      VITE_CLICKHOUSE_URL: http://localhost:8123
+      VITE_CLICKHOUSE_USER: default
+      VITE_CLICKHOUSE_PASS: default
+    ports:
+      - "5521:5521"
+
+volumes:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local

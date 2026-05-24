@@ -1,0 +1,27 @@
+<!--
+  Storybook manager head injections
+  - Clear persisted manager state so Storybook always boots with repo defaults
+    (no stale globals/layout from previous sessions).
+-->
+<script>
+  (() => {
+    try {
+      const shouldClear = (key) =>
+        key === 'storybook-theme' || key.startsWith('@storybook/') || key.startsWith('storybook-');
+
+      for (const storage of [window.localStorage, window.sessionStorage]) {
+        const keys = [];
+        for (let index = 0; index < storage.length; index += 1) {
+          const key = storage.key(index);
+          if (key) keys.push(key);
+        }
+
+        for (const key of keys) {
+          if (shouldClear(key)) storage.removeItem(key);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  })();
+</script>

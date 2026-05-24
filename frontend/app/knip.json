@@ -1,0 +1,67 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "app/**/*.{ts,tsx}",
+    "components/**/*.{ts,tsx}",
+    "lib/**/*.{ts,tsx}",
+    "hooks/**/*.{ts,tsx}",
+    "test/**/*.{ts,tsx}",
+    "scripts/**/*.mjs",
+    ".releaserc.json"
+  ],
+  "project": [
+    "app/**/*.{ts,tsx}",
+    "components/**/*.{ts,tsx}",
+    "lib/**/*.{ts,tsx}",
+    "hooks/**/*.{ts,tsx}",
+    "test/**/*.{ts,tsx}",
+    "scripts/**/*.mjs",
+    ".releaserc.json"
+  ],
+  "ignore": [
+    "**/*.d.ts",
+    "**/*.config.*",
+    "components/ui/**",
+    ".storybook/**",
+    "e2e/**",
+    "tailwind.config.*"
+  ],
+  "ignoreDependencies": [
+    "@types/*",
+    "@eslint/compat",
+    "@eslint/eslintrc",
+    "eslint-plugin-*",
+    "chromatic",
+    "@semantic-release/github",
+    "@fullcalendar/core",
+    "@fullcalendar/daygrid",
+    "@fullcalendar/interaction",
+    "@fullcalendar/react",
+    "@fullcalendar/timegrid",
+    "@hello-pangea/dnd",
+    "@tanstack/react-query",
+    "@tanstack/react-virtual",
+    "axios",
+    "conventional-changelog-conventionalcommits",
+    "dotenv",
+    "dotenv-cli",
+    "lodash-es",
+    "nanoid",
+    "tailwindcss",
+    "tailwindcss-animate",
+    "zustand",
+    "eslint-config-next"
+  ],
+  "ignoreBinaries": [],
+  "next": {
+    "entry": [
+      "app/**/page.{ts,tsx}",
+      "app/**/layout.{ts,tsx}",
+      "app/**/loading.{ts,tsx}",
+      "app/**/error.{ts,tsx}",
+      "app/**/not-found.{ts,tsx}",
+      "app/**/route.{ts,tsx}",
+      "middleware.{ts,tsx}"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "wakaclock-vscode: compile",
+      "type": "npm",
+      "script": "compile",
+      "path": "extensions/vscode",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "group": "build"
+    }
+  ]
+}

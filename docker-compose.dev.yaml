@@ -1,0 +1,124 @@
+# Development mode configuration
+# Usage: docker-compose -f docker-compose.dev.yaml up
+# Note: Running only the infrastructure services (MySQL, Redis, RabbitMQ)
+# Frontend, Strapi, and Rust backend should be run locally for development
+
+services:
+  # ClickHouse Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: ecommerce_clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD: default
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - 9000:9000
+      - 8123:8123
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ClickHouse Web UI (ch-ui)
+  ch-ui:
+    image: ghcr.io/caioricciuti/ch-ui:latest
+    container_name: ch-ui
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+    environment:
+      VITE_CLICKHOUSE_URL: ${CH_UI_CLICKHOUSE_URL:-http://localhost:8123}
+      VITE_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      VITE_CLICKHOUSE_PASS: ${CLICKHOUSE_PASSWORD:-default}
+      VITE_CLICKHOUSE_USE_ADVANCED: "true"
+      VITE_CLICKHOUSE_REQUEST_TIMEOUT: 45000
+      VITE_BASE_PATH: /
+    ports:
+      - 5521:5521
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ecommerce_qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - 6333:6333
+      - 6334:6334
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+
+  # Redis Cache (Development)
+  redis:
+    image: redis:7-alpine
+    container_name: ecommerce-redis-dev
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # RabbitMQ for Message Queue (Development)
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: ecommerce-rabbitmq-dev
+    ports:
+      - "5672:5672" # AMQP client connections
+      - "15672:15672" # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Caddy Reverse Proxy (Commented out for local development)
+  # Uncomment when running full stack via Docker
+  caddy:
+    image: caddy:2-alpine
+    container_name: ecommerce-caddy-dev
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - CADDY_INGRESS_NETWORKS=ecommerce-connect_default
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+  rabbitmq-data:
+  caddy-data:
+  caddy-config:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  qdrant_data:
+    driver: local

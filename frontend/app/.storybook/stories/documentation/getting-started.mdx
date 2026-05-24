@@ -1,0 +1,55 @@
+import { Meta, Title } from '@storybook/addon-docs/blocks';
+
+<Meta title="Documentation/Getting Started" />
+
+<Title />
+
+This Storybook is the component playground for `components/**` and is wired to match the app
+runtime: Next.js App Router, Tailwind styles, theme presets, and accessibility checks.
+
+## Run
+
+```bash
+./node_modules/.bin/storybook dev -p 6006
+./node_modules/.bin/storybook build
+```
+
+## Global toolbars
+
+- `Theme`: `light` / `dark`
+- `Locale`: `en` / `ja` (storybook-react-i18next)
+- `Dir`: `ltr` / `rtl` (storybook-addon-rtl)
+- `Viewport`: device sizes (integrated viewport tool)
+- `Preset`, `Radius`, `Scale`, `Layout`: design-system tokens (wired through `ActiveThemeProvider`)
+
+## MSW (API mocking)
+
+This Storybook enables `msw-storybook-addon` via a global loader in `.storybook/preview.tsx`.
+Add request handlers per-story via `parameters.msw`:
+
+```tsx
+import { http, HttpResponse } from 'msw';
+
+export const Default = {
+  parameters: {
+    msw: {
+      handlers: [http.get('/__msw/health', () => HttpResponse.json({ ok: true }))],
+    },
+  },
+};
+```
+
+## Coverage
+
+`@storybook/addon-coverage` is installed but only instruments code when `VITE_COVERAGE=true`:
+
+```bash
+VITE_COVERAGE=true ./node_modules/.bin/storybook dev -p 6006
+VITE_COVERAGE=true ./node_modules/.bin/storybook build
+```
+
+## Guidelines
+
+- Put stories under `.storybook/stories/**`
+- Prefer a `Playground` story + a few key state stories (disabled, loading, empty, error, etc.)
+- Keep interactive state inside the story wrapper (do not edit `components/**`)

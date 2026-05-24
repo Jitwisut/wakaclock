@@ -1,0 +1,101 @@
+{
+  "name": "wakaclock-vscode",
+  "displayName": "Wakaclock",
+  "description": "Track coding activity in VS Code with wakaclock-cli.",
+  "version": "0.1.0",
+  "publisher": "wakaclock",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:wakaclock.configureCliPath",
+    "onCommand:wakaclock.showToday",
+    "workspaceContains:**/*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "wakaclock.configureCliPath",
+        "title": "Wakaclock: Configure CLI Path"
+      },
+      {
+        "command": "wakaclock.showToday",
+        "title": "Wakaclock: Show Today's Total"
+      },
+      {
+        "command": "wakaclock.sendHeartbeatNow",
+        "title": "Wakaclock: Send Heartbeat Now"
+      },
+      {
+        "command": "wakaclock.toggleStatusBar",
+        "title": "Wakaclock: Toggle Status Bar"
+      }
+    ],
+    "configuration": {
+      "title": "Wakaclock",
+      "properties": {
+        "wakaclock.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to wakaclock-cli. Leave empty to resolve from PATH."
+        },
+        "wakaclock.flushIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "description": "How often buffered file activity is flushed to wakaclock-cli."
+        },
+        "wakaclock.sameFileHeartbeatMinutes": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "If activity resumes on the same file after this gap, send a new heartbeat window."
+        },
+        "wakaclock.idleMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "Do not emit background heartbeats when there is no activity for longer than this."
+        },
+        "wakaclock.statusBarEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show today's total coding time in the VS Code status bar."
+        },
+        "wakaclock.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose Wakaclock logging in the extension host console."
+        },
+        "wakaclock.trackDebugSessions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send debugging heartbeats when VS Code debug sessions start and stop."
+        },
+        "wakaclock.trackBuildTasks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send building heartbeats when VS Code tasks start and stop."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit -p ./",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "2",
+    "name": "Snack",
+    "icon": "🍟"
+  },
+  {
+    "id": "3",
+    "name": "Pizza",
+    "icon": "🍕"
+  },
+  {
+    "id": "4",
+    "name": "Hamburger",
+    "icon": "🍔"
+  },
+  {
+    "id": "5",
+    "name": "Coffee",
+    "icon": "☕️"
+  },
+  {
+    "id": "6",
+    "name": "Drink",
+    "icon": "🍷"
+  },
+  {
+    "id": "7",
+    "name": "Pasta",
+    "icon": "🍝"
+  },
+  {
+    "id": "8",
+    "name": "Sauces",
+    "icon": "🫙"
+  }
+]

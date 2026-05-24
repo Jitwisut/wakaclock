@@ -1,0 +1,268 @@
+<!--
+  Storybook Preview Head Injections
+  ==================================
+  Enterprise-grade configuration for production Storybook deployments.
+
+  Features:
+  - Deterministic boot state (prevents FOUC and stale state)
+  - Optimized font loading with preconnect and preload
+  - Performance-conscious resource hints
+  - Accessibility defaults (reduced motion support)
+  - Security headers via meta tags
+
+  @see https://storybook.js.org/docs/configure/story-rendering
+  @see https://www.chromatic.com/docs/font-loading/
+-->
+
+<!-- Security & Performance Meta Tags -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+
+<!-- DNS Prefetch & Preconnect for External Resources -->
+<link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+<link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+
+<!-- Load Google Fonts with display=swap for better CLS -->
+<link
+  href="https://fonts.googleapis.com/css2?family=Hedvig+Letters+Serif:wght@400&family=Inter:wght@400;500;700&family=Kumbh+Sans:wght@400&family=Montserrat:wght@400;500;600&family=Outfit:wght@400&family=Overpass+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;800&family=Poppins:wght@400;500;600&family=PT+Sans:wght@400;700&family=Roboto:wght@400;500;700&display=swap"
+  rel="stylesheet"
+  media="print"
+  onload="this.media = 'all'"
+/>
+<noscript>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Hedvig+Letters+Serif:wght@400&family=Inter:wght@400;500;700&family=Kumbh+Sans:wght@400&family=Montserrat:wght@400;500;600&family=Outfit:wght@400&family=Overpass+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;800&family=Poppins:wght@400;500;600&family=PT+Sans:wght@400;700&family=Roboto:wght@400;500;700&display=swap"
+    rel="stylesheet"
+  />
+</noscript>
+
+<!-- Deterministic Boot Script -->
+<script>
+  (function initStorybookPreview() {
+    'use strict';
+
+    try {
+      var root = document.documentElement;
+      var STORAGE_KEYS_TO_CLEAR = ['storybook-theme'];
+      var STORAGE_PREFIXES_TO_CLEAR = ['@storybook/', 'storybook-'];
+
+      // Set deterministic defaults to prevent FOUC (Flash of Unstyled Content)
+      root.lang = 'en';
+      root.dir = 'ltr';
+      root.classList.remove('dark');
+      root.classList.add('light');
+      root.style.colorScheme = 'light';
+
+      // Respect user's reduced motion preference
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        root.classList.add('reduce-motion');
+      }
+
+      // Clear stale Storybook state to ensure consistent boot
+      function shouldClearKey(key) {
+        if (!key) return false;
+        if (STORAGE_KEYS_TO_CLEAR.indexOf(key) !== -1) return true;
+        for (var i = 0; i < STORAGE_PREFIXES_TO_CLEAR.length; i++) {
+          if (key.indexOf(STORAGE_PREFIXES_TO_CLEAR[i]) === 0) return true;
+        }
+        return false;
+      }
+
+      function clearStorybookState(storage) {
+        if (!storage) return;
+        var keysToRemove = [];
+        for (var i = 0; i < storage.length; i++) {
+          var key = storage.key(i);
+          if (shouldClearKey(key)) keysToRemove.push(key);
+        }
+        for (var j = 0; j < keysToRemove.length; j++) {
+          storage.removeItem(keysToRemove[j]);
+        }
+      }
+
+      clearStorybookState(window.localStorage);
+      clearStorybookState(window.sessionStorage);
+
+      // Performance mark for debugging
+      if (window.performance && window.performance.mark) {
+        window.performance.mark('storybook-preview-head-init');
+      }
+    } catch (error) {
+      // Silently fail - boot script errors should not break Storybook
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[Storybook] Preview head init error:', error);
+      }
+    }
+  })();
+</script>
+
+<!-- Critical CSS for Font Variables and Reduced Motion -->
+<style>
+  /* Font family CSS variables for theme presets */
+  body {
+    --font-inter: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-roboto: 'Roboto', system-ui, sans-serif;
+    --font-plus-jakarta-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-montserrat: 'Montserrat', system-ui, sans-serif;
+    --font-poppins: 'Poppins', system-ui, sans-serif;
+    --font-overpass-mono: 'Overpass Mono', ui-monospace, monospace;
+    --font-pt-sans: 'PT Sans', system-ui, sans-serif;
+    --font-hedvig-letters-serif: 'Hedvig Letters Serif', ui-serif, serif;
+    --font-kumbh-sans: 'Kumbh Sans', system-ui, sans-serif;
+    --font-outfit: 'Outfit', system-ui, sans-serif;
+  }
+
+  /* Reduced motion support for accessibility */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Prevent layout shift during font loading */
+  .fonts-loading body {
+    visibility: hidden;
+  }
+
+  .fonts-loaded body {
+    visibility: visible;
+  }
+
+  /* =========================================================================
+   * Theme-aware backgrounds for Storybook (comprehensive coverage)
+   * =========================================================================
+   * Storybook uses CSS-in-JS with dynamic class names (css-xxxxx).
+   * We target structural classes and data attributes for stability.
+   * ========================================================================= */
+
+  /* Root body backgrounds */
+  html.dark body.bg-background,
+  html.dark body.sb-show-main {
+    background-color: var(--background) !important;
+    color: var(--foreground) !important;
+  }
+
+  html.light body.bg-background,
+  html.light body.sb-show-main {
+    background-color: var(--background) !important;
+    color: var(--foreground) !important;
+  }
+
+  /* =========================================================================
+   * Docs Mode - Story Preview Containers
+   * These are the wrapper elements around each story in documentation view
+   * ========================================================================= */
+
+  /* Main docs preview wrapper (.sbdocs-preview) */
+  html.dark .sbdocs-preview,
+  html.dark .sbdocs.sbdocs-preview {
+    background-color: var(--background) !important;
+    border-color: var(--border) !important;
+  }
+
+  /* Individual story container (.docs-story) */
+  html.dark .docs-story {
+    background-color: var(--background) !important;
+  }
+
+  /* Story block wrapper (.sb-story) */
+  html.dark .sb-story {
+    background-color: transparent !important;
+  }
+
+  /* Inner zoom/scale container */
+  html.dark .innerZoomElementWrapper,
+  html.dark .innerZoomElementWrapper > div {
+    background-color: transparent !important;
+  }
+
+  /* Storybook unstyled reset elements */
+  html.dark .sb-unstyled {
+    background-color: transparent !important;
+  }
+
+  /* Story content wrapper with data attributes */
+  html.dark [data-story-block='true'] {
+    background-color: transparent !important;
+  }
+
+  /* Toolbar in docs preview */
+  html.dark .sbdocs-preview [role='toolbar'] {
+    background-color: var(--background) !important;
+    border-color: var(--border) !important;
+  }
+
+  /* Code toggle button area */
+  html.dark .docblock-code-toggle {
+    background-color: var(--muted) !important;
+    color: var(--muted-foreground) !important;
+    border-color: var(--border) !important;
+  }
+
+  /* =========================================================================
+   * Light Mode - Explicit rules for consistency
+   * ========================================================================= */
+
+  html.light .sbdocs-preview,
+  html.light .sbdocs.sbdocs-preview {
+    background-color: var(--background) !important;
+    border-color: var(--border) !important;
+  }
+
+  html.light .docs-story {
+    background-color: var(--background) !important;
+  }
+
+  html.light .sb-story,
+  html.light .innerZoomElementWrapper,
+  html.light .innerZoomElementWrapper > div,
+  html.light .sb-unstyled,
+  html.light [data-story-block='true'] {
+    background-color: transparent !important;
+  }
+
+  /* =========================================================================
+   * Canvas Mode - Story view (not docs)
+   * ========================================================================= */
+
+  html.dark .sb-main-padded {
+    background-color: var(--background) !important;
+  }
+
+  html.light .sb-main-padded {
+    background-color: var(--background) !important;
+  }
+
+  /* =========================================================================
+   * Storybook Addon Panels & UI Elements
+   * ========================================================================= */
+
+  /* Controls panel inputs */
+  html.dark .docblock-argstable {
+    background-color: var(--background) !important;
+  }
+
+  html.dark .docblock-argstable td,
+  html.dark .docblock-argstable th {
+    border-color: var(--border) !important;
+  }
+
+  /* Anchor links in docs */
+  html.dark .sb-anchor {
+    background-color: transparent !important;
+  }
+
+  /* Source code blocks in docs */
+  html.dark .docblock-source {
+    background-color: var(--muted) !important;
+  }
+</style>

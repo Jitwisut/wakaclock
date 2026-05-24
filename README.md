@@ -1,0 +1,168 @@
+# Wakaclock
+
+> Self-hosted developer time tracking. A WakaTime-compatible alternative built in Rust.
+
+---
+
+## What is Wakaclock?
+
+Wakaclock tracks how long you spend coding across editors, languages, and projects — then gives you dashboards and insights. It's fully WakaTime-compatible (existing IDE extensions work via the CLI hub) while adding features WakaTime doesn't have:
+
+- **AST-based language detection** via tree-sitter — no more guessing `.h` is C vs C++ vs Objective-C
+- **ClickHouse-native ETL** with SummingMergeTree/AggregatingMergeTree — zero app-level aggregation
+- **AI code attribution** — track what percentage of your code is written by AI agents (Copilot, Claude, Cursor, etc.) vs human keystrokes
+- **User-defined project rules** — regex-based project matching + project merging
+- **Self-hosted first** — your data stays on your infrastructure
+
+## Architecture
+
+```
+                         ┌──────────────────────────┐
+                         │   wakaclock-server        │
+                         │   (Axum + ClickHouse)     │
+                         └──────────▲────────────────┘
+                                    │ HTTP (heartbeats.bulk)
+               ┌────────────────────┼────────────────────┐
+               │                    │                     │
+    ┌──────────┴──────────┐  ┌──────┴───────┐  ┌─────────┴────────┐
+    │   wakaclock-cli     │  │ figma plugin  │  │  desktop app     │
+    │   (Rust binary)     │  │ (direct HTTP) │  │  (Tauri, in-proc)│
+    └──────────▲──────────┘  └──────────────-┘  └──────────────────┘
+               │ child process / LSP
+    ┌──────────┼──────────────────┐
+    │          │                  │
+ VS Code    Zed (via           Blender
+ (TS)       wakaclock-ls)      (Python)
+```
+
+All IDE extensions delegate to `wakaclock-cli` for heartbeat construction, project/branch detection, language detection, offline queue, and API communication.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Server | Rust, Axum 0.7 |
+| Database | ClickHouse (analytics), Redis (cache) |
+| CLI | Rust, Clap |
+| AST Detection | tree-sitter |
+| VS Code Extension | TypeScript |
+| Zed Extension | Rust (LSP via tower-lsp) |
+| Figma Plugin | TypeScript (direct HTTP) |
+| Blender Addon | Python |
+| Desktop App | Tauri (Phase 4) |
+
+## Project Structure
+
+```
+wakaclock/
+├── backend/
+│   └── api/                  # Axum server + ClickHouse
+│       ├── src/
+│       │   ├── client/       # Database, cache, queue clients
+│       │   ├── modules/      # Feature modules
+│       │   └── main.rs
+│       ├── migrations/       # ClickHouse schema
+│       └── Cargo.toml
+├── frontend/
+│   └── app/                  # Next.js dashboard
+├── docker-compose.dev.yaml   # ClickHouse, Redis, Qdrant, RabbitMQ
+├── Caddyfile                 # Reverse proxy (dev)
+├── Makefile                  # Build automation
+├── plan.md                   # Full architecture & design doc
+└── start.sh                  # Quick start script
+```
+
+## Prerequisites
+
+- **Rust** (1.75+) — [rustup.rs](https://rustup.rs/)
+- **Node.js** (20+) — [nodejs.org](https://nodejs.org/)
+- **pnpm** (9+) — `npm install -g pnpm`
+- **Docker** & **Docker Compose** — [docker.com](https://docs.docker.com/get-docker/)
+
+## Quick Start
+
+```bash
+# 1. Start infrastructure (ClickHouse, Redis, etc.)
+docker compose -f docker-compose.dev.yaml up -d
+
+# 2. Start the backend
+cd backend/api
+cargo run -- web-service
+
+# 3. Start the frontend (separate terminal)
+cd frontend/app
+pnpm install && pnpm dev
+```
+
+Or use the start script:
+
+```bash
+./start.sh                   # Everything
+./start.sh --backend-only    # Backend only
+./start.sh --frontend-only   # Frontend only
+```
+
+### Service URLs
+
+| Service | URL |
+|---------|-----|
+| Backend API | http://localhost:8080 |
+| API Docs (Scalar) | http://localhost:8080/scalar |
+| Frontend Dashboard | http://localhost:3000 |
+| ClickHouse UI | http://localhost:5521 |
+| RabbitMQ Management | http://localhost:15672 |
+
+## API Overview
+
+Auth: `Authorization: Basic base64(api_key)` or `Bearer <api_key>`
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| POST | `/api/v1/heartbeats.bulk` | Bulk heartbeat ingestion |
+| POST | `/api/v1/heartbeats` | Single heartbeat |
+| GET | `/api/v1/heartbeats?date=` | List heartbeats for a day |
+| GET | `/api/v1/status_bar/today` | Today's total coding time |
+| GET | `/api/v1/durations?date=` | Duration blocks (session detection) |
+| GET | `/api/v1/summaries?start=&end=` | Grouped summaries |
+| GET | `/api/v1/stats/:range` | Stats (total, avg, best day) |
+| GET | `/api/v1/projects` | List projects |
+| GET | `/api/v1/insights/:type/:range` | Insights (weekdays, languages) |
+| GET | `/api/v1/users/current/ai_stats` | AI vs human code breakdown |
+| GET/PUT/DELETE | `/api/v1/project_rules[/:id]` | CRUD regex project rules |
+| GET/PUT/DELETE | `/api/v1/project_merges[/:id]` | CRUD merge mappings |
+| POST | `/api/v1/import/wakatime` | Import WakaTime data dump |
+
+Full endpoint list in [plan.md](./plan.md).
+
+## Development
+
+```bash
+make dev               # Full dev environment
+make test              # Run all tests
+make lint              # Run linters
+make build             # Production build
+make docker-up         # Start infrastructure
+make docker-down       # Stop infrastructure
+```
+
+## ClickHouse ETL
+
+Heartbeats flow through two paths:
+
+**Live ingestion** — `POST /heartbeats.bulk` inserts into `heartbeats` (MergeTree). Eight materialized views auto-fire to populate aggregation tables (`daily_totals`, `language_daily`, `project_daily`, etc.) using SummingMergeTree and AggregatingMergeTree.
+
+**History reprocessing** — For backfills and rule changes, data is inserted into `heartbeats_incoming` (Null engine). Same MVs fire, aggregations update, but raw data is discarded. This keeps disk usage minimal for historical imports.
+
+## Implementation Phases
+
+- **Phase 0** — Workspace bootstrap, ClickHouse schema, Docker setup
+- **Phase 1** — Core heartbeat pipeline: CLI + Server + project rules
+- **Phase 2** — AST detection (tree-sitter) + VS Code extension
+- **Phase 3** — Analytics endpoints + Zed/Figma/Blender extensions
+- **Phase 4** — Tauri desktop app (active window tracking, meeting detection)
+
+See [plan.md](./plan.md) for full details.
+
+## License
+
+Confidential — StandUpCode / Lodash (Thailand) Co., Ltd.

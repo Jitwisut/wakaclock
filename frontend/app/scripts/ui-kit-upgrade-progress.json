@@ -1,0 +1,1294 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-12-24T00:00:00.000Z",
+  "config": {
+    "policy": "strict-enrichment",
+    "addonRequirements": ["controls", "actions", "interactions", "a11y", "i18n"]
+  },
+  "units": {
+    "ui/accordion": {
+      "componentPaths": ["components/ui/accordion.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/accordion.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/alert-dialog": {
+      "componentPaths": ["components/ui/alert-dialog.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/alert-dialog.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/alert": {
+      "componentPaths": ["components/ui/alert.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/alert.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/aspect-ratio": {
+      "componentPaths": ["components/ui/aspect-ratio.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/aspect-ratio.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/avatar": {
+      "componentPaths": ["components/ui/avatar.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/avatar.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/badge": {
+      "componentPaths": ["components/ui/badge.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/badge.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/breadcrumb": {
+      "componentPaths": ["components/ui/breadcrumb.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/breadcrumb.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/button-group": {
+      "componentPaths": ["components/ui/button-group.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/button-group.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/button": {
+      "componentPaths": ["components/ui/button.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/button.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/calendar": {
+      "componentPaths": ["components/ui/calendar.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/calendar.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/card": {
+      "componentPaths": ["components/ui/card.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/card.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/carousel": {
+      "componentPaths": ["components/ui/carousel.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/carousel.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/chart": {
+      "componentPaths": ["components/ui/chart.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/chart.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/checkbox": {
+      "componentPaths": ["components/ui/checkbox.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/checkbox.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/collapsible": {
+      "componentPaths": ["components/ui/collapsible.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/collapsible.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/command": {
+      "componentPaths": ["components/ui/command.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/command.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/context-menu": {
+      "componentPaths": ["components/ui/context-menu.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/context-menu.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/dialog": {
+      "componentPaths": ["components/ui/dialog.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/dialog.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/drawer": {
+      "componentPaths": ["components/ui/drawer.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/drawer.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/dropdown-menu": {
+      "componentPaths": ["components/ui/dropdown-menu.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/dropdown-menu.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/empty": {
+      "componentPaths": ["components/ui/empty.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/empty.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/field": {
+      "componentPaths": ["components/ui/field.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/field.stories.tsx"],
+      "status": "todo",
+      "tier": "D",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/form": {
+      "componentPaths": ["components/ui/form.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/form.stories.tsx"],
+      "status": "todo",
+      "tier": "D",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/hover-card": {
+      "componentPaths": ["components/ui/hover-card.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/hover-card.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/input-group": {
+      "componentPaths": ["components/ui/input-group.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/input-group.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/input-otp": {
+      "componentPaths": ["components/ui/input-otp.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/input-otp.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/input": {
+      "componentPaths": ["components/ui/input.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/input.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/item": {
+      "componentPaths": ["components/ui/item.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/item.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/kanban": {
+      "componentPaths": ["components/ui/kanban.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/kanban.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/kbd": {
+      "componentPaths": ["components/ui/kbd.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/kbd.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/label": {
+      "componentPaths": ["components/ui/label.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/label.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/menubar": {
+      "componentPaths": ["components/ui/menubar.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/menubar.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/native-select": {
+      "componentPaths": ["components/ui/native-select.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/native-select.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/navigation-menu": {
+      "componentPaths": ["components/ui/navigation-menu.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/navigation-menu.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/pagination": {
+      "componentPaths": ["components/ui/pagination.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/pagination.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/popover": {
+      "componentPaths": ["components/ui/popover.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/popover.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/progress": {
+      "componentPaths": ["components/ui/progress.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/progress.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/radio-group": {
+      "componentPaths": ["components/ui/radio-group.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/radio-group.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/reel": {
+      "componentPaths": ["components/ui/reel.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/reel.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/resizable": {
+      "componentPaths": ["components/ui/resizable.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/resizable.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/scroll-area": {
+      "componentPaths": ["components/ui/scroll-area.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/scroll-area.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/select": {
+      "componentPaths": ["components/ui/select.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/select.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/separator": {
+      "componentPaths": ["components/ui/separator.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/separator.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/sheet": {
+      "componentPaths": ["components/ui/sheet.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/sheet.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/sidebar": {
+      "componentPaths": ["components/ui/sidebar.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/sidebar.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/skeleton": {
+      "componentPaths": ["components/ui/skeleton.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/skeleton.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/slider": {
+      "componentPaths": ["components/ui/slider.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/slider.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/sonner": {
+      "componentPaths": ["components/ui/sonner.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/sonner.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/spinner": {
+      "componentPaths": ["components/ui/spinner.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/spinner.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/switch": {
+      "componentPaths": ["components/ui/switch.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/switch.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/table": {
+      "componentPaths": ["components/ui/table.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/table.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/tabs": {
+      "componentPaths": ["components/ui/tabs.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/tabs.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/textarea": {
+      "componentPaths": ["components/ui/textarea.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/textarea.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/timeline": {
+      "componentPaths": ["components/ui/timeline.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/timeline.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/toast": {
+      "componentPaths": ["components/ui/toast.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/toast.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/toggle-group": {
+      "componentPaths": ["components/ui/toggle-group.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/ui/toggle-group.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/toggle": {
+      "componentPaths": ["components/ui/toggle.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/toggle.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "ui/tooltip": {
+      "componentPaths": ["components/ui/tooltip.tsx"],
+      "storyPaths": [".storybook/stories/components/ui/tooltip.stories.tsx"],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "layout/header": {
+      "componentPaths": [
+        "components/layout/header/index.tsx",
+        "components/layout/header/notifications.tsx",
+        "components/layout/header/search.tsx",
+        "components/layout/header/theme-switch.tsx",
+        "components/layout/header/user-menu.tsx"
+      ],
+      "storyPaths": [
+        ".storybook/stories/components/layout/header/site-header.stories.tsx",
+        ".storybook/stories/components/layout/header/notifications.stories.tsx",
+        ".storybook/stories/components/layout/header/search.stories.tsx",
+        ".storybook/stories/components/layout/header/theme-switch.stories.tsx",
+        ".storybook/stories/components/layout/header/user-menu.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "layout/logo": {
+      "componentPaths": ["components/layout/logo.tsx"],
+      "storyPaths": [".storybook/stories/components/layout/logo.stories.tsx"],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "layout/sidebar": {
+      "componentPaths": [
+        "components/layout/sidebar/app-sidebar.tsx",
+        "components/layout/sidebar/nav-main.tsx",
+        "components/layout/sidebar/nav-user.tsx"
+      ],
+      "storyPaths": [
+        ".storybook/stories/components/layout/sidebar/app-sidebar.stories.tsx",
+        ".storybook/stories/components/layout/sidebar/nav-main.stories.tsx",
+        ".storybook/stories/components/layout/sidebar/nav-user.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/color-mode-selector": {
+      "componentPaths": ["components/theme-customizer/color-mode-selector.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/color-mode-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/content-layout-selector": {
+      "componentPaths": [
+        "components/theme-customizer/content-layout-selector.tsx"
+      ],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/content-layout-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/panel": {
+      "componentPaths": ["components/theme-customizer/panel.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/panel.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/preset-selector": {
+      "componentPaths": ["components/theme-customizer/preset-selector.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/preset-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/radius-selector": {
+      "componentPaths": ["components/theme-customizer/radius-selector.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/radius-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/reset-theme": {
+      "componentPaths": ["components/theme-customizer/reset-theme.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/reset-theme.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/scale-selector": {
+      "componentPaths": ["components/theme-customizer/scale-selector.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/scale-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "theme-customizer/sidebar-mode-selector": {
+      "componentPaths": [
+        "components/theme-customizer/sidebar-mode-selector.tsx"
+      ],
+      "storyPaths": [
+        ".storybook/stories/components/theme-customizer/sidebar-mode-selector.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "custom/count-animation": {
+      "componentPaths": ["components/ui/custom/count-animation.tsx"],
+      "storyPaths": [
+        ".storybook/stories/components/custom/count-animation.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "A",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": [],
+      "timestamp": null
+    },
+    "custom/minimal-tiptap": {
+      "componentPaths": [
+        "components/ui/custom/minimal-tiptap/minimal-tiptap.tsx"
+      ],
+      "storyPaths": [
+        ".storybook/stories/components/custom/minimal-tiptap.stories.tsx"
+      ],
+      "status": "todo",
+      "tier": "B",
+      "variantMatrix": [],
+      "addonMatrix": {
+        "controls": "todo",
+        "actions": "todo",
+        "interactions": "todo",
+        "a11y": "todo"
+      },
+      "i18n": { "japanese": false, "rtl": false },
+      "gateResults": {},
+      "notes": ["Complex editor component with many sub-components"],
+      "timestamp": null
+    }
+  },
+  "summary": {
+    "total": 68,
+    "done": 0,
+    "in_progress": 0,
+    "todo": 68,
+    "blocked": 0
+  }
+}

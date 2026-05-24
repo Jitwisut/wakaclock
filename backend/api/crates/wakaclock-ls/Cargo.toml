@@ -1,0 +1,16 @@
+[package]
+name = "wakaclock-ls"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wakaclock-ls"
+path = "src/main.rs"
+
+[dependencies]
+wakaclock-core = { path = "../wakaclock-core" }
+wakaclock-ast = { path = "../wakaclock-ast" }
+tower-lsp = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

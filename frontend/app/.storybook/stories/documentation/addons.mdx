@@ -1,0 +1,96 @@
+import { Meta, Title } from '@storybook/addon-docs/blocks';
+
+<Meta title="Documentation/Addons" />
+
+<Title />
+
+This project runs Storybook 10 with the Next.js + Vite builder. In Storybook 9+ many "classic"
+addon packages were replaced by **integrated addons** (enabled via `features.*` in
+`.storybook/main.ts`), and configured via `parameters` in `.storybook/ssot.ts` (SSOT) then applied
+from `.storybook/preview.tsx`.
+
+## Requested addons (status)
+
+### Official / built-in (Storybook 10)
+
+- `@storybook/addon-essentials` → **Integrated in Storybook 9+** (not a required dependency here). Enabled via
+  `features.actions/backgrounds/controls/viewport/measure/outline/highlight/interactions` in `.storybook/main.ts`.
+- `@storybook/addon-actions` → **Integrated** (`features.actions`) + configured via `parameters.actions` in
+  `.storybook/ssot.ts`. Prefer explicit `fn()` spies from `storybook/test` in stories (enterprise-safe).
+- `@storybook/addon-controls` → **Integrated** (`features.controls`) + configured via `parameters.controls` in
+  `.storybook/ssot.ts`.
+- `@storybook/addon-backgrounds` → **Integrated** (`features.backgrounds`) + configured via `parameters.backgrounds` in
+  `.storybook/ssot.ts`.
+- `@storybook/addon-viewport` → **Integrated** (`features.viewport`) + configured via `parameters.viewport` in
+  `.storybook/ssot.ts`. This repo also enables the Viewport tool in **Docs** via `.storybook/manager.ts`.
+- `@storybook/addon-measure` → **Integrated** (`features.measure`) (toolbar tool).
+- `@storybook/addon-outline` → **Integrated** (`features.outline`) (toolbar tool).
+- `@storybook/addon-interactions` → **Integrated** (`features.interactions`) + test tooling via `@storybook/addon-vitest`.
+- `@storybook/addon-storysource` → Replaced by Docs + the integrated **Code panel**. This repo enables
+  `parameters.docs.codePanel=true` in `.storybook/ssot.ts` and `features.experimentalCodeExamples` to improve code
+  examples.
+
+### Official addons (installed)
+
+- `@storybook/addon-links` → Installed and enabled in `.storybook/main.ts`.
+- `@storybook/addon-onboarding` → Installed and enabled in `.storybook/main.ts`.
+- `@storybook/addon-themes` → Installed and enabled in `.storybook/main.ts`.
+- `@storybook/addon-a11y` → Installed and enabled in `.storybook/main.ts`.
+- `@storybook/addon-docs` → Installed and enabled in `.storybook/main.ts`.
+- `@storybook/addon-vitest` → Installed and enabled in `.storybook/main.ts`.
+
+### Third-party addons / integrations (installed)
+
+- `@storybook/addon-coverage` → Installed and enabled in `.storybook/main.ts`. Instrumentation is enabled only when
+  `VITE_COVERAGE=true`.
+- `msw-storybook-addon` → Enabled via `mswLoader` in `.storybook/preview.tsx` (the addon is **not** registered in
+  `.storybook/main.ts` to avoid Node/localStorage warnings). Worker file is in `public/mockServiceWorker.js`.
+- `storybook-react-i18next` → Enabled in `.storybook/main.ts` and wired via `.storybook/ssot.ts` +
+  `initialGlobals.locale/locales` (applied from `.storybook/preview.tsx`).
+- `@chromatic-com/storybook` → Adds the Chromatic Visual Tests integration (recommended for enterprise visual regression
+  and review workflows). Publish runs via `node scripts/run-chromatic.mjs` (requires `CHROMATIC_PROJECT_TOKEN`).
+- `@storybook/addon-designs` → Adds a **Design** panel (Figma/URLs) for enterprise design handoff.
+- `storybook-addon-pseudo-states` → Adds pseudo-state previews (hover/focus/active) without changing component code.
+- `storybook-addon-rtl` → Adds an RTL/LTR toolbar toggle using Storybook globals (`globals.addonRtl`).
+- `storybook-addon-mock-date` → Freezes `Date` via `parameters.mockingDate` for deterministic stories (useful for
+  calendar/date/time components).
+- `storybook-design-token` → Generates design token docs (see `Foundations/Design Tokens`) from
+  `.storybook/tokens/**/*.tokens.*`.
+
+### Not applicable in this repo
+
+- `@storybook/addon-styling-webpack` → Webpack-only. This repo uses `@storybook/nextjs-vite` (Vite builder) and loads
+  Tailwind styles via `app/globals.css` in `.storybook/preview.tsx`.
+
+### Console logging
+
+`@storybook/addon-console` depends on the removed `@storybook/addon-actions` package in Storybook 9+. Instead this repo
+implements a Storybook-10-compatible replacement:
+
+- implemented in `.storybook/preview.tsx` (decorator)
+
+Per-story override:
+
+```tsx
+export const Default = {
+  parameters: {
+    consoleToActions: { enabled: false },
+  },
+};
+```
+
+## Auditing “missing” support
+
+Run:
+
+```bash
+./node_modules/.bin/storybook build --quiet
+node scripts/storybook-audit.mjs
+```
+
+The audit script checks:
+
+- `features.*` integrated addons are enabled
+- `preview.tsx` has parameters for actions/controls/backgrounds/viewport/a11y
+- Filemap coverage for `components/**` is complete
+- Built manager bundle contains markers for integrated addons

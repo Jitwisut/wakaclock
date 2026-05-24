@@ -1,0 +1,890 @@
+{
+  "version": 1,
+  "generatedAt": "2025-12-17T16:40:43.485Z",
+  "stories": {
+    "components-custom-count-animation--dark": {},
+    "components-custom-count-animation--default": {},
+    "components-custom-count-animation--playground": {},
+    "components-custom-count-animation--rtl": {},
+    "components-custom-date-range-picker--dark": {},
+    "components-custom-date-range-picker--default": {},
+    "components-custom-date-range-picker--playground": {},
+    "components-custom-date-range-picker--rtl": {},
+    "components-custom-date-time-picker--dark": {},
+    "components-custom-date-time-picker--default": {},
+    "components-custom-date-time-picker--playground": {},
+    "components-custom-date-time-picker--rtl": {},
+    "components-custom-export-button--dark": {},
+    "components-custom-export-button--default": {},
+    "components-custom-export-button--playground": {},
+    "components-custom-export-button--rtl": {},
+    "components-custom-icon--dark": {},
+    "components-custom-icon--default": {},
+    "components-custom-icon--missing-name": {},
+    "components-custom-icon--playground": {},
+    "components-custom-icon--rtl": {},
+    "components-custom-minimal-tiptap--dark": {},
+    "components-custom-minimal-tiptap--default": {},
+    "components-custom-minimal-tiptap--editor": {},
+    "components-custom-minimal-tiptap--playground": {},
+    "components-custom-minimal-tiptap--rtl": {},
+    "components-custom-minimal-tiptap-image-actions--dark": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-actions--default": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-actions--playground": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-actions--rtl": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-edit-block--dark": {},
+    "components-custom-minimal-tiptap-image-edit-block--default": {},
+    "components-custom-minimal-tiptap-image-edit-block--playground": {},
+    "components-custom-minimal-tiptap-image-edit-block--rtl": {},
+    "components-custom-minimal-tiptap-image-edit-dialog--dark": {},
+    "components-custom-minimal-tiptap-image-edit-dialog--default": {},
+    "components-custom-minimal-tiptap-image-edit-dialog--playground": {},
+    "components-custom-minimal-tiptap-image-edit-dialog--rtl": {},
+    "components-custom-minimal-tiptap-image-overlay--dark": {},
+    "components-custom-minimal-tiptap-image-overlay--default": {},
+    "components-custom-minimal-tiptap-image-overlay--playground": {},
+    "components-custom-minimal-tiptap-image-overlay--rtl": {},
+    "components-custom-minimal-tiptap-image-view-block--dark": {
+      "aria-valid-attr-value": 1,
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-view-block--default": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-view-block--playground": {
+      "aria-valid-attr-value": 1,
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-image-view-block--rtl": {
+      "aria-valid-attr-value": 1,
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-internals-extensions--dark": {},
+    "components-custom-minimal-tiptap-internals-extensions--default": {},
+    "components-custom-minimal-tiptap-internals-extensions--playground": {},
+    "components-custom-minimal-tiptap-internals-extensions--rtl": {},
+    "components-custom-minimal-tiptap-internals-hooks--dark": {
+      "aria-input-field-name": 2
+    },
+    "components-custom-minimal-tiptap-internals-hooks--default": {
+      "aria-input-field-name": 2
+    },
+    "components-custom-minimal-tiptap-internals-hooks--playground": {
+      "aria-input-field-name": 2
+    },
+    "components-custom-minimal-tiptap-internals-hooks--rtl": {
+      "aria-input-field-name": 2
+    },
+    "components-custom-minimal-tiptap-internals-styles--dark": {
+      "link-in-text-block": 1
+    },
+    "components-custom-minimal-tiptap-internals-styles--default": {
+      "link-in-text-block": 1
+    },
+    "components-custom-minimal-tiptap-internals-styles--playground": {
+      "link-in-text-block": 1
+    },
+    "components-custom-minimal-tiptap-internals-styles--rtl": {
+      "link-in-text-block": 1
+    },
+    "components-custom-minimal-tiptap-internals-utils--dark": {},
+    "components-custom-minimal-tiptap-internals-utils--default": {},
+    "components-custom-minimal-tiptap-internals-utils--playground": {},
+    "components-custom-minimal-tiptap-internals-utils--rtl": {},
+    "components-custom-minimal-tiptap-link-bubble-menu--dark": {},
+    "components-custom-minimal-tiptap-link-bubble-menu--default": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-link-bubble-menu--playground": {},
+    "components-custom-minimal-tiptap-link-bubble-menu--rtl": {},
+    "components-custom-minimal-tiptap-link-edit-block--dark": {
+      "button-name": 1
+    },
+    "components-custom-minimal-tiptap-link-edit-block--default": {
+      "button-name": 1
+    },
+    "components-custom-minimal-tiptap-link-edit-block--playground": {
+      "button-name": 1
+    },
+    "components-custom-minimal-tiptap-link-edit-block--rtl": {
+      "button-name": 1
+    },
+    "components-custom-minimal-tiptap-link-edit-popover--dark": {},
+    "components-custom-minimal-tiptap-link-edit-popover--default": {},
+    "components-custom-minimal-tiptap-link-edit-popover--playground": {},
+    "components-custom-minimal-tiptap-link-edit-popover--rtl": {},
+    "components-custom-minimal-tiptap-link-popover-block--dark": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-link-popover-block--default": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-link-popover-block--playground": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-link-popover-block--rtl": {
+      "button-name": 3
+    },
+    "components-custom-minimal-tiptap-measured-container--dark": {
+      "aria-input-field-name": 1
+    },
+    "components-custom-minimal-tiptap-measured-container--default": {
+      "aria-input-field-name": 1
+    },
+    "components-custom-minimal-tiptap-measured-container--playground": {
+      "aria-input-field-name": 1
+    },
+    "components-custom-minimal-tiptap-measured-container--rtl": {
+      "aria-input-field-name": 1
+    },
+    "components-custom-minimal-tiptap-resize-handle--dark": {},
+    "components-custom-minimal-tiptap-resize-handle--default": {},
+    "components-custom-minimal-tiptap-resize-handle--playground": {},
+    "components-custom-minimal-tiptap-resize-handle--rtl": {
+      "color-contrast": 1
+    },
+    "components-custom-minimal-tiptap-section-five--dark": {},
+    "components-custom-minimal-tiptap-section-five--default": {},
+    "components-custom-minimal-tiptap-section-five--playground": {},
+    "components-custom-minimal-tiptap-section-five--rtl": {},
+    "components-custom-minimal-tiptap-section-four--dark": {},
+    "components-custom-minimal-tiptap-section-four--default": {},
+    "components-custom-minimal-tiptap-section-four--playground": {},
+    "components-custom-minimal-tiptap-section-four--rtl": {},
+    "components-custom-minimal-tiptap-section-one--dark": {},
+    "components-custom-minimal-tiptap-section-one--default": {},
+    "components-custom-minimal-tiptap-section-one--playground": {},
+    "components-custom-minimal-tiptap-section-one--rtl": {},
+    "components-custom-minimal-tiptap-section-three--dark": {},
+    "components-custom-minimal-tiptap-section-three--default": {},
+    "components-custom-minimal-tiptap-section-three--playground": {},
+    "components-custom-minimal-tiptap-section-three--rtl": {},
+    "components-custom-minimal-tiptap-section-two--dark": {},
+    "components-custom-minimal-tiptap-section-two--default": {},
+    "components-custom-minimal-tiptap-section-two--playground": {},
+    "components-custom-minimal-tiptap-section-two--rtl": {},
+    "components-custom-minimal-tiptap-shortcut-key--dark": {},
+    "components-custom-minimal-tiptap-shortcut-key--default": {},
+    "components-custom-minimal-tiptap-shortcut-key--playground": {},
+    "components-custom-minimal-tiptap-shortcut-key--rtl": {},
+    "components-custom-minimal-tiptap-spinner--dark": {},
+    "components-custom-minimal-tiptap-spinner--default": {},
+    "components-custom-minimal-tiptap-spinner--playground": {},
+    "components-custom-minimal-tiptap-spinner--rtl": {},
+    "components-custom-minimal-tiptap-toolbar-button--dark": {},
+    "components-custom-minimal-tiptap-toolbar-button--default": {},
+    "components-custom-minimal-tiptap-toolbar-button--playground": {},
+    "components-custom-minimal-tiptap-toolbar-button--rtl": {},
+    "components-custom-minimal-tiptap-toolbar-section--dark": {},
+    "components-custom-minimal-tiptap-toolbar-section--default": {},
+    "components-custom-minimal-tiptap-toolbar-section--playground": {},
+    "components-custom-minimal-tiptap-toolbar-section--rtl": {},
+    "components-custom-prompt-chat--dark": {
+      "color-contrast": 5
+    },
+    "components-custom-prompt-chat--default": {},
+    "components-custom-prompt-chat--playground": {},
+    "components-custom-prompt-chat--rtl": {
+      "color-contrast": 5
+    },
+    "components-custom-prompt-code-block--dark": {},
+    "components-custom-prompt-code-block--default": {},
+    "components-custom-prompt-code-block--playground": {},
+    "components-custom-prompt-code-block--preview": {},
+    "components-custom-prompt-code-block--rtl": {},
+    "components-custom-prompt-loader--all-variants": {},
+    "components-custom-prompt-loader--dark": {},
+    "components-custom-prompt-loader--default": {},
+    "components-custom-prompt-loader--playground": {},
+    "components-custom-prompt-loader--rtl": {},
+    "components-custom-prompt-scroll-button--dark": {},
+    "components-custom-prompt-scroll-button--default": {},
+    "components-custom-prompt-scroll-button--playground": {},
+    "components-custom-prompt-scroll-button--rtl": {},
+    "components-internal-module-exports--dark": {},
+    "components-internal-module-exports--default": {
+      "color-contrast": 1
+    },
+    "components-internal-module-exports--playground": {
+      "color-contrast": 1
+    },
+    "components-internal-module-exports--rtl": {},
+    "components-layout-header-data--dark": {},
+    "components-layout-header-data--default": {},
+    "components-layout-header-data--playground": {},
+    "components-layout-header-data--rtl": {},
+    "components-layout-header-notifications--closed": {
+      "button-name": 1
+    },
+    "components-layout-header-notifications--dark": {
+      "button-name": 1
+    },
+    "components-layout-header-notifications--default": {
+      "button-name": 1
+    },
+    "components-layout-header-notifications--opened": {
+      "button-name": 1
+    },
+    "components-layout-header-notifications--playground": {
+      "button-name": 1
+    },
+    "components-layout-header-notifications--rtl": {
+      "button-name": 1
+    },
+    "components-layout-header-search--closed": {},
+    "components-layout-header-search--dark": {},
+    "components-layout-header-search--default": {},
+    "components-layout-header-search--opened": {},
+    "components-layout-header-search--playground": {},
+    "components-layout-header-search--rtl": {},
+    "components-layout-header-site-header--dark": {
+      "aria-allowed-attr": 1,
+      "button-name": 3
+    },
+    "components-layout-header-site-header--default": {
+      "aria-allowed-attr": 1,
+      "button-name": 3,
+      "color-contrast": 19
+    },
+    "components-layout-header-site-header--playground": {
+      "aria-allowed-attr": 1,
+      "button-name": 3,
+      "color-contrast": 19
+    },
+    "components-layout-header-site-header--rtl": {
+      "aria-allowed-attr": 1,
+      "button-name": 3
+    },
+    "components-layout-header-theme-switch--dark": {},
+    "components-layout-header-theme-switch--default": {},
+    "components-layout-header-theme-switch--light": {},
+    "components-layout-header-theme-switch--playground": {},
+    "components-layout-header-theme-switch--rtl": {},
+    "components-layout-header-user-menu--closed": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-header-user-menu--dark": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-header-user-menu--default": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-header-user-menu--opened": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-header-user-menu--playground": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-header-user-menu--rtl": {
+      "aria-allowed-attr": 1
+    },
+    "components-layout-logo--dark": {},
+    "components-layout-logo--default": {},
+    "components-layout-logo--playground": {},
+    "components-layout-logo--rtl": {},
+    "components-layout-sidebar-app-sidebar--dark": {},
+    "components-layout-sidebar-app-sidebar--default": {
+      "color-contrast": 19
+    },
+    "components-layout-sidebar-app-sidebar--playground": {
+      "color-contrast": 19
+    },
+    "components-layout-sidebar-app-sidebar--rtl": {},
+    "components-layout-sidebar-nav-main--dark": {},
+    "components-layout-sidebar-nav-main--default": {
+      "color-contrast": 19
+    },
+    "components-layout-sidebar-nav-main--nested-active": {
+      "color-contrast": 19
+    },
+    "components-layout-sidebar-nav-main--playground": {
+      "color-contrast": 19
+    },
+    "components-layout-sidebar-nav-main--rtl": {},
+    "components-layout-sidebar-nav-user--closed": {
+      "color-contrast": 2
+    },
+    "components-layout-sidebar-nav-user--dark": {},
+    "components-layout-sidebar-nav-user--default": {
+      "color-contrast": 2
+    },
+    "components-layout-sidebar-nav-user--opened": {
+      "color-contrast": 2
+    },
+    "components-layout-sidebar-nav-user--playground": {
+      "color-contrast": 2
+    },
+    "components-layout-sidebar-nav-user--rtl": {},
+    "components-theme-customizer-color-mode-selector--dark": {},
+    "components-theme-customizer-color-mode-selector--default": {},
+    "components-theme-customizer-color-mode-selector--playground": {},
+    "components-theme-customizer-color-mode-selector--rtl": {},
+    "components-theme-customizer-content-layout-selector--dark": {},
+    "components-theme-customizer-content-layout-selector--default": {},
+    "components-theme-customizer-content-layout-selector--playground": {},
+    "components-theme-customizer-content-layout-selector--rtl": {},
+    "components-theme-customizer-panel--closed": {
+      "button-name": 1
+    },
+    "components-theme-customizer-panel--dark": {
+      "button-name": 1
+    },
+    "components-theme-customizer-panel--default": {
+      "button-name": 1
+    },
+    "components-theme-customizer-panel--opened": {
+      "button-name": 1
+    },
+    "components-theme-customizer-panel--playground": {
+      "button-name": 1
+    },
+    "components-theme-customizer-panel--rtl": {
+      "button-name": 1
+    },
+    "components-theme-customizer-preset-selector--dark": {
+      "aria-hidden-focus": 1
+    },
+    "components-theme-customizer-preset-selector--default": {
+      "aria-hidden-focus": 1
+    },
+    "components-theme-customizer-preset-selector--playground": {
+      "aria-hidden-focus": 1
+    },
+    "components-theme-customizer-preset-selector--rtl": {
+      "aria-hidden-focus": 1
+    },
+    "components-theme-customizer-radius-selector--dark": {
+      "button-name": 1
+    },
+    "components-theme-customizer-radius-selector--default": {
+      "button-name": 1
+    },
+    "components-theme-customizer-radius-selector--playground": {
+      "button-name": 1
+    },
+    "components-theme-customizer-radius-selector--rtl": {
+      "button-name": 1
+    },
+    "components-theme-customizer-reset-theme-button--dark": {},
+    "components-theme-customizer-reset-theme-button--default": {},
+    "components-theme-customizer-reset-theme-button--playground": {},
+    "components-theme-customizer-reset-theme-button--rtl": {},
+    "components-theme-customizer-scale-selector--dark": {
+      "button-name": 1
+    },
+    "components-theme-customizer-scale-selector--default": {
+      "button-name": 1
+    },
+    "components-theme-customizer-scale-selector--playground": {
+      "button-name": 1
+    },
+    "components-theme-customizer-scale-selector--rtl": {
+      "button-name": 1
+    },
+    "components-theme-customizer-sidebar-mode-selector--dark": {},
+    "components-theme-customizer-sidebar-mode-selector--default": {},
+    "components-theme-customizer-sidebar-mode-selector--playground": {},
+    "components-theme-customizer-sidebar-mode-selector--rtl": {},
+    "components-ui-accordion--dark": {},
+    "components-ui-accordion--default": {},
+    "components-ui-accordion--multiple": {},
+    "components-ui-accordion--playground": {},
+    "components-ui-accordion--rtl": {},
+    "components-ui-accordion--single": {},
+    "components-ui-alert--dark": {},
+    "components-ui-alert--default": {},
+    "components-ui-alert--destructive": {},
+    "components-ui-alert--playground": {},
+    "components-ui-alert--rtl": {},
+    "components-ui-alert-dialog--closed": {},
+    "components-ui-alert-dialog--dark": {},
+    "components-ui-alert-dialog--default": {},
+    "components-ui-alert-dialog--open": {},
+    "components-ui-alert-dialog--playground": {},
+    "components-ui-alert-dialog--rtl": {},
+    "components-ui-aspect-ratio--dark": {},
+    "components-ui-aspect-ratio--default": {},
+    "components-ui-aspect-ratio--playground": {},
+    "components-ui-aspect-ratio--rtl": {},
+    "components-ui-aspect-ratio--square": {},
+    "components-ui-avatar--dark": {},
+    "components-ui-avatar--default": {},
+    "components-ui-avatar--fallback-only": {},
+    "components-ui-avatar--playground": {},
+    "components-ui-avatar--rtl": {},
+    "components-ui-avatar--with-image": {},
+    "components-ui-badge--dark": {},
+    "components-ui-badge--default": {},
+    "components-ui-badge--playground": {},
+    "components-ui-badge--rtl": {},
+    "components-ui-badge--variants": {},
+    "components-ui-breadcrumb--dark": {},
+    "components-ui-breadcrumb--default": {},
+    "components-ui-breadcrumb--playground": {},
+    "components-ui-breadcrumb--rtl": {},
+    "components-ui-button--dark": {},
+    "components-ui-button--default": {},
+    "components-ui-button--playground": {},
+    "components-ui-button--rtl": {},
+    "components-ui-button--variants": {},
+    "components-ui-button--with-icon": {},
+    "components-ui-button-group--dark": {},
+    "components-ui-button-group--default": {},
+    "components-ui-button-group--playground": {},
+    "components-ui-button-group--rtl": {},
+    "components-ui-button-group--vertical": {},
+    "components-ui-calendar--dark": {
+      "color-contrast": 5
+    },
+    "components-ui-calendar--default": {
+      "color-contrast": 5
+    },
+    "components-ui-calendar--playground": {
+      "color-contrast": 1
+    },
+    "components-ui-calendar--range": {
+      "color-contrast": 1
+    },
+    "components-ui-calendar--rtl": {
+      "color-contrast": 5
+    },
+    "components-ui-calendar--single": {
+      "color-contrast": 1
+    },
+    "components-ui-card--dark": {},
+    "components-ui-card--default": {},
+    "components-ui-card--playground": {},
+    "components-ui-card--rtl": {},
+    "components-ui-carousel--dark": {},
+    "components-ui-carousel--default": {},
+    "components-ui-carousel--playground": {},
+    "components-ui-carousel--rtl": {},
+    "components-ui-chart--bar-chart-example": {},
+    "components-ui-chart--dark": {},
+    "components-ui-chart--default": {},
+    "components-ui-chart--playground": {},
+    "components-ui-chart--rtl": {},
+    "components-ui-checkbox--controlled": {},
+    "components-ui-checkbox--dark": {},
+    "components-ui-checkbox--default": {},
+    "components-ui-checkbox--disabled": {},
+    "components-ui-checkbox--playground": {},
+    "components-ui-checkbox--rtl": {},
+    "components-ui-collapsible--dark": {},
+    "components-ui-collapsible--default": {},
+    "components-ui-collapsible--playground": {},
+    "components-ui-collapsible--rtl": {},
+    "components-ui-command--closed": {},
+    "components-ui-command--dark": {},
+    "components-ui-command--default": {},
+    "components-ui-command--open": {},
+    "components-ui-command--playground": {},
+    "components-ui-command--rtl": {},
+    "components-ui-context-menu--dark": {},
+    "components-ui-context-menu--default": {},
+    "components-ui-context-menu--playground": {},
+    "components-ui-context-menu--rtl": {},
+    "components-ui-dialog--closed": {},
+    "components-ui-dialog--dark": {},
+    "components-ui-dialog--default": {},
+    "components-ui-dialog--open": {},
+    "components-ui-dialog--playground": {},
+    "components-ui-dialog--rtl": {},
+    "components-ui-drawer--closed": {},
+    "components-ui-drawer--dark": {},
+    "components-ui-drawer--default": {},
+    "components-ui-drawer--open": {},
+    "components-ui-drawer--playground": {},
+    "components-ui-drawer--rtl": {},
+    "components-ui-dropdown-menu--dark": {},
+    "components-ui-dropdown-menu--default": {},
+    "components-ui-dropdown-menu--playground": {},
+    "components-ui-dropdown-menu--rtl": {},
+    "components-ui-empty--dark": {},
+    "components-ui-empty--default": {},
+    "components-ui-empty--playground": {},
+    "components-ui-empty--rtl": {},
+    "components-ui-field--dark": {},
+    "components-ui-field--default": {},
+    "components-ui-field--playground": {},
+    "components-ui-field--rtl": {},
+    "components-ui-form--dark": {},
+    "components-ui-form--default": {},
+    "components-ui-form--playground": {},
+    "components-ui-form--rtl": {},
+    "components-ui-hover-card--dark": {},
+    "components-ui-hover-card--default": {},
+    "components-ui-hover-card--playground": {},
+    "components-ui-hover-card--rtl": {},
+    "components-ui-input--dark": {},
+    "components-ui-input--default": {},
+    "components-ui-input--playground": {},
+    "components-ui-input--rtl": {},
+    "components-ui-input--states": {},
+    "components-ui-input-group--dark": {},
+    "components-ui-input-group--default": {},
+    "components-ui-input-group--playground": {},
+    "components-ui-input-group--rtl": {},
+    "components-ui-input-otp--dark": {},
+    "components-ui-input-otp--default": {},
+    "components-ui-input-otp--playground": {},
+    "components-ui-input-otp--rtl": {},
+    "components-ui-item--dark": {},
+    "components-ui-item--default": {},
+    "components-ui-item--playground": {},
+    "components-ui-item--rtl": {},
+    "components-ui-kanban--dark": {
+      "aria-allowed-attr": 1
+    },
+    "components-ui-kanban--default": {
+      "aria-allowed-attr": 1
+    },
+    "components-ui-kanban--playground": {
+      "aria-allowed-attr": 1
+    },
+    "components-ui-kanban--rtl": {
+      "aria-allowed-attr": 1
+    },
+    "components-ui-kbd--dark": {},
+    "components-ui-kbd--default": {
+      "color-contrast": 1
+    },
+    "components-ui-kbd--group": {},
+    "components-ui-kbd--playground": {
+      "color-contrast": 1
+    },
+    "components-ui-kbd--rtl": {},
+    "components-ui-kbd--single": {
+      "color-contrast": 1
+    },
+    "components-ui-label--dark": {},
+    "components-ui-label--default": {},
+    "components-ui-label--playground": {},
+    "components-ui-label--rtl": {},
+    "components-ui-label--with-input": {},
+    "components-ui-menubar--dark": {},
+    "components-ui-menubar--default": {},
+    "components-ui-menubar--playground": {},
+    "components-ui-menubar--rtl": {},
+    "components-ui-native-select--dark": {},
+    "components-ui-native-select--default": {},
+    "components-ui-native-select--invalid": {},
+    "components-ui-native-select--playground": {},
+    "components-ui-native-select--rtl": {},
+    "components-ui-navigation-menu--dark": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-navigation-menu--default": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-navigation-menu--playground": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-navigation-menu--rtl": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-pagination--dark": {},
+    "components-ui-pagination--default": {},
+    "components-ui-pagination--playground": {},
+    "components-ui-pagination--rtl": {},
+    "components-ui-popover--closed": {},
+    "components-ui-popover--dark": {},
+    "components-ui-popover--default": {},
+    "components-ui-popover--open": {},
+    "components-ui-popover--playground": {},
+    "components-ui-popover--rtl": {},
+    "components-ui-progress--dark": {},
+    "components-ui-progress--default": {},
+    "components-ui-progress--playground": {},
+    "components-ui-progress--rtl": {},
+    "components-ui-radio-group--dark": {},
+    "components-ui-radio-group--default": {},
+    "components-ui-radio-group--playground": {},
+    "components-ui-radio-group--rtl": {},
+    "components-ui-reel--dark": {},
+    "components-ui-reel--default": {},
+    "components-ui-reel--playground": {},
+    "components-ui-reel--rtl": {},
+    "components-ui-resizable--dark": {},
+    "components-ui-resizable--default": {},
+    "components-ui-resizable--playground": {},
+    "components-ui-resizable--rtl": {},
+    "components-ui-scroll-area--dark": {
+      "scrollable-region-focusable": 1
+    },
+    "components-ui-scroll-area--default": {
+      "scrollable-region-focusable": 1
+    },
+    "components-ui-scroll-area--playground": {
+      "scrollable-region-focusable": 1
+    },
+    "components-ui-scroll-area--rtl": {
+      "scrollable-region-focusable": 1
+    },
+    "components-ui-select--dark": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-select--default": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-select--playground": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-select--rtl": {
+      "aria-hidden-focus": 1
+    },
+    "components-ui-separator--dark": {},
+    "components-ui-separator--default": {},
+    "components-ui-separator--horizontal": {},
+    "components-ui-separator--playground": {},
+    "components-ui-separator--rtl": {},
+    "components-ui-separator--vertical": {},
+    "components-ui-sheet--closed": {},
+    "components-ui-sheet--dark": {},
+    "components-ui-sheet--default": {},
+    "components-ui-sheet--open": {},
+    "components-ui-sheet--playground": {},
+    "components-ui-sheet--rtl": {},
+    "components-ui-sidebar--dark": {},
+    "components-ui-sidebar--default": {},
+    "components-ui-sidebar--playground": {},
+    "components-ui-sidebar--rtl": {},
+    "components-ui-skeleton--card-loading": {},
+    "components-ui-skeleton--dark": {},
+    "components-ui-skeleton--default": {},
+    "components-ui-skeleton--playground": {},
+    "components-ui-skeleton--rtl": {},
+    "components-ui-slider--dark": {
+      "aria-input-field-name": 1
+    },
+    "components-ui-slider--default": {
+      "aria-input-field-name": 1
+    },
+    "components-ui-slider--playground": {
+      "aria-input-field-name": 1
+    },
+    "components-ui-slider--range": {},
+    "components-ui-slider--rtl": {
+      "aria-input-field-name": 1
+    },
+    "components-ui-slider--single": {
+      "aria-input-field-name": 1
+    },
+    "components-ui-sonner--dark": {},
+    "components-ui-sonner--default": {},
+    "components-ui-sonner--playground": {},
+    "components-ui-sonner--rtl": {},
+    "components-ui-sonner--toasts": {},
+    "components-ui-spinner--dark": {},
+    "components-ui-spinner--default": {},
+    "components-ui-spinner--playground": {},
+    "components-ui-spinner--rtl": {},
+    "components-ui-spinner--sizes": {},
+    "components-ui-switch--controlled": {},
+    "components-ui-switch--dark": {},
+    "components-ui-switch--default": {},
+    "components-ui-switch--disabled": {},
+    "components-ui-switch--playground": {},
+    "components-ui-switch--rtl": {},
+    "components-ui-table--dark": {},
+    "components-ui-table--default": {},
+    "components-ui-table--playground": {},
+    "components-ui-table--rtl": {},
+    "components-ui-tabs--dark": {},
+    "components-ui-tabs--default": {
+      "color-contrast": 2
+    },
+    "components-ui-tabs--playground": {
+      "color-contrast": 2
+    },
+    "components-ui-tabs--rtl": {},
+    "components-ui-textarea--dark": {},
+    "components-ui-textarea--default": {},
+    "components-ui-textarea--invalid": {},
+    "components-ui-textarea--playground": {},
+    "components-ui-textarea--rtl": {},
+    "components-ui-timeline--dark": {},
+    "components-ui-timeline--default": {},
+    "components-ui-timeline--playground": {},
+    "components-ui-timeline--rtl": {},
+    "components-ui-toast--dark": {},
+    "components-ui-toast--default": {},
+    "components-ui-toast--playground": {},
+    "components-ui-toast--rtl": {},
+    "components-ui-toast--toasts": {},
+    "components-ui-toggle--controlled": {},
+    "components-ui-toggle--dark": {},
+    "components-ui-toggle--default": {},
+    "components-ui-toggle--disabled": {},
+    "components-ui-toggle--playground": {},
+    "components-ui-toggle--rtl": {},
+    "components-ui-toggle--sizes": {},
+    "components-ui-toggle-group--dark": {},
+    "components-ui-toggle-group--default": {},
+    "components-ui-toggle-group--multiple": {},
+    "components-ui-toggle-group--playground": {},
+    "components-ui-toggle-group--rtl": {},
+    "components-ui-toggle-group--single": {},
+    "components-ui-tooltip--dark": {},
+    "components-ui-tooltip--default": {},
+    "components-ui-tooltip--playground": {},
+    "components-ui-tooltip--rtl": {},
+    "documentation-addons-showcase--interaction-test": {},
+    "documentation-addons-showcase--playground": {},
+    "documentation-introduction--overview": {},
+    "filemap-components-active-theme-tsx--default": {},
+    "filemap-components-cardactionmenus-tsx--default": {},
+    "filemap-components-custom-date-range-picker-tsx--default": {},
+    "filemap-components-date-time-picker-tsx--default": {},
+    "filemap-components-icon-tsx--default": {},
+    "filemap-components-layout-header-data-ts--default": {},
+    "filemap-components-layout-header-index-tsx--default": {},
+    "filemap-components-layout-header-notifications-tsx--default": {},
+    "filemap-components-layout-header-search-tsx--default": {},
+    "filemap-components-layout-header-theme-switch-tsx--default": {},
+    "filemap-components-layout-header-user-menu-tsx--default": {},
+    "filemap-components-layout-logo-tsx--default": {},
+    "filemap-components-layout-sidebar-app-sidebar-tsx--default": {},
+    "filemap-components-layout-sidebar-nav-main-tsx--default": {},
+    "filemap-components-layout-sidebar-nav-user-tsx--default": {},
+    "filemap-components-theme-customizer-color-mode-selector-tsx--default": {},
+    "filemap-components-theme-customizer-content-layout-selector-tsx--default": {},
+    "filemap-components-theme-customizer-index-ts--default": {},
+    "filemap-components-theme-customizer-panel-tsx--default": {},
+    "filemap-components-theme-customizer-preset-selector-tsx--default": {},
+    "filemap-components-theme-customizer-radius-selector-tsx--default": {},
+    "filemap-components-theme-customizer-reset-theme-tsx--default": {},
+    "filemap-components-theme-customizer-scale-selector-tsx--default": {},
+    "filemap-components-theme-customizer-sidebar-mode-selector-tsx--default": {},
+    "filemap-components-ui-accordion-tsx--default": {},
+    "filemap-components-ui-alert-dialog-tsx--default": {},
+    "filemap-components-ui-alert-tsx--default": {},
+    "filemap-components-ui-aspect-ratio-tsx--default": {},
+    "filemap-components-ui-avatar-tsx--default": {},
+    "filemap-components-ui-badge-tsx--default": {},
+    "filemap-components-ui-breadcrumb-tsx--default": {},
+    "filemap-components-ui-button-group-tsx--default": {},
+    "filemap-components-ui-button-tsx--default": {},
+    "filemap-components-ui-calendar-tsx--default": {},
+    "filemap-components-ui-card-tsx--default": {},
+    "filemap-components-ui-carousel-tsx--default": {},
+    "filemap-components-ui-chart-tsx--default": {},
+    "filemap-components-ui-checkbox-tsx--default": {},
+    "filemap-components-ui-collapsible-tsx--default": {},
+    "filemap-components-ui-command-tsx--default": {},
+    "filemap-components-ui-context-menu-tsx--default": {},
+    "filemap-components-ui-custom-count-animation-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-bubble-menu-link-bubble-menu-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-image-image-edit-block-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-image-image-edit-dialog-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-link-link-edit-block-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-link-link-edit-popover-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-link-link-popover-block-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-measured-container-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-section-five-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-section-four-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-section-one-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-section-three-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-section-two-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-shortcut-key-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-spinner-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-toolbar-button-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-components-toolbar-section-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-code-block-lowlight-code-block-lowlight-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-code-block-lowlight-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-color-color-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-color-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-file-handler-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-horizontal-rule-horizontal-rule-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-horizontal-rule-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-components-image-actions-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-components-image-overlay-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-components-image-view-block-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-components-resize-handle-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-hooks-use-drag-resize-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-hooks-use-image-actions-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-image-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-image-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-link-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-link-link-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-reset-marks-on-enter-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-reset-marks-on-enter-reset-marks-on-enter-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-selection-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-selection-selection-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-unset-all-marks-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-extensions-unset-all-marks-unset-all-marks-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-hooks-use-container-size-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-hooks-use-minimal-tiptap-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-hooks-use-theme-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-hooks-use-throttle-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-index-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-minimal-tiptap-tsx--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-index-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-partials-code-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-partials-lists-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-partials-placeholder-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-partials-typography-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-styles-partials-zoom-css--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-types-ts--default": {},
+    "filemap-components-ui-custom-minimal-tiptap-utils-ts--default": {},
+    "filemap-components-ui-custom-prompt-chat-container-tsx--default": {},
+    "filemap-components-ui-custom-prompt-code-block-tsx--default": {},
+    "filemap-components-ui-custom-prompt-input-tsx--default": {},
+    "filemap-components-ui-custom-prompt-loader-tsx--default": {},
+    "filemap-components-ui-custom-prompt-markdown-tsx--default": {},
+    "filemap-components-ui-custom-prompt-message-tsx--default": {},
+    "filemap-components-ui-custom-prompt-scroll-button-tsx--default": {},
+    "filemap-components-ui-custom-prompt-suggestion-tsx--default": {},
+    "filemap-components-ui-dialog-tsx--default": {},
+    "filemap-components-ui-drawer-tsx--default": {},
+    "filemap-components-ui-dropdown-menu-tsx--default": {},
+    "filemap-components-ui-empty-tsx--default": {},
+    "filemap-components-ui-field-tsx--default": {},
+    "filemap-components-ui-form-tsx--default": {},
+    "filemap-components-ui-hover-card-tsx--default": {},
+    "filemap-components-ui-input-group-tsx--default": {},
+    "filemap-components-ui-input-otp-tsx--default": {},
+    "filemap-components-ui-input-tsx--default": {},
+    "filemap-components-ui-item-tsx--default": {},
+    "filemap-components-ui-kanban-tsx--default": {},
+    "filemap-components-ui-kbd-tsx--default": {},
+    "filemap-components-ui-label-tsx--default": {},
+    "filemap-components-ui-menubar-tsx--default": {},
+    "filemap-components-ui-native-select-tsx--default": {},
+    "filemap-components-ui-navigation-menu-tsx--default": {},
+    "filemap-components-ui-pagination-tsx--default": {},
+    "filemap-components-ui-popover-tsx--default": {},
+    "filemap-components-ui-progress-tsx--default": {},
+    "filemap-components-ui-radio-group-tsx--default": {},
+    "filemap-components-ui-reel-tsx--default": {},
+    "filemap-components-ui-resizable-tsx--default": {},
+    "filemap-components-ui-scroll-area-tsx--default": {},
+    "filemap-components-ui-select-tsx--default": {},
+    "filemap-components-ui-separator-tsx--default": {},
+    "filemap-components-ui-sheet-tsx--default": {},
+    "filemap-components-ui-sidebar-tsx--default": {},
+    "filemap-components-ui-skeleton-tsx--default": {},
+    "filemap-components-ui-slider-tsx--default": {},
+    "filemap-components-ui-sonner-tsx--default": {},
+    "filemap-components-ui-spinner-tsx--default": {},
+    "filemap-components-ui-switch-tsx--default": {},
+    "filemap-components-ui-table-tsx--default": {},
+    "filemap-components-ui-tabs-tsx--default": {},
+    "filemap-components-ui-textarea-tsx--default": {},
+    "filemap-components-ui-timeline-tsx--default": {},
+    "filemap-components-ui-toast-tsx--default": {},
+    "filemap-components-ui-toggle-group-tsx--default": {},
+    "filemap-components-ui-toggle-tsx--default": {},
+    "filemap-components-ui-tooltip-tsx--default": {},
+    "foundations-theming--overview": {}
+  }
+}

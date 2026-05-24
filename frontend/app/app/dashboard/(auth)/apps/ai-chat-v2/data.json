@@ -1,0 +1,214 @@
+[
+  {
+    "id": "mock-1",
+    "title": "What's something you've learned",
+    "messages": [
+      {
+        "id": "1",
+        "content": "In JavaScript, arrays come with built-in methods that make data manipulation easier. For instance, the `map` function allows you to transform every element of an array and return a new one. Here’s a quick example:\n\n```ts\nconst numbers = [1, 2, 3, 4];\nconst squared = numbers.map(num => num * num);\n\nconsole.log(squared); // [1, 4, 9, 16]\n```\n\nThis approach is useful whenever you want to apply a transformation to each item without modifying the original array.\n\nWould you like to see an example with `filter` instead?",
+        "role": "user"
+      },
+      {
+        "id": "2",
+        "content": "That's a great question! I recently learned about the fascinating concept of biomimicry - how nature inspires technological innovations. For example, velcro was inspired by burr seeds!",
+        "role": "assistant"
+      },
+      {
+        "id": "3",
+        "content": "Oh, interesting! But could you also give me that `filter` example in JavaScript?",
+        "role": "user"
+      },
+      {
+        "id": "4",
+        "content": "Of course! The `filter` method lets you create a new array with only the elements that meet a certain condition. Here’s a quick example:\n\n```ts\nconst numbers = [1, 2, 3, 4, 5, 6];\nconst evens = numbers.filter(num => num % 2 === 0);\n\nconsole.log(evens); // [2, 4, 6]\n```\n\nThis keeps only the even numbers from the original array.",
+        "role": "assistant"
+      },
+      {
+        "id": "5",
+        "content": "That makes sense! When should I use `map` versus `filter`?",
+        "role": "user"
+      },
+      {
+        "id": "6",
+        "content": "Great follow-up! Use `map` when you want to transform all items in an array into something new. Use `filter` when you want to remove some items based on a condition but keep the rest as they are.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "That's a great question! I recently learned about the fascinating concept of biomimicry...",
+    "category": "today"
+  },
+  {
+    "id": "mock-5",
+    "title": "Best travel experience",
+    "messages": [
+      {
+        "id": "9",
+        "content": "What's your most memorable travel experience?",
+        "role": "user"
+      },
+      {
+        "id": "10",
+        "content": "Watching the Northern Lights in Iceland was absolutely magical. The dancing lights in the night sky were unforgettable!",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "Watching the Northern Lights in Iceland was absolutely magical. The dancing lights in the night sky were unforgettable!",
+    "category": "today"
+  },
+  {
+    "id": "mock-7",
+    "title": "Favorite book",
+    "messages": [
+      {
+        "id": "15",
+        "content": "Do you have a favorite book that inspired you?",
+        "role": "user"
+      },
+      {
+        "id": "16",
+        "content": "Yes! 'Atomic Habits' by James Clear really changed how I think about building consistent habits.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "'Atomic Habits' by James Clear really changed how I think about building consistent habits.",
+    "category": "today"
+  },
+  {
+    "id": "mock-2",
+    "title": "If you could teleport anywhere...",
+    "messages": [
+      {
+        "id": "3",
+        "content": "If you could teleport anywhere right now, where would you go?",
+        "role": "user"
+      },
+      {
+        "id": "4",
+        "content": "I would love to teleport to the Maldives! The crystal clear waters and overwater bungalows seem like paradise.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "I would love to teleport to the Maldives! The crystal clear waters and overwater bungalows seem like paradise.",
+    "category": "yesterday"
+  },
+  {
+    "id": "mock-3",
+    "title": "What's one goal you want to achieve...",
+    "messages": [
+      {
+        "id": "5",
+        "content": "What's one goal you want to achieve this year?",
+        "role": "user"
+      },
+      {
+        "id": "6",
+        "content": "My main goal this year is to master TypeScript and React development!",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "My main goal this year is to master TypeScript and React development!",
+    "category": "7days"
+  },
+  {
+    "id": "mock-4",
+    "title": "Favorite programming language",
+    "messages": [
+      {
+        "id": "7",
+        "content": "Would you like me to show you an example using CSS Grid instead?",
+        "role": "user"
+      },
+      {
+        "id": "8",
+        "content": "CSS Flexbox makes it easier to design flexible and responsive layouts. By using `display: flex`, you can align and distribute elements inside a container efficiently. Here’s a simple example:\n\n```css\n.container {\n  display: flex;\n  justify-content: center;\n  align-items: center;\n  height: 100vh;\n}\n```\n\nThis centers the content both vertically and horizontally on the page.\n\nWould you like me to show you an example using CSS Grid instead?",
+        "role": "assistant"
+      },
+      {
+        "id": "9",
+        "content": "Yes, please! I’d like to see how the same layout works with CSS Grid.",
+        "role": "user"
+      },
+      {
+        "id": "10",
+        "content": "Sure! With CSS Grid, you can achieve the same centering effect using `place-items`. Here’s an example:\n\n```css\n.container {\n  display: grid;\n  place-items: center;\n  height: 100vh;\n}\n```\n\nThis produces the same centered layout, but Grid also provides more control over rows and columns if needed.",
+        "role": "assistant"
+      },
+      {
+        "id": "11",
+        "content": "That looks much cleaner. When should I prefer Grid over Flexbox?",
+        "role": "user"
+      },
+      {
+        "id": "12",
+        "content": "Good question! Use **Flexbox** when you’re working with one-dimensional layouts (either a row or a column). Use **Grid** when you need two-dimensional control (both rows and columns).",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "TypeScript is my favorite because it adds static typing to JavaScript, making code more reliable and maintainable.",
+    "category": "7days"
+  },
+  {
+    "id": "mock-8",
+    "title": "Learning new skills",
+    "messages": [
+      {
+        "id": "17",
+        "content": "What's the best way to learn a new programming language quickly?",
+        "role": "user"
+      },
+      {
+        "id": "18",
+        "content": "Practice by building small projects every day. Combining tutorials with hands-on coding helps you retain concepts faster.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "Practice by building small projects every day. Combining tutorials with hands-on coding helps you retain concepts faster.",
+    "category": "7days"
+  },
+  {
+    "id": "mock-9",
+    "title": "Weekend plans",
+    "messages": [
+      {
+        "id": "19",
+        "content": "Do you have any plans for the weekend?",
+        "role": "user"
+      },
+      {
+        "id": "20",
+        "content": "I plan to go hiking and spend some time in nature to recharge.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "I plan to go hiking and spend some time in nature to recharge.",
+    "category": "7days"
+  },
+  {
+    "id": "mock-11",
+    "title": "Evening reflections",
+    "messages": [
+      {
+        "id": "23",
+        "content": "Do you reflect on your day in the evenings?",
+        "role": "user"
+      },
+      {
+        "id": "24",
+        "content": "Yes, I try to spend 10 minutes reviewing what I accomplished and what I could improve. It helps me stay mindful and plan better for tomorrow.",
+        "role": "assistant"
+      },
+      {
+        "id": "25",
+        "content": "Do you write it down or just think about it?",
+        "role": "user"
+      },
+      {
+        "id": "26",
+        "content": "I usually write it in a small journal. Writing things down makes it more concrete and easier to track progress over time.",
+        "role": "assistant"
+      }
+    ],
+    "lastMessage": "I usually write it in a small journal. Writing things down makes it more concrete and easier to track progress over time.",
+    "category": "7days"
+  }
+]

@@ -1,0 +1,137 @@
+# Caddyfile for ecommerce-connect development environment
+# Using lodashventure.local domain with Docker networking
+
+{
+    # Local development configuration
+    # Use custom self-signed wildcard certificate
+    skip_install_trust
+}
+
+# Main Application (Next.js Frontend)
+app.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    # Enable CORS for development
+    @options {
+        method OPTIONS
+    }
+    handle @options {
+        header Access-Control-Allow-Origin "*"
+        header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        header Access-Control-Allow-Headers "Content-Type, Authorization, x-auth-token, x-org-id"
+        respond 204
+    }
+
+    # Frontend is on port 5174 in dev mode (Vite)
+    # Vite handles all routes including hot reload
+    reverse_proxy host.docker.internal:5174 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Increase timeouts for development hot reload
+        transport http {
+            read_timeout 300s
+            write_timeout 300s
+        }
+    }
+}
+
+# Rust Backend API
+api.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy host.docker.internal:8080
+}
+
+# Strapi Backend CMS
+strapi.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy host.docker.internal:1338
+}
+
+# ClickHouse Database HTTP Interface
+clickhouse.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy clickhouse:8123
+}
+
+# ClickHouse UI (ch-ui)
+chui.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy ch-ui:5521
+}
+
+# Qdrant Vector Database
+qdrant.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy qdrant:6333
+}
+
+
+# Redis Cache
+redis.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy redis:6379
+}
+
+# Ory Kratos (Identity Management)
+kratos.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy kratos:4433
+}
+
+kratos-admin.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy kratos:4434
+}
+
+# Ory Hydra (OAuth2/OIDC)
+hydra.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy hydra:4444
+}
+
+hydra-admin.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy hydra:4445
+}
+
+# Ory Keto (Access Control)
+keto-read.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy keto:4466
+}
+
+keto-write.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy keto:4467
+}
+
+# Mailslurper (Email Testing)
+mail.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy mailslurper:4436
+}
+
+# Mailslurper SMTP (Email Testing) - Note: SMTP is not HTTP, cannot be proxied by Caddy HTTP
+# smtp.lodashventure.local {
+#     reverse_proxy mailslurper:1025
+# }
+
+# MySQL Database (for Strapi) - Note: MySQL is not HTTP, cannot be proxied by Caddy HTTP
+# mysql.lodashventure.local {
+#     reverse_proxy mysql:3306
+# }
+
+# Lodash Authentication SPA
+auth.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    reverse_proxy lodash-login-spa:80
+}
+
+# Documentation Site (Docusaurus)
+help.lodashventure.local {
+    tls /certs/lodashventure.local-cert.pem /certs/lodashventure.local-key.pem
+    # For development, docs run on port 3002
+    reverse_proxy host.docker.internal:3002
+}

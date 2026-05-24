@@ -1,0 +1,29 @@
+# Lefthook Configuration
+# @see https://github.com/evilmartians/lefthook
+
+# ---------------------------------------------------------------------------
+# Pre-commit Hook
+# ---------------------------------------------------------------------------
+pre-commit:
+  parallel: true
+  commands:
+    lint-staged:
+      glob: "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,sass,md,mdx,yml,yaml}"
+      run: npx --no -- lint-staged
+
+# ---------------------------------------------------------------------------
+# Commit-msg Hook
+# ---------------------------------------------------------------------------
+commit-msg:
+  commands:
+    commitlint:
+      run: npx --no -- commitlint --edit {1}
+
+# ---------------------------------------------------------------------------
+# Pre-push Hook
+# ---------------------------------------------------------------------------
+pre-push:
+  parallel: false
+  commands:
+    check-strict:
+      run: node scripts/check-strict.mjs

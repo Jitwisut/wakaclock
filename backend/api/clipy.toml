@@ -1,0 +1,36 @@
+# ============================================================
+# Clippy Configuration — Production + Enterprise Grade
+# ============================================================
+# Enforces strict Rust idioms: ownership, borrowing, zero-copy,
+# naming conventions, and performance best practices.
+#
+# Reference: https://rust-lang.github.io/rust-clippy/master/index.html
+# ============================================================
+
+# Thresholds
+too-many-arguments-threshold = 8
+cognitive-complexity-threshold = 25
+too-many-lines-threshold = 350
+max-struct-bools = 3
+enum-variant-size-threshold = 200
+type-complexity-threshold = 250
+trivial-copy-size-limit = 8
+single-char-binding-names-threshold = 4
+
+# Banned variable names
+disallowed-names = ["foo", "bar", "baz", "quux", "temp", "tmp", "data2", "result2", "ret", "val"]
+
+# Banned methods — force explicit error handling
+disallowed-methods = [
+    { path = "std::io::stdout", reason = "use tracing macros instead" },
+    { path = "std::io::stderr", reason = "use tracing macros instead" },
+]
+
+# Banned types — enforce async-safe primitives
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "use tokio::sync::Mutex for async code" },
+    { path = "std::sync::RwLock", reason = "use tokio::sync::RwLock for async code" },
+]
+
+# MSRV — matches Cargo.toml rust-version
+msrv = "1.94.0"

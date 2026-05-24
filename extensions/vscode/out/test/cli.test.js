@@ -1,0 +1,103 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const node_events_1 = require("node:events");
+const node_stream_1 = require("node:stream");
+const vitest_1 = require("vitest");
+const cli_1 = require("../src/cli");
+const logging_1 = require("../src/logging");
+const spawnMock = vitest_1.vi.fn();
+vitest_1.vi.mock("node:child_process", () => ({
+    spawn: (...args) => spawnMock(...args)
+}));
+function createConfig() {
+    return {
+        cliPath: "wakaclock-cli",
+        flushIntervalMs: 30_000,
+        sameFileHeartbeatMs: 120_000,
+        idleMs: 300_000,
+        statusBarEnabled: true,
+        debugLogging: false,
+        trackDebugSessions: true,
+        trackBuildTasks: true
+    };
+}
+function mockChild(result = {}) {
+    const child = new node_events_1.EventEmitter();
+    child.stdin = new node_stream_1.PassThrough();
+    child.stdout = new node_stream_1.PassThrough();
+    child.stderr = new node_stream_1.PassThrough();
+    queueMicrotask(() => {
+        if (result.error) {
+            child.emit("error", result.error);
+            return;
+        }
+        if (result.stdout) {
+            child.stdout.write(result.stdout);
+        }
+        if (result.stderr) {
+            child.stderr.write(result.stderr);
+        }
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", result.exitCode ?? 0);
+    });
+    return child;
+}
+(0, vitest_1.describe)("WakaclockCliService", () => {
+    (0, vitest_1.beforeEach)(() => {
+        spawnMock.mockReset();
+    });
+    (0, vitest_1.it)("sends no stdin payload when there are no extras", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding");
+        const child = spawnMock.mock.results[0]?.value;
+        (0, vitest_1.expect)(spawnMock).toHaveBeenCalledWith("wakaclock-cli", vitest_1.expect.any(Array), vitest_1.expect.objectContaining({
+            stdio: "pipe",
+            env: vitest_1.expect.objectContaining({
+                WAKACLOCK_EDITOR: "vscode"
+            })
+        }));
+        (0, vitest_1.expect)(child.stdin.read()?.toString() ?? "").toBe("");
+    });
+    (0, vitest_1.it)("writes json array to stdin when extras are provided", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [
+            { entity: "C:/project/b.ts", keystrokes: 3 }
+        ]);
+        const child = spawnMock.mock.results[0]?.value;
+        const stdinPayload = child.stdin.read()?.toString() ?? "";
+        (0, vitest_1.expect)(stdinPayload).toContain("\"entity\": \"C:/project/b.ts\"");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--extra-heartbeats");
+    });
+    (0, vitest_1.it)("passes --project for the primary heartbeat when provided", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+            project: "Daniel"
+        });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--project");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("Daniel");
+    });
+    (0, vitest_1.it)("parses today output", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            stdout: "Today: 1 hr 20 mins\nTotal seconds: 4800\nHeartbeats: 42\n",
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.getToday()).resolves.toEqual({
+            humanReadable: "1 hr 20 mins",
+            totalSeconds: 4800,
+            heartbeatCount: 42
+        });
+    });
+    (0, vitest_1.it)("surfaces missing cli errors", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            error: new Error("spawn wakaclock-cli ENOENT")
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.getStatus()).rejects.toThrow(/Failed to start wakaclock-cli/);
+    });
+});
+//# sourceMappingURL=cli.test.js.map

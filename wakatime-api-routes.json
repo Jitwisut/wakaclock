@@ -1,0 +1,183 @@
+{
+  "base_url": "https://api.wakatime.com/api/v1",
+  "alternative_base_url": "https://wakatime.com/api/v1",
+  "documented_routes": [
+    { "method": "GET", "route": "/api/v1/users/:user", "section": "Users" },
+    { "method": "GET", "route": "/api/v1/users/current", "section": "Users" },
+    { "method": "GET", "route": "/api/v1/users/:user/all_time_since_today", "section": "All Time Since Today" },
+    { "method": "GET", "route": "/api/v1/users/current/all_time_since_today", "section": "All Time Since Today" },
+    { "method": "GET", "route": "/api/v1/users/:user/projects/:project/commits", "section": "Commits" },
+    { "method": "GET", "route": "/api/v1/users/current/projects/:project/commits", "section": "Commits" },
+    { "method": "GET", "route": "/api/v1/users/:user/projects/:project/commits/:hash", "section": "Commit" },
+    { "method": "GET", "route": "/api/v1/users/current/projects/:project/commits/:hash", "section": "Commit" },
+    { "method": "GET", "route": "/api/v1/users/:user/custom_rules", "section": "Custom Rules" },
+    { "method": "GET", "route": "/api/v1/users/current/custom_rules", "section": "Custom Rules" },
+    { "method": "PUT", "route": "/api/v1/users/:user/custom_rules", "section": "Custom Rules" },
+    { "method": "PUT", "route": "/api/v1/users/current/custom_rules", "section": "Custom Rules" },
+    { "method": "DELETE", "route": "/api/v1/users/:user/custom_rules/:rule_id", "section": "Custom Rules" },
+    { "method": "DELETE", "route": "/api/v1/users/current/custom_rules/:rule_id", "section": "Custom Rules" },
+    { "method": "GET", "route": "/api/v1/users/:user/custom_rules_progress", "section": "Custom Rules Progress" },
+    { "method": "GET", "route": "/api/v1/users/current/custom_rules_progress", "section": "Custom Rules Progress" },
+    { "method": "DELETE", "route": "/api/v1/users/:user/custom_rules_progress", "section": "Custom Rules Progress" },
+    { "method": "DELETE", "route": "/api/v1/users/current/custom_rules_progress", "section": "Custom Rules Progress" },
+    { "method": "GET", "route": "/api/v1/users/:user/data_dumps", "section": "Data Dumps" },
+    { "method": "GET", "route": "/api/v1/users/current/data_dumps", "section": "Data Dumps" },
+    { "method": "POST", "route": "/api/v1/users/:user/data_dumps", "section": "Data Dumps" },
+    { "method": "POST", "route": "/api/v1/users/current/data_dumps", "section": "Data Dumps" },
+    { "method": "GET", "route": "/api/v1/users/:user/durations", "section": "Durations" },
+    { "method": "GET", "route": "/api/v1/users/current/durations", "section": "Durations" },
+    { "method": "GET", "route": "/api/v1/editors", "section": "Editors" },
+    { "method": "GET", "route": "/api/v1/users/:user/external_durations", "section": "External Durations" },
+    { "method": "GET", "route": "/api/v1/users/current/external_durations", "section": "External Durations" },
+    { "method": "POST", "route": "/api/v1/users/:user/external_durations", "section": "External Durations" },
+    { "method": "POST", "route": "/api/v1/users/current/external_durations", "section": "External Durations" },
+    { "method": "POST", "route": "/api/v1/users/:user/external_durations.bulk", "section": "External Durations" },
+    { "method": "POST", "route": "/api/v1/users/current/external_durations.bulk", "section": "External Durations" },
+    { "method": "DELETE", "route": "/api/v1/users/:user/external_durations.bulk", "section": "External Durations" },
+    { "method": "DELETE", "route": "/api/v1/users/current/external_durations.bulk", "section": "External Durations" },
+    { "method": "GET", "route": "/api/v1/users/:user/goals", "section": "Goals" },
+    { "method": "GET", "route": "/api/v1/users/current/goals", "section": "Goals" },
+    { "method": "GET", "route": "/api/v1/users/:user/goals/:goal", "section": "Goal" },
+    { "method": "GET", "route": "/api/v1/users/current/goals/:goal", "section": "Goal" },
+    { "method": "GET", "route": "/api/v1/users/:user/heartbeats", "section": "Heartbeats" },
+    { "method": "GET", "route": "/api/v1/users/current/heartbeats", "section": "Heartbeats" },
+    { "method": "POST", "route": "/api/v1/users/:user/heartbeats", "section": "Heartbeats" },
+    { "method": "POST", "route": "/api/v1/users/current/heartbeats", "section": "Heartbeats" },
+    { "method": "POST", "route": "/api/v1/users/:user/heartbeats.bulk", "section": "Heartbeats" },
+    { "method": "POST", "route": "/api/v1/users/current/heartbeats.bulk", "section": "Heartbeats" },
+    { "method": "DELETE", "route": "/api/v1/users/:user/heartbeats.bulk", "section": "Heartbeats" },
+    { "method": "DELETE", "route": "/api/v1/users/current/heartbeats.bulk", "section": "Heartbeats" },
+    { "method": "GET", "route": "/api/v1/users/:user/insights/:insight_type/:range", "section": "Insights" },
+    { "method": "GET", "route": "/api/v1/users/current/insights/:insight_type/:range", "section": "Insights" },
+    { "method": "GET", "route": "/api/v1/leaders", "section": "Leaders" },
+    { "method": "GET", "route": "/api/v1/users/:user/machine_names", "section": "Machine Names" },
+    { "method": "GET", "route": "/api/v1/users/current/machine_names", "section": "Machine Names" },
+    { "method": "GET", "route": "/api/v1/meta", "section": "Meta" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/custom_rules", "section": "Org Custom Rules" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:org/custom_rules", "section": "Org Custom Rules" },
+    { "method": "PUT", "route": "/api/v1/users/:user/orgs/:org/custom_rules", "section": "Org Custom Rules" },
+    { "method": "PUT", "route": "/api/v1/users/current/orgs/:org/custom_rules", "section": "Org Custom Rules" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards", "section": "Org Dashboards" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:org/dashboards", "section": "Org Dashboards" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/durations", "section": "Org Dashboard Durations" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:orgs/dashboards/:dashboard/durations", "section": "Org Dashboard Durations" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members", "section": "Org Dashboard Members" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/members", "section": "Org Dashboard Members" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members/:member/durations", "section": "Org Dashboard Member Durations" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:orgs/dashboards/:dashboard/members/:member/durations", "section": "Org Dashboard Member Durations" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members/:member/summaries", "section": "Org Dashboard Member Summaries" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/members/:member/summaries", "section": "Org Dashboard Member Summaries" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/summaries", "section": "Org Dashboard Summaries" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/summaries", "section": "Org Dashboard Summaries" },
+    { "method": "GET", "route": "/api/v1/users/:user/orgs", "section": "Orgs" },
+    { "method": "GET", "route": "/api/v1/users/current/orgs", "section": "Orgs" },
+    { "method": "GET", "route": "/api/v1/users/:user/leaderboards", "section": "Private Leaderboards" },
+    { "method": "GET", "route": "/api/v1/users/current/leaderboards", "section": "Private Leaderboards" },
+    { "method": "GET", "route": "/api/v1/users/:user/leaderboards/:board", "section": "Private Leaderboards Leaders" },
+    { "method": "GET", "route": "/api/v1/users/current/leaderboards/:board", "section": "Private Leaderboards Leaders" },
+    { "method": "GET", "route": "/api/v1/program_languages", "section": "Program Languages" },
+    { "method": "GET", "route": "/api/v1/users/:user/projects", "section": "Projects" },
+    { "method": "GET", "route": "/api/v1/users/current/projects", "section": "Projects" },
+    { "method": "GET", "route": "/api/v1/users/:user/stats", "section": "Stats" },
+    { "method": "GET", "route": "/api/v1/users/current/stats", "section": "Stats" },
+    { "method": "GET", "route": "/api/v1/users/:user/stats/:range", "section": "Stats" },
+    { "method": "GET", "route": "/api/v1/users/current/stats/:range", "section": "Stats" },
+    { "method": "GET", "route": "/api/v1/stats/:range", "section": "Stats Aggregated" },
+    { "method": "GET", "route": "/api/v1/users/:user/status_bar/today", "section": "Status Bar" },
+    { "method": "GET", "route": "/api/v1/users/current/status_bar/today", "section": "Status Bar" },
+    { "method": "GET", "route": "/api/v1/users/:user/summaries", "section": "Summaries" },
+    { "method": "GET", "route": "/api/v1/users/current/summaries", "section": "Summaries" },
+    { "method": "GET", "route": "/api/v1/users/:user/user_agents", "section": "User Agents" },
+    { "method": "GET", "route": "/api/v1/users/current/user_agents", "section": "User Agents" }
+  ],
+  "undocumented_routes": [
+    { "method": "POST", "route": "/api/v1/users/current/ev", "description": "Event tracking (mouse/page views)" },
+    { "method": "POST", "route": "/api/v1/metrics/timing", "description": "Page render timing metrics" },
+    { "method": "GET", "route": "/api/v1/users/current/alerts/latest", "description": "Latest user alerts" },
+    { "method": "POST", "route": "/api/v1/exf", "description": "External tracking (pre-login)" }
+  ],
+  "insight_types": ["weekdays", "days", "languages", "projects", "operating_systems", "best_day", "daily_average", "stats"],
+  "insight_ranges": ["last_year", "last_6_months", "last_month"],
+  "stats_ranges": ["last_7_days", "last_30_days", "last_6_months", "last_year", "all_time"],
+  "auth": {
+    "methods": ["API Key (Base64 encoded)", "OAuth2 Bearer Token"],
+    "api_key_header": "Authorization: Basic base64(api_key)",
+    "oauth_header": "Authorization: Bearer <access_token>",
+    "oauth_authorize_url": "https://wakatime.com/oauth/authorize",
+    "oauth_token_url": "https://wakatime.com/oauth/token"
+  },
+  "network_captured_requests": [
+    {
+      "method": "POST",
+      "url": "https://wakatime.com/api/v1/users/current/ev",
+      "status": 200,
+      "request_body_example": "{\"ev\":{\"/\":[...],\"/login\":[...]}}"
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/durations?date=2026-04-01&paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/alerts/latest",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "url": "https://wakatime.com/api/v1/metrics/timing",
+      "status": 201,
+      "request_body_example": "{\"final_render_time\":441,\"page\":\"day\"}"
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/projects?q=&page=1",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/weekdays/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/days/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/languages/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/projects/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/operating_systems/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/best_day/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/daily_average/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/insights/stats/last_year?paywalled=true",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "url": "https://wakatime.com/api/v1/users/current/goals?today=2026-04-01",
+      "status": 200
+    }
+  ]
+}

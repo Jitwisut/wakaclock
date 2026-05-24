@@ -1,0 +1,111 @@
+[package]
+name = "wakaclock-server"
+version.workspace = true
+edition.workspace = true
+default-run = "wakaclock-server"
+
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/wakaclock-core",
+    "crates/wakaclock-ast",
+    "crates/wakaclock-cli",
+    "crates/wakaclock-ls",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "cookies", "blocking"] }
+dotenvy = "0.15"
+clap = { version = "4.5.43", features = ["derive"] }
+axum = { version = "0.7", features = ["multipart", "ws", "macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "timeout", "fs"] }
+clickhouse = { version = "0.13.3", features = ["lz4", "uuid", "rustls-tls", "inserter"] }
+governor = "0.8"
+rusqlite = { version = "0.29", features = ["bundled"] }
+gix = { version = "0.68", default-features = false, features = ["worktree-mutation"] }
+regex = "1"
+tree-sitter = "0.24"
+tower-lsp = "0.20"
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-scalar = "0.2"
+toml = "0.8"
+dirs = "5.0"
+
+
+[features]
+default = []
+
+[dependencies]
+wakaclock-core = { path = "crates/wakaclock-core" }
+
+# Web framework
+axum = { workspace = true }
+tower = "0.4"
+tower-http = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Database
+clickhouse = { workspace = true }
+
+# Authentication & Crypto
+jsonwebtoken = "9.3"
+argon2 = "0.5"
+
+# TLS/mTLS
+rustls = "0.23"
+
+# HTTP Client
+reqwest = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Logging & Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+anyhow = "1.0"
+thiserror = { workspace = true }
+
+# Environment
+dotenvy = { workspace = true }
+config = "0.14"
+
+# Utilities
+futures = "0.3"
+lazy_static = "1.4"
+bytes = "1.5"
+
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+regex = { workspace = true }
+
+# Terminal parsing
+clap = { version = "4.5.43", features = ["derive"] }
+
+[dev-dependencies]
+mockall = "0.12"
+tokio-test = "0.4"

@@ -1,0 +1,20 @@
+# Development Dockerfile for Rust backend with hot-reload
+# Using nightly for edition2024 support
+FROM rustlang/rust:nightly AS development
+
+WORKDIR /app
+
+# Install development dependencies including cargo-watch for hot-reload
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && cargo install cargo-watch
+
+# Expose ports
+EXPOSE 8080 8082
+
+# Default command (can be overridden in docker-compose)
+CMD ["cargo", "watch", "-x", "run"]

@@ -1,0 +1,358 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - text: 
+        - link "WakaTime Logo WakaTime" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - img "WakaTime Logo" [ref=e6]
+          - text: WakaTime
+      - generic [ref=e7]:
+        - list [ref=e8]:
+          - listitem [ref=e9]:
+            - link "Team dashboards" [ref=e10] [cursor=pointer]:
+              - /url: /orgs/018e0ef4-037f-44dd-8d26-f10efeac8149
+          - listitem [ref=e11]:
+            - link "Personal dashboard" [ref=e12] [cursor=pointer]:
+              - /url: /
+          - listitem [ref=e13]:
+            - button [ref=e14] [cursor=pointer]:
+              - img [ref=e15]
+            - text:    
+        - text:           
+  - generic [ref=e17]:
+    - generic [ref=e19]:
+      - link "WakaTime" [ref=e21] [cursor=pointer]:
+        - /url: /
+        - img [ref=e22]
+        - text: WakaTime
+      - text: 
+      - generic [ref=e24]:
+        - list [ref=e25]:
+          - listitem [ref=e26]:
+            - link " Dashboard" [ref=e27] [cursor=pointer]:
+              - /url: /dashboard
+              - generic [ref=e28]: 
+              - text: Dashboard
+          - listitem [ref=e29]:
+            - link " Lodash (Thailand)" [ref=e30] [cursor=pointer]:
+              - /url: /orgs/018e0ef4-037f-44dd-8d26-f10efeac8149
+              - generic [ref=e31]: 
+              - text: Lodash (Thailand)
+          - listitem [ref=e32]:
+            - link " Projects" [ref=e33] [cursor=pointer]:
+              - /url: /projects
+              - generic [ref=e34]: 
+              - text: Projects
+          - listitem [ref=e35]:
+            - link " Insights" [ref=e36] [cursor=pointer]:
+              - /url: /insights
+              - generic [ref=e37]: 
+              - text: Insights
+          - listitem [ref=e38]:
+            - link " Reports" [ref=e39] [cursor=pointer]:
+              - /url: /reports
+              - generic [ref=e40]: 
+              - text: Reports
+          - listitem [ref=e41]:
+            - link " Invoices" [ref=e42] [cursor=pointer]:
+              - /url: /invoices
+              - generic [ref=e43]: 
+              - text: Invoices
+          - listitem [ref=e44]:
+            - link " Goals" [ref=e45] [cursor=pointer]:
+              - /url: /goals
+              - generic [ref=e46]: 
+              - text: Goals
+          - listitem [ref=e47]:
+            - link " Shareables" [ref=e48] [cursor=pointer]:
+              - /url: /share
+              - generic [ref=e49]: 
+              - text: Shareables
+          - listitem [ref=e50]:
+            - link " Leaderboards" [ref=e51] [cursor=pointer]:
+              - /url: /leaders
+              - generic [ref=e52]: 
+              - text: Leaderboards
+          - listitem [ref=e53]:
+            - link " Wrapped" [ref=e54] [cursor=pointer]:
+              - /url: /wrapped
+              - generic [ref=e55]: 
+              - text: Wrapped
+          - listitem [ref=e56]:
+            - link " Integrations" [ref=e57] [cursor=pointer]:
+              - /url: /integrations
+              - generic [ref=e58]: 
+              - text: Integrations
+          - listitem [ref=e59]:
+            - link " Supported IDEs" [ref=e60] [cursor=pointer]:
+              - /url: /plugins
+              - generic [ref=e61]: 
+              - text: Supported IDEs
+        - list [ref=e62]:
+          - listitem [ref=e63]:
+            - link "Blog" [ref=e64] [cursor=pointer]:
+              - /url: /blog
+          - listitem [ref=e65]:
+            - link "API Docs" [ref=e66] [cursor=pointer]:
+              - /url: /developers
+          - listitem [ref=e67]:
+            - link "Pricing" [ref=e68] [cursor=pointer]:
+              - /url: /pricing
+          - listitem [ref=e69]:
+            - link "Community" [ref=e70] [cursor=pointer]:
+              - /url: /community
+          - listitem [ref=e71]:
+            - link "FAQ" [ref=e72] [cursor=pointer]:
+              - /url: /faq
+          - listitem [ref=e73]:
+            - link "Plugin Status" [ref=e74] [cursor=pointer]:
+              - /url: /plugins/status
+          - listitem [ref=e75]:
+            - link "About" [ref=e76] [cursor=pointer]:
+              - /url: /about
+    - generic [ref=e78]:
+      - generic [ref=e79]:
+        - heading "Integrations" [level=1] [ref=e81]
+        - heading "Install popular external integrations, or build your own. Looking for your team integrations?" [level=2] [ref=e83]:
+          - text: Install popular external integrations, or
+          - link "build your own" [ref=e84] [cursor=pointer]:
+            - /url: /apps
+          - text: .
+          - generic [ref=e85]:
+            - text: Looking for your
+            - link "team integrations" [ref=e86] [cursor=pointer]:
+              - /url: /settings/orgs/integrations
+            - text: "?"
+      - generic [ref=e89]:
+        - link "Bitbucket by WakaTime  See time spent coding per Bitbucket commit, issue, or pull request." [ref=e91] [cursor=pointer]:
+          - /url: /integrations/bitbucket
+          - img [ref=e92]
+          - generic [ref=e93]:
+            - heading "Bitbucket" [level=3] [ref=e94]
+            - heading "by WakaTime " [level=4] [ref=e95]:
+              - text: by WakaTime
+              - generic [ref=e96]: 
+            - paragraph [ref=e97]: See time spent coding per Bitbucket commit, issue, or pull request.
+        - link "GitHub by WakaTime  See time spent coding per GitHub commit, issue, or pull request." [ref=e99] [cursor=pointer]:
+          - /url: /integrations/github
+          - img [ref=e100]
+          - generic [ref=e101]:
+            - heading "GitHub" [level=3] [ref=e102]
+            - heading "by WakaTime " [level=4] [ref=e103]:
+              - text: by WakaTime
+              - generic [ref=e104]: 
+            - paragraph [ref=e105]: See time spent coding per GitHub commit, issue, or pull request.
+        - link "GitLab by WakaTime  See time spent coding per GitLab commit, issue, or pull request." [ref=e107] [cursor=pointer]:
+          - /url: /integrations/gitlab
+          - img [ref=e108]
+          - generic [ref=e109]:
+            - heading "GitLab" [level=3] [ref=e110]
+            - heading "by WakaTime " [level=4] [ref=e111]:
+              - text: by WakaTime
+              - generic [ref=e112]: 
+            - paragraph [ref=e113]: See time spent coding per GitLab commit, issue, or pull request.
+        - link "Installed Google Calendar by WakaTime  Import meetings from Google Calendar to display on your WakaTime dashboard." [ref=e115] [cursor=pointer]:
+          - /url: /integrations/google_calendar
+          - generic [ref=e117]: Installed
+          - img [ref=e118]
+          - generic [ref=e119]:
+            - heading "Google Calendar" [level=3] [ref=e120]
+            - heading "by WakaTime " [level=4] [ref=e121]:
+              - text: by WakaTime
+              - generic [ref=e122]: 
+            - paragraph [ref=e123]: Import meetings from Google Calendar to display on your WakaTime dashboard.
+        - link "Microsoft Calendar by WakaTime  Import meetings from Microsoft Outlook Calendar to display on your WakaTime dashboard." [ref=e125] [cursor=pointer]:
+          - /url: /integrations/microsoft_calendar
+          - img [ref=e126]
+          - generic [ref=e127]:
+            - heading "Microsoft Calendar" [level=3] [ref=e128]
+            - heading "by WakaTime " [level=4] [ref=e129]:
+              - text: by WakaTime
+              - generic [ref=e130]: 
+            - paragraph [ref=e131]: Import meetings from Microsoft Outlook Calendar to display on your WakaTime dashboard.
+        - link "Office 365 by WakaTime   Share each GitHub, Bitbucket, or GitLab commit with your team on Office 365. The time spent coding for the commit is included in the Office 365 message to your team." [ref=e133] [cursor=pointer]:
+          - /url: /integrations/office_365
+          - img [ref=e134]
+          - generic [ref=e135]:
+            - heading "Office 365" [level=3] [ref=e136]
+            - heading "by WakaTime  " [level=4] [ref=e137]:
+              - text: by WakaTime
+              - generic [ref=e138]: 
+              - generic [ref=e139]: 
+            - paragraph [ref=e140]: Share each GitHub, Bitbucket, or GitLab commit with your team on Office 365. The time spent coding for the commit is included in the Office 365 message to your team.
+        - link "Paymo by WakaTime   Sync your WakaTime stats with your team’s Paymo timesheets." [ref=e142] [cursor=pointer]:
+          - /url: /integrations/paymo
+          - img [ref=e143]
+          - generic [ref=e144]:
+            - heading "Paymo" [level=3] [ref=e145]
+            - heading "by WakaTime  " [level=4] [ref=e146]:
+              - text: by WakaTime
+              - generic [ref=e147]: 
+              - generic [ref=e148]: 
+            - paragraph [ref=e149]: Sync your WakaTime stats with your team’s Paymo timesheets.
+        - link "Slack by WakaTime   Share each GitHub, Bitbucket, or GitLab commit with your team on Slack. The time spent coding for the commit is included in the Slack message to your team." [ref=e151] [cursor=pointer]:
+          - /url: /slack
+          - img [ref=e152]
+          - generic [ref=e153]:
+            - heading "Slack" [level=3] [ref=e154]
+            - heading "by WakaTime  " [level=4] [ref=e155]:
+              - text: by WakaTime
+              - generic [ref=e156]: 
+              - generic [ref=e157]: 
+            - paragraph [ref=e158]: Share each GitHub, Bitbucket, or GitLab commit with your team on Slack. The time spent coding for the commit is included in the Slack message to your team.
+        - link "Installed Zoom by WakaTime  See time spent in Zoom meetings on your WakaTime dashboard." [ref=e160] [cursor=pointer]:
+          - /url: /integrations/zoom
+          - generic [ref=e162]: Installed
+          - img [ref=e163]
+          - generic [ref=e164]:
+            - heading "Zoom" [level=3] [ref=e165]
+            - heading "by WakaTime " [level=4] [ref=e166]:
+              - text: by WakaTime
+              - generic [ref=e167]: 
+            - paragraph [ref=e168]: See time spent in Zoom meetings on your WakaTime dashboard.
+        - link "Zube by WakaTime  See time spent coding per Zube ticket." [ref=e170] [cursor=pointer]:
+          - /url: /integrations/zube
+          - img [ref=e171]
+          - generic [ref=e172]:
+            - heading "Zube" [level=3] [ref=e173]
+            - heading "by WakaTime " [level=4] [ref=e174]:
+              - text: by WakaTime
+              - generic [ref=e175]: 
+            - paragraph [ref=e176]: See time spent coding per Zube ticket.
+        - link "Beeminder by Beeminder Inc Beeminder helps you get stuff done" [ref=e178] [cursor=pointer]:
+          - /url: /apps/Beeminder
+          - img [ref=e179]
+          - generic [ref=e180]:
+            - heading "Beeminder" [level=3] [ref=e181]
+            - heading "by Beeminder Inc" [level=4] [ref=e182]
+            - paragraph [ref=e183]: Beeminder helps you get stuff done
+        - link "crackboard.dev by crackedboard.dev Track your productivity through a daily leaderboard" [ref=e185] [cursor=pointer]:
+          - /url: /apps/crackboard.dev
+          - img [ref=e186]
+          - generic [ref=e187]:
+            - heading "crackboard.dev" [level=3] [ref=e188]
+            - heading "by crackedboard.dev" [level=4] [ref=e189]
+            - paragraph [ref=e190]: Track your productivity through a daily leaderboard
+        - link "Histre by Histre Histre is a smart bookmarking tool, with notes, highlights, history, and sharing. Install to visualize on WakaTime dashboard the time you spend browsing websites." [ref=e192] [cursor=pointer]:
+          - /url: /apps/Histre
+          - img [ref=e193]
+          - generic [ref=e194]:
+            - heading "Histre" [level=3] [ref=e195]
+            - heading "by Histre" [level=4] [ref=e196]
+            - paragraph [ref=e197]: Histre is a smart bookmarking tool, with notes, highlights, history, and sharing. Install to visualize on WakaTime dashboard the time you spend browsing websites.
+        - link "Linitime by Greif Matthias A 3rd party Android client app for WakaTime." [ref=e199] [cursor=pointer]:
+          - /url: /apps/Linitime
+          - img [ref=e200]
+          - generic [ref=e201]:
+            - heading "Linitime" [level=3] [ref=e202]
+            - heading "by Greif Matthias" [level=4] [ref=e203]
+            - paragraph [ref=e204]: A 3rd party Android client app for WakaTime.
+        - link "Pipedream by Pipedream Pipedream is a serverless integration platform for developers, with more than 900 integrated apps and 350k developers." [ref=e206] [cursor=pointer]:
+          - /url: /apps/Pipedream
+          - img [ref=e207]
+          - generic [ref=e208]:
+            - heading "Pipedream" [level=3] [ref=e209]
+            - heading "by Pipedream" [level=4] [ref=e210]
+            - paragraph [ref=e211]: Pipedream is a serverless integration platform for developers, with more than 900 integrated apps and 350k developers.
+        - link "PocketWaka by Vladimir Kondenko A 3rd party Android client app for WakaTime." [ref=e213] [cursor=pointer]:
+          - /url: /apps/PocketWaka
+          - img [ref=e214]
+          - generic [ref=e215]:
+            - heading "PocketWaka" [level=3] [ref=e216]
+            - heading "by Vladimir Kondenko" [level=4] [ref=e217]
+            - paragraph [ref=e218]: A 3rd party Android client app for WakaTime.
+        - link "Timeless by devgianlu A 3rd party Android client app for WakaTime." [ref=e220] [cursor=pointer]:
+          - /url: /apps/Timeless
+          - img [ref=e221]
+          - generic [ref=e222]:
+            - heading "Timeless" [level=3] [ref=e223]
+            - heading "by devgianlu" [level=4] [ref=e224]
+            - paragraph [ref=e225]: A 3rd party Android client app for WakaTime.
+        - link "Waka iOS by Pramodya Abeysinghe A 3rd party iOS client app for WakaTime." [ref=e227] [cursor=pointer]:
+          - /url: /apps/Waka%20iOS
+          - img [ref=e228]
+          - generic [ref=e229]:
+            - heading "Waka iOS" [level=3] [ref=e230]
+            - heading "by Pramodya Abeysinghe" [level=4] [ref=e231]
+            - paragraph [ref=e232]: A 3rd party iOS client app for WakaTime.
+        - link "Waka Watch by uioporqwerty See your WakaTime stats on your Apple Watch." [ref=e234] [cursor=pointer]:
+          - /url: /apps/Waka%20Watch
+          - img [ref=e235]
+          - generic [ref=e236]:
+            - heading "Waka Watch" [level=3] [ref=e237]
+            - heading "by uioporqwerty" [level=4] [ref=e238]
+            - paragraph [ref=e239]: See your WakaTime stats on your Apple Watch.
+        - link "WTKit by wtkit.app A 3rd party WakaTime dashboard App for your iOS and Android device" [ref=e241] [cursor=pointer]:
+          - /url: /apps/WTKit
+          - img [ref=e242]
+          - generic [ref=e243]:
+            - heading "WTKit" [level=3] [ref=e244]
+            - heading "by wtkit.app" [level=4] [ref=e245]
+            - paragraph [ref=e246]: A 3rd party WakaTime dashboard App for your iOS and Android device
+        - link "Zenobase by Zenobase LLC Store, visualize and correlate data from WakaTime with data from other sources." [ref=e248] [cursor=pointer]:
+          - /url: /apps/Zenobase
+          - img [ref=e249]
+          - generic [ref=e250]:
+            - heading "Zenobase" [level=3] [ref=e251]
+            - heading "by Zenobase LLC" [level=4] [ref=e252]
+            - paragraph [ref=e253]: Store, visualize and correlate data from WakaTime with data from other sources.
+      - heading "Editor plugins" [level=1] [ref=e256]
+      - link [ref=e259] [cursor=pointer]:
+        - /url: /editors
+        - img [ref=e260]
+      - link "more editors…" [ref=e263] [cursor=pointer]:
+        - /url: /editors
+      - generic [ref=e265]:
+        - text: Not seeing an integration you need?
+        - link "Let us know!" [ref=e266] [cursor=pointer]:
+          - /url: mailto:support@wakatime.com?subject=Integration needed
+    - contentinfo [ref=e267]:
+      - generic [ref=e269]:
+        - list [ref=e271]:
+          - listitem [ref=e272]: © 2026 WakaTime
+          - listitem [ref=e273]:
+            - link "Terms" [ref=e274] [cursor=pointer]:
+              - /url: /terms
+          - listitem [ref=e275]:
+            - link "Privacy" [ref=e276] [cursor=pointer]:
+              - /url: /privacy
+          - listitem [ref=e277]:
+            - link "About" [ref=e278] [cursor=pointer]:
+              - /url: /about
+          - listitem [ref=e279]:
+            - link "Blog" [ref=e280] [cursor=pointer]:
+              - /url: /blog
+          - listitem [ref=e281]:
+            - link "Tutorials" [ref=e282] [cursor=pointer]:
+              - /url: https://wakatime.io
+        - list [ref=e284]:
+          - listitem [ref=e285]:
+            - link "" [ref=e286] [cursor=pointer]:
+              - /url: https://github.com/wakatime
+              - generic [ref=e287]: 
+          - listitem [ref=e288]:
+            - link "" [ref=e289] [cursor=pointer]:
+              - /url: https://www.reddit.com/r/WakaTime/
+              - generic [ref=e290]: 
+          - listitem [ref=e291]:
+            - link "X" [ref=e292] [cursor=pointer]:
+              - /url: https://x.com/intent/user?screen_name=WakaTime
+              - img "X" [ref=e293]
+          - listitem [ref=e295]:
+            - link [ref=e296] [cursor=pointer]:
+              - /url: https://wonderful.dev/c/WakaTime
+              - img [ref=e297]
+        - list [ref=e303]:
+          - listitem [ref=e304]:
+            - link "Supported IDEs" [ref=e305] [cursor=pointer]:
+              - /url: /plugins
+          - listitem [ref=e306]:
+            - link "Leaderboards" [ref=e307] [cursor=pointer]:
+              - /url: /leaders
+          - listitem [ref=e308]:
+            - link "Status" [ref=e309] [cursor=pointer]:
+              - /url: https://status.wakatime.com
+          - listitem [ref=e310]:
+            - link "Help" [ref=e311] [cursor=pointer]:
+              - /url: /help

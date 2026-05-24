@@ -1,0 +1,171 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - text: 
+        - link "WakaTime Logo WakaTime" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - img "WakaTime Logo" [ref=e6]
+          - text: WakaTime
+      - generic [ref=e7]:
+        - list [ref=e8]:
+          - listitem [ref=e9]:
+            - link "Team dashboards" [ref=e10] [cursor=pointer]:
+              - /url: /orgs/018e0ef4-037f-44dd-8d26-f10efeac8149
+          - listitem [ref=e11]:
+            - link "Personal dashboard" [ref=e12] [cursor=pointer]:
+              - /url: /
+          - listitem [ref=e13]:
+            - button [ref=e14] [cursor=pointer]:
+              - img [ref=e15]
+            - text:    
+        - text:           
+  - generic [ref=e17]:
+    - generic [ref=e19]:
+      - link "WakaTime" [ref=e21] [cursor=pointer]:
+        - /url: /
+        - img [ref=e22]
+        - text: WakaTime
+      - text: 
+      - generic [ref=e24]:
+        - list [ref=e25]:
+          - listitem [ref=e26]:
+            - link " Dashboard" [ref=e27] [cursor=pointer]:
+              - /url: /dashboard
+              - generic [ref=e28]: 
+              - text: Dashboard
+          - listitem [ref=e29]:
+            - link " Lodash (Thailand)" [ref=e30] [cursor=pointer]:
+              - /url: /orgs/018e0ef4-037f-44dd-8d26-f10efeac8149
+              - generic [ref=e31]: 
+              - text: Lodash (Thailand)
+          - listitem [ref=e32]:
+            - link " Projects" [ref=e33] [cursor=pointer]:
+              - /url: /projects
+              - generic [ref=e34]: 
+              - text: Projects
+          - listitem [ref=e35]:
+            - link " Insights" [ref=e36] [cursor=pointer]:
+              - /url: /insights
+              - generic [ref=e37]: 
+              - text: Insights
+          - listitem [ref=e38]:
+            - link " Reports" [ref=e39] [cursor=pointer]:
+              - /url: /reports
+              - generic [ref=e40]: 
+              - text: Reports
+          - listitem [ref=e41]:
+            - link " Invoices" [ref=e42] [cursor=pointer]:
+              - /url: /invoices
+              - generic [ref=e43]: 
+              - text: Invoices
+          - listitem [ref=e44]:
+            - link " Goals" [ref=e45] [cursor=pointer]:
+              - /url: /goals
+              - generic [ref=e46]: 
+              - text: Goals
+          - listitem [ref=e47]:
+            - link " Shareables" [ref=e48] [cursor=pointer]:
+              - /url: /share
+              - generic [ref=e49]: 
+              - text: Shareables
+          - listitem [ref=e50]:
+            - link " Leaderboards" [ref=e51] [cursor=pointer]:
+              - /url: /leaders
+              - generic [ref=e52]: 
+              - text: Leaderboards
+          - listitem [ref=e53]:
+            - link " Wrapped" [ref=e54] [cursor=pointer]:
+              - /url: /wrapped
+              - generic [ref=e55]: 
+              - text: Wrapped
+          - listitem [ref=e56]:
+            - link " Integrations" [ref=e57] [cursor=pointer]:
+              - /url: /integrations
+              - generic [ref=e58]: 
+              - text: Integrations
+          - listitem [ref=e59]:
+            - link " Supported IDEs" [ref=e60] [cursor=pointer]:
+              - /url: /plugins
+              - generic [ref=e61]: 
+              - text: Supported IDEs
+        - list [ref=e62]:
+          - listitem [ref=e63]:
+            - link "Blog" [ref=e64] [cursor=pointer]:
+              - /url: /blog
+          - listitem [ref=e65]:
+            - link "API Docs" [ref=e66] [cursor=pointer]:
+              - /url: /developers
+          - listitem [ref=e67]:
+            - link "Pricing" [ref=e68] [cursor=pointer]:
+              - /url: /pricing
+          - listitem [ref=e69]:
+            - link "Community" [ref=e70] [cursor=pointer]:
+              - /url: /community
+          - listitem [ref=e71]:
+            - link "FAQ" [ref=e72] [cursor=pointer]:
+              - /url: /faq
+          - listitem [ref=e73]:
+            - link "Plugin Status" [ref=e74] [cursor=pointer]:
+              - /url: /plugins/status
+          - listitem [ref=e75]:
+            - link "About" [ref=e76] [cursor=pointer]:
+              - /url: /about
+    - generic [ref=e78]:
+      - heading "Insights" [level=1] [ref=e81]
+      - combobox [ref=e85]:
+        - option "Since Mar 2024"
+        - option "Last Year" [selected]
+        - option "2026"
+        - option "2025"
+        - option "2024"
+      - img [ref=e88]
+    - contentinfo [ref=e89]:
+      - generic [ref=e91]:
+        - list [ref=e93]:
+          - listitem [ref=e94]: © 2026 WakaTime
+          - listitem [ref=e95]:
+            - link "Terms" [ref=e96] [cursor=pointer]:
+              - /url: /terms
+          - listitem [ref=e97]:
+            - link "Privacy" [ref=e98] [cursor=pointer]:
+              - /url: /privacy
+          - listitem [ref=e99]:
+            - link "About" [ref=e100] [cursor=pointer]:
+              - /url: /about
+          - listitem [ref=e101]:
+            - link "Blog" [ref=e102] [cursor=pointer]:
+              - /url: /blog
+          - listitem [ref=e103]:
+            - link "Tutorials" [ref=e104] [cursor=pointer]:
+              - /url: https://wakatime.io
+        - list [ref=e106]:
+          - listitem [ref=e107]:
+            - link "" [ref=e108] [cursor=pointer]:
+              - /url: https://github.com/wakatime
+              - generic [ref=e109]: 
+          - listitem [ref=e110]:
+            - link "" [ref=e111] [cursor=pointer]:
+              - /url: https://www.reddit.com/r/WakaTime/
+              - generic [ref=e112]: 
+          - listitem [ref=e113]:
+            - link "X" [ref=e114] [cursor=pointer]:
+              - /url: https://x.com/intent/user?screen_name=WakaTime
+              - img "X" [ref=e115]
+          - listitem [ref=e117]:
+            - link [ref=e118] [cursor=pointer]:
+              - /url: https://wonderful.dev/c/WakaTime
+              - img [ref=e119]
+        - list [ref=e125]:
+          - listitem [ref=e126]:
+            - link "Supported IDEs" [ref=e127] [cursor=pointer]:
+              - /url: /plugins
+          - listitem [ref=e128]:
+            - link "Leaderboards" [ref=e129] [cursor=pointer]:
+              - /url: /leaders
+          - listitem [ref=e130]:
+            - link "Status" [ref=e131] [cursor=pointer]:
+              - /url: https://status.wakatime.com
+          - listitem [ref=e132]:
+            - link "Help" [ref=e133] [cursor=pointer]:
+              - /url: /help
