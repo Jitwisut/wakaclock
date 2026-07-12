@@ -73,7 +73,7 @@ class WakaclockConfigService {
     }
     resolveCliPath(config) {
         const configuredPath = config.get("cliPath", "").trim();
-        return configuredPath || "wakaclock-cli";
+        return configuredPath || "wakaclock";
     }
 }
 exports.WakaclockConfigService = WakaclockConfigService;

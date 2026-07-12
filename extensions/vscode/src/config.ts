@@ -48,6 +48,6 @@ export class WakaclockConfigService implements vscode.Disposable {
 
   private resolveCliPath(config: vscode.WorkspaceConfiguration): string {
     const configuredPath = config.get<string>("cliPath", "").trim();
-    return configuredPath || "wakaclock-cli";
+    return configuredPath || "wakaclock";
   }
 }
