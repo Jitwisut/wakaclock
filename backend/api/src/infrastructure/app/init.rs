@@ -4,9 +4,11 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::logger::Logger;
+use crate::repository::analytics::AnalyticsRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
+use crate::services::ai_stats::AiStatsService;
 use crate::services::all_time::AllTimeService;
 use crate::services::duration::DurationService;
 use crate::services::heartbeat::HeartbeatService;
@@ -18,6 +20,7 @@ use crate::services::projects::ProjectsService;
 use crate::services::reprocess::ReprocessService;
 use crate::services::stats::StatsService;
 use crate::services::summary::SummaryService;
+use crate::services::user::UserService;
 use crate::services::wakatime_import::WakaTimeImportService;
 
 /// โครงสร้าง App Container ที่ปฏิบัติตาม Clean Architecture
@@ -25,10 +28,13 @@ pub struct AppState {
     pub logger: Arc<Logger>,
     pub config: Arc<Config>,
     pub clickhouse: Arc<ClickHouseClient>,
+    pub analytics_repo: Arc<AnalyticsRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
     pub project_rule_repo: Arc<ProjectRuleRepository>,
+    pub ai_stats_service: Arc<AiStatsService>,
     pub all_time_service: Arc<AllTimeService>,
+    pub user_service: Arc<UserService>,
     pub heartbeat_service: Arc<HeartbeatService>,
     pub duration_service: Arc<DurationService>,
     pub insights_service: Arc<InsightsService>,
@@ -80,12 +86,15 @@ pub async fn create_app_state() -> Result<AppState> {
     );
 
     // Initialise Repositories
+    let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
     let heartbeat_repo = Arc::new(HeartbeatRepository::new(clickhouse.clone()));
     let project_merge_repo = Arc::new(ProjectMergeRepository::new(clickhouse.clone()));
     let project_rule_repo = Arc::new(ProjectRuleRepository::new(clickhouse.clone()));
 
     // Initialise Services
+    let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
     let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone()));
+    let user_service = Arc::new(UserService::new(clickhouse.clone()));
     let heartbeat_service = Arc::new(HeartbeatService::new(heartbeat_repo.clone()));
     let duration_service = Arc::new(DurationService::new(clickhouse.clone()));
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone()));
@@ -105,10 +114,13 @@ pub async fn create_app_state() -> Result<AppState> {
         logger,
         config,
         clickhouse,
+        analytics_repo,
         heartbeat_repo,
         project_merge_repo,
         project_rule_repo,
+        ai_stats_service,
         all_time_service,
+        user_service,
         heartbeat_service,
         duration_service,
         insights_service,

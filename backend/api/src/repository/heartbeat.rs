@@ -24,7 +24,7 @@ impl HeartbeatRepository {
                     entity String,
                     entity_type String,
                     time Float64,
-                    date UInt16,
+                    date Date DEFAULT toDate(toDateTime(toUInt32(time))),
                     project Nullable(String),
                     branch Nullable(String),
                     language Nullable(String),

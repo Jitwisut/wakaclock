@@ -43,7 +43,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             user_id: Uuid::new_v4(),
-            server_url: "http://localhost:3030".to_string(),
+            server_url: "http://localhost:8080".to_string(),
             api_key: None,
         }
     }

@@ -1,3 +1,4 @@
+pub mod ai_stats;
 pub mod all_time;
 pub mod duration;
 pub mod heartbeat;
@@ -9,8 +10,10 @@ pub mod projects;
 pub mod reprocess;
 pub mod stats;
 pub mod summary;
+pub mod user;
 pub mod wakatime_import;
 
+pub use ai_stats::*;
 pub use all_time::*;
 pub use duration::*;
 pub use heartbeat::*;
@@ -22,4 +25,5 @@ pub use projects::*;
 pub use reprocess::*;
 pub use stats::*;
 pub use summary::*;
+pub use user::*;
 pub use wakatime_import::*;

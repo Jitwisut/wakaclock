@@ -1,3 +1,4 @@
+pub mod ai_stats;
 pub mod all_time;
 pub mod durations;
 pub mod heartbeats;
@@ -10,6 +11,7 @@ pub mod reprocess;
 pub mod stats;
 pub mod status_bar;
 pub mod summaries;
+pub mod users;
 pub mod wakatime_import;
 use crate::infrastructure::app::AppState;
 use axum::{
@@ -34,6 +36,8 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/stats/:range", get(stats::get))
         .route("/summaries", get(summaries::list))
         .route("/import/wakatime", post(wakatime_import::run))
+        .route("/users/current", get(users::current))
+        .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/current/keystroke_stats", get(keystroke_stats::get))
         .route("/project_merges", get(project_merges::list))
         .route(

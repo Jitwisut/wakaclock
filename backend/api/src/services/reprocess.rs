@@ -113,9 +113,9 @@ impl ReprocessService {
                     ai_lines_added,
                     ai_lines_deleted,
                     toUInt32(created_at) AS created_at
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                ORDER BY time ASC
+                FROM wakaclock.heartbeats AS h
+                WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                ORDER BY h.time ASC
                 ",
             )
             .bind(user_id)

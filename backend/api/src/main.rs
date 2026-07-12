@@ -40,6 +40,10 @@ async fn main() -> Result<()> {
         error!("Migration failed: {}", e);
         return Err(e);
     }
+    if let Err(e) = app_state.analytics_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
     info!("Migrations completed successfully.");
 
     // 3. Setup router
