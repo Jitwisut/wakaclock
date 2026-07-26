@@ -5,13 +5,18 @@ import { registerCommands } from "./commands";
 import { WakaclockConfigService } from "./config";
 import { registerEventSubscriptions } from "./events";
 import { Logger } from "./logging";
+import { getStoredApiKey } from "./secrets";
 import { StatusBarController } from "./statusBar";
 
 export function activate(context: vscode.ExtensionContext): void {
   console.log("[wakaclock] extension activated");
   const configService = new WakaclockConfigService();
   const logger = new Logger(() => configService.getSnapshot().debugLogging);
-  const cliService = new WakaclockCliService(() => configService.getSnapshot(), logger);
+  const cliService = new WakaclockCliService(
+    () => configService.getSnapshot(),
+    logger,
+    () => getStoredApiKey(context.secrets)
+  );
   const statusBar = new StatusBarController(() => configService.getSnapshot(), cliService, logger);
   const bufferManager = new HeartbeatBufferManager(
     () => configService.getSnapshot(),

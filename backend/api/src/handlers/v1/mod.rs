@@ -1,5 +1,7 @@
 pub mod ai_stats;
 pub mod all_time;
+pub mod api_key;
+pub mod auth;
 pub mod durations;
 pub mod heartbeats;
 pub mod insights;
@@ -22,6 +24,8 @@ use std::sync::Arc;
 
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/auth/register", post(auth::register))
+        .route("/auth/login", post(auth::login))
         .route(
             "/heartbeats",
             post(heartbeats::create).get(heartbeats::list),
@@ -37,6 +41,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/summaries", get(summaries::list))
         .route("/import/wakatime", post(wakatime_import::run))
         .route("/users/current", get(users::current))
+        .route(
+            "/users/current/api_key",
+            post(api_key::generate).delete(api_key::revoke),
+        )
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/current/keystroke_stats", get(keystroke_stats::get))
         .route("/project_merges", get(project_merges::list))

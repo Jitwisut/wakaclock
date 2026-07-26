@@ -1,0 +1,62 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import { ActivityIcon, CalendarDaysIcon, ClockIcon, ZapIcon } from 'lucide-react';
+
+import { StatTile } from '@/components/wakaclock/stat-tile';
+import { getAllTime, getStatusBar } from '@/lib/wakaclock/endpoints';
+import { formatCompactNumber } from '@/lib/wakaclock/format';
+import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
+import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+export function StatusTiles() {
+  const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+
+  const statusBar = useQuery({
+    queryKey: wakaclockKeys.statusBar(),
+    queryFn: getStatusBar,
+    refetchInterval: 60_000,
+  });
+
+  const allTime = useQuery({
+    queryKey: wakaclockKeys.allTime(userId),
+    queryFn: () => getAllTime(userId),
+    enabled: Boolean(userId),
+  });
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <StatTile
+        icon={<ClockIcon />}
+        isLoading={statusBar.isLoading}
+        label="Today (all users)"
+        subtext={`${formatCompactNumber(statusBar.data?.heartbeat_count ?? 0)} heartbeats`}
+        tooltip="This endpoint (GET /status_bar/today) doesn't filter by user_id on the backend — it aggregates across every account. It's shown for reference, not per-user tracking."
+        value={statusBar.data?.human_readable ?? '0m'}
+      />
+      <StatTile
+        icon={<ZapIcon />}
+        isLoading={allTime.isLoading}
+        label="All-time total"
+        subtext="since first heartbeat"
+        value={allTime.data?.data.text ?? '0m'}
+      />
+      <StatTile
+        icon={<CalendarDaysIcon />}
+        isLoading={allTime.isLoading}
+        label="Days with activity"
+        value={String(allTime.data?.data.days_with_activity ?? 0)}
+      />
+      <StatTile
+        icon={<ActivityIcon />}
+        isLoading={allTime.isLoading}
+        label="Coding since"
+        value={
+          allTime.data?.data.since
+            ? new Date(allTime.data.data.since).toLocaleDateString()
+            : '—'
+        }
+      />
+    </div>
+  );
+}

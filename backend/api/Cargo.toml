@@ -69,6 +69,8 @@ clickhouse = { workspace = true }
 # Authentication & Crypto
 jsonwebtoken = "9.3"
 argon2 = "0.5"
+sha2 = "0.10"
+base64 = "0.22"
 
 # TLS/mTLS
 rustls = "0.23"

@@ -62,9 +62,20 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
     },
-    Config,
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
     Status,
     Today,
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Save an API key generated from the Wakaclock dashboard into ~/.wakaclock/config.toml
+    SetKey { key: String },
+    /// Remove the saved API key (heartbeats fall back to the unauthenticated user_id)
+    ClearKey,
 }
 #[derive(Debug, Clone, Deserialize)]
 struct ExtraHeartbeatInput {
@@ -94,7 +105,18 @@ struct ExtraHeartbeatInput {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    let config = Config::load();
+    let mut config = Config::load();
+
+    // An API key from the environment (set by the VS Code extension via SecretStorage)
+    // takes precedence over the persisted config.toml, without writing it back to disk —
+    // that keeps the editor's own secret store as the single place the key lives when set
+    // this way.
+    if let Ok(env_key) = std::env::var("WAKACLOCK_API_KEY") {
+        if !env_key.trim().is_empty() {
+            config.api_key = Some(env_key);
+        }
+    }
+
     let api_client = ApiClient::new(config.clone())?;
 
     match cli.command {
@@ -176,12 +198,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("Queued: {}", report.queued);
             println!("Flushed: {}", report.flushed);
         }
-        Commands::Config => {
-            println!("Config path: {}", Config::config_path().display());
-            println!("User ID: {}", config.user_id);
-            println!("Server URL: {}", config.server_url);
-            println!("API key set: {}", config.api_key.is_some());
-        }
+        Commands::Config { action } => match action {
+            None => {
+                println!("Config path: {}", Config::config_path().display());
+                println!("User ID: {}", config.user_id);
+                println!("Server URL: {}", config.server_url);
+                println!("API key set: {}", config.api_key.is_some());
+            }
+            Some(ConfigAction::SetKey { key }) => {
+                // Persist to config.toml, independent of any WAKACLOCK_API_KEY env
+                // override applied above — this always writes the on-disk value.
+                let mut persisted = Config::load();
+                persisted.api_key = Some(key);
+                persisted.save();
+                println!("API key saved to {}", Config::config_path().display());
+            }
+            Some(ConfigAction::ClearKey) => {
+                let mut persisted = Config::load();
+                persisted.api_key = None;
+                persisted.save();
+                println!("API key cleared from {}", Config::config_path().display());
+            }
+        },
         Commands::Status => {
             let queue = Queue::open()?;
             println!("Config path: {}", Config::config_path().display());

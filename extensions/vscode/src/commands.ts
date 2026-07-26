@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { HeartbeatBufferManager } from "./buffer";
 import type { WakaclockCliService } from "./cli";
 import type { WakaclockConfigService } from "./config";
+import { clearStoredApiKey, getStoredApiKey, setStoredApiKey } from "./secrets";
 import type { StatusBarController } from "./statusBar";
 
 export function registerCommands(
@@ -60,6 +61,40 @@ export function registerCommands(
       await configService.updateSetting("statusBarEnabled", !current);
       statusBar.applyVisibility();
       await statusBar.refresh();
+    }),
+    vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
+      const value = await vscode.window.showInputBox({
+        prompt: "API key generated from the Wakaclock dashboard (Settings → API key)",
+        placeHolder: "wcl_...",
+        password: true,
+        ignoreFocusOut: true
+      });
+
+      if (value === undefined) {
+        return;
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        await vscode.window.showWarningMessage("No API key entered — nothing was saved.");
+        return;
+      }
+
+      // Stored via SecretStorage (OS keychain), never in settings.json.
+      await setStoredApiKey(context.secrets, trimmed);
+      await vscode.window.showInformationMessage("Wakaclock API key saved.");
+    }),
+    vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
+      const existing = await getStoredApiKey(context.secrets);
+      if (!existing) {
+        await vscode.window.showInformationMessage("No Wakaclock API key is currently set.");
+        return;
+      }
+
+      await clearStoredApiKey(context.secrets);
+      await vscode.window.showInformationMessage(
+        "Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again."
+      );
     })
   );
 }

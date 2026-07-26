@@ -175,6 +175,12 @@ const STATEMENTS: &[&str] = &[
     ENGINE = ReplacingMergeTree(updated_at)
     ORDER BY (user_id)
     "#,
+    // `CREATE TABLE IF NOT EXISTS` above is a no-op against a database that already has
+    // `wakaclock.users` — this ALTER is what actually adds the column on existing installs.
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS password_hash String DEFAULT ''
+    "#,
     // ============================================================
     // Materialized Views — Path A: live ingestion (from heartbeats)
     // ============================================================

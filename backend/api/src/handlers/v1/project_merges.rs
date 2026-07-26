@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
+use crate::middleware::auth;
 use crate::model::project_merge::ProjectMergeRow;
 
 #[derive(Debug, Deserialize)]
@@ -50,11 +51,13 @@ pub struct DeleteResponse {
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<ProjectMergesQuery>,
 ) -> Result<Json<ProjectMergesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
     let rows = state
         .project_merge_service
-        .list_by_user(query.user_id)
+        .list_by_user(user_id)
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -65,13 +68,15 @@ pub async fn list(
 
 pub async fn upsert(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(merge_id): Path<Uuid>,
     Json(payload): Json<UpsertProjectMergePayload>,
 ) -> Result<Json<ProjectMergeMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = auth::resolve_user_id(&state, &headers, Some(payload.user_id));
     let row = state
         .project_merge_service
         .upsert(
-            payload.user_id,
+            user_id,
             merge_id,
             payload.source_project,
             payload.target_project,
@@ -87,12 +92,14 @@ pub async fn upsert(
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(merge_id): Path<Uuid>,
     Query(query): Query<ProjectMergesQuery>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
     state
         .project_merge_service
-        .delete(query.user_id, merge_id)
+        .delete(user_id, merge_id)
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 

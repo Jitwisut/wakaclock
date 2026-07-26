@@ -117,17 +117,19 @@ impl HeartbeatRepository {
     }
 
     /// Query heartbeats ตาม date string "YYYY-MM-DD"
-    /// date ใน ClickHouse เก็บเป็น UInt16 (days since 1970-01-01)
+    ///
+    /// Binds the raw string and lets ClickHouse's `toDate()` parse it — matching every
+    /// other date-filtered query in this codebase (see services/duration.rs,
+    /// services/summary.rs, etc.). This function used to convert the string to a
+    /// days-since-epoch `u16` in Rust and bind that instead; ClickHouse 24.x's `equals()`
+    /// rejects comparing `Date` against a bare `UInt16` ("Illegal types of arguments
+    /// (Date, UInt16) of function equals"), so every call failed.
     pub async fn get_by_date(
         &self,
         user_id: uuid::Uuid,
         date_str: &str, // "2026-04-10"
     ) -> Result<Vec<HeartbeatRow>> {
         let ch_client = self.client.get_client();
-
-        // แปลง "YYYY-MM-DD" → days since epoch (UInt16)
-        let date_u16 =
-            date_str_to_u16(date_str).context("Invalid date format, expected YYYY-MM-DD")?;
 
         let rows = ch_client
             .query(
@@ -142,33 +144,15 @@ impl HeartbeatRepository {
                     is_ai_generated, ai_agent, ai_lines_added, ai_lines_deleted,
                     created_at
                 FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date = ?
+                WHERE user_id = ? AND date = toDate(?)
                 ORDER BY time ASC",
             )
             .bind(user_id)
-            .bind(date_u16)
+            .bind(date_str)
             .fetch_all::<HeartbeatRow>()
             .await
             .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))?;
 
         Ok(rows)
     }
-}
-
-/// แปลง "YYYY-MM-DD" → UInt16 (days since 1970-01-01)
-fn date_str_to_u16(date_str: &str) -> Option<u16> {
-    let parts: Vec<&str> = date_str.split('-').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let y: i32 = parts[0].parse().ok()?;
-    let m: u32 = parts[1].parse().ok()?;
-    let d: u32 = parts[2].parse().ok()?;
-
-    use chrono::NaiveDate;
-    let date = NaiveDate::from_ymd_opt(y, m, d)?;
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
-    let days = (date - epoch).num_days();
-
-    u16::try_from(days).ok()
 }

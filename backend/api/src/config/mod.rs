@@ -19,10 +19,22 @@ pub struct ClickHouseConfig {
 pub struct Config {
     pub server: ServerConfig,
     pub clickhouse: ClickHouseConfig,
+    pub jwt_secret: String,
 }
+
+const DEV_JWT_SECRET: &str = "wakaclock-dev-secret-change-me";
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+            tracing::warn!(
+                "JWT_SECRET not set — using an insecure default. Sessions will not survive a \
+                 restart of anyone else who also happens to run with the same default, and \
+                 this must never be used outside local development."
+            );
+            DEV_JWT_SECRET.to_string()
+        });
+
         Ok(Self {
             server: ServerConfig {
                 host: std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
@@ -40,6 +52,7 @@ impl Config {
                     .or_else(|_| std::env::var("CLICKHOUSE_DATABASE"))
                     .unwrap_or_else(|_| "wakaclock".to_string()),
             },
+            jwt_secret,
         })
     }
 }

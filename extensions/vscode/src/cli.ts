@@ -13,6 +13,10 @@ export class WakaclockCliService {
     public constructor(
         private readonly getConfig: () => WakaclockConfigSnapshot,
         private readonly logger: Logger,
+        // Optional so existing 2-arg call sites (tests) keep working unauthenticated.
+        private readonly getApiKey: () => Thenable<
+            string | undefined
+        > = () => Promise.resolve(undefined),
     ) {}
 
     public async sendHeartbeat(
@@ -103,10 +107,15 @@ export class WakaclockCliService {
         stdinPayload?: string,
     ): Promise<CliResult> {
         const { cliPath } = this.getConfig();
+        // Passed as an env var, not a `--api-key` CLI flag: process argv is visible to
+        // any other process on the machine via `ps`, an env var passed directly to the
+        // child is not.
+        const apiKey = await this.getApiKey();
         this.logger.debug("spawning wakaclock-cli", {
             cliPath,
             args,
             hasStdin: Boolean(stdinPayload),
+            hasApiKey: Boolean(apiKey),
         });
 
         return new Promise<CliResult>((resolve, reject) => {
@@ -115,6 +124,7 @@ export class WakaclockCliService {
                 env: {
                     ...process.env,
                     WAKACLOCK_EDITOR: "vscode",
+                    ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
                 },
             });
 

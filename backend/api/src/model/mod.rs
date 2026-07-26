@@ -1,5 +1,6 @@
 pub mod ai_stats;
 pub mod all_time;
+pub mod auth;
 pub mod duration;
 pub mod heartbeat;
 pub mod insights;

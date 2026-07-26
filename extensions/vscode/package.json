@@ -35,6 +35,14 @@
       {
         "command": "wakaclock.toggleStatusBar",
         "title": "Wakaclock: Toggle Status Bar"
+      },
+      {
+        "command": "wakaclock.setApiKey",
+        "title": "Wakaclock: Set API Key"
+      },
+      {
+        "command": "wakaclock.clearApiKey",
+        "title": "Wakaclock: Clear API Key"
       }
     ],
     "configuration": {

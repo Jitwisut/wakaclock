@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::logger::Logger;
 use crate::repository::analytics::AnalyticsRepository;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub logger: Arc<Logger>,
     pub config: Arc<Config>,
     pub clickhouse: Arc<ClickHouseClient>,
+    pub auth_cache: Arc<AuthKeyCache>,
     pub analytics_repo: Arc<AnalyticsRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
@@ -85,6 +87,10 @@ pub async fn create_app_state() -> Result<AppState> {
             .context("Failed to initialize ClickHouse client")?,
     );
 
+    // Auth key cache starts empty — populated by `AuthKeyCache::refresh()` in main.rs
+    // once migrations have created `wakaclock.users`.
+    let auth_cache = AuthKeyCache::new();
+
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
     let heartbeat_repo = Arc::new(HeartbeatRepository::new(clickhouse.clone()));
@@ -114,6 +120,7 @@ pub async fn create_app_state() -> Result<AppState> {
         logger,
         config,
         clickhouse,
+        auth_cache,
         analytics_repo,
         heartbeat_repo,
         project_merge_repo,

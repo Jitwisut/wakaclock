@@ -32,6 +32,9 @@ export const env = createEnv({
     // App
     NEXT_PUBLIC_APP_URL: z.string().url().optional(),
 
+    // Wakaclock API
+    NEXT_PUBLIC_WAKACLOCK_API_URL: z.string().url().default('http://localhost:8080'),
+
     // Analytics
     NEXT_PUBLIC_POSTHOG_KEY: z.string().optional(),
     NEXT_PUBLIC_POSTHOG_HOST: z.string().url().optional(),
@@ -54,6 +57,7 @@ export const env = createEnv({
 
     // Client
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    NEXT_PUBLIC_WAKACLOCK_API_URL: process.env.NEXT_PUBLIC_WAKACLOCK_API_URL,
     NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY,
     NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
     NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID,

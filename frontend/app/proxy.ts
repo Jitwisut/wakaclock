@@ -5,7 +5,7 @@ import { type NextRequest, NextResponse } from 'next/server';
  * @see https://nextjs.org/docs/app/building-your-application/routing/middleware
  */
 export function proxy(request: NextRequest) {
-  return NextResponse.redirect(new URL('/dashboard/default', request.url));
+  return NextResponse.redirect(new URL('/dashboard/wakaclock', request.url));
 }
 
 export const config = {

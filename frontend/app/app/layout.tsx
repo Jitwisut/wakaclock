@@ -5,6 +5,7 @@ import { ThemeProvider } from 'next-themes';
 import NextTopLoader from 'nextjs-toploader';
 
 import { ActiveThemeProvider } from '@/components/active-theme';
+import { QueryProvider } from '@/components/query-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { fontVariables } from '@/lib/fonts';
 import GoogleAnalyticsInit from '@/lib/ga';
@@ -16,6 +17,7 @@ import {
   type ThemeScale,
 } from '@/lib/themes';
 import { cn } from '@/lib/utils';
+import { WakaclockUserProvider } from '@/lib/wakaclock/user-store';
 
 import './globals.css';
 
@@ -56,8 +58,12 @@ export default async function RootLayout({
           enableSystem
         >
           <ActiveThemeProvider initialTheme={themeSettings}>
-            {children}
-            <Toaster position="top-center" richColors />
+            <QueryProvider>
+              <WakaclockUserProvider>
+                {children}
+                <Toaster position="top-center" richColors />
+              </WakaclockUserProvider>
+            </QueryProvider>
             <NextTopLoader color="var(--primary)" height={2} shadow-sm="none" showSpinner={false} />
             {process.env.NODE_ENV === 'production' ? <GoogleAnalyticsInit /> : null}
           </ActiveThemeProvider>

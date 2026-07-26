@@ -46,6 +46,12 @@ async fn main() -> Result<()> {
     }
     info!("Migrations completed successfully.");
 
+    // Load any existing API key hashes into memory (wakaclock.users now exists).
+    if let Err(e) = app_state.auth_cache.refresh(&app_state.clickhouse).await {
+        error!("Failed to load auth key cache: {}", e);
+        return Err(e);
+    }
+
     // 3. Setup router
     let api_v1 = handlers::v1::router(app_state.clone());
 

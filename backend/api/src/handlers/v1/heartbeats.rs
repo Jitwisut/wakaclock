@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
+use crate::middleware::auth;
 use wakaclock_core::heartbeat::{Category, EntityType, Heartbeat};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -99,9 +100,13 @@ pub struct HeartbeatItem {
 /// POST /api/v1/heartbeats — single heartbeat
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<HeartbeatPayload>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = payload.user_id.unwrap_or(Uuid::nil());
+    // An authenticated key always overrides whatever user_id the client claims in the
+    // body — otherwise a valid key would be decorative and any caller could still write
+    // heartbeats under someone else's identity just by setting this field.
+    let user_id = auth::resolve_user_id(&state, &headers, payload.user_id);
     let heartbeat =
         resolve_heartbeat_project(&state, user_id, payload_to_heartbeat(payload, user_id))
             .await
@@ -126,12 +131,11 @@ pub async fn create(
 /// POST /api/v1/heartbeats.bulk — หลาย heartbeats
 pub async fn create_bulk(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payloads): Json<Vec<HeartbeatPayload>>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = payloads
-        .first()
-        .and_then(|p| p.user_id)
-        .unwrap_or(Uuid::nil());
+    let client_supplied = payloads.first().and_then(|p| p.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers, client_supplied);
 
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
@@ -168,6 +172,7 @@ pub async fn create_bulk(
 /// GET /api/v1/heartbeats?date=2026-04-10&user_id=...
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<HeartbeatListResponse>, (StatusCode, Json<serde_json::Value>)> {
     // default date = today
@@ -175,8 +180,7 @@ pub async fn list(
         .date
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
 
-    // TODO: ดึง user_id จาก JWT — ตอนนี้ใช้จาก query param
-    let user_id = params.user_id.unwrap_or(Uuid::nil());
+    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
 
     let rows = state
         .heartbeat_service
