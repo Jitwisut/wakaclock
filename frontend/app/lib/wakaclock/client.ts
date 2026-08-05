@@ -2,7 +2,7 @@ import axios from 'axios';
 
 import { env } from '@/lib/env';
 
-import { getCurrentToken } from './session';
+import { getCurrentToken, notifyUnauthorized } from './session';
 
 import type { ApiErrorBody } from './types';
 import type { AxiosError } from 'axios';
@@ -48,6 +48,19 @@ wakaclockClient.interceptors.response.use(
       (error.code === 'ECONNABORTED'
         ? 'Request timed out — is the backend running?'
         : error.message);
+
+    // A 401 on any normal endpoint means the stored session token is no longer good —
+    // expired, or signed with a JWT_SECRET the server has since rotated. Drop the
+    // session so the login form comes back, instead of leaving every panel showing
+    // "authentication required" with no way to recover.
+    //
+    // /auth/* is excluded: a 401 there is just wrong credentials on a login attempt,
+    // and there's no session to end.
+    const isAuthEndpoint = error.config?.url?.startsWith('/auth/') ?? false;
+    if (status === 401 && !isAuthEndpoint) {
+      notifyUnauthorized();
+    }
+
     return Promise.reject(new WakaclockError(message, status));
   }
 );

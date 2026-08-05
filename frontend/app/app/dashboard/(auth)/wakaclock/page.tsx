@@ -13,9 +13,9 @@ export default function WakaclockOverviewPage() {
         description="Self-hosted coding-time analytics, backed by the wakaclock Rust API."
         title="Overview"
       />
-      <StatusTiles />
       <RequireUser>
         <div className="flex flex-col gap-4">
+          <StatusTiles />
           <RangeStats />
           <SummariesPanel />
           <DurationTimeline />

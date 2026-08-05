@@ -13,8 +13,9 @@ export function StatusTiles() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
 
   const statusBar = useQuery({
-    queryKey: wakaclockKeys.statusBar(),
+    queryKey: wakaclockKeys.statusBar(userId),
     queryFn: getStatusBar,
+    enabled: Boolean(userId),
     refetchInterval: 60_000,
   });
 
@@ -29,9 +30,8 @@ export function StatusTiles() {
       <StatTile
         icon={<ClockIcon />}
         isLoading={statusBar.isLoading}
-        label="Today (all users)"
+        label="Today"
         subtext={`${formatCompactNumber(statusBar.data?.heartbeat_count ?? 0)} heartbeats`}
-        tooltip="This endpoint (GET /status_bar/today) doesn't filter by user_id on the backend — it aggregates across every account. It's shown for reference, not per-user tracking."
         value={statusBar.data?.human_readable ?? '0m'}
       />
       <StatTile

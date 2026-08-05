@@ -12,6 +12,7 @@ import { ThemeCustomizerPanel } from '@/components/theme-customizer';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { useSidebar } from '@/components/ui/sidebar';
+import { SubscriptionBadge } from '@/components/wakaclock/subscription-badge';
 import { UserSwitcher } from '@/components/wakaclock/user-switcher';
 
 /**
@@ -96,6 +97,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
           <Search labels={searchLabels} />
 
           <div className="ml-auto flex items-center gap-2">
+            <SubscriptionBadge />
             <UserSwitcher />
             <Separator className="mx-2 data-[orientation=vertical]:h-4" orientation="vertical" />
             <Notifications labels={notificationsLabels} />

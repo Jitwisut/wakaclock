@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { setCurrentToken } from './session';
+import { setCurrentToken, setUnauthorizedHandler } from './session';
 
 const STORAGE_KEY = 'wakaclock-session';
 
@@ -80,6 +80,12 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     if (!hydrated.current) return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
+
+  // Let the axios interceptor end the session when the server rejects our token.
+  React.useEffect(() => {
+    setUnauthorizedHandler(() => dispatch({ type: 'clear' }));
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   const value = React.useMemo<WakaclockUserState>(
     () => ({

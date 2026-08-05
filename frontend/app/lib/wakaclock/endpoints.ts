@@ -48,7 +48,8 @@ export async function loginAccount(username: string, password: string) {
   return data;
 }
 
-// GET /status_bar/today — no params, no user_id, aggregates ALL users
+// GET /status_bar/today — no query params; user_id comes from the session/API key
+// header attached automatically by the axios interceptor in client.ts
 export async function getStatusBar() {
   const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today');
   return data;

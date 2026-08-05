@@ -4,7 +4,7 @@
  */
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
-  statusBar: () => [...wakaclockKeys.all, 'status-bar'] as const,
+  statusBar: (userId: string) => [...wakaclockKeys.all, 'status-bar', userId] as const,
   allTime: (userId: string) => [...wakaclockKeys.all, 'all-time', userId] as const,
   stats: (userId: string, range: string) =>
     [...wakaclockKeys.all, 'stats', userId, range] as const,

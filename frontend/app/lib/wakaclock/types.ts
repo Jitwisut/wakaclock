@@ -256,6 +256,12 @@ export interface UserData {
   email: string;
   id: string;
   is_active: boolean;
+  subscription_period_end: null | number;
+  /** Free-form — the backend doesn't enforce a fixed set of values. 'active' and
+   * 'trialing' (with an unexpired trial_ends_at) are the only ones that grant access. */
+  subscription_status: string;
+  /** Unix seconds. Only meaningful while subscription_status === 'trialing'. */
+  trial_ends_at: number;
   username: string;
 }
 
