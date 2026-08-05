@@ -3,7 +3,6 @@ use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct WakaTimeImportRequest {
-    pub user_id: Uuid,
     pub file_path: String,
 }
 

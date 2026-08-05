@@ -1,14 +1,23 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+    Json,
+};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::infrastructure::app::AppState;
+use crate::middleware::auth;
 use crate::model::auth::{AuthResponse, LoginRequest, RegisterRequest};
 
 /// POST /api/v1/auth/register
 pub async fn register(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
+    auth::check_rate_limit(&state, addr.ip())?;
+
     if payload.username.trim().is_empty() || payload.password.len() < 8 {
         return Err(app_error(
             StatusCode::BAD_REQUEST,
@@ -28,8 +37,11 @@ pub async fn register(
 /// POST /api/v1/auth/login
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
+    auth::check_rate_limit(&state, addr.ip())?;
+
     let data = state
         .user_service
         .login(payload.username.trim(), &payload.password, &state.config.jwt_secret)

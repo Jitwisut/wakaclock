@@ -8,6 +8,13 @@ pub struct UserData {
     pub username: String,
     pub email: String,
     pub is_active: bool,
+    pub subscription_status: String,
+    /// Unix seconds. Meaningless once `subscription_status` is no longer "trialing",
+    /// but always present for a simpler frontend type.
+    pub trial_ends_at: u32,
+    /// Unix seconds — set by whatever external payment system calls
+    /// POST /internal/subscription; `None` until a subscription has ever been active.
+    pub subscription_period_end: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -20,6 +27,9 @@ pub struct UserRow {
     pub username: String,
     pub email: String,
     pub is_active: bool,
+    pub subscription_status: String,
+    pub trial_ends_at: u32,
+    pub subscription_period_end: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Row)]
@@ -27,6 +37,10 @@ pub struct ExistingUserRow {
     pub username: String,
     pub email: String,
     pub password_hash: String,
+    pub api_key: String,
+    pub subscription_status: String,
+    pub trial_ends_at: u32,
+    pub subscription_period_end: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Row)]

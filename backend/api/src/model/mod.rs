@@ -4,6 +4,7 @@ pub mod auth;
 pub mod duration;
 pub mod heartbeat;
 pub mod insights;
+pub mod internal;
 pub mod keystroke_stats;
 pub mod project_merge;
 pub mod project_rule;

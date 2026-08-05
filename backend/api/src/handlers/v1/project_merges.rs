@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -12,13 +12,7 @@ use crate::middleware::auth;
 use crate::model::project_merge::ProjectMergeRow;
 
 #[derive(Debug, Deserialize)]
-pub struct ProjectMergesQuery {
-    pub user_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct UpsertProjectMergePayload {
-    pub user_id: Uuid,
     pub source_project: String,
     pub target_project: String,
 }
@@ -52,9 +46,8 @@ pub struct DeleteResponse {
 pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(query): Query<ProjectMergesQuery>,
 ) -> Result<Json<ProjectMergesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let rows = state
         .project_merge_service
         .list_by_user(user_id)
@@ -72,7 +65,7 @@ pub async fn upsert(
     Path(merge_id): Path<Uuid>,
     Json(payload): Json<UpsertProjectMergePayload>,
 ) -> Result<Json<ProjectMergeMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(payload.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let row = state
         .project_merge_service
         .upsert(
@@ -94,9 +87,8 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(merge_id): Path<Uuid>,
-    Query(query): Query<ProjectMergesQuery>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     state
         .project_merge_service
         .delete(user_id, merge_id)

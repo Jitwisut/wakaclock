@@ -1,28 +1,20 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::Deserialize;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::insights::InsightsResponse;
 
-#[derive(Debug, Deserialize)]
-pub struct InsightsQuery {
-    pub user_id: Option<Uuid>,
-}
-
 pub async fn get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((insight_type, range)): Path<(String, String)>,
-    Query(params): Query<InsightsQuery>,
 ) -> Result<Json<InsightsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
 
     let response = state
         .insights_service

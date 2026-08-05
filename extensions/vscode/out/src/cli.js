@@ -5,9 +5,13 @@ const node_child_process_1 = require("node:child_process");
 class WakaclockCliService {
     getConfig;
     logger;
-    constructor(getConfig, logger) {
+    getApiKey;
+    constructor(getConfig, logger, 
+    // Optional so existing 2-arg call sites (tests) keep working unauthenticated.
+    getApiKey = () => Promise.resolve(undefined)) {
         this.getConfig = getConfig;
         this.logger = logger;
+        this.getApiKey = getApiKey;
     }
     async sendHeartbeat(primaryEntity, primaryWrite, primaryCategory, extraHeartbeats = [], primaryExtra = {}) {
         const args = [
@@ -59,10 +63,15 @@ class WakaclockCliService {
     }
     async runCli(args, stdinPayload) {
         const { cliPath } = this.getConfig();
+        // Passed as an env var, not a `--api-key` CLI flag: process argv is visible to
+        // any other process on the machine via `ps`, an env var passed directly to the
+        // child is not.
+        const apiKey = await this.getApiKey();
         this.logger.debug("spawning wakaclock-cli", {
             cliPath,
             args,
             hasStdin: Boolean(stdinPayload),
+            hasApiKey: Boolean(apiKey),
         });
         return new Promise((resolve, reject) => {
             const child = (0, node_child_process_1.spawn)(cliPath, args, {
@@ -70,6 +79,7 @@ class WakaclockCliService {
                 env: {
                     ...process.env,
                     WAKACLOCK_EDITOR: "vscode",
+                    ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
                 },
             });
             let stdout = "";

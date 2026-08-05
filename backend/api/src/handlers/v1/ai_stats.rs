@@ -5,7 +5,6 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -15,7 +14,6 @@ use crate::model::ai_stats::AiStatsResponse;
 pub struct AiStatsQuery {
     pub start: String,
     pub end: String,
-    pub user_id: Option<Uuid>,
 }
 
 pub async fn get(
@@ -23,7 +21,7 @@ pub async fn get(
     headers: HeaderMap,
     Query(params): Query<AiStatsQuery>,
 ) -> Result<Json<AiStatsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
 
     let response = state
         .ai_stats_service

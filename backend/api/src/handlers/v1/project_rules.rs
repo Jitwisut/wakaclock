@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -12,13 +12,7 @@ use crate::middleware::auth;
 use crate::model::project_rule::ProjectRuleRow;
 
 #[derive(Debug, Deserialize)]
-pub struct ProjectRulesQuery {
-    pub user_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct UpsertProjectRulePayload {
-    pub user_id: Uuid,
     pub pattern: String,
     pub project_name: String,
     pub priority: i32,
@@ -56,9 +50,8 @@ pub struct DeleteResponse {
 pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(query): Query<ProjectRulesQuery>,
 ) -> Result<Json<ProjectRulesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let rows = state
         .project_rule_service
         .list_by_user(user_id)
@@ -76,7 +69,7 @@ pub async fn upsert(
     Path(rule_id): Path<Uuid>,
     Json(payload): Json<UpsertProjectRulePayload>,
 ) -> Result<Json<ProjectRuleMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(payload.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let row = state
         .project_rule_service
         .upsert(
@@ -100,9 +93,8 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(rule_id): Path<Uuid>,
-    Query(query): Query<ProjectRulesQuery>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(query.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     state
         .project_rule_service
         .delete(user_id, rule_id)

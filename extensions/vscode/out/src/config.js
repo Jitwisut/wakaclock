@@ -73,7 +73,10 @@ class WakaclockConfigService {
     }
     resolveCliPath(config) {
         const configuredPath = config.get("cliPath", "").trim();
-        return configuredPath || "wakaclock-cli";
+        // The package is named `wakaclock-cli`, but its `[[bin]] name` in Cargo.toml is
+        // "wakaclock" — that's the binary that actually gets built, so it's what has to be
+        // resolved from PATH when no explicit wakaclock.cliPath is configured.
+        return configuredPath || "wakaclock";
     }
 }
 exports.WakaclockConfigService = WakaclockConfigService;

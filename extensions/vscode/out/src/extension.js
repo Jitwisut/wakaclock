@@ -42,12 +42,13 @@ const commands_1 = require("./commands");
 const config_1 = require("./config");
 const events_1 = require("./events");
 const logging_1 = require("./logging");
+const secrets_1 = require("./secrets");
 const statusBar_1 = require("./statusBar");
 function activate(context) {
     console.log("[wakaclock] extension activated");
     const configService = new config_1.WakaclockConfigService();
     const logger = new logging_1.Logger(() => configService.getSnapshot().debugLogging);
-    const cliService = new cli_1.WakaclockCliService(() => configService.getSnapshot(), logger);
+    const cliService = new cli_1.WakaclockCliService(() => configService.getSnapshot(), logger, () => (0, secrets_1.getStoredApiKey)(context.secrets));
     const statusBar = new statusBar_1.StatusBarController(() => configService.getSnapshot(), cliService, logger);
     const bufferManager = new buffer_1.HeartbeatBufferManager(() => configService.getSnapshot(), cliService, logger, () => statusBar.handleHeartbeatSent());
     context.subscriptions.push(configService, statusBar);

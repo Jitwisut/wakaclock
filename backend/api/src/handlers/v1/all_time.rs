@@ -1,27 +1,19 @@
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::Deserialize;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::all_time::AllTimeResponse;
 
-#[derive(Debug, Deserialize)]
-pub struct AllTimeQuery {
-    pub user_id: Option<Uuid>,
-}
-
 pub async fn get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(params): Query<AllTimeQuery>,
 ) -> Result<Json<AllTimeResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
 
     let response = state
         .all_time_service

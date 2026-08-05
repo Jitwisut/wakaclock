@@ -86,31 +86,91 @@ fn extract_key(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Resolve the effective `user_id` for a data request. A session JWT (from the
-/// dashboard) or an API key (from a CLI/extension) always wins over whatever `user_id`
-/// the client claims in the query string or JSON body — otherwise the header would be
-/// decorative and any caller could still impersonate another user by just setting that
-/// field. Falls back to the client-supplied value (or `Uuid::nil()`) when neither is
-/// presented, so existing `?user_id=` callers keep working during rollout.
-pub fn resolve_user_id(state: &AppState, headers: &HeaderMap, client_supplied: Option<Uuid>) -> Uuid {
-    if let Some(token) = extract_key(headers) {
-        if let Some(user_id) = verify_session_token(&token, &state.config.jwt_secret) {
-            return user_id;
-        }
-        let hash = hash_key(&token);
-        if let Some(user_id) = state.auth_cache.lookup(&hash) {
-            return user_id;
-        }
+/// Resolve the caller's `user_id` from a session JWT (dashboard) or an API key
+/// (CLI/extension) — the only two ways to prove identity. Returns `None` if neither is
+/// present or valid, and callers must treat that as a hard failure (401), not fall back
+/// to a client-supplied `user_id` in a query string or JSON body: that field is never
+/// trustworthy on its own, since anyone can set it to any uuid. An earlier version of
+/// this function accepted that fallback for a soft rollout; every caller now requires
+/// real authentication, so it was removed rather than left reachable.
+pub fn resolve_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+    let token = extract_key(headers)?;
+
+    if let Some(user_id) = verify_session_token(&token, &state.config.jwt_secret) {
+        return Some(user_id);
     }
 
-    client_supplied.unwrap_or(Uuid::nil())
+    let hash = hash_key(&token);
+    state.auth_cache.lookup(&hash)
 }
 
-/// Like `resolve_user_id`, but for endpoints that must refuse to act at all without a
-/// real logged-in session — API key generation being the main one, since letting that
-/// endpoint fall back to a client-supplied `user_id` would let anyone mint a key for any
-/// account.
+/// Like `resolve_user_id`, but only accepts a session JWT — not an API key. Used by
+/// endpoints that must not be reachable from a long-lived CLI/extension credential at
+/// all, such as generating a *new* API key: a key should never be able to mint another
+/// key for itself.
 pub fn require_session_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
     let token = extract_key(headers)?;
     verify_session_token(&token, &state.config.jwt_secret)
+}
+
+/// Shared 401 body for every handler that requires authentication.
+pub fn unauthorized() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        axum::Json(serde_json::json!({ "error": "authentication required" })),
+    )
+}
+
+/// Check the per-IP limit for an auth-sensitive endpoint (login, register, API key
+/// generate/revoke). Returns a ready-to-return 429 on failure so call sites stay a
+/// one-liner.
+pub fn check_rate_limit(
+    state: &AppState,
+    ip: std::net::IpAddr,
+) -> Result<(), (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    state.auth_rate_limiter.check(ip).map_err(|_| {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            axum::Json(serde_json::json!({ "error": "too many attempts, try again later" })),
+        )
+    })
+}
+
+/// Verify `Authorization: Bearer <secret>` against `INTERNAL_API_SECRET` — the only
+/// credential POST /internal/subscription accepts. Constant-time on purpose: this
+/// secret has no rate limit or hashing behind it, so a timing side-channel would be a
+/// real shortcut for guessing it.
+pub fn verify_internal_secret(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(configured) = &state.config.internal_api_secret else {
+        return false;
+    };
+    let Some(provided) = extract_key(headers) else {
+        return false;
+    };
+
+    constant_time_eq(configured.as_bytes(), provided.as_bytes())
+}
+
+/// Manual constant-time comparison rather than pulling in a crate for it — always
+/// scans every byte of both slices regardless of where they first differ, so timing
+/// doesn't leak how much of the secret a guess got right.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Shared 402 body for endpoints gated behind an active trial/subscription.
+pub fn payment_required() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    (
+        axum::http::StatusCode::PAYMENT_REQUIRED,
+        axum::Json(serde_json::json!({
+            "error": "trial expired or subscription inactive — see /users/current for status"
+        })),
+    )
 }

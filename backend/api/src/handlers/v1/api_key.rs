@@ -1,8 +1,9 @@
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::infrastructure::app::AppState;
@@ -17,8 +18,11 @@ use crate::model::user::{GenerateApiKeyResponse, RevokeApiKeyResponse};
 /// they actually logged into.
 pub async fn generate(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<GenerateApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    auth::check_rate_limit(&state, addr.ip())?;
+
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
@@ -39,8 +43,11 @@ pub async fn generate(
 /// DELETE /api/v1/users/current/api_key — also requires a valid session, same reasoning.
 pub async fn revoke(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<RevokeApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    auth::check_rate_limit(&state, addr.ip())?;
+
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 

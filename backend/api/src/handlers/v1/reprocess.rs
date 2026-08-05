@@ -14,7 +14,7 @@ pub async fn run(
     headers: HeaderMap,
     Json(payload): Json<ReprocessRequest>,
 ) -> Result<Json<ReprocessResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(payload.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let count = state
         .reprocess_service
         .run(user_id, &payload.start, &payload.end)

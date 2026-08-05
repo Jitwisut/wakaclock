@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::logger::Logger;
+use crate::infrastructure::rate_limiter::AuthRateLimiter;
 use crate::repository::analytics::AnalyticsRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::project_merge::ProjectMergeRepository;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub clickhouse: Arc<ClickHouseClient>,
     pub auth_cache: Arc<AuthKeyCache>,
+    pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_repo: Arc<AnalyticsRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
@@ -90,6 +92,7 @@ pub async fn create_app_state() -> Result<AppState> {
     // Auth key cache starts empty — populated by `AuthKeyCache::refresh()` in main.rs
     // once migrations have created `wakaclock.users`.
     let auth_cache = AuthKeyCache::new();
+    let auth_rate_limiter = AuthRateLimiter::new();
 
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
@@ -121,6 +124,7 @@ pub async fn create_app_state() -> Result<AppState> {
         config,
         clickhouse,
         auth_cache,
+        auth_rate_limiter,
         analytics_repo,
         heartbeat_repo,
         project_merge_repo,

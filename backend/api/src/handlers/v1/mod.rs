@@ -5,6 +5,7 @@ pub mod auth;
 pub mod durations;
 pub mod heartbeats;
 pub mod insights;
+pub mod internal;
 pub mod keystroke_stats;
 pub mod project_merges;
 pub mod project_rules;
@@ -26,6 +27,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
+        .route("/internal/subscription", post(internal::update_subscription))
         .route(
             "/heartbeats",
             post(heartbeats::create).get(heartbeats::list),

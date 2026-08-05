@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use axum::http::{header, HeaderValue, Method};
 use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 
 mod config;
@@ -10,7 +12,25 @@ mod middleware;
 mod model;
 mod repository;
 mod services;
+use config::CorsOrigins;
 use infrastructure::app::create_app_state;
+
+fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
+    match origins {
+        CorsOrigins::Any => CorsLayer::permissive(),
+        CorsOrigins::List(list) => {
+            let parsed: Vec<HeaderValue> = list
+                .iter()
+                .filter_map(|origin| origin.parse().ok())
+                .collect();
+
+            CorsLayer::new()
+                .allow_origin(parsed)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -59,7 +79,7 @@ async fn main() -> Result<()> {
         .nest("/api/v1", api_v1)
         // Add middleware (Logger, CORS, etc.)
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .layer(build_cors_layer(&app_state.config.cors_origins));
 
     // 4. Start HTTP Server
     let host = app_state.config.server.host.clone();
@@ -71,9 +91,16 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to bind TCP listener")?;
 
-    axum::serve(listener, router)
-        .await
-        .context("Server error")?;
+    // ConnectInfo<SocketAddr> is what the rate limiter keys on — note this is the
+    // direct TCP peer, so behind a reverse proxy every request would appear to come
+    // from the proxy's IP. Fine for a direct-exposed deployment; a proxied one needs
+    // X-Forwarded-For handling instead, which isn't wired up yet.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("Server error")?;
 
     Ok(())
 }

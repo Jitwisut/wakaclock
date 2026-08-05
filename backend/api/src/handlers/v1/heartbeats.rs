@@ -19,7 +19,6 @@ use wakaclock_core::heartbeat::{Category, EntityType, Heartbeat};
 
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatPayload {
-    pub user_id: Option<Uuid>,
     pub entity: String,
     pub entity_type: EntityType,
     pub time: f64,
@@ -55,11 +54,10 @@ pub struct HeartbeatResponse {
     pub heartbeats_inserted: usize,
 }
 
-/// Query params สำหรับ GET /heartbeats?date=YYYY-MM-DD&user_id=...
+/// Query params สำหรับ GET /heartbeats?date=YYYY-MM-DD
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub date: Option<String>,
-    pub user_id: Option<Uuid>,
 }
 
 /// Response สำหรับ GET /heartbeats
@@ -103,10 +101,8 @@ pub async fn create(
     headers: HeaderMap,
     Json(payload): Json<HeartbeatPayload>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    // An authenticated key always overrides whatever user_id the client claims in the
-    // body — otherwise a valid key would be decorative and any caller could still write
-    // heartbeats under someone else's identity just by setting this field.
-    let user_id = auth::resolve_user_id(&state, &headers, payload.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    require_active_access(&state, user_id).await?;
     let heartbeat =
         resolve_heartbeat_project(&state, user_id, payload_to_heartbeat(payload, user_id))
             .await
@@ -134,8 +130,8 @@ pub async fn create_bulk(
     headers: HeaderMap,
     Json(payloads): Json<Vec<HeartbeatPayload>>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let client_supplied = payloads.first().and_then(|p| p.user_id);
-    let user_id = auth::resolve_user_id(&state, &headers, client_supplied);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    require_active_access(&state, user_id).await?;
 
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
@@ -180,7 +176,7 @@ pub async fn list(
         .date
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
 
-    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
 
     let rows = state
         .heartbeat_service
@@ -222,6 +218,27 @@ pub async fn list(
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Heartbeat ingestion is the one action gated on subscription status — it's the only
+/// thing that actually costs anything to keep accepting. Everything else (reading
+/// existing history, project rules, etc.) stays reachable even after a trial lapses,
+/// so a lapsed customer can still see their data and decide whether to resubscribe.
+async fn require_active_access(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let has_access = state
+        .user_service
+        .has_active_access(user_id)
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    if has_access {
+        Ok(())
+    } else {
+        Err(auth::payment_required())
+    }
+}
 
 fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
     let date = Heartbeat::date_from_time(p.time);

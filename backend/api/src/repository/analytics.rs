@@ -181,6 +181,24 @@ const STATEMENTS: &[&str] = &[
     ALTER TABLE wakaclock.users
     ADD COLUMN IF NOT EXISTS password_hash String DEFAULT ''
     "#,
+    // Flat-plan subscription state. Payment processing itself is intentionally not this
+    // server's job — see handlers/v1/internal.rs — this table only tracks the resulting
+    // status. `trial_ends_at`'s default only takes effect on the INSERT from
+    // register() (every other write to this row must carry these three columns forward
+    // explicitly, the same way username/email/password_hash already have to be, or a
+    // key rotation would silently reset a user's trial).
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS subscription_status String DEFAULT 'trialing'
+    "#,
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS trial_ends_at DateTime DEFAULT now() + INTERVAL 14 DAY
+    "#,
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS subscription_period_end Nullable(DateTime)
+    "#,
     // ============================================================
     // Materialized Views — Path A: live ingestion (from heartbeats)
     // ============================================================

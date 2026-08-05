@@ -1,6 +1,11 @@
 // src/handlers/v1/status_bar.rs
 use crate::infrastructure::app::AppState;
-use axum::{extract::State, Json};
+use crate::middleware::auth;
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -18,22 +23,35 @@ struct TotalsRow {
     heartbeat_count: u64,
 }
 
-pub async fn today(State(state): State<Arc<AppState>>) -> Json<StatusBarResponse> {
+/// GET /api/v1/status_bar/today
+///
+/// Used to aggregate across every account — the `user_id` bind was commented out, so
+/// this leaked every tenant's activity into one number the moment there was more than
+/// one account. Now scoped to the caller's own authenticated identity, same as every
+/// other data endpoint.
+pub async fn today(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<StatusBarResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+
     let result = state
-        .clickhouse          // ← เปลี่ยนจาก state.ch.get_client()
+        .clickhouse
         .get_client()
-        .query("
+        .query(
+            "
             SELECT
                 coalesce(sum(ifNull(active_seconds, 0.0)), 0.0) AS total_seconds,
                 count() AS heartbeat_count
             FROM wakaclock.heartbeats
-            WHERE date = today()
-        ")
-        //.bind(user_id)
+            WHERE date = today() AND user_id = ?
+        ",
+        )
+        .bind(user_id)
         .fetch_one::<TotalsRow>()
         .await;
 
-    match result {
+    Ok(match result {
         Ok(row) => Json(StatusBarResponse {
             human_readable: format_duration(row.total_seconds),
             total_seconds: row.total_seconds,
@@ -44,7 +62,7 @@ pub async fn today(State(state): State<Arc<AppState>>) -> Json<StatusBarResponse
             human_readable: "0m".to_string(),
             heartbeat_count: 0,
         }),
-    }
+    })
 }
 
 fn format_duration(secs: f64) -> String {

@@ -16,7 +16,7 @@ pub async fn run(
     headers: HeaderMap,
     Json(payload): Json<WakaTimeImportRequest>,
 ) -> Result<Json<WakaTimeImportResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers, Some(payload.user_id));
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     let result = state
         .wakatime_import_service
         .run(user_id, &payload.file_path)

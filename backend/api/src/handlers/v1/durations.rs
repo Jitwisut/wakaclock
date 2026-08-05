@@ -5,7 +5,6 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -15,7 +14,6 @@ use crate::services::duration::DurationService;
 #[derive(Debug, Deserialize)]
 pub struct DurationsQuery {
     pub date: Option<String>,
-    pub user_id: Option<Uuid>,
 }
 
 pub async fn list(
@@ -26,7 +24,7 @@ pub async fn list(
     let date = params
         .date
         .unwrap_or_else(DurationService::today_date_string);
-    let user_id = auth::resolve_user_id(&state, &headers, params.user_id);
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
 
     let rows = state
         .duration_service

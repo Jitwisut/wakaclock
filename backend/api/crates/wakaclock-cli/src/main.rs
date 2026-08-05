@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             let report = api_client.send_heartbeats(heartbeats).await?;
-            println!("User ID: {}", config.user_id);
+            println!("{}", identity_line(&config));
             println!("Sent: {}", report.sent);
             println!("Deduped: {}", report.deduped);
             println!("Queued: {}", report.queued);
@@ -201,9 +201,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Commands::Config { action } => match action {
             None => {
                 println!("Config path: {}", Config::config_path().display());
-                println!("User ID: {}", config.user_id);
                 println!("Server URL: {}", config.server_url);
-                println!("API key set: {}", config.api_key.is_some());
+                println!("{}", identity_line(&config));
             }
             Some(ConfigAction::SetKey { key }) => {
                 // Persist to config.toml, independent of any WAKACLOCK_API_KEY env
@@ -224,7 +223,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let queue = Queue::open()?;
             println!("Config path: {}", Config::config_path().display());
             println!("Server URL: {}", config.server_url);
-            println!("User ID: {}", config.user_id);
+            println!("{}", identity_line(&config));
             println!("Queued heartbeats: {}", queue.len()?);
             let flushed = api_client.flush_queue().await?;
             println!("Flushed now: {}", flushed);
@@ -314,6 +313,21 @@ fn read_extra_heartbeats() -> Result<Vec<ExtraHeartbeatInput>, Box<dyn Error>> {
         Ok(serde_json::from_str(&stdin)?)
     } else {
         Ok(vec![serde_json::from_str(&stdin)?])
+    }
+}
+
+/// Describe which account this CLI is actually acting as.
+///
+/// The server derives identity from the API key alone and ignores any `user_id` the
+/// client sends, so printing `config.user_id` alongside a successful request was
+/// actively misleading — it's a locally-generated uuid that has nothing to do with
+/// where the data landed. Report the key's presence instead, since that's what decides.
+fn identity_line(config: &Config) -> String {
+    if config.api_key.is_some() {
+        "Authenticated: yes (account resolved from API key)".to_string()
+    } else {
+        "Authenticated: no — run `wakaclock config set-key <KEY>`; requests will be rejected"
+            .to_string()
     }
 }
 

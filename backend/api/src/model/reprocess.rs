@@ -3,7 +3,6 @@ use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct ReprocessRequest {
-    pub user_id: Uuid,
     pub start: String,
     pub end: String,
 }

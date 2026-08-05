@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
+const secrets_1 = require("./secrets");
 function registerCommands(context, configService, cliService, bufferManager, statusBar) {
     function workspaceProject(editor) {
         if (!editor) {
@@ -70,6 +71,32 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await configService.updateSetting("statusBarEnabled", !current);
         statusBar.applyVisibility();
         await statusBar.refresh();
+    }), vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
+        const value = await vscode.window.showInputBox({
+            prompt: "API key generated from the Wakaclock dashboard (Settings → API key)",
+            placeHolder: "wcl_...",
+            password: true,
+            ignoreFocusOut: true
+        });
+        if (value === undefined) {
+            return;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+            await vscode.window.showWarningMessage("No API key entered — nothing was saved.");
+            return;
+        }
+        // Stored via SecretStorage (OS keychain), never in settings.json.
+        await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
+        await vscode.window.showInformationMessage("Wakaclock API key saved.");
+    }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
+        const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
+        if (!existing) {
+            await vscode.window.showInformationMessage("No Wakaclock API key is currently set.");
+            return;
+        }
+        await (0, secrets_1.clearStoredApiKey)(context.secrets);
+        await vscode.window.showInformationMessage("Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again.");
     }));
 }
 //# sourceMappingURL=commands.js.map
