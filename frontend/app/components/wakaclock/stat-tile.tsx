@@ -1,11 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface StatTileProps {
@@ -62,9 +57,7 @@ export function StatTile({
             {value}
           </div>
         )}
-        {subtext && !isLoading && (
-          <p className="text-muted-foreground mt-1 text-xs">{subtext}</p>
-        )}
+        {subtext && !isLoading && <p className="text-muted-foreground mt-1 text-xs">{subtext}</p>}
       </CardContent>
     </Card>
   );

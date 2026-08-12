@@ -75,7 +75,9 @@ function ReprocessCard() {
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Reprocess {start} → {end}?</AlertDialogTitle>
+              <AlertDialogTitle>
+                Reprocess {start} → {end}?
+              </AlertDialogTitle>
               <AlertDialogDescription>
                 This deletes rows from 8 aggregate tables for this user and range, then rebuilds
                 them from raw heartbeats. Type <strong>reprocess</strong> to confirm.

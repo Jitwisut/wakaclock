@@ -30,7 +30,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { QueryState } from '@/components/wakaclock/query-state';
 import {
   deleteProjectMerge,
@@ -78,8 +85,8 @@ function MergeFormDialog({
         <DialogHeader>
           <DialogTitle>{merge ? 'Edit project merge' : 'New project merge'}</DialogTitle>
           <DialogDescription>
-            Applied at read time — only GET /projects reflects this. Summaries, stats, and
-            insights still show the source project name separately.
+            Applied at read time — only GET /projects reflects this. Summaries, stats, and insights
+            still show the source project name separately.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -93,7 +100,10 @@ function MergeFormDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={mutation.isPending || !source || !target} onClick={() => mutation.mutate()}>
+          <Button
+            disabled={mutation.isPending || !source || !target}
+            onClick={() => mutation.mutate()}
+          >
             {mutation.isPending ? 'Saving…' : 'Save'}
           </Button>
         </DialogFooter>

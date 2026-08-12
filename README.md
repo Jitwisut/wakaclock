@@ -1,18 +1,33 @@
-# Wakaclock
+# Azyren
 
 > Self-hosted developer time tracking. A WakaTime-compatible alternative built in Rust.
+>
+> One timeline for everything you do.
 
 ---
 
-## What is Wakaclock?
+**Naming:** the product is branded **Azyren**. The binary (`wakaclock-cli`), config
+directory (`~/.wakaclock/config.toml`), crate names and editor setting keys still use the
+original `wakaclock` naming, and are written that way throughout these docs because that is
+what actually ships.
 
-Wakaclock tracks how long you spend coding across editors, languages, and projects — then gives you dashboards and insights. It's fully WakaTime-compatible (existing IDE extensions work via the CLI hub) while adding features WakaTime doesn't have:
+## What is Azyren?
+
+Azyren tracks how long you spend coding across editors, languages, and projects — then gives you dashboards and insights. It's WakaTime-compatible (existing IDE extensions work via the CLI hub) and adds:
 
 - **AST-based language detection** via tree-sitter — no more guessing `.h` is C vs C++ vs Objective-C
 - **ClickHouse-native ETL** with SummingMergeTree/AggregatingMergeTree — zero app-level aggregation
-- **AI code attribution** — track what percentage of your code is written by AI agents (Copilot, Claude, Cursor, etc.) vs human keystrokes
+- **AI code attribution** — heartbeats accept an agent name plus AI lines added/deleted, aggregated per agent and per day against human keystrokes. Note that **no shipped client populates these fields automatically**: there is no built-in detection of Copilot, Claude Code, Cursor or any other agent. The agent name is a free-form string supplied by whichever client sends the heartbeat, so attribution comes from your own tooling calling the API, or from a WakaTime import.
+- **Keystroke metrics** — keystrokes and characters added/deleted per project and per day
 - **User-defined project rules** — regex-based project matching + project merging
 - **Self-hosted first** — your data stays on your infrastructure
+
+### Known limitations
+
+- The only editor plugin in this repo is for VS Code (`extensions/vscode`); other editors connect via the WakaTime protocol.
+- Heartbeats support `file`, `app`, `domain` and `url` entity types, but the VS Code extension sends `file` only — there is no desktop or browser client yet.
+- Analytics are scoped to a single account; there is no team or organisation rollup.
+- Heartbeats never carry source code, prompts, AI responses, or keystroke content.
 
 ## Architecture
 

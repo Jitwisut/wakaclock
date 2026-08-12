@@ -52,9 +52,7 @@ export function StatusTiles() {
         isLoading={allTime.isLoading}
         label="Coding since"
         value={
-          allTime.data?.data.since
-            ? new Date(allTime.data.data.since).toLocaleDateString()
-            : '—'
+          allTime.data?.data.since ? new Date(allTime.data.data.since).toLocaleDateString() : '—'
         }
       />
     </div>

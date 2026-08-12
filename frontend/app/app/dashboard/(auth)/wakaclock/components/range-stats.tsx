@@ -94,19 +94,17 @@ export function RangeStats() {
                     )
                   )}
                 </TabsList>
-                {(Object.keys(BREAKDOWN_LABELS) as (keyof typeof BREAKDOWN_LABELS)[]).map(
-                  (key) => (
-                    <TabsContent key={key} value={key}>
-                      {stats[key].length > 0 ? (
-                        <BreakdownChart data={stats[key]} />
-                      ) : (
-                        <p className="text-muted-foreground py-8 text-center text-sm">
-                          No {BREAKDOWN_LABELS[key].toLowerCase()} recorded in this range.
-                        </p>
-                      )}
-                    </TabsContent>
-                  )
-                )}
+                {(Object.keys(BREAKDOWN_LABELS) as (keyof typeof BREAKDOWN_LABELS)[]).map((key) => (
+                  <TabsContent key={key} value={key}>
+                    {stats[key].length > 0 ? (
+                      <BreakdownChart data={stats[key]} />
+                    ) : (
+                      <p className="text-muted-foreground py-8 text-center text-sm">
+                        No {BREAKDOWN_LABELS[key].toLowerCase()} recorded in this range.
+                      </p>
+                    )}
+                  </TabsContent>
+                ))}
               </Tabs>
             </div>
           )}

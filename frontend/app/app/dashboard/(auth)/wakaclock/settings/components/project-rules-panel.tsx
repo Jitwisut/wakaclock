@@ -32,13 +32,16 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { QueryState } from '@/components/wakaclock/query-state';
 import {
-  deleteProjectRule,
-  getProjectRules,
-  upsertProjectRule,
-} from '@/lib/wakaclock/endpoints';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { QueryState } from '@/components/wakaclock/query-state';
+import { deleteProjectRule, getProjectRules, upsertProjectRule } from '@/lib/wakaclock/endpoints';
 import { formatUnixSeconds } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { ProjectRuleItem } from '@/lib/wakaclock/types';
@@ -134,9 +137,7 @@ function RuleFormDialog({
         </div>
         <DialogFooter>
           <Button
-            disabled={
-              mutation.isPending || !pattern || !projectName || patternInvalid
-            }
+            disabled={mutation.isPending || !pattern || !projectName || patternInvalid}
             onClick={() => mutation.mutate()}
           >
             {mutation.isPending ? 'Saving…' : 'Save'}
@@ -236,8 +237,8 @@ export function ProjectRulesPanel() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete this rule?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Future heartbeats matching “{rule.pattern}” will no longer be
-                            reassigned to {rule.project_name}.
+                            Future heartbeats matching “{rule.pattern}” will no longer be reassigned
+                            to {rule.project_name}.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>

@@ -1,0 +1,60 @@
+/*
+ * Scoped design tokens for the marketing site only. Deliberately isolated from
+ * app/themes.css (the dashboard's 8-preset system) via the `.wakaclock-marketing`
+ * class wrapper — nothing here can affect the authenticated app.
+ *
+ * Palette: "Developer Tool / IDE" archetype (slate + terminal green), sourced via
+ * ui-ux-pro-max design-system search for a technical/infra-trust product.
+ */
+
+.wakaclock-marketing {
+  --mkt-bg: #f8fafc;
+  --mkt-bg-elevated: #ffffff;
+  --mkt-bg-sunken: #f1f5f9;
+  --mkt-border: #e2e8f0;
+  --mkt-fg: #0f172a;
+  --mkt-fg-muted: #475569;
+  --mkt-accent: #16a34a;
+  --mkt-accent-fg: #ffffff;
+  --mkt-accent-soft: #dcfce7;
+  --mkt-code-bg: #0f172a;
+  --mkt-code-fg: #4ade80;
+}
+
+.dark .wakaclock-marketing {
+  --mkt-bg: #0f172a;
+  --mkt-bg-elevated: #1e293b;
+  --mkt-bg-sunken: #0b1222;
+  --mkt-border: #334155;
+  --mkt-fg: #f8fafc;
+  --mkt-fg-muted: #94a3b8;
+  --mkt-accent: #22c55e;
+  --mkt-accent-fg: #052e16;
+  --mkt-accent-soft: rgba(34, 197, 94, 0.14);
+  --mkt-code-bg: #020617;
+  --mkt-code-fg: #4ade80;
+}
+
+.wakaclock-marketing {
+  background: var(--mkt-bg);
+  color: var(--mkt-fg);
+}
+
+@keyframes marketing-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.wakaclock-marquee-track {
+  animation: marketing-marquee 40s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marquee-track {
+    animation: none;
+  }
+}

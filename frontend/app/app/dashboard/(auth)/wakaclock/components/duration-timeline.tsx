@@ -10,17 +10,19 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { cn } from '@/lib/utils';
 import { getDurations } from '@/lib/wakaclock/endpoints';
-import { formatEpochRange , todayDateString } from '@/lib/wakaclock/format';
+import { formatEpochRange, todayDateString } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { DurationBlock } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -104,10 +106,7 @@ export function DurationTimeline() {
                 <div className="bg-muted relative h-10 w-full overflow-hidden rounded-md">
                   {blocks.map((block: DurationBlock) => {
                     const startPct = (secondsSinceMidnight(block.start) / DAY_SECONDS) * 100;
-                    const widthPct = Math.max(
-                      (block.duration_seconds / DAY_SECONDS) * 100,
-                      0.4
-                    );
+                    const widthPct = Math.max((block.duration_seconds / DAY_SECONDS) * 100, 0.4);
                     return (
                       <Tooltip key={`${block.entity}-${block.start}-${block.end}`}>
                         <TooltipTrigger asChild>
@@ -121,9 +120,7 @@ export function DurationTimeline() {
                         </TooltipTrigger>
                         <TooltipContent>
                           <div className="text-xs">
-                            <div className="font-medium">
-                              {block.project ?? block.entity}
-                            </div>
+                            <div className="font-medium">{block.project ?? block.entity}</div>
                             <div>
                               {formatEpochRange(block.start, block.end)} · {block.category}
                             </div>

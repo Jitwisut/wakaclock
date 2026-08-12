@@ -12,7 +12,14 @@ import {
   ChartTooltipContent,
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
@@ -50,7 +57,11 @@ function AiStatsPanel() {
   const pieData = stats
     ? [
         { key: 'ai', heartbeats: Math.round(aiPct * 10) / 10, fill: 'var(--color-ai)' },
-        { key: 'human', heartbeats: Math.round((100 - aiPct) * 10) / 10, fill: 'var(--color-human)' },
+        {
+          key: 'human',
+          heartbeats: Math.round((100 - aiPct) * 10) / 10,
+          fill: 'var(--color-human)',
+        },
       ]
     : [];
 

@@ -63,9 +63,9 @@ export function ApiKeyPanel() {
           API key
         </CardTitle>
         <CardDescription>
-          POST/DELETE /users/current/api_key — lets a CLI or editor extension authenticate as
-          you. Only generates a key for the account you&apos;re currently logged into as
-          this session — proven by your login, not a query param anyone could set.
+          POST/DELETE /users/current/api_key — lets a CLI or editor extension authenticate as you.
+          Only generates a key for the account you&apos;re currently logged into as this session —
+          proven by your login, not a query param anyone could set.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -75,8 +75,8 @@ export function ApiKeyPanel() {
               <TriangleAlertIcon />
               <AlertTitle>Copy this now — it won&apos;t be shown again</AlertTitle>
               <AlertDescription>
-                Only its hash is stored. If you lose it, generate a new one (this invalidates
-                the old key everywhere it&apos;s used).
+                Only its hash is stored. If you lose it, generate a new one (this invalidates the
+                old key everywhere it&apos;s used).
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
@@ -93,8 +93,8 @@ export function ApiKeyPanel() {
           </div>
         ) : (
           <p className="text-muted-foreground text-sm">
-            No key shown — generating one below always creates a brand new key (the old one, if
-            any, stops working immediately).
+            No key shown — generating one below always creates a brand new key (the old one, if any,
+            stops working immediately).
           </p>
         )}
 
@@ -109,8 +109,8 @@ export function ApiKeyPanel() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Generate a new API key?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Any key currently in use by a CLI or extension for this user_id will stop
-                  working immediately and need to be replaced.
+                  Any key currently in use by a CLI or extension for this user_id will stop working
+                  immediately and need to be replaced.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

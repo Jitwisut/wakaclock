@@ -30,9 +30,7 @@ interface StoredShape {
   username: null | string;
 }
 
-type Action =
-  | { token: string; type: 'set'; userId: string; username: string }
-  | { type: 'clear' };
+type Action = { token: string; type: 'set'; userId: string; username: string } | { type: 'clear' };
 
 function reducer(state: StoredShape, action: Action): StoredShape {
   switch (action.type) {
@@ -51,7 +49,11 @@ function reducer(state: StoredShape, action: Action): StoredShape {
 const WakaclockUserContext = React.createContext<null | WakaclockUserState>(null);
 
 export function WakaclockUserProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = React.useReducer(reducer, { userId: null, username: null, token: null });
+  const [state, dispatch] = React.useReducer(reducer, {
+    userId: null,
+    username: null,
+    token: null,
+  });
   const hydrated = React.useRef(false);
 
   React.useEffect(() => {
@@ -104,9 +106,7 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     [state]
   );
 
-  return (
-    <WakaclockUserContext.Provider value={value}>{children}</WakaclockUserContext.Provider>
-  );
+  return <WakaclockUserContext.Provider value={value}>{children}</WakaclockUserContext.Provider>;
 }
 
 /** Selector-style access, e.g. `useWakaclockUserStore((s) => s.userId)`. */

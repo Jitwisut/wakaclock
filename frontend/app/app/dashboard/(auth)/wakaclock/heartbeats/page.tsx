@@ -12,7 +12,14 @@ import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
@@ -41,7 +48,9 @@ function HeartbeatsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Raw heartbeats — {data?.total ?? 0} today</CardTitle>
-            <CardDescription>GET /heartbeats · POST /heartbeats · POST /heartbeats.bulk</CardDescription>
+            <CardDescription>
+              GET /heartbeats · POST /heartbeats · POST /heartbeats.bulk
+            </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Popover>

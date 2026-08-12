@@ -9,6 +9,7 @@ import { QueryProvider } from '@/components/query-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { fontVariables } from '@/lib/fonts';
 import GoogleAnalyticsInit from '@/lib/ga';
+import { PRODUCT_ANSWER, SITE_NAME, SITE_TAGLINE, SITE_URL } from '@/lib/seo/site';
 import {
   DEFAULT_THEME,
   type ThemeContentLayout,
@@ -19,7 +20,38 @@ import {
 import { cn } from '@/lib/utils';
 import { WakaclockUserProvider } from '@/lib/wakaclock/user-store';
 
+import type { Metadata } from 'next';
+
 import './globals.css';
+
+/**
+ * `metadataBase` is what lets every page emit absolute canonical/OG URLs from a
+ * relative path. It is derived from NEXT_PUBLIC_APP_URL, which throws on a
+ * production build rather than silently canonicalising to localhost.
+ */
+export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: PRODUCT_ANSWER,
+  applicationName: SITE_NAME,
+  openGraph: {
+    type: 'website',
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    description: SITE_TAGLINE,
+    url: '/',
+  },
+  twitter: {
+    // No Open Graph image asset exists yet; a large-image card with no image renders
+    // worse than a summary card. Switch to summary_large_image once one is added.
+    card: 'summary',
+    title: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    description: SITE_TAGLINE,
+  },
+};
 
 export default async function RootLayout({
   children,

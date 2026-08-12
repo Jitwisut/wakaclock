@@ -18,10 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { sendHeartbeat, sendHeartbeatsBulk } from '@/lib/wakaclock/endpoints';
@@ -184,10 +181,7 @@ export function SendHeartbeatDialog({ date }: { date: string }) {
               </div>
             </div>
             <DialogFooter>
-              <Button
-                disabled={singleMutation.isPending || !userId}
-                onClick={handleSingleSubmit}
-              >
+              <Button disabled={singleMutation.isPending || !userId} onClick={handleSingleSubmit}>
                 {singleMutation.isPending ? 'Sending…' : 'Send'}
               </Button>
             </DialogFooter>

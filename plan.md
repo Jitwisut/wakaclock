@@ -485,6 +485,246 @@ Auth: `Authorization: Basic base64(api_key)` (WakaTime-compatible) or `Bearer <a
 
 ---
 
+## Status Note (as of 2026-08-12)
+
+This file has drifted from reality in a few places — read the rest of it with this in mind
+rather than trusting paths/status literally:
+
+- **Paths are stale.** This plan describes `crates/` and `wakaclock-server` at repo root.
+  The actual server lives at `backend/api` (root package, not a separate crate), and CLI
+  crates live at `backend/api/crates/`.
+- **Auth, subscriptions, and the frontend dashboard aren't in this file at all.**
+  Session auth (register/login/JWT + API keys), the 14-day trial/subscription model, and
+  the full `frontend/app` Next.js dashboard were built after this plan was written, in a
+  separate planning pass. Don't treat their absence here as "not started."
+- **Phase 0–2 are largely done**, Phase 3's server endpoints are done, but `/health` still
+  doesn't exist (`README.md`/`start.sh` reference it and `/scalar` — neither is real).
+  Zed, Figma, and Blender from Phase 3 are **not started** — see the correction below.
+- **`wakaclock-ls` (Zed) is a 10-line stub**, not the LSP server the "Extension Patterns"
+  table above implies — `crates/wakaclock-ls/src/main.rs` just prints
+  `"LSP server not yet implemented (Phase 3)"`.
+
+---
+
+## Phase 5 — Editor & Tool Coverage (Beyond VS Code)
+
+### Context
+
+The reference is WakaTime's "supported editors" grid — ~90 icons. Two things need saying
+before scoping this, because they change what "support Program X" actually costs:
+
+1. **Agent CLIs are not editor plugins.** Claude Code, Codex CLI, Copilot CLI, Amp CLI, and
+   similar terminal AI agents appear in that grid, but they don't have editor events to
+   hook (no `onSave`, no buffer). They're covered by the separate `sync-agents` plan (reads
+   `~/.claude/projects/*.jsonl`, `~/.codex/sessions/*.jsonl`) — **not** four more plugins
+   here. Don't double-budget them.
+2. **~90 line items is the wrong shape for this plan.** Most of that grid shares a plugin
+   host with several other apps in the same grid (JetBrains alone is 14 icons for one
+   plugin). Scoping by *host platform* instead of by *icon* is both more accurate and
+   roughly a tenth of the size. The tiers below are that regrouping.
+
+### Prerequisites (block every tier below, do these first)
+
+- [ ] **Binary distribution.** There is currently no release artifact anywhere — no
+  `.github/workflows/release.yml`, no install script, no version-check endpoint. Every
+  plugin past VS Code shells out to a `wakaclock` binary the user must already have on
+  `PATH`; right now that only exists via `cargo install --path`. WakaTime's plugins solve
+  this by having each plugin auto-download `wakatime-cli` on first run. Needs, at minimum:
+  cross-compiled release binaries (macOS/Linux/Windows) attached to GitHub releases, and a
+  `GET /api/v1/cli/latest` (or static JSON) version-check endpoint plugins can poll.
+- [ ] **Move buffering logic out of the VS Code extension and into `wakaclock-core`.**
+  Verified: `extensions/vscode/src/buffer.ts` (305 lines) owns the entire flush-timer,
+  keystroke-accumulation, gap/idle-detection, and active-seconds-estimate logic — none of
+  it is in `wakaclock-core`, which only has the offline SQLite queue. Every Tier 2 plugin
+  below would otherwise reimplement ~300 lines of this in Lua, Elisp, Python, C++, or C#.
+  Decide the shape before building anything new: either (a) a `wakaclock watch` background
+  process that owns buffering and accepts raw keystroke events over a local socket/stdin
+  from thin plugins, or (b) a `wakaclock-editor-shim` library crate other language bindings
+  wrap via FFI. Until this lands, each new plugin is a full reimplementation, not the
+  "~150 lines of event wiring" it should be.
+- [ ] **Document the `WAKACLOCK_EDITOR` contract.** The CLI already resolves editor identity
+  via `detect_editor()` (`WAKACLOCK_EDITOR` env var → `TERM_PROGRAM` → `EDITOR` →
+  `"wakaclock-cli"` fallback), and the VS Code extension already sets it to `"vscode"`
+  (`cli.ts:126`). This is currently undocumented and easy to skip. The `editor_daily` table
+  and the dashboard's Editors breakdown are useless if every new plugin doesn't set a
+  distinct, stable value — make it part of the shim contract from the prerequisite above,
+  not an afterthought per plugin.
+
+### Tier 1 — Committed scope (one codebase covers a whole family)
+
+- [ ] **VS Code Extension API family** — VS Code, Cursor, Trae, Kiro, Qoder, Antigravity,
+  VSCodium. All consume the same Extension API; `extensions/vscode` already targets it.
+  Work is packaging/distribution, not new logic: publish to both the VS Code Marketplace
+  and Open VSX (the forks pull from Open VSX, not Marketplace). Credential store:
+  `vscode.SecretStorage`, already wired (`secrets.ts`).
+- [ ] **IntelliJ Platform SDK family** — IntelliJ IDEA, PyCharm, WebStorm, PhpStorm,
+  RubyMine, CLion, GoLand, DataGrip, DataSpell, Rider, RustRover, AppCode, Android Studio,
+  MPS. One plugin (Kotlin, IntelliJ Platform Plugin Template) covers all 14 icons via one
+  Marketplace listing. New `extensions/jetbrains/`. Spawns the `wakaclock` CLI the same way
+  the VS Code extension does — document-open/save/change listeners → buffer → flush.
+  Credential store: IntelliJ `PasswordSafe` API.
+
+### Tier 2 — Sequenced, not yet scheduled (one codebase, one app each)
+
+- [ ] **Neovim** (Lua, native LSP client or a plugin using `vim.loop` timers)
+- [ ] **Vim** (VimScript — no Lua runtime in classic Vim, separate implementation from Neovim)
+- [ ] **Emacs** (Elisp package, distributed via MELPA)
+- [ ] **Sublime Text** (Python 3.8 plugin API)
+- [ ] **Zed** — finish `wakaclock-ls` for real: `tower-lsp` server implementing
+  `didOpen`/`didChange`/`didSave` → heartbeat, plus the `extension.toml` wrapper for Zed's
+  extension registry (this was already Phase 3 scope — it just never got built)
+- [ ] **Visual Studio** (full, not Code) — VSPackage/VSIX, C#/.NET
+- [ ] **Xcode** — Swift Source Editor Extension; flag risk early, Apple's extension API is
+  sandboxed and notoriously limited (no reliable save/change hooks in some Xcode versions)
+- [ ] **Notepad++** (C++, Notepad++ Plugin API)
+- [ ] **Eclipse** (Java, OSGi/Eclipse Platform plugin)
+
+Credential store for all of Tier 2: none of these hosts have a secret-storage API wakaclock
+can use, so they fall back to `~/.wakaclock/config.toml` via `wakaclock config set-key` —
+same path the CLI already supports today, just document it per-plugin instead of building
+anything new.
+
+### Tier 3 — Explicitly out (bucket rule, not a per-app decision)
+
+**Rule:** no plugin/extension API with editor-event hooks, or the app isn't primarily a
+coding surface → covered by the Tauri desktop app's active-window tracking (Phase 4), not a
+dedicated plugin. This is a deliberate non-goal, not a gap to fill later per-app.
+
+Covers the rest of the grid: terminals, browsers (Chrome/Firefox/Edge/Brave/Safari — a
+browser plugin would track *view* time, not *coding* time, which is out of scope for this
+product), Office apps (Word/Excel/PowerPoint), Discord, Postman, IDA Pro, database GUIs
+(DBeaver, MySQL Workbench, Azure Data Studio, SQL Server Studio, Aqua Data Studio — DataGrip
+is the one exception, covered under Tier 1 as JetBrains), and the long tail of niche editors
+(BlueJ, Processing, Qt Creator, Code::Blocks, CodeLite, KDevelop, Light Table, Espresso,
+RStudio, Spyder, TeXstudio, TextMate, Kakoune, Kate, Micro, Helix, Nova, Coda, Geany, Gedit,
+EmEditor, WPS Office, SiYuan, HBuilder X, Delphi, Wing, ReClassEx, Recaf, Oxygen, Maestro,
+Komodo, Cloud9, Brackets, Aptana, Arduino IDE, SlickEdit, Zotero).
+
+Two apps already have a home in the *existing* plan and aren't new Phase 5 work:
+**Figma** (Phase 3, direct HTTP plugin) and **Blender** (Phase 3, Python addon) — both
+already scoped above, neither started yet.
+
+---
+
+## Phase 6 — Teams/Orgs, Billing & Trust Surfaces
+
+### Context
+
+Source: a Playwright research session against the real WakaTime app (logged in), snapshots
+saved under `.playwright-mcp/`. Cross-referenced against what `frontend/app` already has
+(full 21-endpoint dashboard, register/login, flat-plan trial). Four gaps found; only the
+first is a structural blocker for the target market this product already committed to
+(engineering managers running 20–200 person teams, per the pricing/positioning pass) — the
+other three are parity nice-to-haves and should not jump the queue ahead of it.
+
+### 6.1 — Teams & Organizations (🔴 blocking for the chosen target market)
+
+**Why this outranks everything else in this file:** the auth/subscription system built so
+far (`services/user.rs`, `middleware/auth.rs`) is single-user end to end — one `user_id`,
+one `api_key`, one `subscription_status`. There is no concept of "these 40 people are one
+customer." An engineering manager evaluating this product will ask for a team view in the
+first five minutes; without it, the entire positioning built around that buyer doesn't work
+yet, regardless of how good the AI-analytics differentiator is.
+
+**Schema** (new tables, same `ReplacingMergeTree` + full-row-replace discipline as
+`wakaclock.users` — every write must carry every column forward, the same footgun that bit
+`update_subscription()` earlier in this project):
+
+```sql
+CREATE TABLE IF NOT EXISTS wakaclock.orgs
+(
+    org_id        UUID,
+    name          String,
+    owner_user_id UUID,
+    created_at    DateTime64(3) DEFAULT now64(3),
+    updated_at    DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id)
+
+CREATE TABLE IF NOT EXISTS wakaclock.org_members
+(
+    org_id     UUID,
+    user_id    UUID,
+    role       String,   -- 'owner' | 'admin' | 'member'
+    joined_at  DateTime64(3) DEFAULT now64(3),
+    updated_at DateTime64(3) DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, user_id)
+```
+
+- [ ] **Org context resolution** — don't embed `org_id` in the JWT (`SessionClaims { sub:
+      Uuid }` stays user-only, avoids re-issuing tokens on every org switch). Add
+      `resolve_org_context(state, headers, user_id) -> Option<Uuid>` reading an
+      `X-Wakaclock-Org` header, validated against `org_members` — same shape as
+      `resolve_user_id()`, same "no client-supplied trust" rule.
+- [ ] **Every read query gets an org-scoped variant.** This is the real size of the feature,
+      not the schema. `summaries`, `stats`, `insights`, `projects`, `ai_stats`,
+      `keystroke_stats` all currently filter `WHERE user_id = ?` in
+      `repository/analytics.rs`; an org view needs
+      `WHERE user_id IN (SELECT user_id FROM org_members WHERE org_id = ?)` on each one.
+      Budget this as touching essentially every existing query, not as one new endpoint.
+- [ ] **Billing model decision (blocks implementation, decide first):** subscription state
+      (`subscription_status`, `trial_ends_at`, `subscription_period_end`) currently lives on
+      `wakaclock.users`, i.e. per person. Teams pricing was already recommended as per-seat
+      (see pricing discussion) — decide whether that means moving subscription state onto
+      `orgs` and gating org members off the org's subscription, or keeping it per-user and
+      having the org owner's plan act as a seat pool. Don't start the schema work until this
+      is picked; it changes which table the new columns land on.
+- [ ] **Migration shape for existing accounts:** every user created so far has no org. Two
+      options — (a) auto-create a personal, always-1-member org per existing/new user, so
+      every query is uniformly org-scoped and "Personal" is just an org with one member
+      (this is what WakaTime's own org switcher implies, per the snapshot); or (b) org stays
+      a fully optional overlay with two code paths (personal vs org queries). Prefer (a) —
+      it collapses the org-scoped query work above into the *only* query shape, instead of
+      building and maintaining two.
+- [ ] **Frontend:** org switcher (mirrors the WakaTime snapshot's pattern — dropdown with
+      "Personal dashboard" + one entry per org), invite-by-email flow, member list with
+      role management (owner can promote/demote/remove), org-scoped variant of the existing
+      Overview/Projects/Insights pages.
+- [ ] **Permissions:** only `org_members` rows can read that org's aggregated data; only
+      `owner`/`admin` roles can invite, remove, or change roles. Enforce server-side in the
+      org-context resolver, not just hidden in the frontend.
+
+### 6.2 — Public API docs (🟡 medium, cheap relative to its value)
+
+`utoipa` and `utoipa-scalar` are **already dependencies** (`Cargo.toml:42-43`) but nothing
+mounts them — `README.md`/`start.sh` advertise a `/scalar` route that 404s today (see Status
+Note above). This is mostly annotation work on handlers already written, not new
+infrastructure:
+
+- [ ] Add `#[utoipa::path(...)]` annotations to existing `handlers/v1/*` functions
+- [ ] Mount `utoipa-scalar` at `/scalar`, wire the generated `OpenApi` doc
+- [ ] Sequence this early relative to the rest of Phase 6 — it's the cheapest item here and
+      it closes a gap between what the README already claims and what's actually running
+
+### 6.3 — Reports & Invoices (🟡 medium, freelancer-shaped — reconsider before building)
+
+WakaTime has both; they exist to support freelancers billing clients by tracked hours. That
+use case sits outside the team/org buyer this product is positioned for — **don't build
+either until real signups show a freelancer segment actually asking for it.** If it
+happens:
+- [ ] **Reports** — exportable periodic summary (CSV/PDF) of an existing date-range query;
+      no new data model, purely a rendering/export layer on `summaries`/`stats`.
+- [ ] **Invoices** — genuinely new data: hourly rate per project, invoice records with
+      paid/unpaid status, rate × tracked-time line items, CSV/PDF export. Meaningfully more
+      work than Reports; don't bundle the two as one estimate.
+
+### 6.4 — Email weekly report (🟢 low-medium)
+
+No email-sending capability exists anywhere in the stack yet (no SMTP/email crate in
+`Cargo.toml`). Build this once as a shared `EmailService`, not twice:
+
+- [ ] Pick a sending path (SMTP via `lettre`, or a transactional API like Postmark/SES)
+- [ ] Scheduled job querying each user's (or org's, if 6.1 ships first) past-7-days summary,
+      rendering a simple HTML digest, sending
+- [ ] Reuse the same `EmailService` for org invite emails (6.1) — building invite-email and
+      report-email as two independent integrations would duplicate the sending
+      infrastructure for no reason
+
+---
+
 ## Testing Strategy (TDD per CLAUDE.md)
 
 | Layer | Tool | Coverage |
