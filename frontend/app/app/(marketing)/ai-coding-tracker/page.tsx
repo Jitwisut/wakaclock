@@ -133,7 +133,7 @@ export default function AiCodingTrackerPage() {
           <CodeBlock label="POST /api/v1/heartbeats.bulk">{`{
   "entity": "src/parser.rs",
   "entity_type": "file",
-  "project": "azyren",
+  "project": "atoaxis",
   "language": "Rust",
   "is_ai_generated": true,
   "ai_agent": "your-agent-name",
@@ -150,16 +150,16 @@ export default function AiCodingTrackerPage() {
 
         <Section heading="Supported AI tools" id="supported-tools">
           <p style={MUTED_TEXT}>
-            This is the part worth being precise about, because it is where similar products tend
-            to overstate. {SITE_NAME} does <strong>not</strong> ship an integration that detects
-            Claude Code, Codex, Cursor, Copilot or any other agent automatically. There is no
-            list of blessed tools in the codebase.
+            {SITE_NAME} does <strong>not</strong> ship an integration that detects Claude Code,
+            Codex, Cursor, Copilot or any other agent automatically. There is no list of
+            supported tools in the codebase, and installing the VS Code extension will not
+            separate AI-assisted work from hand-written work on its own.
           </p>
           <p style={MUTED_TEXT}>
             What exists instead is an open field. The agent name is a free-form string, so any
-            tool you report activity for shows up in the dashboard under the name you send. That
-            makes the feature genuinely tool-agnostic, but it does mean the reporting is
-            something you wire up rather than something that happens by installing an extension.
+            tool you report activity for appears in the dashboard under the name you send. That
+            makes the feature tool-agnostic, but the reporting is something you wire up rather
+            than something that happens by installing an extension.
           </p>
           <Subheading>The two paths that populate it today</Subheading>
           <Bullets
@@ -168,6 +168,23 @@ export default function AiCodingTrackerPage() {
               'A WakaTime data import, where heartbeats carrying an AI category or AI session are recorded under the agent name "wakatime"',
             ]}
           />
+        </Section>
+
+        <Section heading="If automatic AI tracking is what you need" id="compare-wakatime">
+          <p style={MUTED_TEXT}>
+            Worth saying plainly, because it may save you an evaluation: WakaTime publishes
+            dedicated plugins for Claude Code, Cursor, Codex and Copilot, and its paid tiers
+            report AI-generated versus human-written lines, token usage and estimated cost per
+            model without any integration work. {SITE_NAME} does none of that automatically, and
+            it does not track tokens or cost at all.
+          </p>
+          <p style={MUTED_TEXT}>
+            So if automatic AI agent analytics is your primary requirement, WakaTime is the
+            better product today. {SITE_NAME} is the better fit when the deciding factor is
+            keeping your complete coding history at a lower price —
+            and you are willing to send the AI attribution yourself. Verified against
+            wakatime.com in August 2026; check their current documentation before deciding.
+          </p>
         </Section>
 
         <Section heading="What is recorded" id="what-is-recorded">

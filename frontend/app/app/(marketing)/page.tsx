@@ -14,12 +14,12 @@ import { PRICING, PRODUCT_ANSWER, SITE_NAME } from '@/lib/seo/site';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  // `absolute` opts out of the root layout's "%s | Azyren" template, which would
+  // `absolute` opts out of the root layout's "%s | AtoAxis" template, which would
   // otherwise render the brand name twice on the homepage.
-  title: { absolute: `${SITE_NAME} — Self-Hosted Developer Time Tracking` },
+  title: { absolute: `${SITE_NAME} — Developer Time Tracking with Complete History` },
   description: PRODUCT_ANSWER,
   alternates: { canonical: '/' },
-  openGraph: { url: '/', title: `${SITE_NAME} — Self-Hosted Developer Time Tracking` },
+  openGraph: { url: '/', title: `${SITE_NAME} — Developer Time Tracking with Complete History` },
 };
 
 const FAQ: readonly FaqEntry[] = [
@@ -76,9 +76,15 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: `Where is ${SITE_NAME} data stored?`,
     answer:
-      `${SITE_NAME} is self-hosted. Heartbeats are written to a ClickHouse database running on ` +
-      'infrastructure you control, and you can query that database directly. Nothing is sent to a ' +
-      'server operated by us.',
+      `${SITE_NAME} is a hosted service. Heartbeats are sent over HTTPS to servers we operate and ` +
+      'stored in a ClickHouse database we run. Your source code never leaves your machine, but ' +
+      'file paths and project names do — the privacy page describes exactly what is stored.',
+  },
+  {
+    question: `Do I need to run a server to use ${SITE_NAME}?`,
+    answer:
+      'No. There is nothing to deploy and no database to maintain. Create an account, install the ' +
+      'VS Code extension or point an existing WakaTime plugin at the API, and tracking starts.',
   },
   {
     question: `Does ${SITE_NAME} store my source code?`,
@@ -91,8 +97,8 @@ const FAQ: readonly FaqEntry[] = [
     question: `How much does ${SITE_NAME} cost?`,
     answer:
       `${SITE_NAME} costs $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year, with ` +
-      `a ${PRICING.trialDays}-day trial. Every account includes the full product; there are no ` +
-      'feature-gated tiers.',
+      `a ${PRICING.trialDays}-day trial. Every account includes the full product and your complete ` +
+      'coding history; there are no feature-gated tiers and nothing extra to pay for hosting.',
   },
 ];
 
@@ -106,9 +112,11 @@ const USE_CASES = [
 
 const LIMITATIONS = [
   'The only editor plugin published by us is for VS Code; other editors connect through the WakaTime protocol.',
-  'AI attribution fields are accepted and aggregated by the API, but no shipped client fills them in automatically.',
+  'AI attribution fields are accepted and aggregated by the API, but no shipped client fills them in automatically — there is no built-in Claude Code, Cursor or Copilot integration.',
+  'AI token usage and cost are not tracked at all.',
   'There is no desktop or browser client yet, so activity outside a connected editor is not captured.',
   'There is no team or organisation dashboard — analytics are scoped to a single account.',
+  'There is no free tier, and no self-hosted edition.',
 ];
 
 export default function MarketingHomePage() {
@@ -120,7 +128,7 @@ export default function MarketingHomePage() {
       <EditorWallSection />
 
       <div className="mx-auto max-w-3xl px-4 md:px-6">
-        <Section heading={`What is ${SITE_NAME}?`} id="what-is-azyren">
+        <Section heading={`What is ${SITE_NAME}?`} id="what-is-atoaxis">
           <p className="text-base leading-relaxed">{PRODUCT_ANSWER}</p>
         </Section>
 

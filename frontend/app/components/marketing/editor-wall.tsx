@@ -32,7 +32,7 @@ export function EditorWallSection() {
   return (
     <section className="py-14">
       <p className="mb-8 text-center text-sm font-medium" style={{ color: 'var(--mkt-fg-muted)' }}>
-        Compatible via the WakaTime plugin protocol — {COMPATIBLE_EDITORS.length}+ editors, no new
+        Already using one of these with a WakaTime plugin? Point it at AtoAxis — no new
         extension to install
       </p>
       <div className="space-y-3">

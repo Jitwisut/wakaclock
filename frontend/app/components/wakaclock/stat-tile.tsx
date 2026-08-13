@@ -1,3 +1,5 @@
+import { InfoIcon } from 'lucide-react';
+
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -33,10 +35,10 @@ export function StatTile({
                 <TooltipTrigger asChild>
                   <button
                     aria-label={tooltip}
-                    className="text-muted-foreground/60 hover:text-foreground cursor-help underline decoration-dotted underline-offset-4"
+                    className="text-muted-foreground/60 hover:text-foreground cursor-help transition-colors"
                     type="button"
                   >
-                    ⓘ
+                    <InfoIcon aria-hidden className="size-3.5" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-64">{tooltip}</TooltipContent>

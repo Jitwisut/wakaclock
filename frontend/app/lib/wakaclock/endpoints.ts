@@ -1,9 +1,11 @@
 import { wakaclockClient } from './client';
+import { getCurrentToken } from './session';
 
 import type {
   AiStatsResponse,
   AllTimeResponse,
   AuthResponse,
+  CreatePresenceRoomResponse,
   DeleteResponse,
   DurationsResponse,
   GenerateApiKeyResponse,
@@ -13,6 +15,9 @@ import type {
   InsightsResponse,
   InsightType,
   KeystrokeStatsResponse,
+  OrgResponse,
+  OrgsResponse,
+  PresenceActionResponse,
   ProjectMergeMutationResponse,
   ProjectMergesResponse,
   ProjectRuleMutationResponse,
@@ -24,6 +29,8 @@ import type {
   StatsResponse,
   StatusBarResponse,
   SummariesResponse,
+  TeamResponse,
+  TeamsResponse,
   UpsertProjectMergePayload,
   UpsertProjectRulePayload,
   UserResponse,
@@ -162,6 +169,87 @@ export async function sendHeartbeatsBulk(payloads: HeartbeatPayload[]) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Presence (plan.md Phase 7) — prototype, see types.ts for what that means.
+// ---------------------------------------------------------------------------
+
+// POST /presence/rooms — teamId, when given, must be a team the caller already belongs
+// to; the server looks up and stores its real name, it is never sent as free text.
+export async function createPresenceRoom(teamId?: string) {
+  const { data } = await wakaclockClient.post<CreatePresenceRoomResponse>(
+    '/presence/rooms',
+    teamId ? { team_id: teamId } : undefined
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/join
+export async function joinPresenceRoom(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/join`
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/leave — also ends/shrinks any co-working session this
+// user was part of in the room (handled server-side).
+export async function leavePresenceRoom(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/leave`
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/position — call on drag END only, not per pointer-move
+// frame. This is what makes the canvas a genuinely shared view: every viewer's SSE
+// stream reflects it, not just the browser that did the dragging.
+export async function updatePresencePosition(roomId: string, x: number, y: number) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/position`,
+    { x, y }
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/sessions — reports "I am now close to this person" (plan.md
+// 7.4). No session id is ever chosen by the client; the server infers whether this
+// extends an existing group session or starts a new one.
+export async function startOrJoinSession(roomId: string, withUserId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/sessions`,
+    { with_user_id: withUserId }
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/sessions/leave — called after the 3-minute drag-apart
+// grace period elapses with no reunion. Ends the caller's own session participation;
+// staying in the room itself is unaffected.
+export async function leaveSession(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/sessions/leave`
+  );
+  return data;
+}
+
+/**
+ * GET /presence/rooms/:roomId/stream — not called through `wakaclockClient` because
+ * it's a long-lived SSE connection, not a request/response call. The browser's native
+ * `EventSource` cannot set an `Authorization` header, so the session token travels as a
+ * query parameter instead; the server accepts this only on this one endpoint (see
+ * `auth::resolve_user_id_from_token` on the backend).
+ *
+ * Returns `null` if there is no current session — callers should not open a connection
+ * without one.
+ */
+export function presenceStreamUrl(roomId: string): null | string {
+  const token = getCurrentToken();
+  if (!token) return null;
+
+  const base = wakaclockClient.defaults.baseURL;
+  return `${base}/presence/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
+}
+
 // GET /project_rules?user_id= — user_id REQUIRED (400 if omitted)
 export async function getProjectRules(userId: string) {
   const { data } = await wakaclockClient.get<ProjectRulesResponse>('/project_rules', {
@@ -228,5 +316,42 @@ export async function importWakaTime(userId: string, filePath: string) {
     user_id: userId,
     file_path: filePath,
   });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Orgs & teams — minimal slice, see types.ts for what this does and does not cover.
+// ---------------------------------------------------------------------------
+
+// POST /orgs — creator becomes the org's owner
+export async function createOrg(name: string) {
+  const { data } = await wakaclockClient.post<OrgResponse>('/orgs', { name });
+  return data;
+}
+
+// GET /orgs — every org the caller belongs to
+export async function listOrgs() {
+  const { data } = await wakaclockClient.get<OrgsResponse>('/orgs');
+  return data;
+}
+
+// POST /orgs/:orgId/teams — org owner/admin only
+export async function createTeam(orgId: string, name: string) {
+  const { data } = await wakaclockClient.post<TeamResponse>(`/orgs/${orgId}/teams`, { name });
+  return data;
+}
+
+// GET /orgs/:orgId/teams
+export async function listTeams(orgId: string) {
+  const { data } = await wakaclockClient.get<TeamsResponse>(`/orgs/${orgId}/teams`);
+  return data;
+}
+
+// POST /orgs/:orgId/teams/:teamId/members — org owner/admin only
+export async function addTeamMember(orgId: string, teamId: string, userId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/orgs/${orgId}/teams/${teamId}/members`,
+    { user_id: userId }
+  );
   return data;
 }

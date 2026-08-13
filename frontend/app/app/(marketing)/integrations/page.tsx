@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   title: 'Editor Integrations',
   description:
     `How editors connect to ${SITE_NAME}: a dedicated VS Code extension, or any editor with a ` +
-    'WakaTime plugin pointed at your own server through the WakaTime-compatible heartbeat API.',
+    'WakaTime plugin pointed at the AtoAxis API, which is WakaTime-compatible.',
   alternates: { canonical: CANONICAL },
   openGraph: { url: CANONICAL, title: `Editor Integrations | ${SITE_NAME}` },
 };
@@ -41,7 +41,7 @@ export default function IntegrationsIndexPage() {
         <LeadAnswer>
           There are two ways to get coding activity into {SITE_NAME}. Install the dedicated VS
           Code extension, which is the only editor plugin we publish, or point an editor that
-          already has a WakaTime plugin at your own server — the heartbeat API is
+          already has a WakaTime plugin at AtoAxis — the heartbeat API is
           WakaTime-compatible, so that takes one configuration change and no new extension.
         </LeadAnswer>
 

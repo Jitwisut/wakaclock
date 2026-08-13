@@ -1,15 +1,18 @@
 pub mod ai_stats;
 pub mod all_time;
+pub mod coworking_session;
 pub mod duration;
 pub mod heartbeat;
 pub mod insights;
 pub mod keystroke_stats;
+pub mod org;
 pub mod project_merge;
 pub mod project_rule;
 pub mod projects;
 pub mod reprocess;
 pub mod stats;
 pub mod summary;
+pub mod team;
 pub mod user;
 pub mod wakatime_import;
 

@@ -118,6 +118,11 @@ pub async fn create(
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    // Presence (plan.md Phase 7): best-effort, in-memory, and deliberately after the
+    // ClickHouse write succeeds — a presence update is not a reason to fail or delay a
+    // heartbeat, and `record_heartbeat` cannot itself fail (see presence_store).
+    state.presence.record_heartbeat(user_id).await;
+
     Ok(Json(HeartbeatResponse {
         status: "ok".to_string(),
         heartbeats_inserted: 1,
@@ -158,6 +163,12 @@ pub async fn create_bulk(
         .process_heartbeats(user_id, "".to_string(), heartbeats)
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    // See the same call in `create` above. Guarded on `count` so an empty batch — which
+    // sent zero actual heartbeats — does not mark the user as having just been active.
+    if count > 0 {
+        state.presence.record_heartbeat(user_id).await;
+    }
 
     Ok(Json(HeartbeatResponse {
         status: "ok".to_string(),

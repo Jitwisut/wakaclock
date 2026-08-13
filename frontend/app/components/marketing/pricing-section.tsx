@@ -18,7 +18,7 @@ const INCLUDED = [
   'Project rules & merges',
   'AST-based language detection',
   'WakaTime data import',
-  'Self-hosted on your infrastructure',
+  'Complete coding history, never trimmed',
 ];
 
 export function PricingSection() {
@@ -114,7 +114,7 @@ export function PricingSection() {
           <Link href="/docs/getting-started">Start {PRICING.trialDays}-day free trial</Link>
         </Button>
         <p className="mt-3 text-center text-xs" style={{ color: MKT_FG_MUTED }}>
-          Runs on your own infrastructure — hosting costs are separate.
+          Hosting included — nothing to deploy or maintain.
         </p>
       </div>
     </section>

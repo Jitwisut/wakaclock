@@ -1,10 +1,10 @@
 {
-  "name": "wakaclock-vscode",
-  "displayName": "Azyren \u2014 Developer Time Tracking",
-  "description": "Developer time tracking for VS Code. Records coding time by project, language and branch, plus keystroke counts, and sends it to your self-hosted Azyren server.",
+  "name": "atoaxis-vscode",
+  "displayName": "AtoAxis \u2014 Developer Time Tracking",
+  "description": "Developer time tracking for VS Code. Records coding time by project, language and branch, plus keystroke counts, and sends it to your self-hosted AtoAxis server.",
   "version": "0.1.0",
-  "publisher": "wakaclock",
-  "license": "MIT",
+  "publisher": "atoaxis",
+  "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/Jitwisut/wakaclock#readme",
   "repository": {
     "type": "git",

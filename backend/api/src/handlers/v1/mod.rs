@@ -7,6 +7,8 @@ pub mod heartbeats;
 pub mod insights;
 pub mod internal;
 pub mod keystroke_stats;
+pub mod orgs;
+pub mod presence;
 pub mod project_merges;
 pub mod project_rules;
 pub mod projects;
@@ -14,6 +16,7 @@ pub mod reprocess;
 pub mod stats;
 pub mod status_bar;
 pub mod summaries;
+pub mod teams;
 pub mod users;
 pub mod wakatime_import;
 use crate::infrastructure::app::AppState;
@@ -27,7 +30,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
-        .route("/internal/subscription", post(internal::update_subscription))
+        .route(
+            "/internal/subscription",
+            post(internal::update_subscription),
+        )
         .route(
             "/heartbeats",
             post(heartbeats::create).get(heartbeats::list),
@@ -49,6 +55,31 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         )
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/current/keystroke_stats", get(keystroke_stats::get))
+        .route("/orgs", post(orgs::create).get(orgs::list))
+        .route("/orgs/:org_id/teams", post(teams::create).get(teams::list))
+        .route(
+            "/orgs/:org_id/teams/:team_id/members",
+            post(teams::add_member),
+        )
+        .route("/presence/rooms", post(presence::create_room))
+        .route("/presence/rooms/:room_id/join", post(presence::join_room))
+        .route("/presence/rooms/:room_id/leave", post(presence::leave_room))
+        .route(
+            "/presence/rooms/:room_id/position",
+            post(presence::update_position),
+        )
+        .route(
+            "/presence/rooms/:room_id/sessions",
+            post(presence::start_or_join_session),
+        )
+        .route(
+            "/presence/rooms/:room_id/sessions/leave",
+            post(presence::leave_session),
+        )
+        .route(
+            "/presence/rooms/:room_id/stream",
+            get(presence::stream_presence),
+        )
         .route("/project_merges", get(project_merges::list))
         .route(
             "/project_merges/:merge_id",

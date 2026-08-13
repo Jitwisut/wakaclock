@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Label, Pie, PieChart, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ChartContainer,
   ChartLegend,
@@ -71,7 +71,6 @@ function AiStatsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>AI code attribution</CardTitle>
-            <CardDescription>GET /users/current/ai_stats</CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>

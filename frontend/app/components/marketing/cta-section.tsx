@@ -14,11 +14,11 @@ export function CtaSection() {
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
         >
-          Your coding data, on your terms
+          Start tracking in two minutes
         </h2>
         <p className="mx-auto mt-4 max-w-md text-base" style={{ color: 'var(--mkt-fg-muted)' }}>
-          Deploy Azyren, generate an API key, and point your existing editor plugin at it. Ten
-          minutes, no editor changes.
+          Create an account, generate an API key, and point your existing editor plugin at it. Two
+          minutes, no new extension.
         </p>
         <Button
           asChild
@@ -27,7 +27,7 @@ export function CtaSection() {
           style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
         >
           <Link href="/docs/getting-started">
-            Install Azyren
+            Install AtoAxis
             <ArrowRightIcon aria-hidden className="size-4" />
           </Link>
         </Button>

@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 const CONFIG_SNIPPET = `~/.wakatime.cfg
 
 [settings]
-api_url = https://your-azyren.example.com/api/v1
+api_url = https://api.atoaxis.com/api/v1
 api_key = your_generated_api_key`;
 
 /**

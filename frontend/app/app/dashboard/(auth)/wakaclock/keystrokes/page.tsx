@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import {
@@ -47,7 +47,6 @@ function KeystrokesPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Keystrokes</CardTitle>
-            <CardDescription>GET /users/current/keystroke_stats</CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>

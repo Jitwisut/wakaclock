@@ -1,11 +1,11 @@
-# Azyren — Developer Time Tracking for VS Code
+# AtoAxis — Developer Time Tracking for VS Code
 
-Azyren records how long you spend coding in VS Code and breaks it down by project,
+AtoAxis records how long you spend coding in VS Code and breaks it down by project,
 programming language, branch and editor. This extension captures editor activity,
 buffers it in memory, and delegates heartbeat delivery to `wakaclock-cli`, which sends
-it to a self-hosted Azyren server you run yourself.
+it to a self-hosted AtoAxis server you run yourself.
 
-> **Naming:** the product is Azyren, but the CLI binary, config directory and setting
+> **Naming:** the product is AtoAxis, but the CLI binary, config directory and setting
 > keys still ship under the original `wakaclock` name. Commands below are written
 > exactly as you must type them.
 
@@ -22,7 +22,7 @@ it to a self-hosted Azyren server you run yourself.
 
 - VS Code 1.90 or newer
 - `wakaclock-cli` on your `PATH`, or configured via `wakaclock.cliPath`
-- A running Azyren server and a config file at `~/.wakaclock/config.toml`
+- A running AtoAxis server and a config file at `~/.wakaclock/config.toml`
 
 ## Installation
 
@@ -61,13 +61,13 @@ wakaclock-cli today    # today's total
 
 ## Supported editors
 
-This is the only editor plugin published for Azyren. Other editors can still send
-data: the Azyren heartbeat API is WakaTime-compatible, so any editor with a WakaTime
-plugin can point its `api_url` at your Azyren server instead.
+This is the only editor plugin published for AtoAxis. Other editors can still send
+data: the AtoAxis heartbeat API is WakaTime-compatible, so any editor with a WakaTime
+plugin can point its `api_url` at your AtoAxis server instead.
 
 ## AI tracking
 
-The Azyren heartbeat API accepts AI attribution fields — an agent name plus AI lines
+The AtoAxis heartbeat API accepts AI attribution fields — an agent name plus AI lines
 added and deleted — and the dashboard aggregates them per agent and per day.
 
 **This extension does not populate those fields.** There is no built-in detection of

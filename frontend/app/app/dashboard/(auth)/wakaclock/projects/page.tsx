@@ -89,7 +89,7 @@ function ProjectsTable() {
           <div>
             <CardTitle>Projects</CardTitle>
             <CardDescription>
-              GET /projects — the only endpoint that applies project_merges
+              Project merges are applied here
             </CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />

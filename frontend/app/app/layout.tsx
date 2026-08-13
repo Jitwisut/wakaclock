@@ -32,7 +32,7 @@ import './globals.css';
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    default: `${SITE_NAME} — Developer Time Tracking`,
     template: `%s | ${SITE_NAME}`,
   },
   description: PRODUCT_ANSWER,
@@ -40,7 +40,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     siteName: SITE_NAME,
-    title: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    title: `${SITE_NAME} — Developer Time Tracking`,
     description: SITE_TAGLINE,
     url: '/',
   },
@@ -48,7 +48,7 @@ export const metadata: Metadata = {
     // No Open Graph image asset exists yet; a large-image card with no image renders
     // worse than a summary card. Switch to summary_large_image once one is added.
     card: 'summary',
-    title: `${SITE_NAME} — Self-Hosted Developer Time Tracking`,
+    title: `${SITE_NAME} — Developer Time Tracking`,
     description: SITE_TAGLINE,
   },
 };

@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import {
@@ -18,12 +18,13 @@ import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { getSummaries } from '@/lib/wakaclock/endpoints';
+import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { SummaryDay, SummaryItem } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 const chartConfig = {
-  hours: { label: 'Hours', color: 'var(--chart-1)' },
+  seconds: { label: 'Time', color: 'var(--chart-1)' },
 } satisfies ChartConfig;
 
 function topItem(items: SummaryItem[]) {
@@ -43,7 +44,7 @@ export function SummariesPanel() {
   const days = data?.days ?? [];
   const chartData = days.map((day) => ({
     date: day.date,
-    hours: Number(day.grand_total.hours.toFixed(2)),
+    seconds: day.grand_total.total_seconds,
   }));
 
   return (
@@ -52,7 +53,6 @@ export function SummariesPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Daily summaries</CardTitle>
-            <CardDescription>GET /summaries</CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
@@ -68,8 +68,8 @@ export function SummariesPanel() {
               <AreaChart data={chartData} margin={{ left: 8, right: 8 }}>
                 <defs>
                   <linearGradient id="summaryHoursFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.02} />
+                    <stop offset="5%" stopColor="var(--color-seconds)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-seconds)" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -79,12 +79,23 @@ export function SummariesPanel() {
                   tickFormatter={(v: string) => v.slice(5)}
                   tickLine={false}
                 />
-                <YAxis axisLine={false} tickLine={false} unit="h" width={32} />
-                <ChartTooltip content={<ChartTooltipContent />} />
+                <YAxis
+                  axisLine={false}
+                  tickFormatter={formatDurationShort}
+                  tickLine={false}
+                  width={48}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => formatDurationShort(Number(value))}
+                    />
+                  }
+                />
                 <Area
-                  dataKey="hours"
+                  dataKey="seconds"
                   fill="url(#summaryHoursFill)"
-                  stroke="var(--color-hours)"
+                  stroke="var(--color-seconds)"
                   strokeWidth={2}
                   type="monotone"
                 />

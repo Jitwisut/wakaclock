@@ -10,7 +10,7 @@ export default function WakaclockOverviewPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Self-hosted coding-time analytics, backed by the wakaclock Rust API."
+        description="Coding-time analytics, backed by the wakaclock Rust API."
         title="Overview"
       />
       <RequireUser>

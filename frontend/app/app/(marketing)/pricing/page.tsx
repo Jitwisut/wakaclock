@@ -42,21 +42,28 @@ const FAQ: readonly FaqEntry[] = [
     question: `Is ${SITE_NAME} free?`,
     answer:
       `No. There is a ${PRICING.trialDays}-day trial, after which ${SITE_NAME} is a paid product. ` +
-      'You host it yourself, so you also cover the cost of the infrastructure it runs on.',
+      'There is no free tier. Hosting is included in the price — there is no separate ' +
+      'infrastructure cost.',
   },
   {
     question: `Is ${SITE_NAME} open source?`,
     answer:
-      `No. ${SITE_NAME} is a commercial, proprietary product. Self-hosting means the software runs ` +
-      'on infrastructure you control and the data stays there; it does not mean the source code is ' +
-      'publicly licensed.',
+      `No. ${SITE_NAME} is a commercial, proprietary hosted service. The source code is not ` +
+      'publicly licensed, and there is no self-hosted or on-premise edition.',
   },
   {
-    question: 'What does self-hosted mean for cost?',
+    question: 'Is hosting included?',
     answer:
-      'You run the server, the ClickHouse database and the cache yourself, so hosting costs are ' +
-      'yours and depend on your provider and the volume of activity you record. The subscription ' +
-      'covers the software, not the infrastructure.',
+      `Yes. ${SITE_NAME} runs the server, the database and the dashboard. There is nothing to ` +
+      'deploy and no infrastructure bill on top of the subscription.',
+  },
+  {
+    question: 'What do I get that the WakaTime free plan does not give me?',
+    answer:
+      'Your complete coding history rather than a one-week dashboard window. WakaTime keeps your ' +
+      'stats but requires its $14/month Premium plan to see all of it; complete history is ' +
+      `included in the single $${PRICING.monthlyUsd}/month ${SITE_NAME} plan. Verified against ` +
+      'wakatime.com in August 2026.',
   },
   {
     question: 'Is there a team plan?',
@@ -78,8 +85,8 @@ export default function PricingPage() {
         <LeadAnswer>
           {SITE_NAME} costs ${PRICING.monthlyUsd} per month or ${PRICING.annualUsd} per year,
           following a {PRICING.trialDays}-day trial. There is a single plan: every account gets
-          the complete product, with no feature gating and no limit on projects or heartbeats.
-          Because {SITE_NAME} is self-hosted, infrastructure costs are separate and yours.
+          the complete product, your full coding history, and no limit on projects or heartbeats.
+          Hosting is included — there is no infrastructure to run or pay for separately.
         </LeadAnswer>
       </PageShell>
 
@@ -88,18 +95,17 @@ export default function PricingPage() {
       <PageShell>
         <Section heading="What the subscription covers" id="covers">
           <p style={MUTED_TEXT}>
-            The subscription licenses the {SITE_NAME} software — the server, the dashboard, the
-            CLI and the VS Code extension. It does not include hosting: you provide the machine,
-            the ClickHouse database and the cache, so your total cost depends on your provider
-            and how much activity you record.
+            Everything: the hosted service, your dashboard, the CLI and the VS Code extension,
+            plus storage of your complete coding history. There is no separate infrastructure
+            bill and no per-project, per-heartbeat or per-editor limit.
           </p>
         </Section>
 
         <Section heading="Licensing" id="licensing">
           <p style={MUTED_TEXT}>
             {SITE_NAME} is a commercial, proprietary product published by StandUpCode / Lodash
-            (Thailand) Co., Ltd. Self-hosting refers to where the software runs and where your
-            data lives — it is not a statement about the source code being openly licensed.
+            (Thailand) Co., Ltd. It is a hosted service: there is no self-hosted or on-premise
+            edition, and the source code is not publicly licensed.
           </p>
         </Section>
 

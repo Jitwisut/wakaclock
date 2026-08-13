@@ -73,7 +73,12 @@ impl UserService {
     /// `subscription_status`/`trial_ends_at` are deliberately left out of this INSERT so
     /// ClickHouse applies their column defaults (`'trialing'`, `now() + 14 days`) — the
     /// one place those defaults are supposed to fire.
-    pub async fn register(&self, username: &str, password: &str, jwt_secret: &str) -> Result<AuthData> {
+    pub async fn register(
+        &self,
+        username: &str,
+        password: &str,
+        jwt_secret: &str,
+    ) -> Result<AuthData> {
         if self.find_user_id_by_username(username).await?.is_some() {
             return Err(anyhow!("username already taken"));
         }
@@ -110,7 +115,12 @@ impl UserService {
     }
 
     /// Verify username/password and issue a fresh session JWT.
-    pub async fn login(&self, username: &str, password: &str, jwt_secret: &str) -> Result<AuthData> {
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+        jwt_secret: &str,
+    ) -> Result<AuthData> {
         let row = self
             .clickhouse
             .get_client()
@@ -158,7 +168,8 @@ impl UserService {
         let plaintext_key = auth::generate_key();
         let key_hash = auth::hash_key(&plaintext_key);
 
-        self.upsert_preserving_identity(user_id, &identity, &key_hash).await?;
+        self.upsert_preserving_identity(user_id, &identity, &key_hash)
+            .await?;
 
         Ok(GenerateApiKeyResponse {
             data: GenerateApiKeyData {
@@ -173,7 +184,8 @@ impl UserService {
     pub async fn revoke_api_key(&self, user_id: Uuid) -> Result<RevokeApiKeyResponse> {
         let identity = self.existing_identity(user_id).await?;
 
-        self.upsert_preserving_identity(user_id, &identity, "").await?;
+        self.upsert_preserving_identity(user_id, &identity, "")
+            .await?;
 
         Ok(RevokeApiKeyResponse {
             status: "ok".to_string(),
@@ -209,7 +221,8 @@ impl UserService {
 
         Ok(match row {
             Some(row) => {
-                row.subscription_status == "active" || (row.subscription_status == "trialing" && row.trial_valid)
+                row.subscription_status == "active"
+                    || (row.subscription_status == "trialing" && row.trial_valid)
             }
             None => false,
         })

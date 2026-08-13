@@ -10,9 +10,9 @@ import {
 const FEATURES = [
   {
     icon: ServerIcon,
-    title: 'Self-hosted',
+    title: 'Complete history',
     description:
-      'Run it on your own infrastructure. Your heartbeats and code metadata never leave your network unless you choose to.',
+      'Every account keeps your full coding history. Nothing is aged out to a recent window, and there is no higher tier to buy for it.',
   },
   {
     icon: BotIcon,
@@ -54,7 +54,7 @@ export function FeatureGridSection() {
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
         >
-          What Azyren tracks
+          What AtoAxis tracks
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base" style={{ color: 'var(--mkt-fg-muted)' }}>
           Not just elapsed time — which project and language, how the code was written, and

@@ -17,7 +17,7 @@ const STAT_TILES = [
   { label: 'Today', value: '5h 42m' },
   { label: 'This week', value: '28h 10m' },
   { label: 'AI-assisted', value: '34%' },
-  { label: 'Active project', value: 'azyren' },
+  { label: 'Active project', value: 'atoaxis' },
 ];
 
 export function DashboardPreviewSection() {
@@ -52,7 +52,7 @@ export function DashboardPreviewSection() {
             style={{ background: 'var(--mkt-bg)', color: MKT_FG_MUTED }}
           >
             <LockIcon aria-hidden className="size-3" />
-            your-azyren.example.com/dashboard
+            app.atoaxis.com/dashboard
           </div>
         </div>
 

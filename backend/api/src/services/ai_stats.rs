@@ -16,7 +16,12 @@ impl AiStatsService {
         Self { clickhouse }
     }
 
-    pub async fn get_range(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiStatsResponse> {
+    pub async fn get_range(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+    ) -> Result<AiStatsResponse> {
         validate_date(start)?;
         validate_date(end)?;
 

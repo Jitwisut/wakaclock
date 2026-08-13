@@ -40,9 +40,9 @@ export function websiteSchema(): JsonLdValue {
 }
 
 /**
- * The product is a self-hosted server plus editor clients, so `applicationCategory`
- * is DeveloperApplication and `operatingSystem` lists only what the repository
- * actually builds for.
+ * The product is a hosted web service reached through editor clients, so it is described
+ * as a DeveloperApplication whose `operatingSystem` covers the platforms the editor
+ * clients run on. `offers` carries the real subscription price — never a placeholder.
  */
 export function softwareApplicationSchema(): JsonLdValue {
   return {

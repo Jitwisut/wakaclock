@@ -155,24 +155,24 @@ describe('site URL resolution', () => {
 
   it('uses the configured public origin and emits no localhost URLs', async () => {
     vi.resetModules();
-    process.env.NEXT_PUBLIC_APP_URL = 'https://azyren.example.com';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://atoaxis.example.com';
 
     const schema = await import('@/lib/seo/schema');
     const serialized = JSON.stringify(
       schema.graph(schema.organizationSchema(), schema.softwareApplicationSchema())
     );
 
-    expect(serialized).toContain('https://azyren.example.com');
+    expect(serialized).toContain('https://atoaxis.example.com');
     expect(serialized).not.toContain('localhost');
   });
 
   it('strips a trailing slash so canonicals are not doubled', async () => {
     vi.resetModules();
-    process.env.NEXT_PUBLIC_APP_URL = 'https://azyren.example.com/';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://atoaxis.example.com/';
 
     const { absoluteUrl: scopedAbsoluteUrl } = await import('@/lib/seo/site');
 
-    expect(scopedAbsoluteUrl('/pricing')).toBe('https://azyren.example.com/pricing');
+    expect(scopedAbsoluteUrl('/pricing')).toBe('https://atoaxis.example.com/pricing');
   });
 
   it('throws on a production build when no public origin is configured', async () => {

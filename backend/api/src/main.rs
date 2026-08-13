@@ -64,6 +64,18 @@ async fn main() -> Result<()> {
         error!("Migration failed: {}", e);
         return Err(e);
     }
+    if let Err(e) = app_state.org_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
+    if let Err(e) = app_state.team_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
+    if let Err(e) = app_state.coworking_session_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
     info!("Migrations completed successfully.");
 
     // Load any existing API key hashes into memory (wakaclock.users now exists).

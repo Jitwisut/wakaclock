@@ -472,6 +472,73 @@ export interface WakaTimeImportResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Presence (plan.md Phase 7) — prototype. Backed by an in-memory, single-process
+// store on the server; does not survive a server restart. See
+// backend/api/src/infrastructure/presence_store.rs for what that means.
+// ---------------------------------------------------------------------------
+export type PresenceState = 'coding' | 'idle' | 'offline';
+
+export interface PresencePoint {
+  x: number;
+  y: number;
+}
+
+export interface PresenceRosterEntry {
+  position: null | PresencePoint;
+  state: PresenceState;
+  user_id: string;
+  username: string;
+}
+
+/** What the SSE stream at /presence/rooms/:roomId/stream delivers on every tick. */
+export interface PresenceRoomSnapshot {
+  roster: PresenceRosterEntry[];
+  team_id: null | string;
+  team_name: null | string;
+}
+
+export interface CreatePresenceRoomResponse {
+  room_id: string;
+}
+
+export interface PresenceActionResponse {
+  status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Orgs & teams — minimal slice (plan.md 6.1, scoped down), exists only so a presence
+// room can carry a real, permission-checked team name instead of free text. Not
+// org-scoped analytics, not billing — see backend/api/src/handlers/v1/orgs.rs.
+// ---------------------------------------------------------------------------
+export interface Org {
+  name: string;
+  org_id: string;
+  owner_user_id: string;
+}
+
+export interface Team {
+  name: string;
+  org_id: string;
+  team_id: string;
+}
+
+export interface OrgResponse {
+  data: Org;
+}
+
+export interface OrgsResponse {
+  data: Org[];
+}
+
+export interface TeamResponse {
+  data: Team;
+}
+
+export interface TeamsResponse {
+  data: Team[];
+}
+
+// ---------------------------------------------------------------------------
 // Error shape — every handler returns this on failure
 // ---------------------------------------------------------------------------
 export interface ApiErrorBody {

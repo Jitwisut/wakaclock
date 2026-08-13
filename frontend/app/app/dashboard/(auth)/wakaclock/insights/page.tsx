@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
   SelectContent,
@@ -65,7 +65,6 @@ function InsightsPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Insights</CardTitle>
-            <CardDescription>GET /insights/:type/:range</CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Select onValueChange={(v) => setType(v as InsightType)} value={type}>

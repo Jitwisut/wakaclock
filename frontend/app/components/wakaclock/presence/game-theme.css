@@ -1,0 +1,159 @@
+/*
+ * Scoped design tokens for the presence page only, via the `.wakaclock-game-theme`
+ * wrapper — the same isolation approach `app/(marketing)/marketing.css` uses for the
+ * public site, so this playful theme cannot leak into the rest of the authenticated
+ * dashboard (which stays on the shadcn preset system in app/themes.css).
+ *
+ * Palette: pixel-art / retro-arcade — sharp corners (no border-radius anywhere in this
+ * theme), hard-edged offset shadows (no blur, ever — a blurred shadow reads as
+ * claymorphism, not 8-bit), and a limited, high-saturation colour set closer to an NES
+ * cartridge than a candy-pastel one. Chosen via ui-ux-pro-max's "Pixel Art" style entry,
+ * adapted by hand for a light AND dark mode (most pixel-art references are dark-only
+ * "arcade cabinet" looks; light mode here reads as a daytime overworld map instead of
+ * turning the pixel identity off).
+ */
+
+.wakaclock-game-theme {
+  --game-bg: #bee7ff;
+  --game-bg-alt: #cff5c2;
+  --game-surface: #fff7e6;
+  --game-surface-border: #241d45;
+  --game-text: #241d45;
+  --game-text-muted: #5b4d7a;
+  --game-primary: #e0342b;
+  --game-primary-fg: #fff7e6;
+  --game-accent: #1e9e52;
+  --game-tile-a: #9cdb7a;
+  --game-tile-b: #86ce63;
+  --game-shadow-color: rgba(36, 29, 69, 0.9);
+}
+
+.dark .wakaclock-game-theme {
+  --game-bg: #0e0a1f;
+  --game-bg-alt: #171029;
+  --game-surface: #221a3f;
+  --game-surface-border: #f5c945;
+  --game-text: #f4eedd;
+  --game-text-muted: #b7a6e0;
+  --game-primary: #ff4d5e;
+  --game-primary-fg: #0e0a1f;
+  --game-accent: #47e0b0;
+  --game-tile-a: #1c1636;
+  --game-tile-b: #241c40;
+  --game-shadow-color: rgba(0, 0, 0, 0.7);
+}
+
+.wakaclock-game-theme {
+  background: var(--game-bg);
+  color: var(--game-text);
+  border-radius: 0;
+  /* VT323 draws visually smaller than its font-size implies — bumped up from the
+     dashboard's 16px base so body copy stays legible (readable-font-size guideline). */
+  font-size: 1.15rem;
+  line-height: 1.6;
+}
+
+.wakaclock-game-theme * {
+  border-radius: 0 !important;
+}
+
+/* Classic two-gradient checkerboard trick — an RPG floor tile grid with no image asset,
+   so it stays crisp at any zoom level instead of needing a raster sprite sheet. */
+.wakaclock-game-canvas {
+  background-color: var(--game-tile-a);
+  background-image:
+    linear-gradient(
+      45deg,
+      var(--game-tile-b) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--game-tile-b) 75%,
+      var(--game-tile-b)
+    ),
+    linear-gradient(
+      45deg,
+      var(--game-tile-b) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--game-tile-b) 75%,
+      var(--game-tile-b)
+    );
+  background-size: 32px 32px;
+  background-position:
+    0 0,
+    16px 16px;
+}
+
+/* Discrete "steps" easing instead of smooth ease — this is what reads as 8-bit motion;
+   a smoothly-interpolated bounce would look like claymorphism wearing a pixel skin. */
+@keyframes wakaclock-pixel-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes wakaclock-pixel-sway {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes wakaclock-pixel-blink {
+  0%,
+  85%,
+  100% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 0.25;
+  }
+}
+
+.wakaclock-pixel-bob {
+  animation: wakaclock-pixel-bob 0.9s steps(2, jump-none) infinite;
+}
+
+.wakaclock-pixel-sway {
+  animation: wakaclock-pixel-sway 2.4s steps(4, jump-none) infinite;
+}
+
+.wakaclock-pixel-blink {
+  animation: wakaclock-pixel-blink 2.6s steps(1, jump-none) infinite;
+}
+
+/* Belt-and-suspenders alongside the `reducedMotion` prop threaded from
+   `useReducedMotion()` — this stops the animation even if a class slips through without
+   the prop gate (e.g. a future caller that forgets to pass it). */
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-game-theme .wakaclock-pixel-bob,
+  .wakaclock-game-theme .wakaclock-pixel-sway,
+  .wakaclock-game-theme .wakaclock-pixel-blink {
+    animation: none;
+  }
+}
+
+/* Pressable-button illusion: a static hard shadow plus a hover/active translate, so the
+   button appears to lift off (hover) or sink into (active) its own shadow — no JS
+   hover-state tracking needed, matching the duration-timing guideline (150-300ms). */
+.wakaclock-pixel-press {
+  transition:
+    transform 150ms ease-out,
+    box-shadow 150ms ease-out;
+}
+
+.wakaclock-pixel-press:hover {
+  transform: translate(-2px, -2px);
+}
+
+.wakaclock-pixel-press:active {
+  transform: translate(1px, 1px);
+  box-shadow: none !important;
+}

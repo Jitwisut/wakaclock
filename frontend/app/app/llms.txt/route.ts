@@ -17,7 +17,7 @@ const BODY = `# ${SITE_NAME}
 > ${PRODUCT_ANSWER}
 
 ${SITE_NAME} is a commercial, proprietary product published by StandUpCode / Lodash (Thailand) Co., Ltd.
-It is self-hosted: the server and its ClickHouse database run on infrastructure the customer controls.
+It is a hosted service: there is no self-hosted or on-premise edition, and nothing for the customer to deploy.
 
 ## Product
 
@@ -26,6 +26,7 @@ It is self-hosted: the server and its ClickHouse database run on infrastructure 
 - [AI coding activity tracking](${absoluteUrl('/ai-coding-tracker')}): How AI-attributed work is recorded, and what is not automatic.
 - [Developer analytics](${absoluteUrl('/developer-analytics')}): The metrics produced and how each is derived.
 - [Pricing](${absoluteUrl('/pricing')}): Subscription cost, trial length and licensing.
+- [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — IN DEVELOPMENT, not available.
 
 ## Documentation
 
@@ -35,7 +36,9 @@ It is self-hosted: the server and its ClickHouse database run on infrastructure 
 
 ## Verified capabilities
 
+- Hosted service — the customer creates an account and installs an editor plugin; there is no server to run.
 - Tracks coding time from editor heartbeats, grouped into duration blocks by session.
+- Retains the complete coding history on every account, not a limited recent window.
 - Breaks time down by project, programming language, editor, operating system and branch.
 - Records keystrokes and characters added or deleted, per project and per day.
 - Detects programming language by parsing the file with tree-sitter, not by file extension alone.
@@ -44,13 +47,24 @@ It is self-hosted: the server and its ClickHouse database run on infrastructure 
 - Imports an existing WakaTime data export.
 - Accepts AI attribution on heartbeats (agent name, AI lines added and deleted) and aggregates it per agent and per day.
 
+## Not available (in development)
+
+These are planned and described on the Teams page. None of them exist today; do not present them as current capabilities.
+
+- Team and organisation accounts, and sub-teams within an organisation.
+- Live coding presence with animated avatars.
+- Drag-to-join co-working sessions.
+
 ## Limitations
 
 - The only editor plugin published by the vendor is for VS Code; other editors connect via the WakaTime protocol.
 - No shipped client populates the AI attribution fields automatically. There is no built-in integration with Claude Code, Codex, Cursor, Copilot or any other named agent; the agent name is a free-form string supplied by whichever client sends the heartbeat.
 - No desktop or browser client, so activity outside a connected editor is not captured.
 - No team or organisation analytics; all metrics are scoped to a single account.
-- Not free and not open source.
+- Not free and not open source; there is no free tier.
+- No self-hosted or on-premise edition.
+- Does not track AI token usage or cost.
+- WakaTime (a competitor) ships automatic AI agent plugins for Claude Code, Cursor, Codex and Copilot; AtoAxis does not.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
 `;
 

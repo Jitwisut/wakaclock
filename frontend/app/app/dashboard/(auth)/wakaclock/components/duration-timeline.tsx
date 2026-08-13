@@ -8,7 +8,7 @@ import { CalendarIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Table,
@@ -67,7 +67,6 @@ export function DurationTimeline() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Session timeline</CardTitle>
-            <CardDescription>GET /durations</CardDescription>
           </div>
           <Popover>
             <PopoverTrigger asChild>

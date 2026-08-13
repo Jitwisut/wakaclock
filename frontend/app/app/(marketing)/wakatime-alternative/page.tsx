@@ -20,8 +20,9 @@ import type { Metadata } from 'next';
 export const metadata: Metadata = {
   title: `WakaTime Alternative for Developer Time Tracking`,
   description:
-    `${SITE_NAME} is a self-hosted alternative to WakaTime that implements the WakaTime API. ` +
-    'Keep your existing editor plugin, host the server yourself, and import your WakaTime export.',
+    `${SITE_NAME} is an alternative to WakaTime that implements the WakaTime API. Keep your ` +
+    'existing editor plugin, get your complete coding history in the base plan, and import your ' +
+    'WakaTime export.',
   alternates: { canonical: '/wakatime-alternative' },
   openGraph: {
     url: '/wakatime-alternative',
@@ -47,7 +48,7 @@ const FAQ: readonly FaqEntry[] = [
     question: 'Do I have to replace my editor plugin?',
     answer:
       'No. Any editor with a WakaTime plugin can send data by changing api_url in ~/.wakatime.cfg ' +
-      `to your ${SITE_NAME} server and using an API key generated there. A dedicated VS Code ` +
+      `to the ${SITE_NAME} API and using an API key generated in your account. A dedicated VS Code ` +
       `extension is also available if you prefer a ${SITE_NAME}-native client.`,
   },
   {
@@ -61,8 +62,9 @@ const FAQ: readonly FaqEntry[] = [
     question: `Is ${SITE_NAME} free or open source?`,
     answer:
       `No. ${SITE_NAME} is a commercial, proprietary product. It costs $${PRICING.monthlyUsd} per ` +
-      `month or $${PRICING.annualUsd} per year after a ${PRICING.trialDays}-day trial. You host it ` +
-      'on your own infrastructure, but the source is not publicly licensed.',
+      `month or $${PRICING.annualUsd} per year after a ${PRICING.trialDays}-day trial, with ` +
+      'hosting included. WakaTime does have a free plan, though it limits dashboard history to ' +
+      'one week.',
   },
   {
     question: `What does ${SITE_NAME} not do that I should know about?`,
@@ -75,11 +77,22 @@ const FAQ: readonly FaqEntry[] = [
 ];
 
 const REASONS = [
-  'They want the data on infrastructure they control rather than a third-party service',
-  'They want to query the underlying database directly instead of only through a dashboard UI',
+  'They want their complete coding history without paying for the top tier to see it',
+  'They want one plan with everything included rather than choosing between feature tiers',
   'They want language detection that parses the file rather than guessing from the extension',
   'They want keystroke and character counts alongside elapsed time',
-  'They want a place to record AI-attributed work next to human-written work',
+];
+
+/**
+ * Stated up front rather than buried. WakaTime is genuinely ahead on these, and a
+ * comparison page that hides them is not a comparison page.
+ */
+const STAY_WITH_WAKATIME = [
+  'You want automatic AI agent tracking — WakaTime publishes plugins for Claude Code, Cursor, Codex and Copilot; AtoAxis has none',
+  'You want AI token usage or estimated cost per model — AtoAxis does not track either',
+  'You need team or organisation dashboards — AtoAxis analytics are scoped to one account',
+  'You want a free tier — AtoAxis is paid only after its trial',
+  'You want the widest editor plugin coverage — WakaTime publishes 80+ official plugins',
 ];
 
 export default function WakaTimeAlternativePage() {
@@ -89,14 +102,13 @@ export default function WakaTimeAlternativePage() {
 
       <PageShell>
         <Breadcrumbs entries={BREADCRUMBS} />
-        <PageTitle>A self-hosted WakaTime alternative</PageTitle>
+        <PageTitle>A WakaTime alternative with your full history</PageTitle>
 
         <LeadAnswer>
-          {SITE_NAME} is a self-hosted developer time tracking service that implements the
-          WakaTime API. Editors that already have a WakaTime plugin can send their heartbeats
-          to your {SITE_NAME} server by changing one config value, and an existing WakaTime
-          data export can be imported. Your coding activity is stored in a ClickHouse database
-          you run and can query yourself.
+          {SITE_NAME} is a developer time tracking service that implements the WakaTime API.
+          An editor that already has a WakaTime plugin can send its heartbeats to {SITE_NAME} by
+          changing one config value, and an existing WakaTime data export can be imported. Every
+          account includes your complete coding history rather than a limited recent window.
         </LeadAnswer>
 
         <Section heading={`What is ${SITE_NAME}?`} id="what-is">
@@ -112,10 +124,22 @@ export default function WakaTimeAlternativePage() {
 
         <Section heading="Why developers look for WakaTime alternatives" id="why">
           <p style={MUTED_TEXT}>
-            The reasons we hear most often are about ownership and granularity rather than
+            The reasons we hear most often are about history retention and pricing rather than
             dissatisfaction with tracking itself:
           </p>
           <Bullets items={REASONS} />
+        </Section>
+
+        <Section heading="When you should stay with WakaTime" id="stay-with-wakatime">
+          <p style={MUTED_TEXT}>
+            There are real cases where switching would be a downgrade. WakaTime is the better
+            product if any of these apply to you:
+          </p>
+          <Bullets items={STAY_WITH_WAKATIME} />
+          <p style={MUTED_TEXT}>
+            Verified against wakatime.com in August 2026. WakaTime ships quickly, so check their
+            current documentation before deciding.
+          </p>
         </Section>
 
         <Section heading="Switching is a config change" id="switching">
@@ -124,7 +148,7 @@ export default function WakaTimeAlternativePage() {
             WakaTime can report to {SITE_NAME} instead by pointing at a different host:
           </p>
           <CodeBlock label="~/.wakatime.cfg">{`[settings]
-api_url = https://your-azyren.example.com/api/v1
+api_url = https://api.atoaxis.com/api/v1
 api_key = your_generated_api_key`}</CodeBlock>
           <p style={MUTED_TEXT}>
             Generate the API key from your {SITE_NAME} settings page. Editors connected this way
@@ -134,11 +158,10 @@ api_key = your_generated_api_key`}</CodeBlock>
 
         <Section heading="Honest comparison" id="comparison">
           <p style={MUTED_TEXT}>
-            The table below describes {SITE_NAME} capabilities verified against its own source
-            code. Cells marked with a dash mean WakaTime does not publicly document that
-            capability at the time of writing — they are not claims that the feature is absent,
-            and WakaTime&apos;s product may have changed since. Check WakaTime&apos;s own
-            documentation before making a decision on those rows.
+            {SITE_NAME} capabilities below were verified against its own source code, and every
+            WakaTime cell against wakatime.com in August 2026. Rows where WakaTime wins are
+            included rather than omitted. Both products change, so treat this as a snapshot and
+            confirm anything decisive against WakaTime&apos;s current documentation.
           </p>
         </Section>
       </PageShell>

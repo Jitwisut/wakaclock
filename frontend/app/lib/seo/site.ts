@@ -13,11 +13,11 @@
  */
 
 /**
- * Brand name. The product is marketed as "Azyren"; the underlying binary, config
+ * Brand name. The product is marketed as "AtoAxis"; the underlying binary, config
  * path and editor setting keys still ship as `wakaclock-*` and are referenced
  * verbatim in installation docs so the documented commands actually run.
  */
-export const SITE_NAME = 'Azyren';
+export const SITE_NAME = 'AtoAxis';
 export const SITE_TAGLINE = 'One timeline for everything you do.';
 
 /**
@@ -64,18 +64,40 @@ export const PRICING = {
 
 /**
  * The 40-80 word definitional answer. Reused verbatim by the homepage's
- * "What is Azyren?" section and by the site-level meta description so search
+ * "What is AtoAxis?" section and by the site-level meta description so search
  * engines and answer engines extract one consistent definition.
+ *
+ * Note for future edits: this product is a hosted service. Earlier drafts described it
+ * as self-hosted — that was wrong and every page was corrected. Do not reintroduce
+ * "run it on your own infrastructure" language unless a self-hosted edition actually
+ * ships, and do not claim the customer owns or can query the database.
  */
 export const PRODUCT_ANSWER =
-  `${SITE_NAME} is a self-hosted developer time tracking service. It receives coding ` +
-  'activity from your editor as heartbeats and turns them into dashboards for coding ' +
-  'time, projects, programming languages, branches and editors. It speaks the WakaTime ' +
-  'API, so editors that already have a WakaTime plugin can send data to your own ' +
-  'server, and it stores that data in a ClickHouse database you control.';
+  `${SITE_NAME} is a developer time tracking service. It receives coding activity from ` +
+  'your editor as heartbeats and turns them into dashboards for coding time, projects, ' +
+  'programming languages, branches and editors. It implements the WakaTime API, so an ' +
+  'editor that already has a WakaTime plugin can send data to it, and every account ' +
+  'includes your complete coding history rather than a limited recent window.';
+
+/**
+ * Capabilities that are designed but NOT built. Anything listed here must be described
+ * in the future tense and visibly labelled as upcoming wherever it appears — never in
+ * `PRODUCT_ANSWER`, never in SoftwareApplication structured data, and never answered
+ * "yes" in an FAQ. The whole site was audited once to remove claims the code could not
+ * back; this constant exists so the next person does not have to do it again.
+ *
+ * Status verified against the repository: there is no team or organisation model, no
+ * WebSocket or SSE transport, and no presence or session storage.
+ */
+export const IN_DEVELOPMENT = {
+  teamPresence: 'Team presence with animated avatars',
+  subTeams: 'Sub-teams within an organisation',
+  coworkingSessions: 'Drag-to-join co-working sessions',
+} as const;
 
 export const PUBLIC_ROUTES = [
   '/',
+  '/teams',
   '/wakatime-alternative',
   '/ai-coding-tracker',
   '/developer-analytics',

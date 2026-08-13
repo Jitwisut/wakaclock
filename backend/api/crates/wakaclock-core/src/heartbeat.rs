@@ -180,11 +180,19 @@ impl Heartbeat {
         Ok(())
     }
 
+    /// A symmetric relation: two heartbeats are duplicates of each other, not just of
+    /// whichever one happens to be `self`. This matters because the one real caller
+    /// (`ApiClient::filter_duplicates`) checks `heartbeat.is_duplicate_of(last)`, where
+    /// `last` — the most recently accepted heartbeat — can itself be a save. Only
+    /// checking `self.is_write` let a save silently protect an unrelated heartbeat that
+    /// arrived shortly after it from ever being sent; a save is a meaningful event on
+    /// either side of the comparison and must never let a pair be coalesced into one.
     pub fn is_duplicate_of(&self, other: &Heartbeat) -> bool {
         let time_diff = (self.time - other.time).abs();
         self.entity == other.entity
             && self.entity_type == other.entity_type
             && !self.is_write
+            && !other.is_write
             && time_diff < 120.0
     }
 }
@@ -235,6 +243,30 @@ mod tests {
         let mut hb3 = hb1.clone();
         hb3.is_write = true;
         assert!(!hb1.is_duplicate_of(&hb3));
+    }
+
+    /// Regression test: `is_duplicate_of` used to only check `self.is_write`, so a save
+    /// that arrived first would silently mark a later non-write heartbeat as its
+    /// duplicate — the exact call shape `ApiClient::filter_duplicates` uses, where
+    /// `self` is the newly-arriving heartbeat and `other` is the previously accepted
+    /// one. The relation must hold regardless of which side of the pair the save is on.
+    #[test]
+    fn test_duplicate_detection_is_symmetric_in_is_write() {
+        let hb1 = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+
+        let mut save = hb1.clone();
+        save.is_write = true;
+
+        let mut later = hb1.clone();
+        later.time = hb1.time + 30.0;
+
+        assert!(!later.is_duplicate_of(&save));
+        assert!(!save.is_duplicate_of(&later));
     }
 
     #[test]

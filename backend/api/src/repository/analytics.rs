@@ -22,7 +22,9 @@ impl AnalyticsRepository {
                 .query(statement)
                 .execute()
                 .await
-                .with_context(|| format!("Failed to execute analytics migration statement: {statement}"))?;
+                .with_context(|| {
+                    format!("Failed to execute analytics migration statement: {statement}")
+                })?;
         }
 
         Ok(())

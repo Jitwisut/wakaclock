@@ -85,8 +85,8 @@ function MergeFormDialog({
         <DialogHeader>
           <DialogTitle>{merge ? 'Edit project merge' : 'New project merge'}</DialogTitle>
           <DialogDescription>
-            Applied at read time — only GET /projects reflects this. Summaries, stats, and insights
-            still show the source project name separately.
+            Applied at read time — only the Projects page reflects this. Summaries, stats, and
+            insights still show the source project name separately.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

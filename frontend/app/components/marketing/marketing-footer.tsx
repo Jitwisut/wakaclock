@@ -10,6 +10,7 @@ const FOOTER_SECTIONS = [
       { href: '/wakatime-alternative', label: 'WakaTime alternative' },
       { href: '/ai-coding-tracker', label: 'AI coding tracker' },
       { href: '/developer-analytics', label: 'Developer analytics' },
+      { href: '/teams', label: 'Teams (in development)' },
       { href: '/pricing', label: 'Pricing' },
     ],
   },
@@ -39,7 +40,7 @@ export function MarketingFooter() {
               </span>
             </div>
             <p className="mt-3 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
-              Self-hosted developer time tracking. One timeline for everything you do.
+              Developer time tracking with your complete history. One timeline for everything you do.
             </p>
           </div>
 
@@ -67,7 +68,7 @@ export function MarketingFooter() {
           className="mt-10 border-t pt-6 text-xs"
           style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
         >
-          © {new Date().getFullYear()} {SITE_NAME}. Self-hosted developer time tracking.
+          © {new Date().getFullYear()} {SITE_NAME}. Developer time tracking.
         </p>
       </div>
     </footer>

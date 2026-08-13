@@ -12,6 +12,7 @@ const NAV_LINKS = [
   { href: '/wakatime-alternative', label: 'vs WakaTime' },
   { href: '/ai-coding-tracker', label: 'AI tracking' },
   { href: '/developer-analytics', label: 'Analytics' },
+  { href: '/teams', label: 'Teams' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/docs/getting-started', label: 'Docs' },
 ];

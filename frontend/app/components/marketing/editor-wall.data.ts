@@ -1,13 +1,29 @@
 /**
- * Editors compatible via the WakaTime plugin protocol — i.e. any editor with a WakaTime
- * plugin can point its `api_url` at an Azyren server. Names only, deliberately no logos:
- * rendering ~90 third-party brand marks correctly (and keeping them correct as they
- * change) is a real maintenance/legal-accuracy cost that a text wall avoids.
+ * Editors compatible via the WakaTime plugin protocol — an editor with a WakaTime plugin
+ * can point its `api_url` at an AtoAxis server.
+ *
+ * Every name below was checked against WakaTime's official plugin directory
+ * (wakatime.com/plugins) in August 2026. Entries that appeared in earlier drafts but are
+ * NOT in that directory were removed: RStudio, Spyder, Qt Creator, Code::Blocks,
+ * CodeLite, KDevelop, BlueJ and Helix.
+ *
+ * Deliberately excluded even though WakaTime lists them: the AI coding agents (Claude
+ * Code, Codex CLI, Copilot CLI, Amp CLI, OpenCode). Those WakaTime plugins report AI
+ * metrics that AtoAxis has no shipped client for, so listing them here would imply an
+ * equivalence that does not exist.
+ *
+ * Names only, deliberately no logos: rendering third-party brand marks correctly (and
+ * keeping them correct as they change) is a maintenance and legal-accuracy cost that a
+ * text wall avoids.
  */
 export const COMPATIBLE_EDITORS = [
   'VS Code',
+  'Cursor',
   'Neovim',
   'Vim',
+  'Emacs',
+  'Sublime Text',
+  'Zed',
   'IntelliJ IDEA',
   'PyCharm',
   'WebStorm',
@@ -16,41 +32,40 @@ export const COMPATIBLE_EDITORS = [
   'CLion',
   'GoLand',
   'DataGrip',
+  'DataSpell',
   'Rider',
   'RustRover',
+  'AppCode',
   'Android Studio',
   'Xcode',
-  'Sublime Text',
-  'Emacs',
+  'Visual Studio',
   'Eclipse',
   'NetBeans',
-  'Visual Studio',
-  'Zed',
-  'Cursor',
   'Notepad++',
+  'TextMate',
+  'Kate',
+  'Kakoune',
+  'Micro',
+  'Nova',
   'Brackets',
+  'Komodo',
+  'Cloud9',
+  'Geany',
+  'Gedit',
+  'Pulsar',
   'Jupyter',
-  'RStudio',
-  'Spyder',
+  'Azure Data Studio',
+  'DBeaver',
+  'SQL Server Studio',
+  'Postman',
   'Unity',
   'Blender',
   'Figma',
   'Sketch',
-  'Postman',
-  'DBeaver',
-  'QtCreator',
-  'Code::Blocks',
-  'CodeLite',
-  'KDevelop',
-  'BlueJ',
-  'Processing',
-  'TeXstudio',
-  'TextMate',
-  'Kate',
-  'Helix',
-  'Kakoune',
-  'Micro',
-  'Nova',
+  'Canva',
   'Obsidian',
+  'Processing',
+  'Arduino IDE',
+  'TeXstudio',
   'Terminal',
 ];

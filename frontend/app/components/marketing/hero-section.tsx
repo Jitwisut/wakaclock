@@ -21,7 +21,7 @@ export function HeroSection() {
             style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
           >
             <ShieldCheckIcon aria-hidden className="size-3.5" />
-            Self-hosted · Works with the WakaTime API
+            Complete history · Works with the WakaTime API
           </p>
 
           <h1
@@ -30,7 +30,7 @@ export function HeroSection() {
           >
             Developer time tracking
             <br />
-            <span style={{ color: 'var(--mkt-accent)' }}>on your own server.</span>
+            <span style={{ color: 'var(--mkt-accent)' }}>with your full history.</span>
           </h1>
 
           <p className="mt-4 max-w-xl text-xl font-medium text-pretty">{SITE_TAGLINE}</p>
@@ -38,9 +38,9 @@ export function HeroSection() {
           <p className="mt-4 max-w-xl text-lg text-pretty" style={{ color: 'var(--mkt-fg-muted)' }}>
             {SITE_NAME} records how long you spend coding across projects, programming
             languages, branches and editors. It implements the WakaTime API, so an editor
-            that already has a WakaTime plugin can point at your {SITE_NAME} server instead
-            — and your heartbeats land in a ClickHouse database you own and can query
-            directly.
+            that already has a WakaTime plugin can point at {SITE_NAME} instead
+            — and every account keeps your complete coding history, not just a recent
+            window.
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -62,7 +62,7 @@ export function HeroSection() {
 
           <p className="mt-4 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
             {PRICING.trialDays}-day trial · ${PRICING.monthlyUsd}/month or $
-            {PRICING.annualUsd}/year · Runs on your own infrastructure
+            {PRICING.annualUsd}/year · Nothing to deploy
           </p>
         </div>
 
