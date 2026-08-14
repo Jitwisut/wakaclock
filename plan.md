@@ -1097,6 +1097,38 @@ given this is a time-tracking product — is a recorded shared session.
 
 ## Phase 8 — WakaTime-Style Transcript-Based AI Attribution
 
+### Status note (2026-08-14)
+
+Six commits landed the transcript-parsing pipeline's core and ran it live, not just
+against fixtures: `event.rs`/`patch.rs`/`path.rs`/`parser.rs` (pure types + shared
+trait), `codex.rs` + `claude.rs` (real parsers, fixture-tested), `correlation.rs`
+(AI-vs-Human matching decision, in-memory pool only), `state.rs` (SQLite cursor +
+delivery dedup), and `wakaclock ai sync`/`wakaclock ai status` CLI commands. Full
+verification record, including a real bug found and fixed by running against a live
+session (not a fixture) and a byte-exact idempotency check, is in
+`crates/wakaclock-core/src/ai/VERIFICATION.md`.
+
+**Not done, in priority order for whoever continues this:**
+1. Server-side dedup by `ai_event_id` — the pre-existing `extensions/ai-agents/` hooks
+   and this new transcript path are both active right now and will double-count the
+   same edit under different `ai_event_id` schemes until this lands (8.1's
+   "never let hook and transcript parser submit the same event twice" is currently
+   violated in practice, not just in principle).
+2. `ai-sync.lock` cross-process locking (8.6) — not implemented; single-writer SQLite
+   makes concurrent runs safe but uncoordinated, not race-free in intent.
+3. Gemini CLI parser — blocked on having a real local transcript to verify against.
+4. Wiring `correlation.rs` into a live path — it's tested in isolation but nothing
+   calls it yet; `wakaclock ai sync` deliberately bypasses it (no editor buffer exists
+   in that path, see 8.2's "outside VS Code" case), so `correlation.rs` only matters
+   once the VS Code extension itself starts producing `EditorObservation`s.
+5. Historical reprocessing, retiring/migrating the old hooks, dashboard Unattributed
+   labeling, privacy docs, packaged E2E tests — none started.
+
+The granular checkboxes below this note were **not** individually re-audited item by
+item (165 lines) — only 8.0's top-level committed-scope list was corrected to match
+the above. Treat an unmarked `[ ]` elsewhere in 8.1–8.9 as before: unaudited, not
+necessarily false.
+
 ### Context and decision
 
 Added 2026-08-13 after diagnosing why the AI Stats page reports work performed with an
@@ -1137,14 +1169,29 @@ also add the same editor-observed change to Human keystrokes or Human lines.
 
 Initial committed scope:
 
-- [ ] Codex parser and end-to-end correlation, including Codex CLI/Desktop transcript
-      discovery where the installed client exposes suitable local activity.
-- [ ] Claude Code parser.
-- [ ] Gemini CLI parser.
-- [ ] Shared parser interface so Copilot, Cursor, Continue, Cline, Roo, Windsurf and other
-      tools can be added without modifying correlation logic.
-- [ ] Safe local parser state, cross-process locking, event idempotency and diagnostics.
-- [ ] New-data correctness first, followed by an explicit historical reprocessing path.
+- [~] Codex parser exists and is unit-tested against a real-transcript-shaped fixture
+      (`crates/wakaclock-core/src/ai/codex.rs`), but has not been run against a live
+      Codex session — only Claude Code has been verified end-to-end (see
+      `ai/VERIFICATION.md`, 2026-08-14). Correlation is not wired into the live path;
+      `wakaclock ai sync` builds AI-attributed heartbeats directly from parsed events
+      with no editor buffer to correlate against, which is a deliberate, documented
+      choice for the "agent edits outside the IDE" case (8.2), not an oversight.
+- [x] Claude Code parser — implemented, unit-tested, and run live against a real
+      session (this one). Found and fixed a real bug this way: a brand-new file's
+      `structuredPatch` is empty, not a single addition hunk (`ai/CAPABILITIES.md`'s
+      2026-08-14 correction note).
+- [ ] Gemini CLI parser — not started. No Gemini CLI installation was available to
+      capture a real transcript shape against; `ai/fixtures/gemini_cli/README.md`
+      documents this explicitly rather than guessing at a shape.
+- [x] Shared parser interface (`ai/parser.rs`'s `AiActivityParser` trait) — Codex and
+      Claude Code both implement it; adding Gemini or another agent needs no change to
+      `correlation.rs`.
+- [~] Local parser state and event idempotency exist (`ai/state.rs`, SQLite-backed
+      cursor + delivered-event dedup, verified idempotent via a live double-run — see
+      `ai/VERIFICATION.md`). Cross-process locking (`ai-sync.lock`) and diagnostics
+      beyond plain stdout are not implemented — `ai/state.rs`'s doc comment explains
+      why a single local writer is safe without the lock, just uncoordinated.
+- [ ] Historical reprocessing path — not started.
 
 Non-goals for the first release:
 
