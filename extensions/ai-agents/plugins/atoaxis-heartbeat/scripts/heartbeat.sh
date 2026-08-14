@@ -30,6 +30,24 @@ TOOL_NAME="$(jq -r '.tool_name // empty' <<<"$INPUT")"
 FILE_PATH="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")"
 AI_MODEL="$(jq -r '.model // .model_name // .model_id // .session.model // empty' <<<"$INPUT")"
 
+# The PostToolUse payload carries no model field, so the lookup above always came up
+# empty and every AI heartbeat was recorded with an unknown model. The model does exist
+# in the session transcript, on the assistant record that issued this tool call, and the
+# payload tells us where that transcript lives — so fall back to reading it from there.
+#
+# Only the tail is scanned: these files reach tens of megabytes, and the assistant turn
+# that triggered this hook is by definition at the end. Every step is failure-tolerant
+# (`set -o pipefail` is active) because an unknown model must degrade to "unknown", never
+# break the heartbeat this hook exists to send.
+if [ -z "$AI_MODEL" ] || [ "$AI_MODEL" = "null" ]; then
+  TRANSCRIPT_PATH="$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null || true)"
+  if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+    AI_MODEL="$(tail -n 400 "$TRANSCRIPT_PATH" 2>/dev/null \
+      | jq -r 'select(.type == "assistant") | .message.model // empty' 2>/dev/null \
+      | tail -n 1 || true)"
+  fi
+fi
+
 if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
