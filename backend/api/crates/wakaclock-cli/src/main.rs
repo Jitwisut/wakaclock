@@ -15,6 +15,7 @@ use wakaclock_core::{
     },
     api_client::ApiClient,
     config::Config,
+    error::AppError,
     git,
     heartbeat::{Category, EntityType, Heartbeat},
     queue::Queue,
@@ -346,8 +347,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
             println!("Server URL: {}", config.server_url);
             println!("{}", identity_line(&config));
             println!("Queued heartbeats: {}", queue.len()?);
-            let flushed = api_client.flush_queue().await?;
-            println!("Flushed now: {}", flushed);
+
+            // The point of `status` is answering "why is nothing being recorded", and the
+            // on-disk view above cannot answer it — so ask the server. `today` is the same
+            // authenticated call the VS Code extension verifies a key with, and its 401 is
+            // already translated into an actionable message by `reject_unauthorized`.
+            match api_client.today().await {
+                Ok(_) => println!("Key check: verified — the server accepted this API key"),
+                Err(AppError::Auth(message)) => println!("Key check: rejected — {message}"),
+                Err(error) => println!(
+                    "Key check: could not reach {} — {error}",
+                    config.server_url
+                ),
+            }
+
+            let flush = api_client.flush_queue().await?;
+            println!("Flushed now: {}", flush.flushed);
+            if let Some(reason) = flush.stopped_because {
+                println!("Flush stopped: {reason}");
+            }
         }
         Commands::Today => {
             let snapshot = api_client.today().await?;
@@ -688,11 +706,18 @@ fn read_extra_heartbeats() -> Result<Vec<ExtraHeartbeatInput>, Box<dyn Error>> {
 /// client sends, so printing `config.user_id` alongside a successful request was
 /// actively misleading — it's a locally-generated uuid that has nothing to do with
 /// where the data landed. Report the key's presence instead, since that's what decides.
+/// Reports only what is on disk, and says so. This used to claim "Authenticated: yes
+/// (account resolved from API key)" on nothing more than the key being present, which is
+/// exactly backwards for the case it exists to diagnose: a key the server has since
+/// revoked looks identical on disk to a working one, so the line that was supposed to
+/// explain "why is nothing recorded" actively argued the key was fine. `wakaclock status`
+/// makes a real request and prints the server's verdict; this stays local and cheap so
+/// `wakaclock config` does not have to do network I/O just to print a path.
 fn identity_line(config: &Config) -> String {
     if config.api_key.is_some() {
-        "Authenticated: yes (account resolved from API key)".to_string()
+        "API key: present in config.toml (not verified here)".to_string()
     } else {
-        "Authenticated: no — run `wakaclock config set-key <KEY>`; requests will be rejected"
+        "API key: missing — run `wakaclock config set-key <KEY>`; requests will be rejected"
             .to_string()
     }
 }

@@ -23,6 +23,19 @@ pub struct SendReport {
     pub flushed: usize,
 }
 
+/// What a queue flush actually did. `flushed` alone was ambiguous in the one place it
+/// matters most — `wakaclock status` printing "Queued: 2 / Flushed now: 0" gave no hint
+/// whether the server was down, the key was rejected, or the queue was simply empty.
+#[derive(Debug, Clone)]
+pub struct FlushReport {
+    pub flushed: usize,
+    /// Why the flush stopped before draining the queue, if it did. Flushing sends one
+    /// heartbeat at a time and stops at the first failure, so the remaining entries keep
+    /// their order and a dead server is not hammered; this carries that first failure's
+    /// message instead of discarding it.
+    pub stopped_because: Option<String>,
+}
+
 impl SendReport {
     fn queued(sent: usize, deduped: usize, queued: usize) -> Self {
         Self {
@@ -88,12 +101,12 @@ impl ApiClient {
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 self.store_last_heartbeats(&last_by_entity)?;
-                let flushed = self.flush_queue_inner(&queue).await?;
+                let flush = self.flush_queue_inner(&queue).await?;
                 Ok(SendReport {
                     sent: payloads.len(),
                     deduped,
                     queued: 0,
-                    flushed,
+                    flushed: flush.flushed,
                 })
             }
             Err(_) => {
@@ -105,7 +118,7 @@ impl ApiClient {
         }
     }
 
-    pub async fn flush_queue(&self) -> AppResult<usize> {
+    pub async fn flush_queue(&self) -> AppResult<FlushReport> {
         let queue = Queue::open()?;
         self.flush_queue_inner(&queue).await
     }
@@ -155,9 +168,10 @@ impl ApiClient {
         })
     }
 
-    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<usize> {
+    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
         let pending = queue.pop_all()?;
         let mut flushed = 0;
+        let mut stopped_because = None;
 
         for (id, payload) in pending {
             match self.post_json("/api/v1/heartbeats", &payload).await {
@@ -165,11 +179,17 @@ impl ApiClient {
                     queue.remove(id)?;
                     flushed += 1;
                 }
-                Err(_) => break,
+                Err(error) => {
+                    stopped_because = Some(error.to_string());
+                    break;
+                }
             }
         }
 
-        Ok(flushed)
+        Ok(FlushReport {
+            flushed,
+            stopped_because,
+        })
     }
 
     async fn post_json<T: Serialize + ?Sized>(&self, path: &str, payload: &T) -> AppResult<()> {
