@@ -209,6 +209,18 @@ const STATEMENTS: &[&str] = &[
     ALTER TABLE wakaclock.users
     ADD COLUMN IF NOT EXISTS subscription_period_end Nullable(DateTime)
     "#,
+    // The retrievable copy of the API key, kept alongside `api_key` (its hash, which is
+    // what authentication still compares against). A key has to be pasted into at least
+    // three places — config.toml, the editor extension, and any agent hook — and showing
+    // it only once meant losing it there cost a full regenerate-and-reconfigure cycle,
+    // with the old key dead in the meantime. Storing it is a deliberate tradeoff, chosen
+    // over hash-only: a database dump now exposes usable keys, which it previously did
+    // not. Authentication deliberately still goes through the hash, so this column is
+    // only ever read to display the key back to its owner.
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS api_key_plain String DEFAULT ''
+    "#,
     // ============================================================
     // Materialized Views — Path A: live ingestion (from heartbeats)
     // ============================================================

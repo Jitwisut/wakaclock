@@ -7,9 +7,11 @@ import { ApiKeyPanel } from '@/app/dashboard/(auth)/wakaclock/settings/component
 
 const generateApiKey = vi.fn();
 const revokeApiKey = vi.fn();
+const getCurrentApiKey = vi.fn().mockResolvedValue({ data: { api_key: null, user_id: 'user-1' } });
 
 vi.mock('@/lib/wakaclock/endpoints', () => ({
   generateApiKey: () => generateApiKey(),
+  getCurrentApiKey: () => getCurrentApiKey(),
   revokeApiKey: () => revokeApiKey(),
 }));
 
@@ -23,7 +25,9 @@ vi.mock('sonner', () => ({
 }));
 
 function renderPanel() {
-  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <ApiKeyPanel />
@@ -33,8 +37,7 @@ function renderPanel() {
 
 describe('ApiKeyPanel', () => {
   it('shows the generated key so it can be copied before it is lost', async () => {
-    // The key is only ever returned once — the server stores nothing but its hash — so
-    // failing to render it here means the user cannot recover it at all.
+    // The freshly generated key must appear immediately, without waiting for a refetch.
     generateApiKey.mockResolvedValue({
       data: { api_key: 'wcl_secret_value', user_id: 'user-1' },
     });
@@ -52,13 +55,15 @@ describe('ApiKeyPanel', () => {
 
 describe('ApiKeyPanel inside the Settings tabs', () => {
   it('keeps the generated key visible after switching tabs and back', async () => {
-    // The key is unrecoverable once lost, so a remount that clears it destroys the only
-    // copy. Radix unmounts inactive TabsContent by default.
+    // Radix unmounts inactive TabsContent by default, which used to discard the key held
+    // in this panel's state. Still guarded even though the key is now refetchable.
     generateApiKey.mockResolvedValue({
       data: { api_key: 'wcl_tab_value', user_id: 'user-1' },
     });
     const user = userEvent.setup();
-    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+    });
     // Mirrors the real Settings page's tab wiring, so this fails if the forceMount
     // that keeps the key alive is ever dropped.
     const { Tabs, TabsContent, TabsList, TabsTrigger } = await import('@/components/ui/tabs');
@@ -103,5 +108,22 @@ describe('ApiKeyPanel when the response has no key', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApiKeyPanel on load', () => {
+  it('shows the stored key without needing to generate a new one', async () => {
+    // The whole point of storing it: looking the key up must not cost a regenerate,
+    // which would break every place the current key is already configured.
+    getCurrentApiKey.mockResolvedValue({
+      data: { api_key: 'wcl_already_stored', user_id: 'user-1' },
+    });
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('wcl_already_stored')).toBeInTheDocument()
+    );
+    expect(generateApiKey).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /regenerate key/i })).toBeInTheDocument();
   });
 });

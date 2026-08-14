@@ -47,7 +47,7 @@ function HeartbeatsPanel() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Raw heartbeats — {data?.total ?? 0} today</CardTitle>
+            <CardTitle>Quest journal — {data?.total ?? 0} entries today</CardTitle>
           </div>
           <div className="flex items-center gap-2">
             <Popover>
@@ -92,8 +92,14 @@ function HeartbeatsPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((hb) => (
-                  <TableRow key={`${hb.entity}-${hb.time}-${hb.cursor_position}`}>
+                {rows.map((hb, index) => (
+                  // `HeartbeatItem` has no unique id from the API, and entity+time+
+                  // cursor_position can genuinely collide (e.g. two heartbeats in the
+                  // same file within the same second while idle, cursor unchanged) —
+                  // the index disambiguates. Safe here since this list is read-only and
+                  // never reordered client-side; a full refetch just replaces the array.
+                  // eslint-disable-next-line react/no-array-index-key
+                  <TableRow key={`${hb.entity}-${hb.time}-${hb.cursor_position}-${index}`}>
                     <TableCell className="font-mono text-xs">
                       {new Date(hb.time * 1000).toLocaleTimeString()}
                     </TableCell>
@@ -125,7 +131,7 @@ export default function HeartbeatsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="The raw event stream every aggregate on this dashboard is built from."
+        description="The quest journal — every raw event this dashboard's stats are built from."
         title="Heartbeats"
       />
       <RequireUser>

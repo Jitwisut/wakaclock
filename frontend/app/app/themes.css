@@ -7,6 +7,219 @@ body {
 
 /* Theme presets */
 
+/*
+ * Retro Pixel 3D — the dashboard's default preset (see `lib/themes.ts`). A single warm
+ * "wood cabinet / parchment" hue (~78°) carries the whole base scale from cream (light
+ * mode) down to near-black (dark mode), the same one-hue-across-the-scale approach every
+ * other preset here uses — it just means light and dark read as "arcade cabinet by day"
+ * vs "by night" instead of two unrelated palettes. Primary is a saturated arcade red,
+ * secondary an amber/gold accent. `--radius: 0rem` plus the `border-radius: 0 !important`
+ * safety net further down (`--radius-xl`'s calc() would otherwise still leave 4px of
+ * rounding, and `rounded-full` circles ignore `--radius` entirely) commit fully to sharp
+ * pixel corners. Display font is Pixelify Sans (headings/buttons/short labels — a
+ * multi-weight pixel-cut face, not the single crude weight Press Start 2P shipped with
+ * initially); body font is Space Mono, a retro-terminal monospace chosen because this
+ * dashboard has dense data tables (heartbeats, insights) where a true bitmap font would
+ * fail the readable-font-size/line-length guidelines badly. See `lib/fonts.ts`.
+ */
+[data-theme-preset='retro-pixel'] {
+  --base-50: oklch(0.984 0.01 78);
+  --base-100: oklch(0.9687 0.016 78);
+  --base-200: oklch(0.929 0.026 78);
+  --base-300: oklch(0.869 0.038 76);
+  --base-400: oklch(0.704 0.05 74);
+  --base-500: oklch(0.554 0.045 72);
+  --base-600: oklch(0.446 0.04 70);
+  --base-700: oklch(0.372 0.036 68);
+  --base-800: oklch(0.279 0.03 66);
+  --base-900: oklch(0.208 0.026 64);
+  --base-950: oklch(0.129 0.02 62);
+  --base-1000: oklch(0.078 0.016 60);
+
+  --primary-50: oklch(0.9718 0.02 27);
+  --primary-100: oklch(0.9435 0.04 27);
+  --primary-200: oklch(0.8917 0.075 27);
+  --primary-300: oklch(0.8203 0.115 27);
+  --primary-400: oklch(0.7429 0.155 27);
+  --primary-500: oklch(0.6614 0.19 27);
+  --primary-600: oklch(0.5852 0.205 27);
+  --primary-700: oklch(0.51 0.195 27);
+  --primary-800: oklch(0.4235 0.165 27);
+  --primary-900: oklch(0.352 0.135 27);
+  --primary-950: oklch(0.243 0.095 27);
+  --primary-1000: oklch(0.165 0.065 27);
+
+  --secondary-50: oklch(0.9755 0.02 88);
+  --secondary-100: oklch(0.9512 0.045 88);
+  --secondary-200: oklch(0.902 0.085 88);
+  --secondary-300: oklch(0.8292 0.125 88);
+  --secondary-400: oklch(0.753 0.15 88);
+  --secondary-500: oklch(0.685 0.16 88);
+  --secondary-600: oklch(0.598 0.15 88);
+  --secondary-700: oklch(0.5211 0.13 88);
+  --secondary-800: oklch(0.4552 0.105 88);
+  --secondary-900: oklch(0.4042 0.085 88);
+  --secondary-950: oklch(0.2893 0.06 88);
+  --secondary-1000: oklch(0.2146 0.045 88);
+
+  --background: var(--base-50);
+  --foreground: var(--base-900);
+  --card: var(--base-100);
+  --card-foreground: var(--base-900);
+  --popover: var(--base-100);
+  --popover-foreground: var(--base-900);
+  --primary: var(--primary-600);
+  --primary-foreground: var(--color-white);
+  --secondary: var(--secondary-600);
+  --secondary-foreground: var(--base-950);
+  --muted: var(--base-200);
+  --muted-foreground: var(--base-600);
+  --accent: var(--base-200);
+  --accent-foreground: var(--base-900);
+  --destructive: oklch(0.55 0.22 10);
+  --border: var(--base-300);
+  --input: var(--base-300);
+  --ring: var(--primary-600);
+  --chart-1: var(--primary-600);
+  --chart-2: var(--secondary-600);
+  --chart-3: var(--primary-300);
+  --chart-4: var(--secondary-300);
+  --chart-5: var(--base-500);
+  --radius: 0rem;
+  --sidebar: var(--base-100);
+  --sidebar-foreground: var(--base-900);
+  --sidebar-primary: var(--primary-600);
+  --sidebar-primary-foreground: var(--color-white);
+  --sidebar-accent: var(--primary);
+  --sidebar-accent-foreground: var(--color-white);
+  --sidebar-border: var(--base-300);
+  --sidebar-ring: var(--primary-600);
+
+  --display-family: var(--font-pixelify-sans), sans-serif;
+  --display-weight: 600;
+  --text-family: var(--font-space-mono), monospace;
+
+  /* Hard, unblurred offset shadow used by the beveled-3D component rules below — a
+     pixel-art panel "sits" on this rather than casting a soft drop shadow. */
+  --retro-shadow: oklch(0.129 0.02 62 / 90%);
+
+  @variant dark {
+    --background: var(--base-1000);
+    --foreground: var(--base-100);
+    --card: var(--base-950);
+    --card-foreground: var(--base-100);
+    --popover: var(--base-950);
+    --popover-foreground: var(--base-100);
+    --primary: var(--primary-500);
+    --primary-foreground: var(--color-white);
+    --secondary: var(--secondary-500);
+    --secondary-foreground: var(--base-1000);
+    --muted: var(--base-900);
+    --muted-foreground: var(--base-400);
+    --accent: var(--base-900);
+    --accent-foreground: var(--base-100);
+    --destructive: oklch(0.65 0.22 10);
+    --border: var(--base-800);
+    --input: var(--base-800);
+    --ring: var(--primary-500);
+    --chart-1: var(--primary-500);
+    --chart-2: var(--secondary-500);
+    --chart-3: var(--primary-300);
+    --chart-4: var(--secondary-300);
+    --chart-5: var(--base-400);
+    --sidebar: var(--base-950);
+    --sidebar-foreground: var(--base-100);
+    --sidebar-primary: var(--primary-500);
+    --sidebar-primary-foreground: var(--color-white);
+    --sidebar-accent: var(--primary);
+    --sidebar-accent-foreground: var(--base-100);
+    --sidebar-border: var(--base-800);
+    --sidebar-ring: var(--primary-500);
+    --retro-shadow: oklch(0 0 0 / 75%);
+  }
+}
+
+/*
+ * Beveled/embossed 3D component skin for the Retro Pixel 3D preset — layered on top of
+ * the colour tokens above via `data-slot` attribute selectors (the convention every
+ * shadcn primitive in `components/ui/` already uses to mark its own DOM nodes), so this
+ * reskins every page built on those primitives without editing the ~59 vendor component
+ * files themselves (avoided per this repo's CLAUDE.md guidance on `components/ui/`).
+ *
+ * Buttons read as *raised* (outer hard shadow, lightened top-left / darkened
+ * bottom-right inset edges) and invert to *pressed* on `:active` — the classic
+ * console-menu 3D-bevel illusion, done with static box-shadow + a small active-state
+ * translate, no JS. Inputs/textareas read as *sunken* instead (inset-only shadow),
+ * since a text well is conceptually the opposite of a pressable button. Surfaces that
+ * float above the page (popovers, dialogs, dropdowns, tooltips) get the same raised
+ * treatment as cards, just with a larger offset so they read as "higher up".
+ */
+[data-theme-preset='retro-pixel'] {
+  /* --radius: 0rem above already zeroes rounded-lg (:= --radius) and clamps the
+     negative rounded-sm/md calc() results, but rounded-xl (--radius + 4px) and any
+     rounded-full circle (avatars, some badges/switches) ignore --radius entirely —
+     this is the safety net that actually guarantees sharp corners everywhere. */
+  & * {
+    border-radius: 0 !important;
+  }
+
+  & [data-slot='button']:not([data-slot='button-skeleton']) {
+    border: 2px solid var(--border);
+    box-shadow:
+      inset 2px 2px 0 oklch(1 0 0 / 30%),
+      inset -2px -2px 0 oklch(0 0 0 / 30%),
+      3px 3px 0 var(--retro-shadow);
+    transition: none;
+  }
+
+  & [data-slot='button']:not([data-slot='button-skeleton']):active {
+    transform: translate(2px, 2px);
+    box-shadow:
+      inset -2px -2px 0 oklch(1 0 0 / 20%),
+      inset 2px 2px 0 oklch(0 0 0 / 35%);
+  }
+
+  & [data-slot='card'],
+  & [data-slot='alert'] {
+    border: 3px solid var(--border);
+    box-shadow: 4px 4px 0 var(--retro-shadow);
+  }
+
+  & [data-slot='popover-content'],
+  & [data-slot='dialog-content'],
+  & [data-slot='dropdown-menu-content'],
+  & [data-slot='select-content'],
+  & [data-slot='context-menu-content'],
+  & [data-slot='command'],
+  & [data-slot='alert-dialog-content'] {
+    border: 3px solid var(--border);
+    box-shadow: 5px 5px 0 var(--retro-shadow);
+  }
+
+  & [data-slot='input'],
+  & [data-slot='textarea'],
+  & [data-slot='select-trigger'] {
+    border: 2px solid var(--border);
+    box-shadow:
+      inset 2px 2px 0 oklch(0 0 0 / 20%),
+      inset -1px -1px 0 oklch(1 0 0 / 20%);
+  }
+
+  & [data-slot='badge'] {
+    border: 2px solid currentColor;
+    box-shadow: 2px 2px 0 var(--retro-shadow);
+  }
+
+  & [data-slot='sidebar-container'] {
+    border-right: 3px solid var(--sidebar-border);
+    box-shadow: 4px 0 0 var(--retro-shadow);
+  }
+
+  & table thead th {
+    border-bottom: 3px solid var(--border) !important;
+  }
+}
+
 [data-theme-preset='underground'] {
   --base-50: oklch(0.984 0.0022 247.84);
   --base-100: oklch(0.9687 0.0051 247.88);

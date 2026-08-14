@@ -6,6 +6,7 @@ import type {
   AllTimeResponse,
   AuthResponse,
   CreatePresenceRoomResponse,
+  CurrentApiKeyResponse,
   DeleteResponse,
   DurationsResponse,
   GenerateApiKeyResponse,
@@ -138,6 +139,13 @@ export async function getCurrentUser(userId: string) {
 // POST /users/current/api_key — requires a logged-in session; user_id comes from that
 // session (Authorization header, attached automatically), not a query param. Plaintext
 // key returned once, never again.
+// GET /users/current/api_key — the key in retrievable form, so the dashboard can show
+// it whenever it's needed rather than only right after it was created.
+export async function getCurrentApiKey() {
+  const { data } = await wakaclockClient.get<CurrentApiKeyResponse>('/users/current/api_key');
+  return data;
+}
+
 export async function generateApiKey() {
   const { data } = await wakaclockClient.post<GenerateApiKeyResponse>('/users/current/api_key');
   return data;

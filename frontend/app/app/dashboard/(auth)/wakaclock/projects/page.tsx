@@ -19,6 +19,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { RankBadge } from '@/components/wakaclock/rpg/rank-badge';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { cn } from '@/lib/utils';
 import { getProjects } from '@/lib/wakaclock/endpoints';
@@ -73,6 +74,15 @@ function ProjectsTable() {
     return (a[sortKey] - b[sortKey]) * dir;
   });
 
+  // Rank is always "position by total coding time," independent of the table's current
+  // sort — so a row still shows its real rank even while the visible order is sorted by
+  // name or heartbeat count instead.
+  const rankByProject = new Map(
+    [...(data?.data ?? [])]
+      .sort((a, b) => b.total_seconds - a.total_seconds)
+      .map((project, index) => [project.name, index + 1])
+  );
+
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
       setSortDesc((d) => !d);
@@ -87,9 +97,10 @@ function ProjectsTable() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Projects</CardTitle>
+            <CardTitle>Quest board</CardTitle>
             <CardDescription>
-              Project merges are applied here
+              Every project is a quest — ranked by the time it earned you. Manage merges in
+              Settings.
             </CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
@@ -107,6 +118,7 @@ function ProjectsTable() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">Rank</TableHead>
                     <SortHeader
                       active={sortKey === 'name'}
                       columnKey="name"
@@ -133,6 +145,9 @@ function ProjectsTable() {
                 <TableBody>
                   {rows.map((project: ProjectItem) => (
                     <TableRow key={project.name}>
+                      <TableCell>
+                        <RankBadge rank={rankByProject.get(project.name) ?? rows.length} />
+                      </TableCell>
                       <TableCell className="font-medium">{project.name}</TableCell>
                       <TableCell className={cn('font-mono text-xs')}>{project.text}</TableCell>
                       <TableCell>{project.heartbeats.toLocaleString()}</TableCell>
@@ -152,7 +167,7 @@ export default function ProjectsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Merged project totals for the selected range. Manage merges in Settings."
+        description="The quest board — which projects earned you the most coding time."
         title="Projects"
       />
       <RequireUser>

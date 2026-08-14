@@ -6,10 +6,12 @@ import {
   Montserrat,
   Outfit,
   Overpass_Mono,
+  Pixelify_Sans,
   Plus_Jakarta_Sans,
   Poppins,
   PT_Sans,
   Roboto,
+  Space_Mono,
 } from 'next/font/google';
 
 import { cn } from '@/lib/utils';
@@ -72,6 +74,35 @@ const outfit = Outfit({
   variable: '--font-outfit',
 });
 
+/**
+ * Display face for the "Retro Pixel 3D" theme preset (`app/themes.css`) — used for
+ * headings/titles/button labels via `--display-family`, the same way
+ * `hedvig_letters_serif` is Underground's display face. Was Press Start 2P (true 8-bit
+ * bitmap) initially; swapped to Pixelify Sans, which keeps the pixel-cut silhouette but
+ * is a proper multi-weight typeface (400-700) rather than one crude blocky weight, so
+ * headings actually have a bold/regular hierarchy and read as considered rather than
+ * placeholder-crude.
+ */
+const pixelify_sans = Pixelify_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-pixelify-sans',
+});
+
+/**
+ * Body face for the "Retro Pixel 3D" theme preset, via `--text-family`. Was
+ * `overpass_mono` initially (still registered below for the pre-existing
+ * `data-theme-font='overpass-mono'` option, unrelated to this preset); swapped to Space
+ * Mono for more retro-terminal character while staying legible at the dashboard's dense
+ * table/data density (heartbeats, insights) — the same legibility constraint that ruled
+ * out Press Start 2P and VT323 for body copy in the first place.
+ */
+const space_mono = Space_Mono({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  variable: '--font-space-mono',
+});
+
 export const fontVariables = cn(
   geist.variable,
   inter.variable,
@@ -83,5 +114,7 @@ export const fontVariables = cn(
   plus_jakarta_sans.variable,
   hedvig_letters_serif.variable,
   kumbh_sans.variable,
-  outfit.variable
+  outfit.variable,
+  pixelify_sans.variable,
+  space_mono.variable
 );

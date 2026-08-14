@@ -301,6 +301,17 @@ export interface GenerateApiKeyData {
   user_id: string;
 }
 
+/** `api_key` is null when nothing is displayable: no key, or one issued before keys
+ *  were stored retrievably (those still authenticate, they just can't be shown). */
+export interface CurrentApiKeyData {
+  api_key: null | string;
+  user_id: string;
+}
+
+export interface CurrentApiKeyResponse {
+  data: CurrentApiKeyData;
+}
+
 export interface GenerateApiKeyResponse {
   data: GenerateApiKeyData;
 }

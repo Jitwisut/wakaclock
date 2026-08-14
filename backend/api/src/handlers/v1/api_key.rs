@@ -40,6 +40,36 @@ pub async fn generate(
     Ok(Json(response))
 }
 
+/// GET /api/v1/users/current/api_key
+///
+/// Returns the caller's current key so the dashboard can show it whenever they need to
+/// paste it somewhere, rather than only in the seconds after it was created. Session-only
+/// for the same reason as generate: an API key must never be able to read itself back, or
+/// a leaked key would hand over a permanent, self-renewing credential.
+///
+/// `api_key: null` means there is nothing displayable — no key, or one issued before keys
+/// were stored retrievably. Those still authenticate; they just cannot be shown again.
+pub async fn current(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    auth::check_rate_limit(&state, addr.ip())?;
+
+    let user_id = auth::require_session_user(&state, &headers)
+        .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
+
+    let api_key = state
+        .user_service
+        .current_api_key(user_id)
+        .await
+        .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "data": { "user_id": user_id, "api_key": api_key }
+    })))
+}
+
 /// DELETE /api/v1/users/current/api_key — also requires a valid session, same reasoning.
 pub async fn revoke(
     State(state): State<Arc<AppState>>,

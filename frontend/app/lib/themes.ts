@@ -1,5 +1,5 @@
 export const DEFAULT_THEME = {
-  preset: 'default',
+  preset: 'retro-pixel',
   radius: 'default',
   scale: 'none',
   contentLayout: 'full',
@@ -18,6 +18,11 @@ export type ThemeType = {
 };
 
 export const THEMES = [
+  {
+    name: 'Retro Pixel 3D',
+    value: 'retro-pixel',
+    colors: ['oklch(0.5583 0.2075 27.32)'],
+  },
   {
     name: 'Default',
     value: 'default',

@@ -51,7 +51,9 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/users/current", get(users::current))
         .route(
             "/users/current/api_key",
-            post(api_key::generate).delete(api_key::revoke),
+            get(api_key::current)
+                .post(api_key::generate)
+                .delete(api_key::revoke),
         )
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/current/keystroke_stats", get(keystroke_stats::get))

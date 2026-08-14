@@ -46,7 +46,7 @@ function KeystrokesPanel() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Keystrokes</CardTitle>
+            <CardTitle>Combat log</CardTitle>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
@@ -134,7 +134,7 @@ export default function KeystrokesPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Raw typing volume per project, independent of AI attribution."
+        description="Every keystroke logged as combat volume, independent of AI attribution."
         title="Keystrokes"
       />
       <RequireUser>

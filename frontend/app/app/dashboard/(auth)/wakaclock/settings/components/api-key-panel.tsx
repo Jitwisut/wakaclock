@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon, CopyIcon, KeyRoundIcon, TriangleAlertIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -21,13 +21,28 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { generateApiKey, revokeApiKey } from '@/lib/wakaclock/endpoints';
+import { generateApiKey, getCurrentApiKey, revokeApiKey } from '@/lib/wakaclock/endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 export function ApiKeyPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [plaintextKey, setPlaintextKey] = React.useState<null | string>(null);
   const [copied, setCopied] = React.useState(false);
+
+  // The stored key, so it can be shown whenever it's needed. It has to be pasted into
+  // config.toml, the editor extension and any agent hook, and losing it between those
+  // steps used to mean regenerating — which kills the copy already in use.
+  const currentKeyQuery = useQuery({
+    queryKey: ['wakaclock', 'api-key', userId],
+    queryFn: getCurrentApiKey,
+    enabled: Boolean(userId),
+  });
+
+  // A key just generated in this session wins: it is the freshest value, and it is
+  // available before the query refetches.
+  const shownKey = plaintextKey ?? currentKeyQuery.data?.data.api_key ?? null;
+
+  const queryClient = useQueryClient();
 
   const generateMutation = useMutation({
     mutationFn: generateApiKey,
@@ -44,6 +59,7 @@ export function ApiKeyPanel() {
       }
       setPlaintextKey(key);
       setCopied(false);
+      void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('New API key generated');
     },
     onError: (err: Error) => toast.error(err.message),
@@ -53,14 +69,15 @@ export function ApiKeyPanel() {
     mutationFn: revokeApiKey,
     onSuccess: () => {
       setPlaintextKey(null);
+      void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('API key revoked');
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
   async function copyKey() {
-    if (!plaintextKey) return;
-    await navigator.clipboard.writeText(plaintextKey);
+    if (!shownKey) return;
+    await navigator.clipboard.writeText(shownKey);
     setCopied(true);
     toast.success('Copied to clipboard');
   }
@@ -73,24 +90,25 @@ export function ApiKeyPanel() {
           API key
         </CardTitle>
         <CardDescription>
-          POST/DELETE /users/current/api_key — lets a CLI or editor extension authenticate as you.
-          Only generates a key for the account you&apos;re currently logged into as this session —
-          proven by your login, not a query param anyone could set.
+          Lets a CLI, editor extension or agent hook authenticate as you. Always tied to the
+          account this session is logged into — proven by your login, not a query param anyone
+          could set.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {plaintextKey ? (
+        {shownKey ? (
           <div className="space-y-2">
-            <Alert variant="destructive">
+            <Alert>
               <TriangleAlertIcon />
-              <AlertTitle>Copy this now — it won&apos;t be shown again</AlertTitle>
+              <AlertTitle>Treat this like a password</AlertTitle>
               <AlertDescription>
-                Only its hash is stored. If you lose it, generate a new one (this invalidates the
-                old key everywhere it&apos;s used).
+                Anyone with this key can send and read coding activity as you. It stays visible
+                here, so there is no need to regenerate just to look it up — regenerating breaks
+                every place the old key is already in use.
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
-              <Input className="font-mono text-xs" readOnly value={plaintextKey} />
+              <Input className="font-mono text-xs" readOnly value={shownKey} />
               <Button aria-label="Copy API key" onClick={copyKey} size="icon" variant="outline">
                 {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
               </Button>
@@ -103,8 +121,9 @@ export function ApiKeyPanel() {
           </div>
         ) : (
           <p className="text-muted-foreground text-sm">
-            No key shown — generating one below always creates a brand new key (the old one, if any,
-            stops working immediately).
+            {currentKeyQuery.isLoading
+              ? 'Loading your API key…'
+              : 'No key yet — generate one below. If you had a key from before keys were stored, it still works but can no longer be displayed; generate a new one to see it here.'}
           </p>
         )}
 
@@ -112,7 +131,7 @@ export function ApiKeyPanel() {
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button disabled={!userId || generateMutation.isPending}>
-                {plaintextKey || generateMutation.isPending ? 'Regenerate key' : 'Generate key'}
+                {shownKey || generateMutation.isPending ? 'Regenerate key' : 'Generate key'}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
