@@ -14,6 +14,19 @@ pub enum AiEventSource {
     IdeTelemetry,
 }
 
+impl AiEventSource {
+    /// Matches the `ai_source` wire values `wakaclock-cli`'s `--ai-source` flag and
+    /// the server already accept (`agent_hook`, `ide_telemetry`) — see
+    /// `backend/api/crates/wakaclock-cli/src/main.rs`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::AgentHook => "agent_hook",
+            Self::IdeTelemetry => "ide_telemetry",
+        }
+    }
+}
+
 /// Ordered low-to-high so `AiConfidence::Verified > AiConfidence::Correlated`, matching
 /// the candidate-scoring order in plan.md 8.7 ("higher evidence confidence (verified
 /// before correlated before inferred)").
@@ -24,6 +37,17 @@ pub enum AiConfidence {
     Inferred,
     Correlated,
     Verified,
+}
+
+impl AiConfidence {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Inferred => "inferred",
+            Self::Correlated => "correlated",
+            Self::Verified => "verified",
+        }
+    }
 }
 
 /// A single file mutation attributed to an AI agent, derived from a transcript record,
@@ -71,6 +95,13 @@ pub fn normalize_agent_id(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_str_matches_the_cli_wire_values() {
+        assert_eq!(AiEventSource::Transcript.as_str(), "transcript");
+        assert_eq!(AiEventSource::AgentHook.as_str(), "agent_hook");
+        assert_eq!(AiConfidence::Verified.as_str(), "verified");
+    }
 
     #[test]
     fn confidence_orders_verified_highest() {

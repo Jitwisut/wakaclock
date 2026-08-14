@@ -9,9 +9,10 @@
 //! `CAPABILITIES.md`). `gemini.rs` is not implemented — Gemini CLI wasn't available to
 //! verify a real transcript shape against, see `fixtures/gemini_cli/README.md`.
 //! `correlation.rs` matches AI events to editor-observed buffers (in-memory pool
-//! only). `state.rs` (SQLite-backed cursor/dedup persistence, cross-process locking)
-//! is not yet implemented — see `correlation::expire_unmatched` for the stopgap this
-//! pass uses instead.
+//! only). `state.rs` persists parser cursors and delivered-event identity to SQLite so
+//! a re-run doesn't re-attribute the same edit twice; the cross-process `ai-sync.lock`
+//! plan.md 8.6 also calls for is not yet implemented (see state.rs's doc comment for
+//! why a single local writer is safe without it, just uncoordinated).
 
 pub mod claude;
 pub mod codex;
@@ -21,6 +22,7 @@ mod jsonl;
 pub mod parser;
 pub mod patch;
 pub mod path;
+pub mod state;
 
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
@@ -38,3 +40,4 @@ pub use patch::{
 pub use path::{
     normalize_lexical, resolve_within_workspace, to_comparable_string, PathResolveError,
 };
+pub use state::AiAttributionState;

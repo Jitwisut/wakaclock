@@ -9,6 +9,10 @@ use std::{
 };
 use wakaclock_ast::detect;
 use wakaclock_core::{
+    ai::{
+        AiActivityParser, AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser,
+        DiscoveryContext, DiscoveryState, ParseContext, ParserCursor,
+    },
     api_client::ApiClient,
     config::Config,
     git,
@@ -107,6 +111,32 @@ enum Commands {
     },
     Status,
     Today,
+    Ai {
+        #[command(subcommand)]
+        action: AiAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AiAction {
+    /// Report transcript discovery state for each supported agent, without reading or
+    /// sending anything.
+    Status,
+    /// Parse new events from each agent's local transcript since the last sync and
+    /// send one AI-attributed heartbeat per event. There is no editor buffer to
+    /// correlate against here (this reads transcripts directly, not via an IDE
+    /// extension) — plan.md 8.2 requires attribution to keep working "when an agent
+    /// edits files outside VS Code," which is exactly this path.
+    Sync {
+        /// Only sync this agent (`claude-code` or `codex`); default is all supported
+        /// agents.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Parse and print what would be sent without contacting the server or
+        /// advancing any cursor/delivery state.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,9 +355,241 @@ async fn run() -> Result<(), Box<dyn Error>> {
             println!("Total seconds: {}", snapshot.total_seconds);
             println!("Heartbeats: {}", snapshot.heartbeat_count);
         }
+        Commands::Ai { action } => match action {
+            AiAction::Status => print_ai_status()?,
+            AiAction::Sync { agent, dry_run } => {
+                run_ai_sync(&config, &api_client, agent.as_deref(), dry_run).await?
+            }
+        },
     }
 
     Ok(())
+}
+
+fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
+    vec![
+        ("claude-code", Box::new(ClaudeCodeParser::new())),
+        ("codex", Box::new(CodexParser::new())),
+    ]
+}
+
+fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
+    Ok(DiscoveryContext {
+        home_dir: dirs::home_dir().ok_or("could not resolve home directory")?,
+        config_override: None,
+    })
+}
+
+fn print_ai_status() -> Result<(), Box<dyn Error>> {
+    let context = ai_discovery_context()?;
+    for (id, parser) in supported_ai_parsers() {
+        let result = parser.discover(&context);
+        let description = match result.state {
+            DiscoveryState::NotInstalled => "not installed".to_string(),
+            DiscoveryState::InstalledNoTranscript => "installed, no transcript found".to_string(),
+            DiscoveryState::TranscriptFound { path } => {
+                format!("transcript found: {}", path.display())
+            }
+            DiscoveryState::PermissionDenied { path } => {
+                format!("permission denied: {}", path.display())
+            }
+            DiscoveryState::UnsupportedVersion {
+                path,
+                found_version,
+            } => {
+                format!(
+                    "unsupported transcript version at {} ({})",
+                    path.display(),
+                    found_version.as_deref().unwrap_or("unknown")
+                )
+            }
+        };
+        println!("{id}: {description}");
+    }
+    println!("gemini-cli: not implemented (no verified local transcript shape yet)");
+    Ok(())
+}
+
+async fn run_ai_sync(
+    config: &Config,
+    api_client: &ApiClient,
+    agent_filter: Option<&str>,
+    dry_run: bool,
+) -> Result<(), Box<dyn Error>> {
+    let state = AiAttributionState::open()?;
+    let context = ai_discovery_context()?;
+
+    for (id, parser) in supported_ai_parsers() {
+        if agent_filter.is_some_and(|filter| filter != id) {
+            continue;
+        }
+        println!("== {id} ==");
+
+        let discovery = parser.discover(&context);
+        let transcript_path = match discovery.state {
+            DiscoveryState::TranscriptFound { path } => path,
+            DiscoveryState::NotInstalled => {
+                println!("  not installed, skipping");
+                continue;
+            }
+            DiscoveryState::InstalledNoTranscript => {
+                println!("  installed but no transcript found, skipping");
+                continue;
+            }
+            DiscoveryState::PermissionDenied { path } => {
+                println!("  permission denied reading {}, skipping", path.display());
+                continue;
+            }
+            DiscoveryState::UnsupportedVersion { path, .. } => {
+                println!(
+                    "  unsupported transcript version at {}, skipping",
+                    path.display()
+                );
+                continue;
+            }
+        };
+
+        // Resume from the saved cursor only if it still points at the same file — a
+        // new session file (Claude Code starts one per session) means byte offset 0
+        // against the file discover() just found, not a stale offset into a file we
+        // may no longer even be able to read.
+        let source_path_string = transcript_path.to_string_lossy().into_owned();
+        let existing_cursor = state.load_cursor(id)?;
+        let cursor = match existing_cursor {
+            Some(cursor) if cursor.source_path == source_path_string => cursor,
+            _ => ParserCursor {
+                source_path: source_path_string,
+                file_identity: None,
+                byte_offset: 0,
+                last_record_id: None,
+                last_record_time: None,
+            },
+        };
+
+        let batch = parser.parse_since(&ParseContext::default(), Some(&cursor))?;
+        for warning in &batch.warnings {
+            eprintln!("  warning: {}", warning.message);
+        }
+
+        let candidate_ids: Vec<String> = batch
+            .events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect();
+        let undelivered = state.filter_undelivered(&candidate_ids)?;
+        let new_events: Vec<&AiEditEvent> = batch
+            .events
+            .iter()
+            .filter(|event| undelivered.contains(&event.event_id))
+            .collect();
+
+        println!(
+            "  {} event(s) parsed since last sync, {} already delivered, {} new",
+            batch.events.len(),
+            batch.events.len() - new_events.len(),
+            new_events.len()
+        );
+
+        if dry_run {
+            for event in &new_events {
+                println!(
+                    "  [dry-run] {} {} +{}/-{} model={}",
+                    event.event_id,
+                    event.entity.display(),
+                    event.lines_added.unwrap_or(0),
+                    event.lines_deleted.unwrap_or(0),
+                    event.model.as_deref().unwrap_or("unknown")
+                );
+            }
+            continue;
+        }
+
+        if !new_events.is_empty() {
+            let heartbeats: Vec<Heartbeat> = new_events
+                .iter()
+                .map(|event| build_ai_heartbeat(config, event))
+                .collect();
+            let report = api_client.send_heartbeats(heartbeats).await?;
+            println!(
+                "  sent {} (deduped {}, queued {}, flushed {})",
+                report.sent, report.deduped, report.queued, report.flushed
+            );
+            for event in &new_events {
+                state.mark_delivered(&event.event_id, id)?;
+            }
+        }
+
+        state.save_cursor(id, &batch.next_cursor)?;
+    }
+
+    let pruned = state.prune_delivered_older_than(30)?;
+    if pruned > 0 {
+        println!("Pruned {pruned} delivered-event record(s) older than 30 days.");
+    }
+
+    Ok(())
+}
+
+/// Builds an AI-attributed heartbeat directly from a parsed transcript event, with no
+/// editor buffer to correlate against (see `AiAction::Sync`'s doc comment). `ai_source`
+/// is always `"transcript"` here — never `"agent_hook"` — because the value must
+/// describe how *this* event was obtained, not how some other integration might have
+/// reported the same file.
+fn build_ai_heartbeat(config: &Config, event: &AiEditEvent) -> Heartbeat {
+    let entity_path = event.entity.to_string_lossy().into_owned();
+    let mut heartbeat = Heartbeat::new(
+        config.user_id,
+        entity_path.clone(),
+        EntityType::File,
+        "wakaclock-cli/ai-sync".to_string(),
+    );
+
+    let git_info = git::discover(&entity_path);
+    heartbeat.project = git_info
+        .as_ref()
+        .map(|info| info.project.clone())
+        .or_else(|| {
+            event
+                .project_root
+                .as_ref()
+                .and_then(|root| root.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+    heartbeat.branch = git_info.map(|info| info.branch);
+    heartbeat.is_write = true;
+    heartbeat.category = Category::Coding;
+    heartbeat.operating_system = std::env::consts::OS.to_string();
+    heartbeat.machine = hostname::get()
+        .ok()
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    heartbeat.editor = "wakaclock-ai-sync".to_string();
+    heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
+    heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
+
+    if Path::new(&entity_path).exists() {
+        if let Ok(source) = fs::read(&entity_path) {
+            heartbeat.lines = Some(source.iter().filter(|&&b| b == b'\n').count() as u32 + 1);
+            if let Some(ast) = detect(&entity_path, &source) {
+                heartbeat.language = Some(ast.language.clone());
+                heartbeat.ast_language = Some(ast.language);
+                heartbeat.ast_confidence = Some(ast.confidence);
+                heartbeat.dependencies = ast.dependencies;
+            }
+        }
+    }
+
+    heartbeat.is_ai_generated = true;
+    heartbeat.ai_agent = Some(event.agent.clone());
+    heartbeat.ai_provider = event.provider.clone();
+    heartbeat.ai_model = event.model.clone();
+    heartbeat.ai_source = Some(event.source.as_str().to_string());
+    heartbeat.ai_confidence = Some(event.confidence.as_str().to_string());
+    heartbeat.ai_event_id = Some(event.event_id.clone());
+    heartbeat.ai_lines_added = event.lines_added;
+    heartbeat.ai_lines_deleted = event.lines_deleted;
+
+    heartbeat
 }
 
 fn build_heartbeat(
