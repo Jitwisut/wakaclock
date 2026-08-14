@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+/// How close in time two heartbeats for the same file must be before the later one is
+/// considered a duplicate. Ported from WakaTime's same-file rule, which its editor
+/// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
+/// this window to mean the same thing here as it does there.
+pub const DEDUP_WINDOW_SECONDS: f64 = 120.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EntityType {
@@ -217,7 +223,7 @@ impl Heartbeat {
             && !self.is_write
             && !other.is_write
             && !self.carries_measurements()
-            && time_diff < 120.0
+            && time_diff < DEDUP_WINDOW_SECONDS
     }
 
     /// Whether this heartbeat carries measured work that exists nowhere else.
