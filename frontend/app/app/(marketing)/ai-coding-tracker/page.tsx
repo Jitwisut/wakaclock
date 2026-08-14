@@ -21,8 +21,8 @@ export const metadata: Metadata = {
   title: 'AI Coding Activity Tracking',
   description:
     `How ${SITE_NAME} records AI-assisted development: the heartbeat API accepts an AI agent name ` +
-    'and AI line counts, and the dashboard aggregates them per agent and per day. No shipped ' +
-    'client fills these fields in automatically.',
+    'and AI line counts, and the VS Code extension can configure Claude Code, Codex CLI and ' +
+    'Gemini CLI hooks automatically.',
   alternates: { canonical: '/ai-coding-tracker' },
   openGraph: { url: '/ai-coding-tracker', title: `AI Coding Activity Tracking | ${SITE_NAME}` },
 };
@@ -51,14 +51,15 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: `Does ${SITE_NAME} support Claude Code, Codex or Cursor out of the box?`,
     answer:
-      'No. There is no shipped integration that detects those tools automatically. The agent name ' +
-      'is a free-form string supplied by whatever client sends the heartbeat, so any agent you ' +
-      'report will appear in the dashboard under that name — but you have to send it yourself.',
+      'Claude Code, Codex CLI and Gemini CLI are supported through the VS Code setup wizard. ' +
+      'Cursor and Copilot require provider-specific adapters; unsupported tools are not guessed ' +
+      'from typing speed or code shape.',
   },
   {
     question: 'How do AI attribution fields get populated today?',
     answer:
-      'Two ways. Either your own tooling calls the heartbeat API directly with is_ai_generated, ' +
+      'Three ways. The bundled agent hooks call the heartbeat API with verified metadata; your own ' +
+      'tooling can call it directly with is_ai_generated, ' +
       'ai_agent and the AI line counts set, or you import a WakaTime data export — imported ' +
       'heartbeats carrying an AI category or AI session are recorded as AI-generated under the ' +
       'agent name "wakatime".',
@@ -150,21 +151,20 @@ export default function AiCodingTrackerPage() {
 
         <Section heading="Supported AI tools" id="supported-tools">
           <p style={MUTED_TEXT}>
-            {SITE_NAME} does <strong>not</strong> ship an integration that detects Claude Code,
-            Codex, Cursor, Copilot or any other agent automatically. There is no list of
-            supported tools in the codebase, and installing the VS Code extension will not
-            separate AI-assisted work from hand-written work on its own.
+            {SITE_NAME} ships verified hook integrations for Claude Code, Codex CLI and Gemini CLI.
+            The VS Code setup wizard detects those CLIs and registers their hooks without reading
+            prompts, responses or source code. Cursor and Copilot are not yet supported because
+            their editor events need provider-specific adapters.
           </p>
           <p style={MUTED_TEXT}>
-            What exists instead is an open field. The agent name is a free-form string, so any
-            tool you report activity for appears in the dashboard under the name you send. That
-            makes the feature tool-agnostic, but the reporting is something you wire up rather
-            than something that happens by installing an extension.
+            Every hook sends provider, agent, optional model, line deltas, timestamp and an event id.
+            Unsupported tools remain unclassified rather than being guessed as human activity.
           </p>
           <Subheading>The two paths that populate it today</Subheading>
           <Bullets
             items={[
-              'Your own tooling — a wrapper, hook or script around your agent — posts heartbeats with the AI fields set',
+              'The bundled Claude Code, Codex CLI or Gemini CLI hook posts verified heartbeats after an AI file edit',
+              'Your own tooling — a wrapper, hook or script around another agent — posts heartbeats with the AI fields set',
               'A WakaTime data import, where heartbeats carrying an AI category or AI session are recorded under the agent name "wakatime"',
             ]}
           />

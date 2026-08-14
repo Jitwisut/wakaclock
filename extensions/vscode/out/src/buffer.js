@@ -1,18 +1,21 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HeartbeatBufferManager = void 0;
+const aiAttribution_1 = require("./aiAttribution");
 const utils_1 = require("./utils");
 class HeartbeatBufferManager {
     getConfig;
     cli;
     logger;
     onHeartbeatSent;
+    aiAttributionStore;
     states = new Map();
-    constructor(getConfig, cli, logger, onHeartbeatSent) {
+    constructor(getConfig, cli, logger, onHeartbeatSent, aiAttributionStore = new aiAttribution_1.AiAttributionStore()) {
         this.getConfig = getConfig;
         this.cli = cli;
         this.logger = logger;
         this.onHeartbeatSent = onHeartbeatSent;
+        this.aiAttributionStore = aiAttributionStore;
     }
     async recordTextChange(document, changes, selection, now = Date.now(), project) {
         if (!(0, utils_1.isFileDocument)(document) || changes.length === 0) {
@@ -29,6 +32,8 @@ class HeartbeatBufferManager {
         state.keystrokes += summary.keystrokes;
         state.charsAdded += summary.charsAdded;
         state.charsDeleted += summary.charsDeleted;
+        state.humanLinesAdded += summary.linesAdded;
+        state.humanLinesDeleted += summary.linesDeleted;
         this.updateSelectionState(state, selection);
         if (state.lastHeartbeatAt &&
             now - state.lastHeartbeatAt >= this.getConfig().sameFileHeartbeatMs &&
@@ -77,6 +82,11 @@ class HeartbeatBufferManager {
             if (!this.shouldFlushOnTimer(state, now)) {
                 continue;
             }
+            await this.classifyPendingAttribution(state, now);
+            if (!this.hasPendingActivity(state)) {
+                this.markFlushed(entity, now);
+                continue;
+            }
             duePayloads.push({
                 entity,
                 payload: this.buildPayload(state, "coding", false),
@@ -113,6 +123,11 @@ class HeartbeatBufferManager {
             return;
         }
         try {
+            await this.classifyPendingAttribution(state, now);
+            if (!force && !this.hasPendingActivity(state)) {
+                this.markFlushed(entity, now);
+                return;
+            }
             await this.cli.sendHeartbeat(entity, write, category, [], this.buildPayload(state, category, write));
             this.markFlushed(entity, now);
             this.onHeartbeatSent?.();
@@ -132,16 +147,27 @@ class HeartbeatBufferManager {
             keystrokes: 0,
             charsAdded: 0,
             charsDeleted: 0,
+            humanLinesAdded: 0,
+            humanLinesDeleted: 0,
             pendingWrite: false
         };
         this.states.set(entity, created);
         return created;
     }
     hasPendingActivity(state) {
-        return state.pendingWrite || state.keystrokes > 0 || state.charsAdded > 0 || state.charsDeleted > 0;
+        return (state.pendingWrite ||
+            state.keystrokes > 0 ||
+            state.charsAdded > 0 ||
+            state.charsDeleted > 0 ||
+            state.humanLinesAdded > 0 ||
+            state.humanLinesDeleted > 0);
     }
     hasTrackedActivity(state) {
-        return state.keystrokes > 0 || state.charsAdded > 0 || state.charsDeleted > 0;
+        return (state.keystrokes > 0 ||
+            state.charsAdded > 0 ||
+            state.charsDeleted > 0 ||
+            state.humanLinesAdded > 0 ||
+            state.humanLinesDeleted > 0);
     }
     shouldFlushOnTimer(state, now) {
         const { idleMs } = this.getConfig();
@@ -165,8 +191,28 @@ class HeartbeatBufferManager {
             keystrokes: state.keystrokes || undefined,
             chars_added: state.charsAdded || undefined,
             chars_deleted: state.charsDeleted || undefined,
+            human_lines_added: state.humanLinesAdded || undefined,
+            human_lines_deleted: state.humanLinesDeleted || undefined,
             active_seconds: this.estimateActiveSeconds(state)
         };
+    }
+    async classifyPendingAttribution(state, now) {
+        if (state.humanLinesAdded === 0 && state.humanLinesDeleted === 0) {
+            return;
+        }
+        const matchedAiEdit = await this.aiAttributionStore.matchesRecentEdit(state.entity, state.lastActivityAt ?? now, state.humanLinesAdded, state.humanLinesDeleted);
+        if (!matchedAiEdit) {
+            return;
+        }
+        // The agent hook owns this edit's line/time attribution. Remove the editor-side
+        // counters so the same change is not reported as human as well. A pending save is
+        // left intact so the ordinary write heartbeat can still mark the file as active.
+        this.logger.debug("classified editor change as AI-generated", { entity: state.entity });
+        state.keystrokes = 0;
+        state.charsAdded = 0;
+        state.charsDeleted = 0;
+        state.humanLinesAdded = 0;
+        state.humanLinesDeleted = 0;
     }
     estimateActiveSeconds(state) {
         if (!this.hasTrackedActivity(state)) {
@@ -187,6 +233,8 @@ class HeartbeatBufferManager {
         state.keystrokes = 0;
         state.charsAdded = 0;
         state.charsDeleted = 0;
+        state.humanLinesAdded = 0;
+        state.humanLinesDeleted = 0;
         state.firstActivityAt = undefined;
         state.lastActivityAt = undefined;
         state.pendingWrite = false;

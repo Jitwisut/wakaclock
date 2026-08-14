@@ -59,6 +59,45 @@ enum Commands {
         #[arg(long)]
         active_seconds: Option<f64>,
 
+        /// Name of the AI agent that made this edit (e.g. "claude-code", "codex",
+        /// "gemini-cli") — presence of this flag is what sets `is_ai_generated`; there
+        /// is no separate boolean flag, since a heartbeat naming an agent is AI-generated
+        /// by definition and a redundant flag is just another way for the two to disagree.
+        #[arg(long)]
+        ai_agent: Option<String>,
+
+        /// Vendor/provider that supplied the AI attribution (e.g. "openai").
+        #[arg(long)]
+        ai_provider: Option<String>,
+
+        /// Model supplied by the AI integration, when known.
+        #[arg(long)]
+        ai_model: Option<String>,
+
+        /// Attribution source (e.g. "agent_hook", "ide_telemetry").
+        #[arg(long)]
+        ai_source: Option<String>,
+
+        /// Attribution confidence (verified, correlated, inferred, unknown).
+        #[arg(long)]
+        ai_confidence: Option<String>,
+
+        /// Stable id for this AI edit event; used to make retries idempotent downstream.
+        #[arg(long)]
+        ai_event_id: Option<String>,
+
+        #[arg(long)]
+        ai_lines_added: Option<u32>,
+
+        #[arg(long)]
+        ai_lines_deleted: Option<u32>,
+
+        #[arg(long)]
+        human_lines_added: Option<u32>,
+
+        #[arg(long)]
+        human_lines_deleted: Option<u32>,
+
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
     },
@@ -100,10 +139,42 @@ struct ExtraHeartbeatInput {
     chars_deleted: Option<u32>,
     #[serde(default)]
     active_seconds: Option<f64>,
+    #[serde(default)]
+    ai_agent: Option<String>,
+    #[serde(default)]
+    ai_provider: Option<String>,
+    #[serde(default)]
+    ai_model: Option<String>,
+    #[serde(default)]
+    ai_source: Option<String>,
+    #[serde(default)]
+    ai_confidence: Option<String>,
+    #[serde(default)]
+    ai_event_id: Option<String>,
+    #[serde(default)]
+    ai_lines_added: Option<u32>,
+    #[serde(default)]
+    ai_lines_deleted: Option<u32>,
+    #[serde(default)]
+    human_lines_added: Option<u32>,
+    #[serde(default)]
+    human_lines_deleted: Option<u32>,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
+    // `main` returning `Result` would let the Rust runtime print the error itself, but
+    // it does so via `Debug`, not `Display` — that's the literal cause of errors like
+    // `Http(reqwest::Error { kind: Status(401, None), url: "..." })` reaching a VS Code
+    // user instead of a readable sentence. `AppError`'s `Display` impl (thiserror, see
+    // `wakaclock-core::error`) has an actual message; use it instead.
+    if let Err(err) = run().await {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let mut config = Config::load();
 
@@ -132,6 +203,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             chars_added,
             chars_deleted,
             active_seconds,
+            ai_agent,
+            ai_provider,
+            ai_model,
+            ai_source,
+            ai_confidence,
+            ai_event_id,
+            ai_lines_added,
+            ai_lines_deleted,
+            human_lines_added,
+            human_lines_deleted,
             extra_heartbeats,
         } => {
             let entity_type = EntityType::from_str(&entity_type)?;
@@ -148,6 +229,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 chars_added,
                 chars_deleted,
                 active_seconds,
+                ai_agent,
+                ai_provider,
+                ai_model,
+                ai_source,
+                ai_confidence,
+                ai_event_id,
+                ai_lines_added,
+                ai_lines_deleted,
+                human_lines_added,
+                human_lines_deleted,
             };
             let primary = build_heartbeat(
                 &config,
@@ -286,6 +377,19 @@ fn build_heartbeat(
         heartbeat.chars_added = extra.chars_added;
         heartbeat.chars_deleted = extra.chars_deleted;
         heartbeat.active_seconds = extra.active_seconds;
+        // Presence of `ai_agent` is the whole signal — see the CLI flag's doc comment
+        // for why there is no separate `is_ai_generated` flag to keep in sync with it.
+        heartbeat.is_ai_generated = extra.ai_agent.is_some();
+        heartbeat.ai_agent = extra.ai_agent;
+        heartbeat.ai_provider = extra.ai_provider;
+        heartbeat.ai_model = extra.ai_model;
+        heartbeat.ai_source = extra.ai_source;
+        heartbeat.ai_confidence = extra.ai_confidence;
+        heartbeat.ai_event_id = extra.ai_event_id;
+        heartbeat.ai_lines_added = extra.ai_lines_added;
+        heartbeat.ai_lines_deleted = extra.ai_lines_deleted;
+        heartbeat.human_lines_added = extra.human_lines_added;
+        heartbeat.human_lines_deleted = extra.human_lines_deleted;
     }
 
     heartbeat.validate().map_err(io::Error::other)?;

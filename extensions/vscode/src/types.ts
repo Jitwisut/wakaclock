@@ -21,6 +21,8 @@ export interface BufferedFileState {
     keystrokes: number;
     charsAdded: number;
     charsDeleted: number;
+    humanLinesAdded: number;
+    humanLinesDeleted: number;
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
@@ -38,6 +40,16 @@ export interface ExtraHeartbeatPayload {
     chars_added?: number;
     chars_deleted?: number;
     active_seconds?: number;
+    ai_agent?: string;
+    ai_provider?: string;
+    ai_model?: string;
+    ai_source?: string;
+    ai_confidence?: "verified" | "correlated" | "inferred" | "unknown" | string;
+    ai_event_id?: string;
+    ai_lines_added?: number;
+    ai_lines_deleted?: number;
+    human_lines_added?: number;
+    human_lines_deleted?: number;
 }
 
 export interface CliResult {

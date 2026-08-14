@@ -110,8 +110,15 @@ impl ReprocessService {
                     active_seconds,
                     is_ai_generated,
                     ai_agent,
+                    ai_provider,
+                    ai_model,
+                    ai_source,
+                    ai_confidence,
+                    ai_event_id,
                     ai_lines_added,
                     ai_lines_deleted,
+                    human_lines_added,
+                    human_lines_deleted,
                     toUInt32(created_at) AS created_at
                 FROM wakaclock.heartbeats AS h
                 WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)

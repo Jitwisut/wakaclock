@@ -80,6 +80,38 @@ function mockChild(result = {}) {
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--project");
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("Daniel");
     });
+    (0, vitest_1.it)("passes AI attribution metadata to the CLI", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", true, "coding", [], {
+            ai_agent: "codex",
+            ai_provider: "openai",
+            ai_model: "gpt-5",
+            ai_source: "agent_hook",
+            ai_confidence: "verified",
+            ai_event_id: "event-1",
+            ai_lines_added: 12,
+            ai_lines_deleted: 3
+        });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(vitest_1.expect.arrayContaining([
+            "--ai-agent",
+            "codex",
+            "--ai-provider",
+            "openai",
+            "--ai-model",
+            "gpt-5",
+            "--ai-source",
+            "agent_hook",
+            "--ai-confidence",
+            "verified",
+            "--ai-event-id",
+            "event-1",
+            "--ai-lines-added",
+            "12",
+            "--ai-lines-deleted",
+            "3"
+        ]));
+    });
     (0, vitest_1.it)("parses today output", async () => {
         spawnMock.mockImplementation(() => mockChild({
             stdout: "Today: 1 hr 20 mins\nTotal seconds: 4800\nHeartbeats: 42\n",
@@ -98,6 +130,23 @@ function mockChild(result = {}) {
         }));
         const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
         await (0, vitest_1.expect)(service.getStatus()).rejects.toThrow(/Failed to start wakaclock-cli/);
+    });
+    (0, vitest_1.it)("passes the key as an argv value to config set-key", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.setApiKey("wcl_abc123");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["config", "set-key", "wcl_abc123"]);
+    });
+    (0, vitest_1.it)("runs config clear-key with no arguments", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.clearApiKey();
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["config", "clear-key"]);
+    });
+    (0, vitest_1.it)("rejects setApiKey when wakaclock-cli exits non-zero", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stderr: "Error: could not write config\n", exitCode: 1 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.setApiKey("wcl_abc123")).rejects.toThrow(/exited with code 1/);
     });
 });
 //# sourceMappingURL=cli.test.js.map

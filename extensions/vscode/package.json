@@ -1,7 +1,7 @@
 {
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis \u2014 Developer Time Tracking",
-  "description": "Developer time tracking for VS Code. Records coding time by project, language and branch, plus keystroke counts, and sends it to your self-hosted AtoAxis server.",
+  "description": "Developer time tracking for VS Code with AI agent attribution. Records coding time, human/AI line counts and keystrokes, and sends it to your self-hosted AtoAxis server.",
   "version": "0.1.0",
   "publisher": "atoaxis",
   "license": "SEE LICENSE IN LICENSE",
@@ -35,6 +35,9 @@
     "onStartupFinished",
     "onCommand:wakaclock.configureCliPath",
     "onCommand:wakaclock.showToday",
+    "onCommand:wakaclock.setupAiTracking",
+    "onCommand:wakaclock.showAiTrackingStatus",
+    "onCommand:wakaclock.repairAiIntegrations",
     "workspaceContains:**/*"
   ],
   "contributes": {
@@ -62,6 +65,18 @@
       {
         "command": "wakaclock.clearApiKey",
         "title": "Wakaclock: Clear API Key"
+      },
+      {
+        "command": "wakaclock.setupAiTracking",
+        "title": "AtoAxis: Set Up AI Tracking"
+      },
+      {
+        "command": "wakaclock.showAiTrackingStatus",
+        "title": "AtoAxis: Show AI Tracking Status"
+      },
+      {
+        "command": "wakaclock.repairAiIntegrations",
+        "title": "AtoAxis: Repair AI Integrations"
       }
     ],
     "configuration": {
@@ -117,7 +132,9 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit -p ./",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:resources": "node scripts/copy-ai-agents.js",
+    "vscode:prepublish": "npm run compile && npm run build:resources"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

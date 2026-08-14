@@ -71,8 +71,8 @@ const FAQ: readonly FaqEntry[] = [
     answer:
       'The only editor plugin published by us is for VS Code, so other editors connect through the ' +
       'WakaTime protocol. There is no desktop or browser client, no team or organisation ' +
-      'dashboard, and AI attribution fields are accepted by the API but not filled in automatically ' +
-      'by any shipped client.',
+      'dashboard. The VS Code extension can configure Claude Code, Codex CLI and Gemini CLI hooks; ' +
+      'Cursor and Copilot still need provider-specific adapters.',
   },
 ];
 
@@ -88,7 +88,7 @@ const REASONS = [
  * comparison page that hides them is not a comparison page.
  */
 const STAY_WITH_WAKATIME = [
-  'You want automatic AI agent tracking — WakaTime publishes plugins for Claude Code, Cursor, Codex and Copilot; AtoAxis has none',
+  'You want automatic AI tracking for Cursor or Copilot today — AtoAxis currently supports Claude Code, Codex CLI and Gemini CLI',
   'You want AI token usage or estimated cost per model — AtoAxis does not track either',
   'You need team or organisation dashboards — AtoAxis analytics are scoped to one account',
   'You want a free tier — AtoAxis is paid only after its trial',

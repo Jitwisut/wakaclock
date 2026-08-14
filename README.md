@@ -17,7 +17,12 @@ AtoAxis tracks how long you spend coding across editors, languages, and projects
 
 - **AST-based language detection** via tree-sitter — no more guessing `.h` is C vs C++ vs Objective-C
 - **ClickHouse-native ETL** with SummingMergeTree/AggregatingMergeTree — zero app-level aggregation
-- **AI code attribution** — heartbeats accept an agent name plus AI lines added/deleted, aggregated per agent and per day against human keystrokes. Note that **no shipped client populates these fields automatically**: there is no built-in detection of Copilot, Claude Code, Cursor or any other agent. The agent name is a free-form string supplied by whichever client sends the heartbeat, so attribution comes from your own tooling calling the API, or from a WakaTime import. This is *weaker* than WakaTime here — verified August 2026, WakaTime publishes dedicated Claude Code / Cursor / Codex / Copilot plugins and reports AI vs human lines, token usage and estimated cost automatically.
+- **AI code attribution** — the VS Code extension can detect and one-click configure the
+  bundled Claude Code, Codex CLI and Gemini CLI hooks. Heartbeats carry provider, agent,
+  optional model, attribution source/confidence, event id and AI/human line deltas; the
+  dashboard aggregates them per agent and per day. Cursor and Copilot still need
+  provider-specific adapters because a generic editor change event cannot identify them
+  reliably.
 - **Keystroke metrics** — keystrokes and characters added/deleted per project and per day
 - **User-defined project rules** — regex-based project matching + project merging
 - **Complete history** — every account keeps full coding history rather than a limited recent window

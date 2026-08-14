@@ -189,6 +189,10 @@ export interface AiAgentItem {
   ai_lines_added: number;
   ai_lines_deleted: number;
   heartbeat_count: number;
+  human_lines_added: number;
+  human_lines_deleted: number;
+  model?: null | string;
+  provider?: null | string;
 }
 
 export interface AiDailyItem {
@@ -198,6 +202,8 @@ export interface AiDailyItem {
   heartbeat_count: number;
   human_chars_added: number;
   human_keystrokes: number;
+  human_lines_added: number;
+  human_lines_deleted: number;
 }
 
 export interface AiStatsData {
@@ -209,6 +215,8 @@ export interface AiStatsData {
   total_heartbeats: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
+  total_human_lines_added: number;
+  total_human_lines_deleted: number;
 }
 
 export interface AiStatsResponse {
@@ -306,6 +314,14 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  ai_agent?: null | string;
+  ai_confidence?: null | string;
+  ai_event_id?: null | string;
+  ai_lines_added?: null | number;
+  ai_lines_deleted?: null | number;
+  ai_model?: null | string;
+  ai_provider?: null | string;
+  ai_source?: null | string;
   ast_confidence: null | number;
   ast_language: null | string;
   branch: null | string;
@@ -315,6 +331,8 @@ export interface HeartbeatItem {
   editor: string;
   entity: string;
   entity_type: string;
+  human_lines_added?: null | number;
+  human_lines_deleted?: null | number;
   is_write: boolean;
   language: null | string;
   line_number: null | number;
@@ -334,8 +352,13 @@ export interface HeartbeatListResponse {
 export interface HeartbeatPayload {
   active_seconds?: number;
   ai_agent?: string;
+  ai_confidence?: string;
+  ai_event_id?: string;
   ai_lines_added?: number;
   ai_lines_deleted?: number;
+  ai_model?: string;
+  ai_provider?: string;
+  ai_source?: string;
   ast_confidence?: number;
   ast_language?: string;
   branch?: string;
@@ -348,6 +371,8 @@ export interface HeartbeatPayload {
   editor?: string;
   entity: string;
   entity_type: EntityType;
+  human_lines_added?: number;
+  human_lines_deleted?: number;
   is_ai_generated?: boolean;
   is_write?: boolean;
   keystrokes?: number;

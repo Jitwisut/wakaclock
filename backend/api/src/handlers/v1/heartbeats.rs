@@ -44,8 +44,15 @@ pub struct HeartbeatPayload {
     pub active_seconds: Option<f64>,
     pub is_ai_generated: Option<bool>,
     pub ai_agent: Option<String>,
+    pub ai_provider: Option<String>,
+    pub ai_model: Option<String>,
+    pub ai_source: Option<String>,
+    pub ai_confidence: Option<String>,
+    pub ai_event_id: Option<String>,
     pub ai_lines_added: Option<u32>,
     pub ai_lines_deleted: Option<u32>,
+    pub human_lines_added: Option<u32>,
+    pub human_lines_deleted: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +93,17 @@ pub struct HeartbeatItem {
     pub ast_language: Option<String>,
     pub ast_confidence: Option<f32>,
     pub active_seconds: Option<f64>,
+    pub is_ai_generated: bool,
+    pub ai_agent: Option<String>,
+    pub ai_provider: Option<String>,
+    pub ai_model: Option<String>,
+    pub ai_source: Option<String>,
+    pub ai_confidence: Option<String>,
+    pub ai_event_id: Option<String>,
+    pub ai_lines_added: Option<u32>,
+    pub ai_lines_deleted: Option<u32>,
+    pub human_lines_added: Option<u32>,
+    pub human_lines_deleted: Option<u32>,
     pub editor: String,
     pub operating_system: String,
     pub machine: String,
@@ -157,8 +175,7 @@ pub async fn create_bulk(
             .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
     }
 
-    let count = heartbeats.len();
-    state
+    let count = state
         .heartbeat_service
         .process_heartbeats(user_id, "".to_string(), heartbeats)
         .await
@@ -213,6 +230,17 @@ pub async fn list(
             ast_language: r.ast_language,
             ast_confidence: r.ast_confidence,
             active_seconds: r.active_seconds,
+            is_ai_generated: r.is_ai_generated,
+            ai_agent: r.ai_agent,
+            ai_provider: r.ai_provider,
+            ai_model: r.ai_model,
+            ai_source: r.ai_source,
+            ai_confidence: r.ai_confidence,
+            ai_event_id: r.ai_event_id,
+            ai_lines_added: r.ai_lines_added,
+            ai_lines_deleted: r.ai_lines_deleted,
+            human_lines_added: r.human_lines_added,
+            human_lines_deleted: r.human_lines_deleted,
             editor: r.editor,
             operating_system: r.operating_system,
             machine: r.machine,
@@ -282,10 +310,20 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         chars_added: p.chars_added,
         chars_deleted: p.chars_deleted,
         active_seconds: p.active_seconds,
-        is_ai_generated: p.is_ai_generated.unwrap_or(false),
+        // An agent name is authoritative. This prevents a malformed client from
+        // sending `ai_agent` with `is_ai_generated: false` and having the same edit
+        // counted as human by the materialized view.
+        is_ai_generated: p.ai_agent.is_some() || p.is_ai_generated.unwrap_or(false),
         ai_agent: p.ai_agent,
+        ai_provider: p.ai_provider,
+        ai_model: p.ai_model,
+        ai_source: p.ai_source,
+        ai_confidence: p.ai_confidence,
+        ai_event_id: p.ai_event_id,
         ai_lines_added: p.ai_lines_added,
         ai_lines_deleted: p.ai_lines_deleted,
+        human_lines_added: p.human_lines_added,
+        human_lines_deleted: p.human_lines_deleted,
         created_at,
     }
 }

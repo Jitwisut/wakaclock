@@ -142,12 +142,20 @@ const STATEMENTS: &[&str] = &[
         ai_agent          String,
         ai_lines_added    UInt64,
         ai_lines_deleted  UInt64,
+        human_lines_added UInt64,
+        human_lines_deleted UInt64,
         human_keystrokes  UInt64,
         human_chars_added UInt64,
         heartbeat_count   UInt64
     )
-    ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_keystrokes, human_chars_added, heartbeat_count))
+    ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_lines_added, human_lines_deleted, human_keystrokes, human_chars_added, heartbeat_count))
     ORDER BY (user_id, date, ai_agent)
+    "#,
+    r#"
+    ALTER TABLE wakaclock.ai_daily ADD COLUMN IF NOT EXISTS human_lines_added UInt64
+    "#,
+    r#"
+    ALTER TABLE wakaclock.ai_daily ADD COLUMN IF NOT EXISTS human_lines_deleted UInt64
     "#,
     r#"
     CREATE TABLE IF NOT EXISTS wakaclock.keystroke_daily
@@ -289,6 +297,8 @@ const STATEMENTS: &[&str] = &[
         coalesce(ai_agent, 'human') AS ai_agent,
         sum(coalesce(ai_lines_added, 0))  AS ai_lines_added,
         sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
+        sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+        sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
         sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
         sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
         count() AS heartbeat_count
@@ -359,6 +369,8 @@ const STATEMENTS: &[&str] = &[
     SELECT user_id, date, coalesce(ai_agent, 'human') AS ai_agent,
            sum(coalesce(ai_lines_added, 0)) AS ai_lines_added,
            sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
+           sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+           sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
            sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
            sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
            count() AS heartbeat_count

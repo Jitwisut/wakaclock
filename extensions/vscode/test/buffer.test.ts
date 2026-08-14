@@ -1,4 +1,8 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { AiAttributionStore } from "../src/aiAttribution";
 import { HeartbeatBufferManager } from "../src/buffer";
 import { Logger } from "../src/logging";
 import type { WakaclockConfigSnapshot } from "../src/types";
@@ -57,6 +61,7 @@ describe("HeartbeatBufferManager", () => {
         keystrokes: 5,
         chars_added: 5,
         active_seconds: 1,
+        human_lines_added: 1,
         line_number: 5,
         cursor_position: 3
       })
@@ -146,5 +151,44 @@ describe("HeartbeatBufferManager", () => {
     );
 
     expect(sendHeartbeat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not resend a matching AI edit as human activity", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+    try {
+      const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          event_id: "codex-1",
+          entity: "C:/project/a.ts",
+          time: 10,
+          lines_added: 1,
+          lines_deleted: 0
+        }) + "\n"
+      );
+
+      const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+      const manager = new HeartbeatBufferManager(
+        createConfig,
+        { sendHeartbeat },
+        new Logger(() => false),
+        undefined,
+        new AiAttributionStore(homeDir)
+      );
+
+      await manager.recordTextChange(
+        { uri: fileUri("C:/project/a.ts") },
+        [{ text: "hello", rangeLength: 0 }],
+        selection(0, 0),
+        10_000
+      );
+      await manager.flushDueBuffers("timer", 31_000);
+
+      expect(sendHeartbeat).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 });

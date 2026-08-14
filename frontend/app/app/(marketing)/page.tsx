@@ -60,11 +60,10 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: `Does ${SITE_NAME} track AI coding tools such as Claude Code, Codex or Cursor?`,
     answer:
-      'Not out of the box. The heartbeat API accepts AI attribution fields — an agent name plus ' +
-      'AI lines added and deleted — and the dashboard aggregates them per agent and per day. ' +
-      'However, no shipped client populates those fields automatically, so today they are filled in ' +
-      'either by your own tooling calling the API, or by importing a WakaTime export that already ' +
-      'contains AI categories.',
+      'The heartbeat API accepts AI attribution fields — an agent name plus AI lines added and ' +
+      'deleted — and the VS Code extension can configure Claude Code, Codex CLI and Gemini CLI hooks. ' +
+      'Cursor and Copilot still need provider-specific adapters; custom tooling and WakaTime imports ' +
+      'remain supported.',
   },
   {
     question: `How is coding time calculated?`,
@@ -112,7 +111,7 @@ const USE_CASES = [
 
 const LIMITATIONS = [
   'The only editor plugin published by us is for VS Code; other editors connect through the WakaTime protocol.',
-  'AI attribution fields are accepted and aggregated by the API, but no shipped client fills them in automatically — there is no built-in Claude Code, Cursor or Copilot integration.',
+  'AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor and Copilot need provider-specific adapters.',
   'AI token usage and cost are not tracked at all.',
   'There is no desktop or browser client yet, so activity outside a connected editor is not captured.',
   'There is no team or organisation dashboard — analytics are scoped to a single account.',

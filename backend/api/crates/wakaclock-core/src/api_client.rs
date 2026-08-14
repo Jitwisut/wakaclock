@@ -119,8 +119,29 @@ impl ApiClient {
             ))
             .send()
             .await?;
+        let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
         Ok(response.json::<StatusBarSnapshot>().await?)
+    }
+
+    /// Turns a 401 into a message that actually says what to do about it, instead of
+    /// letting it fall through to `error_for_status()` and print as an opaque
+    /// `Http(reqwest::Error { kind: Status(401, None), .. })` — which was indistinguishable
+    /// from "server unreachable" to a VS Code user (both surfaced as the same generic
+    /// wakaclock-cli exit-code-1 toast). The most common real cause: the API key stored
+    /// in the editor's own SecretStorage (set via "Wakaclock: Set API Key") doesn't match
+    /// what the server currently recognizes — e.g. it was regenerated on the dashboard,
+    /// which invalidates the previous key.
+    fn reject_unauthorized(response: reqwest::Response) -> AppResult<reqwest::Response> {
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AppError::Auth(
+                "API key was rejected by the server. If you regenerated your API key on \
+                 the dashboard, the old one stopped working — run \"Wakaclock: Set API Key\" \
+                 again with a fresh key from Settings → API key."
+                    .to_string(),
+            ));
+        }
+        Ok(response)
     }
 
     fn filter_duplicates(&self, heartbeats: Vec<Heartbeat>) -> AppResult<FilteredHeartbeats> {
@@ -176,6 +197,7 @@ impl ApiClient {
             .send()
             .await?;
 
+        let response = Self::reject_unauthorized(response)?;
         response.error_for_status()?;
         Ok(())
     }

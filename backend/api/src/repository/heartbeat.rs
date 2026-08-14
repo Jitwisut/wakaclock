@@ -46,8 +46,15 @@ impl HeartbeatRepository {
                     active_seconds Nullable(Float64),
                     is_ai_generated UInt8,
                     ai_agent Nullable(String),
+                    ai_provider Nullable(String),
+                    ai_model Nullable(String),
+                    ai_source Nullable(String),
+                    ai_confidence Nullable(String),
+                    ai_event_id Nullable(String),
                     ai_lines_added Nullable(UInt32),
                     ai_lines_deleted Nullable(UInt32),
+                    human_lines_added Nullable(UInt32),
+                    human_lines_deleted Nullable(UInt32),
                     created_at UInt32
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
@@ -66,6 +73,23 @@ impl HeartbeatRepository {
             .execute()
             .await
             .context("Failed to add heartbeats.active_seconds column")?;
+
+        for column in [
+            "ai_provider Nullable(String)",
+            "ai_model Nullable(String)",
+            "ai_source Nullable(String)",
+            "ai_confidence Nullable(String)",
+            "ai_event_id Nullable(String)",
+            "human_lines_added Nullable(UInt32)",
+            "human_lines_deleted Nullable(UInt32)",
+        ] {
+            let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
+            ch_client
+                .query(&sql)
+                .execute()
+                .await
+                .with_context(|| format!("Failed to add heartbeats column: {column}"))?;
+        }
 
         ch_client
             .query(
@@ -86,6 +110,25 @@ impl HeartbeatRepository {
             .execute()
             .await
             .context("Failed to add heartbeats_incoming.active_seconds column")?;
+
+        for column in [
+            "ai_provider Nullable(String)",
+            "ai_model Nullable(String)",
+            "ai_source Nullable(String)",
+            "ai_confidence Nullable(String)",
+            "ai_event_id Nullable(String)",
+            "human_lines_added Nullable(UInt32)",
+            "human_lines_deleted Nullable(UInt32)",
+        ] {
+            let sql = format!(
+                "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
+            );
+            ch_client
+                .query(&sql)
+                .execute()
+                .await
+                .with_context(|| format!("Failed to add heartbeats_incoming column: {column}"))?;
+        }
 
         Ok(())
     }
@@ -141,7 +184,9 @@ impl HeartbeatRepository {
                     machine, user_agent,
                     ast_language, ast_confidence,
                     keystrokes, chars_added, chars_deleted, active_seconds,
-                    is_ai_generated, ai_agent, ai_lines_added, ai_lines_deleted,
+                    is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
+                    ai_confidence, ai_event_id, ai_lines_added, ai_lines_deleted,
+                    human_lines_added, human_lines_deleted,
                     created_at
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date = toDate(?)

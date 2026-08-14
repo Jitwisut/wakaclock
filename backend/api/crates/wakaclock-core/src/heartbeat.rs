@@ -110,8 +110,24 @@ pub struct Heartbeat {
     pub active_seconds: Option<f64>,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
+    /// Provider that emitted the attribution event (for example `openai` or `anthropic`).
+    /// Kept separate from `ai_agent` so the dashboard can group tools and vendors
+    /// independently when an agent can use more than one provider.
+    pub ai_provider: Option<String>,
+    /// Model reported by the agent, when the integration exposes it.
+    pub ai_model: Option<String>,
+    /// How the client obtained the attribution (`agent_hook`, `ide_telemetry`, ...).
+    pub ai_source: Option<String>,
+    /// Confidence label rather than a guessed probability. Unknown integrations must
+    /// remain visibly unknown instead of being silently counted as human work.
+    pub ai_confidence: Option<String>,
+    /// Stable id supplied by an agent hook. This is used for retry/deduplication and is
+    /// intentionally opaque to the server.
+    pub ai_event_id: Option<String>,
     pub ai_lines_added: Option<u32>,
     pub ai_lines_deleted: Option<u32>,
+    pub human_lines_added: Option<u32>,
+    pub human_lines_deleted: Option<u32>,
     pub created_at: String,
 }
 
@@ -148,8 +164,15 @@ impl Heartbeat {
             active_seconds: None,
             is_ai_generated: false,
             ai_agent: None,
+            ai_provider: None,
+            ai_model: None,
+            ai_source: None,
+            ai_confidence: None,
+            ai_event_id: None,
             ai_lines_added: None,
             ai_lines_deleted: None,
+            human_lines_added: None,
+            human_lines_deleted: None,
             created_at: now.to_rfc3339(),
         }
     }

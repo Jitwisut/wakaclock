@@ -68,6 +68,16 @@ export class WakaclockCliService {
             "--active-seconds",
             primaryExtra.active_seconds,
         );
+        this.pushOptionalString(args, "--ai-agent", primaryExtra.ai_agent);
+        this.pushOptionalString(args, "--ai-provider", primaryExtra.ai_provider);
+        this.pushOptionalString(args, "--ai-model", primaryExtra.ai_model);
+        this.pushOptionalString(args, "--ai-source", primaryExtra.ai_source);
+        this.pushOptionalString(args, "--ai-confidence", primaryExtra.ai_confidence);
+        this.pushOptionalString(args, "--ai-event-id", primaryExtra.ai_event_id);
+        this.pushOptionalNumber(args, "--ai-lines-added", primaryExtra.ai_lines_added);
+        this.pushOptionalNumber(args, "--ai-lines-deleted", primaryExtra.ai_lines_deleted);
+        this.pushOptionalNumber(args, "--human-lines-added", primaryExtra.human_lines_added);
+        this.pushOptionalNumber(args, "--human-lines-deleted", primaryExtra.human_lines_deleted);
 
         const stdinPayload =
             extraHeartbeats.length > 0
@@ -88,6 +98,20 @@ export class WakaclockCliService {
             totalSeconds: Number(lines["Total seconds"] ?? "0"),
             heartbeatCount: Number(lines.Heartbeats ?? "0"),
         };
+    }
+
+    // Mirrors the key into ~/.wakaclock/config.toml on disk, in addition to VS Code's
+    // own SecretStorage. Needed because AI agent hooks (extensions/ai-agents/) are
+    // invoked by Claude Code/Codex/Gemini CLI directly, outside this extension's
+    // process tree, so they can never inherit the WAKACLOCK_API_KEY env var this
+    // extension passes to its own spawned CLI calls (see runCli below) — config.toml
+    // is the only channel those hooks can read a key from.
+    public async setApiKey(key: string): Promise<void> {
+        await this.runCli(["config", "set-key", key]);
+    }
+
+    public async clearApiKey(): Promise<void> {
+        await this.runCli(["config", "clear-key"]);
     }
 
     public async getStatus(): Promise<StatusSnapshot> {
@@ -202,5 +226,17 @@ export class WakaclockCliService {
             return;
         }
         args.push(flag, String(value));
+    }
+
+    private pushOptionalString(
+        args: string[],
+        flag: string,
+        value?: string,
+    ): void {
+        const trimmed = value?.trim();
+        if (!trimmed) {
+            return;
+        }
+        args.push(flag, trimmed);
     }
 }

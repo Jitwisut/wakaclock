@@ -7,10 +7,9 @@
  * NOT in that directory were removed: RStudio, Spyder, Qt Creator, Code::Blocks,
  * CodeLite, KDevelop, BlueJ and Helix.
  *
- * Deliberately excluded even though WakaTime lists them: the AI coding agents (Claude
- * Code, Codex CLI, Copilot CLI, Amp CLI, OpenCode). Those WakaTime plugins report AI
- * metrics that AtoAxis has no shipped client for, so listing them here would imply an
- * equivalence that does not exist.
+ * Deliberately excluded even though WakaTime lists them: AI coding agents are tracked by
+ * the dedicated AtoAxis AI setup flow rather than by the editor-protocol compatibility
+ * wall shown here.
  *
  * Names only, deliberately no logos: rendering third-party brand marks correctly (and
  * keeping them correct as they change) is a maintenance and legal-accuracy cost that a

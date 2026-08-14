@@ -58,13 +58,13 @@ These are planned and described on the Teams page. None of them exist today; do 
 ## Limitations
 
 - The only editor plugin published by the vendor is for VS Code; other editors connect via the WakaTime protocol.
-- No shipped client populates the AI attribution fields automatically. There is no built-in integration with Claude Code, Codex, Cursor, Copilot or any other named agent; the agent name is a free-form string supplied by whichever client sends the heartbeat.
+- The VS Code extension can detect and configure bundled hooks for Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot still require provider-specific adapters.
 - No desktop or browser client, so activity outside a connected editor is not captured.
 - No team or organisation analytics; all metrics are scoped to a single account.
 - Not free and not open source; there is no free tier.
 - No self-hosted or on-premise edition.
 - Does not track AI token usage or cost.
-- WakaTime (a competitor) ships automatic AI agent plugins for Claude Code, Cursor, Codex and Copilot; AtoAxis does not.
+- WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI and Gemini CLI.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
 `;
 

@@ -44,10 +44,10 @@ const ROWS: ComparisonRow[] = [
     note: 'Other editors reach AtoAxis through WakaTime-protocol compatibility rather than a plugin we publish.',
   },
   {
-    label: 'Automatic AI agent tracking (Claude Code, Cursor, Codex, Copilot)',
-    atoaxis: { kind: 'no' },
+    label: 'Automatic AI agent tracking (Claude Code, Codex, Gemini CLI)',
+    atoaxis: { kind: 'yes' },
     wakatime: { kind: 'yes' },
-    note: 'WakaTime ships dedicated plugins for these agents. AtoAxis accepts AI attribution on its API but no shipped client populates it automatically.',
+    note: 'AtoAxis configures bundled hooks for Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot still need provider-specific adapters.',
   },
   {
     label: 'AI token usage and estimated cost',

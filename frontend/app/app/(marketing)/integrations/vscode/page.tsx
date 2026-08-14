@@ -69,9 +69,8 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: 'Does the VS Code extension track AI coding tools?',
     answer:
-      'No. The extension sends file activity, keystroke and character counts. It does not set the ' +
-      'AI attribution fields, so AI-assisted work is not separated out automatically by installing ' +
-      'this extension.',
+      'Yes for Claude Code, Codex CLI and Gemini CLI. Run AtoAxis: Set Up AI Tracking and the ' +
+      'extension registers their native hooks. Cursor and Copilot need provider-specific adapters.',
   },
   {
     question: 'Can I use my existing WakaTime plugin instead?',
@@ -188,7 +187,7 @@ export default function VsCodeIntegrationPage() {
           <Bullets
             items={[
               'Only file activity is sent — the extension does not report app, domain or url heartbeats',
-              'AI attribution fields are not set, so AI-assisted work is not separated automatically',
+              'AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need adapters',
               'The extension requires wakaclock-cli; it does not talk to the server directly',
             ]}
           />

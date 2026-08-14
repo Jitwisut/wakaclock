@@ -1,0 +1,15 @@
+{
+  "name": "atoaxis-plugins",
+  "owner": {
+    "name": "AtoAxis",
+    "url": "https://atoaxis.com"
+  },
+  "description": "Official AtoAxis integrations for AI coding agents.",
+  "plugins": [
+    {
+      "name": "atoaxis-heartbeat",
+      "source": "./plugins/atoaxis-heartbeat",
+      "description": "Sends AtoAxis coding-time heartbeats, attributed to Claude Code, whenever Claude edits a file — no editor open required."
+    }
+  ]
+}

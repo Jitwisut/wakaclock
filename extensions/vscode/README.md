@@ -67,13 +67,22 @@ plugin can point its `api_url` at your AtoAxis server instead.
 
 ## AI tracking
 
-The AtoAxis heartbeat API accepts AI attribution fields — an agent name plus AI lines
-added and deleted — and the dashboard aggregates them per agent and per day.
+After installation, run `AtoAxis: Show AI Tracking Status`. If Claude Code, Codex CLI or
+Gemini CLI is present, `AtoAxis: Set Up AI Tracking` registers the corresponding hook
+with a stable path that survives VS Code extension updates. The first activation also
+offers this setup once; it never edits another tool's config without your confirmation.
+The configured `wakaclock.cliPath` is mirrored to `~/.wakaclock/cli-path` so hooks can
+use an absolute CLI path even when the binary is not on the AI tool's `PATH`.
 
-**This extension does not populate those fields.** There is no built-in detection of
-Claude Code, Codex, Cursor, Copilot or any other agent. AI attribution is filled in
-either by your own tooling calling the API directly, or by importing a WakaTime export
-that already contains AI categories.
+The hooks send only metadata: agent/provider, optional model, file path, line deltas,
+timestamp and a stable event id. Claude Code is attributed to Anthropic, Codex to
+OpenAI, and Gemini CLI to Google. The dashboard aggregates AI lines separately from
+human lines and keystrokes.
+
+Run `AtoAxis: Repair AI Integrations` after changing an agent installation or if an
+agent reports that its hook path no longer exists. Cursor, Copilot and other IDE-only
+providers are shown as unsupported until they expose an event/telemetry adapter; the
+extension does not guess their identity from typing speed or code shape.
 
 ## Privacy
 
@@ -102,6 +111,9 @@ ClickHouse database on infrastructure you control.
 | `Wakaclock: Set API Key`         | Store your API key in secret storage   |
 | `Wakaclock: Clear API Key`       | Remove the stored key                  |
 | `Wakaclock: Configure CLI Path`  | Point the extension at the CLI binary  |
+| `AtoAxis: Set Up AI Tracking`    | Install hooks for detected AI CLIs     |
+| `AtoAxis: Show AI Tracking Status` | Show detected/enabled AI integrations |
+| `AtoAxis: Repair AI Integrations` | Re-register managed AI hooks           |
 | `Wakaclock: Show Today's Total`  | Display today's tracked time           |
 | `Wakaclock: Send Heartbeat Now`  | Flush pending activity immediately     |
 | `Wakaclock: Toggle Status Bar`   | Show or hide the status bar item       |
@@ -109,7 +121,8 @@ ClickHouse database on infrastructure you control.
 ## Limitations
 
 - Sends file activity only — no `app`, `domain` or `url` heartbeats
-- Does not set AI attribution fields
+- AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need
+  provider-specific adapters
 - Requires `wakaclock-cli`; it does not talk to the server directly
 
 ## Local development

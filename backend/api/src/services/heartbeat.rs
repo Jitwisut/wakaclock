@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 use wakaclock_core::heartbeat::Heartbeat;
@@ -22,10 +23,20 @@ impl HeartbeatService {
         user_id: Uuid,
         machine: String,
         heartbeats: Vec<Heartbeat>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let mut rows = Vec::with_capacity(heartbeats.len());
+        let mut batch_event_ids = HashSet::new();
 
         for mut hb in heartbeats {
+            // Bulk retries can contain the same AI event twice. De-duplicate within
+            // the request before it reaches ClickHouse; the opaque id is supplied by
+            // the agent hook and is not derived from source content.
+            if let Some(event_id) = hb.ai_event_id.as_ref() {
+                if !batch_event_ids.insert(event_id.clone()) {
+                    continue;
+                }
+            }
+
             if !machine.is_empty() {
                 hb.machine = machine.clone();
             }
@@ -60,16 +71,24 @@ impl HeartbeatService {
                 active_seconds: hb.active_seconds,
                 is_ai_generated: hb.is_ai_generated,
                 ai_agent: hb.ai_agent,
+                ai_provider: hb.ai_provider,
+                ai_model: hb.ai_model,
+                ai_source: hb.ai_source,
+                ai_confidence: hb.ai_confidence,
+                ai_event_id: hb.ai_event_id,
                 ai_lines_added: hb.ai_lines_added,
                 ai_lines_deleted: hb.ai_lines_deleted,
+                human_lines_added: hb.human_lines_added,
+                human_lines_deleted: hb.human_lines_deleted,
                 created_at,
             };
 
             rows.push(row);
         }
 
+        let inserted = rows.len();
         self.repo.insert_batch(rows).await?;
-        Ok(())
+        Ok(inserted)
     }
 
     /// ดึง heartbeats ตามวันที่ "YYYY-MM-DD"
