@@ -138,8 +138,8 @@ impl AiStatsService {
                 "
                 SELECT
                     toString(date) AS day,
-                    sum(ai_lines_added) AS ai_lines_added,
-                    sum(ai_lines_deleted) AS ai_lines_deleted,
+                    coalesce(sum(ai_lines_added), 0) AS ai_lines_added,
+                    coalesce(sum(ai_lines_deleted), 0) AS ai_lines_deleted,
                     sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
                     sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
                     sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
