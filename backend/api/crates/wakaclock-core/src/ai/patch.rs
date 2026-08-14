@@ -61,6 +61,24 @@ pub fn count_unified_diff_lines(diff_text: &str) -> LineDelta {
     delta
 }
 
+/// Count lines in a whole-file content blob as a pure addition — Claude Code's
+/// `Write` result for a brand-new file carries an empty `structuredPatch` (there is
+/// nothing to diff against) and puts the full text in `content` instead. Mirrors the
+/// same "count records, not trailing-newline bytes" rule the VS Code buffer's
+/// `countChangedLines` uses, so a file ending in `\n` doesn't count one phantom empty
+/// line.
+pub fn count_content_lines(content: &str) -> u32 {
+    if content.is_empty() {
+        return 0;
+    }
+    let newline_count = content.matches('\n').count();
+    if content.ends_with('\n') {
+        newline_count as u32
+    } else {
+        newline_count as u32 + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,15 +103,29 @@ mod tests {
     }
 
     #[test]
-    fn structured_patch_counts_new_file_as_pure_addition() {
+    fn new_file_write_has_an_empty_structured_patch_use_content_instead() {
+        // Corrected 2026-08-14 against a real live session: a brand-new file's
+        // structuredPatch is empty, not a single addition hunk — see CAPABILITIES.md's
+        // correction note. The line count comes from `content` via
+        // `count_content_lines`, exercised directly below.
         let fixture = load_fixture("claude_code/write_tool_result.json");
         let hunks: Vec<StructuredPatchHunk> =
             serde_json::from_value(fixture["toolUseResult"]["structuredPatch"].clone())
                 .expect("structuredPatch parses");
+        assert!(hunks.is_empty());
 
-        let delta = count_structured_patch_lines(&hunks);
-        assert_eq!(delta.added, 3);
-        assert_eq!(delta.deleted, 0);
+        let content = fixture["toolUseResult"]["content"]
+            .as_str()
+            .expect("content string");
+        assert_eq!(count_content_lines(content), 3);
+    }
+
+    #[test]
+    fn count_content_lines_does_not_count_a_phantom_trailing_line() {
+        assert_eq!(count_content_lines("one\ntwo\nthree\n"), 3);
+        assert_eq!(count_content_lines("one\ntwo\nthree"), 3);
+        assert_eq!(count_content_lines(""), 0);
+        assert_eq!(count_content_lines("no newline at all"), 1);
     }
 
     #[test]

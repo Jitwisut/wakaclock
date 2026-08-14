@@ -4,7 +4,9 @@ use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserCursor,
 };
-use crate::ai::patch::{count_structured_patch_lines, StructuredPatchHunk};
+use crate::ai::patch::{
+    count_content_lines, count_structured_patch_lines, LineDelta, StructuredPatchHunk,
+};
 use crate::ai::path::resolve_within_workspace;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -201,15 +203,28 @@ impl AiActivityParser for ClaudeCodeParser {
                     let Some(file_path) = result.file_path.clone() else {
                         continue;
                     };
-                    let Some(hunks) = result.structured_patch.clone() else {
+                    // A populated structuredPatch proves an edit to existing content;
+                    // an empty one with a content blob proves a brand-new file (see
+                    // ClaudeToolUseResult's doc comment). Either is real evidence of a
+                    // file mutation — a completely absent/empty result with no content
+                    // is not, and is skipped rather than counted as a zero-line edit.
+                    let hunks = result.structured_patch.clone().unwrap_or_default();
+                    let delta = if !hunks.is_empty() {
+                        count_structured_patch_lines(&hunks)
+                    } else if let Some(content) =
+                        result.content.as_deref().filter(|c| !c.is_empty())
+                    {
+                        LineDelta {
+                            added: count_content_lines(content),
+                            deleted: 0,
+                        }
+                    } else {
                         continue;
                     };
                     let Some(timestamp) = record.timestamp else {
                         continue;
                     };
                     last_record_time = Some(timestamp);
-
-                    let delta = count_structured_patch_lines(&hunks);
                     let project_root = record.cwd.clone().map(PathBuf::from);
                     let entity = resolve_entity(&file_path, project_root.as_deref());
                     let model = pending_tool_use_models.remove(&tool_use_id).flatten();
@@ -291,15 +306,18 @@ struct ClaudeContentBlock {
 }
 
 /// Deliberately loose: Edit/Write results carry different key sets (see
-/// CAPABILITIES.md) and MultiEdit's shape has not been directly verified, but both
-/// verified shapes agree on `filePath` + `structuredPatch`, so this only requires
-/// those two fields to be present rather than modeling each tool's result separately.
+/// CAPABILITIES.md) and MultiEdit's shape has not been directly verified. Both
+/// verified shapes agree on `filePath`, but `structuredPatch` is only populated for an
+/// *existing*-file edit — a brand-new file (`Write` with no prior content) reports an
+/// **empty** `structuredPatch` and puts the whole file in `content` instead (found by
+/// running this parser against a real session; see CAPABILITIES.md's correction note).
 #[derive(Debug, Deserialize, Clone)]
 struct ClaudeToolUseResult {
     #[serde(rename = "filePath")]
     file_path: Option<String>,
     #[serde(rename = "structuredPatch")]
     structured_patch: Option<Vec<StructuredPatchHunk>>,
+    content: Option<String>,
 }
 
 #[cfg(test)]

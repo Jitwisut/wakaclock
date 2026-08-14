@@ -5,6 +5,16 @@ Verified 2026-08-14 against real local transcript files on a development machine
 `fixtures/` are synthetic — they reproduce the exact structural shape observed, with
 placeholder file paths and content, never real project/prompt/patch data.
 
+**Correction (2026-08-14, later same day):** the first pass got Claude Code's `Write`
+result wrong. It assumed `structuredPatch` would contain one hunk representing the
+whole new file. Running the real parser against a real live session showed otherwise:
+for a brand-new file, `structuredPatch` is an **empty array** — the full content lives
+only in `toolUseResult.content`, with no diff representation at all. `claude.rs` and
+the `write_tool_result.json` fixture were updated to match; `patch.rs` gained
+`count_content_lines()` for this content-only case. Filed as evidence that a fixture
+built from *reading* a transcript format is not a substitute for running the parser
+against one and checking the output.
+
 Gemini CLI was **not** installed on the inspection machine, so its row is marked
 `unknown` rather than guessed. Do not implement `gemini.rs` from assumption; repeat
 this inventory pass on a machine with a real Gemini CLI transcript first.

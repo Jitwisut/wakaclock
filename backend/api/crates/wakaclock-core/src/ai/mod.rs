@@ -35,7 +35,8 @@ pub use parser::{
     ParseContext, ParseWarning, ParserCursor,
 };
 pub use patch::{
-    count_structured_patch_lines, count_unified_diff_lines, LineDelta, StructuredPatchHunk,
+    count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,
+    StructuredPatchHunk,
 };
 pub use path::{
     normalize_lexical, resolve_within_workspace, to_comparable_string, PathResolveError,

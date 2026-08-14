@@ -19,18 +19,6 @@
     "content": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
     "originalFile": null,
     "userModified": false,
-    "structuredPatch": [
-      {
-        "oldStart": 0,
-        "oldLines": 0,
-        "newStart": 1,
-        "newLines": 3,
-        "lines": [
-          "+pub fn add(a: i32, b: i32) -> i32 {",
-          "+    a + b",
-          "+}"
-        ]
-      }
-    ]
+    "structuredPatch": []
   }
 }
