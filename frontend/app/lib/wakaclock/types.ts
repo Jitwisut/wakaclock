@@ -303,6 +303,74 @@ export interface GenerateApiKeyData {
 
 /** `api_key` is null when nothing is displayable: no key, or one issued before keys
  *  were stored retrievably (those still authenticate, they just can't be shown). */
+// ---------------------------------------------------------------------------
+// GET /dashboard/analytics — every value carries the metric it counts and the unit
+// it is measured in, because the cards mix seconds, lines and currency.
+// ---------------------------------------------------------------------------
+export type AnalyticsMetric =
+  | 'active_duration'
+  | 'ai_lines_changed'
+  | 'estimated_cost'
+  | 'human_lines_changed'
+  | 'prompt_count'
+  | 'session_count'
+  | 'token_count'
+  | 'unattributed_lines_changed';
+
+export type AnalyticsUnit =
+  | 'lines'
+  | 'micro_usd'
+  | 'prompts'
+  | 'seconds'
+  | 'sessions'
+  | 'tokens';
+
+export interface BreakdownItem {
+  metric: AnalyticsMetric;
+  name: string;
+  percentage: number;
+  text: string;
+  unit: AnalyticsUnit;
+  value: number;
+}
+
+export interface Breakdown {
+  items: BreakdownItem[];
+  metric: AnalyticsMetric;
+  total: number;
+  unit: AnalyticsUnit;
+}
+
+export interface PeriodComparison {
+  current_seconds: number;
+  direction: 'decrease' | 'increase' | 'new_activity' | 'unchanged';
+  /** null when a percentage would be meaningless (zero to positive). */
+  percent: null | number;
+  previous_seconds: number;
+}
+
+export interface DashboardAnalyticsResponse {
+  breakdowns: {
+    editors: Breakdown;
+    languages: Breakdown;
+    machines: Breakdown;
+    models: Breakdown;
+    operating_systems: Breakdown;
+    weekdays: Breakdown;
+  };
+  generated_at: string;
+  range: { days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  summary: {
+    active_day_average_seconds: number;
+    calendar_day_average_seconds: number;
+    most_active_day: { date: string; text: string; total_seconds: number } | null;
+    previous_period: PeriodComparison;
+    today_seconds: number;
+    today_text: string;
+  };
+}
+
 export interface CurrentApiKeyData {
   api_key: null | string;
   user_id: string;
