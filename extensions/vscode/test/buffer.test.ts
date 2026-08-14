@@ -153,6 +153,57 @@ describe("HeartbeatBufferManager", () => {
     expect(sendHeartbeat).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a small human edit in a file the agent just rewrote", async () => {
+    // Regression test. The match used to be `event.lines_added >= linesAdded`, so an
+    // agent event that rewrote a whole file (+491) matched any human edit in that file
+    // within 15 seconds — `491 >= 1` — and the user's heartbeat was dropped entirely,
+    // losing the time they actually spent. A large agent edit and a one-line human edit
+    // are not the same change and must not be collapsed.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+    try {
+      const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          event_id: "claude-big-rewrite",
+          entity: "C:/project/a.ts",
+          time: 10,
+          lines_added: 491,
+          lines_deleted: 4
+        }) + "\n"
+      );
+
+      const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+      const manager = new HeartbeatBufferManager(
+        createConfig,
+        { sendHeartbeat },
+        new Logger(() => false),
+        undefined,
+        new AiAttributionStore(homeDir)
+      );
+
+      await manager.recordTextChange(
+        { uri: fileUri("C:/project/a.ts") },
+        [{ text: "hello", rangeLength: 0 }],
+        selection(0, 0),
+        10_000
+      );
+      await manager.flushDueBuffers("timer", 31_000);
+
+      expect(sendHeartbeat).toHaveBeenCalledTimes(1);
+      expect(sendHeartbeat).toHaveBeenCalledWith(
+        "C:/project/a.ts",
+        false,
+        "coding",
+        [],
+        expect.objectContaining({ human_lines_added: 1, keystrokes: 5 })
+      );
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not resend a matching AI edit as human activity", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
     try {

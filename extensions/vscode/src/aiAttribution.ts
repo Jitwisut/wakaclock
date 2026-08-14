@@ -2,6 +2,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+/**
+ * How far an AI hook's line counts may differ from VS Code's own range metrics and
+ * still be considered the same edit. Small on purpose: it exists to absorb
+ * trailing-newline and replacement-counting differences, not to let a large agent
+ * rewrite swallow an unrelated human edit in the same file.
+ */
+const LINE_MATCH_SLACK = 2;
+
 export interface AiEditEvent {
   event_id: string;
   entity: string;
@@ -47,10 +55,22 @@ export class AiAttributionStore {
       if (Math.abs(event.time - nowSeconds) > 15) {
         return false;
       }
-      // A hook may count a replacement slightly differently from VS Code's range
-      // metrics. Requiring the AI delta to cover the editor delta avoids suppressing
-      // nearby human typing while still handling a complete AI insertion.
-      return event.lines_added >= linesAdded && event.lines_deleted >= linesDeleted;
+      // The two sides must plausibly describe the *same* edit. A hook counts a
+      // replacement slightly differently from VS Code's range metrics, so a small
+      // absolute slack is allowed — but no more than that.
+      //
+      // This used to be `event.lines_added >= linesAdded`, which matched any AI event
+      // that touched at least as many lines as the editor observed. Because an agent
+      // routinely rewrites whole files (events with +491 lines were present in a real
+      // log), that test passed for essentially any human edit in a file an agent had
+      // touched in the last 15 seconds: `491 >= 1`. The user's own typing was then
+      // reattributed to the AI and their heartbeat dropped entirely, so the time they
+      // genuinely spent disappeared. When in doubt leave the activity with the human —
+      // plan.md 8.7 requires never erasing real human work to make attribution tidier.
+      return (
+        Math.abs(event.lines_added - linesAdded) <= LINE_MATCH_SLACK &&
+        Math.abs(event.lines_deleted - linesDeleted) <= LINE_MATCH_SLACK
+      );
     });
 
     if (index === -1) {
