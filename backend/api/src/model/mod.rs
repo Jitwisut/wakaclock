@@ -2,6 +2,7 @@ pub mod ai_stats;
 pub mod all_time;
 pub mod auth;
 pub mod coworking_session;
+pub mod dashboard_analytics;
 pub mod date_range;
 pub mod duration;
 pub mod heartbeat;

@@ -2,6 +2,7 @@ pub mod ai_stats;
 pub mod all_time;
 pub mod api_key;
 pub mod auth;
+pub mod dashboard_analytics;
 pub mod durations;
 pub mod heartbeats;
 pub mod insights;
@@ -49,6 +50,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/summaries", get(summaries::list))
         .route("/import/wakatime", post(wakatime_import::run))
         .route("/users/current", get(users::current))
+        .route("/dashboard/analytics", get(dashboard_analytics::overview))
         .route(
             "/users/current/api_key",
             get(api_key::current)

@@ -1,6 +1,7 @@
 pub mod ai_stats;
 pub mod all_time;
 pub mod coworking_session;
+pub mod dashboard_analytics;
 pub mod duration;
 pub mod heartbeat;
 pub mod insights;

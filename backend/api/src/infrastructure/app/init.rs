@@ -17,6 +17,7 @@ use crate::repository::team::TeamRepository;
 use crate::services::ai_stats::AiStatsService;
 use crate::services::all_time::AllTimeService;
 use crate::services::coworking_session::CoworkingSessionService;
+use crate::services::dashboard_analytics::DashboardAnalyticsService;
 use crate::services::duration::DurationService;
 use crate::services::heartbeat::HeartbeatService;
 use crate::services::insights::InsightsService;
@@ -61,6 +62,7 @@ pub struct AppState {
     pub reprocess_service: Arc<ReprocessService>,
     pub project_rule_service: Arc<ProjectRuleService>,
     pub stats_service: Arc<StatsService>,
+    pub dashboard_analytics_service: Arc<DashboardAnalyticsService>,
     pub summary_service: Arc<SummaryService>,
     pub wakatime_import_service: Arc<WakaTimeImportService>,
     /// Minimal org layer (plan.md 6.1, scoped-down) — exists only so a presence room can
@@ -126,6 +128,7 @@ pub async fn create_app_state() -> Result<AppState> {
 
     // Initialise Services
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
+    let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(clickhouse.clone()));
     let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone()));
     let user_service = Arc::new(UserService::new(clickhouse.clone()));
     let heartbeat_service = Arc::new(HeartbeatService::new(heartbeat_repo.clone()));
@@ -173,6 +176,7 @@ pub async fn create_app_state() -> Result<AppState> {
         reprocess_service,
         project_rule_service,
         stats_service,
+        dashboard_analytics_service,
         summary_service,
         wakatime_import_service,
         org_service,
