@@ -11,7 +11,7 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Project rules run at write time; merges run at read time; reprocess and import are one-off maintenance jobs."
+        description="Character settings — project rules run at write time, merges at read time; reprocess and import are one-off maintenance jobs."
         title="Settings"
       />
       <RequireUser>
@@ -22,7 +22,19 @@ export default function SettingsPage() {
             <TabsTrigger value="merges">Project merges</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
-          <TabsContent className="pt-4" value="api-key">
+          {/*
+            forceMount because a freshly generated key exists only in this panel's
+            React state — the server stores nothing but its hash. Radix unmounts
+            inactive tab content by default, so switching to any other tab destroyed
+            the only copy of the key, silently and unrecoverably. Kept mounted and
+            hidden with CSS instead; the other tabs can unmount freely since their
+            state is all refetchable.
+          */}
+          <TabsContent
+            className="pt-4 data-[state=inactive]:hidden"
+            forceMount
+            value="api-key"
+          >
             <ApiKeyPanel />
           </TabsContent>
           <TabsContent className="pt-4" value="rules">

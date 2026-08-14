@@ -32,7 +32,17 @@ export function ApiKeyPanel() {
   const generateMutation = useMutation({
     mutationFn: generateApiKey,
     onSuccess: (res) => {
-      setPlaintextKey(res.data.api_key);
+      // Generating always replaces the old key server-side, so reporting success
+      // without showing the new one would leave the account with a key nobody has.
+      // Treat a missing key as the failure it is rather than a silent success.
+      const key = res?.data?.api_key;
+      if (!key) {
+        toast.error(
+          'The server did not return a key. Your previous key has stopped working — generate again.'
+        );
+        return;
+      }
+      setPlaintextKey(key);
       setCopied(false);
       toast.success('New API key generated');
     },
