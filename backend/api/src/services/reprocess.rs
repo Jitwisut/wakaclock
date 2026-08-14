@@ -90,6 +90,7 @@ impl ReprocessService {
                     time,
                     toUInt16(date) AS date,
                     project,
+                    project_id,
                     branch,
                     language,
                     dependencies,

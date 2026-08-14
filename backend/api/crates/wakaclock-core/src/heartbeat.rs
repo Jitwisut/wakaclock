@@ -96,6 +96,12 @@ pub struct Heartbeat {
     pub time: f64,
     pub date: String,
     pub project: Option<String>,
+    /// Stable project identity (plan.md 9.3). Always `None` on the wire: clients send a
+    /// project *name* and the server resolves it, because identity has to survive renames
+    /// and merges that a client cannot see. Present on this shared struct only so the
+    /// resolved value can reach the ClickHouse row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Uuid>,
     pub branch: Option<String>,
     pub language: Option<String>,
     pub dependencies: Vec<String>,
@@ -150,6 +156,7 @@ impl Heartbeat {
             time,
             date,
             project: None,
+            project_id: None,
             branch: None,
             language: None,
             dependencies: vec![],

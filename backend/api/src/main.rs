@@ -64,6 +64,12 @@ async fn main() -> Result<()> {
         error!("Migration failed: {}", e);
         return Err(e);
     }
+    // Must follow heartbeat_repo and analytics_repo: this one widens `heartbeats` and
+    // `project_daily` with a nullable project_id, so both have to exist first.
+    if let Err(e) = app_state.project_identity_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
     if let Err(e) = app_state.org_repo.migrate().await {
         error!("Migration failed: {}", e);
         return Err(e);

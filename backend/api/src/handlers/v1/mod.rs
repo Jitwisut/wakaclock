@@ -10,6 +10,7 @@ pub mod internal;
 pub mod keystroke_stats;
 pub mod orgs;
 pub mod presence;
+pub mod project_identity;
 pub mod project_merges;
 pub mod project_rules;
 pub mod projects;
@@ -44,6 +45,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/durations", get(durations::list))
         .route("/insights/:type/:range", get(insights::get))
         .route("/projects", get(projects::list))
+        .route(
+            "/projects/backfill_preview",
+            get(project_identity::backfill_preview),
+        )
         .route("/reprocess", post(reprocess::run))
         .route("/status_bar/today", get(status_bar::today))
         .route("/stats/:range", get(stats::get))

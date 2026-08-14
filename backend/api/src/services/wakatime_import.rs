@@ -134,6 +134,10 @@ fn map_heartbeat(
         time: heartbeat.time,
         date,
         project: heartbeat.project,
+        // Imports bypass the live resolve path, so identity is left unresolved here and
+        // picked up by the PR 9.9 backfill along with the rest of the history — rather
+        // than minting identities from another tool's project names at import time.
+        project_id: None,
         branch: heartbeat.branch,
         language: heartbeat.language,
         dependencies: heartbeat.dependencies,

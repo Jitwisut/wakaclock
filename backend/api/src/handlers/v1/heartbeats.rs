@@ -82,6 +82,9 @@ pub struct HeartbeatItem {
     pub entity_type: String,
     pub time: f64,
     pub project: Option<String>,
+    /// Null for history recorded before project identity existed (plan.md 9.3); PR 9.9
+    /// backfills those.
+    pub project_id: Option<Uuid>,
     pub branch: Option<String>,
     pub language: Option<String>,
     pub is_write: bool,
@@ -219,6 +222,7 @@ pub async fn list(
             entity_type: r.entity_type,
             time: r.time,
             project: r.project,
+            project_id: r.project_id,
             branch: r.branch,
             language: r.language,
             is_write: r.is_write,
@@ -292,6 +296,8 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         time: p.time,
         date,
         project: p.project,
+        // Resolved server-side in `resolve_heartbeat_project`, never taken from the client.
+        project_id: None,
         branch: p.branch,
         language: p.language,
         dependencies: p.dependencies.unwrap_or_default(),
@@ -336,6 +342,13 @@ async fn resolve_heartbeat_project(
     heartbeat.project = state
         .project_rule_service
         .resolve_project(user_id, &heartbeat.entity, heartbeat.project.clone())
+        .await?;
+
+    // Identity is resolved after the name rules, not before: a rule can change which
+    // project a heartbeat belongs to, and the id must follow the resolved name.
+    heartbeat.project_id = state
+        .project_identity_service
+        .resolve_project_id(user_id, heartbeat.project.as_deref(), None)
         .await?;
 
     Ok(heartbeat)

@@ -51,6 +51,7 @@ impl HeartbeatService {
                 time: hb.time,
                 date,
                 project: hb.project,
+                project_id: hb.project_id,
                 branch: hb.branch,
                 language: hb.language,
                 dependencies: hb.dependencies,

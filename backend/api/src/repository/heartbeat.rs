@@ -176,9 +176,12 @@ impl HeartbeatRepository {
 
         let rows = ch_client
             .query(
+                // Column order must match `HeartbeatRow` field order exactly — the client
+                // decodes positionally, so an omitted or reordered column misaligns every
+                // field after it rather than failing cleanly.
                 "SELECT
                     user_id, entity, entity_type, time, date,
-                    project, branch, language, dependencies,
+                    project, project_id, branch, language, dependencies,
                     lines, line_number, cursor_position,
                     is_write, category, editor, operating_system,
                     machine, user_agent,

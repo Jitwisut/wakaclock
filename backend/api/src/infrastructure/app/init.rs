@@ -11,6 +11,7 @@ use crate::repository::analytics::AnalyticsRepository;
 use crate::repository::coworking_session::CoworkingSessionRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::org::OrgRepository;
+use crate::repository::project_identity::ProjectIdentityRepository;
 use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
@@ -23,6 +24,7 @@ use crate::services::heartbeat::HeartbeatService;
 use crate::services::insights::InsightsService;
 use crate::services::keystroke_stats::KeystrokeStatsService;
 use crate::services::org::OrgService;
+use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_merge::ProjectMergeService;
 use crate::services::project_rule::ProjectRuleService;
 use crate::services::projects::ProjectsService;
@@ -45,6 +47,7 @@ pub struct AppState {
     pub presence: Arc<PresenceStore>,
     pub analytics_repo: Arc<AnalyticsRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
+    pub project_identity_repo: Arc<ProjectIdentityRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
     pub project_rule_repo: Arc<ProjectRuleRepository>,
     pub org_repo: Arc<OrgRepository>,
@@ -57,6 +60,8 @@ pub struct AppState {
     pub duration_service: Arc<DurationService>,
     pub insights_service: Arc<InsightsService>,
     pub keystroke_stats_service: Arc<KeystrokeStatsService>,
+    /// Stable project identity (plan.md 9.3): mints and resolves `project_id`.
+    pub project_identity_service: Arc<ProjectIdentityService>,
     pub project_merge_service: Arc<ProjectMergeService>,
     pub projects_service: Arc<ProjectsService>,
     pub reprocess_service: Arc<ReprocessService>,
@@ -120,6 +125,7 @@ pub async fn create_app_state() -> Result<AppState> {
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
     let heartbeat_repo = Arc::new(HeartbeatRepository::new(clickhouse.clone()));
+    let project_identity_repo = Arc::new(ProjectIdentityRepository::new(clickhouse.clone()));
     let project_merge_repo = Arc::new(ProjectMergeRepository::new(clickhouse.clone()));
     let project_rule_repo = Arc::new(ProjectRuleRepository::new(clickhouse.clone()));
     let org_repo = Arc::new(OrgRepository::new(clickhouse.clone()));
@@ -136,6 +142,10 @@ pub async fn create_app_state() -> Result<AppState> {
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone()));
     let keystroke_stats_service = Arc::new(KeystrokeStatsService::new(clickhouse.clone()));
     let project_merge_service = Arc::new(ProjectMergeService::new(project_merge_repo.clone()));
+    let project_identity_service = Arc::new(ProjectIdentityService::new(
+        project_identity_repo.clone(),
+        project_merge_repo.clone(),
+    ));
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone()));
     let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
     let reprocess_service = Arc::new(ReprocessService::new(
@@ -159,6 +169,7 @@ pub async fn create_app_state() -> Result<AppState> {
         presence,
         analytics_repo,
         heartbeat_repo,
+        project_identity_repo,
         project_merge_repo,
         project_rule_repo,
         org_repo,
@@ -171,6 +182,7 @@ pub async fn create_app_state() -> Result<AppState> {
         duration_service,
         insights_service,
         keystroke_stats_service,
+        project_identity_service,
         project_merge_service,
         projects_service,
         reprocess_service,
