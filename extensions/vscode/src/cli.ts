@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type {
+    ApiKeySyncResult,
     CliResult,
     ExtraHeartbeatPayload,
     HeartbeatCategory,
@@ -108,6 +109,36 @@ export class WakaclockCliService {
     // is the only channel those hooks can read a key from.
     public async setApiKey(key: string): Promise<void> {
         await this.runCli(["config", "set-key", key]);
+    }
+
+    /**
+     * Mirror a key into config.toml and then confirm the server actually accepts it.
+     *
+     * Saving a key used to succeed silently whether or not it worked: a wrong or
+     * revoked key produced no error anywhere, heartbeats just stopped being stored
+     * (the CLI queues failed sends and exits 0), and the only symptom was an empty
+     * dashboard hours later. Regenerating a key on the dashboard invalidates the
+     * previous one, so this is easy to hit by accident. Verifying once, at the moment
+     * the user pastes the key, turns that silent failure into an immediate answer.
+     */
+    public async syncAndVerifyApiKey(key: string): Promise<ApiKeySyncResult> {
+        const result: ApiKeySyncResult = { mirroredToCliConfig: true, verified: false };
+
+        try {
+            await this.setApiKey(key);
+        } catch (error) {
+            result.mirroredToCliConfig = false;
+            result.mirrorError = error instanceof Error ? error.message : String(error);
+        }
+
+        try {
+            await this.getToday();
+            result.verified = true;
+        } catch (error) {
+            result.verifyError = error instanceof Error ? error.message : String(error);
+        }
+
+        return result;
     }
 
     public async clearApiKey(): Promise<void> {

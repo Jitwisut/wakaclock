@@ -86,18 +86,22 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             await vscode.window.showWarningMessage("No API key entered — nothing was saved.");
             return;
         }
-        // Stored via SecretStorage (OS keychain), never in settings.json.
+        // Stored via SecretStorage (OS keychain), never in settings.json. Written first
+        // so the verification below authenticates with the key the user just entered.
         await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
-        await vscode.window.showInformationMessage("Wakaclock API key saved.");
-        // Best-effort: also mirror into wakaclock-cli's config.toml so AI agent hooks
-        // (Claude Code, Codex, Gemini CLI) can authenticate too. Failure here shouldn't
-        // undo the successful SecretStorage save above, so it's reported separately.
-        try {
-            await cliService.setApiKey(trimmed);
+        // Mirror into wakaclock-cli's config.toml (the only channel AI agent hooks can
+        // read a key from) and confirm the server accepts it, rather than reporting
+        // "saved" for a key that silently fails on every heartbeat from here on.
+        const result = await cliService.syncAndVerifyApiKey(trimmed);
+        if (!result.verified) {
+            await vscode.window.showErrorMessage(`Wakaclock API key saved, but the server rejected it — heartbeats will not be recorded. ${result.verifyError ?? ""}`.trim());
+            return;
         }
-        catch (error) {
-            await vscode.window.showWarningMessage(`Saved for VS Code, but couldn't sync the key to wakaclock-cli's config (used by AI agent integrations): ${error instanceof Error ? error.message : String(error)}`);
+        if (!result.mirroredToCliConfig) {
+            await vscode.window.showWarningMessage(`Wakaclock API key saved and verified for VS Code, but it couldn't be written to wakaclock-cli's config, so AI agent integrations (Claude Code, Codex, Gemini CLI) will not be able to authenticate: ${result.mirrorError ?? ""}`.trim());
+            return;
         }
+        await vscode.window.showInformationMessage("Wakaclock API key saved, verified with the server, and synced to wakaclock-cli for AI agent integrations.");
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
         if (!existing) {

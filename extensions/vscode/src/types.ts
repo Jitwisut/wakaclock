@@ -58,6 +58,16 @@ export interface CliResult {
     exitCode: number;
 }
 
+/** Outcome of saving an API key: did it reach config.toml, and does the server accept it. */
+export interface ApiKeySyncResult {
+    /** config.toml is the only channel the AI agent hooks can read a key from. */
+    mirroredToCliConfig: boolean;
+    /** The server accepted the key on a real authenticated request. */
+    verified: boolean;
+    mirrorError?: string;
+    verifyError?: string;
+}
+
 export interface StatusBarSnapshot {
     humanReadable: string;
     totalSeconds: number;

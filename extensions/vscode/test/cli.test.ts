@@ -168,6 +168,63 @@ describe("WakaclockCliService", () => {
     await expect(service.getStatus()).rejects.toThrow(/Failed to start wakaclock-cli/);
   });
 
+  describe("syncAndVerifyApiKey", () => {
+    it("reports verified when the key mirrors and the server accepts it", async () => {
+      spawnMock
+        .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }))
+        .mockImplementationOnce(() =>
+          mockChild({
+            stdout: "Today: 1h 2m\nTotal seconds: 3720\nHeartbeats: 12\n",
+            exitCode: 0
+          })
+        );
+      const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+      const result = await service.syncAndVerifyApiKey("wcl_good");
+
+      expect(result).toEqual({ mirroredToCliConfig: true, verified: true });
+      expect(spawnMock.mock.calls[0][1]).toEqual(["config", "set-key", "wcl_good"]);
+      expect(spawnMock.mock.calls[1][1]).toEqual(["today"]);
+    });
+
+    // The failure that made a wrong key undetectable: the key saves fine, and only a
+    // real authenticated request reveals the server rejects it.
+    it("reports not verified when the server rejects the key", async () => {
+      spawnMock
+        .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }))
+        .mockImplementationOnce(() =>
+          mockChild({ stderr: "Error: API key was rejected by the server.", exitCode: 1 })
+        );
+      const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+      const result = await service.syncAndVerifyApiKey("wcl_revoked");
+
+      expect(result.mirroredToCliConfig).toBe(true);
+      expect(result.verified).toBe(false);
+      expect(result.verifyError).toMatch(/rejected by the server/);
+    });
+
+    // A failed mirror must still be reported, because config.toml is the only place
+    // the AI agent hooks can read a key from.
+    it("reports a failed config.toml mirror without giving up on verification", async () => {
+      spawnMock
+        .mockImplementationOnce(() => mockChild({ stderr: "boom", exitCode: 1 }))
+        .mockImplementationOnce(() =>
+          mockChild({
+            stdout: "Today: 0m\nTotal seconds: 0\nHeartbeats: 0\n",
+            exitCode: 0
+          })
+        );
+      const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+      const result = await service.syncAndVerifyApiKey("wcl_good");
+
+      expect(result.mirroredToCliConfig).toBe(false);
+      expect(result.mirrorError).toMatch(/boom/);
+      expect(result.verified).toBe(true);
+    });
+  });
+
   it("passes the key as an argv value to config set-key", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));
