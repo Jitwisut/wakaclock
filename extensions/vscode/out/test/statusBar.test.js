@@ -8,14 +8,27 @@ const item = {
     tooltip: "",
     command: "",
     name: "",
+    backgroundColor: undefined,
     show: vitest_1.vi.fn(),
     hide: vitest_1.vi.fn(),
     dispose: vitest_1.vi.fn()
 };
+const showErrorMessage = vitest_1.vi.fn().mockResolvedValue(undefined);
+const executeCommand = vitest_1.vi.fn();
 vitest_1.vi.mock("vscode", () => ({
     StatusBarAlignment: { Left: 1 },
+    ThemeColor: class {
+        id;
+        constructor(id) {
+            this.id = id;
+        }
+    },
     window: {
-        createStatusBarItem: () => item
+        createStatusBarItem: () => item,
+        showErrorMessage: (...args) => showErrorMessage(...args)
+    },
+    commands: {
+        executeCommand: (...args) => executeCommand(...args)
     }
 }));
 function createConfig(overrides = {}) {
@@ -35,9 +48,51 @@ function createConfig(overrides = {}) {
     (0, vitest_1.beforeEach)(() => {
         item.text = "";
         item.tooltip = "";
+        item.backgroundColor = undefined;
         item.show.mockReset();
         item.hide.mockReset();
         item.dispose.mockReset();
+        showErrorMessage.mockClear();
+        executeCommand.mockClear();
+    });
+    // A revoked key and an unreachable server used to look identical in the status bar,
+    // so a key regenerated after setup read as a transient blip while every heartbeat
+    // went unrecorded.
+    (0, vitest_1.it)("distinguishes a rejected API key from a generic failure", async () => {
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi
+                .fn()
+                .mockRejectedValue(new Error("Error: API key was rejected by the server."))
+        }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        (0, vitest_1.expect)(item.text).toBe("$(warning) Wakaclock: key rejected");
+        (0, vitest_1.expect)(item.command).toBe("wakaclock.setApiKey");
+        (0, vitest_1.expect)(item.backgroundColor).toBeDefined();
+        (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(1);
+    });
+    (0, vitest_1.it)("notifies once per failure, not on every refresh", async () => {
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi.fn().mockRejectedValue(new Error("authentication required"))
+        }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        await controller.refresh();
+        await controller.refresh();
+        (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(1);
+    });
+    (0, vitest_1.it)("clears the warning and notifies again after a later failure", async () => {
+        const getToday = vitest_1.vi
+            .fn()
+            .mockRejectedValueOnce(new Error("API key was rejected by the server"))
+            .mockResolvedValueOnce({ humanReadable: "5 m", totalSeconds: 300, heartbeatCount: 2 })
+            .mockRejectedValueOnce(new Error("API key was rejected by the server"));
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), { getToday }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        await controller.refresh();
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 5 m");
+        (0, vitest_1.expect)(item.backgroundColor).toBeUndefined();
+        (0, vitest_1.expect)(item.command).toBe("wakaclock.showToday");
+        await controller.refresh();
+        (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(2);
     });
     (0, vitest_1.it)("renders today output", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig(), {
