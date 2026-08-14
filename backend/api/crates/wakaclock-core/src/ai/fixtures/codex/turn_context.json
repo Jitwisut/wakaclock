@@ -1,0 +1,10 @@
+{
+  "type": "turn_context",
+  "timestamp": "2026-08-14T09:19:41.500Z",
+  "payload": {
+    "turn_id": "018f0000-bbbb-7000-8000-000000000002",
+    "cwd": "/home/dev/example-project",
+    "workspace_roots": ["/home/dev/example-project"],
+    "model": "example-model-id"
+  }
+}

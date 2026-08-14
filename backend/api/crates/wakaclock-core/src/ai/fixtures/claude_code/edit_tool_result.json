@@ -1,0 +1,39 @@
+{
+  "type": "user",
+  "sessionId": "018f0000-aaaa-7000-8000-000000000001",
+  "cwd": "/home/dev/example-project",
+  "gitBranch": "main",
+  "timestamp": "2026-08-14T09:15:22.418Z",
+  "message": {
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01ExampleEditCallId000001",
+        "is_error": false
+      }
+    ]
+  },
+  "toolUseResult": {
+    "type": "text",
+    "filePath": "/home/dev/example-project/src/greeting.rs",
+    "oldString": "fn greet() {\n    println!(\"hi\");\n}\n",
+    "newString": "fn greet(name: &str) {\n    println!(\"hello, {name}\");\n}\n",
+    "originalFile": "fn greet() {\n    println!(\"hi\");\n}\n",
+    "userModified": false,
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 3,
+        "newStart": 1,
+        "newLines": 3,
+        "lines": [
+          "-fn greet() {",
+          "-    println!(\"hi\");",
+          "+fn greet(name: &str) {",
+          "+    println!(\"hello, {name}\");",
+          " }"
+        ]
+      }
+    ]
+  }
+}
