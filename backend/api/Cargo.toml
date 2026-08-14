@@ -81,6 +81,9 @@ reqwest = { workspace = true }
 
 # Date/Time
 chrono = { workspace = true }
+# IANA timezone database — Phase 9 computes local day boundaries, weekdays and
+# "today" in the user's zone, which fixed UTC offsets cannot do correctly across DST.
+chrono-tz = "0.10"
 
 # UUID
 uuid = { workspace = true }
