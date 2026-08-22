@@ -41,9 +41,12 @@ pub struct HeartbeatRow {
     pub ai_source: Option<String>,
     pub ai_confidence: Option<String>,
     pub ai_event_id: Option<String>,
+    pub ai_event_fingerprint: Option<String>,
     pub ai_lines_added: Option<u32>,
     pub ai_lines_deleted: Option<u32>,
     pub human_lines_added: Option<u32>,
     pub human_lines_deleted: Option<u32>,
+    pub unattributed_lines_added: Option<u32>,
+    pub unattributed_lines_deleted: Option<u32>,
     pub created_at: u32,
 }

@@ -140,6 +140,13 @@ pub struct Heartbeat {
     pub ai_lines_deleted: Option<u32>,
     pub human_lines_added: Option<u32>,
     pub human_lines_deleted: Option<u32>,
+    /// Lines whose provenance could not be proven as either AI or manual. Keeping this
+    /// separate from the human counters prevents an uncorrelated agent edit from silently
+    /// inflating the human metric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed_lines_added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed_lines_deleted: Option<u32>,
     pub created_at: String,
 }
 
@@ -186,6 +193,8 @@ impl Heartbeat {
             ai_lines_deleted: None,
             human_lines_added: None,
             human_lines_deleted: None,
+            unattributed_lines_added: None,
+            unattributed_lines_deleted: None,
             created_at: now.to_rfc3339(),
         }
     }
@@ -259,6 +268,8 @@ impl Heartbeat {
             || positive(self.chars_deleted)
             || positive(self.human_lines_added)
             || positive(self.human_lines_deleted)
+            || positive(self.unattributed_lines_added)
+            || positive(self.unattributed_lines_deleted)
             || positive(self.ai_lines_added)
             || positive(self.ai_lines_deleted)
             || self.active_seconds.is_some_and(|seconds| seconds > 0.0)

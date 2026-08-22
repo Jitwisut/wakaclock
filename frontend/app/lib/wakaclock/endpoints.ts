@@ -20,6 +20,12 @@ import type {
   OrgResponse,
   OrgsResponse,
   PresenceActionResponse,
+  ProjectAiResponse,
+  ProjectAnalyticsDetailResponse,
+  ProjectAnalyticsListResponse,
+  ProjectBranchesResponse,
+  ProjectDailyResponse,
+  ProjectFilesResponse,
   ProjectMergeMutationResponse,
   ProjectMergesResponse,
   ProjectRuleMutationResponse,
@@ -147,10 +153,96 @@ export async function getDashboardAnalytics(params: {
   start: string;
   timezone?: string;
 }) {
-  const { data } = await wakaclockClient.get<DashboardAnalyticsResponse>(
-    '/dashboard/analytics',
+  const { data } = await wakaclockClient.get<DashboardAnalyticsResponse>('/dashboard/analytics', {
+    params,
+  });
+  return data;
+}
+
+// GET /projects/analytics — Phase 9 project cards, always keyed by stable project_id.
+export async function getProjectAnalytics(params: {
+  cursor?: string;
+  end: string;
+  limit?: number;
+  order?: 'asc' | 'desc';
+  sort?:
+    | 'ai_changes'
+    | 'duration'
+    | 'estimated_cost'
+    | 'prompts'
+    | 'recent'
+    | 'sessions'
+    | 'tokens';
+  start: string;
+  timezone?: string;
+}) {
+  const { data } = await wakaclockClient.get<ProjectAnalyticsListResponse>('/projects/analytics', {
+    params,
+  });
+  return data;
+}
+
+// GET /projects/:projectId/analytics — initial project detail payload.
+export async function getProjectAnalyticsDetail(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectAnalyticsDetailResponse>(
+    `/projects/${projectId}/analytics`,
     { params }
   );
+  return data;
+}
+
+// GET /projects/:projectId/files — shared source for the file list and bubble chart.
+export async function getProjectAnalyticsFiles(
+  projectId: string,
+  params: {
+    branch?: string;
+    cursor?: string;
+    end: string;
+    limit?: number;
+    min_seconds?: number;
+    order?: 'asc' | 'desc';
+    sort?: 'duration';
+    start: string;
+    timezone?: string;
+  }
+) {
+  const { data } = await wakaclockClient.get<ProjectFilesResponse>(`/projects/${projectId}/files`, {
+    params,
+  });
+  return data;
+}
+
+export async function getProjectAnalyticsBranches(
+  projectId: string,
+  params: { cursor?: string; end: string; limit?: number; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectBranchesResponse>(
+    `/projects/${projectId}/branches`,
+    { params }
+  );
+  return data;
+}
+
+export async function getProjectAnalyticsDaily(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectDailyResponse>(`/projects/${projectId}/daily`, {
+    params,
+  });
+  return data;
+}
+
+export async function getProjectAnalyticsAi(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectAiResponse>(`/projects/${projectId}/ai`, {
+    params,
+  });
   return data;
 }
 
@@ -323,10 +415,10 @@ export async function deleteProjectMerge(mergeId: string, userId: string) {
   return data;
 }
 
-// POST /reprocess — destructive: deletes + rebuilds aggregates for [start, end]
-export async function reprocess(userId: string, start: string, end: string) {
+// POST /reprocess — defaults to dry-run. Applying an inspected range requires explicit false.
+export async function reprocess(start: string, end: string, dryRun = true) {
   const { data } = await wakaclockClient.post<ReprocessResponse>('/reprocess', {
-    user_id: userId,
+    dry_run: dryRun,
     start,
     end,
   });

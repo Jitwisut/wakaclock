@@ -12,21 +12,18 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { ORGANIZATION, SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, ORGANIZATION, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 const CANONICAL = '/privacy';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createMarketingMetadata({
   title: 'Privacy and Data Collection',
   description:
-    `Exactly what a ${SITE_NAME} heartbeat contains, what is never collected, where the data is ` +
-    'stored, and how to delete it. Heartbeats carry file paths and project names but never your ' +
-    'source code.',
-  alternates: { canonical: CANONICAL },
-  openGraph: { url: CANONICAL, title: `Privacy and Data Collection | ${SITE_NAME}` },
-};
+    'See exactly what an AtoAxis heartbeat stores, including file paths and AI attribution, what never leaves your machine, where data is hosted and how to delete it.',
+  path: CANONICAL,
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },

@@ -30,6 +30,17 @@ pub struct ProjectIdentityService {
     merge_repo: Arc<ProjectMergeRepository>,
 }
 
+/// Result of the scoped historical identity backfill.  Counts are returned instead of
+/// raw project names so that the audit and API response stay useful without revealing
+/// repository metadata.
+#[derive(Debug, Default)]
+pub struct HistoricalProjectBackfill {
+    pub resolved_heartbeats: u64,
+    pub unresolved_heartbeats: u64,
+    pub project_ids_written: u64,
+    pub resolved_ids: HashMap<String, Uuid>,
+}
+
 impl ProjectIdentityService {
     pub fn new(
         repo: Arc<ProjectIdentityRepository>,
@@ -124,21 +135,14 @@ impl ProjectIdentityService {
         Ok(Some(project_id))
     }
 
-    /// Every project endpoint must prove the caller owns the project before returning
-    /// anything about it (plan.md 9.3). A `project_id` is guessable in a way a name is not
-    /// — it appears in URLs — so this is the check that stops one account reading another's
-    /// project by id.
-    ///
-    /// Not called yet: the endpoints keyed by `project_id` arrive in PR 9.7/9.8. It lives
-    /// here because 9.2 owns the ownership rule, and shipping the rule with the identity it
-    /// guards is what stops each later endpoint from inventing its own version.
-    #[allow(dead_code)]
-    pub async fn verify_ownership(&self, user_id: Uuid, project_id: Uuid) -> Result<bool> {
-        Ok(self
-            .repo
-            .find_by_project_id(user_id, project_id)
-            .await?
-            .is_some())
+    /// Returns the stable identity only when it belongs to the authenticated caller.
+    /// Project detail routes use this before reading any analytics dimension.
+    pub async fn owned_identity(
+        &self,
+        user_id: Uuid,
+        project_id: Uuid,
+    ) -> Result<Option<ProjectIdentityRow>> {
+        self.repo.find_by_project_id(user_id, project_id).await
     }
 
     /// Reports what a historical backfill would do, without writing anything.
@@ -194,6 +198,64 @@ impl ProjectIdentityService {
             identities_to_create: would_create.len(),
             items,
         })
+    }
+
+    /// Resolves the project names already selected by the reprocess range.  In dry-run
+    /// mode this only reports how many heartbeats could be resolved; in apply mode it
+    /// persists identities/aliases and mutates only unresolved rows in that exact range.
+    pub async fn backfill_historical_projects(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        projects: &HashMap<String, (String, u64)>,
+        dry_run: bool,
+    ) -> Result<HistoricalProjectBackfill> {
+        let merges = self.merge_repo.list_by_user(user_id).await?;
+        let mut result = HistoricalProjectBackfill::default();
+
+        for (source_project, (resolved_project, heartbeat_count)) in projects {
+            let name = resolved_project.trim();
+            if name.is_empty() {
+                result.unresolved_heartbeats += heartbeat_count;
+                continue;
+            }
+
+            let canonical = canonical_name(name, &merges);
+            let existing = self
+                .repo
+                .find_by_canonical_name(user_id, &canonical)
+                .await?;
+            let project_id = existing
+                .as_ref()
+                .map(|identity| identity.project_id)
+                .unwrap_or_else(|| derive_project_id(user_id, &canonical));
+
+            result.resolved_heartbeats += heartbeat_count;
+            result
+                .resolved_ids
+                .insert(resolved_project.clone(), project_id);
+
+            if dry_run {
+                continue;
+            }
+
+            // This creates the identity and alias on a first encounter, and is
+            // idempotent on retries because both the id and alias are deterministic.
+            let persisted_id = self
+                .resolve_project_id(user_id, Some(name), None)
+                .await?
+                .expect("non-empty project names resolve to an id");
+            self.repo
+                .set_project_id_for_range(user_id, start, end, source_project, persisted_id)
+                .await?;
+            result.project_ids_written += heartbeat_count;
+            result
+                .resolved_ids
+                .insert(resolved_project.clone(), persisted_id);
+        }
+
+        Ok(result)
     }
 }
 

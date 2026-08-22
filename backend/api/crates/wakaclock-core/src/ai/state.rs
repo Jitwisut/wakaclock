@@ -33,6 +33,9 @@ impl AiAttributionState {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // Hooks are independent CLI processes. Wait briefly for another hook's
+        // activity-cursor transaction instead of dropping the heartbeat on SQLITE_BUSY.
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS parser_state (
@@ -46,9 +49,74 @@ impl AiAttributionState {
                 parser_id    TEXT NOT NULL,
                 delivered_at INTEGER NOT NULL
             );
+
+            -- A single cursor for activity observed outside the editor (Claude/Codex
+            -- hooks and transcript sync). It lets separate CLI processes join AI
+            -- heartbeats into WakaTime-style durations without counting each process'
+            -- first event as a fabricated second of work.
+            CREATE TABLE IF NOT EXISTS activity_cursors (
+                stream_id TEXT PRIMARY KEY,
+                last_time REAL NOT NULL
+            );
             ",
         )?;
         Ok(Self { conn })
+    }
+
+    /// Record an activity timestamp and return the duration from the previous activity
+    /// when the gap is inside the configured timeout. This is the same mini-duration
+    /// rule WakaTime applies to consecutive heartbeats: an isolated event contributes
+    /// zero, while a gap at or beyond the timeout starts a new session.
+    ///
+    /// The cursor is updated transactionally because agent hooks are separate CLI
+    /// processes and can arrive concurrently.
+    pub fn record_activity(
+        &mut self,
+        stream_id: &str,
+        timestamp: f64,
+        timeout_seconds: f64,
+    ) -> Result<f64, AppError> {
+        if !timestamp.is_finite() || !timeout_seconds.is_finite() || timeout_seconds <= 0.0 {
+            return Err(AppError::Validation(
+                "activity timestamp and timeout must be finite; timeout must be positive"
+                    .to_string(),
+            ));
+        }
+
+        let tx = self.conn.transaction()?;
+        let previous: Option<f64> = tx
+            .query_row(
+                "SELECT last_time FROM activity_cursors WHERE stream_id = ?1",
+                params![stream_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        // Retries can arrive after newer events. Never move the cursor backwards: doing
+        // so would let a later event re-count the whole interval after the retry.
+        let active_seconds = match previous {
+            Some(last) if timestamp <= last => 0.0,
+            Some(last) => {
+                let gap = timestamp - last;
+                if gap < timeout_seconds {
+                    gap
+                } else {
+                    0.0
+                }
+            }
+            None => 0.0,
+        };
+
+        if previous.map_or(true, |last| timestamp > last) {
+            tx.execute(
+                "INSERT INTO activity_cursors (stream_id, last_time) VALUES (?1, ?2)
+                 ON CONFLICT(stream_id) DO UPDATE SET last_time = excluded.last_time",
+                params![stream_id, timestamp],
+            )?;
+        }
+        tx.commit()?;
+
+        Ok(active_seconds)
     }
 
     /// `None` means this parser has never run before (or its cursor was pruned) —
@@ -247,6 +315,19 @@ mod tests {
         state.mark_delivered("toolu_1", "claude-code").unwrap();
         let remaining = state.filter_undelivered(&["toolu_1".to_string()]).unwrap();
         assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn activity_cursor_joins_only_gaps_inside_the_timeout() {
+        let path = temp_db_path("activity-cursor");
+        let _ = std::fs::remove_file(&path);
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+
+        assert_eq!(state.record_activity("ai", 100.0, 900.0).unwrap(), 0.0);
+        assert_eq!(state.record_activity("ai", 160.0, 900.0).unwrap(), 60.0);
+        assert_eq!(state.record_activity("ai", 1_060.0, 900.0).unwrap(), 0.0);
+        assert_eq!(state.record_activity("ai", 1_000.0, 900.0).unwrap(), 0.0);
+        assert_eq!(state.record_activity("ai", 1_090.0, 900.0).unwrap(), 30.0);
     }
 
     #[test]

@@ -13,22 +13,16 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { PRICING, SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, PRICING, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
-export const metadata: Metadata = {
-  title: `WakaTime Alternative for Developer Time Tracking`,
+export const metadata: Metadata = createMarketingMetadata({
+  title: 'WakaTime Alternative for Developer Time Tracking',
   description:
-    `${SITE_NAME} is an alternative to WakaTime that implements the WakaTime API. Keep your ` +
-    'existing editor plugin, get your complete coding history in the base plan, and import your ' +
-    'WakaTime export.',
-  alternates: { canonical: '/wakatime-alternative' },
-  openGraph: {
-    url: '/wakatime-alternative',
-    title: `WakaTime Alternative for Developer Time Tracking | ${SITE_NAME}`,
-  },
-};
+    'AtoAxis is a hosted WakaTime alternative with API compatibility, complete coding history, import support, project analytics and no plugin replacement required.',
+  path: '/wakatime-alternative',
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -61,10 +55,9 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: `Is ${SITE_NAME} free or open source?`,
     answer:
-      `No. ${SITE_NAME} is a commercial, proprietary product. It costs $${PRICING.monthlyUsd} per ` +
-      `month or $${PRICING.annualUsd} per year after a ${PRICING.trialDays}-day trial, with ` +
-      'hosting included. WakaTime does have a free plan, though it limits dashboard history to ' +
-      'one week.',
+      `Checkout is not open yet. ${SITE_NAME} is planned as a commercial hosted product at ` +
+      `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year. WakaTime does have a free ` +
+      'plan, though its dashboard history is limited.',
   },
   {
     question: `What does ${SITE_NAME} not do that I should know about?`,
@@ -91,7 +84,7 @@ const STAY_WITH_WAKATIME = [
   'You want automatic AI tracking for Cursor or Copilot today — AtoAxis currently supports Claude Code, Codex CLI and Gemini CLI',
   'You want AI token usage or estimated cost per model — AtoAxis does not track either',
   'You need team or organisation dashboards — AtoAxis analytics are scoped to one account',
-  'You want a free tier — AtoAxis is paid only after its trial',
+  'You need a free tier today — AtoAxis is still in Early Access',
   'You want the widest editor plugin coverage — WakaTime publishes 80+ official plugins',
 ];
 
@@ -172,27 +165,26 @@ api_key = your_generated_api_key`}</CodeBlock>
         <Section heading={`Who ${SITE_NAME} is for`} id="who-for">
           <p style={MUTED_TEXT}>
             Individual developers who want visibility into where their development time goes and
-            are willing to run a server to keep that data in their own environment. It suits
-            people already comfortable with Docker and a database. It is not currently a fit for
-            engineering managers looking for team-wide reporting, because analytics are scoped to
-            a single account.
+            are comfortable joining Early Access before checkout opens. It is not currently a fit
+            for engineering managers looking for team-wide reporting, because analytics are scoped
+            to a single account.
           </p>
         </Section>
 
         <Section heading="Getting started" id="getting-started">
           <p style={MUTED_TEXT}>
-            Deploy the server, create an account, generate an API key, then either install the VS
-            Code extension or repoint your existing WakaTime plugin. The full sequence, including
-            requirements and how to verify that tracking works, is on the installation page.
+            Join Early Access first. When access opens, the sequence will be to create an account,
+            generate an API key, then install the VS Code extension or repoint an existing WakaTime
+            plugin. The connection steps are documented for evaluation.
           </p>
         </Section>
 
         <RelatedLinks
           links={[
             {
-              href: '/docs/getting-started',
-              label: `Install ${SITE_NAME}`,
-              description: 'Requirements, server setup, connecting an editor, and verifying tracking',
+              href: '/early-access',
+              label: `Join ${SITE_NAME} early access`,
+              description: 'Hosted launch requirements, editor connection and launch updates',
             },
             {
               href: '/integrations/vscode',
@@ -207,7 +199,7 @@ api_key = your_generated_api_key`}</CodeBlock>
             {
               href: '/pricing',
               label: `${SITE_NAME} pricing`,
-              description: 'Monthly and annual cost, trial length, and what every account includes',
+              description: 'Planned monthly and annual pricing before checkout opens',
             },
           ]}
         />

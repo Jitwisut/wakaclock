@@ -9,17 +9,18 @@ import { PricingSection } from '@/components/marketing/pricing-section';
 import { Bullets, MUTED_TEXT, Section } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { PRICING, PRODUCT_ANSWER, SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, PRODUCT_ANSWER, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  // `absolute` opts out of the root layout's "%s | AtoAxis" template, which would
-  // otherwise render the brand name twice on the homepage.
+  ...createMarketingMetadata({
+    title: `${SITE_NAME} — Developer Time Tracking with Complete History`,
+    description:
+      'Developer time tracking with complete coding history, WakaTime API compatibility, project and language analytics, AI attribution and transparent privacy limits.',
+    path: '/',
+  }),
   title: { absolute: `${SITE_NAME} — Developer Time Tracking with Complete History` },
-  description: PRODUCT_ANSWER,
-  alternates: { canonical: '/' },
-  openGraph: { url: '/', title: `${SITE_NAME} — Developer Time Tracking with Complete History` },
 };
 
 const FAQ: readonly FaqEntry[] = [
@@ -46,7 +47,7 @@ const FAQ: readonly FaqEntry[] = [
     question: `Which editors does ${SITE_NAME} support?`,
     answer:
       `${SITE_NAME} ships its own VS Code extension. Beyond that, any editor with a WakaTime ` +
-      'plugin can send data by pointing the plugin’s api_url at your server, because the ' +
+      'plugin can send data by pointing the plugin’s api_url at the hosted AtoAxis API, because the ' +
       'heartbeat API is WakaTime-compatible. Editors reached that way are supported through the ' +
       'protocol rather than through a plugin published by us.',
   },
@@ -95,9 +96,8 @@ const FAQ: readonly FaqEntry[] = [
   {
     question: `How much does ${SITE_NAME} cost?`,
     answer:
-      `${SITE_NAME} costs $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year, with ` +
-      `a ${PRICING.trialDays}-day trial. Every account includes the full product and your complete ` +
-      'coding history; there are no feature-gated tiers and nothing extra to pay for hosting.',
+      `${SITE_NAME} plans to launch at $12 per month or $99 per year after Early Access. Final ` +
+      'billing and trial details will be published when checkout is available.',
   },
 ];
 
@@ -115,7 +115,7 @@ const LIMITATIONS = [
   'AI token usage and cost are not tracked at all.',
   'There is no desktop or browser client yet, so activity outside a connected editor is not captured.',
   'There is no team or organisation dashboard — analytics are scoped to a single account.',
-  'There is no free tier, and no self-hosted edition.',
+  'There is no free tier; the planned product is operated as a hosted service.',
 ];
 
 export default function MarketingHomePage() {

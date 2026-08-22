@@ -2964,17 +2964,23 @@ Deliver this in small, dependency-ordered PRs after the relevant Phase 8 foundat
 1. **PR 9.1 — Metric contracts and API schemas**
    - Rust metric types, units, coverage semantics, date/timezone/filter validators and
      versioned response fixtures.
+   - Versioned Kafka event envelopes, topic contracts, partition keys and RabbitMQ job
+     contracts. These contracts land before any producer or consumer is switched on.
 2. **PR 9.2 — Stable project identity**
    - `project_id`, aliases, merge-to-canonical mapping, ownership checks and backfill
      dry-run.
 3. **PR 9.3 — AI usage/session/pricing storage**
    - `ai_usage_events`, `ai_sessions`, `ai_session_projects`, pricing catalog, validation
      and idempotency tests.
+   - Kafka producers for authenticated heartbeat/AI metadata ingestion and idempotent
+     consumers for `ai.edit.v1` and `ai.usage.v1`.
 4. **PR 9.4 — Account projections**
-   - machine/model/client/project daily analytics and version-aware rebuild mechanism.
+   - machine/model/client/project daily analytics, Kafka-to-ClickHouse batch consumer and
+     version-aware rebuild mechanism.
 5. **PR 9.5 — Project-detail projections**
    - file/branch/language/editor/activity daily tables, path sanitization and reconciliation
-     tests.
+     tests. Projection consumers commit Kafka offsets only after the complete ClickHouse
+     batch is durable.
 6. **PR 9.6 — Dashboard API**
    - summary, comparison, models/editors/languages/OS/machines/weekdays and daily
      attribution.
@@ -2984,12 +2990,16 @@ Deliver this in small, dependency-ordered PRs after the relevant Phase 8 foundat
    - overview, files, branches, daily and AI endpoints with consistent filters.
 9. **PR 9.9 — Historical reprocess**
    - project ID backfill, transcript-aware attribution rebuild, versioned publish and audit.
+   - RabbitMQ job exchange, reprocess/projection queues, retry policy, publisher confirms,
+     manual acknowledgements and dead-letter queues.
 10. **PR 9.10 — Frontend integration**
     - dashboard charts, project cards, detail page, bubble/list reuse, branch filter and
       partial/empty/error states.
 11. **PR 9.11 — Performance/privacy launch gate**
     - query profiling, cache/ETag, range/rate limits, packaged E2E, privacy/docs/product-copy
       audit.
+    - Kafka consumer-lag/load tests, RabbitMQ backlog/retry/DLQ tests, broker outage tests,
+      broker ACL/TLS review and verification that queued payloads contain no prohibited data.
 
 ### 9.20 — Definition of done / acceptance criteria
 
@@ -3021,6 +3031,12 @@ Phase 9 is complete only when:
 - [ ] Frontend TypeScript contracts, backend serialization and OpenAPI examples agree.
 - [ ] Packaged Codex, Claude and Gemini scenarios pass against a real ClickHouse test stack
       before the feature is advertised as shipped.
+- [ ] Authenticated heartbeat, AI edit and AI usage events pass through Kafka with stable
+      identities; replay, consumer restart and duplicate delivery do not change final totals.
+- [ ] Historical reprocess and projection rebuild requests pass through RabbitMQ, expose a
+      durable job status, retry safely and reach a dead-letter queue after bounded failures.
+- [ ] Kafka or ClickHouse downtime does not lose accepted telemetry, and RabbitMQ or worker
+      downtime does not lose accepted background jobs.
 
 ### 9.21 — Explicit product/UI caveats
 
@@ -3037,6 +3053,323 @@ Phase 9 is complete only when:
 - Historical data cannot be reconstructed beyond locally retained transcripts. Such dates
   remain Unattributed and the UI must not imply otherwise.
 
+### 9.22 — Kafka event backbone and RabbitMQ job architecture
+
+Phase 9 must support horizontal API and worker scaling without turning ClickHouse into the
+backpressure boundary for every connected editor. Kafka and RabbitMQ are both part of the
+production architecture, but they solve different problems and must not carry duplicate copies
+of the same workload merely for redundancy.
+
+#### Locked responsibility split
+
+| Component | Owns | Must not own |
+|-----------|------|--------------|
+| Kafka | High-volume, append-only heartbeat, AI edit and AI usage event streams; ordered delivery per account; short-term replay; fan-out to independent consumers | User-triggered reprocess commands, delayed retries, cron-like jobs, email/notification jobs |
+| RabbitMQ | Bounded background commands with explicit completion: AI session reconciliation, historical reprocess, projection rebuild, pricing reconciliation; retry/backoff and dead-letter handling | The continuous heartbeat firehose, client-local transcript parsing or a second copy of the Kafka telemetry stream |
+| ClickHouse | Authoritative raw metadata facts, versioned projections, reconciliation and analytics reads | Acting as a message broker or absorbing unbounded synchronous request bursts |
+| Client SQLite queue | Device-side offline buffering until the authenticated API confirms broker acceptance | Cross-user/server coordination or analytics processing |
+
+If only one broker is healthy, the system handles only the workload assigned to that broker.
+Kafka is not a fallback for RabbitMQ jobs, and RabbitMQ is not a fallback for Kafka telemetry.
+Recovery comes from stable event/job identities, client retry, broker durability and idempotent
+consumers rather than publishing every message twice.
+
+#### End-to-end data flow
+
+```text
+IDE / CLI / agent hook
+        │ local SQLite offline queue
+        ▼
+Authenticated ingest API (stateless, horizontally scalable)
+        │ validate + sanitize + assign/verify stable event_id
+        ▼
+Kafka
+  ├── heartbeat.v1 ───────────────┐
+  ├── ai.edit.v1 ─────────────────┼──► ClickHouse fact sink (batched)
+  └── ai.usage.v1 ────────────────┤
+                                   ├──► attribution/session consumer
+                                   └──► project identity/projection consumers
+
+Authenticated maintenance API
+        │ validate range + create stable job_id
+        ▼
+RabbitMQ topic exchange: wakaclock.jobs
+  ├── ai.session.reconcile ───────► sanitized session/allocation worker
+  ├── analytics.reprocess ────────► reprocess worker
+  ├── projection.rebuild ─────────► projection worker
+  └── pricing.reconcile ──────────► pricing worker
+             │ bounded retry/backoff
+             └────────────────────► wakaclock.jobs.dlq
+```
+
+Dashboard and project read APIs never wait for RabbitMQ jobs. They read one coherent published
+projection version when available, otherwise the marked raw-data fallback. Read endpoints do not
+publish telemetry messages simply because a chart was opened.
+
+#### Shared event envelope
+
+Every Kafka record uses a versioned metadata-only envelope. Producers may add optional fields but
+may not reinterpret or remove a field without publishing a new schema version.
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "stable-source-or-derived-id",
+  "event_type": "heartbeat.recorded",
+  "occurred_at": "2026-08-22T12:34:56.123Z",
+  "received_at": "2026-08-22T12:34:56.456Z",
+  "user_id": "uuid",
+  "project_id": "uuid-or-null",
+  "source": "vscode|cli|codex|claude|gemini",
+  "trace_id": "uuid",
+  "payload": {}
+}
+```
+
+Envelope rules:
+
+- `event_id` is stable across HTTP retry, client offline replay, Kafka replay and consumer
+  restart. Upload time is never part of a derived identity.
+- The Kafka record key is `user_id`. This preserves account-local order while allowing accounts
+  to spread across partitions. No global ordering guarantee is required.
+- `occurred_at` controls analytics time; `received_at` is observability metadata only.
+- `project_id` may be null until stable resolution succeeds. A later resolver may emit a new
+  versioned identity event but may not silently classify unknown project data.
+- The payload contains counts, dimensions and opaque hashes/relative keys only. It never contains
+  prompts, responses, transcript bodies, patch bodies, source code or absolute file paths.
+- Unknown/Unattributed values remain explicit nullable fields and are never converted to Human or
+  numeric zero by a producer, serializer or consumer.
+
+#### Kafka topics and consumers
+
+| Topic | Key | Producer | Primary consumers | Initial retention |
+|-------|-----|----------|-------------------|------------------|
+| `wakaclock.heartbeat.v1` | `user_id` | Heartbeat bulk API | heartbeat fact sink, project identity resolver, activity projection | 7 days |
+| `wakaclock.ai-edit.v1` | `user_id` | Verified agent/correlation ingest API | AI fact sink, attribution/session consumer, AI projections | 30 days |
+| `wakaclock.ai-usage.v1` | `user_id` | AI usage ingest API | usage/session fact sink, pricing consumer, project allocation | 30 days |
+| `wakaclock.identity-change.v1` | `user_id` | Project identity/merge service | projection invalidator, audit consumer | 30 days |
+| `wakaclock.ingest.dlq.v1` | original record key | Consumer error handler | restricted repair tooling only | 30 days |
+
+Production Kafka defaults, subject to load-test revision:
+
+- Start with 24 partitions for each telemetry topic. Measure skew by account before increasing;
+  adding partitions changes cross-partition placement but does not weaken event-id deduplication.
+- Use replication factor 3, `acks=all`, idempotent producers and minimum in-sync replicas 2.
+- Disable consumer auto-commit. Commit offsets only after the complete ClickHouse batch succeeds.
+- Batch ClickHouse writes by both size and time, initially 1,000 records or 500 ms, whichever
+  occurs first. Tune from actual insert latency and consumer lag rather than request rate alone.
+- A consumer group owns one logical side effect. Additional analytics uses get separate consumer
+  groups; adding a replica to the same group increases throughput without duplicating the effect.
+- Schema compatibility is checked in CI. A schema registry is required before any external team
+  independently publishes to these topics.
+
+Kafka delivery is at-least-once. Exactly-once analytics comes from idempotent effects:
+
+1. The API verifies or derives a stable `event_id` and waits for Kafka acknowledgement before
+   confirming acceptance to the client.
+2. The ClickHouse sink writes the logical identity and version into a deduplicating/replacing fact
+   table or rejects an already-seen identity.
+3. Projection workers aggregate only deduplicated facts and publish a new `data_version` after
+   reconciliation.
+4. The consumer commits its Kafka offset after the write/publish succeeds. A crash before commit
+   replays the batch safely.
+
+The Kafka sink must not write retryable records directly into an additive materialized-view path.
+Every heartbeat, AI edit and usage fact receives an `event_id` column and first lands in a
+version-aware deduplication table keyed by `(user_id, event_id)`. Projection input selects one
+logical version per identity. A replay may create another physical ClickHouse row before merging,
+but API/projection queries must not count both rows, and additive projections are published only
+from the deduplicated input. This requirement applies to ordinary heartbeats as well as AI events.
+
+#### RabbitMQ exchanges, queues and workers
+
+Use a durable topic exchange named `wakaclock.jobs` and a separate durable dead-letter exchange
+named `wakaclock.jobs.dlx`.
+
+| Routing key / queue | Producer | Worker responsibility | Completion result |
+|---------------------|----------|-----------------------|------------------|
+| `ai.session.reconcile` | AI usage consumer/internal scheduler | Rebuild session/model/project allocation from sanitized facts already ingested through Kafka | Counts, allocation method and coverage; never transcript content |
+| `analytics.reprocess` | Authenticated maintenance API | Re-resolve project IDs and attribution for one user/range | Audit ID, reconciliation totals and published `data_version` |
+| `projection.rebuild` | Reprocess worker or internal scheduler | Build account/project staging projections and publish after validation | Published `data_version` or controlled failure |
+| `pricing.reconcile` | Internal audited administration path | Reprice only events covered by an explicitly approved catalog version | Pricing version, affected count and coverage delta |
+| `wakaclock.jobs.dlq` | RabbitMQ dead-letter exchange | Hold exhausted jobs for restricted inspection/replay | No automatic replay |
+
+RabbitMQ job contract:
+
+```json
+{
+  "schema_version": 1,
+  "job_id": "uuid-or-idempotency-key-derived-id",
+  "job_type": "analytics.reprocess",
+  "requested_by": "authenticated-user-or-internal-principal",
+  "user_id": "uuid",
+  "range": {"start": "2026-08-01", "end": "2026-08-31", "timezone": "Asia/Bangkok"},
+  "attempt": 0,
+  "trace_id": "uuid",
+  "parameters": {}
+}
+```
+
+Persist privacy-safe job state in a versioned `wakaclock.async_jobs` table:
+
+```text
+user_id, job_id, job_type, idempotency_key_hash,
+status(pending_publish|queued|running|succeeded|failed|dead_lettered|cancelled),
+attempt, requested_at, started_at, finished_at,
+result_data_version Nullable(UInt64), error_code Nullable(String), version
+```
+
+Expose `GET /api/v1/jobs/:job_id` with ownership checks. The response contains state, progress,
+timestamps, sanitized error code and result version only; it does not expose broker routing,
+worker hostnames or serialized message bodies.
+
+RabbitMQ processing rules:
+
+- The API uses publisher confirms and returns `202 Accepted` only after the broker confirms the
+  durable message. A failed publish returns a controlled retryable error.
+- The API writes `pending_publish` before publishing and updates to `queued` after publisher
+  confirmation. A reconciler republishes abandoned `pending_publish` rows with the same `job_id`;
+  worker idempotency makes a crash between publish and status update safe.
+- Repeated `Idempotency-Key` values resolve to the same `job_id`. Workers keep a durable job audit
+  and treat an already completed job as success without performing it again.
+- Consumers use manual acknowledgement and acknowledge only after durable audit/projection state
+  is written.
+- Retry with exponential backoff plus jitter, initially 5 seconds, 30 seconds, 2 minutes and
+  10 minutes. After the bounded attempts, dead-letter the job with a sanitized error category.
+- Use a bounded prefetch, initially 10 for session reconciliation and 1 for expensive reprocess/rebuild
+  workers. Increase only after ClickHouse load and memory use are measured.
+- A projection rebuild spawned by reprocess receives a deterministic child job ID. Retrying the
+  parent cannot create parallel rebuilds of the same user/range/version.
+- Job payloads carry IDs, ranges and configuration versions. Large data is read from authoritative
+  stores by the worker and is not embedded in RabbitMQ messages.
+- Transcript discovery and parsing remain local to the CLI/extension because the server cannot and
+  must not reach into a user's local transcript files. RabbitMQ starts only after sanitized event
+  metadata has crossed the authenticated Kafka ingestion boundary.
+
+#### API behavior and backpressure
+
+- Heartbeat/AI ingest endpoints validate authentication, size limits, schema and privacy before
+  publishing. They return an acceptance ID after Kafka acknowledgement; they do not wait for
+  ClickHouse or projections.
+- Existing CLI/extension SQLite queues remove an item only after broker-backed API acceptance. If
+  Kafka is unavailable, the API returns `503` plus `Retry-After` and the client retains the item.
+- When ClickHouse is unavailable, Kafka consumers stop committing offsets. Kafka absorbs the
+  bounded outage and consumer-lag alerts fire; the API remains available while topic retention and
+  disk capacity are safe.
+- Maintenance endpoints return a `job_id` and expose authenticated job status. They never hold an
+  HTTP connection open for a reprocess or rebuild.
+- If RabbitMQ is unavailable, a job request is not reported as accepted. Clients may retry with
+  the same idempotency key without creating duplicate work.
+- Apply per-user and global publish quotas before either broker. A broker is a backpressure buffer,
+  not permission to accept unlimited untrusted input.
+
+#### Security and privacy controls
+
+- Browsers, IDEs and external agents never receive direct Kafka or RabbitMQ credentials. Only
+  authenticated server-side producers and workers can reach broker networks.
+- Production brokers require TLS, authentication and least-privilege ACLs. API producers receive
+  write-only access to their topics/exchange; consumers receive only their group/queue access;
+  repair tools use a separate audited principal.
+- Do not place bearer tokens, API keys, prompt text, transcript text, patches, source code or raw
+  absolute paths in message bodies, headers, keys, topic names, queue names or error logs.
+- Encrypt broker disks/backups, set explicit retention and document deletion propagation. Kafka
+  retention is a recovery window, not a second permanent analytics database.
+- DLQ access is production-sensitive. DLQ inspection tools display identifiers and sanitized error
+  categories, not arbitrary serialized payload dumps.
+
+#### Observability and capacity gates
+
+Required metrics and alerts:
+
+- API publish latency/error rate by topic or routing key.
+- Kafka bytes/records in, partition skew, under-replicated partitions, consumer lag and age of the
+  oldest unprocessed record for every consumer group.
+- RabbitMQ ready/unacked counts, oldest job age, retry count, DLQ count and worker concurrency.
+- ClickHouse batch size, insert latency, rejected rows, dedup hits and projection reconciliation
+  failures.
+- End-to-end delay from `occurred_at` to raw fact visibility and from fact visibility to published
+  projection version.
+
+Initial production targets:
+
+- Kafka-backed ingest acknowledgement p95 below 250 ms under expected peak load.
+- Normal consumer lag below 60 seconds; alert at 5 minutes and page at 15 minutes.
+- No accepted event/job loss during one broker/worker restart.
+- Zero projection publication when reconciliation fails.
+- RabbitMQ DLQ is normally empty; any non-test message pages the owning worker team.
+
+Capacity tests must establish the supported users rather than claim scale from broker presence
+alone. Test concurrent active users, per-user burst, Kafka partition skew, ClickHouse batch
+throughput, worker catch-up after outage and storage required for the full retention window.
+
+#### Rollout and migration sequence
+
+1. Land schemas, event/job types and compatibility tests with all producers disabled.
+2. Deploy Kafka/RabbitMQ, ACLs, dashboards and empty consumers in shadow mode.
+3. Dual-observe a sample of sanitized telemetry: keep the current direct write authoritative while
+   the Kafka sink writes to isolated shadow tables. Compare counts, identities and latency.
+4. Stop shadow writes and fix every reconciliation mismatch; do not compensate by adding totals.
+5. Switch one account cohort at a time so Kafka becomes the sole accepted telemetry path. Keep the
+   client offline queue enabled throughout.
+6. Enable RabbitMQ for dry-run reprocess jobs, then projection rebuilds, then non-dry-run repairs.
+7. Remove the direct ClickHouse ingest path only after rollback and replay tests pass. Reads remain
+   unchanged until broker-backed facts reconcile with the existing API responses.
+8. Run packaged Codex, Claude and Gemini scenarios, broker restart tests and realistic load tests
+   before declaring the launch gate complete.
+
+Rollback rules:
+
+- A cohort may return to direct ingest only while dual-write reconciliation and a deterministic
+  event-ID bridge are still available. Never run independent direct and Kafka authoritative paths
+  indefinitely.
+- Kafka records already acknowledged remain consumable after rollback and must still deduplicate
+  against any direct writes.
+- RabbitMQ jobs already accepted must finish or be explicitly cancelled/audited; disabling new job
+  publishing does not discard queued work.
+
+#### Deployment baseline
+
+Development uses one KRaft Kafka broker, one RabbitMQ node with the management UI and one
+ClickHouse node in Docker Compose. Production starts with either managed services or at least three
+Kafka brokers and three RabbitMQ nodes; RabbitMQ workload queues use durable quorum queues. Kafka
+uses replication factor 3/minimum ISR 2, while RabbitMQ publishers use confirms and consumers use
+manual acknowledgements.
+
+Required configuration groups:
+
+- `KAFKA_BOOTSTRAP_SERVERS`, security protocol/SASL/TLS settings, client ID, topic prefix,
+  producer acknowledgement/compression limits and consumer group IDs.
+- `RABBITMQ_URL`, TLS/credential settings, exchange/queue prefix, publisher-confirm timeout,
+  prefetch, retry TTLs and DLQ names.
+- Per-environment topic retention, message-size ceilings, queue length/age ceilings and disk-watermark
+  alerts. Production secrets come from the deployment secret manager, never committed `.env` files.
+
+Retry delays use explicit TTL retry queues dead-lettering back to the work queue, avoiding a
+mandatory delayed-message plugin. Quorum queues protect accepted jobs across a node loss; they do
+not replace idempotent workers or a tested backup/restore procedure.
+
+#### Broker acceptance tests
+
+- [ ] Replaying the same client batch 100 times produces one logical heartbeat/AI/usage fact per
+      stable event ID.
+- [ ] Killing a Kafka consumer after ClickHouse insert but before offset commit replays safely and
+      leaves projections unchanged.
+- [ ] Pausing ClickHouse causes Kafka lag to grow without losing accepted events; resuming it
+      drains the backlog and reconciles exactly.
+- [ ] Records for one user remain ordered; high traffic from one user does not block unrelated
+      partitions beyond measured capacity limits.
+- [ ] An incompatible schema, oversized payload or prohibited privacy field is rejected before
+      broker publication.
+- [ ] Repeating a RabbitMQ request with the same idempotency key returns the same job identity and
+      executes the expensive operation at most once logically.
+- [ ] Worker crashes cause bounded retry, then success or DLQ; no job is silently acknowledged.
+- [ ] A failed projection reconciliation never publishes its `data_version` and the prior version
+      remains readable.
+- [ ] Kafka, RabbitMQ, worker and ClickHouse restart scenarios expose controlled health/lag status
+      without leaking broker details to public API callers.
+- [ ] Broker storage, logs and DLQs contain no prompts, responses, transcripts, patches, source
+      code, raw absolute paths or authentication secrets.
+
 ---
 
 ## Testing Strategy (TDD per CLAUDE.md)
@@ -3046,9 +3379,11 @@ Phase 9 is complete only when:
 | Unit (Rust) | `cargo test` | Heartbeat validation, config, dedup, AST detection accuracy, duration calc, project rule regex |
 | Integration (Rust) | `assert_cmd` | CLI end-to-end, `axum::test` for server routes, real SQLite for offline queue |
 | Integration (Server) | Docker ClickHouse | MV aggregation, ReplicatedSummingMergeTree correctness, Null engine reprocessing |
+| Integration (Brokers) | Testcontainers/Docker Kafka + RabbitMQ + ClickHouse | Producer acknowledgement, consumer restart/replay, offset commit ordering, publisher confirms, retry/DLQ and idempotent ClickHouse effects |
 | Unit (TypeScript) | Vitest | VS Code heartbeat buffer/flush timing, Figma rate limiting, dedup |
 | Unit (Python) | pytest | Blender event queue, CLI delegation, handler registration |
-| E2E | Full roundtrip | CLI → server → ClickHouse INSERT → MV fires → query aggregated table → verify response |
+| E2E telemetry | Full roundtrip | CLI → ingest API → Kafka → ClickHouse consumer → projection publish → analytics API |
+| E2E jobs | Full roundtrip | Maintenance API → RabbitMQ → reprocess/rebuild worker → reconciled `data_version` → job status |
 
 ---
 
@@ -3056,12 +3391,17 @@ Phase 9 is complete only when:
 
 1. `cargo test --workspace` — all Rust tests pass
 2. `cargo build --workspace --release` — all binaries compile
-3. `docker compose up -d` — start ClickHouse
-4. `cargo run -p wakaclock-server` — starts, runs migrations, connects to CH
-5. `cargo run -p wakaclock-cli -- heartbeat --entity ./test.rs --write`
-6. `curl localhost:3030/api/v1/status_bar/today -H "Authorization: Basic <key>"`
-7. Verify MVs fired: `SELECT * FROM daily_totals` shows aggregated data
-8. VS Code: install extension, open file, verify status bar shows time
+3. `docker compose up -d` — start ClickHouse, Kafka and RabbitMQ with health checks
+4. Verify Kafka topics/ACLs, RabbitMQ exchanges/queues/DLQ and empty initial consumer lag
+5. Start Kafka fact/projection consumers and RabbitMQ session/reprocess/rebuild workers
+6. `cargo run -p wakaclock-server` — starts, runs migrations and connects to all required services
+7. `cargo run -p wakaclock-cli -- heartbeat --entity ./test.rs --write`
+8. Verify the event is acknowledged by Kafka, consumed once logically and visible in ClickHouse
+9. `curl localhost:3030/api/v1/status_bar/today -H "Authorization: Basic <key>"`
+10. Submit a dry-run reprocess request, observe RabbitMQ job status and verify DLQ remains empty
+11. Restart one consumer/worker and replay the same event/job IDs; totals and published version do
+    not change
+12. VS Code: install extension, open file, verify status bar shows time
 
 ---
 

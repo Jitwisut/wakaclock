@@ -6,16 +6,21 @@ use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::logger::Logger;
 use crate::infrastructure::presence_store::PresenceStore;
-use crate::infrastructure::rate_limiter::AuthRateLimiter;
+use crate::infrastructure::rate_limiter::{AnalyticsRateLimiter, AuthRateLimiter};
+use crate::repository::account_analytics::AccountAnalyticsRepository;
+use crate::repository::ai_usage::AiUsageRepository;
 use crate::repository::analytics::AnalyticsRepository;
 use crate::repository::coworking_session::CoworkingSessionRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::org::OrgRepository;
+use crate::repository::project_analytics::ProjectAnalyticsRepository;
 use crate::repository::project_identity::ProjectIdentityRepository;
 use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
+use crate::services::account_analytics::AccountAnalyticsService;
 use crate::services::ai_stats::AiStatsService;
+use crate::services::ai_usage::AiUsageService;
 use crate::services::all_time::AllTimeService;
 use crate::services::coworking_session::CoworkingSessionService;
 use crate::services::dashboard_analytics::DashboardAnalyticsService;
@@ -24,6 +29,7 @@ use crate::services::heartbeat::HeartbeatService;
 use crate::services::insights::InsightsService;
 use crate::services::keystroke_stats::KeystrokeStatsService;
 use crate::services::org::OrgService;
+use crate::services::project_analytics::ProjectAnalyticsService;
 use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_merge::ProjectMergeService;
 use crate::services::project_rule::ProjectRuleService;
@@ -42,10 +48,13 @@ pub struct AppState {
     pub clickhouse: Arc<ClickHouseClient>,
     pub auth_cache: Arc<AuthKeyCache>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
+    pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     /// Live coding presence (plan.md Phase 7) — in-memory prototype, see
     /// `presence_store` module docs for what that does and does not mean.
     pub presence: Arc<PresenceStore>,
     pub analytics_repo: Arc<AnalyticsRepository>,
+    pub account_analytics_repo: Arc<AccountAnalyticsRepository>,
+    pub ai_usage_repo: Arc<AiUsageRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
     pub project_identity_repo: Arc<ProjectIdentityRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
@@ -54,6 +63,8 @@ pub struct AppState {
     pub team_repo: Arc<TeamRepository>,
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
     pub ai_stats_service: Arc<AiStatsService>,
+    pub account_analytics_service: Arc<AccountAnalyticsService>,
+    pub ai_usage_service: Arc<AiUsageService>,
     pub all_time_service: Arc<AllTimeService>,
     pub user_service: Arc<UserService>,
     pub heartbeat_service: Arc<HeartbeatService>,
@@ -62,6 +73,7 @@ pub struct AppState {
     pub keystroke_stats_service: Arc<KeystrokeStatsService>,
     /// Stable project identity (plan.md 9.3): mints and resolves `project_id`.
     pub project_identity_service: Arc<ProjectIdentityService>,
+    pub project_analytics_service: Arc<ProjectAnalyticsService>,
     pub project_merge_service: Arc<ProjectMergeService>,
     pub projects_service: Arc<ProjectsService>,
     pub reprocess_service: Arc<ReprocessService>,
@@ -120,12 +132,16 @@ pub async fn create_app_state() -> Result<AppState> {
     // once migrations have created `wakaclock.users`.
     let auth_cache = AuthKeyCache::new();
     let auth_rate_limiter = AuthRateLimiter::new();
+    let analytics_rate_limiter = AnalyticsRateLimiter::new();
     let presence = PresenceStore::new();
 
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
+    let account_analytics_repo = Arc::new(AccountAnalyticsRepository::new(clickhouse.clone()));
+    let ai_usage_repo = Arc::new(AiUsageRepository::new(clickhouse.clone()));
     let heartbeat_repo = Arc::new(HeartbeatRepository::new(clickhouse.clone()));
     let project_identity_repo = Arc::new(ProjectIdentityRepository::new(clickhouse.clone()));
+    let project_analytics_repo = Arc::new(ProjectAnalyticsRepository::new(clickhouse.clone()));
     let project_merge_repo = Arc::new(ProjectMergeRepository::new(clickhouse.clone()));
     let project_rule_repo = Arc::new(ProjectRuleRepository::new(clickhouse.clone()));
     let org_repo = Arc::new(OrgRepository::new(clickhouse.clone()));
@@ -134,10 +150,11 @@ pub async fn create_app_state() -> Result<AppState> {
 
     // Initialise Services
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
+    let account_analytics_service =
+        Arc::new(AccountAnalyticsService::new(account_analytics_repo.clone()));
     let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(clickhouse.clone()));
     let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone()));
     let user_service = Arc::new(UserService::new(clickhouse.clone()));
-    let heartbeat_service = Arc::new(HeartbeatService::new(heartbeat_repo.clone()));
     let duration_service = Arc::new(DurationService::new(clickhouse.clone()));
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone()));
     let keystroke_stats_service = Arc::new(KeystrokeStatsService::new(clickhouse.clone()));
@@ -146,11 +163,26 @@ pub async fn create_app_state() -> Result<AppState> {
         project_identity_repo.clone(),
         project_merge_repo.clone(),
     ));
+    let ai_usage_service = Arc::new(AiUsageService::new(
+        ai_usage_repo.clone(),
+        project_identity_service.clone(),
+    ));
+    let project_analytics_service = Arc::new(ProjectAnalyticsService::new(
+        project_analytics_repo.clone(),
+        project_identity_service.clone(),
+        config.jwt_secret.clone(),
+    ));
+    let heartbeat_service = Arc::new(HeartbeatService::new(
+        heartbeat_repo.clone(),
+        project_identity_service.clone(),
+    ));
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone()));
     let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
     let reprocess_service = Arc::new(ReprocessService::new(
         clickhouse.clone(),
         project_rule_service.clone(),
+        project_identity_service.clone(),
+        account_analytics_service.clone(),
     ));
     let stats_service = Arc::new(StatsService::new(clickhouse.clone()));
     let summary_service = Arc::new(SummaryService::new(clickhouse.clone()));
@@ -166,8 +198,11 @@ pub async fn create_app_state() -> Result<AppState> {
         clickhouse,
         auth_cache,
         auth_rate_limiter,
+        analytics_rate_limiter,
         presence,
         analytics_repo,
+        account_analytics_repo,
+        ai_usage_repo,
         heartbeat_repo,
         project_identity_repo,
         project_merge_repo,
@@ -176,6 +211,8 @@ pub async fn create_app_state() -> Result<AppState> {
         team_repo,
         coworking_session_repo,
         ai_stats_service,
+        account_analytics_service,
+        ai_usage_service,
         all_time_service,
         user_service,
         heartbeat_service,
@@ -183,6 +220,7 @@ pub async fn create_app_state() -> Result<AppState> {
         insights_service,
         keystroke_stats_service,
         project_identity_service,
+        project_analytics_service,
         project_merge_service,
         projects_service,
         reprocess_service,

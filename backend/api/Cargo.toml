@@ -31,7 +31,7 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "cooki
 dotenvy = "0.15"
 clap = { version = "4.5.43", features = ["derive"] }
 axum = { version = "0.7", features = ["multipart", "ws", "macros"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "timeout", "fs"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "timeout", "fs", "set-header"] }
 clickhouse = { version = "0.13.3", features = ["lz4", "uuid", "rustls-tls", "inserter"] }
 governor = "0.8"
 rusqlite = { version = "0.29", features = ["bundled"] }

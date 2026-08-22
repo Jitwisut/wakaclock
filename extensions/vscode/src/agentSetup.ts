@@ -337,9 +337,41 @@ async function writeCliPath(homeDir: string, cliPath?: string): Promise<void> {
   if (!trimmed) {
     return;
   }
+  const resolved = await resolveExecutablePath(trimmed);
   const target = path.join(homeDir, ".wakaclock", "cli-path");
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await writeTextAtomically(target, `${trimmed}\n`);
+  await writeTextAtomically(target, `${resolved}\n`);
+}
+
+/**
+ * Agent hooks frequently run with a smaller PATH than the VS Code extension host.
+ * Persist an absolute executable when the configured value is a bare command so the
+ * hook keeps working from Codex/Claude even when `wakaclock` is not on their PATH.
+ */
+async function resolveExecutablePath(command: string): Promise<string> {
+  if (path.isAbsolute(command) || command.includes(path.sep)) {
+    return command;
+  }
+
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")
+    : [""];
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch {
+        // Keep searching the remaining PATH entries.
+      }
+    }
+  }
+
+  return command;
 }
 
 async function codexHookIsConfigured(homeDir: string): Promise<boolean> {

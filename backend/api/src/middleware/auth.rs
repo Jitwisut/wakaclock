@@ -150,6 +150,24 @@ pub fn check_rate_limit(
     })
 }
 
+/// Check the per-account limit for expensive analytics and historical rebuild work.
+///
+/// Authentication must happen before this helper is called, so the key is the verified
+/// account id rather than a caller-controlled query parameter or an unstable proxy IP.
+pub fn check_analytics_rate_limit(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<(), (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    state.analytics_rate_limiter.check(user_id).map_err(|_| {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            axum::Json(serde_json::json!({
+                "error": "analytics request rate limit exceeded, try again later"
+            })),
+        )
+    })
+}
+
 /// Verify `Authorization: Bearer <secret>` against `INTERNAL_API_SECRET` — the only
 /// credential POST /internal/subscription accepts. Constant-time on purpose: this
 /// secret has no rate limit or hashing behind it, so a timing side-channel would be a

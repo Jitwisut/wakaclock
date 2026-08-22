@@ -225,4 +225,35 @@ impl ProjectIdentityRepository {
             .await
             .map_err(|e| anyhow::anyhow!("ClickHouse unresolved projects query error: {e}"))
     }
+
+    /// The historical reprocess path is deliberately both account- and date-scoped.  A
+    /// project rename should never trigger a mutation across another account's history.
+    pub async fn set_project_id_for_range(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        project: &str,
+        project_id: Uuid,
+    ) -> Result<()> {
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.heartbeats
+                 UPDATE project_id = ?
+                 WHERE user_id = ?
+                   AND toDate(date) BETWEEN toDate(?) AND toDate(?)
+                   AND project_id IS NULL
+                   AND ifNull(project, '') = ?
+                 SETTINGS mutations_sync = 1",
+            )
+            .bind(project_id)
+            .bind(user_id)
+            .bind(start)
+            .bind(end)
+            .bind(project)
+            .execute()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse project-id backfill mutation failed: {e}"))
+    }
 }

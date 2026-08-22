@@ -12,22 +12,19 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 /** Declared once so the canonical, OG URL and breadcrumb entries cannot drift apart. */
 const CANONICAL = '/integrations/vscode';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createMarketingMetadata({
   title: 'VS Code Time Tracking Extension',
   description:
-    `The ${SITE_NAME} VS Code extension records editor activity, buffers it in memory, and sends ` +
-    'it through wakaclock-cli. It tracks typing, saves, file switches, debug sessions and build ' +
-    "tasks, and shows today's total in the status bar.",
-  alternates: { canonical: CANONICAL },
-  openGraph: { url: CANONICAL, title: `VS Code Time Tracking | ${SITE_NAME}` },
-};
+    'Learn how the AtoAxis VS Code extension buffers editor activity, sends heartbeats and shows today’s coding time for transparent activity tracking.',
+  path: CANONICAL,
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -76,7 +73,7 @@ const FAQ: readonly FaqEntry[] = [
     question: 'Can I use my existing WakaTime plugin instead?',
     answer:
       'Yes. The heartbeat API is WakaTime-compatible, so pointing api_url in ~/.wakatime.cfg at ' +
-      `your ${SITE_NAME} server works without installing this extension. The dedicated extension ` +
+      `the ${SITE_NAME} API works without installing this extension. The dedicated extension ` +
       'exists for people who want a native client and the status bar total.',
   },
 ];
@@ -135,8 +132,8 @@ export default function VsCodeIntegrationPage() {
             items={[
               'VS Code 1.90 or newer',
               'The wakaclock-cli binary, either on your PATH or set via wakaclock.cliPath',
-              `A running ${SITE_NAME} server and an API key generated from its settings page`,
-              'A CLI config file at ~/.wakaclock/config.toml pointing at that server',
+              `A ${SITE_NAME} account and an API key generated from its settings page`,
+              'A CLI config file at ~/.wakaclock/config.toml pointing at the hosted API',
             ]}
           />
         </Section>
@@ -198,7 +195,7 @@ export default function VsCodeIntegrationPage() {
             {
               href: '/docs/getting-started',
               label: `Install ${SITE_NAME}`,
-              description: 'Server setup, API keys, and verifying that tracking works end to end',
+              description: 'Hosted setup, API keys, and verifying that tracking works end to end',
             },
             {
               href: '/wakatime-alternative',

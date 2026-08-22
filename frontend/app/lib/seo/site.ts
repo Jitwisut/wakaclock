@@ -1,5 +1,8 @@
+import type { Metadata } from 'next';
+
 /**
- * Single source of truth for public site identity, canonical URLs, and structured data.
+ * Single source of truth for public site identity, canonical URLs, localized routes,
+ * metadata and structured data.
  *
  * Every claim expressed here is verified against the product source:
  *   - heartbeat ingest + fields .... backend/api/src/handlers/v1/heartbeats.rs
@@ -19,6 +22,9 @@
  */
 export const SITE_NAME = 'AtoAxis';
 export const SITE_TAGLINE = 'One timeline for everything you do.';
+export const SITE_LOCALES = ['en', 'th'] as const;
+export type SiteLocale = (typeof SITE_LOCALES)[number];
+export const DEFAULT_LOCALE: SiteLocale = 'en';
 
 /**
  * Canonical origin. Production builds must supply a real public URL — a canonical
@@ -44,22 +50,43 @@ function resolveSiteUrl(): string {
 
 export const SITE_URL = resolveSiteUrl();
 
+export const SOCIAL_IMAGE_PATH = '/opengraph-image';
+
+export function localizedPath(locale: SiteLocale, path: string): string {
+  let normalized = path;
+
+  if (path === '/') {
+    normalized = '';
+  } else if (!path.startsWith('/')) {
+    normalized = `/${path}`;
+  }
+
+  if (locale === DEFAULT_LOCALE) {
+    return normalized || '/';
+  }
+
+  return normalized ? `/th${normalized}` : '/th';
+}
+
 export function absoluteUrl(path: string): string {
   return new URL(path, `${SITE_URL}/`).toString();
 }
 
 /** The legal entity behind the product, taken from the repository LICENSE. */
 export const ORGANIZATION = {
+  email: 'hello@atoaxis.com',
+  legalName: 'Lodash (Thailand) Co., Ltd.',
+  logo: absoluteUrl('/logo.png'),
   name: 'StandUpCode / Lodash (Thailand) Co., Ltd.',
   url: SITE_URL,
 } as const;
 
-/** Commercial terms, confirmed by the product owner. */
+/** Commercial terms planned for launch; checkout is not enabled in Early Access. */
 export const PRICING = {
   monthlyUsd: 12,
   annualUsd: 99,
-  trialDays: 14,
   currency: 'USD',
+  status: 'planned',
 } as const;
 
 /**
@@ -68,9 +95,9 @@ export const PRICING = {
  * engines and answer engines extract one consistent definition.
  *
  * Note for future edits: this product is a hosted service. Earlier drafts described it
- * as self-hosted — that was wrong and every page was corrected. Do not reintroduce
- * "run it on your own infrastructure" language unless a self-hosted edition actually
- * ships, and do not claim the customer owns or can query the database.
+ * as customer-operated infrastructure — that was wrong and every page was corrected. Do not
+ * reintroduce customer-operated infrastructure language, and do not claim the customer owns or
+ * can query the database.
  */
 export const PRODUCT_ANSWER =
   `${SITE_NAME} is a developer time tracking service. It receives coding activity from ` +
@@ -86,16 +113,17 @@ export const PRODUCT_ANSWER =
  * "yes" in an FAQ. The whole site was audited once to remove claims the code could not
  * back; this constant exists so the next person does not have to do it again.
  *
- * Status verified against the repository: there is no team or organisation model, no
- * WebSocket or SSE transport, and no presence or session storage.
+ * The team/presence work in the repository is prototype-level only. It must not be
+ * described as a production capability until persistence, permissions, analytics and
+ * billing are complete.
  */
 export const IN_DEVELOPMENT = {
-  teamPresence: 'Team presence with animated avatars',
-  subTeams: 'Sub-teams within an organisation',
-  coworkingSessions: 'Drag-to-join co-working sessions',
+  teamPresence: 'Team presence with animated avatars (Early Access)',
+  subTeams: 'Sub-teams within an organisation (Early Access)',
+  coworkingSessions: 'Drag-to-join co-working sessions (Early Access)',
 } as const;
 
-export const PUBLIC_ROUTES = [
+export const EN_PUBLIC_ROUTES = [
   '/',
   '/teams',
   '/wakatime-alternative',
@@ -107,7 +135,79 @@ export const PUBLIC_ROUTES = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/about',
+  '/contact',
+  '/terms',
+  '/early-access',
 ] as const;
+
+export const TH_PUBLIC_ROUTES = EN_PUBLIC_ROUTES.map((route) => localizedPath('th', route));
+
+export interface PublicRouteDefinition {
+  lastModified?: string;
+  locale: SiteLocale;
+  path: string;
+}
+
+/** Locale-aware route inventory. Add a real content date only when the page changes. */
+export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [
+  ...EN_PUBLIC_ROUTES.map((path) => ({ locale: 'en' as const, path })),
+  ...EN_PUBLIC_ROUTES.map((path) => ({ locale: 'th' as const, path: localizedPath('th', path) })),
+];
+
+/** Canonical public URL paths, including both language variants. */
+export const PUBLIC_ROUTES = [...EN_PUBLIC_ROUTES, ...TH_PUBLIC_ROUTES] as readonly string[];
+
+export function createMarketingMetadata({
+  description,
+  locale = DEFAULT_LOCALE,
+  path,
+  title,
+}: {
+  description: string;
+  locale?: SiteLocale;
+  path: string;
+  title: string;
+}): Metadata {
+  const canonicalPath = localizedPath(locale, path);
+  const englishPath = localizedPath('en', path);
+  const thaiPath = localizedPath('th', path);
+  const displayTitle = title.includes(SITE_NAME) ? title : `${title} | ${SITE_NAME}`;
+
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: canonicalPath,
+      languages: {
+        en: englishPath,
+        th: thaiPath,
+        'x-default': englishPath,
+      },
+    },
+    openGraph: {
+      type: 'website',
+      siteName: SITE_NAME,
+      title: displayTitle,
+      description,
+      url: canonicalPath,
+      images: [
+        {
+          alt: `${SITE_NAME} — ${title}`,
+          height: 630,
+          url: SOCIAL_IMAGE_PATH,
+          width: 1200,
+        },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: displayTitle,
+      description,
+      images: [SOCIAL_IMAGE_PATH],
+    },
+  };
+}
 
 /** Route prefixes that must never be crawled or listed in the sitemap. */
 export const PRIVATE_ROUTE_PREFIXES = ['/dashboard', '/api', '/auth'] as const;

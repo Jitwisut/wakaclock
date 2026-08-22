@@ -1,4 +1,6 @@
+pub mod account_analytics;
 pub mod ai_stats;
+pub mod ai_usage;
 pub mod all_time;
 pub mod api_key;
 pub mod auth;
@@ -10,6 +12,7 @@ pub mod internal;
 pub mod keystroke_stats;
 pub mod orgs;
 pub mod presence;
+pub mod project_analytics;
 pub mod project_identity;
 pub mod project_merges;
 pub mod project_rules;
@@ -41,10 +44,24 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(heartbeats::create).get(heartbeats::list),
         )
         .route("/heartbeats.bulk", post(heartbeats::create_bulk))
+        .route("/ai/usage", post(ai_usage::ingest))
+        .route("/analytics/rebuild", post(account_analytics::rebuild))
         .route("/all_time_since_today", get(all_time::get))
         .route("/durations", get(durations::list))
         .route("/insights/:type/:range", get(insights::get))
         .route("/projects", get(projects::list))
+        .route("/projects/analytics", get(project_analytics::list))
+        .route(
+            "/projects/:project_id/analytics",
+            get(project_analytics::detail),
+        )
+        .route("/projects/:project_id/files", get(project_analytics::files))
+        .route(
+            "/projects/:project_id/branches",
+            get(project_analytics::branches),
+        )
+        .route("/projects/:project_id/daily", get(project_analytics::daily))
+        .route("/projects/:project_id/ai", get(project_analytics::ai))
         .route(
             "/projects/backfill_preview",
             get(project_identity::backfill_preview),

@@ -14,15 +14,18 @@ export type FlushReason =
 export interface BufferedFileState {
     entity: string;
     project?: string;
-    lastKeystrokeAt?: number;
-    firstActivityAt?: number;
+    /** Timestamp of the most recent text edit, kept separate from cross-file activity time. */
+    lastEditAt?: number;
     lastActivityAt?: number;
     lastHeartbeatAt?: number;
+    activeSeconds: number;
     keystrokes: number;
     charsAdded: number;
     charsDeleted: number;
     humanLinesAdded: number;
     humanLinesDeleted: number;
+    unattributedLinesAdded: number;
+    unattributedLinesDeleted: number;
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
@@ -50,6 +53,8 @@ export interface ExtraHeartbeatPayload {
     ai_lines_deleted?: number;
     human_lines_added?: number;
     human_lines_deleted?: number;
+    unattributed_lines_added?: number;
+    unattributed_lines_deleted?: number;
 }
 
 export interface CliResult {

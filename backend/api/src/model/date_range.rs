@@ -5,7 +5,7 @@
 //! agreeing with each other — computing any of them against server-local time silently
 //! reports the wrong day to anyone not sitting in the server's zone.
 
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::Serialize;
 
@@ -129,6 +129,36 @@ impl ResolvedRange {
             days_included: self.days_included(),
         }
     }
+
+    /// Unix-second bounds for querying the raw heartbeat/usage facts. The boundaries are
+    /// computed from the user's local midnight, so DST transitions produce a 23/25-hour
+    /// interval instead of silently shifting a day into the server's timezone.
+    pub fn unix_bounds(&self) -> (f64, f64) {
+        let start = self
+            .timezone
+            .from_local_datetime(&self.start.and_hms_opt(0, 0, 0).expect("midnight is valid"))
+            .earliest()
+            .or_else(|| {
+                self.timezone
+                    .from_local_datetime(
+                        &self.start.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+                    )
+                    .latest()
+            })
+            .expect("timezone has a midnight offset");
+        let end_date = self.end + Duration::days(1);
+        let end = self
+            .timezone
+            .from_local_datetime(&end_date.and_hms_opt(0, 0, 0).expect("midnight is valid"))
+            .earliest()
+            .or_else(|| {
+                self.timezone
+                    .from_local_datetime(&end_date.and_hms_opt(0, 0, 0).expect("midnight is valid"))
+                    .latest()
+            })
+            .expect("timezone has a midnight offset");
+        (start.timestamp() as f64, end.timestamp() as f64)
+    }
 }
 
 #[cfg(test)]
@@ -199,5 +229,13 @@ mod tests {
         let info = range.info();
         assert_eq!(info.timezone, "Asia/Bangkok");
         assert_eq!(info.days_included, 7);
+    }
+
+    #[test]
+    fn unix_bounds_follow_the_requested_timezone() {
+        let range = ResolvedRange::parse("2026-08-07", "2026-08-07", Some("Asia/Bangkok")).unwrap();
+        let (start, end) = range.unix_bounds();
+        assert_eq!(end - start, 86_400.0);
+        assert!(start > 0.0);
     }
 }

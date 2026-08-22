@@ -10,6 +10,8 @@ import * as path from "node:path";
  */
 const LINE_MATCH_SLACK = 2;
 
+export type RecentEditAttribution = "ai" | "human" | "unattributed";
+
 export interface AiEditEvent {
   event_id: string;
   entity: string;
@@ -38,14 +40,37 @@ export class AiAttributionStore {
     linesAdded: number,
     linesDeleted: number
   ): Promise<boolean> {
+    return (
+      (await this.classifyRecentEdit(entity, timeMs, linesAdded, linesDeleted)) ===
+      "ai"
+    );
+  }
+
+  /**
+   * Classify an editor-side change using only the metadata emitted by agent hooks.
+   *
+   * A nearby event with a materially different line delta is deliberately not
+   * treated as human work: it is evidence that an agent may have touched the file,
+   * but not enough evidence to claim that this exact editor change belongs to it.
+   * Keeping that result as `unattributed` prevents the dashboard from silently
+   * inflating human attribution while preserving the observed activity.
+   */
+  public async classifyRecentEdit(
+    entity: string,
+    timeMs: number,
+    linesAdded: number,
+    linesDeleted: number
+  ): Promise<RecentEditAttribution> {
     if (linesAdded === 0 && linesDeleted === 0) {
-      return false;
+      return "human";
     }
 
     await this.refresh();
     const normalizedEntity = normalizeEntity(entity);
     const nowSeconds = timeMs / 1000;
-    const index = this.events.findIndex((event) => {
+    const candidates = this.events
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => {
       if (this.consumed.has(event.event_id)) {
         return false;
       }
@@ -55,31 +80,29 @@ export class AiAttributionStore {
       if (Math.abs(event.time - nowSeconds) > 15) {
         return false;
       }
-      // The two sides must plausibly describe the *same* edit. A hook counts a
-      // replacement slightly differently from VS Code's range metrics, so a small
-      // absolute slack is allowed — but no more than that.
-      //
-      // This used to be `event.lines_added >= linesAdded`, which matched any AI event
-      // that touched at least as many lines as the editor observed. Because an agent
-      // routinely rewrites whole files (events with +491 lines were present in a real
-      // log), that test passed for essentially any human edit in a file an agent had
-      // touched in the last 15 seconds: `491 >= 1`. The user's own typing was then
-      // reattributed to the AI and their heartbeat dropped entirely, so the time they
-      // genuinely spent disappeared. When in doubt leave the activity with the human —
-      // plan.md 8.7 requires never erasing real human work to make attribution tidier.
-      return (
-        Math.abs(event.lines_added - linesAdded) <= LINE_MATCH_SLACK &&
-        Math.abs(event.lines_deleted - linesDeleted) <= LINE_MATCH_SLACK
-      );
+      return true;
     });
 
-    if (index === -1) {
-      return false;
+    if (candidates.length === 0) {
+      return "human";
     }
 
-    const event = this.events[index];
+    // Prefer the closest event in time so an old nearby event cannot claim a newer
+    // edit when several agent activities are present in the sidecar.
+    candidates.sort(
+      (left, right) =>
+        Math.abs(left.event.time - nowSeconds) - Math.abs(right.event.time - nowSeconds)
+    );
+    const { event } = candidates[0];
+    const lineMatch =
+      Math.abs(event.lines_added - linesAdded) <= LINE_MATCH_SLACK &&
+      Math.abs(event.lines_deleted - linesDeleted) <= LINE_MATCH_SLACK;
+    if (!lineMatch) {
+      return "unattributed";
+    }
+
     this.consumed.add(event.event_id);
-    return true;
+    return "ai";
   }
 
   private async refresh(): Promise<void> {

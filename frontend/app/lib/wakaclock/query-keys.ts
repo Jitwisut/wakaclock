@@ -24,4 +24,24 @@ export const wakaclockKeys = {
     [...wakaclockKeys.all, 'heartbeats', userId, date] as const,
   projectRules: (userId: string) => [...wakaclockKeys.all, 'project-rules', userId] as const,
   projectMerges: (userId: string) => [...wakaclockKeys.all, 'project-merges', userId] as const,
+  projectAnalytics: (userId: string, start: string, end: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'project-analytics', userId, start, end, timezone] as const,
+  projectAnalyticsDetail: (
+    userId: string,
+    projectId: string,
+    start: string,
+    end: string,
+    timezone?: string,
+    branch?: string
+  ) =>
+    [
+      ...wakaclockKeys.all,
+      'project-analytics-detail',
+      userId,
+      projectId,
+      start,
+      end,
+      timezone,
+      branch,
+    ] as const,
 };

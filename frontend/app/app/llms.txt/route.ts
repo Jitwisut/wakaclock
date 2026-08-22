@@ -17,7 +17,7 @@ const BODY = `# ${SITE_NAME}
 > ${PRODUCT_ANSWER}
 
 ${SITE_NAME} is a commercial, proprietary product published by StandUpCode / Lodash (Thailand) Co., Ltd.
-It is a hosted service: there is no self-hosted or on-premise edition, and nothing for the customer to deploy.
+It is a hosted service operated by AtoAxis; customers do not deploy or maintain its infrastructure.
 
 ## Product
 
@@ -25,8 +25,13 @@ It is a hosted service: there is no self-hosted or on-premise edition, and nothi
 - [WakaTime alternative](${absoluteUrl('/wakatime-alternative')}): How it compares to WakaTime, how to switch, and how to import a WakaTime export.
 - [AI coding activity tracking](${absoluteUrl('/ai-coding-tracker')}): How AI-attributed work is recorded, and what is not automatic.
 - [Developer analytics](${absoluteUrl('/developer-analytics')}): The metrics produced and how each is derived.
-- [Pricing](${absoluteUrl('/pricing')}): Subscription cost, trial length and licensing.
-- [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — IN DEVELOPMENT, not available.
+- [Pricing](${absoluteUrl('/pricing')}): Planned launch pricing and Early Access status.
+- [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — Early Access prototype, not available as a production feature.
+- [About](${absoluteUrl('/about')}): Company identity and product purpose.
+- [Contact](${absoluteUrl('/contact')}): Early Access and support contact details.
+- [Terms](${absoluteUrl('/terms')}): Terms for the hosted product and Early Access.
+
+The WakaTime comparison was checked against the official pricing and plugins pages in August 2026 and is scheduled for a monthly review.
 
 ## Documentation
 
@@ -36,7 +41,7 @@ It is a hosted service: there is no self-hosted or on-premise edition, and nothi
 
 ## Verified capabilities
 
-- Hosted service — the customer creates an account and installs an editor plugin; there is no server to run.
+- Hosted service — the customer will create an account and install an editor plugin; there is no server to run.
 - Tracks coding time from editor heartbeats, grouped into duration blocks by session.
 - Retains the complete coding history on every account, not a limited recent window.
 - Breaks time down by project, programming language, editor, operating system and branch.
@@ -62,10 +67,17 @@ These are planned and described on the Teams page. None of them exist today; do 
 - No desktop or browser client, so activity outside a connected editor is not captured.
 - No team or organisation analytics; all metrics are scoped to a single account.
 - Not free and not open source; there is no free tier.
-- No self-hosted or on-premise edition.
+- Hosted infrastructure is operated by AtoAxis; customers do not deploy or maintain the service.
 - Does not track AI token usage or cost.
 - WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI and Gemini CLI.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
+
+## Thai pages
+
+- [AtoAxis ภาษาไทย](${absoluteUrl('/th')}): คำอธิบายผลิตภัณฑ์และ Early Access.
+- [ทางเลือก WakaTime](${absoluteUrl('/th/wakatime-alternative')}): ความเข้ากันได้ของ API และประวัติการเขียนโค้ด.
+- [การติดตาม AI coding](${absoluteUrl('/th/ai-coding-tracker')}): AI attribution และข้อมูลที่ไม่ถูกเก็บ.
+- [เข้าร่วม Early Access](${absoluteUrl('/th/early-access')}): ลงทะเบียนความสนใจสำหรับผลิตภัณฑ์ภาษาไทย.
 `;
 
 export function GET(): Response {

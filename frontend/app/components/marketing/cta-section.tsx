@@ -14,11 +14,11 @@ export function CtaSection() {
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
         >
-          Start tracking in two minutes
+          Join the AtoAxis early access list
         </h2>
         <p className="mx-auto mt-4 max-w-md text-base" style={{ color: 'var(--mkt-fg-muted)' }}>
-          Create an account, generate an API key, and point your existing editor plugin at it. Two
-          minutes, no new extension.
+          Be first to try the hosted developer analytics product, receive launch updates, and
+          help shape the next integrations.
         </p>
         <Button
           asChild
@@ -26,8 +26,8 @@ export function CtaSection() {
           size="lg"
           style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
         >
-          <Link href="/docs/getting-started">
-            Install AtoAxis
+          <Link href="/early-access">
+            Join early access
             <ArrowRightIcon aria-hidden className="size-4" />
           </Link>
         </Button>

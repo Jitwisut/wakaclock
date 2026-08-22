@@ -70,7 +70,9 @@ async function maybeOfferAiSetup(
   aiIntegrations: AiIntegrationController,
   logger: Logger
 ): Promise<void> {
-  if (context.globalState.get<boolean>("atoaxis.aiSetupPrompted")) {
+  const lastPromptedAt = context.globalState.get<number>("atoaxis.aiSetupPromptedAt");
+  const promptSnoozeMs = 24 * 60 * 60 * 1000;
+  if (lastPromptedAt && Date.now() - lastPromptedAt < promptSnoozeMs) {
     return;
   }
 
@@ -79,14 +81,25 @@ async function maybeOfferAiSetup(
     if (!statuses.some((status) => status.detected && !status.enabled)) {
       return;
     }
-    await context.globalState.update("atoaxis.aiSetupPrompted", true);
     const choice = await vscode.window.showInformationMessage(
       "AtoAxis detected a supported AI coding tool. Enable AI attribution tracking?",
       "Set up now",
       "Later"
     );
     if (choice === "Set up now") {
-      await vscode.commands.executeCommand("wakaclock.setupAiTracking");
+      const configured = await vscode.commands.executeCommand<boolean>(
+        "wakaclock.setupAiTracking"
+      );
+      if (!configured) {
+        // A failed/partial setup remains eligible on the next activation. The command
+        // already showed the actionable error, so do not immediately show another prompt.
+        return;
+      }
+    } else {
+      // "Later" means later, not never. The old boolean was written before the user
+      // chose and permanently suppressed every future offer, which left detected agents
+      // uninstrumented with no visible reason.
+      await context.globalState.update("atoaxis.aiSetupPromptedAt", Date.now());
     }
   } catch (error) {
     logger.warn("AI setup detection failed", {

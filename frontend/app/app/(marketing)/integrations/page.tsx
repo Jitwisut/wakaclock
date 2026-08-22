@@ -9,20 +9,18 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, graph } from '@/lib/seo/schema';
-import { SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 const CANONICAL = '/integrations';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createMarketingMetadata({
   title: 'Editor Integrations',
   description:
-    `How editors connect to ${SITE_NAME}: a dedicated VS Code extension, or any editor with a ` +
-    'WakaTime plugin pointed at the AtoAxis API, which is WakaTime-compatible.',
-  alternates: { canonical: CANONICAL },
-  openGraph: { url: CANONICAL, title: `Editor Integrations | ${SITE_NAME}` },
-};
+    'Connect VS Code with the AtoAxis extension, or point any WakaTime-compatible editor plugin at the hosted API without installing a new plugin.',
+  path: CANONICAL,
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -66,8 +64,8 @@ export default function IntegrationsIndexPage() {
         <Section heading="Everything else, via the WakaTime protocol" id="protocol">
           <p style={MUTED_TEXT}>
             Any editor with a WakaTime plugin can report to {SITE_NAME} by setting{' '}
-            <code>api_url</code> in <code>~/.wakatime.cfg</code> to your server and using an API
-            key generated there. Editors connected this way are supported through protocol
+            <code>api_url</code> in <code>~/.wakatime.cfg</code> to the hosted AtoAxis API and using
+            an API key generated in your account. Editors connected this way are supported through protocol
             compatibility rather than through a plugin published by us — so their behaviour,
             update cadence and feature set are determined by that plugin, not by {SITE_NAME}.
           </p>
@@ -78,7 +76,7 @@ export default function IntegrationsIndexPage() {
             {
               href: '/docs/getting-started',
               label: `Install ${SITE_NAME}`,
-              description: 'Server setup, API keys, connecting an editor and verifying tracking',
+              description: 'Hosted setup, API keys, connecting an editor and verifying tracking',
             },
             {
               href: '/wakatime-alternative',

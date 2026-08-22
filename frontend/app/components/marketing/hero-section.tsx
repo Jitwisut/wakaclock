@@ -2,7 +2,7 @@ import { ArrowRightIcon, ShieldCheckIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
-import { PRICING, SITE_NAME, SITE_TAGLINE } from '@/lib/seo/site';
+import { SITE_NAME, SITE_TAGLINE } from '@/lib/seo/site';
 
 import { HeroPanel } from './hero-panel';
 
@@ -50,8 +50,8 @@ export function HeroSection() {
               size="lg"
               style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
             >
-              <Link href="/docs/getting-started">
-                Install {SITE_NAME}
+              <Link href="/early-access">
+                Join early access
                 <ArrowRightIcon aria-hidden className="size-4" />
               </Link>
             </Button>
@@ -61,8 +61,7 @@ export function HeroSection() {
           </div>
 
           <p className="mt-4 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
-            {PRICING.trialDays}-day trial · ${PRICING.monthlyUsd}/month or $
-            {PRICING.annualUsd}/year · Nothing to deploy
+            Planned hosted launch · Nothing to deploy · English and Thai support
           </p>
         </div>
 

@@ -12,11 +12,61 @@ pub const DASHBOARD_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardAnalyticsResponse {
+    pub data_version: u64,
+    pub daily_attribution: Vec<DailyAttribution>,
     pub schema_version: u32,
     pub generated_at: String,
     pub range: RangeInfo,
     pub summary: DashboardSummary,
     pub breakdowns: DashboardBreakdowns,
+    pub coverage: DashboardCoverage,
+    pub usage: DashboardUsageSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardUsageSummary {
+    pub prompts: Option<u64>,
+    pub sessions: Option<u64>,
+    pub tokens: DashboardTokenTotals,
+    pub estimated_spend: DashboardEstimatedSpend,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardTokenTotals {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
+    pub total: Option<u64>,
+    pub coverage_percent: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardEstimatedSpend {
+    pub amount_microusd: Option<u64>,
+    pub coverage_percent: Option<f64>,
+    pub currency: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DailyAttribution {
+    pub ai_added: u64,
+    pub ai_deleted: u64,
+    pub date: String,
+    pub human_added: u64,
+    pub human_deleted: u64,
+    /// Historical heartbeats do not carry explicit unknown provenance. `null` protects
+    /// the UI from presenting that absence as a measured zero.
+    pub unattributed_added: Option<u64>,
+    pub unattributed_deleted: Option<u64>,
+    pub unit: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardCoverage {
+    pub attribution_percent: Option<f64>,
+    pub cost_percent: Option<f64>,
+    pub token_percent: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,4 +111,31 @@ pub struct NamedTotalRow {
 pub struct DailyTotalRow {
     pub day: String,
     pub total: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Row)]
+pub struct DailyAttributionRow {
+    pub day: String,
+    pub ai_added: u64,
+    pub ai_deleted: u64,
+    pub human_added: u64,
+    pub human_deleted: u64,
+    pub unattributed_added: u64,
+    pub unattributed_deleted: u64,
+    pub unknown_attribution_rows: u64,
+}
+
+#[derive(Debug, Deserialize, Row)]
+pub struct UsageSummaryRow {
+    pub usage_events: u64,
+    pub prompts: u64,
+    pub sessions: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reported_tokens: u64,
+    pub priced_tokens: u64,
+    pub estimated_cost_microusd: u64,
+    pub priced_events: u64,
 }

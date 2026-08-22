@@ -36,39 +36,43 @@ export function PricingSection() {
           One plan. Everything included.
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-base" style={{ color: MKT_FG_MUTED }}>
-          No tiers to compare, no feature gating. Every account gets the full product.
+          Planned launch pricing — one hosted plan with the complete product. Checkout is not open
+          during Early Access.
         </p>
       </div>
 
-      <div className="mb-8 flex items-center justify-center gap-3">
+      <div
+        aria-label="Billing period"
+        className="mb-8 inline-flex w-full items-center justify-center"
+        role="group"
+      >
         <button
-          className="cursor-pointer text-sm font-medium"
+          aria-pressed={!annual}
+          className="cursor-pointer rounded-l-md border border-r-0 px-5 py-2 text-sm font-semibold transition-colors"
+          data-selected={!annual}
           onClick={() => setAnnual(false)}
-          style={{ color: annual ? MKT_FG_MUTED : 'var(--mkt-fg)' }}
+          style={{
+            background: annual ? 'transparent' : 'var(--mkt-bg-elevated)',
+            borderColor: 'var(--mkt-border)',
+            color: annual ? MKT_FG_MUTED : 'var(--mkt-fg)',
+          }}
           type="button"
         >
-          Monthly
+          Monthly billing
         </button>
         <button
-          aria-checked={annual}
-          className="relative h-6 w-11 cursor-pointer rounded-full transition-colors"
-          onClick={() => setAnnual((current) => !current)}
-          role="switch"
-          style={{ background: annual ? MKT_ACCENT : 'var(--mkt-border)' }}
-          type="button"
-        >
-          <span
-            className="absolute top-0.5 size-5 rounded-full bg-white transition-transform"
-            style={{ transform: annual ? 'translateX(22px)' : 'translateX(2px)' }}
-          />
-        </button>
-        <button
-          className="cursor-pointer text-sm font-medium"
+          aria-pressed={annual}
+          className="cursor-pointer rounded-r-md border px-5 py-2 text-sm font-semibold transition-colors"
+          data-selected={annual}
           onClick={() => setAnnual(true)}
-          style={{ color: annual ? 'var(--mkt-fg)' : MKT_FG_MUTED }}
+          style={{
+            background: annual ? 'var(--mkt-bg-elevated)' : 'transparent',
+            borderColor: 'var(--mkt-border)',
+            color: annual ? 'var(--mkt-fg)' : MKT_FG_MUTED,
+          }}
           type="button"
         >
-          Annual
+          Annual billing
           <span
             className="ml-1.5 rounded-full px-2 py-0.5 text-xs font-semibold"
             style={{ background: 'var(--mkt-accent-soft)', color: MKT_ACCENT }}
@@ -111,10 +115,10 @@ export function PricingSection() {
           size="lg"
           style={{ background: MKT_ACCENT, color: 'var(--mkt-accent-fg)' }}
         >
-          <Link href="/docs/getting-started">Start {PRICING.trialDays}-day free trial</Link>
+          <Link href="/early-access">Join early access</Link>
         </Button>
         <p className="mt-3 text-center text-xs" style={{ color: MKT_FG_MUTED }}>
-          Hosting included — nothing to deploy or maintain.
+          Planned pricing: ${PRICING.monthlyUsd}/month or ${PRICING.annualUsd}/year. No charge now.
         </p>
       </div>
     </section>

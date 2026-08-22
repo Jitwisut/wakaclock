@@ -1,3 +1,4 @@
+import { EarlyAccessForm } from '@/components/marketing/early-access-form';
 import { FaqSection } from '@/components/marketing/faq-section';
 import {
   Breadcrumbs,
@@ -12,15 +13,15 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 const CANONICAL = '/teams';
 
 /**
- * Roadmap page. Nothing described here is built — there is no team model, no presence
- * transport and no avatar UI in the codebase (see plan.md Phase 7).
+ * Early Access page. The repository contains prototype team/presence work, but it is not
+ * production-ready and must not be described as a shipped team product.
  *
  * Consequently this page:
  *   - states its status in the first sentence and again in the FAQ,
@@ -31,17 +32,12 @@ const CANONICAL = '/teams';
  * If any of this ships, move the copy to present tense here and update the shipped
  * capability lists at the same time. Do not do one without the other.
  */
-export const metadata: Metadata = {
-  title: 'Team Presence for Remote Developers (In Development)',
+export const metadata: Metadata = createMarketingMetadata({
+  title: 'Team Coding Presence — Early Access',
   description:
-    `A live view of who on your team is coding right now, driven by real editor activity ` +
-    `rather than a self-reported status. In development at ${SITE_NAME} — not yet available.`,
-  alternates: { canonical: CANONICAL },
-  openGraph: {
-    url: CANONICAL,
-    title: `Team Presence for Remote Developers | ${SITE_NAME}`,
-  },
-};
+    'AtoAxis team coding presence is an Early Access concept based on editor activity for remote teams. Join the list to follow prototype development and launch updates.',
+  path: CANONICAL,
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -193,9 +189,9 @@ export default function TeamsPage() {
               description: 'The metrics currently produced, and how each is calculated',
             },
             {
-              href: '/docs/getting-started',
-              label: `Start tracking with ${SITE_NAME}`,
-              description: 'Create an account and connect an editor in a couple of minutes',
+              href: '/early-access',
+              label: `Join ${SITE_NAME} Teams early access`,
+              description: 'Register interest in team presence while the prototype is developed',
             },
             {
               href: '/privacy',
@@ -207,6 +203,7 @@ export default function TeamsPage() {
       </PageShell>
 
       <FaqSection entries={FAQ} heading="Team presence FAQ" />
+      <EarlyAccessForm sourcePage="teams" />
     </>
   );
 }

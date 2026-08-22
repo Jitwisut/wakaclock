@@ -53,6 +53,8 @@ pub struct HeartbeatPayload {
     pub ai_lines_deleted: Option<u32>,
     pub human_lines_added: Option<u32>,
     pub human_lines_deleted: Option<u32>,
+    pub unattributed_lines_added: Option<u32>,
+    pub unattributed_lines_deleted: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +109,8 @@ pub struct HeartbeatItem {
     pub ai_lines_deleted: Option<u32>,
     pub human_lines_added: Option<u32>,
     pub human_lines_deleted: Option<u32>,
+    pub unattributed_lines_added: Option<u32>,
+    pub unattributed_lines_deleted: Option<u32>,
     pub editor: String,
     pub operating_system: String,
     pub machine: String,
@@ -218,7 +222,10 @@ pub async fn list(
     let items: Vec<HeartbeatItem> = rows
         .into_iter()
         .map(|r| HeartbeatItem {
-            entity: r.entity,
+            // History is still owner-scoped, but the response must not become a path
+            // exfiltration endpoint. Keep project-relative names where possible and reduce
+            // legacy absolute/traversal rows to a safe basename.
+            entity: sanitize_entity(&r.entity),
             entity_type: r.entity_type,
             time: r.time,
             project: r.project,
@@ -245,6 +252,8 @@ pub async fn list(
             ai_lines_deleted: r.ai_lines_deleted,
             human_lines_added: r.human_lines_added,
             human_lines_deleted: r.human_lines_deleted,
+            unattributed_lines_added: r.unattributed_lines_added,
+            unattributed_lines_deleted: r.unattributed_lines_deleted,
             editor: r.editor,
             operating_system: r.operating_system,
             machine: r.machine,
@@ -256,6 +265,29 @@ pub async fn list(
         date,
         data: items,
     }))
+}
+
+fn sanitize_entity(entity: &str) -> String {
+    let normalized = entity.replace('\\', "/");
+    let absolute = normalized.starts_with('/') || normalized.as_bytes().get(1) == Some(&b':');
+    let traversal = normalized.split('/').any(|part| part == "..");
+    let value = if absolute || traversal {
+        normalized
+            .rsplit('/')
+            .find(|part| !part.is_empty() && *part != "." && *part != "..")
+            .unwrap_or("Unknown")
+    } else {
+        &normalized
+    };
+    let sanitized: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
+    if sanitized.is_empty() {
+        "Unknown".to_string()
+    } else {
+        sanitized
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -330,6 +362,8 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         ai_lines_deleted: p.ai_lines_deleted,
         human_lines_added: p.human_lines_added,
         human_lines_deleted: p.human_lines_deleted,
+        unattributed_lines_added: p.unattributed_lines_added,
+        unattributed_lines_deleted: p.unattributed_lines_deleted,
         created_at,
     }
 }
@@ -356,4 +390,23 @@ async fn resolve_heartbeat_project(
 
 fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
     (status, Json(serde_json::json!({ "error": msg })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_entity;
+
+    #[test]
+    fn history_entity_redacts_absolute_and_traversal_paths() {
+        assert_eq!(
+            sanitize_entity("/Users/alice/project/src/main.rs"),
+            "main.rs"
+        );
+        assert_eq!(
+            sanitize_entity(r"C:\Users\alice\project\main.rs"),
+            "main.rs"
+        );
+        assert_eq!(sanitize_entity("../../secrets.env"), "secrets.env");
+        assert_eq!(sanitize_entity("src/main.rs"), "src/main.rs");
+    }
 }

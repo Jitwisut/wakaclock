@@ -6,12 +6,14 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 use wakaclock_ast::detect;
 use wakaclock_core::{
     ai::{
-        AiActivityParser, AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser,
-        DiscoveryContext, DiscoveryState, ParseContext, ParserCursor,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, AiActivityParser,
+        AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser, DiscoveryContext,
+        DiscoveryState, GeminiCliParser, ParseContext, ParserCursor,
     },
     api_client::ApiClient,
     config::Config,
@@ -20,6 +22,12 @@ use wakaclock_core::{
     heartbeat::{Category, EntityType, Heartbeat},
     queue::Queue,
 };
+
+/// Match WakaTime's default keystroke timeout when joining agent heartbeats. AI
+/// transcript/tool events are activity markers too; they should contribute the interval
+/// between nearby events, not remain permanently at zero seconds.
+const AI_ACTIVITY_TIMEOUT_SECONDS: f64 = 15.0 * 60.0;
+const AI_ACTIVITY_STREAM: &str = "ai";
 
 #[derive(Parser)]
 #[command(name = "wakaclock", version, about = "Wakaclock CLI Hub")]
@@ -103,6 +111,13 @@ enum Commands {
         #[arg(long)]
         human_lines_deleted: Option<u32>,
 
+        /// Lines whose provenance could not be proven as AI or manual.
+        #[arg(long)]
+        unattributed_lines_added: Option<u32>,
+
+        #[arg(long)]
+        unattributed_lines_deleted: Option<u32>,
+
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
     },
@@ -129,7 +144,7 @@ enum AiAction {
     /// extension) — plan.md 8.2 requires attribution to keep working "when an agent
     /// edits files outside VS Code," which is exactly this path.
     Sync {
-        /// Only sync this agent (`claude-code` or `codex`); default is all supported
+        /// Only sync this agent (`claude-code`, `codex`, or `gemini-cli`); default is all supported
         /// agents.
         #[arg(long)]
         agent: Option<String>,
@@ -137,6 +152,16 @@ enum AiAction {
         /// advancing any cursor/delivery state.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+        /// Ignore the saved parser cursor and replay the discovered transcript from
+        /// byte zero. Already-delivered event IDs are still filtered, so this safely
+        /// recovers from a cursor that advanced before delivery completed.
+        #[arg(long, default_value_t = false)]
+        from_start: bool,
+        /// Parse one exact transcript file instead of whichever active session was
+        /// modified most recently. Requires `--agent`; useful when multiple Codex
+        /// sessions are writing concurrently.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
     },
 }
 
@@ -190,6 +215,10 @@ struct ExtraHeartbeatInput {
     human_lines_added: Option<u32>,
     #[serde(default)]
     human_lines_deleted: Option<u32>,
+    #[serde(default)]
+    unattributed_lines_added: Option<u32>,
+    #[serde(default)]
+    unattributed_lines_deleted: Option<u32>,
 }
 
 #[tokio::main]
@@ -244,10 +273,34 @@ async fn run() -> Result<(), Box<dyn Error>> {
             ai_lines_deleted,
             human_lines_added,
             human_lines_deleted,
+            unattributed_lines_added,
+            unattributed_lines_deleted,
             extra_heartbeats,
         } => {
+            // Hook-originated AI heartbeats are already attributed. Running transcript
+            // sync from inside them would create a second event for the same patch.
+            let should_auto_sync_ai = ai_agent.is_none();
             let entity_type = EntityType::from_str(&entity_type)?;
             let category = Category::from_str(&category)?;
+            let mut ai_activity_state = if ai_agent.is_some() {
+                Some(AiAttributionState::open()?)
+            } else {
+                None
+            };
+            let active_seconds = match (ai_agent.is_some(), active_seconds) {
+                (true, explicit) => {
+                    let derived = ai_activity_state
+                        .as_mut()
+                        .expect("AI activity state is present")
+                        .record_activity(
+                            AI_ACTIVITY_STREAM,
+                            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                            AI_ACTIVITY_TIMEOUT_SECONDS,
+                        )?;
+                    Some(explicit.unwrap_or(derived))
+                }
+                (false, value) => value,
+            };
             let primary_extra = ExtraHeartbeatInput {
                 entity: entity.clone(),
                 entity_type: None,
@@ -270,6 +323,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 ai_lines_deleted,
                 human_lines_added,
                 human_lines_deleted,
+                unattributed_lines_added,
+                unattributed_lines_deleted,
             };
             let primary = build_heartbeat(
                 &config,
@@ -284,7 +339,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let mut heartbeats = vec![primary.clone()];
             if extra_heartbeats {
                 let extras = read_extra_heartbeats()?;
-                for extra in extras {
+                for mut extra in extras {
+                    if extra.ai_agent.is_some() {
+                        let derived = ai_activity_state
+                            .as_mut()
+                            .expect("AI activity state is present")
+                            .record_activity(
+                                AI_ACTIVITY_STREAM,
+                                chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                                AI_ACTIVITY_TIMEOUT_SECONDS,
+                            )?;
+                        if extra.active_seconds.is_none() {
+                            extra.active_seconds = Some(derived);
+                        }
+                    }
                     let resolved_entity = extra.entity.clone();
                     let resolved_entity_type = extra
                         .entity_type
@@ -311,6 +379,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     )?;
                     heartbeats.push(heartbeat);
                 }
+            }
+
+            if should_auto_sync_ai {
+                run_bounded_ai_sync(&config, &api_client).await;
             }
 
             let report = api_client.send_heartbeats(heartbeats).await?;
@@ -355,10 +427,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             match api_client.today().await {
                 Ok(_) => println!("Key check: verified — the server accepted this API key"),
                 Err(AppError::Auth(message)) => println!("Key check: rejected — {message}"),
-                Err(error) => println!(
-                    "Key check: could not reach {} — {error}",
-                    config.server_url
-                ),
+                Err(error) => {
+                    println!("Key check: could not reach {} — {error}", config.server_url)
+                }
             }
 
             let flush = api_client.flush_queue().await?;
@@ -375,8 +446,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::Ai { action } => match action {
             AiAction::Status => print_ai_status()?,
-            AiAction::Sync { agent, dry_run } => {
-                run_ai_sync(&config, &api_client, agent.as_deref(), dry_run).await?
+            AiAction::Sync {
+                agent,
+                dry_run,
+                from_start,
+                transcript,
+            } => {
+                if transcript.is_some() && agent.is_none() {
+                    return Err("--transcript requires --agent".into());
+                }
+                run_ai_sync(
+                    &config,
+                    &api_client,
+                    agent.as_deref(),
+                    dry_run,
+                    true,
+                    from_start,
+                    transcript.as_deref(),
+                )
+                .await?
             }
         },
     }
@@ -388,6 +476,7 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
     vec![
         ("claude-code", Box::new(ClaudeCodeParser::new())),
         ("codex", Box::new(CodexParser::new())),
+        ("gemini-cli", Box::new(GeminiCliParser::new())),
     ]
 }
 
@@ -424,7 +513,6 @@ fn print_ai_status() -> Result<(), Box<dyn Error>> {
         };
         println!("{id}: {description}");
     }
-    println!("gemini-cli: not implemented (no verified local transcript shape yet)");
     Ok(())
 }
 
@@ -433,37 +521,59 @@ async fn run_ai_sync(
     api_client: &ApiClient,
     agent_filter: Option<&str>,
     dry_run: bool,
+    verbose: bool,
+    from_start: bool,
+    transcript_override: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let state = AiAttributionState::open()?;
+    let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
+    let mut first_delivery_error: Option<AppError> = None;
 
     for (id, parser) in supported_ai_parsers() {
         if agent_filter.is_some_and(|filter| filter != id) {
             continue;
         }
-        println!("== {id} ==");
+        if verbose {
+            println!("== {id} ==");
+        }
 
-        let discovery = parser.discover(&context);
-        let transcript_path = match discovery.state {
-            DiscoveryState::TranscriptFound { path } => path,
-            DiscoveryState::NotInstalled => {
-                println!("  not installed, skipping");
-                continue;
+        let transcript_path = if let Some(path) = transcript_override {
+            let path = path.canonicalize()?;
+            if !path.is_file() {
+                return Err(format!("transcript is not a file: {}", path.display()).into());
             }
-            DiscoveryState::InstalledNoTranscript => {
-                println!("  installed but no transcript found, skipping");
-                continue;
-            }
-            DiscoveryState::PermissionDenied { path } => {
-                println!("  permission denied reading {}, skipping", path.display());
-                continue;
-            }
-            DiscoveryState::UnsupportedVersion { path, .. } => {
-                println!(
-                    "  unsupported transcript version at {}, skipping",
-                    path.display()
-                );
-                continue;
+            path
+        } else {
+            let discovery = parser.discover(&context);
+            match discovery.state {
+                DiscoveryState::TranscriptFound { path } => path,
+                DiscoveryState::NotInstalled => {
+                    if verbose {
+                        println!("  not installed, skipping");
+                    }
+                    continue;
+                }
+                DiscoveryState::InstalledNoTranscript => {
+                    if verbose {
+                        println!("  installed but no transcript found, skipping");
+                    }
+                    continue;
+                }
+                DiscoveryState::PermissionDenied { path } => {
+                    if verbose {
+                        println!("  permission denied reading {}, skipping", path.display());
+                    }
+                    continue;
+                }
+                DiscoveryState::UnsupportedVersion { path, .. } => {
+                    if verbose {
+                        println!(
+                            "  unsupported transcript version at {}, skipping",
+                            path.display()
+                        );
+                    }
+                    continue;
+                }
             }
         };
 
@@ -474,7 +584,7 @@ async fn run_ai_sync(
         let source_path_string = transcript_path.to_string_lossy().into_owned();
         let existing_cursor = state.load_cursor(id)?;
         let cursor = match existing_cursor {
-            Some(cursor) if cursor.source_path == source_path_string => cursor,
+            Some(cursor) if !from_start && cursor.source_path == source_path_string => cursor,
             _ => ParserCursor {
                 source_path: source_path_string,
                 file_identity: None,
@@ -485,8 +595,18 @@ async fn run_ai_sync(
         };
 
         let batch = parser.parse_since(&ParseContext::default(), Some(&cursor))?;
-        for warning in &batch.warnings {
-            eprintln!("  warning: {}", warning.message);
+        // Usage is parsed independently from file-edit events: one model response may edit
+        // several files, and copying its token count to each file would inflate totals.
+        let usage_records = match id {
+            "claude-code" => parse_claude_usage(&transcript_path)?,
+            "codex" => parse_codex_usage(&transcript_path)?,
+            "gemini-cli" => parse_gemini_usage(&transcript_path)?,
+            _ => Vec::new(),
+        };
+        if verbose {
+            for warning in &batch.warnings {
+                eprintln!("  warning: {}", warning.message);
+            }
         }
 
         let candidate_ids: Vec<String> = batch
@@ -500,38 +620,82 @@ async fn run_ai_sync(
             .iter()
             .filter(|event| undelivered.contains(&event.event_id))
             .collect();
+        let mut new_events = new_events;
+        new_events.sort_by_key(|event| event.occurred_at);
 
-        println!(
-            "  {} event(s) parsed since last sync, {} already delivered, {} new",
-            batch.events.len(),
-            batch.events.len() - new_events.len(),
-            new_events.len()
-        );
+        if verbose {
+            println!(
+                "  {} event(s) parsed since last sync, {} already delivered, {} new",
+                batch.events.len(),
+                batch.events.len() - new_events.len(),
+                new_events.len()
+            );
+            if !usage_records.is_empty() {
+                println!(
+                    "  {} usage record(s) available for idempotent upload",
+                    usage_records.len()
+                );
+            }
+        }
 
         if dry_run {
-            for event in &new_events {
-                println!(
-                    "  [dry-run] {} {} +{}/-{} model={}",
-                    event.event_id,
-                    event.entity.display(),
-                    event.lines_added.unwrap_or(0),
-                    event.lines_deleted.unwrap_or(0),
-                    event.model.as_deref().unwrap_or("unknown")
-                );
+            if verbose {
+                for event in &new_events {
+                    println!(
+                        "  [dry-run] {} {} +{}/-{} model={}",
+                        event.event_id,
+                        event.entity.display(),
+                        event.lines_added.unwrap_or(0),
+                        event.lines_deleted.unwrap_or(0),
+                        event.model.as_deref().unwrap_or("unknown")
+                    );
+                }
             }
             continue;
         }
 
+        if !usage_records.is_empty() {
+            match api_client.send_ai_usage(&usage_records).await {
+                Ok(report) => {
+                    if verbose {
+                        println!(
+                            "  usage: received {}, stored {}, duplicate-in-batch {}, unpriced {}, sessions {}",
+                            report.received,
+                            report.stored,
+                            report.duplicates_in_batch,
+                            report.unpriced,
+                            report.sessions_touched
+                        );
+                    }
+                }
+                Err(error) => {
+                    if verbose {
+                        eprintln!("  warning: usage upload failed: {error}");
+                    }
+                    if first_delivery_error.is_none() {
+                        first_delivery_error = Some(error);
+                    }
+                }
+            }
+        }
+
         if !new_events.is_empty() {
-            let heartbeats: Vec<Heartbeat> = new_events
-                .iter()
-                .map(|event| build_ai_heartbeat(config, event))
-                .collect();
+            let mut heartbeats = Vec::with_capacity(new_events.len());
+            for event in &new_events {
+                let active_seconds = state.record_activity(
+                    AI_ACTIVITY_STREAM,
+                    event.occurred_at.timestamp_millis() as f64 / 1000.0,
+                    AI_ACTIVITY_TIMEOUT_SECONDS,
+                )?;
+                heartbeats.push(build_ai_heartbeat(config, event, active_seconds));
+            }
             let report = api_client.send_heartbeats(heartbeats).await?;
-            println!(
-                "  sent {} (deduped {}, queued {}, flushed {})",
-                report.sent, report.deduped, report.queued, report.flushed
-            );
+            if verbose {
+                println!(
+                    "  sent {} (deduped {}, queued {}, flushed {})",
+                    report.sent, report.deduped, report.queued, report.flushed
+                );
+            }
             for event in &new_events {
                 state.mark_delivered(&event.event_id, id)?;
             }
@@ -540,12 +704,38 @@ async fn run_ai_sync(
         state.save_cursor(id, &batch.next_cursor)?;
     }
 
-    let pruned = state.prune_delivered_older_than(30)?;
-    if pruned > 0 {
-        println!("Pruned {pruned} delivered-event record(s) older than 30 days.");
+    // A dry run must not mutate delivery state. In particular, pruning here used to
+    // make `--dry-run` fail in read-only environments even after it printed results.
+    if !dry_run {
+        let pruned = state.prune_delivered_older_than(30)?;
+        if verbose && pruned > 0 {
+            println!("Pruned {pruned} delivered-event record(s) older than 30 days.");
+        }
+    }
+
+    if let Some(error) = first_delivery_error {
+        return Err(Box::new(error));
     }
 
     Ok(())
+}
+
+/// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
+/// are not dependent on a user remembering to run `wakaclock ai sync`. The bound keeps
+/// extension heartbeat latency predictable; any timeout/error leaves the ordinary
+/// heartbeat path untouched and the transcript cursor replayable on the next call.
+async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
+    const AUTO_SYNC_BUDGET: Duration = Duration::from_secs(2);
+    match tokio::time::timeout(
+        AUTO_SYNC_BUDGET,
+        run_ai_sync(config, api_client, None, false, false, false, None),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("Warning: automatic AI sync skipped: {error}"),
+        Err(_) => eprintln!("Warning: automatic AI sync exceeded 2 seconds; will retry later"),
+    }
 }
 
 /// Builds an AI-attributed heartbeat directly from a parsed transcript event, with no
@@ -553,7 +743,7 @@ async fn run_ai_sync(
 /// is always `"transcript"` here — never `"agent_hook"` — because the value must
 /// describe how *this* event was obtained, not how some other integration might have
 /// reported the same file.
-fn build_ai_heartbeat(config: &Config, event: &AiEditEvent) -> Heartbeat {
+fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64) -> Heartbeat {
     let entity_path = event.entity.to_string_lossy().into_owned();
     let mut heartbeat = Heartbeat::new(
         config.user_id,
@@ -606,6 +796,7 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent) -> Heartbeat {
     heartbeat.ai_event_id = Some(event.event_id.clone());
     heartbeat.ai_lines_added = event.lines_added;
     heartbeat.ai_lines_deleted = event.lines_deleted;
+    heartbeat.active_seconds = Some(active_seconds);
 
     heartbeat
 }
@@ -670,6 +861,8 @@ fn build_heartbeat(
         heartbeat.ai_lines_deleted = extra.ai_lines_deleted;
         heartbeat.human_lines_added = extra.human_lines_added;
         heartbeat.human_lines_deleted = extra.human_lines_deleted;
+        heartbeat.unattributed_lines_added = extra.unattributed_lines_added;
+        heartbeat.unattributed_lines_deleted = extra.unattributed_lines_deleted;
     }
 
     heartbeat.validate().map_err(io::Error::other)?;

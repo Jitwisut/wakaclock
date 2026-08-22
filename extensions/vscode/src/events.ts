@@ -45,21 +45,27 @@ export function registerEventSubscriptions(
       void bufferManager.recordSave(document, Date.now(), workspaceProject(document));
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      void bufferManager.recordEditorSwitch(previousEditor ?? undefined);
+      const now = Date.now();
+      // Observe the new editor first: that closes the previous file's WakaTime-style
+      // interval before its buffer is flushed, avoiding a race that could discard the
+      // time between the last edit and the editor switch.
       if (editor) {
         bufferManager.updateCursor(
           editor.document,
           editor.selection,
-          workspaceProject(editor.document)
+          workspaceProject(editor.document),
+          now
         );
       }
+      void bufferManager.recordEditorSwitch(previousEditor ?? undefined, now);
       previousEditor = editor;
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
       bufferManager.updateCursor(
         event.textEditor.document,
         event.selections[0],
-        workspaceProject(event.textEditor.document)
+        workspaceProject(event.textEditor.document),
+        Date.now()
       );
     }),
     vscode.debug.onDidStartDebugSession(() => {

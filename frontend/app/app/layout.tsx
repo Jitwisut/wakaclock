@@ -1,33 +1,20 @@
-import React from 'react';
+import type React from 'react';
 
-import { cookies } from 'next/headers';
-import { ThemeProvider } from 'next-themes';
-import NextTopLoader from 'nextjs-toploader';
-
-import { ActiveThemeProvider } from '@/components/active-theme';
-import { QueryProvider } from '@/components/query-provider';
-import { Toaster } from '@/components/ui/sonner';
-import { fontVariables } from '@/lib/fonts';
-import GoogleAnalyticsInit from '@/lib/ga';
-import { PRODUCT_ANSWER, SITE_NAME, SITE_TAGLINE, SITE_URL } from '@/lib/seo/site';
 import {
-  DEFAULT_THEME,
-  type ThemeContentLayout,
-  type ThemePreset,
-  type ThemeRadius,
-  type ThemeScale,
-} from '@/lib/themes';
-import { cn } from '@/lib/utils';
-import { WakaclockUserProvider } from '@/lib/wakaclock/user-store';
+  PRODUCT_ANSWER,
+  SITE_NAME,
+  SITE_TAGLINE,
+  SITE_URL,
+  SOCIAL_IMAGE_PATH,
+} from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 import './globals.css';
 
 /**
- * `metadataBase` is what lets every page emit absolute canonical/OG URLs from a
- * relative path. It is derived from NEXT_PUBLIC_APP_URL, which throws on a
- * production build rather than silently canonicalising to localhost.
+ * Cookie-backed dashboard theme state and authenticated providers live under /dashboard,
+ * while the marketing route groups opt into static rendering below this root layout.
  */
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -37,70 +24,50 @@ export const metadata: Metadata = {
   },
   description: PRODUCT_ANSWER,
   applicationName: SITE_NAME,
+  alternates: {
+    canonical: '/',
+    languages: {
+      en: '/',
+      th: '/th',
+      'x-default': '/',
+    },
+  },
   openGraph: {
     type: 'website',
     siteName: SITE_NAME,
     title: `${SITE_NAME} — Developer Time Tracking`,
     description: SITE_TAGLINE,
-    url: '/',
+    url: SITE_URL,
+    images: [
+      {
+        alt: `${SITE_NAME} — Developer time tracking`,
+        height: 630,
+        url: SOCIAL_IMAGE_PATH,
+        width: 1200,
+      },
+    ],
   },
   twitter: {
-    // No Open Graph image asset exists yet; a large-image card with no image renders
-    // worse than a summary card. Switch to summary_large_image once one is added.
-    card: 'summary',
+    card: 'summary_large_image',
     title: `${SITE_NAME} — Developer Time Tracking`,
     description: SITE_TAGLINE,
+    images: [SOCIAL_IMAGE_PATH],
   },
+  icons: {
+    icon: '/favicon.ico',
+    apple: '/apple-icon',
+  },
+  manifest: '/manifest.webmanifest',
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const cookieStore = await cookies();
-  const themeSettings = {
-    preset: (cookieStore.get('theme_preset')?.value ?? DEFAULT_THEME.preset) as ThemePreset,
-    scale: (cookieStore.get('theme_scale')?.value ?? DEFAULT_THEME.scale) as ThemeScale,
-    radius: (cookieStore.get('theme_radius')?.value ?? DEFAULT_THEME.radius) as ThemeRadius,
-    contentLayout: (cookieStore.get('theme_content_layout')?.value ??
-      DEFAULT_THEME.contentLayout) as ThemeContentLayout,
-  };
-
-  const bodyAttributes = Object.fromEntries(
-    Object.entries(themeSettings)
-      .filter(([_, value]) => value)
-      .map(([key, value]) => [
-        `data-theme-${key.replaceAll(/([A-Z])/g, '-$1').toLowerCase()}`,
-        value,
-      ])
-  );
-
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className={cn('bg-background group/layout font-sans', fontVariables)}
-        suppressHydrationWarning
-        {...bodyAttributes}
-      >
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="light"
-          disableTransitionOnChange
-          enableSystem
-        >
-          <ActiveThemeProvider initialTheme={themeSettings}>
-            <QueryProvider>
-              <WakaclockUserProvider>
-                {children}
-                <Toaster position="top-center" richColors />
-              </WakaclockUserProvider>
-            </QueryProvider>
-            <NextTopLoader color="var(--primary)" height={2} shadow-sm="none" showSpinner={false} />
-            {process.env.NODE_ENV === 'production' ? <GoogleAnalyticsInit /> : null}
-          </ActiveThemeProvider>
-        </ThemeProvider>
-      </body>
+    <html lang="en">
+      <body className="bg-background group/layout">{children}</body>
     </html>
   );
 }

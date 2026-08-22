@@ -27,6 +27,14 @@ type HeartbeatSentHandler = () => void;
 
 export class HeartbeatBufferManager {
   private readonly states = new Map<string, BufferedFileState>();
+  /**
+   * One global activity cursor prevents two open files from claiming the same wall-clock
+   * interval. WakaTime derives a mini-duration from each heartbeat to the next one; this
+   * cursor provides the equivalent accounting while wakaclock still stores an explicit
+   * `active_seconds` value on each heartbeat.
+  */
+  private lastObservedActivityAt?: number;
+  private lastObservedEntity?: string;
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
@@ -53,11 +61,12 @@ export class HeartbeatBufferManager {
     const state = this.getOrCreateState(entity);
     this.updateProjectState(state, project);
     const summary = summarizeTextChanges(changes);
-    const hadTrackedActivity = this.hasTrackedActivity(state);
 
-    state.lastKeystrokeAt = now;
-    state.firstActivityAt = hadTrackedActivity ? state.firstActivityAt : now;
-    state.lastActivityAt = now;
+    this.observeActivity(state, now);
+    // Cross-file duration accounting may advance `lastActivityAt` on this state while
+    // another file is edited. Attribution must use the actual editor-change timestamp,
+    // otherwise a nearby AI sidecar event can fall outside the correlation window.
+    state.lastEditAt = now;
     state.keystrokes += summary.keystrokes;
     state.charsAdded += summary.charsAdded;
     state.charsDeleted += summary.charsDeleted;
@@ -86,6 +95,7 @@ export class HeartbeatBufferManager {
     const entity = normalizeFsPath(document.uri.fsPath);
     const state = this.getOrCreateState(entity);
     this.updateProjectState(state, project);
+    this.observeActivity(state, now);
     state.pendingWrite = true;
     await this.flushFile(entity, "save", { now, write: true, force: true });
   }
@@ -104,7 +114,8 @@ export class HeartbeatBufferManager {
   public updateCursor(
     document: Pick<TextDocument, "uri">,
     selection?: Pick<Selection, "active">,
-    project?: string
+    project?: string,
+    now = Date.now()
   ): void {
     if (!isFileDocument(document)) {
       return;
@@ -113,6 +124,7 @@ export class HeartbeatBufferManager {
     const state = this.getOrCreateState(entity);
     this.updateProjectState(state, project);
     this.updateSelectionState(state, selection);
+    this.observeActivity(state, now);
   }
 
   public async flushCurrentEditor(
@@ -223,11 +235,14 @@ export class HeartbeatBufferManager {
 
     const created: BufferedFileState = {
       entity,
+      activeSeconds: 0,
       keystrokes: 0,
       charsAdded: 0,
       charsDeleted: 0,
       humanLinesAdded: 0,
       humanLinesDeleted: 0,
+      unattributedLinesAdded: 0,
+      unattributedLinesDeleted: 0,
       pendingWrite: false
     };
     this.states.set(entity, created);
@@ -237,21 +252,14 @@ export class HeartbeatBufferManager {
   private hasPendingActivity(state: BufferedFileState): boolean {
     return (
       state.pendingWrite ||
+      state.activeSeconds > 0 ||
       state.keystrokes > 0 ||
       state.charsAdded > 0 ||
       state.charsDeleted > 0 ||
       state.humanLinesAdded > 0 ||
-      state.humanLinesDeleted > 0
-    );
-  }
-
-  private hasTrackedActivity(state: BufferedFileState): boolean {
-    return (
-      state.keystrokes > 0 ||
-      state.charsAdded > 0 ||
-      state.charsDeleted > 0 ||
-      state.humanLinesAdded > 0 ||
-      state.humanLinesDeleted > 0
+      state.humanLinesDeleted > 0 ||
+      state.unattributedLinesAdded > 0 ||
+      state.unattributedLinesDeleted > 0
     );
   }
 
@@ -260,10 +268,10 @@ export class HeartbeatBufferManager {
     if (!this.hasPendingActivity(state)) {
       return false;
     }
-    if (!state.lastKeystrokeAt) {
+    if (state.lastActivityAt === undefined) {
       return false;
     }
-    return now - state.lastKeystrokeAt <= idleMs;
+    return now - state.lastActivityAt <= idleMs;
   }
 
   private buildPayload(
@@ -284,7 +292,9 @@ export class HeartbeatBufferManager {
       chars_deleted: state.charsDeleted || undefined,
       human_lines_added: state.humanLinesAdded || undefined,
       human_lines_deleted: state.humanLinesDeleted || undefined,
-      active_seconds: this.estimateActiveSeconds(state)
+      unattributed_lines_added: state.unattributedLinesAdded || undefined,
+      unattributed_lines_deleted: state.unattributedLinesDeleted || undefined,
+      active_seconds: state.activeSeconds
     };
   }
 
@@ -296,13 +306,24 @@ export class HeartbeatBufferManager {
       return;
     }
 
-    const matchedAiEdit = await this.aiAttributionStore.matchesRecentEdit(
+    const attribution = await this.aiAttributionStore.classifyRecentEdit(
       state.entity,
-      state.lastActivityAt ?? now,
+      state.lastEditAt ?? state.lastActivityAt ?? now,
       state.humanLinesAdded,
       state.humanLinesDeleted
     );
-    if (!matchedAiEdit) {
+    if (attribution === "human") {
+      return;
+    }
+
+    if (attribution === "unattributed") {
+      // A nearby agent event exists but its line delta is ambiguous. Keep the
+      // observed change visible without claiming it was human work; a later
+      // transcript retry can still prove the event and be deduplicated server-side.
+      state.unattributedLinesAdded += state.humanLinesAdded;
+      state.unattributedLinesDeleted += state.humanLinesDeleted;
+      state.humanLinesAdded = 0;
+      state.humanLinesDeleted = 0;
       return;
     }
 
@@ -315,19 +336,43 @@ export class HeartbeatBufferManager {
     state.charsDeleted = 0;
     state.humanLinesAdded = 0;
     state.humanLinesDeleted = 0;
+    state.unattributedLinesAdded = 0;
+    state.unattributedLinesDeleted = 0;
+    // A transcript-confirmed AI patch is not evidence that the developer was actively
+    // interacting with the editor. Keep the existing no-duplicate-heartbeat behaviour;
+    // a later save can still emit a zero-duration write marker.
+    state.activeSeconds = 0;
   }
 
-  private estimateActiveSeconds(state: BufferedFileState): number {
-    if (!this.hasTrackedActivity(state)) {
-      return 0;
+  private observeActivity(state: BufferedFileState, now: number): void {
+    const previous = this.lastObservedActivityAt;
+    if (previous !== undefined) {
+      const elapsedMs = now - previous;
+      const { idleMs } = this.getConfig();
+
+      // WakaTime gives a heartbeat the interval to the next heartbeat only while the
+      // gap is below the user's keystroke timeout. Use the same strict boundary and do
+      // not invent a minimum duration for an isolated event.
+      if (elapsedMs >= 0 && elapsedMs < idleMs) {
+        // Attribute the interval to the earlier activity's file, just as WakaTime's
+        // heartbeat-to-next-heartbeat mini-duration algorithm does. The state remains
+        // in the map after a flush, so a later event can safely account for a thinking
+        // interval without double-counting it or assigning it to the newly opened file.
+        const previousState = this.lastObservedEntity
+          ? this.states.get(this.lastObservedEntity)
+          : undefined;
+        if (previousState) {
+          previousState.activeSeconds += elapsedMs / 1000;
+          previousState.lastActivityAt = now;
+        }
+      }
     }
 
-    const start = state.firstActivityAt ?? state.lastActivityAt ?? Date.now();
-    const end = state.lastActivityAt ?? start;
-    const elapsedSeconds = Math.max(0, (end - start) / 1000);
-    const maxWindowSeconds = Math.max(1, this.getConfig().flushIntervalMs / 1000);
-
-    return Math.min(Math.max(elapsedSeconds, 1), maxWindowSeconds);
+    // Resetting the cursor on a backwards system-clock jump avoids a permanently stale
+    // anchor while never manufacturing negative duration.
+    this.lastObservedActivityAt = now;
+    this.lastObservedEntity = state.entity;
+    state.lastActivityAt = now;
   }
 
   private markFlushed(entity: string, now: number): void {
@@ -342,7 +387,10 @@ export class HeartbeatBufferManager {
     state.charsDeleted = 0;
     state.humanLinesAdded = 0;
     state.humanLinesDeleted = 0;
-    state.firstActivityAt = undefined;
+    state.unattributedLinesAdded = 0;
+    state.unattributedLinesDeleted = 0;
+    state.activeSeconds = 0;
+    state.lastEditAt = undefined;
     state.lastActivityAt = undefined;
     state.pendingWrite = false;
   }

@@ -62,8 +62,9 @@ bug-hunting in a disposable local dev database, not a defect in the delivered co
   here — this sync path intentionally bypasses it, per its own doc comment, since
   there is no editor buffer when reading a transcript directly.
 - The old `extensions/ai-agents/` hooks are still active in parallel on this machine
-  and also sent heartbeats for the same edits under `ai_source = 'agent_hook'` with a
-  different `ai_event_id` scheme — server-side dedup across the two sources is not
-  implemented (plan.md 8.1 lists this as an open gap). Query `ai_source` to tell them
-  apart; do not assume `heartbeats` row count equals real edit count until that gap
-  closes.
+  and also send heartbeats for the same edits under `ai_source = 'agent_hook'` with a
+  different `ai_event_id` scheme. The server now bridges that transport boundary with a
+  privacy-safe fingerprint (normalized path suffix, project/branch, five-second bucket and
+  line deltas), while preserving explicit event IDs as the strongest dedup key. A real
+  cross-transport run is still an operational verification task; the fingerprint itself is
+  covered by server unit tests.

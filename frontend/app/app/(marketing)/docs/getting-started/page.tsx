@@ -13,21 +13,19 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { PRICING, SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, PRICING, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
 /** Declared once so the canonical, OG URL and breadcrumb entries cannot drift apart. */
 const CANONICAL = '/docs/getting-started';
 
-export const metadata: Metadata = {
-  title: 'Getting Started — Installation',
+export const metadata: Metadata = createMarketingMetadata({
+  title: 'Getting Started — Hosted Setup',
   description:
-    `How to start tracking with ${SITE_NAME}: create an account, generate an API key, connect ` +
-    'VS Code or an existing WakaTime plugin, and verify that your coding time is being recorded.',
-  alternates: { canonical: CANONICAL },
-  openGraph: { url: CANONICAL, title: `Getting Started | ${SITE_NAME}` },
-};
+    'Learn how AtoAxis will connect VS Code or an existing WakaTime plugin to its hosted API when Early Access opens, without running your own server.',
+  path: CANONICAL,
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -70,10 +68,11 @@ const FAQ: readonly FaqEntry[] = [
       'your account. Your existing plugin sends heartbeats without any further changes.',
   },
   {
-    question: 'Is there a trial?',
+    question: 'Can I try it today?',
     answer:
-      `Yes — ${PRICING.trialDays} days. After that ${SITE_NAME} is $${PRICING.monthlyUsd} per ` +
-      `month or $${PRICING.annualUsd} per year, with every feature included.`,
+      `${SITE_NAME} is in Early Access, so checkout and the final trial terms are not open yet. ` +
+      `Planned launch pricing is $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year; ` +
+      'join the Early Access list for updates.',
   },
 ];
 
@@ -87,31 +86,30 @@ export default function GettingStartedPage() {
         <PageTitle>Getting started</PageTitle>
 
         <LeadAnswer>
-          To start tracking with {SITE_NAME}: create an account, generate an API key from your
-          settings page, then connect your editor — either install the VS Code extension and run
-          its <code>Set API Key</code> command, or point an existing WakaTime plugin at the{' '}
-          {SITE_NAME} API. Your coding time appears in the dashboard within about a minute. There
-          is no server to deploy.
+          When Early Access opens, start tracking with {SITE_NAME} by creating an account,
+          generating an API key, then connecting your editor — either install the VS Code
+          extension and run its <code>Set API Key</code> command, or point an existing WakaTime
+          plugin at the {SITE_NAME} API. There is no server to deploy.
         </LeadAnswer>
 
         <Section heading="What you need" id="requirements">
           <Bullets
             items={[
-              `An ${SITE_NAME} account — the trial is ${PRICING.trialDays} days`,
+              `An ${SITE_NAME} account — Early Access signup is currently required`,
               'VS Code 1.90 or newer, if you want the official extension',
               'Or any editor with a WakaTime plugin already installed',
             ]}
           />
           <p style={MUTED_TEXT}>
-            Nothing else. {SITE_NAME} runs the server, the database and the dashboard — you do not
-            install or maintain any infrastructure.
+            Nothing else. {SITE_NAME} runs the API, database and dashboard — customers do not
+            install or maintain infrastructure.
           </p>
         </Section>
 
-        <Section heading="1. Create an account and generate an API key" id="api-key">
+        <Section heading="1. When access opens: create an account and generate an API key" id="api-key">
           <p style={MUTED_TEXT}>
-            Sign up, then open your settings page and generate an API key. Treat it like a
-            password: it authorises writing activity to your account.
+            When access opens, create an account, open your settings page and generate an API key.
+            Treat it like a password: it authorises writing activity to your account.
           </p>
         </Section>
 

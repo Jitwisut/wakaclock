@@ -43,6 +43,8 @@ class WakaclockCliService {
         this.pushOptionalNumber(args, "--ai-lines-deleted", primaryExtra.ai_lines_deleted);
         this.pushOptionalNumber(args, "--human-lines-added", primaryExtra.human_lines_added);
         this.pushOptionalNumber(args, "--human-lines-deleted", primaryExtra.human_lines_deleted);
+        this.pushOptionalNumber(args, "--unattributed-lines-added", primaryExtra.unattributed_lines_added);
+        this.pushOptionalNumber(args, "--unattributed-lines-deleted", primaryExtra.unattributed_lines_deleted);
         const stdinPayload = extraHeartbeats.length > 0
             ? JSON.stringify(extraHeartbeats, null, 2)
             : undefined;

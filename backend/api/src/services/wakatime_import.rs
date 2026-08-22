@@ -165,10 +165,13 @@ fn map_heartbeat(
         ai_source: is_ai_generated.then(|| "wakatime_import".to_string()),
         ai_confidence: is_ai_generated.then(|| "verified".to_string()),
         ai_event_id,
+        ai_event_fingerprint: None,
         ai_lines_added,
         ai_lines_deleted,
         human_lines_added,
         human_lines_deleted,
+        unattributed_lines_added: Some(0),
+        unattributed_lines_deleted: Some(0),
         created_at,
     })
 }

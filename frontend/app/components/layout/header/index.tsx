@@ -14,6 +14,7 @@ import { Separator } from '@/components/ui/separator';
 import { useSidebar } from '@/components/ui/sidebar';
 import { SubscriptionBadge } from '@/components/wakaclock/subscription-badge';
 import { UserSwitcher } from '@/components/wakaclock/user-switcher';
+import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 /**
  * SiteHeader component props
@@ -74,6 +75,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
     ref
   ) => {
     const { toggleSidebar } = useSidebar();
+    const logout = useWakaclockUserStore((store) => store.logout);
 
     return (
       <header
@@ -104,7 +106,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
             <ThemeSwitch />
             <ThemeCustomizerPanel />
             <Separator className="mx-2 data-[orientation=vertical]:h-4" orientation="vertical" />
-            <UserMenu />
+            <UserMenu onLogout={logout} />
           </div>
         </div>
       </header>

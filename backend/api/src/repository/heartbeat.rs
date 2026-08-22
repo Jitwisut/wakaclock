@@ -26,6 +26,7 @@ impl HeartbeatRepository {
                     time Float64,
                     date Date DEFAULT toDate(toDateTime(toUInt32(time))),
                     project Nullable(String),
+                    project_id Nullable(UUID),
                     branch Nullable(String),
                     language Nullable(String),
                     dependencies Array(String),
@@ -51,10 +52,13 @@ impl HeartbeatRepository {
                     ai_source Nullable(String),
                     ai_confidence Nullable(String),
                     ai_event_id Nullable(String),
+                    ai_event_fingerprint Nullable(String),
                     ai_lines_added Nullable(UInt32),
                     ai_lines_deleted Nullable(UInt32),
                     human_lines_added Nullable(UInt32),
                     human_lines_deleted Nullable(UInt32),
+                    unattributed_lines_added Nullable(UInt32),
+                    unattributed_lines_deleted Nullable(UInt32),
                     created_at UInt32
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
@@ -80,8 +84,11 @@ impl HeartbeatRepository {
             "ai_source Nullable(String)",
             "ai_confidence Nullable(String)",
             "ai_event_id Nullable(String)",
+            "ai_event_fingerprint Nullable(String)",
             "human_lines_added Nullable(UInt32)",
             "human_lines_deleted Nullable(UInt32)",
+            "unattributed_lines_added Nullable(UInt32)",
+            "unattributed_lines_deleted Nullable(UInt32)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -117,8 +124,11 @@ impl HeartbeatRepository {
             "ai_source Nullable(String)",
             "ai_confidence Nullable(String)",
             "ai_event_id Nullable(String)",
+            "ai_event_fingerprint Nullable(String)",
             "human_lines_added Nullable(UInt32)",
             "human_lines_deleted Nullable(UInt32)",
+            "unattributed_lines_added Nullable(UInt32)",
+            "unattributed_lines_deleted Nullable(UInt32)",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -159,6 +169,70 @@ impl HeartbeatRepository {
         Ok(())
     }
 
+    /// Returns AI event IDs already persisted for this user. The explicit ID check covers
+    /// retries whose timestamp changed enough to land in another date partition.
+    pub async fn existing_ai_event_ids(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<Vec<String>> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct IdRow {
+            ai_event_id: String,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT assumeNotNull(ai_event_id) AS ai_event_id
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND ai_event_id IS NOT NULL AND ai_event_id IN ?",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<IdRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse AI event id query failed: {error}"))?;
+        Ok(rows.into_iter().map(|row| row.ai_event_id).collect())
+    }
+
+    /// Returns fingerprints already persisted for this user. Fingerprints bridge two
+    /// transports (agent hook and transcript replay) that may not share an event ID.
+    pub async fn existing_ai_fingerprints(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<Vec<String>> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct FingerprintRow {
+            ai_event_fingerprint: String,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT assumeNotNull(ai_event_fingerprint) AS ai_event_fingerprint
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND ai_event_fingerprint IS NOT NULL
+                   AND ai_event_fingerprint IN ?",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<FingerprintRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse AI fingerprint query failed: {error}"))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| row.ai_event_fingerprint)
+            .collect())
+    }
+
     /// Query heartbeats ตาม date string "YYYY-MM-DD"
     ///
     /// Binds the raw string and lets ClickHouse's `toDate()` parse it — matching every
@@ -188,11 +262,13 @@ impl HeartbeatRepository {
                     ast_language, ast_confidence,
                     keystrokes, chars_added, chars_deleted, active_seconds,
                     is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
-                    ai_confidence, ai_event_id, ai_lines_added, ai_lines_deleted,
+                    ai_confidence, ai_event_id, ai_event_fingerprint,
+                    ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
+                    unattributed_lines_added, unattributed_lines_deleted,
                     created_at
                 FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date = toDate(?)
+                WHERE user_id = ? AND toDate(date) = toDate(?)
                 ORDER BY time ASC",
             )
             .bind(user_id)

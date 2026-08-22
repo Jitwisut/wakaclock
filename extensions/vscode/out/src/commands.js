@@ -125,9 +125,9 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect AI integrations.");
         }
     }), vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
-        await setupAiTracking(aiIntegrations);
+        return setupAiTracking(aiIntegrations);
     }), vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
-        await setupAiTracking(aiIntegrations, true);
+        return setupAiTracking(aiIntegrations, true);
     }));
 }
 async function setupAiTracking(aiIntegrations, repairing = false) {
@@ -138,16 +138,20 @@ async function setupAiTracking(aiIntegrations, repairing = false) {
         const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
         if (failed > 0) {
             await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed. Run “AtoAxis: Show AI Tracking Status” for details.`);
+            return false;
         }
         else if (configured > 0) {
             await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
+            return true;
         }
         else {
             await vscode.window.showInformationMessage("No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+            return false;
         }
     }
     catch (error) {
         await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to configure AI integrations.");
+        return false;
     }
 }
 async function showAiStatus(statuses) {

@@ -14,6 +14,12 @@ const MUTED_STYLE = { color: 'var(--mkt-fg-muted)' };
  * Re-verify before publishing: WakaTime ships quickly and these facts will date.
  */
 const VERIFIED_ON = 'August 2026';
+const NEXT_REVIEW = 'September 2026';
+
+const PRIMARY_SOURCES = [
+  { href: 'https://wakatime.com/pricing', label: 'WakaTime pricing' },
+  { href: 'https://wakatime.com/plugins', label: 'WakaTime official plugins' },
+] as const;
 
 type Cell = { kind: 'no' } | { kind: 'text'; value: string } | { kind: 'yes' };
 
@@ -157,6 +163,23 @@ export function ComparisonSection() {
         WakaTime details verified against wakatime.com in {VERIFIED_ON}. WakaTime is a trademark of
         its respective owner and is not affiliated with AtoAxis. Check their current documentation
         before deciding.
+      </p>
+      <p className="mt-2 text-center text-xs" style={MUTED_STYLE}>
+        Primary sources:{' '}
+        {PRIMARY_SOURCES.map((source, index) => (
+          <span key={source.href}>
+            {index > 0 ? ' · ' : null}
+            <a
+              className="underline underline-offset-4"
+              href={source.href}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {source.label}
+            </a>
+          </span>
+        ))}
+        . Next monthly review: {NEXT_REVIEW}.
       </p>
     </section>
   );

@@ -13,19 +13,16 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createMarketingMetadata({
   title: 'AI Coding Activity Tracking',
   description:
-    `How ${SITE_NAME} records AI-assisted development: the heartbeat API accepts an AI agent name ` +
-    'and AI line counts, and the VS Code extension can configure Claude Code, Codex CLI and ' +
-    'Gemini CLI hooks automatically.',
-  alternates: { canonical: '/ai-coding-tracker' },
-  openGraph: { url: '/ai-coding-tracker', title: `AI Coding Activity Tracking | ${SITE_NAME}` },
-};
+    'See how AtoAxis records AI-assisted coding with agent names, AI line counts and human keystrokes without storing prompts, responses or source code.',
+  path: '/ai-coding-tracker',
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -199,9 +196,9 @@ export default function AiCodingTrackerPage() {
 
         <Section heading="Privacy" id="privacy">
           <p style={MUTED_TEXT}>
-            AI attribution data is stored the same way as the rest of your activity: in a
-            ClickHouse database on infrastructure you run. Because the fields hold counts and an
-            agent name rather than conversation content, an AI-attributed heartbeat is no more
+            AI attribution data is stored the same way as the rest of your activity: in the
+            ClickHouse infrastructure operated by {SITE_NAME}. Because the fields hold counts and
+            an agent name rather than conversation content, an AI-attributed heartbeat is no more
             sensitive than an ordinary one. The privacy page describes the full set of fields
             that a heartbeat can contain.
           </p>
@@ -221,8 +218,8 @@ export default function AiCodingTrackerPage() {
             },
             {
               href: '/docs/getting-started',
-              label: `Install ${SITE_NAME}`,
-              description: 'Set up the server and connect an editor before sending AI heartbeats',
+              label: `Join ${SITE_NAME} early access`,
+              description: 'Learn how the hosted product will connect an editor before sending AI heartbeats',
             },
           ]}
         />

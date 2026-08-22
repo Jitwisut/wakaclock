@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 import Logo from '@/components/layout/logo';
 import { NavMain } from '@/components/layout/sidebar/nav-main';
 import { NavUser } from '@/components/layout/sidebar/nav-user';
+import { SidebarLevelBadge } from '@/components/layout/sidebar/sidebar-level-badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Sidebar,
@@ -19,6 +20,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { useIsTablet } from '@/hooks/use-mobile';
+import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 /** Labels for the AppSidebar component */
 export type AppSidebarLabels = {
@@ -81,6 +83,7 @@ const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function Ap
 ) {
   const pathname = usePathname();
   const { setOpen, setOpenMobile, isMobile } = useSidebar();
+  const logout = useWakaclockUserStore((store) => store.logout);
   const isTablet = useIsTablet();
 
   const appName = labels?.appName ?? 'Wakaclock';
@@ -104,7 +107,8 @@ const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function Ap
               data-testid="app-sidebar-brand"
             >
               <Logo alt={logoAlt} />
-              <span className="text-foreground font-semibold">{appName}</span>
+              <span className="font-display text-foreground font-semibold">{appName}</span>
+              <SidebarLevelBadge />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -115,7 +119,7 @@ const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function Ap
         </ScrollArea>
       </SidebarContent>
       <SidebarFooter>
-        <NavUser />
+        <NavUser onLogout={logout} />
       </SidebarFooter>
     </Sidebar>
   );

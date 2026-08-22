@@ -1,4 +1,4 @@
-import { absoluteUrl, PUBLIC_ROUTES } from '@/lib/seo/site';
+import { absoluteUrl, PUBLIC_ROUTE_DEFINITIONS } from '@/lib/seo/site';
 
 import type { MetadataRoute } from 'next';
 
@@ -8,12 +8,10 @@ import type { MetadataRoute } from 'next';
  * additionally blocked in robots.ts and marked `noindex` in their layouts.
  */
 export default function sitemap(): MetadataRoute.Sitemap {
-  const lastModified = new Date();
-
-  return PUBLIC_ROUTES.map((route) => ({
-    url: absoluteUrl(route),
-    lastModified,
-    changeFrequency: route === '/' ? ('weekly' as const) : ('monthly' as const),
-    priority: route === '/' ? 1 : 0.7,
+  // Omit lastModified until each page has a real content timestamp. A generated
+  // "now" value on every request falsely signals that every page changed.
+  return PUBLIC_ROUTE_DEFINITIONS.map((route) => ({
+    ...(route.lastModified ? { lastModified: route.lastModified } : {}),
+    url: absoluteUrl(route.path),
   }));
 }

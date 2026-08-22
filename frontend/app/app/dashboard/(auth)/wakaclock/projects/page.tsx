@@ -2,161 +2,193 @@
 
 import * as React from 'react';
 
-import { useQuery } from '@tanstack/react-query';
-import { ArrowDownIcon, ArrowUpIcon } from 'lucide-react';
+import { type InfiniteData, useInfiniteQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
-import { RankBadge } from '@/components/wakaclock/rpg/rank-badge';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { cn } from '@/lib/utils';
-import { getProjects } from '@/lib/wakaclock/endpoints';
+import { getProjectAnalytics } from '@/lib/wakaclock/endpoints';
+import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
-import type { ProjectItem } from '@/lib/wakaclock/types';
+import type { ProjectAnalyticsCard, ProjectAnalyticsListResponse } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
-type SortKey = 'heartbeats' | 'name' | 'total_seconds';
+type ProjectSort =
+  | 'ai_changes'
+  | 'duration'
+  | 'estimated_cost'
+  | 'prompts'
+  | 'recent'
+  | 'sessions'
+  | 'tokens';
 
-function SortHeader({
-  active,
-  columnKey,
-  desc,
-  label,
-  onSort,
-}: {
-  active: boolean;
-  columnKey: SortKey;
-  desc: boolean;
-  label: string;
-  onSort: (key: SortKey) => void;
-}) {
+function nullablePercent(value: null | number) {
+  return value === null ? '—' : `${value.toFixed(1)}%`;
+}
+
+function ProjectCard({ project }: { project: ProjectAnalyticsCard }) {
   return (
-    <TableHead
-      className="hover:text-foreground cursor-pointer select-none"
-      onClick={() => onSort(columnKey)}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {active &&
-          (desc ? <ArrowDownIcon className="size-3" /> : <ArrowUpIcon className="size-3" />)}
-      </span>
-    </TableHead>
+    <Link className="block" href={`/dashboard/wakaclock/projects/${project.project_id}`}>
+      <Card className="hover:border-primary/60 hover:bg-muted/30 h-full transition-colors">
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="truncate text-base">{project.name}</CardTitle>
+              <CardDescription className="truncate">
+                {project.repository ?? 'Repository not available'}
+              </CardDescription>
+            </div>
+            <span className="shrink-0 font-mono text-sm font-semibold">
+              {formatDurationShort(project.total_seconds)}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <p className="text-muted-foreground">AI changes</p>
+            <p className="font-medium">{project.ai.changes.toLocaleString()} lines</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Human changes</p>
+            <p className="font-medium">{project.human.changes.toLocaleString()} lines</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">AI attribution</p>
+            <p className="font-medium">{nullablePercent(project.ai.percentage)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Unattributed</p>
+            <p className="font-medium">
+              {project.unattributed.changes.toLocaleString()} lines
+            </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Coverage</p>
+            <p className="font-medium">{nullablePercent(project.attribution_coverage_percent)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Last activity</p>
+            <p className="font-medium">
+              {project.last_activity_at
+                ? new Date(project.last_activity_at).toLocaleDateString()
+                : '—'}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 
-function ProjectsTable() {
-  const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+function ProjectsAnalytics() {
+  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
   const { start, end, setRange } = useWakaclockRange(30);
-  const [sortKey, setSortKey] = React.useState<SortKey>('total_seconds');
-  const [sortDesc, setSortDesc] = React.useState(true);
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.projects(userId, start, end),
-    queryFn: () => getProjects(userId, start, end),
+  const [sort, setSort] = React.useState<ProjectSort>('duration');
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+  } = useInfiniteQuery<
+    ProjectAnalyticsListResponse,
+    Error,
+    InfiniteData<ProjectAnalyticsListResponse>,
+    readonly unknown[],
+    string | undefined
+  >({
     enabled: Boolean(userId),
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      getProjectAnalytics({
+        cursor: pageParam ?? undefined,
+        end,
+        limit: 100,
+        order: 'desc',
+        sort,
+        start,
+        timezone,
+      }),
+    queryKey: [...wakaclockKeys.projectAnalytics(userId, start, end, timezone), sort],
   });
-
-  const rows = [...(data?.data ?? [])].sort((a, b) => {
-    const dir = sortDesc ? -1 : 1;
-    if (sortKey === 'name') return a.name.localeCompare(b.name) * dir;
-    return (a[sortKey] - b[sortKey]) * dir;
-  });
-
-  // Rank is always "position by total coding time," independent of the table's current
-  // sort — so a row still shows its real rank even while the visible order is sorted by
-  // name or heartbeat count instead.
-  const rankByProject = new Map(
-    [...(data?.data ?? [])]
-      .sort((a, b) => b.total_seconds - a.total_seconds)
-      .map((project, index) => [project.name, index + 1])
-  );
-
-  function toggleSort(key: SortKey) {
-    if (key === sortKey) {
-      setSortDesc((d) => !d);
-    } else {
-      setSortKey(key);
-      setSortDesc(true);
-    }
-  }
+  const pages = data?.pages ?? [];
+  const firstPage = pages[0];
+  const items = pages.flatMap((page) => page.items);
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle>Quest board</CardTitle>
             <CardDescription>
-              Every project is a quest — ranked by the time it earned you. Manage merges in
-              Settings.
+              Stable project identities keep links valid through renames and merges.
             </CardDescription>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
+        <div aria-label="Project sort" className="flex flex-wrap gap-2 pt-2" role="group">
+          {(
+            [
+              ['duration', 'Duration'],
+              ['recent', 'Recent'],
+              ['ai_changes', 'AI changes'],
+              ['prompts', 'Prompts'],
+              ['sessions', 'Sessions'],
+              ['tokens', 'Tokens'],
+              ['estimated_cost', 'Estimated cost'],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              onClick={() => setSort(value)}
+              size="sm"
+              variant={sort === value ? 'default' : 'outline'}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
       </CardHeader>
       <CardContent>
         <QueryState
+          emptyDescription="No named projects were recorded in this range."
           error={error}
-          isEmpty={!isLoading && !error && rows.length === 0}
+          isEmpty={!isLoading && !error && items.length === 0}
           isLoading={isLoading}
+          skeletonClassName="h-72 w-full"
         >
-          <div className="space-y-6">
-            <BreakdownChart data={rows} />
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">Rank</TableHead>
-                    <SortHeader
-                      active={sortKey === 'name'}
-                      columnKey="name"
-                      desc={sortDesc}
-                      label="Project"
-                      onSort={toggleSort}
-                    />
-                    <SortHeader
-                      active={sortKey === 'total_seconds'}
-                      columnKey="total_seconds"
-                      desc={sortDesc}
-                      label="Total"
-                      onSort={toggleSort}
-                    />
-                    <SortHeader
-                      active={sortKey === 'heartbeats'}
-                      columnKey="heartbeats"
-                      desc={sortDesc}
-                      label="Heartbeats"
-                      onSort={toggleSort}
-                    />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((project: ProjectItem) => (
-                    <TableRow key={project.name}>
-                      <TableCell>
-                        <RankBadge rank={rankByProject.get(project.name) ?? rows.length} />
-                      </TableCell>
-                      <TableCell className="font-medium">{project.name}</TableCell>
-                      <TableCell className={cn('font-mono text-xs')}>{project.text}</TableCell>
-                      <TableCell>{project.heartbeats.toLocaleString()}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+          {firstPage && (
+            <div className="space-y-3">
+              <p className="text-muted-foreground text-sm">
+                {firstPage.totals.project_count.toLocaleString()} projects ·{' '}
+                {formatDurationShort(firstPage.totals.total_seconds)} total
+              </p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {items.map((project) => (
+                  <ProjectCard key={project.project_id} project={project} />
+                ))}
+              </div>
+              {hasNextPage && (
+                <Button
+                  disabled={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  type="button"
+                  variant="outline"
+                >
+                  {isFetchingNextPage ? 'Loading…' : 'Load more projects'}
+                </Button>
+              )}
             </div>
-          </div>
+          )}
         </QueryState>
       </CardContent>
     </Card>
@@ -167,11 +199,11 @@ export default function ProjectsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="The quest board — which projects earned you the most coding time."
+        description="Projects are stable quests: choose one to inspect activity, attribution, files and branches."
         title="Projects"
       />
       <RequireUser>
-        <ProjectsTable />
+        <ProjectsAnalytics />
       </RequireUser>
     </div>
   );

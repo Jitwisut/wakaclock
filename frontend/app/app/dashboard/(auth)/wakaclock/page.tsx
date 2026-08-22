@@ -3,6 +3,7 @@ import { RequireUser } from '@/components/wakaclock/require-user';
 
 import { CharacterSheetHero } from './components/character-sheet-hero';
 import { DurationTimeline } from './components/duration-timeline';
+import { PhaseNineDashboard } from './components/phase-nine-dashboard';
 import { RangeStats } from './components/range-stats';
 import { StatusTiles } from './components/status-tiles';
 import { SummariesPanel } from './components/summaries-panel';
@@ -17,6 +18,7 @@ export default function WakaclockOverviewPage() {
       <RequireUser>
         <div className="flex flex-col gap-4">
           <CharacterSheetHero />
+          <PhaseNineDashboard />
           <StatusTiles />
           <RangeStats />
           <SummariesPanel />

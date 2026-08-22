@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("node:fs/promises"));
 const os = __importStar(require("node:os"));
 const path = __importStar(require("node:path"));
+const node_child_process_1 = require("node:child_process");
 const vitest_1 = require("vitest");
 const agentSetup_1 = require("../src/agentSetup");
 const logging_1 = require("../src/logging");
@@ -58,6 +59,25 @@ async function writeBundledSource(extensionPath) {
     await fs.mkdir(path.join(sourceDir, "codex"), { recursive: true });
     await fs.writeFile(path.join(sourceDir, "README.md"), "hello\n");
     await fs.writeFile(path.join(sourceDir, "codex", "heartbeat-hook.sh"), "#!/usr/bin/env bash\n");
+}
+async function runHook(script, input, env) {
+    await new Promise((resolve, reject) => {
+        const child = (0, node_child_process_1.spawn)("bash", [script], { env });
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+            stderr += String(chunk);
+        });
+        child.on("error", reject);
+        child.on("exit", (code) => {
+            if (code === 0) {
+                resolve();
+            }
+            else {
+                reject(new Error(`hook exited ${code}: ${stderr}`));
+            }
+        });
+        child.stdin.end(JSON.stringify(input));
+    });
 }
 (0, vitest_1.describe)("syncAgentPluginsToStableDir", () => {
     (0, vitest_1.it)("returns undefined and creates nothing when bundled resources are absent", async () => {
@@ -137,6 +157,49 @@ async function writeBundledSource(extensionPath) {
         (0, vitest_1.expect)(updated).toContain('matcher = "apply_patch"');
         (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/heartbeat-hook.sh"');
         (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHook)(updated, "/tmp/Ato Axis/heartbeat-hook.sh")).toBe(updated);
+    });
+});
+(0, vitest_1.describe)("Codex heartbeat hook", () => {
+    (0, vitest_1.it)("emits one heartbeat with per-file deltas for every file in a patch", async () => {
+        const homeDir = path.join(workDir, "home");
+        const fakeCli = path.join(workDir, "fake-wakaclock");
+        const callsLog = path.join(workDir, "calls.log");
+        const eventsLog = path.join(workDir, "events.jsonl");
+        await fs.mkdir(path.join(homeDir, ".wakaclock"), { recursive: true });
+        await fs.writeFile(fakeCli, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$WAKACLOCK_TEST_CALLS"\n');
+        await fs.chmod(fakeCli, 0o755);
+        await fs.writeFile(path.join(homeDir, ".wakaclock", "cli-path"), `${fakeCli}\n`);
+        const script = path.resolve(process.cwd(), "../ai-agents/codex/heartbeat-hook.sh");
+        const patch = [
+            "*** Begin Patch",
+            "*** Update File: src/one.ts",
+            "-old",
+            "+new",
+            "+extra",
+            "*** Add File: src/two file.ts",
+            "+hello",
+            "*** End Patch"
+        ].join("\n");
+        await runHook(script, { tool_input: { input: patch }, model: "gpt-test" }, {
+            ...process.env,
+            HOME: homeDir,
+            WAKACLOCK_TEST_CALLS: callsLog,
+            WAKACLOCK_AI_EVENT_LOG: eventsLog
+        });
+        const calls = (await fs.readFile(callsLog, "utf8")).trim().split("\n");
+        (0, vitest_1.expect)(calls).toHaveLength(2);
+        (0, vitest_1.expect)(calls[0]).toContain("--entity src/one.ts");
+        (0, vitest_1.expect)(calls[0]).toContain("--ai-lines-added 2 --ai-lines-deleted 1");
+        (0, vitest_1.expect)(calls[1]).toContain("--entity src/two file.ts");
+        (0, vitest_1.expect)(calls[1]).toContain("--ai-lines-added 1 --ai-lines-deleted 0");
+        const events = (await fs.readFile(eventsLog, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+        (0, vitest_1.expect)(events).toMatchObject([
+            { entity: "src/one.ts", lines_added: 2, lines_deleted: 1 },
+            { entity: "src/two file.ts", lines_added: 1, lines_deleted: 0 }
+        ]);
     });
 });
 //# sourceMappingURL=agentSetup.test.js.map

@@ -317,13 +317,7 @@ export type AnalyticsMetric =
   | 'token_count'
   | 'unattributed_lines_changed';
 
-export type AnalyticsUnit =
-  | 'lines'
-  | 'micro_usd'
-  | 'prompts'
-  | 'seconds'
-  | 'sessions'
-  | 'tokens';
+export type AnalyticsUnit = 'lines' | 'micro_usd' | 'prompts' | 'seconds' | 'sessions' | 'tokens';
 
 export interface BreakdownItem {
   metric: AnalyticsMetric;
@@ -358,6 +352,22 @@ export interface DashboardAnalyticsResponse {
     operating_systems: Breakdown;
     weekdays: Breakdown;
   };
+  coverage: {
+    attribution_percent: null | number;
+    cost_percent: null | number;
+    token_percent: null | number;
+  };
+  daily_attribution: Array<{
+    ai_added: number;
+    ai_deleted: number;
+    date: string;
+    human_added: number;
+    human_deleted: number;
+    unattributed_added: null | number;
+    unattributed_deleted: null | number;
+    unit: 'lines';
+  }>;
+  data_version: number;
   generated_at: string;
   range: { days_included: number; end: string; start: string; timezone: string };
   schema_version: number;
@@ -369,6 +379,181 @@ export interface DashboardAnalyticsResponse {
     today_seconds: number;
     today_text: string;
   };
+  usage: {
+    estimated_spend: {
+      amount_microusd: null | number;
+      coverage_percent: null | number;
+      currency: 'USD';
+    };
+    prompts: null | number;
+    sessions: null | number;
+    tokens: {
+      cache_read: null | number;
+      cache_write: null | number;
+      coverage_percent: null | number;
+      input: null | number;
+      output: null | number;
+      total: null | number;
+    };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 project analytics — stable project-id routes. The UI integration lands in
+// PR 9.10; keeping these contracts beside the dashboard client prevents it guessing
+// about absent coverage or parsing formatted strings.
+// ---------------------------------------------------------------------------
+export interface ProjectAnalyticsCard {
+  ai: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage: null | number;
+  };
+  attribution_coverage_percent: null | number;
+  estimated_spend: {
+    amount_microusd: null | number;
+    coverage_percent: null | number;
+    currency: 'USD';
+  };
+  human: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage: null | number;
+  };
+  last_activity_at: null | string;
+  name: string;
+  project_id: string;
+  prompts: null | number;
+  repository: null | string;
+  sessions: null | number;
+  tokens: {
+    cache_read: null | number;
+    cache_write: null | number;
+    coverage_percent: null | number;
+    input: null | number;
+    output: null | number;
+    total: null | number;
+  };
+  total_seconds: number;
+  unattributed: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage_of_observed: null | number;
+  };
+}
+
+export interface ProjectAnalyticsListResponse {
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsCard[];
+  next_cursor: null | string;
+  range: { days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  totals: { project_count: number; total_seconds: number };
+}
+
+export interface ProjectAnalyticsDetailResponse {
+  ai: {
+    ai_lines: number;
+    ai_percentage: null | number;
+    attribution_coverage_percent: null | number;
+    estimated_spend: ProjectAnalyticsCard['estimated_spend'];
+    human_lines: number;
+    prompts: null | number;
+    prompts_per_session: null | number;
+    sessions: null | number;
+    tokens: ProjectAnalyticsCard['tokens'];
+    unattributed_lines: null | number;
+  };
+  branches: Array<{
+    ai_changes: number;
+    branch: string;
+    heartbeat_count: number;
+    human_changes: number;
+    total_seconds: number;
+    unattributed_changes: null | number;
+  }>;
+  daily_activity: Array<{
+    ai_added: number;
+    ai_deleted: number;
+    date: string;
+    human_added: number;
+    human_deleted: number;
+    total_seconds: number;
+    unattributed_added: null | number;
+    unattributed_deleted: null | number;
+  }>;
+  data_version: number;
+  editors: Array<{ name: string; percentage: number; total_seconds: number }>;
+  generated_at: string;
+  languages: Array<{ name: string; percentage: number; total_seconds: number }>;
+  project: { name: string; project_id: string; repository: null | string };
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  summary: {
+    active_days: number;
+    all_projects_seconds: number;
+    last_activity_at: null | string;
+    project_seconds: number;
+  };
+  top_files: ProjectFileItem[];
+}
+
+export interface ProjectFileItem {
+  ai_changes: number;
+  display_name: string;
+  entity_key: string;
+  human_changes: number;
+  language: string;
+  path: string;
+  percentage_of_project: number;
+  total_seconds: number;
+  unattributed_changes: null | number;
+}
+
+export interface ProjectFilesResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectFileItem[];
+  metric: 'active_duration';
+  next_cursor: null | string;
+  other_seconds: number;
+  project_total_seconds: number;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  unit: 'seconds';
+}
+
+export interface ProjectBranchesResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsDetailResponse['branches'];
+  next_cursor: null | string;
+  other_seconds: number;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+export interface ProjectDailyResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsDetailResponse['daily_activity'];
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+export interface ProjectAiResponse {
+  data: ProjectAnalyticsDetailResponse['ai'];
+  data_version: number;
+  generated_at: string;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
 }
 
 export interface CurrentApiKeyData {
@@ -395,6 +580,7 @@ export interface HeartbeatItem {
   active_seconds: null | number;
   ai_agent?: null | string;
   ai_confidence?: null | string;
+  ai_event_fingerprint?: null | string;
   ai_event_id?: null | string;
   ai_lines_added?: null | number;
   ai_lines_deleted?: null | number;
@@ -420,6 +606,8 @@ export interface HeartbeatItem {
   operating_system: string;
   project: null | string;
   time: number;
+  unattributed_lines_added?: null | number;
+  unattributed_lines_deleted?: null | number;
 }
 
 export interface HeartbeatListResponse {
@@ -462,6 +650,8 @@ export interface HeartbeatPayload {
   operating_system?: string;
   project?: string;
   time: number;
+  unattributed_lines_added?: number;
+  unattributed_lines_deleted?: number;
   user_agent?: string;
   user_id?: string;
 }
@@ -544,9 +734,15 @@ export interface ReprocessRequest {
 }
 
 export interface ReprocessData {
+  audit_id: string;
+  data_version: null | number;
+  dry_run: boolean;
   end: string;
+  project_ids_written: number;
   reprocessed_heartbeats: number;
+  resolved_heartbeats: number;
   start: string;
+  unresolved_heartbeats: number;
   user_id: string;
 }
 

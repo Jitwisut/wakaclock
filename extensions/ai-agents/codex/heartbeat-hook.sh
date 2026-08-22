@@ -40,47 +40,74 @@ if [ -z "$PATCH_TEXT" ] || [ "$PATCH_TEXT" = "null" ]; then
   exit 0
 fi
 
-FILE_PATH="$(printf '%s' "$PATCH_TEXT" | grep -oE '\*\*\* (Update|Add) File: .*' | head -n1 | sed -E 's/\*\*\* (Update|Add) File: //')"
-if [ -z "$FILE_PATH" ]; then
-  exit 0
-fi
-
-# Same rough "lines touched" heuristic as the Claude Code hook: count +/- prefixed
-# lines in the patch body rather than attempt a byte-exact diff.
-LINES_ADDED="$(printf '%s' "$PATCH_TEXT" | grep -cE '^\+' || true)"
-LINES_DELETED="$(printf '%s' "$PATCH_TEXT" | grep -cE '^-' || true)"
-
-NOW=$(date +%s%N 2>/dev/null || date +%s)
-EVENT_TIME="$(date +%s)"
-EVENT_ID="codex-${NOW}-$(printf '%s' "$FILE_PATH" | shasum | cut -c1-12)"
-
 EVENT_LOG="${WAKACLOCK_AI_EVENT_LOG:-${HOME}/.wakaclock/ai-events.jsonl}"
 mkdir -p "$(dirname "$EVENT_LOG")"
-jq -cn \
-  --arg event_id "$EVENT_ID" \
-  --arg entity "$FILE_PATH" \
-  --argjson time "$EVENT_TIME" \
-  --argjson lines_added "$LINES_ADDED" \
-  --argjson lines_deleted "$LINES_DELETED" \
-  '{event_id: $event_id, entity: $entity, time: $time, lines_added: $lines_added, lines_deleted: $lines_deleted}' \
-  >>"$EVENT_LOG" 2>/dev/null || true
 
-CLI_ARGS=(
-  heartbeat
-  --entity "$FILE_PATH"
-  --write
-  --ai-agent codex
-  --ai-provider openai
-  --ai-source agent_hook
-  --ai-confidence verified
-  --ai-event-id "$EVENT_ID"
-  --ai-lines-added "$LINES_ADDED"
-  --ai-lines-deleted "$LINES_DELETED"
-)
-if [ -n "$AI_MODEL" ]; then
-  CLI_ARGS+=(--ai-model "$AI_MODEL")
-fi
+# Emit one record per file. The previous implementation used `head -n1`, assigned the
+# whole patch's line totals to that first path and silently lost every other file. The
+# unit separator keeps paths containing spaces intact while awk reports per-file deltas.
+printf '%s\n' "$PATCH_TEXT" | awk '
+  function emit() {
+    if (file != "") {
+      printf "%s\034%d\034%d\n", file, added, deleted
+    }
+  }
+  /^\*\*\* (Update|Add|Delete) File: / {
+    emit()
+    file = $0
+    sub(/^\*\*\* (Update|Add|Delete) File: /, "", file)
+    added = 0
+    deleted = 0
+    next
+  }
+  /^\*\*\* Move to: / {
+    file = $0
+    sub(/^\*\*\* Move to: /, "", file)
+    next
+  }
+  /^\*\*\* End Patch/ {
+    emit()
+    file = ""
+    next
+  }
+  file != "" && /^\+/ { added += 1; next }
+  file != "" && /^-/ { deleted += 1; next }
+  END { emit() }
+' | while IFS=$'\034' read -r FILE_PATH LINES_ADDED LINES_DELETED; do
+  if [ -z "$FILE_PATH" ]; then
+    continue
+  fi
 
-"$WAKACLOCK_BIN" "${CLI_ARGS[@]}" >/dev/null 2>&1 || true
+  EVENT_TIME="$(date +%s)"
+  EVENT_NONCE="${EVENT_TIME}-${PPID}-${RANDOM}"
+  EVENT_ID="codex-${EVENT_NONCE}-$(printf '%s' "$FILE_PATH" | shasum | cut -c1-12)"
+
+  jq -cn \
+    --arg event_id "$EVENT_ID" \
+    --arg entity "$FILE_PATH" \
+    --argjson time "$EVENT_TIME" \
+    --argjson lines_added "$LINES_ADDED" \
+    --argjson lines_deleted "$LINES_DELETED" \
+    '{event_id: $event_id, entity: $entity, time: $time, lines_added: $lines_added, lines_deleted: $lines_deleted}' \
+    >>"$EVENT_LOG" 2>/dev/null || true
+
+  CLI_ARGS=(
+    heartbeat
+    --entity "$FILE_PATH"
+    --write
+    --ai-agent codex
+    --ai-provider openai
+    --ai-source agent_hook
+    --ai-confidence verified
+    --ai-event-id "$EVENT_ID"
+    --ai-lines-added "$LINES_ADDED"
+    --ai-lines-deleted "$LINES_DELETED"
+  )
+  if [ -n "$AI_MODEL" ]; then
+    CLI_ARGS+=(--ai-model "$AI_MODEL")
+  fi
+
+  "$WAKACLOCK_BIN" "${CLI_ARGS[@]}" >/dev/null 2>&1 || true
+done
 
 exit 0

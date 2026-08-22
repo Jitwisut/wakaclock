@@ -12,19 +12,16 @@ import {
 } from '@/components/marketing/prose';
 import { JsonLd } from '@/components/seo/json-ld';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
-import { SITE_NAME } from '@/lib/seo/site';
+import { createMarketingMetadata, SITE_NAME } from '@/lib/seo/site';
 
 import type { Metadata } from 'next';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createMarketingMetadata({
   title: 'Developer Analytics and Coding Metrics',
   description:
-    `The coding analytics ${SITE_NAME} produces: total and daily-average coding time, best day, ` +
-    'breakdowns by project, language, editor, operating system and branch, keystroke counts, and ' +
-    'AI versus human attribution.',
-  alternates: { canonical: '/developer-analytics' },
-  openGraph: { url: '/developer-analytics', title: `Developer Analytics | ${SITE_NAME}` },
-};
+    'Explore AtoAxis coding analytics for time, projects, languages, branches, keystrokes and AI-attributed versus human activity with transparent session methodology.',
+  path: '/developer-analytics',
+});
 
 const BREADCRUMBS = [
   { name: 'Home', path: '/' },
@@ -135,8 +132,8 @@ export default function DeveloperAnalyticsPage() {
             aggregate tables as the rows arrive — so a dashboard query reads pre-aggregated data
             rather than scanning raw heartbeats. Coding time itself comes from session grouping:
             consecutive heartbeats form a duration block, a sufficiently long gap ends it, and
-            totals are the sum of the blocks. Because the database is yours, any metric on this
-            page can also be reproduced with your own SQL.
+            totals are the sum of the blocks. Because the metrics are derived from documented
+            heartbeat fields, the methodology on this page explains how each number is produced.
           </p>
         </Section>
 

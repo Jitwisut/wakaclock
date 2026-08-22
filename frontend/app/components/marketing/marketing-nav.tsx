@@ -2,22 +2,29 @@ import { TimerIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
-import { SITE_NAME } from '@/lib/seo/site';
+import { localizedPath, SITE_NAME, type SiteLocale } from '@/lib/seo/site';
+
+import { LanguageSwitcher } from './language-switcher';
 
 /**
  * Real routes rather than same-page anchors, so each destination is crawlable and
  * the anchor text describes the page it points at.
  */
 const NAV_LINKS = [
-  { href: '/wakatime-alternative', label: 'vs WakaTime' },
-  { href: '/ai-coding-tracker', label: 'AI tracking' },
-  { href: '/developer-analytics', label: 'Analytics' },
-  { href: '/teams', label: 'Teams' },
-  { href: '/pricing', label: 'Pricing' },
-  { href: '/docs/getting-started', label: 'Docs' },
+  { href: '/wakatime-alternative', label: { en: 'vs WakaTime', th: 'เทียบกับ WakaTime' } },
+  { href: '/ai-coding-tracker', label: { en: 'AI tracking', th: 'ติดตาม AI' } },
+  { href: '/developer-analytics', label: { en: 'Analytics', th: 'Analytics' } },
+  { href: '/teams', label: { en: 'Teams', th: 'Teams' } },
+  { href: '/pricing', label: { en: 'Pricing', th: 'ราคา' } },
+  { href: '/docs/getting-started', label: { en: 'Docs', th: 'เอกสาร' } },
 ];
 
-export function MarketingNav() {
+const NAV_COPY = {
+  en: { cta: 'Join early access', login: 'Log in', primary: 'Primary' },
+  th: { cta: 'เข้าร่วม Early Access', login: 'เข้าสู่ระบบ', primary: 'เมนูหลัก' },
+} as const;
+
+export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <header className="sticky top-4 z-50 mx-4 md:top-6 md:mx-6">
       <div
@@ -27,7 +34,7 @@ export function MarketingNav() {
           background: 'color-mix(in oklab, var(--mkt-bg-elevated) 85%, transparent)',
         }}
       >
-        <Link className="flex items-center gap-2" href="/">
+        <Link className="flex items-center gap-2" href={localizedPath(locale, '/') }>
           <TimerIcon aria-hidden className="size-5" style={{ color: 'var(--mkt-accent)' }} />
           <span
             className="text-sm font-semibold tracking-tight"
@@ -37,22 +44,23 @@ export function MarketingNav() {
           </span>
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-6 lg:flex">
+        <nav aria-label={NAV_COPY[locale].primary} className="hidden items-center gap-6 lg:flex">
           {NAV_LINKS.map((link) => (
             <Link
               className="text-sm font-medium transition-colors hover:opacity-100"
-              href={link.href}
+              href={localizedPath(locale, link.href)}
               key={link.href}
               style={{ color: 'var(--mkt-fg-muted)' }}
             >
-              {link.label}
+              {link.label[locale]}
             </Link>
           ))}
         </nav>
 
         <div className="flex items-center gap-2">
+          <LanguageSwitcher locale={locale} />
           <Button asChild className="hidden sm:inline-flex" size="sm" variant="ghost">
-            <Link href="/dashboard/wakaclock">Log in</Link>
+            <Link href="/dashboard/wakaclock">{NAV_COPY[locale].login}</Link>
           </Button>
           <Button
             asChild
@@ -60,7 +68,7 @@ export function MarketingNav() {
             size="sm"
             style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
           >
-            <Link href="/dashboard/wakaclock">Get started</Link>
+            <Link href={localizedPath(locale, '/early-access')}>{NAV_COPY[locale].cta}</Link>
           </Button>
         </div>
       </div>

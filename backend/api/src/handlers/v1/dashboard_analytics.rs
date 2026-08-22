@@ -29,6 +29,7 @@ pub async fn overview(
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardAnalyticsResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    auth::check_analytics_rate_limit(&state, user_id)?;
 
     let range = ResolvedRange::parse(&query.start, &query.end, query.timezone.as_deref()).map_err(
         |error| {
@@ -44,9 +45,10 @@ pub async fn overview(
         .overview(user_id, &range)
         .await
         .map_err(|error| {
+            tracing::error!(error = %error, "dashboard analytics request failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error.to_string() })),
+                Json(serde_json::json!({ "error": "Dashboard analytics request failed" })),
             )
         })?;
 

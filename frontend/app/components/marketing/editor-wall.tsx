@@ -35,6 +35,11 @@ export function EditorWallSection() {
         Already using one of these with a WakaTime plugin? Point it at AtoAxis — no new
         extension to install
       </p>
+      <ul aria-label="Editors compatible through the WakaTime plugin protocol" className="sr-only">
+        {COMPATIBLE_EDITORS.map((name) => (
+          <li key={name}>{name}</li>
+        ))}
+      </ul>
       <div className="space-y-3">
         <MarqueeRow />
         <MarqueeRow reverse />

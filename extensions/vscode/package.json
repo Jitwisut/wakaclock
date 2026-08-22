@@ -101,9 +101,9 @@
         },
         "wakaclock.idleMinutes": {
           "type": "number",
-          "default": 5,
+          "default": 15,
           "minimum": 1,
-          "description": "Do not emit background heartbeats when there is no activity for longer than this."
+          "description": "Maximum gap joined into active coding time, matching WakaTime's keystroke-timeout model."
         },
         "wakaclock.statusBarEnabled": {
           "type": "boolean",

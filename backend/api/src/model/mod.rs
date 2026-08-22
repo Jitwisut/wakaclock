@@ -1,4 +1,6 @@
+pub mod account_analytics;
 pub mod ai_stats;
+pub mod ai_usage;
 pub mod all_time;
 pub mod auth;
 pub mod coworking_session;
@@ -11,6 +13,7 @@ pub mod internal;
 pub mod keystroke_stats;
 pub mod metrics;
 pub mod org;
+pub mod project_analytics;
 pub mod project_identity;
 pub mod project_merge;
 pub mod project_rule;

@@ -1,4 +1,5 @@
 use crate::{
+    ai::{AiUsageIngestReport, AiUsageRecord},
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -135,6 +136,22 @@ impl ApiClient {
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
         Ok(response.json::<StatusBarSnapshot>().await?)
+    }
+
+    /// Upload sanitized token/session usage parsed from an agent transcript. Unlike
+    /// heartbeats this stream is not placed in the offline heartbeat queue: each event
+    /// has its own stable provider id, so a failed or retried batch can simply be sent
+    /// again without ever duplicating usage at the server.
+    pub async fn send_ai_usage(&self, records: &[AiUsageRecord]) -> AppResult<AiUsageIngestReport> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/ai/usage", self.config.server_url))
+            .json(records)
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        let response = response.error_for_status()?;
+        Ok(response.json::<AiUsageIngestReport>().await?)
     }
 
     /// Turns a 401 into a message that actually says what to do about it, instead of
