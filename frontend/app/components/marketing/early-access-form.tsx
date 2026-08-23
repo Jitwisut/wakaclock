@@ -1,6 +1,8 @@
-import { localizedPath, type SiteLocale } from '@/lib/seo/site';
+'use client';
 
-import { FormSubmitButton } from './form-submit-button';
+import { useState } from 'react';
+
+import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 const COPY = {
   en: {
@@ -10,6 +12,7 @@ const COPY = {
     interest: 'What are you interested in?',
     optionSolo: 'Personal coding analytics',
     optionTeams: 'Team coding presence',
+    error: 'Something went wrong. Please try again.',
     submit: 'Join the list',
     submitting: 'Sending…',
     success: 'We will use this address only for AtoAxis Early Access updates.',
@@ -21,6 +24,7 @@ const COPY = {
     interest: 'คุณสนใจอะไรเป็นหลัก?',
     optionSolo: 'การวิเคราะห์เวลาการเขียนโค้ดส่วนตัว',
     optionTeams: 'coding presence สำหรับทีม',
+    error: 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
     submit: 'ลงทะเบียน',
     submitting: 'กำลังส่ง…',
     success: 'เราจะใช้อีเมลนี้สำหรับข่าวสาร AtoAxis Early Access เท่านั้น',
@@ -35,6 +39,38 @@ export function EarlyAccessForm({
   sourcePage?: string;
 }) {
   const copy = COPY[locale];
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(false);
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const encodedFormData = new URLSearchParams();
+    formData.forEach((value, key) => {
+      encodedFormData.append(key, typeof value === 'string' ? value : value.name);
+    });
+
+    try {
+      const response = await fetch('/__forms.html', {
+        body: encodedFormData.toString(),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Netlify Forms responded with ${response.status}`);
+      }
+
+      window.location.assign(localizedPath(locale, '/early-access/success'));
+    } catch {
+      setPending(false);
+      setError(true);
+    }
+  }
 
   return (
     <section
@@ -56,14 +92,19 @@ export function EarlyAccessForm({
         <p className="mt-3 text-sm" style={{ color: 'var(--mkt-fg-muted)' }}>
           {copy.success}
         </p>
+        {error ? (
+          <p className="mt-3 text-sm" role="alert" style={{ color: 'var(--mkt-danger, #ef4444)' }}>
+            {copy.error}
+          </p>
+        ) : null}
 
         <form
-          action={localizedPath(locale, '/early-access/success')}
           className="mt-8 space-y-5"
           data-netlify="true"
           data-netlify-honeypot="bot-field"
           method="POST"
           name="early-access"
+          onSubmit={handleSubmit}
         >
           <input name="form-name" type="hidden" value="early-access" />
           <input name="locale" type="hidden" value={locale} />
@@ -113,7 +154,22 @@ export function EarlyAccessForm({
             <input id={`${locale}-early-access-bot`} name="bot-field" tabIndex={-1} />
           </div>
 
-          <FormSubmitButton label={copy.submit} pendingLabel={copy.submitting} />
+          <button
+            aria-busy={pending}
+            className="mkt-pixel-press mkt-pixel-shadow min-h-11 w-full cursor-pointer border-2 px-6 py-3 text-sm font-bold disabled:cursor-progress disabled:opacity-70"
+            disabled={pending}
+            style={{
+              background: 'var(--mkt-accent)',
+              borderColor: 'var(--mkt-border)',
+              color: 'var(--mkt-accent-fg)',
+            }}
+            type="submit"
+          >
+            {pending ? copy.submitting : copy.submit}
+            {pending ? (
+              <span aria-hidden className="mkt-blink ml-2 inline-block size-2 bg-current" />
+            ) : null}
+          </button>
         </form>
       </div>
     </section>
