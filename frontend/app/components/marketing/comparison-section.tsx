@@ -1,5 +1,7 @@
 import { CheckIcon, XIcon } from 'lucide-react';
 
+import type { SiteLocale } from '@/lib/seo/site';
+
 const MUTED_STYLE = { color: 'var(--mkt-fg-muted)' };
 
 /**
@@ -13,7 +15,6 @@ const MUTED_STYLE = { color: 'var(--mkt-fg-muted)' };
  *
  * Re-verify before publishing: WakaTime ships quickly and these facts will date.
  */
-const VERIFIED_ON = 'August 2026';
 const NEXT_REVIEW = 'September 2026';
 
 const PRIMARY_SOURCES = [
@@ -57,9 +58,9 @@ const ROWS: ComparisonRow[] = [
   },
   {
     label: 'AI token usage and estimated cost',
-    atoaxis: { kind: 'no' },
+    atoaxis: { kind: 'text', value: 'Conditional' },
     wakatime: { kind: 'yes' },
-    note: 'Not tracked by AtoAxis at all — there is no token or cost field in its pipeline.',
+    note: 'Shown only when provider-reported usage and a known effective price are available; otherwise coverage is unknown.',
   },
   {
     label: 'Team and organisation dashboards',
@@ -74,59 +75,104 @@ const ROWS: ComparisonRow[] = [
   },
 ];
 
-function CellContent({ cell }: { cell: Cell }) {
+function CellContent({ cell, locale }: { cell: Cell; locale: SiteLocale }) {
   if (cell.kind === 'yes') {
     return (
       <CheckIcon
-        aria-label="Yes"
+        aria-label={locale === 'th' ? 'มี' : 'Yes'}
         className="mx-auto size-5"
         style={{ color: 'var(--mkt-accent)' }}
       />
     );
   }
   if (cell.kind === 'no') {
-    return <XIcon aria-label="No" className="mx-auto size-5 opacity-40" />;
+    return (
+      <XIcon aria-label={locale === 'th' ? 'ไม่มี' : 'No'} className="mx-auto size-5 opacity-40" />
+    );
   }
 
   return <span className="text-sm font-medium">{cell.value}</span>;
 }
 
-export function ComparisonSection() {
+const THAI_LABELS = [
+  'มีประวัติครบในแผนหลัก',
+  'ราคาสำหรับประวัติครบถ้วน',
+  'Official editor plugins',
+  'ติดตาม AI agent อัตโนมัติ (Claude Code, Codex, Gemini CLI)',
+  'AI token usage และ estimated cost',
+  'Team และ organisation dashboards',
+  'Free tier',
+];
+const THAI_NOTES: readonly (string | undefined)[] = [
+  'WakaTime จำกัด dashboard history ใน Free และ Basic ส่วนประวัติครบต้องใช้ Premium',
+  'AtoAxis มีแผนเดียว ส่วน WakaTime มี Free, Basic และ Premium ตามช่วงประวัติ',
+  'Editor อื่นเชื่อมผ่าน WakaTime protocol ไม่ใช่ plugin ที่เราดูแลเอง',
+  'AtoAxis มี bundled hook สำหรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
+  'แสดงเมื่อมี provider usage และราคาที่มีผลใช้งานชัดเจน มิฉะนั้น coverage เป็น unknown',
+  'Analytics ของ AtoAxis อยู่ในขอบเขตบัญชีเดียว',
+  undefined,
+];
+
+export function ComparisonSection({ locale = 'en' }: { locale?: SiteLocale }) {
+  const rows =
+    locale === 'th'
+      ? ROWS.map((row, index) => ({ ...row, label: THAI_LABELS[index], note: THAI_NOTES[index] }))
+      : ROWS;
+  const copy =
+    locale === 'th'
+      ? {
+          title: 'เปรียบเทียบ AtoAxis กับ WakaTime',
+          intro:
+            'แสดงเฉพาะข้อมูลที่ตรวจสอบได้จากทั้งสองระบบ รวมกรณีที่ WakaTime ทำได้ดีกว่า เพื่อให้ตัดสินใจได้ตรงไปตรงมา',
+          capability: 'ความสามารถ',
+          caption: 'ตารางเปรียบเทียบ AtoAxis และ WakaTime ตรวจสอบเมื่อ สิงหาคม 2026',
+          note: 'รายละเอียดของ WakaTime ตรวจสอบจาก wakatime.com ใน สิงหาคม 2026 ควรดูเอกสารล่าสุดก่อนตัดสินใจ',
+          source: 'แหล่งข้อมูลหลัก',
+          review: 'ทบทวนครั้งถัดไป',
+          nextReview: 'กันยายน 2026',
+        }
+      : {
+          title: 'AtoAxis compared with WakaTime',
+          intro:
+            'Only rows where both products could be verified are listed, including cases where WakaTime is ahead. Check the current documentation before deciding.',
+          capability: 'Capability',
+          caption: 'Feature comparison between AtoAxis and WakaTime, verified August 2026',
+          note: 'WakaTime details verified against wakatime.com in August 2026. Check their current documentation before deciding.',
+          source: 'Primary sources',
+          review: 'Next monthly review',
+          nextReview: NEXT_REVIEW,
+        };
   return (
-    <section className="mx-auto max-w-4xl px-4 py-20 md:px-6" id="compare">
+    <section className="mkt-reveal mx-auto max-w-4xl px-4 py-20 md:px-6" id="compare">
       <div className="mb-10 text-center">
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
-          style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
+          style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
         >
-          AtoAxis compared with WakaTime
+          {copy.title}
         </h2>
         <p className="mx-auto mt-4 max-w-2xl text-base" style={MUTED_STYLE}>
-          Only rows where both products could be verified are listed, including the four where
-          WakaTime is ahead. If automatic AI agent tracking or team dashboards matter most to
-          you, WakaTime is the better fit today.
+          {copy.intro}
         </p>
       </div>
 
       <div
-        className="overflow-x-auto rounded-2xl border"
+        className="mkt-pixel-shadow overflow-x-auto border-[3px]"
         style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
       >
         <table className="w-full min-w-[36rem] text-sm">
-          <caption className="sr-only">
-            Feature comparison between AtoAxis and WakaTime, verified {VERIFIED_ON}
-          </caption>
+          <caption className="sr-only">{copy.caption}</caption>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--mkt-border)' }}>
               <th className="p-4 text-left font-medium" scope="col" style={MUTED_STYLE}>
-                Capability
+                {copy.capability}
               </th>
               <th
                 className="p-4 text-center font-semibold"
                 scope="col"
                 style={{
                   color: 'var(--mkt-accent)',
-                  fontFamily: 'var(--font-mkt-mono), monospace',
+                  fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace',
                 }}
               >
                 AtoAxis
@@ -137,7 +183,7 @@ export function ComparisonSection() {
             </tr>
           </thead>
           <tbody>
-            {ROWS.map((row) => (
+            {rows.map((row) => (
               <tr key={row.label} style={{ borderBottom: '1px solid var(--mkt-border)' }}>
                 <th className="p-4 text-left font-normal" scope="row">
                   {row.label}
@@ -148,10 +194,10 @@ export function ComparisonSection() {
                   ) : null}
                 </th>
                 <td className="p-4 text-center" style={{ background: 'var(--mkt-accent-soft)' }}>
-                  <CellContent cell={row.atoaxis} />
+                  <CellContent cell={row.atoaxis} locale={locale} />
                 </td>
                 <td className="p-4 text-center">
-                  <CellContent cell={row.wakatime} />
+                  <CellContent cell={row.wakatime} locale={locale} />
                 </td>
               </tr>
             ))}
@@ -160,15 +206,14 @@ export function ComparisonSection() {
       </div>
 
       <p className="mt-4 text-center text-xs" style={MUTED_STYLE}>
-        WakaTime details verified against wakatime.com in {VERIFIED_ON}. WakaTime is a trademark of
-        its respective owner and is not affiliated with AtoAxis. Check their current documentation
-        before deciding.
+        {copy.note} WakaTime is a trademark of its respective owner and is not affiliated with
+        AtoAxis.
       </p>
       <p className="mt-2 text-center text-xs" style={MUTED_STYLE}>
-        Primary sources:{' '}
+        {copy.source}:{' '}
         {PRIMARY_SOURCES.map((source, index) => (
           <span key={source.href}>
-            {index > 0 ? ' · ' : null}
+            {index > 0 ? ', ' : null}
             <a
               className="underline underline-offset-4"
               href={source.href}
@@ -179,7 +224,7 @@ export function ComparisonSection() {
             </a>
           </span>
         ))}
-        . Next monthly review: {NEXT_REVIEW}.
+        . {copy.review}: {copy.nextReview}.
       </p>
     </section>
   );

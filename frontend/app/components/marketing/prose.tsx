@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import type { BreadcrumbEntry } from '@/lib/seo/schema';
+import type { SiteLocale } from '@/lib/seo/site';
 
 /** Muted body-text colour, shared so the token string is declared once. */
 export const MUTED_TEXT = { color: 'var(--mkt-fg-muted)' } as const;
@@ -15,9 +16,15 @@ export function PageShell({ children }: { children: React.ReactNode }) {
  * Visible breadcrumb trail. Pages that render this should pass the same entries to
  * `breadcrumbSchema()` so the markup and the structured data agree.
  */
-export function Breadcrumbs({ entries }: { entries: readonly BreadcrumbEntry[] }) {
+export function Breadcrumbs({
+  entries,
+  locale = 'en',
+}: {
+  entries: readonly BreadcrumbEntry[];
+  locale?: SiteLocale;
+}) {
   return (
-    <nav aria-label="Breadcrumb" className="mb-8">
+    <nav aria-label={locale === 'th' ? 'เส้นทาง' : 'Breadcrumb'} className="mb-8">
       <ol className="flex flex-wrap items-center gap-2 text-xs">
         {entries.map((entry, index) => {
           const isLast = index === entries.length - 1;
@@ -50,7 +57,7 @@ export function PageTitle({ children }: { children: React.ReactNode }) {
   return (
     <h1
       className="text-3xl font-semibold tracking-tight text-balance md:text-4xl"
-      style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
+      style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
     >
       {children}
     </h1>
@@ -73,13 +80,20 @@ export function Section({
   children,
   heading,
   id,
+  reveal = true,
 }: {
   children: React.ReactNode;
   heading: string;
   id?: string;
+  /**
+   * Set false for a passage whose visibility must not depend on scroll position at all —
+   * the definitional answer under an H1 is the paragraph answer engines lift, and it
+   * should never be sitting at the start of a reveal when something reads the page.
+   */
+  reveal?: boolean;
 }) {
   return (
-    <section className="mt-14" id={id}>
+    <section className={reveal ? 'mkt-reveal mt-14' : 'mt-14'} id={id}>
       <h2 className="text-xl font-semibold tracking-tight md:text-2xl">{heading}</h2>
       <div className="mt-4 space-y-4 text-sm leading-relaxed">{children}</div>
     </section>
@@ -103,7 +117,7 @@ export function Bullets({ items }: { items: readonly string[] }) {
 export function CodeBlock({ children, label }: { children: string; label?: string }) {
   return (
     <figure
-      className="overflow-hidden rounded-xl border"
+      className="mkt-pixel-shadow mkt-scanlines overflow-hidden border-[3px]"
       style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-code-bg)' }}
     >
       {label ? (
@@ -112,7 +126,7 @@ export function CodeBlock({ children, label }: { children: string; label?: strin
           style={{
             borderColor: 'rgba(148,163,184,0.15)',
             color: 'rgba(148,163,184,0.75)',
-            fontFamily: 'var(--font-mkt-mono), monospace',
+            fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
           }}
         >
           {label}
@@ -120,7 +134,10 @@ export function CodeBlock({ children, label }: { children: string; label?: strin
       ) : null}
       <pre
         className="overflow-x-auto p-5 text-sm leading-relaxed"
-        style={{ color: 'var(--mkt-code-fg)', fontFamily: 'var(--font-mkt-mono), monospace' }}
+        style={{
+          color: 'var(--mkt-code-fg)',
+          fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
+        }}
       >
         <code>{children}</code>
       </pre>
@@ -146,12 +163,18 @@ export function RelatedLinks({
       <ul className="mt-4 space-y-3">
         {links.map((link) => (
           <li key={link.href}>
-            <Link className="text-sm font-medium underline underline-offset-4" href={link.href}>
-              {link.label}
+            <Link
+              className="mkt-pixel-press mkt-pixel-shadow-sm block border-2 p-4"
+              href={link.href}
+              style={{ background: 'var(--mkt-bg-elevated)', borderColor: 'var(--mkt-border)' }}
+            >
+              <span className="text-sm font-semibold underline underline-offset-4">
+                {link.label}
+              </span>
+              <span className="mt-1 block text-xs" style={MUTED_TEXT}>
+                {link.description}
+              </span>
             </Link>
-            <span className="block text-xs" style={MUTED_TEXT}>
-              {link.description}
-            </span>
           </li>
         ))}
       </ul>

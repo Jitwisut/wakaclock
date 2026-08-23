@@ -14,7 +14,7 @@ export function StatusTiles() {
 
   const statusBar = useQuery({
     queryKey: wakaclockKeys.statusBar(userId),
-    queryFn: getStatusBar,
+    queryFn: () => getStatusBar(),
     enabled: Boolean(userId),
     refetchInterval: 60_000,
   });

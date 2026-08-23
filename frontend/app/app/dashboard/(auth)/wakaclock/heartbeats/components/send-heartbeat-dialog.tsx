@@ -37,7 +37,13 @@ const CATEGORIES: Category[] = [
   'communicating',
 ];
 
-export function SendHeartbeatDialog({ date }: { date: string }) {
+export function SendHeartbeatDialog({
+  date,
+  timezone,
+}: {
+  date: string;
+  timezone: null | string;
+}) {
   const [open, setOpen] = React.useState(false);
   const userId = useWakaclockUserStore((s) => s.userId);
   const queryClient = useQueryClient();
@@ -53,7 +59,9 @@ export function SendHeartbeatDialog({ date }: { date: string }) {
 
   function invalidate() {
     if (!userId) return;
-    queryClient.invalidateQueries({ queryKey: wakaclockKeys.heartbeats(userId, date) });
+    queryClient.invalidateQueries({
+      queryKey: wakaclockKeys.heartbeats(userId, date, timezone ?? undefined),
+    });
   }
 
   const singleMutation = useMutation({
@@ -107,7 +115,7 @@ export function SendHeartbeatDialog({ date }: { date: string }) {
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogTrigger asChild>
-        <Button className="gap-1.5" disabled={!userId} size="sm">
+        <Button className="gap-1.5" disabled={!userId || !timezone} size="sm">
           <PlusIcon className="size-3.5" />
           Send test heartbeat
         </Button>
@@ -181,7 +189,10 @@ export function SendHeartbeatDialog({ date }: { date: string }) {
               </div>
             </div>
             <DialogFooter>
-              <Button disabled={singleMutation.isPending || !userId} onClick={handleSingleSubmit}>
+              <Button
+                disabled={singleMutation.isPending || !userId || !timezone}
+                onClick={handleSingleSubmit}
+              >
                 {singleMutation.isPending ? 'Sending…' : 'Send'}
               </Button>
             </DialogFooter>

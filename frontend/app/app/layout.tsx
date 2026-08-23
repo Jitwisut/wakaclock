@@ -65,8 +65,10 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // next-themes updates these root attributes from client-side theme state
+  // before hydration; the server cannot render that localStorage/system value.
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="bg-background group/layout">{children}</body>
     </html>
   );

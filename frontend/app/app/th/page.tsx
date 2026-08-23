@@ -1,9 +1,11 @@
-import { thaiRouteMetadata, ThaiRoutePage } from '@/components/marketing/thai-route-page';
+import {
+  marketingHomeMetadata,
+  MarketingHomePage,
+} from '@/components/marketing/marketing-home-page';
 
-const PATH = '/';
+import type { Metadata } from 'next';
 
-export const metadata = thaiRouteMetadata(PATH);
-
+export const metadata: Metadata = marketingHomeMetadata('th');
 export default function Page() {
-  return <ThaiRoutePage path={PATH} />;
+  return <MarketingHomePage locale="th" />;
 }

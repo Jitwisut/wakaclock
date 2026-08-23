@@ -5,8 +5,10 @@ import { ThemeProvider } from 'next-themes';
 import NextTopLoader from 'nextjs-toploader';
 
 import { ActiveThemeProvider } from '@/components/active-theme';
+import { DashboardPanelsProvider } from '@/components/dashboard-panels';
 import { QueryProvider } from '@/components/query-provider';
 import { Toaster } from '@/components/ui/sonner';
+import { DASHBOARD_PANELS_COOKIE, readHiddenPanels } from '@/lib/dashboard-panels';
 import { fontVariables } from '@/lib/fonts';
 import {
   DEFAULT_THEME,
@@ -44,31 +46,32 @@ export default async function DashboardLayout({
       DEFAULT_THEME.contentLayout) as ThemeContentLayout,
   };
 
-  const themeAttributes = Object.fromEntries(
-    Object.entries(themeSettings)
-      .filter(([_, value]) => value)
-      .map(([key, value]) => [
-        `data-theme-${key.replaceAll(/([A-Z])/g, '-$1').toLowerCase()}`,
-        value,
-      ])
-  );
+  const hiddenPanels = readHiddenPanels(cookieStore.get(DASHBOARD_PANELS_COOKIE)?.value);
 
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="light"
-      disableTransitionOnChange
-      enableSystem
-    >
-      <ActiveThemeProvider initialTheme={themeSettings}>
+    <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
+      {/*
+        `fontVariables` has to sit on the same element as the theme attributes. A preset
+        declares `--text-family: var(--font-space-mono), …`, and a var() whose variable is
+        undefined at that element makes the whole declaration invalid, so the font silently
+        falls back to the system stack. The `--font-*` variables come from these classes, so
+        they must be defined here, not on a descendant.
+      */}
+      <ActiveThemeProvider className={fontVariables} initialTheme={themeSettings}>
         <QueryProvider>
           <WakaclockUserProvider>
-            <div
-              className={cn('bg-background group/layout min-h-screen font-sans', fontVariables)}
-              {...themeAttributes}
-            >
-              {children}
-            </div>
+            <DashboardPanelsProvider initialHidden={hiddenPanels}>
+              {/*
+              The `data-theme-*` attributes deliberately do NOT live here. They used to,
+              rendered from the request cookie, which meant this element kept the theme the
+              page was loaded with while `ActiveThemeProvider` moved the live one onto
+              <body>. Both matched the `[data-theme-preset='…']` rules in themes.css, and
+              this element is the deeper of the two, so its tokens won and switching a
+              preset appeared to do nothing until a reload. The provider now owns the
+              attributes on its own element, which does re-render.
+            */}
+              <div className={cn('bg-background min-h-screen font-sans')}>{children}</div>
+            </DashboardPanelsProvider>
             <Toaster position="top-center" richColors />
           </WakaclockUserProvider>
         </QueryProvider>

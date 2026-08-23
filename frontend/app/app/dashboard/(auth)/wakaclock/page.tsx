@@ -1,3 +1,4 @@
+import { DashboardPanel } from '@/components/dashboard-panels';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { RequireUser } from '@/components/wakaclock/require-user';
 
@@ -16,13 +17,26 @@ export default function WakaclockOverviewPage() {
         title="Overview"
       />
       <RequireUser>
+        {/* Each panel is individually switchable from Settings; see lib/dashboard-panels.ts. */}
         <div className="flex flex-col gap-4">
-          <CharacterSheetHero />
-          <PhaseNineDashboard />
-          <StatusTiles />
-          <RangeStats />
-          <SummariesPanel />
-          <DurationTimeline />
+          <DashboardPanel id="overview.character-sheet">
+            <CharacterSheetHero />
+          </DashboardPanel>
+          <DashboardPanel id="overview.analytics">
+            <PhaseNineDashboard />
+          </DashboardPanel>
+          <DashboardPanel id="overview.status-tiles">
+            <StatusTiles />
+          </DashboardPanel>
+          <DashboardPanel id="overview.range-stats">
+            <RangeStats />
+          </DashboardPanel>
+          <DashboardPanel id="overview.summaries">
+            <SummariesPanel />
+          </DashboardPanel>
+          <DashboardPanel id="overview.duration-timeline">
+            <DurationTimeline />
+          </DashboardPanel>
         </div>
       </RequireUser>
     </div>

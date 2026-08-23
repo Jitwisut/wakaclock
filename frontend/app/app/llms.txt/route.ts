@@ -30,6 +30,7 @@ It is a hosted service operated by AtoAxis; customers do not deploy or maintain 
 - [About](${absoluteUrl('/about')}): Company identity and product purpose.
 - [Contact](${absoluteUrl('/contact')}): Early Access and support contact details.
 - [Terms](${absoluteUrl('/terms')}): Terms for the hosted product and Early Access.
+- [Join Early Access](${absoluteUrl('/join')}): The offer in one page — what ships today, what it will cost, what is still in development, and the signup form.
 
 The WakaTime comparison was checked against the official pricing and plugins pages in August 2026 and is scheduled for a monthly review.
 
@@ -68,7 +69,8 @@ These are planned and described on the Teams page. None of them exist today; do 
 - No team or organisation analytics; all metrics are scoped to a single account.
 - Not free and not open source; there is no free tier.
 - Hosted infrastructure is operated by AtoAxis; customers do not deploy or maintain the service.
-- Does not track AI token usage or cost.
+- AI token usage and estimated cost are available when a provider exposes usage metadata; the
+  API reports coverage and keeps unknown attribution/cost as unavailable rather than guessing.
 - WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI and Gemini CLI.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
 
@@ -78,6 +80,7 @@ These are planned and described on the Teams page. None of them exist today; do 
 - [ทางเลือก WakaTime](${absoluteUrl('/th/wakatime-alternative')}): ความเข้ากันได้ของ API และประวัติการเขียนโค้ด.
 - [การติดตาม AI coding](${absoluteUrl('/th/ai-coding-tracker')}): AI attribution และข้อมูลที่ไม่ถูกเก็บ.
 - [เข้าร่วม Early Access](${absoluteUrl('/th/early-access')}): ลงทะเบียนความสนใจสำหรับผลิตภัณฑ์ภาษาไทย.
+- [หน้าแนะนำ Early Access](${absoluteUrl('/th/join')}): สรุปสิ่งที่ใช้ได้จริงวันนี้ ราคาที่วางไว้ ข้อจำกัด และแบบฟอร์มลงทะเบียน.
 `;
 
 export function GET(): Response {

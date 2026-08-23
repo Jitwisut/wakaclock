@@ -14,9 +14,17 @@ export function LanguageSwitcher({ locale }: { locale: SiteLocale }) {
   return (
     <Link
       aria-label={targetLocale === 'th' ? 'อ่านภาษาไทย' : 'Read in English'}
-      className="rounded-full border px-3 py-1.5 text-xs font-semibold"
+      className="mkt-pixel-press mkt-pixel-shadow-sm inline-flex h-11 items-center border-2 px-3 text-xs font-bold"
       href={localizedPath(targetLocale, basePath)}
-      style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
+      style={{
+        background: 'var(--mkt-bg-sunken)',
+        borderColor: 'var(--mkt-border)',
+        color: 'var(--mkt-fg)',
+        // The label is always in the language being switched *to*, so on English pages it
+        // is Thai text — and neither Latin face in this theme ships Thai glyphs.
+        fontFamily:
+          targetLocale === 'th' ? 'var(--font-mkt-thai), sans-serif' : 'var(--font-mkt-body)',
+      }}
     >
       {label}
     </Link>

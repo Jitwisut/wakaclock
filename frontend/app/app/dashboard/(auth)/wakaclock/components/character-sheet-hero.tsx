@@ -25,7 +25,7 @@ export function CharacterSheetHero() {
 
   const statusBar = useQuery({
     queryKey: wakaclockKeys.statusBar(userId),
-    queryFn: getStatusBar,
+    queryFn: () => getStatusBar(),
     enabled: Boolean(userId),
     refetchInterval: 60_000,
   });

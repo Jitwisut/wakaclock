@@ -29,18 +29,15 @@ export function ApiKeyPanel() {
   const [plaintextKey, setPlaintextKey] = React.useState<null | string>(null);
   const [copied, setCopied] = React.useState(false);
 
-  // The stored key, so it can be shown whenever it's needed. It has to be pasted into
-  // config.toml, the editor extension and any agent hook, and losing it between those
-  // steps used to mean regenerating — which kills the copy already in use.
+  // The API only returns plaintext once, immediately after generation. A follow-up read
+  // intentionally returns null because bearer credentials are never stored in plaintext.
   const currentKeyQuery = useQuery({
     queryKey: ['wakaclock', 'api-key', userId],
     queryFn: getCurrentApiKey,
     enabled: Boolean(userId),
   });
 
-  // A key just generated in this session wins: it is the freshest value, and it is
-  // available before the query refetches.
-  const shownKey = plaintextKey ?? currentKeyQuery.data?.data.api_key ?? null;
+  const shownKey = plaintextKey;
 
   const queryClient = useQueryClient();
 
@@ -102,9 +99,8 @@ export function ApiKeyPanel() {
               <TriangleAlertIcon />
               <AlertTitle>Treat this like a password</AlertTitle>
               <AlertDescription>
-                Anyone with this key can send and read coding activity as you. It stays visible
-                here, so there is no need to regenerate just to look it up — regenerating breaks
-                every place the old key is already in use.
+                Anyone with this key can send and read coding activity as you. Copy it into your
+                clients now; AtoAxis will not display it again after this page is closed.
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
@@ -123,7 +119,7 @@ export function ApiKeyPanel() {
           <p className="text-muted-foreground text-sm">
             {currentKeyQuery.isLoading
               ? 'Loading your API key…'
-              : 'No key yet — generate one below. If you had a key from before keys were stored, it still works but can no longer be displayed; generate a new one to see it here.'}
+              : 'No key is visible. Generate a key below; it is shown once and cannot be recovered after you leave this page.'}
           </p>
         )}
 
@@ -161,8 +157,8 @@ export function ApiKeyPanel() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Revoke the current key?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Requests using it will immediately fall back to trusting whatever user_id they
-                  claim themselves, the same as before any key existed.
+                  Requests using it will immediately receive an authentication error until a new
+                  key is generated.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

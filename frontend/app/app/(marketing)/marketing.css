@@ -1,44 +1,328 @@
 /*
  * Scoped design tokens for the marketing site only. Deliberately isolated from
- * app/themes.css (the dashboard's 8-preset system) via the `.wakaclock-marketing`
+ * app/themes.css (the dashboard's preset system) via the `.wakaclock-marketing`
  * class wrapper — nothing here can affect the authenticated app.
  *
- * Palette: "Developer Tool / IDE" archetype (slate + terminal green), sourced via
- * ui-ux-pro-max design-system search for a technical/infra-trust product.
+ * Art direction: "Retro Pixel 3D", the same one the authenticated dashboard ships as
+ * its default preset (`[data-theme-preset='retro-pixel']` in app/themes.css). The palette
+ * is re-derived from that preset's scales rather than invented here, so a visitor who
+ * signs up lands in a product that looks like the site that sold it: white paper surfaces
+ * carrying the faintest green cast, one green primary, zero border-radius, and hard
+ * unblurred offset shadows instead of soft blur.
+ *
+ * Green on white, not green-on-green: the base scale sits at chroma 0.003–0.018 so the
+ * surfaces read as white and the green is spent where it means something — the accent, the
+ * terminal text and the drawn outlines. A tinted background would compete with the accent
+ * and flatten exactly the hierarchy the accent exists to create.
+ *
+ * Two deliberate divergences from the dashboard preset, both accessibility-driven:
+ *   1. `--mkt-accent` is dark enough (L 0.5) that white button labels clear 4.5:1, and it
+ *      doubles as a text colour on the white background.
+ *   2. Body copy is Space Mono / IBM Plex Sans Thai, never the pixel display face —
+ *      see components/marketing/marketing-layout-frame.tsx for why.
  */
 
 .wakaclock-marketing {
-  --mkt-bg: #f8fafc;
-  --mkt-bg-elevated: #ffffff;
-  --mkt-bg-sunken: #f1f5f9;
-  --mkt-border: #e2e8f0;
-  --mkt-fg: #0f172a;
-  --mkt-fg-muted: #475569;
-  --mkt-accent: #16a34a;
-  --mkt-accent-fg: #ffffff;
-  --mkt-accent-soft: #dcfce7;
-  --mkt-code-bg: #0f172a;
-  --mkt-code-fg: #4ade80;
+  --font-mkt-display: var(--font-mkt-pixel);
+
+  /* Base scale — white paper with the faintest green cast (hue 158, very low chroma),
+     so "green and white" reads as white surfaces with green ink rather than green tint */
+  --mkt-bg: oklch(0.995 0.003 158);
+  --mkt-bg-elevated: oklch(1 0 0);
+  --mkt-bg-sunken: oklch(0.963 0.012 158);
+
+  /* Pixel art outlines are hard ink, not hairlines: one strong border token for the
+     drawn outline, one soft token for dividers that should recede. */
+  --mkt-border: oklch(0.24 0.03 158);
+  --mkt-border-soft: oklch(0.9 0.018 158);
+
+  --mkt-fg: oklch(0.18 0.025 158);
+  --mkt-fg-muted: oklch(0.44 0.028 158);
+
+  --mkt-accent: oklch(0.5 0.135 155);
+  --mkt-accent-fg: oklch(1 0 0);
+  --mkt-accent-soft: oklch(0.945 0.045 155);
+
+  /* Soft tint behind the campaign page badge; there is deliberately no strong
+     counterpart, because a second saturated colour would compete with the accent. */
+  --mkt-highlight-soft: oklch(0.94 0.06 145);
+
+  --mkt-code-bg: oklch(0.16 0.022 158);
+  --mkt-code-fg: oklch(0.85 0.16 148);
+
+  --mkt-shadow: oklch(0.24 0.03 158);
+  --mkt-bevel-light: oklch(1 0 0 / 45%);
+  --mkt-bevel-dark: oklch(0.24 0.03 158 / 22%);
+}
+
+.wakaclock-marketing[lang='th'] {
+  --font-mkt-display: var(--font-mkt-thai);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .dark .wakaclock-marketing {
-  --mkt-bg: #0f172a;
-  --mkt-bg-elevated: #1e293b;
-  --mkt-bg-sunken: #0b1222;
-  --mkt-border: #334155;
-  --mkt-fg: #f8fafc;
-  --mkt-fg-muted: #94a3b8;
-  --mkt-accent: #22c55e;
-  --mkt-accent-fg: #052e16;
-  --mkt-accent-soft: rgba(34, 197, 94, 0.14);
-  --mkt-code-bg: #020617;
-  --mkt-code-fg: #4ade80;
+  --mkt-bg: oklch(0.115 0.014 158);
+  --mkt-bg-elevated: oklch(0.175 0.018 158);
+  --mkt-bg-sunken: oklch(0.145 0.016 158);
+
+  --mkt-border: oklch(0.47 0.045 155);
+  --mkt-border-soft: oklch(0.3 0.028 158);
+
+  --mkt-fg: oklch(0.965 0.008 158);
+  --mkt-fg-muted: oklch(0.76 0.022 158);
+
+  --mkt-accent: oklch(0.8 0.16 150);
+  --mkt-accent-fg: oklch(0.15 0.02 158);
+  --mkt-accent-soft: oklch(0.26 0.06 155);
+
+  /* Soft tint behind the campaign page badge; there is deliberately no strong
+     counterpart, because a second saturated colour would compete with the accent. */
+  --mkt-highlight-soft: oklch(0.24 0.05 145);
+
+  --mkt-code-bg: oklch(0.075 0.012 158);
+  --mkt-code-fg: oklch(0.85 0.16 148);
+
+  --mkt-shadow: oklch(0 0 0 / 85%);
+  --mkt-bevel-light: oklch(1 0 0 / 18%);
+  --mkt-bevel-dark: oklch(0 0 0 / 45%);
 }
 
+/*
+ * The marketing routes render below the root layout, outside the dashboard's
+ * next-themes provider, so nothing ever puts `.dark` on <html> here. Honouring the OS
+ * preference directly is what actually makes dark mode reachable on this site; the
+ * `.dark` selector above is kept so the palette still follows if these components are
+ * ever mounted inside the themed app shell (Storybook, an embedded preview).
+ */
+@media (prefers-color-scheme: dark) {
+  .wakaclock-marketing {
+    --mkt-bg: oklch(0.115 0.014 158);
+    --mkt-bg-elevated: oklch(0.175 0.018 158);
+    --mkt-bg-sunken: oklch(0.145 0.016 158);
+
+    --mkt-border: oklch(0.47 0.045 155);
+    --mkt-border-soft: oklch(0.3 0.028 158);
+
+    --mkt-fg: oklch(0.965 0.008 158);
+    --mkt-fg-muted: oklch(0.76 0.022 158);
+
+    --mkt-accent: oklch(0.8 0.16 150);
+    --mkt-accent-fg: oklch(0.15 0.02 158);
+    --mkt-accent-soft: oklch(0.26 0.06 155);
+
+    /* Soft tint behind the campaign page badge; there is deliberately no strong
+     counterpart, because a second saturated colour would compete with the accent. */
+    --mkt-highlight-soft: oklch(0.24 0.05 145);
+
+    --mkt-code-bg: oklch(0.075 0.012 158);
+    --mkt-code-fg: oklch(0.85 0.16 148);
+
+    --mkt-shadow: oklch(0 0 0 / 85%);
+    --mkt-bevel-light: oklch(1 0 0 / 18%);
+    --mkt-bevel-dark: oklch(0 0 0 / 45%);
+  }
+}
+
+/*
+ * Remap the shadcn/Tailwind surface tokens onto the marketing palette for this subtree.
+ *
+ * Primitives like `<Button variant="outline">` are styled with `bg-background` /
+ * `text-foreground`, which resolve against the dashboard's root tokens. Those tokens are
+ * only switched to their dark values by next-themes, whose provider does not wrap these
+ * routes — so an outline button kept a light background while the marketing palette went
+ * dark around it, i.e. near-white text on near-white. Pointing the tokens at `--mkt-*`
+ * fixes every primitive at once and keeps light/dark in step, because the `--mkt-*`
+ * values are the ones that already respond to the colour scheme.
+ */
 .wakaclock-marketing {
+  --background: var(--mkt-bg);
+  --foreground: var(--mkt-fg);
+  --card: var(--mkt-bg-elevated);
+  --card-foreground: var(--mkt-fg);
+  --popover: var(--mkt-bg-elevated);
+  --popover-foreground: var(--mkt-fg);
+  --primary: var(--mkt-accent);
+  --primary-foreground: var(--mkt-accent-fg);
+  --secondary: var(--mkt-bg-sunken);
+  --secondary-foreground: var(--mkt-fg);
+  --muted: var(--mkt-bg-sunken);
+  --muted-foreground: var(--mkt-fg-muted);
+  --accent: var(--mkt-bg-sunken);
+  --accent-foreground: var(--mkt-fg);
+  --border: var(--mkt-border);
+  --input: var(--mkt-border);
+  --ring: var(--mkt-accent);
+
   background: var(--mkt-bg);
   color: var(--mkt-fg);
 }
+
+/*
+ * Sharp corners everywhere. `--radius` is a dashboard token and does not reach this
+ * subtree, and Tailwind's `rounded-full` ignores it anyway, so the reset is the only
+ * thing that actually guarantees pixel corners across shadcn primitives and utility
+ * classes alike. Scoped to the marketing wrapper, so the dashboard is untouched.
+ */
+.wakaclock-marketing *:not(svg):not(svg *) {
+  border-radius: 0 !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Pixel-3D surface language
+ * ------------------------------------------------------------------------ */
+
+/* A panel "sits" on a hard offset shadow rather than casting a soft blur. */
+.mkt-pixel-shadow {
+  box-shadow: 4px 4px 0 var(--mkt-shadow);
+}
+
+.mkt-pixel-shadow-sm {
+  box-shadow: 3px 3px 0 var(--mkt-shadow);
+}
+
+.mkt-pixel-shadow-lg {
+  box-shadow: 6px 6px 0 var(--mkt-shadow);
+}
+
+/* Raised, pressable surface: bevelled edges plus the offset shadow. */
+.mkt-pixel-raised {
+  box-shadow:
+    inset 2px 2px 0 var(--mkt-bevel-light),
+    inset -2px -2px 0 var(--mkt-bevel-dark),
+    4px 4px 0 var(--mkt-shadow);
+}
+
+/* Sunken well — the conceptual opposite of a button (inputs, code frames). */
+.mkt-pixel-sunken {
+  box-shadow:
+    inset 2px 2px 0 var(--mkt-bevel-dark),
+    inset -1px -1px 0 var(--mkt-bevel-light);
+}
+
+/*
+ * Pressable illusion. Hover lifts the surface away from its static shadow; press sinks
+ * it into it and inverts the bevel. Movement is transform-only (compositor friendly)
+ * and the element keeps its footprint, so nothing around it reflows.
+ */
+.mkt-pixel-press {
+  transition:
+    transform 120ms steps(2, jump-none),
+    box-shadow 120ms steps(2, jump-none),
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+@media (hover: hover) {
+  .mkt-pixel-press:hover {
+    transform: translate(-2px, -2px);
+    box-shadow:
+      inset 2px 2px 0 var(--mkt-bevel-light),
+      inset -2px -2px 0 var(--mkt-bevel-dark),
+      6px 6px 0 var(--mkt-shadow);
+  }
+}
+
+.mkt-pixel-press:active {
+  transform: translate(2px, 2px);
+  box-shadow:
+    inset -2px -2px 0 var(--mkt-bevel-light),
+    inset 2px 2px 0 var(--mkt-bevel-dark);
+}
+
+/*
+ * Every shadcn button rendered inside the marketing subtree, reskinned through the
+ * `data-slot` attribute the primitives already emit — the same technique the dashboard
+ * preset uses, so `components/ui/button.tsx` (vendor) is never edited. Buttons read as
+ * raised and physically sink on press, which is the primary "yes, that click
+ * registered" signal on this site.
+ */
+.wakaclock-marketing [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']) {
+  border: 2px solid var(--mkt-border);
+  box-shadow:
+    inset 2px 2px 0 var(--mkt-bevel-light),
+    inset -2px -2px 0 var(--mkt-bevel-dark),
+    3px 3px 0 var(--mkt-shadow);
+  font-family: var(--font-mkt-display), var(--font-mkt-body), monospace;
+  letter-spacing: 0.01em;
+  transition:
+    transform 120ms steps(2, jump-none),
+    box-shadow 120ms steps(2, jump-none);
+}
+
+@media (hover: hover) {
+  .wakaclock-marketing
+    [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']):hover {
+    transform: translate(-1px, -1px);
+    box-shadow:
+      inset 2px 2px 0 var(--mkt-bevel-light),
+      inset -2px -2px 0 var(--mkt-bevel-dark),
+      4px 4px 0 var(--mkt-shadow);
+  }
+}
+
+.wakaclock-marketing [data-slot='button']:not([data-variant='link']):active {
+  transform: translate(3px, 3px);
+  box-shadow:
+    inset -2px -2px 0 var(--mkt-bevel-light),
+    inset 2px 2px 0 var(--mkt-bevel-dark);
+}
+
+.wakaclock-marketing [data-slot='input'],
+.wakaclock-marketing [data-slot='textarea'],
+.wakaclock-marketing [data-slot='select-trigger'] {
+  border: 2px solid var(--mkt-border);
+  box-shadow:
+    inset 2px 2px 0 var(--mkt-bevel-dark),
+    inset -1px -1px 0 var(--mkt-bevel-light);
+}
+
+/*
+ * Keyboard focus is a hard double outline rather than a soft ring: at radius 0 a blurred
+ * ring reads as a rendering artefact, and the offset outline stays visible on both the
+ * cream and the near-black surfaces without depending on the accent colour alone.
+ */
+.wakaclock-marketing a:focus-visible,
+.wakaclock-marketing button:focus-visible,
+.wakaclock-marketing [data-slot='button']:focus-visible,
+.wakaclock-marketing summary:focus-visible,
+.wakaclock-marketing input:focus-visible,
+.wakaclock-marketing textarea:focus-visible {
+  outline: 3px solid var(--mkt-accent);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Textures
+ * ------------------------------------------------------------------------ */
+
+/* Tile-grid backdrop, the same checkerboard idea as the presence playground field. */
+.mkt-grid-surface {
+  background-color: var(--mkt-bg-sunken);
+  background-image:
+    linear-gradient(var(--mkt-border-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--mkt-border-soft) 1px, transparent 1px);
+  background-size:
+    24px 24px,
+    24px 24px;
+}
+
+/* CRT scanlines for the dark "screen" surfaces (code frames, hero panel). */
+.mkt-scanlines {
+  position: relative;
+}
+
+.mkt-scanlines::after {
+  background: repeating-linear-gradient(to bottom, oklch(1 0 0 / 4%) 0 1px, transparent 1px 3px);
+  content: '';
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion
+ * ------------------------------------------------------------------------ */
 
 @keyframes marketing-marquee {
   from {
@@ -53,8 +337,88 @@
   animation: marketing-marquee 40s linear infinite;
 }
 
+@keyframes mkt-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+/* Arcade "insert coin" blink — steps(1), never a smooth fade. */
+.mkt-blink {
+  animation: mkt-blink 1.2s steps(1, jump-none) infinite;
+}
+
+@keyframes mkt-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * Scroll-linked reveal, CSS only.
+ *
+ * Implemented with `animation-timeline: view()` behind an `@supports` gate rather than
+ * an IntersectionObserver, because the fallback is the behaviour we actually want:
+ * a browser without scroll-driven animations (and any crawler, and anyone with
+ * `prefers-reduced-motion`) renders the section at full opacity in its final position,
+ * with no JavaScript and no `opacity: 0` ever committed to the server HTML. An element
+ * already inside the viewport on load is past its entry range and therefore starts
+ * fully revealed, so the fold is never animated in.
+ */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .mkt-reveal {
+      animation: mkt-reveal-in linear both;
+      animation-range: entry 0% cover 20%;
+      animation-timeline: view();
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .wakaclock-marquee-track {
+  .wakaclock-marquee-track,
+  .mkt-blink {
     animation: none;
+  }
+
+  .mkt-pixel-press,
+  .wakaclock-marketing [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']) {
+    transition: none;
+  }
+
+  .mkt-pixel-press:hover,
+  .mkt-pixel-press:active,
+  .wakaclock-marketing [data-slot='button']:hover,
+  .wakaclock-marketing [data-slot='button']:not([data-variant='link']):active {
+    transform: none;
+  }
+}
+
+/*
+ * Ghost/link buttons keep the press movement — the click still has to register
+ * physically — but express hover as a flat inverted block rather than a raised panel.
+ */
+.wakaclock-marketing [data-slot='button'][data-variant='ghost'] {
+  border: 2px solid transparent;
+  font-family: var(--font-mkt-display), var(--font-mkt-body), monospace;
+  transition:
+    transform 120ms steps(2, jump-none),
+    background-color 150ms ease-out;
+}
+
+@media (hover: hover) {
+  .wakaclock-marketing [data-slot='button'][data-variant='ghost']:hover {
+    background: var(--mkt-bg-sunken);
+    border-color: var(--mkt-border);
   }
 }

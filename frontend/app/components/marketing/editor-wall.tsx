@@ -1,3 +1,5 @@
+import type { SiteLocale } from '@/lib/seo/site';
+
 import { COMPATIBLE_EDITORS } from './editor-wall.data';
 
 function MarqueeRow({ reverse = false }: { reverse?: boolean }) {
@@ -13,7 +15,7 @@ function MarqueeRow({ reverse = false }: { reverse?: boolean }) {
       >
         {items.map((name, index) => (
           <li
-            className="shrink-0 rounded-full border px-4 py-2 text-sm font-medium whitespace-nowrap"
+            className="mkt-pixel-shadow-sm shrink-0 border-2 px-4 py-2 text-sm font-medium whitespace-nowrap"
             // Doubled, static, aria-hidden-eligible marquee — names repeat by design, so
             // index is the only available disambiguator, and the row never reorders.
             // eslint-disable-next-line react/no-array-index-key
@@ -28,14 +30,22 @@ function MarqueeRow({ reverse = false }: { reverse?: boolean }) {
   );
 }
 
-export function EditorWallSection() {
+export function EditorWallSection({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
-    <section className="py-14">
+    <section className="mkt-reveal py-14">
       <p className="mb-8 text-center text-sm font-medium" style={{ color: 'var(--mkt-fg-muted)' }}>
-        Already using one of these with a WakaTime plugin? Point it at AtoAxis — no new
-        extension to install
+        {locale === 'th'
+          ? 'ใช้ editor เหล่านี้กับ WakaTime plugin อยู่แล้วหรือไม่? ชี้มายัง AtoAxis ได้โดยไม่ต้องติดตั้ง extension ใหม่'
+          : 'Already using one of these with a WakaTime plugin? Point it at AtoAxis, with no new extension to install'}
       </p>
-      <ul aria-label="Editors compatible through the WakaTime plugin protocol" className="sr-only">
+      <ul
+        aria-label={
+          locale === 'th'
+            ? 'Editor ที่เข้ากันได้ผ่าน WakaTime protocol'
+            : 'Editors compatible through the WakaTime plugin protocol'
+        }
+        className="sr-only"
+      >
         {COMPATIBLE_EDITORS.map((name) => (
           <li key={name}>{name}</li>
         ))}

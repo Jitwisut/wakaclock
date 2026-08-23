@@ -33,11 +33,16 @@ import { SendHeartbeatDialog } from './components/send-heartbeat-dialog';
 function HeartbeatsPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
+  const [timezone, setTimezone] = React.useState<null | string>(null);
+
+  React.useEffect(() => {
+    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  }, []);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.heartbeats(userId, date),
-    queryFn: () => getHeartbeats(userId, date),
-    enabled: Boolean(userId),
+    queryKey: wakaclockKeys.heartbeats(userId, date, timezone ?? undefined),
+    queryFn: () => getHeartbeats(userId, date, timezone ?? undefined),
+    enabled: Boolean(userId && timezone),
   });
 
   const rows = data?.data ?? [];
@@ -65,7 +70,7 @@ function HeartbeatsPanel() {
                 />
               </PopoverContent>
             </Popover>
-            <SendHeartbeatDialog date={date} />
+            <SendHeartbeatDialog date={date} timezone={timezone} />
           </div>
         </div>
       </CardHeader>
@@ -74,8 +79,8 @@ function HeartbeatsPanel() {
           emptyDescription="Send a test heartbeat above, or point wakaclock-cli at this backend."
           emptyTitle="No heartbeats on this day"
           error={error}
-          isEmpty={!isLoading && !error && rows.length === 0}
-          isLoading={isLoading}
+          isEmpty={timezone !== null && !isLoading && !error && rows.length === 0}
+          isLoading={timezone === null || isLoading}
         >
           <ScrollArea className="h-[520px] rounded-md border">
             <Table>

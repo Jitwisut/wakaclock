@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
+import { DashboardPanel } from '@/components/dashboard-panels';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
@@ -100,7 +101,9 @@ function InsightsPanel() {
           isLoading={isLoading}
         >
           <div className="space-y-6">
-            <BreakdownChart data={rows} />
+            <DashboardPanel id="insights.chart">
+              <BreakdownChart data={rows} />
+            </DashboardPanel>
             <div className="overflow-x-auto rounded-md border">
               <Table>
                 <TableHeader>

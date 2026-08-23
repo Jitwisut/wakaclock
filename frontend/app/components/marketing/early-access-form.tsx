@@ -1,5 +1,7 @@
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
+import { FormSubmitButton } from './form-submit-button';
+
 const COPY = {
   en: {
     consent: 'I agree to receive AtoAxis Early Access and launch updates.',
@@ -9,6 +11,7 @@ const COPY = {
     optionSolo: 'Personal coding analytics',
     optionTeams: 'Team coding presence',
     submit: 'Join the list',
+    submitting: 'Sending…',
     success: 'We will use this address only for AtoAxis Early Access updates.',
   },
   th: {
@@ -19,6 +22,7 @@ const COPY = {
     optionSolo: 'การวิเคราะห์เวลาการเขียนโค้ดส่วนตัว',
     optionTeams: 'coding presence สำหรับทีม',
     submit: 'ลงทะเบียน',
+    submitting: 'กำลังส่ง…',
     success: 'เราจะใช้อีเมลนี้สำหรับข่าวสาร AtoAxis Early Access เท่านั้น',
   },
 } as const;
@@ -39,13 +43,13 @@ export function EarlyAccessForm({
       id="early-access"
     >
       <div
-        className="rounded-2xl border p-8 md:p-10"
+        className="mkt-pixel-shadow border-[3px] p-8 md:p-10"
         style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
       >
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           id="early-access-heading"
-          style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
+          style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
         >
           {copy.heading}
         </h2>
@@ -70,7 +74,7 @@ export function EarlyAccessForm({
               {copy.email}
             </label>
             <input
-              className="mt-2 w-full rounded-lg border bg-transparent px-4 py-3 text-sm outline-none"
+              className="mt-2 w-full border-2 bg-transparent px-4 py-3 text-sm outline-none"
               id={`${locale}-early-access-email`}
               name="email"
               placeholder="you@example.com"
@@ -85,7 +89,7 @@ export function EarlyAccessForm({
               {copy.interest}
             </label>
             <select
-              className="mt-2 w-full rounded-lg border bg-transparent px-4 py-3 text-sm outline-none"
+              className="mt-2 w-full border-2 bg-transparent px-4 py-3 text-sm outline-none"
               defaultValue="solo"
               id={`${locale}-early-access-interest`}
               name="interest"
@@ -96,7 +100,10 @@ export function EarlyAccessForm({
             </select>
           </div>
 
-          <label className="flex items-start gap-3 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
+          <label
+            className="flex items-start gap-3 text-xs"
+            style={{ color: 'var(--mkt-fg-muted)' }}
+          >
             <input className="mt-0.5" name="consent" required type="checkbox" value="yes" />
             <span>{copy.consent}</span>
           </label>
@@ -106,13 +113,7 @@ export function EarlyAccessForm({
             <input id={`${locale}-early-access-bot`} name="bot-field" tabIndex={-1} />
           </div>
 
-          <button
-            className="w-full rounded-full px-6 py-3 text-sm font-semibold"
-            style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
-            type="submit"
-          >
-            {copy.submit}
-          </button>
+          <FormSubmitButton label={copy.submit} pendingLabel={copy.submitting} />
         </form>
       </div>
     </section>

@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
+import { DashboardPanel } from '@/components/dashboard-panels';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
@@ -75,26 +76,28 @@ function KeystrokesPanel() {
                 <StatTile label="Active days" value={String(stats.days_with_activity)} />
               </div>
 
-              <ChartContainer className="h-56 w-full" config={chartConfig}>
-                <LineChart data={stats.daily} margin={{ left: 4, right: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis
-                    axisLine={false}
-                    dataKey="date"
-                    tickFormatter={(v: string) => v.slice(5)}
-                    tickLine={false}
-                  />
-                  <YAxis axisLine={false} tickLine={false} width={48} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <Line
-                    dataKey="keystrokes"
-                    dot={false}
-                    stroke="var(--color-keystrokes)"
-                    strokeWidth={2}
-                    type="monotone"
-                  />
-                </LineChart>
-              </ChartContainer>
+              <DashboardPanel id="keystrokes.chart">
+                <ChartContainer className="h-56 w-full" config={chartConfig}>
+                  <LineChart data={stats.daily} margin={{ left: 4, right: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      axisLine={false}
+                      dataKey="date"
+                      tickFormatter={(v: string) => v.slice(5)}
+                      tickLine={false}
+                    />
+                    <YAxis axisLine={false} tickLine={false} width={48} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Line
+                      dataKey="keystrokes"
+                      dot={false}
+                      stroke="var(--color-keystrokes)"
+                      strokeWidth={2}
+                      type="monotone"
+                    />
+                  </LineChart>
+                </ChartContainer>
+              </DashboardPanel>
 
               <div className="overflow-x-auto rounded-md border">
                 <Table>

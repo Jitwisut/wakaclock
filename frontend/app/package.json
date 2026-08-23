@@ -27,6 +27,8 @@
     "typecheck:watch": "tsc --noEmit --watch",
     "validate": "run-p typecheck lint:strict test:run",
     "check:strict": "node scripts/check-strict.mjs",
+    "check:prerender": "node scripts/check-prerender.mjs",
+    "check:build": "npm run build && npm run check:prerender",
     "check:all": "run-s check:strict storybook:build storybook:audit storybook:deep-gaps storybook:test:a11y test:e2e",
     "validate:ci": "run-p typecheck lint:strict && npm run test:ci",
     "storybook": "storybook dev -p 6006",

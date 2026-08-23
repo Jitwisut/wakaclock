@@ -32,8 +32,23 @@ export const INSIGHT_TYPES: InsightType[] = [
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
 export interface StatusBarResponse {
+  agent_health?: unknown;
+  buffered_seconds?: number;
+  confirmed_seconds?: number;
+  covered_intervals?: Array<{
+    end: number;
+    segment_id: string;
+    source: string;
+    start: number;
+  }>;
+  discarded_seconds?: number;
   heartbeat_count: number;
   human_readable: string;
+  last_heartbeat_at?: null | number;
+  last_increment_seconds?: number;
+  last_increment_source?: string;
+  queued_seconds?: number;
+  timezone?: string;
   total_seconds: number;
 }
 
@@ -301,8 +316,7 @@ export interface GenerateApiKeyData {
   user_id: string;
 }
 
-/** `api_key` is null when nothing is displayable: no key, or one issued before keys
- *  were stored retrievably (those still authenticate, they just can't be shown). */
+/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
 // ---------------------------------------------------------------------------
 // GET /dashboard/analytics — every value carries the metric it counts and the unit
 // it is measured in, because the cards mix seconds, lines and currency.

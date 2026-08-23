@@ -127,6 +127,9 @@ const ActiveThemeProvider = React.forwardRef<HTMLDivElement, ActiveThemeProvider
       initialTheme?.scale,
     ]);
 
+    // Mirrored onto <body> as well, because Radix renders popovers, dialogs, dropdowns
+    // and toasts into a portal outside this subtree; without the attributes there they
+    // would fall back to the default palette while the page around them is themed.
     useEffect(() => {
       if (typeof document === 'undefined') return;
       const { body } = document;
@@ -162,10 +165,30 @@ const ActiveThemeProvider = React.forwardRef<HTMLDivElement, ActiveThemeProvider
 
     return (
       <ThemeContext.Provider value={{ theme, setTheme }}>
+        {/*
+          The theme attributes are rendered here, from state, rather than written to this
+          element in an effect. Two things depend on that:
+
+          1. They are present in the server HTML (state is seeded from `initialTheme`,
+             which the dashboard layout reads from cookies), so the first paint already
+             carries the right preset instead of flashing the default.
+          2. They re-render when the preset changes. An attribute placed on some other
+             element from a request cookie cannot, and because `themes.css` targets
+             `[data-theme-preset='…']` anywhere in the tree, that stale copy would win over
+             <body> for everything inside it — which is exactly how preset switching came
+             to look like it did nothing.
+
+          `group/layout` lives here too so the centered-content variants resolve against
+          the same element that carries `data-theme-content-layout`.
+        */}
         <div
-          className={cn(className)}
+          className={cn('group/layout', className)}
           data-slot="active-theme-provider"
           data-testid={testId}
+          data-theme-content-layout={theme.contentLayout}
+          data-theme-preset={theme.preset === 'default' ? undefined : theme.preset}
+          data-theme-radius={theme.radius === 'default' ? undefined : theme.radius}
+          data-theme-scale={theme.scale === 'none' ? undefined : theme.scale}
           ref={ref}
           {...props}
         >

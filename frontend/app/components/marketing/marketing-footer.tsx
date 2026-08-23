@@ -9,18 +9,28 @@ const FOOTER_SECTIONS = [
   {
     heading: { en: 'Product', th: 'ผลิตภัณฑ์' },
     links: [
-      { href: '/wakatime-alternative', label: { en: 'WakaTime alternative', th: 'ทางเลือก WakaTime' } },
+      {
+        href: '/wakatime-alternative',
+        label: { en: 'WakaTime alternative', th: 'ทางเลือก WakaTime' },
+      },
       { href: '/ai-coding-tracker', label: { en: 'AI coding tracker', th: 'ติดตาม AI coding' } },
-      { href: '/developer-analytics', label: { en: 'Developer analytics', th: 'Developer analytics' } },
+      {
+        href: '/developer-analytics',
+        label: { en: 'Developer analytics', th: 'Developer analytics' },
+      },
       { href: '/teams', label: { en: 'Teams (in development)', th: 'Teams (อยู่ระหว่างพัฒนา)' } },
       { href: '/pricing', label: { en: 'Pricing', th: 'ราคา' } },
+      { href: '/join', label: { en: 'Join Early Access', th: 'เข้าร่วม Early Access' } },
     ],
   },
   {
     heading: { en: 'Documentation', th: 'เอกสาร' },
     links: [
       { href: '/docs/getting-started', label: { en: 'Getting started', th: 'เริ่มต้นใช้งาน' } },
-      { href: '/integrations/vscode', label: { en: 'VS Code integration', th: 'การเชื่อมต่อ VS Code' } },
+      {
+        href: '/integrations/vscode',
+        label: { en: 'VS Code integration', th: 'การเชื่อมต่อ VS Code' },
+      },
       { href: '/privacy', label: { en: 'Privacy and data', th: 'ความเป็นส่วนตัวและข้อมูล' } },
     ],
   },
@@ -33,7 +43,8 @@ const FOOTER_COPY = {
     privacy: 'Privacy',
     terms: 'Terms',
     copyright: 'Developer time tracking.',
-    tagline: 'Developer time tracking with your complete history. One timeline for everything you do.',
+    tagline:
+      'Developer time tracking with your complete history. One timeline for everything you do.',
   },
   th: {
     about: 'เกี่ยวกับเรา',
@@ -45,6 +56,13 @@ const FOOTER_COPY = {
   },
 } as const;
 
+const LEGAL_LINKS = [
+  { href: '/about', key: 'about' },
+  { href: '/contact', key: 'contact' },
+  { href: '/privacy', key: 'privacy' },
+  { href: '/terms', key: 'terms' },
+] as const;
+
 export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <footer className="border-t" style={{ borderColor: 'var(--mkt-border)' }}>
@@ -55,7 +73,7 @@ export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
               <TimerIcon aria-hidden className="size-4" style={{ color: 'var(--mkt-accent)' }} />
               <span
                 className="text-sm font-semibold"
-                style={{ fontFamily: 'var(--font-mkt-mono), monospace' }}
+                style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
               >
                 {SITE_NAME}
               </span>
@@ -72,7 +90,7 @@ export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
                 {section.links.map((link) => (
                   <li key={link.href}>
                     <Link
-                      className="text-xs"
+                      className="inline-flex min-h-8 items-center text-xs transition-colors duration-150 hover:text-[var(--mkt-accent)] hover:underline hover:underline-offset-4"
                       href={localizedPath(locale, link.href)}
                       style={{ color: MKT_FG_MUTED }}
                     >
@@ -85,11 +103,19 @@ export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
           ))}
         </div>
 
-        <div className="mt-8 flex flex-wrap gap-x-4 gap-y-2 text-xs" style={{ color: MKT_FG_MUTED }}>
-          <Link href={localizedPath(locale, '/about')}>{FOOTER_COPY[locale].about}</Link>
-          <Link href={localizedPath(locale, '/contact')}>{FOOTER_COPY[locale].contact}</Link>
-          <Link href={localizedPath(locale, '/privacy')}>{FOOTER_COPY[locale].privacy}</Link>
-          <Link href={localizedPath(locale, '/terms')}>{FOOTER_COPY[locale].terms}</Link>
+        <div
+          className="mt-8 flex flex-wrap gap-x-2 gap-y-1 text-xs"
+          style={{ color: MKT_FG_MUTED }}
+        >
+          {LEGAL_LINKS.map((entry) => (
+            <Link
+              className="inline-flex min-h-11 items-center px-2 transition-colors duration-150 hover:text-[var(--mkt-accent)] hover:underline hover:underline-offset-4"
+              href={localizedPath(locale, entry.href)}
+              key={entry.href}
+            >
+              {FOOTER_COPY[locale][entry.key]}
+            </Link>
+          ))}
         </div>
 
         <p

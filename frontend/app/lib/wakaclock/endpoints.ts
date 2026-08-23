@@ -63,10 +63,22 @@ export async function loginAccount(username: string, password: string) {
   return data;
 }
 
-// GET /status_bar/today — no query params; user_id comes from the session/API key
-// header attached automatically by the axios interceptor in client.ts
+// GET /status_bar/today — user_id comes from the session/API key header attached
+// automatically by the axios interceptor in client.ts. The browser's IANA timezone
+// keeps the day boundary aligned with the person viewing the dashboard.
 export async function getStatusBar() {
-  const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today');
+  let timezone: string | undefined;
+  try {
+    timezone =
+      typeof window === 'undefined'
+        ? undefined
+        : Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    timezone = undefined;
+  }
+  const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today', {
+    params: { timezone },
+  });
   return data;
 }
 
@@ -94,10 +106,10 @@ export async function getSummaries(userId: string, start: string, end: string) {
   return data;
 }
 
-// GET /durations?date=&user_id=
-export async function getDurations(userId: string, date: string) {
+// GET /durations?date=&timezone=&user_id=
+export async function getDurations(userId: string, date: string, timezone?: string) {
   const { data } = await wakaclockClient.get<DurationsResponse>('/durations', {
-    params: { user_id: userId, date },
+    params: { user_id: userId, date, timezone },
   });
   return data;
 }
@@ -246,8 +258,8 @@ export async function getProjectAnalyticsAi(
   return data;
 }
 
-// GET /users/current/api_key — the key in retrievable form, so the dashboard can show
-// it whenever it's needed rather than only right after it was created.
+// GET /users/current/api_key — metadata only. Plaintext credentials are never returned
+// after the one-time POST response.
 export async function getCurrentApiKey() {
   const { data } = await wakaclockClient.get<CurrentApiKeyResponse>('/users/current/api_key');
   return data;
@@ -264,10 +276,10 @@ export async function revokeApiKey() {
   return data;
 }
 
-// GET /heartbeats?date=&user_id=
-export async function getHeartbeats(userId: string, date: string) {
+// GET /heartbeats?date=&timezone=&user_id=
+export async function getHeartbeats(userId: string, date: string, timezone?: string) {
   const { data } = await wakaclockClient.get<HeartbeatListResponse>('/heartbeats', {
-    params: { user_id: userId, date },
+    params: { user_id: userId, date, timezone },
   });
   return data;
 }

@@ -139,6 +139,7 @@ export const EN_PUBLIC_ROUTES = [
   '/contact',
   '/terms',
   '/early-access',
+  '/join',
 ] as const;
 
 export const TH_PUBLIC_ROUTES = EN_PUBLIC_ROUTES.map((route) => localizedPath('th', route));

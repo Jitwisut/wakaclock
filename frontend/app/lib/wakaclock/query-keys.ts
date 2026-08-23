@@ -9,8 +9,8 @@ export const wakaclockKeys = {
   stats: (userId: string, range: string) => [...wakaclockKeys.all, 'stats', userId, range] as const,
   summaries: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'summaries', userId, start, end] as const,
-  durations: (userId: string, date: string) =>
-    [...wakaclockKeys.all, 'durations', userId, date] as const,
+  durations: (userId: string, date: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'durations', userId, date, timezone] as const,
   projects: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'projects', userId, start, end] as const,
   insights: (userId: string, type: string, range: string) =>
@@ -20,8 +20,8 @@ export const wakaclockKeys = {
   keystrokeStats: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'keystroke-stats', userId, start, end] as const,
   currentUser: (userId: string) => [...wakaclockKeys.all, 'user', userId] as const,
-  heartbeats: (userId: string, date: string) =>
-    [...wakaclockKeys.all, 'heartbeats', userId, date] as const,
+  heartbeats: (userId: string, date: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'heartbeats', userId, date, timezone] as const,
   projectRules: (userId: string) => [...wakaclockKeys.all, 'project-rules', userId] as const,
   projectMerges: (userId: string) => [...wakaclockKeys.all, 'project-merges', userId] as const,
   projectAnalytics: (userId: string, start: string, end: string, timezone?: string) =>
