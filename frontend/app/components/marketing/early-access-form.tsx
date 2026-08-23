@@ -4,6 +4,8 @@ import { useState } from 'react';
 
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
+import { MKT_BORDER } from './tokens';
+
 const COPY = {
   en: {
     consent: 'I agree to receive AtoAxis Early Access and launch updates.',
@@ -80,7 +82,7 @@ export function EarlyAccessForm({
     >
       <div
         className="mkt-pixel-shadow border-[3px] p-8 md:p-10"
-        style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
+        style={{ borderColor: MKT_BORDER, background: 'var(--mkt-bg-elevated)' }}
       >
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
@@ -120,7 +122,7 @@ export function EarlyAccessForm({
               name="email"
               placeholder="you@example.com"
               required
-              style={{ borderColor: 'var(--mkt-border)' }}
+              style={{ borderColor: MKT_BORDER }}
               type="email"
             />
           </div>
@@ -134,7 +136,7 @@ export function EarlyAccessForm({
               defaultValue="solo"
               id={`${locale}-early-access-interest`}
               name="interest"
-              style={{ borderColor: 'var(--mkt-border)' }}
+              style={{ borderColor: MKT_BORDER }}
             >
               <option value="solo">{copy.optionSolo}</option>
               <option value="teams">{copy.optionTeams}</option>
@@ -160,7 +162,7 @@ export function EarlyAccessForm({
             disabled={pending}
             style={{
               background: 'var(--mkt-accent)',
-              borderColor: 'var(--mkt-border)',
+              borderColor: MKT_BORDER,
               color: 'var(--mkt-accent-fg)',
             }}
             type="submit"

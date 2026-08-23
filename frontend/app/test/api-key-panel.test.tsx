@@ -36,7 +36,7 @@ function renderPanel() {
 }
 
 describe('ApiKeyPanel', () => {
-  it('shows the generated key so it can be copied before it is lost', async () => {
+  it('shows the generated key so it can be copied', async () => {
     // The freshly generated key must appear immediately, without waiting for a refetch.
     generateApiKey.mockResolvedValue({
       data: { api_key: 'wcl_secret_value', user_id: 'user-1' },
@@ -112,17 +112,18 @@ describe('ApiKeyPanel when the response has no key', () => {
 });
 
 describe('ApiKeyPanel on load', () => {
-  it('does not reveal a previously generated key', async () => {
-    // Bearer credentials are hash-only at rest. A read can return metadata but never
-    // recovers the plaintext key after the one-time generation response.
+  it('shows a previously generated key without needing to generate a new one', async () => {
+    // The current key is retrievable by the authenticated dashboard session, so a reload
+    // must not force a rotation that would break existing clients.
     getCurrentApiKey.mockResolvedValue({
       data: { api_key: 'wcl_already_stored', user_id: 'user-1' },
     });
     renderPanel();
 
-    await waitFor(() => expect(getCurrentApiKey).toHaveBeenCalled());
-    expect(screen.queryByDisplayValue('wcl_already_stored')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('wcl_already_stored')).toBeInTheDocument()
+    );
     expect(generateApiKey).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /generate key/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /regenerate key/i })).toBeInTheDocument();
   });
 });

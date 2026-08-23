@@ -308,15 +308,15 @@ export interface AuthResponse {
 // ---------------------------------------------------------------------------
 // POST/DELETE /users/current/api_key — requires a logged-in session (Authorization:
 // Bearer <session token>); user_id comes from that session, not from a query param.
-// Plaintext key is returned exactly once, at generation time — only its hash is
-// persisted server-side.
+// The hash is used for authentication and the owning session can read the current
+// plaintext key back through GET /users/current/api_key.
 // ---------------------------------------------------------------------------
 export interface GenerateApiKeyData {
   api_key: string;
   user_id: string;
 }
 
-/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
+/** `api_key` is null only when no retrievable key exists yet. */
 // ---------------------------------------------------------------------------
 // GET /dashboard/analytics — every value carries the metric it counts and the unit
 // it is measured in, because the cards mix seconds, lines and currency.

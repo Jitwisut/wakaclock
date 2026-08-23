@@ -24,14 +24,8 @@ export default function SettingsPage() {
             <TabsTrigger value="panels">Panels</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
-          {/*
-            forceMount because a freshly generated key exists only in this panel's
-            React state — the server stores nothing but its hash. Radix unmounts
-            inactive tab content by default, so switching to any other tab destroyed
-            the only copy of the key, silently and unrecoverably. Kept mounted and
-            hidden with CSS instead; the other tabs can unmount freely since their
-            state is all refetchable.
-          */}
+          {/* Keep the API-key panel mounted so a freshly generated value remains visible
+              while switching tabs; it is also reloaded from the session-only API on mount. */}
           <TabsContent className="pt-4 data-[state=inactive]:hidden" forceMount value="api-key">
             <ApiKeyPanel />
           </TabsContent>

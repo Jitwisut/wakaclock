@@ -268,7 +268,8 @@ CREATE TABLE IF NOT EXISTS wakaclock.users
     user_id    UUID,
     username   String,
     email      String DEFAULT '',
-    api_key    String,              -- hashed API key
+    api_key    String,              -- SHA-256 hash used for authentication
+    api_key_plain String DEFAULT '', -- retrievable value for the authenticated dashboard
     is_active  Bool DEFAULT true,
     created_at DateTime64(3) DEFAULT now64(3),
     updated_at DateTime64(3) DEFAULT now64(3)

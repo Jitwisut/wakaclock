@@ -193,9 +193,9 @@ impl UserService {
         })
     }
 
-    /// Generate a new API key for `user_id`, replacing any previous one. Only the
-    /// SHA-256 hash is persisted; the plaintext key is returned once and cannot be
-    /// recovered afterwards — losing it means calling this again to rotate.
+    /// Generate a new API key for `user_id`, replacing any previous one. The SHA-256
+    /// hash remains the authentication value, while the plaintext is kept in the
+    /// retrievable column so the owning dashboard session can show it again later.
     ///
     /// `wakaclock.users` is `ReplacingMergeTree(updated_at)`, so this INSERT becomes the
     /// new "current" row once ClickHouse merges; callers must also update the in-memory
@@ -206,7 +206,7 @@ impl UserService {
         let plaintext_key = auth::generate_key();
         let key_hash = auth::hash_key(&plaintext_key);
 
-        self.upsert_preserving_identity(user_id, &identity, &key_hash)
+        self.upsert_preserving_identity(user_id, &identity, &key_hash, &plaintext_key)
             .await?;
 
         if let Some(postgres) = &self.postgres {
@@ -223,12 +223,15 @@ impl UserService {
         })
     }
 
-    /// The caller's current API key is intentionally never returned. API keys are
-    /// bearer credentials and the Phase 10 privacy contract permits showing the
-    /// plaintext only in the one-time response from `generate_api_key`.
+    /// Return the caller's current API key in retrievable form for the authenticated
+    /// dashboard session. API-key authentication is not accepted by the handler, so a
+    /// leaked key cannot use this endpoint to read itself back.
     pub async fn current_api_key(&self, user_id: Uuid) -> Result<Option<String>> {
-        let _ = self.existing_identity(user_id).await?;
-        Ok(None)
+        let identity = self.existing_identity(user_id).await?;
+        if identity.api_key_plain.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(identity.api_key_plain))
     }
 
     /// Revoke the current key for `user_id` by writing a new row with an empty `api_key`.
@@ -236,7 +239,7 @@ impl UserService {
     pub async fn revoke_api_key(&self, user_id: Uuid) -> Result<RevokeApiKeyResponse> {
         let identity = self.existing_identity(user_id).await?;
 
-        self.upsert_preserving_identity(user_id, &identity, "")
+        self.upsert_preserving_identity(user_id, &identity, "", "")
             .await?;
 
         if let Some(postgres) = &self.postgres {
@@ -311,15 +314,16 @@ impl UserService {
             .get_client()
             .query(
                 "INSERT INTO wakaclock.users
-                    (user_id, username, email, api_key, is_active,
+                    (user_id, username, email, api_key, api_key_plain, is_active,
                      password_hash, subscription_status, trial_ends_at,
                      subscription_period_end)
-                 VALUES (?, ?, ?, ?, true, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(&identity.api_key)
+            .bind(&identity.api_key_plain)
             .bind(&identity.password_hash)
             .bind(status)
             .bind(identity.trial_ends_at)
@@ -459,7 +463,7 @@ impl UserService {
             .clickhouse
             .get_client()
             .query(
-                "SELECT username, email, password_hash, api_key,
+                "SELECT username, email, password_hash, api_key, api_key_plain,
                         subscription_status, trial_ends_at, subscription_period_end
                  FROM wakaclock.users FINAL
                  WHERE user_id = ? LIMIT 1",
@@ -474,33 +478,36 @@ impl UserService {
             email: String::new(),
             password_hash: String::new(),
             api_key: String::new(),
+            api_key_plain: String::new(),
             subscription_status: "trialing".to_string(),
             trial_ends_at: default_trial_ends_at(),
             subscription_period_end: None,
         }))
     }
 
-    /// Shared by generate/revoke — everything is preserved from `identity` except
-    /// `api_key`, which the caller passes explicitly (a new hash, or `""` to revoke).
+    /// Shared by generate/revoke — every identity field is preserved, while the hash
+    /// and retrievable plaintext are supplied by the caller.
     async fn upsert_preserving_identity(
         &self,
         user_id: Uuid,
         identity: &ExistingUserRow,
         api_key: &str,
+        api_key_plain: &str,
     ) -> Result<()> {
         self.clickhouse
             .get_client()
             .query(
                 "INSERT INTO wakaclock.users
-                    (user_id, username, email, api_key, is_active,
+                    (user_id, username, email, api_key, api_key_plain, is_active,
                      password_hash, subscription_status, trial_ends_at,
                      subscription_period_end)
-                 VALUES (?, ?, ?, ?, true, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(api_key)
+            .bind(api_key_plain)
             .bind(&identity.password_hash)
             .bind(&identity.subscription_status)
             .bind(identity.trial_ends_at)

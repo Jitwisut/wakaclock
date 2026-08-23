@@ -156,8 +156,7 @@ export async function getCurrentUser(userId: string) {
 }
 
 // POST /users/current/api_key — requires a logged-in session; user_id comes from that
-// session (Authorization header, attached automatically), not a query param. Plaintext
-// key returned once, never again.
+// session (Authorization header, attached automatically), not a query param.
 // GET /dashboard/analytics — the Phase 9 overview: summary plus every breakdown in
 // one request, sized for the initial dashboard render.
 export async function getDashboardAnalytics(params: {
@@ -258,8 +257,7 @@ export async function getProjectAnalyticsAi(
   return data;
 }
 
-// GET /users/current/api_key — metadata only. Plaintext credentials are never returned
-// after the one-time POST response.
+// GET /users/current/api_key — returns the current key to the logged-in dashboard session.
 export async function getCurrentApiKey() {
   const { data } = await wakaclockClient.get<CurrentApiKeyResponse>('/users/current/api_key');
   return data;

@@ -97,7 +97,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
         <div className="flex items-center gap-2">
           <LanguageSwitcher locale={locale} />
           <Button asChild className="hidden sm:inline-flex" size="sm" variant="ghost">
-            <Link href="/dashboard/wakaclock">{copy.login}</Link>
+            <Link href="/login">{copy.login}</Link>
           </Button>
           <Button
             asChild
@@ -162,7 +162,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
 
           <div className="mt-2 flex flex-col gap-2 border-t-2 pt-3" style={BAR_SURFACE}>
             <Button asChild className="min-h-11 w-full" size="lg" variant="outline">
-              <Link href="/dashboard/wakaclock">{copy.login}</Link>
+              <Link href="/login">{copy.login}</Link>
             </Button>
             <Button
               asChild
