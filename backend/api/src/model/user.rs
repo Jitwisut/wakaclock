@@ -37,7 +37,11 @@ pub struct ExistingUserRow {
     pub username: String,
     pub email: String,
     pub password_hash: String,
+    /// SHA-256 hash — what authentication compares against.
     pub api_key: String,
+    /// The same key in retrievable form, so it can be shown to its owner again.
+    /// Empty when no key exists, or for keys issued before this column existed.
+    pub api_key_plain: String,
     pub subscription_status: String,
     pub trial_ends_at: u32,
     pub subscription_period_end: Option<u32>,

@@ -12,7 +12,14 @@ import {
   softwareApplicationSchema,
   websiteSchema,
 } from '@/lib/seo/schema';
-import { absoluteUrl, PRIVATE_ROUTE_PREFIXES, PUBLIC_ROUTES, SITE_NAME } from '@/lib/seo/site';
+import {
+  absoluteUrl,
+  createMarketingMetadata,
+  PRIVATE_ROUTE_PREFIXES,
+  PUBLIC_ROUTE_DEFINITIONS,
+  PUBLIC_ROUTES,
+  SITE_NAME,
+} from '@/lib/seo/site';
 
 /** Reads the JSON-LD payload back out of a rendered <JsonLd /> block. */
 function parseRenderedJsonLd(data: unknown): unknown {
@@ -155,24 +162,24 @@ describe('site URL resolution', () => {
 
   it('uses the configured public origin and emits no localhost URLs', async () => {
     vi.resetModules();
-    process.env.NEXT_PUBLIC_APP_URL = 'https://azyren.example.com';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://atoaxis.example.com';
 
     const schema = await import('@/lib/seo/schema');
     const serialized = JSON.stringify(
       schema.graph(schema.organizationSchema(), schema.softwareApplicationSchema())
     );
 
-    expect(serialized).toContain('https://azyren.example.com');
+    expect(serialized).toContain('https://atoaxis.example.com');
     expect(serialized).not.toContain('localhost');
   });
 
   it('strips a trailing slash so canonicals are not doubled', async () => {
     vi.resetModules();
-    process.env.NEXT_PUBLIC_APP_URL = 'https://azyren.example.com/';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://atoaxis.example.com/';
 
     const { absoluteUrl: scopedAbsoluteUrl } = await import('@/lib/seo/site');
 
-    expect(scopedAbsoluteUrl('/pricing')).toBe('https://azyren.example.com/pricing');
+    expect(scopedAbsoluteUrl('/pricing')).toBe('https://atoaxis.example.com/pricing');
   });
 
   it('throws on a production build when no public origin is configured', async () => {
@@ -196,7 +203,8 @@ describe('sitemap', () => {
   it('lists every public route as an absolute URL', () => {
     const entries = sitemap();
 
-    expect(entries).toHaveLength(PUBLIC_ROUTES.length);
+    expect(entries).toHaveLength(PUBLIC_ROUTE_DEFINITIONS.length);
+    expect(PUBLIC_ROUTES).toHaveLength(PUBLIC_ROUTE_DEFINITIONS.length);
     for (const entry of entries) {
       expect(entry.url.startsWith('http')).toBe(true);
     }
@@ -212,10 +220,40 @@ describe('sitemap', () => {
     }
   });
 
-  it('gives the homepage the highest priority', () => {
-    const home = sitemap().find((entry) => new URL(entry.url).pathname === '/');
+  it('lists canonical URLs without synthetic freshness or legacy priority fields', () => {
+    for (const entry of sitemap()) {
+      expect(entry.lastModified).toBeUndefined();
+      expect(entry.priority).toBeUndefined();
+      expect(entry.changeFrequency).toBeUndefined();
+    }
 
-    expect(home?.priority).toBe(1);
+    expect(sitemap().map((entry) => new URL(entry.url).pathname)).toContain('/th');
+  });
+});
+
+describe('marketing metadata', () => {
+  it('merges canonical, language, Open Graph and Twitter fields', () => {
+    const metadata = createMarketingMetadata({
+      description: 'A concise description for a public marketing page.',
+      path: '/pricing',
+      title: 'Planned Pricing',
+    });
+
+    expect(metadata.alternates?.canonical).toBe('/pricing');
+    expect(metadata.alternates?.languages).toMatchObject({
+      en: '/pricing',
+      th: '/th/pricing',
+      'x-default': '/pricing',
+    });
+    expect(metadata.openGraph).toMatchObject({
+      siteName: SITE_NAME,
+      type: 'website',
+      url: '/pricing',
+    });
+    expect(metadata.openGraph?.images).toEqual([
+      expect.objectContaining({ height: 630, url: '/opengraph-image', width: 1200 }),
+    ]);
+    expect(metadata.twitter).toMatchObject({ card: 'summary_large_image' });
   });
 });
 

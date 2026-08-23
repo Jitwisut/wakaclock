@@ -14,13 +14,18 @@ export type FlushReason =
 export interface BufferedFileState {
     entity: string;
     project?: string;
-    lastKeystrokeAt?: number;
-    firstActivityAt?: number;
+    /** Timestamp of the most recent text edit, kept separate from cross-file activity time. */
+    lastEditAt?: number;
     lastActivityAt?: number;
     lastHeartbeatAt?: number;
+    activeSeconds: number;
     keystrokes: number;
     charsAdded: number;
     charsDeleted: number;
+    humanLinesAdded: number;
+    humanLinesDeleted: number;
+    unattributedLinesAdded: number;
+    unattributedLinesDeleted: number;
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
@@ -38,12 +43,34 @@ export interface ExtraHeartbeatPayload {
     chars_added?: number;
     chars_deleted?: number;
     active_seconds?: number;
+    ai_agent?: string;
+    ai_provider?: string;
+    ai_model?: string;
+    ai_source?: string;
+    ai_confidence?: "verified" | "correlated" | "inferred" | "unknown" | string;
+    ai_event_id?: string;
+    ai_lines_added?: number;
+    ai_lines_deleted?: number;
+    human_lines_added?: number;
+    human_lines_deleted?: number;
+    unattributed_lines_added?: number;
+    unattributed_lines_deleted?: number;
 }
 
 export interface CliResult {
     stdout: string;
     stderr: string;
     exitCode: number;
+}
+
+/** Outcome of saving an API key: did it reach config.toml, and does the server accept it. */
+export interface ApiKeySyncResult {
+    /** config.toml is the only channel the AI agent hooks can read a key from. */
+    mirroredToCliConfig: boolean;
+    /** The server accepted the key on a real authenticated request. */
+    verified: boolean;
+    mirrorError?: string;
+    verifyError?: string;
 }
 
 export interface StatusBarSnapshot {

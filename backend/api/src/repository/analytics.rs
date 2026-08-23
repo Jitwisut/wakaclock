@@ -22,7 +22,9 @@ impl AnalyticsRepository {
                 .query(statement)
                 .execute()
                 .await
-                .with_context(|| format!("Failed to execute analytics migration statement: {statement}"))?;
+                .with_context(|| {
+                    format!("Failed to execute analytics migration statement: {statement}")
+                })?;
         }
 
         Ok(())
@@ -140,12 +142,20 @@ const STATEMENTS: &[&str] = &[
         ai_agent          String,
         ai_lines_added    UInt64,
         ai_lines_deleted  UInt64,
+        human_lines_added UInt64,
+        human_lines_deleted UInt64,
         human_keystrokes  UInt64,
         human_chars_added UInt64,
         heartbeat_count   UInt64
     )
-    ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_keystrokes, human_chars_added, heartbeat_count))
+    ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_lines_added, human_lines_deleted, human_keystrokes, human_chars_added, heartbeat_count))
     ORDER BY (user_id, date, ai_agent)
+    "#,
+    r#"
+    ALTER TABLE wakaclock.ai_daily ADD COLUMN IF NOT EXISTS human_lines_added UInt64
+    "#,
+    r#"
+    ALTER TABLE wakaclock.ai_daily ADD COLUMN IF NOT EXISTS human_lines_deleted UInt64
     "#,
     r#"
     CREATE TABLE IF NOT EXISTS wakaclock.keystroke_daily
@@ -198,6 +208,18 @@ const STATEMENTS: &[&str] = &[
     r#"
     ALTER TABLE wakaclock.users
     ADD COLUMN IF NOT EXISTS subscription_period_end Nullable(DateTime)
+    "#,
+    // The retrievable copy of the API key, kept alongside `api_key` (its hash, which is
+    // what authentication still compares against). A key has to be pasted into at least
+    // three places — config.toml, the editor extension, and any agent hook — and showing
+    // it only once meant losing it there cost a full regenerate-and-reconfigure cycle,
+    // with the old key dead in the meantime. Storing it is a deliberate tradeoff, chosen
+    // over hash-only: a database dump now exposes usable keys, which it previously did
+    // not. Authentication deliberately still goes through the hash, so this column is
+    // only ever read to display the key back to its owner.
+    r#"
+    ALTER TABLE wakaclock.users
+    ADD COLUMN IF NOT EXISTS api_key_plain String DEFAULT ''
     "#,
     // ============================================================
     // Materialized Views — Path A: live ingestion (from heartbeats)
@@ -287,6 +309,8 @@ const STATEMENTS: &[&str] = &[
         coalesce(ai_agent, 'human') AS ai_agent,
         sum(coalesce(ai_lines_added, 0))  AS ai_lines_added,
         sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
+        sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+        sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
         sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
         sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
         count() AS heartbeat_count
@@ -357,6 +381,8 @@ const STATEMENTS: &[&str] = &[
     SELECT user_id, date, coalesce(ai_agent, 'human') AS ai_agent,
            sum(coalesce(ai_lines_added, 0)) AS ai_lines_added,
            sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
+           sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+           sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
            sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
            sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
            count() AS heartbeat_count

@@ -73,7 +73,12 @@ impl UserService {
     /// `subscription_status`/`trial_ends_at` are deliberately left out of this INSERT so
     /// ClickHouse applies their column defaults (`'trialing'`, `now() + 14 days`) — the
     /// one place those defaults are supposed to fire.
-    pub async fn register(&self, username: &str, password: &str, jwt_secret: &str) -> Result<AuthData> {
+    pub async fn register(
+        &self,
+        username: &str,
+        password: &str,
+        jwt_secret: &str,
+    ) -> Result<AuthData> {
         if self.find_user_id_by_username(username).await?.is_some() {
             return Err(anyhow!("username already taken"));
         }
@@ -110,7 +115,12 @@ impl UserService {
     }
 
     /// Verify username/password and issue a fresh session JWT.
-    pub async fn login(&self, username: &str, password: &str, jwt_secret: &str) -> Result<AuthData> {
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+        jwt_secret: &str,
+    ) -> Result<AuthData> {
         let row = self
             .clickhouse
             .get_client()
@@ -158,7 +168,8 @@ impl UserService {
         let plaintext_key = auth::generate_key();
         let key_hash = auth::hash_key(&plaintext_key);
 
-        self.upsert_preserving_identity(user_id, &identity, &key_hash).await?;
+        self.upsert_preserving_identity(user_id, &identity, &key_hash, &plaintext_key)
+            .await?;
 
         Ok(GenerateApiKeyResponse {
             data: GenerateApiKeyData {
@@ -168,12 +179,27 @@ impl UserService {
         })
     }
 
+    /// The caller's current API key in retrievable form, for showing it back to them.
+    ///
+    /// `None` means there is nothing to show: either no key exists, or it predates the
+    /// `api_key_plain` column and only its hash was ever stored — those older keys still
+    /// authenticate, they just cannot be displayed, so the UI has to offer regenerating
+    /// rather than pretending no key exists.
+    pub async fn current_api_key(&self, user_id: Uuid) -> Result<Option<String>> {
+        let identity = self.existing_identity(user_id).await?;
+        if identity.api_key_plain.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(identity.api_key_plain))
+    }
+
     /// Revoke the current key for `user_id` by writing a new row with an empty `api_key`.
     /// Callers must also remove the old hash from `AuthKeyCache`.
     pub async fn revoke_api_key(&self, user_id: Uuid) -> Result<RevokeApiKeyResponse> {
         let identity = self.existing_identity(user_id).await?;
 
-        self.upsert_preserving_identity(user_id, &identity, "").await?;
+        self.upsert_preserving_identity(user_id, &identity, "", "")
+            .await?;
 
         Ok(RevokeApiKeyResponse {
             status: "ok".to_string(),
@@ -209,7 +235,8 @@ impl UserService {
 
         Ok(match row {
             Some(row) => {
-                row.subscription_status == "active" || (row.subscription_status == "trialing" && row.trial_valid)
+                row.subscription_status == "active"
+                    || (row.subscription_status == "trialing" && row.trial_valid)
             }
             None => false,
         })
@@ -235,14 +262,16 @@ impl UserService {
             .get_client()
             .query(
                 "INSERT INTO wakaclock.users
-                    (user_id, username, email, api_key, is_active, password_hash,
-                     subscription_status, trial_ends_at, subscription_period_end)
-                 VALUES (?, ?, ?, ?, true, ?, ?, ?, ?)",
+                    (user_id, username, email, api_key, api_key_plain, is_active,
+                     password_hash, subscription_status, trial_ends_at,
+                     subscription_period_end)
+                 VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(&identity.api_key)
+            .bind(&identity.api_key_plain)
             .bind(&identity.password_hash)
             .bind(status)
             .bind(identity.trial_ends_at)
@@ -282,8 +311,8 @@ impl UserService {
             .clickhouse
             .get_client()
             .query(
-                "SELECT username, email, password_hash, api_key, subscription_status,
-                        trial_ends_at, subscription_period_end
+                "SELECT username, email, password_hash, api_key, api_key_plain,
+                        subscription_status, trial_ends_at, subscription_period_end
                  FROM wakaclock.users FINAL
                  WHERE user_id = ? LIMIT 1",
             )
@@ -297,6 +326,7 @@ impl UserService {
             email: String::new(),
             password_hash: String::new(),
             api_key: String::new(),
+            api_key_plain: String::new(),
             subscription_status: "trialing".to_string(),
             trial_ends_at: default_trial_ends_at(),
             subscription_period_end: None,
@@ -310,19 +340,22 @@ impl UserService {
         user_id: Uuid,
         identity: &ExistingUserRow,
         api_key: &str,
+        api_key_plain: &str,
     ) -> Result<()> {
         self.clickhouse
             .get_client()
             .query(
                 "INSERT INTO wakaclock.users
-                    (user_id, username, email, api_key, is_active, password_hash,
-                     subscription_status, trial_ends_at, subscription_period_end)
-                 VALUES (?, ?, ?, ?, true, ?, ?, ?, ?)",
+                    (user_id, username, email, api_key, api_key_plain, is_active,
+                     password_hash, subscription_status, trial_ends_at,
+                     subscription_period_end)
+                 VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(api_key)
+            .bind(api_key_plain)
             .bind(&identity.password_hash)
             .bind(&identity.subscription_status)
             .bind(identity.trial_ends_at)

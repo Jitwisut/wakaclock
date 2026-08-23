@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon, CopyIcon, KeyRoundIcon, TriangleAlertIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -21,7 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { generateApiKey, revokeApiKey } from '@/lib/wakaclock/endpoints';
+import { generateApiKey, getCurrentApiKey, revokeApiKey } from '@/lib/wakaclock/endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 export function ApiKeyPanel() {
@@ -29,11 +29,34 @@ export function ApiKeyPanel() {
   const [plaintextKey, setPlaintextKey] = React.useState<null | string>(null);
   const [copied, setCopied] = React.useState(false);
 
+  // The API only returns plaintext once, immediately after generation. A follow-up read
+  // intentionally returns null because bearer credentials are never stored in plaintext.
+  const currentKeyQuery = useQuery({
+    queryKey: ['wakaclock', 'api-key', userId],
+    queryFn: getCurrentApiKey,
+    enabled: Boolean(userId),
+  });
+
+  const shownKey = plaintextKey;
+
+  const queryClient = useQueryClient();
+
   const generateMutation = useMutation({
     mutationFn: generateApiKey,
     onSuccess: (res) => {
-      setPlaintextKey(res.data.api_key);
+      // Generating always replaces the old key server-side, so reporting success
+      // without showing the new one would leave the account with a key nobody has.
+      // Treat a missing key as the failure it is rather than a silent success.
+      const key = res?.data?.api_key;
+      if (!key) {
+        toast.error(
+          'The server did not return a key. Your previous key has stopped working — generate again.'
+        );
+        return;
+      }
+      setPlaintextKey(key);
       setCopied(false);
+      void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('New API key generated');
     },
     onError: (err: Error) => toast.error(err.message),
@@ -43,14 +66,15 @@ export function ApiKeyPanel() {
     mutationFn: revokeApiKey,
     onSuccess: () => {
       setPlaintextKey(null);
+      void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('API key revoked');
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
   async function copyKey() {
-    if (!plaintextKey) return;
-    await navigator.clipboard.writeText(plaintextKey);
+    if (!shownKey) return;
+    await navigator.clipboard.writeText(shownKey);
     setCopied(true);
     toast.success('Copied to clipboard');
   }
@@ -63,24 +87,24 @@ export function ApiKeyPanel() {
           API key
         </CardTitle>
         <CardDescription>
-          POST/DELETE /users/current/api_key — lets a CLI or editor extension authenticate as you.
-          Only generates a key for the account you&apos;re currently logged into as this session —
-          proven by your login, not a query param anyone could set.
+          Lets a CLI, editor extension or agent hook authenticate as you. Always tied to the
+          account this session is logged into — proven by your login, not a query param anyone
+          could set.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {plaintextKey ? (
+        {shownKey ? (
           <div className="space-y-2">
-            <Alert variant="destructive">
+            <Alert>
               <TriangleAlertIcon />
-              <AlertTitle>Copy this now — it won&apos;t be shown again</AlertTitle>
+              <AlertTitle>Treat this like a password</AlertTitle>
               <AlertDescription>
-                Only its hash is stored. If you lose it, generate a new one (this invalidates the
-                old key everywhere it&apos;s used).
+                Anyone with this key can send and read coding activity as you. Copy it into your
+                clients now; AtoAxis will not display it again after this page is closed.
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
-              <Input className="font-mono text-xs" readOnly value={plaintextKey} />
+              <Input className="font-mono text-xs" readOnly value={shownKey} />
               <Button aria-label="Copy API key" onClick={copyKey} size="icon" variant="outline">
                 {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
               </Button>
@@ -93,8 +117,9 @@ export function ApiKeyPanel() {
           </div>
         ) : (
           <p className="text-muted-foreground text-sm">
-            No key shown — generating one below always creates a brand new key (the old one, if any,
-            stops working immediately).
+            {currentKeyQuery.isLoading
+              ? 'Loading your API key…'
+              : 'No key is visible. Generate a key below; it is shown once and cannot be recovered after you leave this page.'}
           </p>
         )}
 
@@ -102,7 +127,7 @@ export function ApiKeyPanel() {
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button disabled={!userId || generateMutation.isPending}>
-                {plaintextKey || generateMutation.isPending ? 'Regenerate key' : 'Generate key'}
+                {shownKey || generateMutation.isPending ? 'Regenerate key' : 'Generate key'}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
@@ -132,8 +157,8 @@ export function ApiKeyPanel() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Revoke the current key?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Requests using it will immediately fall back to trusting whatever user_id they
-                  claim themselves, the same as before any key existed.
+                  Requests using it will immediately receive an authentication error until a new
+                  key is generated.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

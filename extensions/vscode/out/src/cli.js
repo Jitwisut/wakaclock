@@ -33,6 +33,18 @@ class WakaclockCliService {
         this.pushOptionalNumber(args, "--chars-added", primaryExtra.chars_added);
         this.pushOptionalNumber(args, "--chars-deleted", primaryExtra.chars_deleted);
         this.pushOptionalNumber(args, "--active-seconds", primaryExtra.active_seconds);
+        this.pushOptionalString(args, "--ai-agent", primaryExtra.ai_agent);
+        this.pushOptionalString(args, "--ai-provider", primaryExtra.ai_provider);
+        this.pushOptionalString(args, "--ai-model", primaryExtra.ai_model);
+        this.pushOptionalString(args, "--ai-source", primaryExtra.ai_source);
+        this.pushOptionalString(args, "--ai-confidence", primaryExtra.ai_confidence);
+        this.pushOptionalString(args, "--ai-event-id", primaryExtra.ai_event_id);
+        this.pushOptionalNumber(args, "--ai-lines-added", primaryExtra.ai_lines_added);
+        this.pushOptionalNumber(args, "--ai-lines-deleted", primaryExtra.ai_lines_deleted);
+        this.pushOptionalNumber(args, "--human-lines-added", primaryExtra.human_lines_added);
+        this.pushOptionalNumber(args, "--human-lines-deleted", primaryExtra.human_lines_deleted);
+        this.pushOptionalNumber(args, "--unattributed-lines-added", primaryExtra.unattributed_lines_added);
+        this.pushOptionalNumber(args, "--unattributed-lines-deleted", primaryExtra.unattributed_lines_deleted);
         const stdinPayload = extraHeartbeats.length > 0
             ? JSON.stringify(extraHeartbeats, null, 2)
             : undefined;
@@ -49,6 +61,46 @@ class WakaclockCliService {
             totalSeconds: Number(lines["Total seconds"] ?? "0"),
             heartbeatCount: Number(lines.Heartbeats ?? "0"),
         };
+    }
+    // Mirrors the key into ~/.wakaclock/config.toml on disk, in addition to VS Code's
+    // own SecretStorage. Needed because AI agent hooks (extensions/ai-agents/) are
+    // invoked by Claude Code/Codex/Gemini CLI directly, outside this extension's
+    // process tree, so they can never inherit the WAKACLOCK_API_KEY env var this
+    // extension passes to its own spawned CLI calls (see runCli below) — config.toml
+    // is the only channel those hooks can read a key from.
+    async setApiKey(key) {
+        await this.runCli(["config", "set-key", key]);
+    }
+    /**
+     * Mirror a key into config.toml and then confirm the server actually accepts it.
+     *
+     * Saving a key used to succeed silently whether or not it worked: a wrong or
+     * revoked key produced no error anywhere, heartbeats just stopped being stored
+     * (the CLI queues failed sends and exits 0), and the only symptom was an empty
+     * dashboard hours later. Regenerating a key on the dashboard invalidates the
+     * previous one, so this is easy to hit by accident. Verifying once, at the moment
+     * the user pastes the key, turns that silent failure into an immediate answer.
+     */
+    async syncAndVerifyApiKey(key) {
+        const result = { mirroredToCliConfig: true, verified: false };
+        try {
+            await this.setApiKey(key);
+        }
+        catch (error) {
+            result.mirroredToCliConfig = false;
+            result.mirrorError = error instanceof Error ? error.message : String(error);
+        }
+        try {
+            await this.getToday();
+            result.verified = true;
+        }
+        catch (error) {
+            result.verifyError = error instanceof Error ? error.message : String(error);
+        }
+        return result;
+    }
+    async clearApiKey() {
+        await this.runCli(["config", "clear-key"]);
     }
     async getStatus() {
         const result = await this.runCli(["status"]);
@@ -137,6 +189,13 @@ class WakaclockCliService {
             return;
         }
         args.push(flag, String(value));
+    }
+    pushOptionalString(args, flag, value) {
+        const trimmed = value?.trim();
+        if (!trimmed) {
+            return;
+        }
+        args.push(flag, trimmed);
     }
 }
 exports.WakaclockCliService = WakaclockCliService;

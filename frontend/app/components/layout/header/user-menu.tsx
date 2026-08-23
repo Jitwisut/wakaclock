@@ -41,6 +41,8 @@ export interface UserMenuLabels {
 export interface UserMenuProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Customizable labels for internationalization */
   labels?: UserMenuLabels;
+  /** Ends the active application session when the user chooses Log out. */
+  onLogout?: () => void;
   /**
    * Custom test ID for testing
    * @default 'header-user-menu'
@@ -73,7 +75,7 @@ export interface UserMenuProps extends React.HTMLAttributes<HTMLDivElement> {
  * ```
  */
 const UserMenu = React.forwardRef<HTMLDivElement, UserMenuProps>(
-  ({ labels, testId = 'header-user-menu', ...props }, ref) => {
+  ({ labels, onLogout, testId = 'header-user-menu', ...props }, ref) => {
     const triggerAriaLabel = labels?.triggerAriaLabel ?? 'User menu';
     const avatarAlt = labels?.avatarAlt ?? 'User avatar';
     const upgradeToPro = labels?.upgradeToPro ?? 'Upgrade to Pro';
@@ -146,7 +148,7 @@ const UserMenu = React.forwardRef<HTMLDivElement, UserMenuProps>(
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem data-testid={`${testId}-logout`}>
+            <DropdownMenuItem data-testid={`${testId}-logout`} onSelect={onLogout}>
               <LogOut />
               {logOut}
             </DropdownMenuItem>

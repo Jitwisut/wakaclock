@@ -1,11 +1,11 @@
-# Azyren — Developer Time Tracking for VS Code
+# AtoAxis — Developer Time Tracking for VS Code
 
-Azyren records how long you spend coding in VS Code and breaks it down by project,
+AtoAxis records how long you spend coding in VS Code and breaks it down by project,
 programming language, branch and editor. This extension captures editor activity,
 buffers it in memory, and delegates heartbeat delivery to `wakaclock-cli`, which sends
-it to a self-hosted Azyren server you run yourself.
+it to a self-hosted AtoAxis server you run yourself.
 
-> **Naming:** the product is Azyren, but the CLI binary, config directory and setting
+> **Naming:** the product is AtoAxis, but the CLI binary, config directory and setting
 > keys still ship under the original `wakaclock` name. Commands below are written
 > exactly as you must type them.
 
@@ -22,7 +22,7 @@ it to a self-hosted Azyren server you run yourself.
 
 - VS Code 1.90 or newer
 - `wakaclock-cli` on your `PATH`, or configured via `wakaclock.cliPath`
-- A running Azyren server and a config file at `~/.wakaclock/config.toml`
+- A running AtoAxis server and a config file at `~/.wakaclock/config.toml`
 
 ## Installation
 
@@ -61,19 +61,28 @@ wakaclock-cli today    # today's total
 
 ## Supported editors
 
-This is the only editor plugin published for Azyren. Other editors can still send
-data: the Azyren heartbeat API is WakaTime-compatible, so any editor with a WakaTime
-plugin can point its `api_url` at your Azyren server instead.
+This is the only editor plugin published for AtoAxis. Other editors can still send
+data: the AtoAxis heartbeat API is WakaTime-compatible, so any editor with a WakaTime
+plugin can point its `api_url` at your AtoAxis server instead.
 
 ## AI tracking
 
-The Azyren heartbeat API accepts AI attribution fields — an agent name plus AI lines
-added and deleted — and the dashboard aggregates them per agent and per day.
+After installation, run `AtoAxis: Show AI Tracking Status`. If Claude Code, Codex CLI or
+Gemini CLI is present, `AtoAxis: Set Up AI Tracking` registers the corresponding hook
+with a stable path that survives VS Code extension updates. The first activation also
+offers this setup once; it never edits another tool's config without your confirmation.
+The configured `wakaclock.cliPath` is mirrored to `~/.wakaclock/cli-path` so hooks can
+use an absolute CLI path even when the binary is not on the AI tool's `PATH`.
 
-**This extension does not populate those fields.** There is no built-in detection of
-Claude Code, Codex, Cursor, Copilot or any other agent. AI attribution is filled in
-either by your own tooling calling the API directly, or by importing a WakaTime export
-that already contains AI categories.
+The hooks send only metadata: agent/provider, optional model, file path, line deltas,
+timestamp and a stable event id. Claude Code is attributed to Anthropic, Codex to
+OpenAI, and Gemini CLI to Google. The dashboard aggregates AI lines separately from
+human lines and keystrokes.
+
+Run `AtoAxis: Repair AI Integrations` after changing an agent installation or if an
+agent reports that its hook path no longer exists. Cursor, Copilot and other IDE-only
+providers are shown as unsupported until they expose an event/telemetry adapter; the
+extension does not guess their identity from typing speed or code shape.
 
 ## Privacy
 
@@ -102,6 +111,9 @@ ClickHouse database on infrastructure you control.
 | `Wakaclock: Set API Key`         | Store your API key in secret storage   |
 | `Wakaclock: Clear API Key`       | Remove the stored key                  |
 | `Wakaclock: Configure CLI Path`  | Point the extension at the CLI binary  |
+| `AtoAxis: Set Up AI Tracking`    | Install hooks for detected AI CLIs     |
+| `AtoAxis: Show AI Tracking Status` | Show detected/enabled AI integrations |
+| `AtoAxis: Repair AI Integrations` | Re-register managed AI hooks           |
 | `Wakaclock: Show Today's Total`  | Display today's tracked time           |
 | `Wakaclock: Send Heartbeat Now`  | Flush pending activity immediately     |
 | `Wakaclock: Toggle Status Bar`   | Show or hide the status bar item       |
@@ -109,7 +121,8 @@ ClickHouse database on infrastructure you control.
 ## Limitations
 
 - Sends file activity only — no `app`, `domain` or `url` heartbeats
-- Does not set AI attribution fields
+- AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need
+  provider-specific adapters
 - Requires `wakaclock-cli`; it does not talk to the server directly
 
 ## Local development

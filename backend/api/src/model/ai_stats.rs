@@ -4,8 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize)]
 pub struct AiAgentItem {
     pub agent: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
+    pub human_lines_added: u64,
+    pub human_lines_deleted: u64,
     pub heartbeat_count: u64,
 }
 
@@ -14,6 +18,8 @@ pub struct AiDailyItem {
     pub date: String,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
+    pub human_lines_added: u64,
+    pub human_lines_deleted: u64,
     pub human_keystrokes: u64,
     pub human_chars_added: u64,
     pub heartbeat_count: u64,
@@ -23,6 +29,8 @@ pub struct AiDailyItem {
 pub struct AiStatsData {
     pub total_ai_lines_added: u64,
     pub total_ai_lines_deleted: u64,
+    pub total_human_lines_added: u64,
+    pub total_human_lines_deleted: u64,
     pub total_human_keystrokes: u64,
     pub total_human_chars_added: u64,
     pub total_heartbeats: u64,
@@ -43,6 +51,8 @@ pub struct AiStatsResponse {
 pub struct AiTotalsRow {
     pub total_ai_lines_added: u64,
     pub total_ai_lines_deleted: u64,
+    pub total_human_lines_added: u64,
+    pub total_human_lines_deleted: u64,
     pub total_human_keystrokes: u64,
     pub total_human_chars_added: u64,
     pub total_heartbeats: u64,
@@ -52,8 +62,12 @@ pub struct AiTotalsRow {
 #[derive(Debug, Deserialize, Row)]
 pub struct AiAgentRow {
     pub agent: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
+    pub human_lines_added: u64,
+    pub human_lines_deleted: u64,
     pub heartbeat_count: u64,
 }
 
@@ -63,6 +77,8 @@ pub struct AiDailyRow {
     pub date: String,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
+    pub human_lines_added: u64,
+    pub human_lines_deleted: u64,
     pub human_keystrokes: u64,
     pub human_chars_added: u64,
     pub heartbeat_count: u64,

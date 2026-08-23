@@ -9,6 +9,7 @@ import {
   KeyboardIcon,
   LayoutDashboardIcon,
   type LucideIcon,
+  RadioIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
   TrendingUpIcon,
@@ -16,6 +17,7 @@ import {
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+import { LinkPending } from '@/components/link-pending';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   DropdownMenu,
@@ -74,6 +76,8 @@ export type NavItem = {
 export type NavMainLabels = {
   /** Text for "coming soon" badge */
   comingBadge?: string;
+  /** Screen-reader text announced while a clicked nav link is still loading */
+  loading?: string;
   /** Text for "new" badge */
   newBadge?: string;
 };
@@ -106,6 +110,7 @@ export const navItems: NavGroup[] = [
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
       { title: 'Keystrokes', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
+      { title: 'Presence (prototype)', href: '/dashboard/wakaclock/presence', icon: RadioIcon },
       { title: 'Settings', href: '/dashboard/wakaclock/settings', icon: SlidersHorizontalIcon },
     ],
   },
@@ -222,7 +227,10 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                                   isActive={pathname === subItem.href}
                                 >
                                   <Link href={subItem.href} target={subItem.newTab ? '_blank' : ''}>
-                                    <span>{subItem.title}</span>
+                                    <span>
+                                      {subItem.title}
+                                      <LinkPending label={labels?.loading ?? 'Loading page'} />
+                                    </span>
                                   </Link>
                                 </SidebarMenuSubButton>
                               </SidebarMenuSubItem>
@@ -241,7 +249,10 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                     >
                       <Link href={item.href} target={item.newTab ? '_blank' : ''}>
                         {item.icon && <item.icon />}
-                        <span>{item.title}</span>
+                        <span>
+                          {item.title}
+                          <LinkPending label={labels?.loading ?? 'Loading page'} />
+                        </span>
                       </Link>
                     </SidebarMenuButton>
                   )}

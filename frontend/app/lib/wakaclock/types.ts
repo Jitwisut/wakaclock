@@ -32,8 +32,23 @@ export const INSIGHT_TYPES: InsightType[] = [
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
 export interface StatusBarResponse {
+  agent_health?: unknown;
+  buffered_seconds?: number;
+  confirmed_seconds?: number;
+  covered_intervals?: Array<{
+    end: number;
+    segment_id: string;
+    source: string;
+    start: number;
+  }>;
+  discarded_seconds?: number;
   heartbeat_count: number;
   human_readable: string;
+  last_heartbeat_at?: null | number;
+  last_increment_seconds?: number;
+  last_increment_source?: string;
+  queued_seconds?: number;
+  timezone?: string;
   total_seconds: number;
 }
 
@@ -189,6 +204,10 @@ export interface AiAgentItem {
   ai_lines_added: number;
   ai_lines_deleted: number;
   heartbeat_count: number;
+  human_lines_added: number;
+  human_lines_deleted: number;
+  model?: null | string;
+  provider?: null | string;
 }
 
 export interface AiDailyItem {
@@ -198,6 +217,8 @@ export interface AiDailyItem {
   heartbeat_count: number;
   human_chars_added: number;
   human_keystrokes: number;
+  human_lines_added: number;
+  human_lines_deleted: number;
 }
 
 export interface AiStatsData {
@@ -209,6 +230,8 @@ export interface AiStatsData {
   total_heartbeats: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
+  total_human_lines_added: number;
+  total_human_lines_deleted: number;
 }
 
 export interface AiStatsResponse {
@@ -293,6 +316,269 @@ export interface GenerateApiKeyData {
   user_id: string;
 }
 
+/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
+// ---------------------------------------------------------------------------
+// GET /dashboard/analytics — every value carries the metric it counts and the unit
+// it is measured in, because the cards mix seconds, lines and currency.
+// ---------------------------------------------------------------------------
+export type AnalyticsMetric =
+  | 'active_duration'
+  | 'ai_lines_changed'
+  | 'estimated_cost'
+  | 'human_lines_changed'
+  | 'prompt_count'
+  | 'session_count'
+  | 'token_count'
+  | 'unattributed_lines_changed';
+
+export type AnalyticsUnit = 'lines' | 'micro_usd' | 'prompts' | 'seconds' | 'sessions' | 'tokens';
+
+export interface BreakdownItem {
+  metric: AnalyticsMetric;
+  name: string;
+  percentage: number;
+  text: string;
+  unit: AnalyticsUnit;
+  value: number;
+}
+
+export interface Breakdown {
+  items: BreakdownItem[];
+  metric: AnalyticsMetric;
+  total: number;
+  unit: AnalyticsUnit;
+}
+
+export interface PeriodComparison {
+  current_seconds: number;
+  direction: 'decrease' | 'increase' | 'new_activity' | 'unchanged';
+  /** null when a percentage would be meaningless (zero to positive). */
+  percent: null | number;
+  previous_seconds: number;
+}
+
+export interface DashboardAnalyticsResponse {
+  breakdowns: {
+    editors: Breakdown;
+    languages: Breakdown;
+    machines: Breakdown;
+    models: Breakdown;
+    operating_systems: Breakdown;
+    weekdays: Breakdown;
+  };
+  coverage: {
+    attribution_percent: null | number;
+    cost_percent: null | number;
+    token_percent: null | number;
+  };
+  daily_attribution: Array<{
+    ai_added: number;
+    ai_deleted: number;
+    date: string;
+    human_added: number;
+    human_deleted: number;
+    unattributed_added: null | number;
+    unattributed_deleted: null | number;
+    unit: 'lines';
+  }>;
+  data_version: number;
+  generated_at: string;
+  range: { days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  summary: {
+    active_day_average_seconds: number;
+    calendar_day_average_seconds: number;
+    most_active_day: { date: string; text: string; total_seconds: number } | null;
+    previous_period: PeriodComparison;
+    today_seconds: number;
+    today_text: string;
+  };
+  usage: {
+    estimated_spend: {
+      amount_microusd: null | number;
+      coverage_percent: null | number;
+      currency: 'USD';
+    };
+    prompts: null | number;
+    sessions: null | number;
+    tokens: {
+      cache_read: null | number;
+      cache_write: null | number;
+      coverage_percent: null | number;
+      input: null | number;
+      output: null | number;
+      total: null | number;
+    };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 project analytics — stable project-id routes. The UI integration lands in
+// PR 9.10; keeping these contracts beside the dashboard client prevents it guessing
+// about absent coverage or parsing formatted strings.
+// ---------------------------------------------------------------------------
+export interface ProjectAnalyticsCard {
+  ai: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage: null | number;
+  };
+  attribution_coverage_percent: null | number;
+  estimated_spend: {
+    amount_microusd: null | number;
+    coverage_percent: null | number;
+    currency: 'USD';
+  };
+  human: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage: null | number;
+  };
+  last_activity_at: null | string;
+  name: string;
+  project_id: string;
+  prompts: null | number;
+  repository: null | string;
+  sessions: null | number;
+  tokens: {
+    cache_read: null | number;
+    cache_write: null | number;
+    coverage_percent: null | number;
+    input: null | number;
+    output: null | number;
+    total: null | number;
+  };
+  total_seconds: number;
+  unattributed: {
+    changes: number;
+    lines_added: number;
+    lines_deleted: number;
+    percentage_of_observed: null | number;
+  };
+}
+
+export interface ProjectAnalyticsListResponse {
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsCard[];
+  next_cursor: null | string;
+  range: { days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  totals: { project_count: number; total_seconds: number };
+}
+
+export interface ProjectAnalyticsDetailResponse {
+  ai: {
+    ai_lines: number;
+    ai_percentage: null | number;
+    attribution_coverage_percent: null | number;
+    estimated_spend: ProjectAnalyticsCard['estimated_spend'];
+    human_lines: number;
+    prompts: null | number;
+    prompts_per_session: null | number;
+    sessions: null | number;
+    tokens: ProjectAnalyticsCard['tokens'];
+    unattributed_lines: null | number;
+  };
+  branches: Array<{
+    ai_changes: number;
+    branch: string;
+    heartbeat_count: number;
+    human_changes: number;
+    total_seconds: number;
+    unattributed_changes: null | number;
+  }>;
+  daily_activity: Array<{
+    ai_added: number;
+    ai_deleted: number;
+    date: string;
+    human_added: number;
+    human_deleted: number;
+    total_seconds: number;
+    unattributed_added: null | number;
+    unattributed_deleted: null | number;
+  }>;
+  data_version: number;
+  editors: Array<{ name: string; percentage: number; total_seconds: number }>;
+  generated_at: string;
+  languages: Array<{ name: string; percentage: number; total_seconds: number }>;
+  project: { name: string; project_id: string; repository: null | string };
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  summary: {
+    active_days: number;
+    all_projects_seconds: number;
+    last_activity_at: null | string;
+    project_seconds: number;
+  };
+  top_files: ProjectFileItem[];
+}
+
+export interface ProjectFileItem {
+  ai_changes: number;
+  display_name: string;
+  entity_key: string;
+  human_changes: number;
+  language: string;
+  path: string;
+  percentage_of_project: number;
+  total_seconds: number;
+  unattributed_changes: null | number;
+}
+
+export interface ProjectFilesResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectFileItem[];
+  metric: 'active_duration';
+  next_cursor: null | string;
+  other_seconds: number;
+  project_total_seconds: number;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+  unit: 'seconds';
+}
+
+export interface ProjectBranchesResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsDetailResponse['branches'];
+  next_cursor: null | string;
+  other_seconds: number;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+export interface ProjectDailyResponse {
+  attribution_coverage_percent: null | number;
+  data_version: number;
+  generated_at: string;
+  items: ProjectAnalyticsDetailResponse['daily_activity'];
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+export interface ProjectAiResponse {
+  data: ProjectAnalyticsDetailResponse['ai'];
+  data_version: number;
+  generated_at: string;
+  range: { branch: string; days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+export interface CurrentApiKeyData {
+  api_key: null | string;
+  user_id: string;
+}
+
+export interface CurrentApiKeyResponse {
+  data: CurrentApiKeyData;
+}
+
 export interface GenerateApiKeyResponse {
   data: GenerateApiKeyData;
 }
@@ -306,6 +592,15 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  ai_agent?: null | string;
+  ai_confidence?: null | string;
+  ai_event_fingerprint?: null | string;
+  ai_event_id?: null | string;
+  ai_lines_added?: null | number;
+  ai_lines_deleted?: null | number;
+  ai_model?: null | string;
+  ai_provider?: null | string;
+  ai_source?: null | string;
   ast_confidence: null | number;
   ast_language: null | string;
   branch: null | string;
@@ -315,6 +610,8 @@ export interface HeartbeatItem {
   editor: string;
   entity: string;
   entity_type: string;
+  human_lines_added?: null | number;
+  human_lines_deleted?: null | number;
   is_write: boolean;
   language: null | string;
   line_number: null | number;
@@ -323,6 +620,8 @@ export interface HeartbeatItem {
   operating_system: string;
   project: null | string;
   time: number;
+  unattributed_lines_added?: null | number;
+  unattributed_lines_deleted?: null | number;
 }
 
 export interface HeartbeatListResponse {
@@ -334,8 +633,13 @@ export interface HeartbeatListResponse {
 export interface HeartbeatPayload {
   active_seconds?: number;
   ai_agent?: string;
+  ai_confidence?: string;
+  ai_event_id?: string;
   ai_lines_added?: number;
   ai_lines_deleted?: number;
+  ai_model?: string;
+  ai_provider?: string;
+  ai_source?: string;
   ast_confidence?: number;
   ast_language?: string;
   branch?: string;
@@ -348,6 +652,8 @@ export interface HeartbeatPayload {
   editor?: string;
   entity: string;
   entity_type: EntityType;
+  human_lines_added?: number;
+  human_lines_deleted?: number;
   is_ai_generated?: boolean;
   is_write?: boolean;
   keystrokes?: number;
@@ -358,6 +664,8 @@ export interface HeartbeatPayload {
   operating_system?: string;
   project?: string;
   time: number;
+  unattributed_lines_added?: number;
+  unattributed_lines_deleted?: number;
   user_agent?: string;
   user_id?: string;
 }
@@ -440,9 +748,15 @@ export interface ReprocessRequest {
 }
 
 export interface ReprocessData {
+  audit_id: string;
+  data_version: null | number;
+  dry_run: boolean;
   end: string;
+  project_ids_written: number;
   reprocessed_heartbeats: number;
+  resolved_heartbeats: number;
   start: string;
+  unresolved_heartbeats: number;
   user_id: string;
 }
 
@@ -469,6 +783,73 @@ export interface WakaTimeImportData {
 export interface WakaTimeImportResponse {
   data: WakaTimeImportData;
   status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Presence (plan.md Phase 7) — prototype. Backed by an in-memory, single-process
+// store on the server; does not survive a server restart. See
+// backend/api/src/infrastructure/presence_store.rs for what that means.
+// ---------------------------------------------------------------------------
+export type PresenceState = 'coding' | 'idle' | 'offline';
+
+export interface PresencePoint {
+  x: number;
+  y: number;
+}
+
+export interface PresenceRosterEntry {
+  position: null | PresencePoint;
+  state: PresenceState;
+  user_id: string;
+  username: string;
+}
+
+/** What the SSE stream at /presence/rooms/:roomId/stream delivers on every tick. */
+export interface PresenceRoomSnapshot {
+  roster: PresenceRosterEntry[];
+  team_id: null | string;
+  team_name: null | string;
+}
+
+export interface CreatePresenceRoomResponse {
+  room_id: string;
+}
+
+export interface PresenceActionResponse {
+  status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Orgs & teams — minimal slice (plan.md 6.1, scoped down), exists only so a presence
+// room can carry a real, permission-checked team name instead of free text. Not
+// org-scoped analytics, not billing — see backend/api/src/handlers/v1/orgs.rs.
+// ---------------------------------------------------------------------------
+export interface Org {
+  name: string;
+  org_id: string;
+  owner_user_id: string;
+}
+
+export interface Team {
+  name: string;
+  org_id: string;
+  team_id: string;
+}
+
+export interface OrgResponse {
+  data: Org;
+}
+
+export interface OrgsResponse {
+  data: Org[];
+}
+
+export interface TeamResponse {
+  data: Team;
+}
+
+export interface TeamsResponse {
+  data: Team[];
 }
 
 // ---------------------------------------------------------------------------

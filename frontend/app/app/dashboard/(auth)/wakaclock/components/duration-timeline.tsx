@@ -8,7 +8,7 @@ import { CalendarIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Table,
@@ -51,11 +51,16 @@ const DAY_SECONDS = 24 * 3600;
 export function DurationTimeline() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
+  const [timezone, setTimezone] = React.useState<null | string>(null);
+
+  React.useEffect(() => {
+    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  }, []);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.durations(userId, date),
-    queryFn: () => getDurations(userId, date),
-    enabled: Boolean(userId),
+    queryKey: wakaclockKeys.durations(userId, date, timezone ?? undefined),
+    queryFn: () => getDurations(userId, date, timezone ?? undefined),
+    enabled: Boolean(userId && timezone),
   });
 
   const blocks = data?.data ?? [];
@@ -67,7 +72,6 @@ export function DurationTimeline() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Session timeline</CardTitle>
-            <CardDescription>GET /durations</CardDescription>
           </div>
           <Popover>
             <PopoverTrigger asChild>
@@ -90,8 +94,8 @@ export function DurationTimeline() {
         <QueryState
           emptyTitle="No sessions on this day"
           error={error}
-          isEmpty={!isLoading && !error && blocks.length === 0}
-          isLoading={isLoading}
+          isEmpty={timezone !== null && !isLoading && !error && blocks.length === 0}
+          isLoading={timezone === null || isLoading}
         >
           <div className="space-y-4">
             <TooltipProvider>

@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+/// How close in time two heartbeats for the same file must be before the later one is
+/// considered a duplicate. Ported from WakaTime's same-file rule, which its editor
+/// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
+/// this window to mean the same thing here as it does there.
+pub const DEDUP_WINDOW_SECONDS: f64 = 120.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EntityType {
@@ -90,6 +96,12 @@ pub struct Heartbeat {
     pub time: f64,
     pub date: String,
     pub project: Option<String>,
+    /// Stable project identity (plan.md 9.3). Always `None` on the wire: clients send a
+    /// project *name* and the server resolves it, because identity has to survive renames
+    /// and merges that a client cannot see. Present on this shared struct only so the
+    /// resolved value can reach the ClickHouse row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Uuid>,
     pub branch: Option<String>,
     pub language: Option<String>,
     pub dependencies: Vec<String>,
@@ -110,8 +122,31 @@ pub struct Heartbeat {
     pub active_seconds: Option<f64>,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
+    /// Provider that emitted the attribution event (for example `openai` or `anthropic`).
+    /// Kept separate from `ai_agent` so the dashboard can group tools and vendors
+    /// independently when an agent can use more than one provider.
+    pub ai_provider: Option<String>,
+    /// Model reported by the agent, when the integration exposes it.
+    pub ai_model: Option<String>,
+    /// How the client obtained the attribution (`agent_hook`, `ide_telemetry`, ...).
+    pub ai_source: Option<String>,
+    /// Confidence label rather than a guessed probability. Unknown integrations must
+    /// remain visibly unknown instead of being silently counted as human work.
+    pub ai_confidence: Option<String>,
+    /// Stable id supplied by an agent hook. This is used for retry/deduplication and is
+    /// intentionally opaque to the server.
+    pub ai_event_id: Option<String>,
     pub ai_lines_added: Option<u32>,
     pub ai_lines_deleted: Option<u32>,
+    pub human_lines_added: Option<u32>,
+    pub human_lines_deleted: Option<u32>,
+    /// Lines whose provenance could not be proven as either AI or manual. Keeping this
+    /// separate from the human counters prevents an uncorrelated agent edit from silently
+    /// inflating the human metric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed_lines_added: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattributed_lines_deleted: Option<u32>,
     pub created_at: String,
 }
 
@@ -128,6 +163,7 @@ impl Heartbeat {
             time,
             date,
             project: None,
+            project_id: None,
             branch: None,
             language: None,
             dependencies: vec![],
@@ -148,8 +184,17 @@ impl Heartbeat {
             active_seconds: None,
             is_ai_generated: false,
             ai_agent: None,
+            ai_provider: None,
+            ai_model: None,
+            ai_source: None,
+            ai_confidence: None,
+            ai_event_id: None,
             ai_lines_added: None,
             ai_lines_deleted: None,
+            human_lines_added: None,
+            human_lines_deleted: None,
+            unattributed_lines_added: None,
+            unattributed_lines_deleted: None,
             created_at: now.to_rfc3339(),
         }
     }
@@ -180,12 +225,54 @@ impl Heartbeat {
         Ok(())
     }
 
+    /// A symmetric relation: two heartbeats are duplicates of each other, not just of
+    /// whichever one happens to be `self`. This matters because the one real caller
+    /// (`ApiClient::filter_duplicates`) checks `heartbeat.is_duplicate_of(last)`, where
+    /// `last` — the most recently accepted heartbeat — can itself be a save. Only
+    /// checking `self.is_write` let a save silently protect an unrelated heartbeat that
+    /// arrived shortly after it from ever being sent; a save is a meaningful event on
+    /// either side of the comparison and must never let a pair be coalesced into one.
     pub fn is_duplicate_of(&self, other: &Heartbeat) -> bool {
         let time_diff = (self.time - other.time).abs();
         self.entity == other.entity
             && self.entity_type == other.entity_type
             && !self.is_write
-            && time_diff < 120.0
+            && !other.is_write
+            && !self.carries_measurements()
+            && time_diff < DEDUP_WINDOW_SECONDS
+    }
+
+    /// Whether this heartbeat carries measured work that exists nowhere else.
+    ///
+    /// This is the difference between wakaclock's heartbeats and WakaTime's, and it is
+    /// why `is_duplicate_of` cannot be a straight port of WakaTime's 2-minute same-file
+    /// rule. A WakaTime heartbeat is a stateless "I was here" marker, so collapsing two
+    /// of them inside one window loses nothing but a redundant timestamp. A wakaclock
+    /// heartbeat additionally carries counters accumulated by the editor buffer since
+    /// the previous flush (keystrokes, characters, lines, active seconds) — and the
+    /// editor zeroes those counters as soon as the CLI call returns, regardless of
+    /// whether the CLI actually delivered them. Dropping such a heartbeat therefore
+    /// destroys the only copy of those measurements: a user typing continuously in one
+    /// file had roughly half their keystroke/character totals silently discarded before
+    /// this check existed.
+    ///
+    /// Only `self` is tested, never `other`: `other` is the previously accepted
+    /// heartbeat, whose measurements are already stored server-side and are not at risk.
+    fn carries_measurements(&self) -> bool {
+        fn positive(value: Option<u32>) -> bool {
+            value.is_some_and(|count| count > 0)
+        }
+
+        positive(self.keystrokes)
+            || positive(self.chars_added)
+            || positive(self.chars_deleted)
+            || positive(self.human_lines_added)
+            || positive(self.human_lines_deleted)
+            || positive(self.unattributed_lines_added)
+            || positive(self.unattributed_lines_deleted)
+            || positive(self.ai_lines_added)
+            || positive(self.ai_lines_deleted)
+            || self.active_seconds.is_some_and(|seconds| seconds > 0.0)
     }
 }
 
@@ -235,6 +322,92 @@ mod tests {
         let mut hb3 = hb1.clone();
         hb3.is_write = true;
         assert!(!hb1.is_duplicate_of(&hb3));
+    }
+
+    /// Regression test for silent data loss: a heartbeat carrying counters the editor
+    /// accumulated since its last flush must never be dropped as a "duplicate". The
+    /// editor zeroes those counters the moment the CLI returns, so dropping the
+    /// heartbeat destroys the only copy. Measured against real behaviour: typing 220
+    /// keystrokes across three 30-second flush windows in one file recorded only 100
+    /// before this rule existed.
+    #[test]
+    fn heartbeat_carrying_measurements_is_never_a_duplicate() {
+        let base = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+
+        let mut later = base.clone();
+        later.time = base.time + 30.0;
+        assert!(
+            later.is_duplicate_of(&base),
+            "an empty presence heartbeat inside the window is still a duplicate"
+        );
+
+        for mutate in [
+            (|hb: &mut Heartbeat| hb.keystrokes = Some(42)) as fn(&mut Heartbeat),
+            |hb: &mut Heartbeat| hb.chars_added = Some(10),
+            |hb: &mut Heartbeat| hb.chars_deleted = Some(3),
+            |hb: &mut Heartbeat| hb.human_lines_added = Some(2),
+            |hb: &mut Heartbeat| hb.human_lines_deleted = Some(1),
+            |hb: &mut Heartbeat| hb.ai_lines_added = Some(7),
+            |hb: &mut Heartbeat| hb.ai_lines_deleted = Some(4),
+            |hb: &mut Heartbeat| hb.active_seconds = Some(12.5),
+        ] {
+            let mut measured = base.clone();
+            measured.time = base.time + 30.0;
+            mutate(&mut measured);
+            assert!(
+                !measured.is_duplicate_of(&base),
+                "a heartbeat carrying measured work must survive dedup"
+            );
+        }
+    }
+
+    /// Explicit zeros are still "no new work" — an editor that reports `keystrokes: 0`
+    /// rather than omitting the field must not defeat dedup and reintroduce the
+    /// heartbeat spam the 2-minute window exists to prevent.
+    #[test]
+    fn zero_valued_counters_do_not_defeat_dedup() {
+        let base = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        let mut zeroed = base.clone();
+        zeroed.time = base.time + 30.0;
+        zeroed.keystrokes = Some(0);
+        zeroed.chars_added = Some(0);
+        zeroed.active_seconds = Some(0.0);
+
+        assert!(zeroed.is_duplicate_of(&base));
+    }
+
+    /// Regression test: `is_duplicate_of` used to only check `self.is_write`, so a save
+    /// that arrived first would silently mark a later non-write heartbeat as its
+    /// duplicate — the exact call shape `ApiClient::filter_duplicates` uses, where
+    /// `self` is the newly-arriving heartbeat and `other` is the previously accepted
+    /// one. The relation must hold regardless of which side of the pair the save is on.
+    #[test]
+    fn test_duplicate_detection_is_symmetric_in_is_write() {
+        let hb1 = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+
+        let mut save = hb1.clone();
+        save.is_write = true;
+
+        let mut later = hb1.clone();
+        later.time = hb1.time + 30.0;
+
+        assert!(!later.is_duplicate_of(&save));
+        assert!(!save.is_duplicate_of(&later));
     }
 
     #[test]

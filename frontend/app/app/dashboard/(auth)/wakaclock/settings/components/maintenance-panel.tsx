@@ -36,10 +36,19 @@ function ReprocessCard() {
   const [confirmText, setConfirmText] = React.useState('');
 
   const mutation = useMutation({
-    mutationFn: () => reprocess(userId, start, end),
+    mutationFn: () => reprocess(start, end, false),
     onSuccess: (res) => {
       toast.success(`Reprocessed ${res.data.reprocessed_heartbeats} heartbeats`);
       setConfirmText('');
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const previewMutation = useMutation({
+    mutationFn: () => reprocess(start, end),
+    onSuccess: (res) => {
+      toast.info(
+        `Preview: ${res.data.resolved_heartbeats} resolved, ${res.data.unresolved_heartbeats} unresolved`
+      );
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -52,8 +61,8 @@ function ReprocessCard() {
           Reprocess
         </CardTitle>
         <CardDescription>
-          POST /reprocess — deletes and rebuilds every aggregate table for this range from raw
-          heartbeats. Idempotent, but not reversible.
+          Preview is read-only. Applying the confirmed range backfills project IDs, rebuilds
+          projections, and records an audit entry.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -67,6 +76,13 @@ function ReprocessCard() {
             <DatePickerButton onChange={setEnd} value={end} />
           </div>
         </div>
+        <Button
+          disabled={!userId || previewMutation.isPending}
+          onClick={() => previewMutation.mutate()}
+          variant="outline"
+        >
+          {previewMutation.isPending ? 'Preparing preview…' : 'Preview range'}
+        </Button>
         <AlertDialog onOpenChange={(open) => !open && setConfirmText('')}>
           <AlertDialogTrigger asChild>
             <Button disabled={!userId} variant="destructive">

@@ -1,0 +1,182 @@
+/*
+ * Scoped design tokens for the Coding Presence page only, via the
+ * `.wakaclock-presence-theme` wrapper — same isolation approach the dashboard's
+ * retro-pixel theme preset and the marketing site use for their own token sets, so this
+ * specific sky-blue/cream/navy palette can't leak into (or be overridden by) the rest of
+ * the authenticated dashboard.
+ *
+ * Deliberately a single committed look, not a `.dark`-aware one like most of this app —
+ * built to a specific reference palette (sky blue / cream / deep navy) the same way a
+ * game's own menu screens commit to one art direction rather than reskinning per system
+ * theme. Text contrast (navy-on-cream, navy-on-sky-blue) is high either way.
+ */
+
+.wakaclock-presence-theme {
+  --presence-bg: #bde6ff;
+  --presence-bg-soft: #d3eeff;
+  --presence-panel: #fff9e9;
+  --presence-border: #151442;
+  --presence-text: #17163f;
+  --presence-text-muted: #4b4a74;
+  --presence-live: #28b65a;
+  --presence-danger: #ff4438;
+  --presence-grass-a: #8adb62;
+  --presence-grass-b: #78cc55;
+  --presence-shadow: rgba(21, 20, 66, 0.85);
+
+  background: var(--presence-bg);
+  color: var(--presence-text);
+  border-radius: 20px;
+}
+
+.wakaclock-presence-theme * {
+  border-radius: inherit;
+}
+
+.wakaclock-presence-theme .presence-panel,
+.wakaclock-presence-theme .presence-field,
+.wakaclock-presence-theme .presence-chip,
+.wakaclock-presence-theme .presence-input,
+.wakaclock-presence-theme button {
+  border-radius: 14px;
+}
+
+.wakaclock-presence-theme .presence-chip {
+  border-radius: 999px;
+}
+
+/* Hard, unblurred offset shadow — the pixel-panel "sits" on this rather than casting a
+   soft drop shadow, matching the retro-3D bevel language used across the rest of the
+   pixel dashboard. */
+.presence-pixel-shadow {
+  box-shadow: 4px 4px 0 var(--presence-shadow);
+}
+
+.presence-pixel-shadow-sm {
+  box-shadow: 3px 3px 0 var(--presence-shadow);
+}
+
+/* Pressable-button illusion: hover lifts (translate away from the static shadow),
+   active sinks into it — no JS hover-state tracking needed. */
+.presence-pixel-press {
+  transition: transform 150ms ease-out;
+}
+
+.presence-pixel-press:hover {
+  transform: translate(-2px, -2px);
+}
+
+.presence-pixel-press:active {
+  transform: translate(1px, 1px);
+}
+
+@keyframes wakaclock-presence-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.4);
+  }
+}
+
+.presence-live-dot {
+  animation: wakaclock-presence-pulse 1.6s ease-in-out infinite;
+}
+
+/* Player motion — three states, three feels: "coding" bobs (the live-activity tell),
+   "idle" sways more slowly, "offline" holds still (handled by simply applying no class).
+   `steps()` timing, not smooth easing, on purpose: a smoothly-interpolated bob reads as
+   a soft/claymorphism motion, discrete "frame flips" are what makes it read as 8-bit. */
+@keyframes wakaclock-presence-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes wakaclock-presence-sway {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes wakaclock-presence-blink {
+  0%,
+  85%,
+  100% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 0.25;
+  }
+}
+
+.presence-player-coding {
+  animation: wakaclock-presence-bob 0.9s steps(2, jump-none) infinite;
+}
+
+.presence-player-idle {
+  animation: wakaclock-presence-sway 2.4s steps(4, jump-none) infinite;
+}
+
+.presence-status-blink {
+  animation: wakaclock-presence-blink 2.6s steps(1, jump-none) infinite;
+}
+
+/* Dragging always wins over the idle/coding animation loop — a bobbing sprite mid-drag
+   would fight the pointer's own motion and feel janky, not lively. */
+.presence-player-dragging {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .presence-live-dot,
+  .presence-player-coding,
+  .presence-player-idle,
+  .presence-status-blink {
+    animation: none;
+  }
+}
+
+/* The playground "field" — a two-tone grass checkerboard (base texture) plus a sparser
+   layer of small dot "grass tuft" flecks at a different frequency so it doesn't read as
+   a flat green rectangle. Both layers are CSS gradients, no image asset needed. */
+.presence-field {
+  background-color: var(--presence-grass-a);
+  background-image:
+    radial-gradient(var(--presence-grass-b) 1.5px, transparent 1.5px),
+    linear-gradient(
+      45deg,
+      var(--presence-grass-b) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--presence-grass-b) 75%,
+      var(--presence-grass-b)
+    ),
+    linear-gradient(
+      45deg,
+      var(--presence-grass-b) 25%,
+      transparent 25%,
+      transparent 75%,
+      var(--presence-grass-b) 75%,
+      var(--presence-grass-b)
+    );
+  background-size:
+    10px 10px,
+    28px 28px,
+    28px 28px;
+  background-position:
+    4px 4px,
+    0 0,
+    14px 14px;
+}

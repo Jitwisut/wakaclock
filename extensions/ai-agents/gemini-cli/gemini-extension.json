@@ -1,0 +1,5 @@
+{
+  "name": "atoaxis-heartbeat",
+  "version": "1.0.0",
+  "description": "Sends AtoAxis coding-time heartbeats, attributed to Gemini CLI, whenever Gemini edits a file — no editor open required."
+}

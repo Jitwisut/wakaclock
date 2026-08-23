@@ -43,7 +43,10 @@ struct SessionClaims {
 /// /auth/register — this is what the frontend holds, separate from the long-lived API
 /// key a CLI/extension uses. Losing the session token just means logging in again; it
 /// carries no more power than "prove you're this user_id for the next 24h".
-pub fn issue_session_token(user_id: Uuid, jwt_secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn issue_session_token(
+    user_id: Uuid,
+    jwt_secret: &str,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let claims = SessionClaims {
         sub: user_id,
         exp: chrono::Utc::now().timestamp() + SESSION_TTL_SECONDS,
@@ -95,12 +98,23 @@ fn extract_key(headers: &HeaderMap) -> Option<String> {
 /// real authentication, so it was removed rather than left reachable.
 pub fn resolve_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
     let token = extract_key(headers)?;
+    resolve_user_id_from_token(state, &token)
+}
 
-    if let Some(user_id) = verify_session_token(&token, &state.config.jwt_secret) {
+/// Same resolution as `resolve_user_id`, but takes the token directly instead of
+/// reading it from an `Authorization` header.
+///
+/// Exists for the presence SSE stream: browsers' native `EventSource` cannot set custom
+/// request headers, so that one endpoint accepts the session token as a `?token=` query
+/// parameter instead. This is the standard workaround for authenticating SSE from a
+/// browser — not a general-purpose alternative to header auth, and no other handler
+/// should call this directly with a client-supplied query parameter.
+pub fn resolve_user_id_from_token(state: &AppState, token: &str) -> Option<Uuid> {
+    if let Some(user_id) = verify_session_token(token, &state.config.jwt_secret) {
         return Some(user_id);
     }
 
-    let hash = hash_key(&token);
+    let hash = hash_key(token);
     state.auth_cache.lookup(&hash)
 }
 
@@ -132,6 +146,24 @@ pub fn check_rate_limit(
         (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
             axum::Json(serde_json::json!({ "error": "too many attempts, try again later" })),
+        )
+    })
+}
+
+/// Check the per-account limit for expensive analytics and historical rebuild work.
+///
+/// Authentication must happen before this helper is called, so the key is the verified
+/// account id rather than a caller-controlled query parameter or an unstable proxy IP.
+pub fn check_analytics_rate_limit(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<(), (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    state.analytics_rate_limiter.check(user_id).map_err(|_| {
+        (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            axum::Json(serde_json::json!({
+                "error": "analytics request rate limit exceeded, try again later"
+            })),
         )
     })
 }

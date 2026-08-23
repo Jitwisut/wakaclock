@@ -1,0 +1,24 @@
+{
+  "type": "user",
+  "sessionId": "018f0000-aaaa-7000-8000-000000000001",
+  "cwd": "/home/dev/example-project",
+  "gitBranch": "main",
+  "timestamp": "2026-08-14T09:16:05.902Z",
+  "message": {
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01ExampleWriteCallId000002",
+        "is_error": false
+      }
+    ]
+  },
+  "toolUseResult": {
+    "type": "create",
+    "filePath": "/home/dev/example-project/src/new_module.rs",
+    "content": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+    "originalFile": null,
+    "userModified": false,
+    "structuredPatch": []
+  }
+}

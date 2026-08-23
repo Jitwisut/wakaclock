@@ -121,10 +121,11 @@ fn map_heartbeat(
     let category = normalize_category(heartbeat.category.as_deref());
     let is_ai_generated = is_ai_generated(&heartbeat);
     let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
+    let ai_event_id = heartbeat.ai_session.clone();
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
-    let chars_added = to_positive_u32(heartbeat.human_line_changes);
-    let chars_deleted = to_negative_u32(heartbeat.human_line_changes);
+    let human_lines_added = to_positive_u32(heartbeat.human_line_changes);
+    let human_lines_deleted = to_negative_u32(heartbeat.human_line_changes);
 
     Some(HeartbeatRow {
         user_id,
@@ -133,6 +134,10 @@ fn map_heartbeat(
         time: heartbeat.time,
         date,
         project: heartbeat.project,
+        // Imports bypass the live resolve path, so identity is left unresolved here and
+        // picked up by the PR 9.9 backfill along with the rest of the history — rather
+        // than minting identities from another tool's project names at import time.
+        project_id: None,
         branch: heartbeat.branch,
         language: heartbeat.language,
         dependencies: heartbeat.dependencies,
@@ -150,13 +155,23 @@ fn map_heartbeat(
         ast_language: None,
         ast_confidence: None,
         keystrokes: None,
-        chars_added,
-        chars_deleted,
+        chars_added: human_lines_added,
+        chars_deleted: human_lines_deleted,
         active_seconds: None,
         is_ai_generated,
         ai_agent,
+        ai_provider: is_ai_generated.then(|| "wakatime".to_string()),
+        ai_model: None,
+        ai_source: is_ai_generated.then(|| "wakatime_import".to_string()),
+        ai_confidence: is_ai_generated.then(|| "verified".to_string()),
+        ai_event_id,
+        ai_event_fingerprint: None,
         ai_lines_added,
         ai_lines_deleted,
+        human_lines_added,
+        human_lines_deleted,
+        unattributed_lines_added: Some(0),
+        unattributed_lines_deleted: Some(0),
         created_at,
     })
 }

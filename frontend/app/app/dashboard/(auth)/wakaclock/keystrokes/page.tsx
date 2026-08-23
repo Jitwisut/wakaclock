@@ -3,7 +3,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { DashboardPanel } from '@/components/dashboard-panels';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import {
@@ -46,8 +47,7 @@ function KeystrokesPanel() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Keystrokes</CardTitle>
-            <CardDescription>GET /users/current/keystroke_stats</CardDescription>
+            <CardTitle>Combat log</CardTitle>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
@@ -76,26 +76,28 @@ function KeystrokesPanel() {
                 <StatTile label="Active days" value={String(stats.days_with_activity)} />
               </div>
 
-              <ChartContainer className="h-56 w-full" config={chartConfig}>
-                <LineChart data={stats.daily} margin={{ left: 4, right: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis
-                    axisLine={false}
-                    dataKey="date"
-                    tickFormatter={(v: string) => v.slice(5)}
-                    tickLine={false}
-                  />
-                  <YAxis axisLine={false} tickLine={false} width={48} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <Line
-                    dataKey="keystrokes"
-                    dot={false}
-                    stroke="var(--color-keystrokes)"
-                    strokeWidth={2}
-                    type="monotone"
-                  />
-                </LineChart>
-              </ChartContainer>
+              <DashboardPanel id="keystrokes.chart">
+                <ChartContainer className="h-56 w-full" config={chartConfig}>
+                  <LineChart data={stats.daily} margin={{ left: 4, right: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      axisLine={false}
+                      dataKey="date"
+                      tickFormatter={(v: string) => v.slice(5)}
+                      tickLine={false}
+                    />
+                    <YAxis axisLine={false} tickLine={false} width={48} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Line
+                      dataKey="keystrokes"
+                      dot={false}
+                      stroke="var(--color-keystrokes)"
+                      strokeWidth={2}
+                      type="monotone"
+                    />
+                  </LineChart>
+                </ChartContainer>
+              </DashboardPanel>
 
               <div className="overflow-x-auto rounded-md border">
                 <Table>
@@ -135,7 +137,7 @@ export default function KeystrokesPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Raw typing volume per project, independent of AI attribution."
+        description="Every keystroke logged as combat volume, independent of AI attribution."
         title="Keystrokes"
       />
       <RequireUser>

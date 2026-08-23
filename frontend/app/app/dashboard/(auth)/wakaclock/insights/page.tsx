@@ -4,7 +4,8 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { DashboardPanel } from '@/components/dashboard-panels';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { RankBadge } from '@/components/wakaclock/rpg/rank-badge';
 import { getInsights } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { InsightType, StatsRange } from '@/lib/wakaclock/types';
@@ -64,8 +66,7 @@ function InsightsPanel() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Insights</CardTitle>
-            <CardDescription>GET /insights/:type/:range</CardDescription>
+            <CardTitle>Skill trials</CardTitle>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Select onValueChange={(v) => setType(v as InsightType)} value={type}>
@@ -100,7 +101,9 @@ function InsightsPanel() {
           isLoading={isLoading}
         >
           <div className="space-y-6">
-            <BreakdownChart data={rows} />
+            <DashboardPanel id="insights.chart">
+              <BreakdownChart data={rows} />
+            </DashboardPanel>
             <div className="overflow-x-auto rounded-md border">
               <Table>
                 <TableHeader>
@@ -117,7 +120,9 @@ function InsightsPanel() {
                     .sort((a, b) => b.total_seconds - a.total_seconds)
                     .map((row, i) => (
                       <TableRow key={row.name}>
-                        <TableCell className="text-muted-foreground">{i + 1}</TableCell>
+                        <TableCell>
+                          <RankBadge rank={i + 1} />
+                        </TableCell>
                         <TableCell className="font-medium">{row.name}</TableCell>
                         <TableCell className="font-mono text-xs">{row.text}</TableCell>
                         <TableCell>{row.days}</TableCell>
@@ -140,7 +145,7 @@ export default function InsightsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="Ranked breakdowns with unique active-day counts."
+        description="Skill trials — ranked breakdowns of where your coding time actually went."
         title="Insights"
       />
       <RequireUser>

@@ -1,33 +1,40 @@
-# Azyren
+# AtoAxis
 
-> Self-hosted developer time tracking. A WakaTime-compatible alternative built in Rust.
+> Developer time tracking with complete history. A WakaTime-compatible alternative built in Rust.
 >
 > One timeline for everything you do.
 
 ---
 
-**Naming:** the product is branded **Azyren**. The binary (`wakaclock-cli`), config
+**Naming:** the product is branded **AtoAxis**. The binary (`wakaclock-cli`), config
 directory (`~/.wakaclock/config.toml`), crate names and editor setting keys still use the
 original `wakaclock` naming, and are written that way throughout these docs because that is
 what actually ships.
 
-## What is Azyren?
+## What is AtoAxis?
 
-Azyren tracks how long you spend coding across editors, languages, and projects — then gives you dashboards and insights. It's WakaTime-compatible (existing IDE extensions work via the CLI hub) and adds:
+AtoAxis tracks how long you spend coding across editors, languages, and projects — then gives you dashboards and insights. It's WakaTime-compatible (existing IDE extensions work via the CLI hub) and adds:
 
 - **AST-based language detection** via tree-sitter — no more guessing `.h` is C vs C++ vs Objective-C
 - **ClickHouse-native ETL** with SummingMergeTree/AggregatingMergeTree — zero app-level aggregation
-- **AI code attribution** — heartbeats accept an agent name plus AI lines added/deleted, aggregated per agent and per day against human keystrokes. Note that **no shipped client populates these fields automatically**: there is no built-in detection of Copilot, Claude Code, Cursor or any other agent. The agent name is a free-form string supplied by whichever client sends the heartbeat, so attribution comes from your own tooling calling the API, or from a WakaTime import.
+- **AI code attribution** — the VS Code extension can detect and one-click configure the
+  bundled Claude Code, Codex CLI and Gemini CLI hooks. Heartbeats carry provider, agent,
+  optional model, attribution source/confidence, event id and AI/human line deltas; the
+  dashboard aggregates them per agent and per day. Cursor and Copilot still need
+  provider-specific adapters because a generic editor change event cannot identify them
+  reliably.
 - **Keystroke metrics** — keystrokes and characters added/deleted per project and per day
 - **User-defined project rules** — regex-based project matching + project merging
-- **Self-hosted first** — your data stays on your infrastructure
+- **Complete history** — every account keeps full coding history rather than a limited recent window
 
 ### Known limitations
 
 - The only editor plugin in this repo is for VS Code (`extensions/vscode`); other editors connect via the WakaTime protocol.
 - Heartbeats support `file`, `app`, `domain` and `url` entity types, but the VS Code extension sends `file` only — there is no desktop or browser client yet.
 - Analytics are scoped to a single account; there is no team or organisation rollup.
-- Heartbeats never carry source code, prompts, AI responses, or keystroke content.
+- Heartbeats never carry source code, prompts, AI responses, or keystroke content — but they DO carry file paths and project names.
+- **Delivery model: hosted SaaS.** There is no self-hosted edition for customers. The `docker-compose` files and build steps below are for running this repo in development, not a customer install path.
+- The payment gate (`payment_required`) is enforced only on heartbeat ingestion and reads `subscription_status` from the local database — it is not a licence check against a remote server.
 
 ## Architecture
 

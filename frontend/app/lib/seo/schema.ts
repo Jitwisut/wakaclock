@@ -1,4 +1,4 @@
-import { absoluteUrl, ORGANIZATION, PRICING, PRODUCT_ANSWER, SITE_NAME, SITE_URL } from './site';
+import { absoluteUrl, ORGANIZATION, PRODUCT_ANSWER, SITE_NAME, SITE_URL } from './site';
 
 /**
  * Structured-data builders.
@@ -24,8 +24,17 @@ export function organizationSchema(): JsonLdValue {
   return {
     '@type': 'Organization',
     '@id': absoluteUrl('/#organization'),
+    email: `mailto:${ORGANIZATION.email}`,
+    legalName: ORGANIZATION.legalName,
+    logo: ORGANIZATION.logo,
     name: ORGANIZATION.name,
     url: ORGANIZATION.url,
+    contactPoint: {
+      '@type': 'ContactPoint',
+      contactType: 'customer support',
+      email: ORGANIZATION.email,
+      url: absoluteUrl('/contact'),
+    },
   };
 }
 
@@ -40,9 +49,10 @@ export function websiteSchema(): JsonLdValue {
 }
 
 /**
- * The product is a self-hosted server plus editor clients, so `applicationCategory`
- * is DeveloperApplication and `operatingSystem` lists only what the repository
- * actually builds for.
+ * The product is a hosted web service reached through editor clients, so it is described
+ * as a DeveloperApplication whose `operatingSystem` covers the platforms the editor
+ * clients run on. Pricing is planned during Early Access, so no Offer is emitted until
+ * checkout is actually available. This keeps structured data aligned with the visible page.
  */
 export function softwareApplicationSchema(): JsonLdValue {
   return {
@@ -55,12 +65,6 @@ export function softwareApplicationSchema(): JsonLdValue {
     applicationSubCategory: 'Time tracking and developer analytics',
     operatingSystem: 'Linux, macOS, Windows',
     publisher: { '@id': absoluteUrl('/#organization') },
-    offers: {
-      '@type': 'Offer',
-      price: String(PRICING.monthlyUsd),
-      priceCurrency: PRICING.currency,
-      url: absoluteUrl('/pricing'),
-    },
   };
 }
 

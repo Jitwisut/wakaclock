@@ -1,9 +1,13 @@
 import { wakaclockClient } from './client';
+import { getCurrentToken } from './session';
 
 import type {
   AiStatsResponse,
   AllTimeResponse,
   AuthResponse,
+  CreatePresenceRoomResponse,
+  CurrentApiKeyResponse,
+  DashboardAnalyticsResponse,
   DeleteResponse,
   DurationsResponse,
   GenerateApiKeyResponse,
@@ -13,6 +17,15 @@ import type {
   InsightsResponse,
   InsightType,
   KeystrokeStatsResponse,
+  OrgResponse,
+  OrgsResponse,
+  PresenceActionResponse,
+  ProjectAiResponse,
+  ProjectAnalyticsDetailResponse,
+  ProjectAnalyticsListResponse,
+  ProjectBranchesResponse,
+  ProjectDailyResponse,
+  ProjectFilesResponse,
   ProjectMergeMutationResponse,
   ProjectMergesResponse,
   ProjectRuleMutationResponse,
@@ -24,6 +37,8 @@ import type {
   StatsResponse,
   StatusBarResponse,
   SummariesResponse,
+  TeamResponse,
+  TeamsResponse,
   UpsertProjectMergePayload,
   UpsertProjectRulePayload,
   UserResponse,
@@ -48,10 +63,22 @@ export async function loginAccount(username: string, password: string) {
   return data;
 }
 
-// GET /status_bar/today — no query params; user_id comes from the session/API key
-// header attached automatically by the axios interceptor in client.ts
+// GET /status_bar/today — user_id comes from the session/API key header attached
+// automatically by the axios interceptor in client.ts. The browser's IANA timezone
+// keeps the day boundary aligned with the person viewing the dashboard.
 export async function getStatusBar() {
-  const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today');
+  let timezone: string | undefined;
+  try {
+    timezone =
+      typeof window === 'undefined'
+        ? undefined
+        : Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    timezone = undefined;
+  }
+  const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today', {
+    params: { timezone },
+  });
   return data;
 }
 
@@ -79,10 +106,10 @@ export async function getSummaries(userId: string, start: string, end: string) {
   return data;
 }
 
-// GET /durations?date=&user_id=
-export async function getDurations(userId: string, date: string) {
+// GET /durations?date=&timezone=&user_id=
+export async function getDurations(userId: string, date: string, timezone?: string) {
   const { data } = await wakaclockClient.get<DurationsResponse>('/durations', {
-    params: { user_id: userId, date },
+    params: { user_id: userId, date, timezone },
   });
   return data;
 }
@@ -131,6 +158,113 @@ export async function getCurrentUser(userId: string) {
 // POST /users/current/api_key — requires a logged-in session; user_id comes from that
 // session (Authorization header, attached automatically), not a query param. Plaintext
 // key returned once, never again.
+// GET /dashboard/analytics — the Phase 9 overview: summary plus every breakdown in
+// one request, sized for the initial dashboard render.
+export async function getDashboardAnalytics(params: {
+  end: string;
+  start: string;
+  timezone?: string;
+}) {
+  const { data } = await wakaclockClient.get<DashboardAnalyticsResponse>('/dashboard/analytics', {
+    params,
+  });
+  return data;
+}
+
+// GET /projects/analytics — Phase 9 project cards, always keyed by stable project_id.
+export async function getProjectAnalytics(params: {
+  cursor?: string;
+  end: string;
+  limit?: number;
+  order?: 'asc' | 'desc';
+  sort?:
+    | 'ai_changes'
+    | 'duration'
+    | 'estimated_cost'
+    | 'prompts'
+    | 'recent'
+    | 'sessions'
+    | 'tokens';
+  start: string;
+  timezone?: string;
+}) {
+  const { data } = await wakaclockClient.get<ProjectAnalyticsListResponse>('/projects/analytics', {
+    params,
+  });
+  return data;
+}
+
+// GET /projects/:projectId/analytics — initial project detail payload.
+export async function getProjectAnalyticsDetail(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectAnalyticsDetailResponse>(
+    `/projects/${projectId}/analytics`,
+    { params }
+  );
+  return data;
+}
+
+// GET /projects/:projectId/files — shared source for the file list and bubble chart.
+export async function getProjectAnalyticsFiles(
+  projectId: string,
+  params: {
+    branch?: string;
+    cursor?: string;
+    end: string;
+    limit?: number;
+    min_seconds?: number;
+    order?: 'asc' | 'desc';
+    sort?: 'duration';
+    start: string;
+    timezone?: string;
+  }
+) {
+  const { data } = await wakaclockClient.get<ProjectFilesResponse>(`/projects/${projectId}/files`, {
+    params,
+  });
+  return data;
+}
+
+export async function getProjectAnalyticsBranches(
+  projectId: string,
+  params: { cursor?: string; end: string; limit?: number; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectBranchesResponse>(
+    `/projects/${projectId}/branches`,
+    { params }
+  );
+  return data;
+}
+
+export async function getProjectAnalyticsDaily(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectDailyResponse>(`/projects/${projectId}/daily`, {
+    params,
+  });
+  return data;
+}
+
+export async function getProjectAnalyticsAi(
+  projectId: string,
+  params: { branch?: string; end: string; start: string; timezone?: string }
+) {
+  const { data } = await wakaclockClient.get<ProjectAiResponse>(`/projects/${projectId}/ai`, {
+    params,
+  });
+  return data;
+}
+
+// GET /users/current/api_key — metadata only. Plaintext credentials are never returned
+// after the one-time POST response.
+export async function getCurrentApiKey() {
+  const { data } = await wakaclockClient.get<CurrentApiKeyResponse>('/users/current/api_key');
+  return data;
+}
+
 export async function generateApiKey() {
   const { data } = await wakaclockClient.post<GenerateApiKeyResponse>('/users/current/api_key');
   return data;
@@ -142,10 +276,10 @@ export async function revokeApiKey() {
   return data;
 }
 
-// GET /heartbeats?date=&user_id=
-export async function getHeartbeats(userId: string, date: string) {
+// GET /heartbeats?date=&timezone=&user_id=
+export async function getHeartbeats(userId: string, date: string, timezone?: string) {
   const { data } = await wakaclockClient.get<HeartbeatListResponse>('/heartbeats', {
-    params: { user_id: userId, date },
+    params: { user_id: userId, date, timezone },
   });
   return data;
 }
@@ -160,6 +294,87 @@ export async function sendHeartbeat(payload: HeartbeatPayload) {
 export async function sendHeartbeatsBulk(payloads: HeartbeatPayload[]) {
   const { data } = await wakaclockClient.post<HeartbeatResponse>('/heartbeats.bulk', payloads);
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// Presence (plan.md Phase 7) — prototype, see types.ts for what that means.
+// ---------------------------------------------------------------------------
+
+// POST /presence/rooms — teamId, when given, must be a team the caller already belongs
+// to; the server looks up and stores its real name, it is never sent as free text.
+export async function createPresenceRoom(teamId?: string) {
+  const { data } = await wakaclockClient.post<CreatePresenceRoomResponse>(
+    '/presence/rooms',
+    teamId ? { team_id: teamId } : undefined
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/join
+export async function joinPresenceRoom(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/join`
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/leave — also ends/shrinks any co-working session this
+// user was part of in the room (handled server-side).
+export async function leavePresenceRoom(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/leave`
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/position — call on drag END only, not per pointer-move
+// frame. This is what makes the canvas a genuinely shared view: every viewer's SSE
+// stream reflects it, not just the browser that did the dragging.
+export async function updatePresencePosition(roomId: string, x: number, y: number) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/position`,
+    { x, y }
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/sessions — reports "I am now close to this person" (plan.md
+// 7.4). No session id is ever chosen by the client; the server infers whether this
+// extends an existing group session or starts a new one.
+export async function startOrJoinSession(roomId: string, withUserId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/sessions`,
+    { with_user_id: withUserId }
+  );
+  return data;
+}
+
+// POST /presence/rooms/:roomId/sessions/leave — called after the 3-minute drag-apart
+// grace period elapses with no reunion. Ends the caller's own session participation;
+// staying in the room itself is unaffected.
+export async function leaveSession(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/presence/rooms/${roomId}/sessions/leave`
+  );
+  return data;
+}
+
+/**
+ * GET /presence/rooms/:roomId/stream — not called through `wakaclockClient` because
+ * it's a long-lived SSE connection, not a request/response call. The browser's native
+ * `EventSource` cannot set an `Authorization` header, so the session token travels as a
+ * query parameter instead; the server accepts this only on this one endpoint (see
+ * `auth::resolve_user_id_from_token` on the backend).
+ *
+ * Returns `null` if there is no current session — callers should not open a connection
+ * without one.
+ */
+export function presenceStreamUrl(roomId: string): null | string {
+  const token = getCurrentToken();
+  if (!token) return null;
+
+  const base = wakaclockClient.defaults.baseURL;
+  return `${base}/presence/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
 }
 
 // GET /project_rules?user_id= — user_id REQUIRED (400 if omitted)
@@ -212,10 +427,10 @@ export async function deleteProjectMerge(mergeId: string, userId: string) {
   return data;
 }
 
-// POST /reprocess — destructive: deletes + rebuilds aggregates for [start, end]
-export async function reprocess(userId: string, start: string, end: string) {
+// POST /reprocess — defaults to dry-run. Applying an inspected range requires explicit false.
+export async function reprocess(start: string, end: string, dryRun = true) {
   const { data } = await wakaclockClient.post<ReprocessResponse>('/reprocess', {
-    user_id: userId,
+    dry_run: dryRun,
     start,
     end,
   });
@@ -228,5 +443,42 @@ export async function importWakaTime(userId: string, filePath: string) {
     user_id: userId,
     file_path: filePath,
   });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Orgs & teams — minimal slice, see types.ts for what this does and does not cover.
+// ---------------------------------------------------------------------------
+
+// POST /orgs — creator becomes the org's owner
+export async function createOrg(name: string) {
+  const { data } = await wakaclockClient.post<OrgResponse>('/orgs', { name });
+  return data;
+}
+
+// GET /orgs — every org the caller belongs to
+export async function listOrgs() {
+  const { data } = await wakaclockClient.get<OrgsResponse>('/orgs');
+  return data;
+}
+
+// POST /orgs/:orgId/teams — org owner/admin only
+export async function createTeam(orgId: string, name: string) {
+  const { data } = await wakaclockClient.post<TeamResponse>(`/orgs/${orgId}/teams`, { name });
+  return data;
+}
+
+// GET /orgs/:orgId/teams
+export async function listTeams(orgId: string) {
+  const { data } = await wakaclockClient.get<TeamsResponse>(`/orgs/${orgId}/teams`);
+  return data;
+}
+
+// POST /orgs/:orgId/teams/:teamId/members — org owner/admin only
+export async function addTeamMember(orgId: string, teamId: string, userId: string) {
+  const { data } = await wakaclockClient.post<PresenceActionResponse>(
+    `/orgs/${orgId}/teams/${teamId}/members`,
+    { user_id: userId }
+  );
   return data;
 }

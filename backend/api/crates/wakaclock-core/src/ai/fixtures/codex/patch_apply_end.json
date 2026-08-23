@@ -1,0 +1,22 @@
+{
+  "type": "event_msg",
+  "timestamp": "2026-08-14T09:20:11.077Z",
+  "payload": {
+    "type": "patch_apply_end",
+    "call_id": "exec-00000000-0000-0000-0000-000000000001",
+    "turn_id": "018f0000-bbbb-7000-8000-000000000002",
+    "stdout": "Success. Updated the following files:\nM /home/dev/example-project/src/greeting.rs\nA /home/dev/example-project/src/new_module.rs\n",
+    "stderr": "",
+    "success": true,
+    "changes": {
+      "/home/dev/example-project/src/greeting.rs": {
+        "type": "update",
+        "unified_diff": "@@ -1,3 +1,3 @@\n-fn greet() {\n-    println!(\"hi\");\n+fn greet(name: &str) {\n+    println!(\"hello, {name}\");\n }\n"
+      },
+      "/home/dev/example-project/src/new_module.rs": {
+        "type": "add",
+        "unified_diff": "@@ -0,0 +1,3 @@\n+pub fn add(a: i32, b: i32) -> i32 {\n+    a + b\n+}\n"
+      }
+    }
+  }
+}

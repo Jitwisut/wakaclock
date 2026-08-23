@@ -33,6 +33,7 @@ impl DurationService {
                         project,
                         language,
                         category,
+                        active_seconds,
                         lagInFrame(time, 1, time) OVER (ORDER BY time ASC) AS prev_time,
                         row_number() OVER (ORDER BY time ASC) AS row_num
                     FROM wakaclock.heartbeats
@@ -55,7 +56,11 @@ impl DurationService {
                 SELECT
                     min(time) AS start,
                     max(time) AS end,
-                    max(time) - min(time) AS duration_seconds,
+                    -- Sum of real active time per heartbeat, not (max - min): the latter
+                    -- would count any idle gap under SESSION_GAP_SECONDS as fully active,
+                    -- inflating duration on sparse sessions. Matches the sum(active_seconds)
+                    -- pattern every other aggregate in analytics.rs already uses.
+                    sum(ifNull(active_seconds, 0.0)) AS duration_seconds,
                     count() AS heartbeat_count,
                     argMin(project, time) AS project,
                     argMin(language, time) AS language,

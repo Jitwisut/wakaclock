@@ -1,7 +1,13 @@
 import * as vscode from "vscode";
+import {
+  detectAiAgents,
+  setupDetectedAiAgents,
+  syncAgentPluginsToStableDir
+} from "./agentSetup";
 import { HeartbeatBufferManager } from "./buffer";
 import { WakaclockCliService } from "./cli";
 import { registerCommands } from "./commands";
+import type { AiIntegrationController } from "./commands";
 import { WakaclockConfigService } from "./config";
 import { registerEventSubscriptions } from "./events";
 import { Logger } from "./logging";
@@ -25,13 +31,81 @@ export function activate(context: vscode.ExtensionContext): void {
     () => statusBar.handleHeartbeatSent()
   );
 
+  const stableAgentDir = syncAgentPluginsToStableDir({
+    extensionPath: context.extensionPath,
+    extensionVersion: String(context.extension.packageJSON.version ?? "0.0.0"),
+    logger
+  });
+  const aiIntegrations = {
+    getStatus: () => detectAiAgents(),
+    setup: async () => {
+      const stableDir = await stableAgentDir;
+      if (!stableDir) {
+        throw new Error("Bundled AtoAxis AI integration resources are unavailable.");
+      }
+      return setupDetectedAiAgents({
+        stableDir,
+        cliPath: configService.getSnapshot().cliPath,
+        logger
+      });
+    }
+  };
+
   context.subscriptions.push(configService, statusBar);
 
   statusBar.start();
-  registerCommands(context, configService, cliService, bufferManager, statusBar);
+  registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations);
   registerEventSubscriptions(context, configService, bufferManager, logger);
   void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
+
+  // Surface the one-click setup once when a supported CLI is present. The user can
+  // always rerun the command later; we never modify another tool's config silently.
+  void maybeOfferAiSetup(context, aiIntegrations, logger);
+
   logger.debug("wakaclock extension activated");
+}
+
+async function maybeOfferAiSetup(
+  context: vscode.ExtensionContext,
+  aiIntegrations: AiIntegrationController,
+  logger: Logger
+): Promise<void> {
+  const lastPromptedAt = context.globalState.get<number>("atoaxis.aiSetupPromptedAt");
+  const promptSnoozeMs = 24 * 60 * 60 * 1000;
+  if (lastPromptedAt && Date.now() - lastPromptedAt < promptSnoozeMs) {
+    return;
+  }
+
+  try {
+    const statuses = await aiIntegrations.getStatus();
+    if (!statuses.some((status) => status.detected && !status.enabled)) {
+      return;
+    }
+    const choice = await vscode.window.showInformationMessage(
+      "AtoAxis detected a supported AI coding tool. Enable AI attribution tracking?",
+      "Set up now",
+      "Later"
+    );
+    if (choice === "Set up now") {
+      const configured = await vscode.commands.executeCommand<boolean>(
+        "wakaclock.setupAiTracking"
+      );
+      if (!configured) {
+        // A failed/partial setup remains eligible on the next activation. The command
+        // already showed the actionable error, so do not immediately show another prompt.
+        return;
+      }
+    } else {
+      // "Later" means later, not never. The old boolean was written before the user
+      // chose and permanently suppressed every future offer, which left detected agents
+      // uninstrumented with no visible reason.
+      await context.globalState.update("atoaxis.aiSetupPromptedAt", Date.now());
+    }
+  } catch (error) {
+    logger.warn("AI setup detection failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 export function deactivate(): void {

@@ -36,7 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
 const secrets_1 = require("./secrets");
-function registerCommands(context, configService, cliService, bufferManager, statusBar) {
+function registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations) {
     function workspaceProject(editor) {
         if (!editor) {
             return undefined;
@@ -86,9 +86,22 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             await vscode.window.showWarningMessage("No API key entered — nothing was saved.");
             return;
         }
-        // Stored via SecretStorage (OS keychain), never in settings.json.
+        // Stored via SecretStorage (OS keychain), never in settings.json. Written first
+        // so the verification below authenticates with the key the user just entered.
         await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
-        await vscode.window.showInformationMessage("Wakaclock API key saved.");
+        // Mirror into wakaclock-cli's config.toml (the only channel AI agent hooks can
+        // read a key from) and confirm the server accepts it, rather than reporting
+        // "saved" for a key that silently fails on every heartbeat from here on.
+        const result = await cliService.syncAndVerifyApiKey(trimmed);
+        if (!result.verified) {
+            await vscode.window.showErrorMessage(`Wakaclock API key saved, but the server rejected it — heartbeats will not be recorded. ${result.verifyError ?? ""}`.trim());
+            return;
+        }
+        if (!result.mirroredToCliConfig) {
+            await vscode.window.showWarningMessage(`Wakaclock API key saved and verified for VS Code, but it couldn't be written to wakaclock-cli's config, so AI agent integrations (Claude Code, Codex, Gemini CLI) will not be able to authenticate: ${result.mirrorError ?? ""}`.trim());
+            return;
+        }
+        await vscode.window.showInformationMessage("Wakaclock API key saved, verified with the server, and synced to wakaclock-cli for AI agent integrations.");
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
         if (!existing) {
@@ -97,6 +110,63 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         }
         await (0, secrets_1.clearStoredApiKey)(context.secrets);
         await vscode.window.showInformationMessage("Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again.");
+        try {
+            await cliService.clearApiKey();
+        }
+        catch (error) {
+            await vscode.window.showWarningMessage(`Cleared for VS Code, but couldn't clear the key from wakaclock-cli's config: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }), vscode.commands.registerCommand("wakaclock.showAiTrackingStatus", async () => {
+        try {
+            const statuses = await aiIntegrations.getStatus();
+            await showAiStatus(statuses);
+        }
+        catch (error) {
+            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect AI integrations.");
+        }
+    }), vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
+        return setupAiTracking(aiIntegrations);
+    }), vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
+        return setupAiTracking(aiIntegrations, true);
     }));
+}
+async function setupAiTracking(aiIntegrations, repairing = false) {
+    try {
+        const result = await aiIntegrations.setup();
+        const configured = result.configured.length;
+        const failed = result.failed.length;
+        const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
+        if (failed > 0) {
+            await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed. Run “AtoAxis: Show AI Tracking Status” for details.`);
+            return false;
+        }
+        else if (configured > 0) {
+            await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
+            return true;
+        }
+        else {
+            await vscode.window.showInformationMessage("No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+            return false;
+        }
+    }
+    catch (error) {
+        await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to configure AI integrations.");
+        return false;
+    }
+}
+async function showAiStatus(statuses) {
+    const items = statuses.map((status) => ({
+        label: `${status.detected ? "$(check)" : "$(circle-slash)"} ${status.label}`,
+        description: status.detected
+            ? status.enabled
+                ? "detected · tracking enabled"
+                : "detected · setup required"
+            : "not detected",
+        detail: status.reason
+    }));
+    await vscode.window.showQuickPick(items, {
+        title: "AtoAxis AI Tracking Status",
+        placeHolder: "Supported CLI integrations"
+    });
 }
 //# sourceMappingURL=commands.js.map

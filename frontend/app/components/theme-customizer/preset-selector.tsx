@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { DEFAULT_THEME, type ThemePreset, THEMES } from '@/lib/themes';
+import { type ThemePreset, THEMES } from '@/lib/themes';
 
 /** Labels configuration for PresetSelector component */
 export type PresetSelectorLabels = {
@@ -61,8 +61,11 @@ const PresetSelector = React.forwardRef<HTMLDivElement, PresetSelectorProps>(
     const label = labels?.label ?? 'Theme preset:';
     const placeholder = labels?.placeholder ?? 'Select a theme';
 
+    // Only the preset changes. Spreading DEFAULT_THEME here also reset radius, scale and
+    // content layout, so picking a colour scheme silently discarded the other three
+    // choices the customizer had just been used to make.
     const handlePreset = (value: string) => {
-      setTheme({ ...theme, ...DEFAULT_THEME, preset: value as ThemePreset });
+      setTheme({ ...theme, preset: value as ThemePreset });
     };
 
     return (

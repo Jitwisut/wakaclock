@@ -16,7 +16,12 @@ impl AiStatsService {
         Self { clickhouse }
     }
 
-    pub async fn get_range(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiStatsResponse> {
+    pub async fn get_range(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+    ) -> Result<AiStatsResponse> {
         validate_date(start)?;
         validate_date(end)?;
 
@@ -36,6 +41,8 @@ impl AiStatsService {
             data: AiStatsData {
                 total_ai_lines_added: totals.total_ai_lines_added,
                 total_ai_lines_deleted: totals.total_ai_lines_deleted,
+                total_human_lines_added: totals.total_human_lines_added,
+                total_human_lines_deleted: totals.total_human_lines_deleted,
                 total_human_keystrokes: totals.total_human_keystrokes,
                 total_human_chars_added: totals.total_human_chars_added,
                 total_heartbeats: totals.total_heartbeats,
@@ -44,8 +51,12 @@ impl AiStatsService {
                     .into_iter()
                     .map(|row| AiAgentItem {
                         agent: row.agent,
+                        provider: row.provider,
+                        model: row.model,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
+                        human_lines_added: row.human_lines_added,
+                        human_lines_deleted: row.human_lines_deleted,
                         heartbeat_count: row.heartbeat_count,
                     })
                     .collect(),
@@ -55,6 +66,8 @@ impl AiStatsService {
                         date: row.date,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
+                        human_lines_added: row.human_lines_added,
+                        human_lines_deleted: row.human_lines_deleted,
                         human_keystrokes: row.human_keystrokes,
                         human_chars_added: row.human_chars_added,
                         heartbeat_count: row.heartbeat_count,
@@ -72,11 +85,13 @@ impl AiStatsService {
                 SELECT
                     coalesce(sum(ai_lines_added), 0) AS total_ai_lines_added,
                     coalesce(sum(ai_lines_deleted), 0) AS total_ai_lines_deleted,
-                    coalesce(sum(human_keystrokes), 0) AS total_human_keystrokes,
-                    coalesce(sum(human_chars_added), 0) AS total_human_chars_added,
-                    coalesce(sum(heartbeat_count), 0) AS total_heartbeats,
-                    coalesce(sumIf(heartbeat_count, ai_agent != 'human'), 0) AS ai_heartbeats
-                FROM wakaclock.ai_daily
+                    coalesce(sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated), 0) AS total_human_lines_added,
+                    coalesce(sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated), 0) AS total_human_lines_deleted,
+                    coalesce(sumIf(coalesce(keystrokes, 0), NOT is_ai_generated), 0) AS total_human_keystrokes,
+                    coalesce(sumIf(coalesce(chars_added, 0), NOT is_ai_generated), 0) AS total_human_chars_added,
+                    count() AS total_heartbeats,
+                    countIf(is_ai_generated) AS ai_heartbeats
+                FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
                 ",
             )
@@ -94,14 +109,18 @@ impl AiStatsService {
             .query(
                 "
                 SELECT
-                    ai_agent AS agent,
-                    sum(ai_lines_added) AS ai_lines_added,
-                    sum(ai_lines_deleted) AS ai_lines_deleted,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.ai_daily
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?) AND ai_agent != 'human'
-                GROUP BY agent
-                ORDER BY ai_lines_added DESC, agent ASC
+                    if(is_ai_generated, coalesce(ai_agent, 'unknown'), 'human') AS agent,
+                    ai_provider AS provider,
+                    ai_model AS model,
+                    sumIf(coalesce(ai_lines_added, 0), is_ai_generated) AS ai_lines_added,
+                    sumIf(coalesce(ai_lines_deleted, 0), is_ai_generated) AS ai_lines_deleted,
+                    sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+                    sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
+                    count() AS heartbeat_count
+                FROM wakaclock.heartbeats
+                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                GROUP BY is_ai_generated, ai_agent, ai_provider, ai_model
+                ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
             )
             .bind(user_id)
@@ -119,12 +138,14 @@ impl AiStatsService {
                 "
                 SELECT
                     toString(date) AS day,
-                    sum(ai_lines_added) AS ai_lines_added,
-                    sum(ai_lines_deleted) AS ai_lines_deleted,
-                    sum(human_keystrokes) AS human_keystrokes,
-                    sum(human_chars_added) AS human_chars_added,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.ai_daily
+                    coalesce(sum(ai_lines_added), 0) AS ai_lines_added,
+                    coalesce(sum(ai_lines_deleted), 0) AS ai_lines_deleted,
+                    sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
+                    sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
+                    sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
+                    sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+                    count() AS heartbeat_count
+                FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
                 GROUP BY day
                 ORDER BY day ASC

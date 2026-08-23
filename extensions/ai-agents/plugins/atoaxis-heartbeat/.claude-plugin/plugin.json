@@ -1,0 +1,12 @@
+{
+  "name": "atoaxis-heartbeat",
+  "displayName": "AtoAxis Heartbeat",
+  "version": "1.0.1",
+  "description": "Reports coding activity to AtoAxis whenever Claude Code edits a file, attributed to the AI so it shows up separately from your own typing.",
+  "author": {
+    "name": "AtoAxis",
+    "url": "https://atoaxis.com"
+  },
+  "homepage": "https://atoaxis.com",
+  "keywords": ["time-tracking", "productivity", "atoaxis", "ai-coding"]
+}

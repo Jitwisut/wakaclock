@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { QueryState } from '@/components/wakaclock/query-state';
@@ -48,7 +48,6 @@ export function RangeStats() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Stats</CardTitle>
-            <CardDescription>GET /stats/:range</CardDescription>
           </div>
           <Tabs onValueChange={(v) => setRange(v as StatsRange)} value={range}>
             <TabsList>

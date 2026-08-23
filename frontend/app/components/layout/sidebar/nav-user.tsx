@@ -50,6 +50,8 @@ export type NavUserLabels = {
 export type NavUserProps = {
   /** Customizable label strings */
   labels?: NavUserLabels;
+  /** Ends the active application session when the user chooses Log out. */
+  onLogout?: () => void;
   /**
    * Custom test ID for testing
    * @default 'nav-user'
@@ -87,7 +89,7 @@ export type NavUserProps = {
  * ```
  */
 const NavUser = React.forwardRef<HTMLUListElement, NavUserProps>(function NavUser(
-  { labels, testId = 'nav-user' },
+  { labels, onLogout, testId = 'nav-user' },
   ref
 ) {
   const { isMobile, state } = useSidebar();
@@ -155,7 +157,7 @@ const NavUser = React.forwardRef<HTMLUListElement, NavUserProps>(function NavUse
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem data-testid="nav-user-item-logout">
+            <DropdownMenuItem data-testid="nav-user-item-logout" onSelect={onLogout}>
               <LogOutIcon />
               {logOutLabel}
             </DropdownMenuItem>

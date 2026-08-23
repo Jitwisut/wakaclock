@@ -3,7 +3,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Label, Pie, PieChart, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { DashboardPanel } from '@/components/dashboard-panels';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ChartContainer,
   ChartLegend,
@@ -39,7 +40,7 @@ const attributionConfig = {
 
 const dailyConfig = {
   ai_lines_added: { label: 'AI lines added', color: 'var(--chart-1)' },
-  human_keystrokes: { label: 'Human keystrokes', color: 'var(--chart-3)' },
+  human_lines_added: { label: 'Human lines added', color: 'var(--chart-3)' },
 } satisfies ChartConfig;
 
 function AiStatsPanel() {
@@ -70,8 +71,7 @@ function AiStatsPanel() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>AI code attribution</CardTitle>
-            <CardDescription>GET /users/current/ai_stats</CardDescription>
+            <CardTitle>AI party member</CardTitle>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
@@ -84,12 +84,17 @@ function AiStatsPanel() {
         >
           {stats && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
                 <StatTile label="AI heartbeats" value={formatPercent(aiPct)} />
                 <StatTile
                   label="AI lines added"
                   subtext={`${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`}
                   value={formatCompactNumber(stats.total_ai_lines_added)}
+                />
+                <StatTile
+                  label="Human lines added"
+                  subtext={`${formatCompactNumber(stats.total_human_lines_deleted)} deleted`}
+                  value={formatCompactNumber(stats.total_human_lines_added)}
                 />
                 <StatTile
                   label="Human keystrokes"
@@ -101,81 +106,87 @@ function AiStatsPanel() {
                 />
               </div>
 
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <div>
-                  <h3 className="mb-2 text-sm font-medium">AI vs. human heartbeats</h3>
-                  <ChartContainer
-                    className="mx-auto aspect-square max-h-64"
-                    config={attributionConfig}
-                  >
-                    <PieChart>
-                      <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-                      <Pie
-                        data={pieData}
-                        dataKey="heartbeats"
-                        innerRadius={60}
-                        nameKey="key"
-                        strokeWidth={4}
-                      >
-                        <Label
-                          content={({ viewBox }) => {
-                            if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
-                              return (
-                                <text
-                                  dominantBaseline="middle"
-                                  textAnchor="middle"
-                                  x={viewBox.cx}
-                                  y={viewBox.cy}
-                                >
-                                  <tspan
-                                    className="fill-foreground text-2xl font-bold"
+              <DashboardPanel id="ai.charts">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div>
+                    <h3 className="mb-2 text-sm font-medium">AI vs. human heartbeats</h3>
+                    <ChartContainer
+                      className="mx-auto aspect-square max-h-64"
+                      config={attributionConfig}
+                    >
+                      <PieChart>
+                        <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                        <Pie
+                          data={pieData}
+                          dataKey="heartbeats"
+                          innerRadius={60}
+                          nameKey="key"
+                          strokeWidth={4}
+                        >
+                          <Label
+                            content={({ viewBox }) => {
+                              if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
+                                return (
+                                  <text
+                                    dominantBaseline="middle"
+                                    textAnchor="middle"
                                     x={viewBox.cx}
                                     y={viewBox.cy}
                                   >
-                                    {formatPercent(aiPct, 0)}
-                                  </tspan>
-                                  <tspan
-                                    className="fill-muted-foreground text-xs"
-                                    x={viewBox.cx}
-                                    y={(viewBox.cy ?? 0) + 20}
-                                  >
-                                    AI-assisted
-                                  </tspan>
-                                </text>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
-                      </Pie>
-                      <ChartLegend content={<ChartLegendContent nameKey="key" />} />
-                    </PieChart>
-                  </ChartContainer>
-                </div>
+                                    <tspan
+                                      className="fill-foreground text-2xl font-bold"
+                                      x={viewBox.cx}
+                                      y={viewBox.cy}
+                                    >
+                                      {formatPercent(aiPct, 0)}
+                                    </tspan>
+                                    <tspan
+                                      className="fill-muted-foreground text-xs"
+                                      x={viewBox.cx}
+                                      y={(viewBox.cy ?? 0) + 20}
+                                    >
+                                      AI-assisted
+                                    </tspan>
+                                  </text>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                        </Pie>
+                        <ChartLegend content={<ChartLegendContent nameKey="key" />} />
+                      </PieChart>
+                    </ChartContainer>
+                  </div>
 
-                <div>
-                  <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
-                  <ChartContainer className="h-64 w-full" config={dailyConfig}>
-                    <BarChart data={stats.daily} margin={{ left: 4, right: 4 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis
-                        axisLine={false}
-                        dataKey="date"
-                        tickFormatter={(v: string) => v.slice(5)}
-                        tickLine={false}
-                      />
-                      <YAxis axisLine={false} tickLine={false} width={40} />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Bar dataKey="ai_lines_added" fill="var(--color-ai_lines_added)" radius={3} />
-                      <Bar
-                        dataKey="human_keystrokes"
-                        fill="var(--color-human_keystrokes)"
-                        radius={3}
-                      />
-                    </BarChart>
-                  </ChartContainer>
+                  <div>
+                    <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
+                    <ChartContainer className="h-64 w-full" config={dailyConfig}>
+                      <BarChart data={stats.daily} margin={{ left: 4, right: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis
+                          axisLine={false}
+                          dataKey="date"
+                          tickFormatter={(v: string) => v.slice(5)}
+                          tickLine={false}
+                        />
+                        <YAxis axisLine={false} tickLine={false} width={40} />
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        <Bar
+                          dataKey="ai_lines_added"
+                          fill="var(--color-ai_lines_added)"
+                          radius={3}
+                        />
+                        <Bar
+                          dataKey="human_lines_added"
+                          fill="var(--color-human_lines_added)"
+                          radius={3}
+                        />
+                      </BarChart>
+                    </ChartContainer>
+                  </div>
                 </div>
-              </div>
+              </DashboardPanel>
 
               <div>
                 <h3 className="mb-2 text-sm font-medium">Agents</h3>
@@ -184,17 +195,25 @@ function AiStatsPanel() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Agent</TableHead>
-                        <TableHead>Lines added</TableHead>
-                        <TableHead>Lines deleted</TableHead>
+                        <TableHead>Provider / model</TableHead>
+                        <TableHead>AI added</TableHead>
+                        <TableHead>AI deleted</TableHead>
+                        <TableHead>Human added</TableHead>
                         <TableHead className="text-right">Heartbeats</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {stats.agents.map((agent) => (
-                        <TableRow key={agent.agent}>
+                        <TableRow
+                          key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
+                        >
                           <TableCell className="font-medium">{agent.agent}</TableCell>
+                          <TableCell>
+                            {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
+                          </TableCell>
                           <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
                           <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
+                          <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
                           <TableCell className="text-right">
                             {formatCompactNumber(agent.heartbeat_count)}
                           </TableCell>
@@ -216,7 +235,7 @@ export default function AiStatsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="How much of your code comes from AI agents vs. human keystrokes."
+        description="How much of the work your AI party member carried vs. what you typed yourself."
         title="AI Stats"
       />
       <RequireUser>

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "name": "atoaxis-heartbeat",
+            "type": "command",
+            "command": "\"${extensionPath}/scripts/heartbeat.sh\"",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

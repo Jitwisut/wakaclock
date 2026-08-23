@@ -27,7 +27,11 @@ pub async fn register(
 
     let data = state
         .user_service
-        .register(payload.username.trim(), &payload.password, &state.config.jwt_secret)
+        .register(
+            payload.username.trim(),
+            &payload.password,
+            &state.config.jwt_secret,
+        )
         .await
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
 
@@ -44,7 +48,11 @@ pub async fn login(
 
     let data = state
         .user_service
-        .login(payload.username.trim(), &payload.password, &state.config.jwt_secret)
+        .login(
+            payload.username.trim(),
+            &payload.password,
+            &state.config.jwt_secret,
+        )
         .await
         .map_err(|_| app_error(StatusCode::UNAUTHORIZED, "invalid username or password"))?;
 

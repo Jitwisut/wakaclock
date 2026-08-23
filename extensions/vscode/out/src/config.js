@@ -56,7 +56,9 @@ class WakaclockConfigService {
             cliPath: this.resolveCliPath(config),
             flushIntervalMs: Math.max(5, config.get("flushIntervalSeconds", 30)) * 1000,
             sameFileHeartbeatMs: Math.max(1, config.get("sameFileHeartbeatMinutes", 2)) * 60 * 1000,
-            idleMs: Math.max(1, config.get("idleMinutes", 5)) * 60 * 1000,
+            // WakaTime's default keystroke timeout is 15 minutes. Keeping the same default
+            // makes short thinking/reading gaps part of the surrounding coding duration.
+            idleMs: Math.max(1, config.get("idleMinutes", 15)) * 60 * 1000,
             statusBarEnabled: config.get("statusBarEnabled", true),
             debugLogging: config.get("debugLogging", false),
             trackDebugSessions: config.get("trackDebugSessions", true),

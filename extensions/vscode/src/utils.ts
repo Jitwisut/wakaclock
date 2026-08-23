@@ -21,19 +21,50 @@ export function getEditorEntity(editor?: Pick<TextEditor, "document">): string |
 }
 
 export function summarizeTextChanges(
-  changes: readonly Pick<TextDocumentContentChangeEvent, "rangeLength" | "text">[]
-): { charsAdded: number; charsDeleted: number; keystrokes: number } {
+  changes: readonly (Pick<TextDocumentContentChangeEvent, "rangeLength" | "text"> & {
+    range?: TextDocumentContentChangeEvent["range"];
+  })[]
+): {
+  charsAdded: number;
+  charsDeleted: number;
+  keystrokes: number;
+  linesAdded: number;
+  linesDeleted: number;
+} {
   let charsAdded = 0;
   let charsDeleted = 0;
   let keystrokes = 0;
+  let linesAdded = 0;
+  let linesDeleted = 0;
 
   for (const change of changes) {
     charsAdded += change.text.length;
     charsDeleted += change.rangeLength;
     keystrokes += Math.max(change.text.length, change.rangeLength, 1);
+    linesAdded += countChangedLines(change.text);
+    if (change.range) {
+      linesDeleted += Math.max(0, change.range.end.line - change.range.start.line);
+    }
   }
 
-  return { charsAdded, charsDeleted, keystrokes };
+  return { charsAdded, charsDeleted, keystrokes, linesAdded, linesDeleted };
+}
+
+/** Count logical lines in inserted text without sending source content anywhere. */
+function countChangedLines(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  const newlineCount = (text.match(/\n/g) ?? []).length;
+  if (newlineCount > 0) {
+    return newlineCount + (text.endsWith("\n") ? 0 : 1);
+  }
+
+  // VS Code reports ordinary typing one character at a time. Counting every such
+  // event as a new line would turn a 40-character line into 40 human lines. A multi-
+  // character paste/AI insertion is still represented as one changed line when it
+  // has no newline boundary.
+  return text.length > 1 ? 1 : 0;
 }
 
 export function getSelectionMetrics(selection?: Pick<Selection, "active">): {
