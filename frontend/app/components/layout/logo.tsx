@@ -44,7 +44,7 @@ export type LogoProps = {
  */
 const Logo = React.forwardRef<HTMLImageElement, LogoProps>(
   ({ alt, className, testId = 'app-logo' }, ref) => {
-    const altText = alt ?? 'shadcn ui kit logo';
+    const altText = alt ?? 'AtoAxis logo';
 
     return (
       <Image
@@ -54,7 +54,7 @@ const Logo = React.forwardRef<HTMLImageElement, LogoProps>(
         data-testid={testId}
         height={30}
         ref={ref}
-        src="/logo.png"
+        src="/atoaxis-logo-mark.png"
         width={30}
       />
     );

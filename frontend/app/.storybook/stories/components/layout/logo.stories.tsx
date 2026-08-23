@@ -49,7 +49,7 @@ const meta = {
       table: {
         category: 'Content',
         type: { summary: 'string' },
-        defaultValue: { summary: 'shadcn ui kit logo' },
+        defaultValue: { summary: 'AtoAxis logo' },
       },
     },
     // Events
@@ -106,10 +106,10 @@ const meta = {
     },
     // Logo Props Reference:
     // Optional Props:
-    // - alt: string - Alt text for accessibility (default: "shadcn ui kit logo")
+    // - alt: string - Alt text for accessibility (default: "AtoAxis logo")
     //
     // Image Details:
-    // - Source: /images/logo.png
+    // - Source: /atoaxis-logo-mark.png
     // - Optimized with Next.js Image component
     // - Priority loading enabled
     // - Fixed dimensions for layout stability
@@ -158,7 +158,7 @@ export const Default: Story = {
     }
 
     expect(img).toHaveAttribute('alt', expect.stringMatching(/\S/));
-    expect(img.src).toContain('logo.png');
+    expect(img.src).toContain('atoaxis-logo-mark.png');
   },
 };
 
@@ -183,8 +183,8 @@ export const FallbackAlt: Story = {
       throw new TypeError('Logo did not render an image element.');
     }
 
-    expect(img.getAttribute('alt')).toBe('shadcn ui kit logo');
-    expect(img.src).toContain('logo.png');
+    expect(img.getAttribute('alt')).toBe('AtoAxis logo');
+    expect(img.src).toContain('atoaxis-logo-mark.png');
   },
 };
 
@@ -323,7 +323,7 @@ export const Japanese: Story = {
     }
 
     expect(img).toHaveAttribute('alt', expect.stringMatching(/\S/));
-    expect(img.src).toContain('logo.png');
+    expect(img.src).toContain('atoaxis-logo-mark.png');
   },
 };
 
