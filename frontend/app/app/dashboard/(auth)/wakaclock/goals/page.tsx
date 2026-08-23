@@ -15,13 +15,14 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
+import { getProjects } from '@/lib/wakaclock/endpoints';
 import {
   createGoal,
   deleteGoal,
   getGoalProgress,
   listGoals,
 } from '@/lib/wakaclock/endpoints-v2';
-import { formatSeconds, todayDateString } from '@/lib/wakaclock/format';
+import { daysAgoDateString, formatSeconds, todayDateString } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { Goal } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -47,6 +48,11 @@ const PERIODS = [
   { label: 'Per day', value: 'daily' },
   { label: 'Per week', value: 'weekly' },
   { label: 'Per month', value: 'monthly' },
+] as const;
+
+const DIRECTIONS = [
+  { label: 'At least this much', value: 'minimum' },
+  { label: 'At most this much', value: 'maximum' },
 ] as const;
 
 function GoalProgressBar({ goal }: { goal: Goal }) {
@@ -105,12 +111,23 @@ function GoalForm({ onCreated }: { onCreated: () => void }) {
   const [filterKind, setFilterKind] = React.useState<string>('all');
   const [filterValue, setFilterValue] = React.useState('');
   const [period, setPeriod] = React.useState<string>('daily');
+  const [direction, setDirection] = React.useState<string>('minimum');
   const [targetHours, setTargetHours] = React.useState('2');
+
+  // A goal filtered to a project name that does not exist measures zero forever and
+  // renders as "no activity yet", which is indistinguishable from not having started.
+  // Suggesting the names actually present in the data makes that typo hard to make.
+  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
+  const { data: projects } = useQuery({
+    enabled: Boolean(userId) && filterKind === 'project',
+    queryFn: () => getProjects(userId, daysAgoDateString(90), todayDateString()),
+    queryKey: wakaclockKeys.projects(userId, daysAgoDateString(90), todayDateString()),
+  });
 
   const mutation = useMutation({
     mutationFn: () =>
       createGoal({
-        direction: 'minimum',
+        direction,
         filter_kind: filterKind,
         filter_value: filterKind === 'all' ? null : filterValue.trim() || null,
         metric,
@@ -193,6 +210,21 @@ function GoalForm({ onCreated }: { onCreated: () => void }) {
       </div>
 
       <div className="grid gap-1.5">
+        <Label htmlFor="goal-direction">Goal is to spend</Label>
+        <NativeSelect
+          id="goal-direction"
+          onChange={(event) => setDirection(event.target.value)}
+          value={direction}
+        >
+          {DIRECTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+
+      <div className="grid gap-1.5">
         <Label htmlFor="goal-filter">Scope</Label>
         <NativeSelect
           id="goal-filter"
@@ -212,10 +244,18 @@ function GoalForm({ onCreated }: { onCreated: () => void }) {
           <Label htmlFor="goal-filter-value">Which one</Label>
           <Input
             id="goal-filter-value"
+            list={filterKind === 'project' ? 'goal-project-options' : undefined}
             onChange={(event) => setFilterValue(event.target.value)}
             placeholder={filterKind === 'language' ? 'Rust' : 'wakaclock'}
             value={filterValue}
           />
+          {filterKind === 'project' && (
+            <datalist id="goal-project-options">
+              {projects?.data.map((project) => (
+                <option key={project.name} value={project.name} />
+              ))}
+            </datalist>
+          )}
         </div>
       )}
 

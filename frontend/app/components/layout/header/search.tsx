@@ -6,7 +6,6 @@ import { useEffect, useState } from 'react';
 import { CommandIcon, SearchIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-import { navItems } from '@/components/layout/sidebar/nav-main';
 import { Button } from '@/components/ui/button';
 import {
   CommandDialog,
@@ -18,6 +17,7 @@ import {
   CommandSeparator,
 } from '@/components/ui/command';
 import { Input } from '@/components/ui/input';
+import { useVisibleNavItems } from '@/hooks/use-visible-nav-items';
 
 /**
  * Labels for the Search component
@@ -75,6 +75,9 @@ const Search = React.forwardRef<HTMLDivElement, SearchProps>(
   ({ labels, testId = 'header-search', ...props }, ref) => {
     const [open, setOpen] = useState(false);
     const router = useRouter();
+    // Same filter the sidebar applies: a deployment that hides Goals from the nav must
+    // not offer it here either.
+    const visibleNavItems = useVisibleNavItems();
     const inputPlaceholder = labels?.inputPlaceholder ?? 'Search...';
     const desktopInputAriaLabel = labels?.desktopInputAriaLabel ?? inputPlaceholder;
     const mobileButtonAriaLabel = labels?.mobileButtonAriaLabel ?? inputPlaceholder;
@@ -142,7 +145,7 @@ const Search = React.forwardRef<HTMLDivElement, SearchProps>(
           />
           <CommandList>
             <CommandEmpty data-testid={`${testId}-empty`}>{emptyState}</CommandEmpty>
-            {navItems.map((route) => (
+            {visibleNavItems.map((route) => (
               <React.Fragment key={route.title}>
                 <CommandGroup heading={route.title}>
                   {route.items.map((item) => (

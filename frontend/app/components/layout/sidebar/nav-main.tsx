@@ -41,7 +41,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { useCapabilities } from '@/hooks/use-capabilities';
+import { useVisibleNavItems } from '@/hooks/use-visible-nav-items';
 
 /** Navigation group containing a title and list of navigation items */
 export type NavGroup = {
@@ -179,18 +179,9 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
 ) {
   const pathname = usePathname();
   const { isMobile } = useSidebar();
-  const { postgresEnabled } = useCapabilities();
   const comingBadge = labels?.comingBadge ?? 'Coming';
   const newBadge = labels?.newBadge ?? 'New';
-
-  // While capabilities are still unknown the Postgres-only entries stay hidden rather
-  // than appearing and then vanishing, which is the more jarring of the two flickers.
-  const visibleGroups = items
-    .map((nav) => ({
-      ...nav,
-      items: nav.items.filter((item) => !item.requiresPostgres || postgresEnabled === true),
-    }))
-    .filter((nav) => nav.items.length > 0);
+  const visibleGroups = useVisibleNavItems(items);
 
   return (
     <div data-slot="nav-main" data-testid={testId} ref={ref}>
