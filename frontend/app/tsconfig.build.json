@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "include": [
+    "next-env.d.ts",
+    "styles.d.ts",
+    "reset.d.ts",
+    "instrumentation.ts",
+    "manifest.ts",
+    "proxy.ts",
+    "apple-icon.tsx",
+    "opengraph-image.tsx",
+    "twitter-image.tsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "app/**/*.mts",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "components/**/*.mts",
+    "hooks/**/*.ts",
+    "hooks/**/*.tsx",
+    "hooks/**/*.mts",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "lib/**/*.mts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".storybook",
+    "test",
+    "e2e",
+    "mocks",
+    "scripts",
+    "coverage",
+    "build",
+    "test-results",
+    "playwright-report"
+  ]
+}
