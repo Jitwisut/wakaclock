@@ -1,0 +1,12 @@
+[build]
+  # The Next.js application lives below the repository root. Keeping the base
+  # here makes Netlify install dependencies and run the build in the same
+  # directory as frontend/app/package.json.
+  base = "frontend/app"
+  # Keep the explicit project variable as the source of truth. If it has not
+  # been set yet, use Netlify's deploy URL so a first deploy can still build.
+  command = "NEXT_PUBLIC_APP_URL=\"${NEXT_PUBLIC_APP_URL:-${DEPLOY_PRIME_URL:-$URL}}\" npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"

@@ -32,7 +32,14 @@ export const DEFAULT_LOCALE: SiteLocale = 'en';
  * instead of falling back.
  */
 function resolveSiteUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  // NEXT_PUBLIC_APP_URL is the preferred value because it can point at a
+  // custom production domain. Netlify exposes URL/DEPLOY_PRIME_URL during a
+  // build, so previews still get a valid canonical origin when the project
+  // variable has not been configured yet.
+  const configured =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    process.env.URL?.trim() ||
+    process.env.DEPLOY_PRIME_URL?.trim();
 
   if (configured && !configured.includes('localhost')) {
     return configured.replace(/\/$/, '');
@@ -40,7 +47,7 @@ function resolveSiteUrl(): string {
 
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
-      'NEXT_PUBLIC_APP_URL must be set to the public site origin for production builds. ' +
+      'NEXT_PUBLIC_APP_URL (or a hosting-provided public URL) must be set for production builds. ' +
         'Canonical URLs and structured data cannot be generated from a localhost origin.'
     );
   }
