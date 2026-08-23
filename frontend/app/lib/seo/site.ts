@@ -135,6 +135,7 @@ export const EN_PUBLIC_ROUTES = [
   '/teams',
   '/wakatime-alternative',
   '/ai-coding-tracker',
+  '/ai-cost-tracking',
   '/developer-analytics',
   '/integrations',
   '/integrations/vscode',
@@ -157,10 +158,30 @@ export interface PublicRouteDefinition {
   path: string;
 }
 
+/**
+ * Dates a page's content actually changed, in ISO form.
+ *
+ * Only pages with a known editorial date appear here. A crawler treats `lastmod` as a
+ * claim it can check, so a generated "now" on every page — or a date copied from a
+ * deploy rather than from the copy — teaches it to ignore the field entirely. Add an
+ * entry when you change that page's words, not when you touch its component.
+ */
+const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
+  '/ai-cost-tracking': '2026-08-23',
+};
+
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
 export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [
-  ...EN_PUBLIC_ROUTES.map((path) => ({ locale: 'en' as const, path })),
-  ...EN_PUBLIC_ROUTES.map((path) => ({ locale: 'th' as const, path: localizedPath('th', path) })),
+  ...EN_PUBLIC_ROUTES.map((path) => ({
+    locale: 'en' as const,
+    path,
+    ...(ROUTE_CONTENT_DATES[path] ? { lastModified: ROUTE_CONTENT_DATES[path] } : {}),
+  })),
+  ...EN_PUBLIC_ROUTES.map((path) => ({
+    locale: 'th' as const,
+    path: localizedPath('th', path),
+    ...(ROUTE_CONTENT_DATES[path] ? { lastModified: ROUTE_CONTENT_DATES[path] } : {}),
+  })),
 ];
 
 /** Canonical public URL paths, including both language variants. */

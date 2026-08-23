@@ -2,12 +2,14 @@ import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { JsonLd } from '@/components/seo/json-ld';
+import { PAGE_COPY } from '@/components/marketing/marketing-copy';
 import robots from '@/app/robots';
 import sitemap from '@/app/sitemap';
 import {
   breadcrumbSchema,
   faqSchema,
   graph,
+  howToSchema,
   organizationSchema,
   softwareApplicationSchema,
   websiteSchema,
@@ -94,6 +96,47 @@ describe('structured data', () => {
     );
 
     expect(serialized).not.toContain('undefined');
+  });
+
+  it('numbers HowTo steps in the order the page presents them', () => {
+    const schema = howToSchema({
+      name: 'Getting started',
+      description: 'Create an API key, connect an editor and verify tracking.',
+      steps: [
+        { name: 'Requirements', text: 'What has to be in place first.' },
+        { name: 'Create an API key', text: 'Generate a key from the dashboard.' },
+      ],
+    }) as {
+      description: string;
+      name: string;
+      step: { name: string; position: number; text: string }[];
+    };
+
+    expect(schema.name).toBe('Getting started');
+    expect(schema.step.map((step) => step.position)).toEqual([1, 2]);
+    expect(schema.step[1].name).toBe('Create an API key');
+    expect(schema.step[0].text).toBe('What has to be in place first.');
+  });
+
+  /**
+   * The point of deriving steps from the rendered sections: instructions that exist only
+   * in the markup are instructions nobody maintains.
+   */
+  it('describes the getting-started page with steps taken from its visible sections', () => {
+    const copy = PAGE_COPY['/docs/getting-started'].en;
+    const schema = howToSchema({
+      name: copy.howTo?.name ?? '',
+      description: copy.howTo?.description ?? '',
+      steps: copy.sections.map((section) => ({
+        name: section.heading,
+        text: 'placeholder',
+      })),
+    }) as { step: { name: string }[] };
+
+    expect(copy.howTo).toBeDefined();
+    expect(schema.step.map((step) => step.name)).toEqual(
+      copy.sections.map((section) => section.heading)
+    );
   });
 
   it('builds FAQPage entries from the supplied questions', () => {
@@ -221,13 +264,22 @@ describe('sitemap', () => {
   });
 
   it('lists canonical URLs without synthetic freshness or legacy priority fields', () => {
-    for (const entry of sitemap()) {
-      expect(entry.lastModified).toBeUndefined();
+    const entries = sitemap();
+
+    for (const entry of entries) {
       expect(entry.priority).toBeUndefined();
       expect(entry.changeFrequency).toBeUndefined();
+      // A real editorial date is allowed; a generated timestamp is not. A literal
+      // YYYY-MM-DD is what a hand-maintained content date looks like.
+      if (entry.lastModified !== undefined) {
+        expect(entry.lastModified).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
     }
 
-    expect(sitemap().map((entry) => new URL(entry.url).pathname)).toContain('/th');
+    // The distinction that matters: a synthetic value would land on every route,
+    // because it comes from the clock rather than from an edit.
+    expect(entries.some((entry) => entry.lastModified === undefined)).toBe(true);
+    expect(entries.map((entry) => new URL(entry.url).pathname)).toContain('/th');
   });
 });
 

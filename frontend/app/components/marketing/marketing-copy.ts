@@ -33,6 +33,13 @@ export interface MarketingPageCopy {
   readonly description: string;
   readonly faq?: { readonly entries: readonly FaqEntry[]; readonly heading: string };
   readonly form?: 'contact' | 'early-access' | 'teams';
+  /**
+   * Emit HowTo structured data for this page. Steps are derived from the rendered
+   * sections rather than written here, for the same reason the FAQ schema is built from
+   * the visible entries: markup that is authored separately drifts away from the page it
+   * claims to describe. Set it only on a page whose sections really are ordered steps.
+   */
+  readonly howTo?: { readonly description: string; readonly name: string };
   readonly lead: string;
   readonly metadataTitle: string;
   readonly related?: readonly {
@@ -48,6 +55,7 @@ export const MARKETING_PAGE_KEYS = [
   '/teams',
   '/wakatime-alternative',
   '/ai-coding-tracker',
+  '/ai-cost-tracking',
   '/developer-analytics',
   '/integrations',
   '/integrations/vscode',
@@ -997,6 +1005,11 @@ dualPage(
     related: [
       related([
         {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'What each agent consumed, and what it is estimated to cost',
+        },
+        {
           href: '/privacy',
           label: 'Heartbeat privacy',
           description: 'Fields stored and fields that never leave the editor',
@@ -1144,6 +1157,11 @@ dualPage(
     ],
     related: [
       related([
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'agent ใช้ token ไปเท่าไร และประมาณค่าใช้จ่ายเท่าไร',
+        },
         {
           href: '/privacy',
           label: 'Privacy ของ heartbeat',
@@ -1409,6 +1427,10 @@ const generic = (
       )
     ),
     form: value.form,
+    howTo:
+      path === '/docs/getting-started'
+        ? { name: value.title, description: value.description }
+        : undefined,
     component: path === '/pricing' ? { kind: 'pricing', afterSectionId: null } : undefined,
     schema: path === '/about' ? 'organization' : undefined,
     related: genericRelated(path, locale),
@@ -2342,6 +2364,328 @@ generic(
     lead: 'ลงทะเบียนความสนใจใน hosted developer time tracking และข่าวการเปิดตัว',
     headings: [],
     form: 'early-access',
+  }
+);
+
+dualPage(
+  '/ai-cost-tracking',
+  {
+    metadataTitle: 'AI Coding Cost and Token Usage Tracking',
+    description:
+      'Track Claude Code, Codex CLI and Gemini CLI token usage and estimated cost per project. Prices are versioned and effective-dated, and an unknown price stays unknown instead of being reported as zero.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'AI cost tracking', path: '/ai-cost-tracking' },
+    ],
+    title: 'AI coding cost and token tracking',
+    lead: `${SITE_NAME} records how many tokens your coding agents consume and what that usage is estimated to cost, broken down by project and by day. Input, output and cache tokens are kept apart, prices are versioned and effective-dated, and any figure that cannot be derived from reported usage and a known price is returned as unknown rather than as zero.`,
+    sections: [
+      section('What AI cost tracking measures', 'what-is', [
+        p(
+          'A coding agent bills on tokens, not on the time you spent watching it work. Duration answers "how long was this session"; token usage answers "what did this session consume". Both are recorded here, on the same timeline, so a project can be read as time spent and as spend incurred.'
+        ),
+        sub('The four token classes'),
+        bullets([
+          'Input tokens: what was sent to the model',
+          'Output tokens: what the model generated',
+          'Cache read tokens: prompt content served from cache, billed at a lower rate',
+          'Cache write tokens: content written into the cache, billed at a higher rate',
+        ]),
+        p(
+          'They are stored separately because they are priced separately. Collapsing them into one number makes a cache-heavy session look identical to one that re-sent its whole context, and those two sessions do not cost the same.'
+        ),
+      ]),
+      section('How usage reaches your account', 'how', [
+        p(
+          'Usage events arrive on a dedicated endpoint that carries identifiers and counts only. There is no prompt, response, patch, file path or source-code field in the payload.'
+        ),
+        code(
+          '[\n  {\n    "usage_event_id": "msg_01ExampleProviderMessageId",\n    "ai_session_id": "your-session-id",\n    "occurred_at": "2026-08-23T04:15:00Z",\n    "agent": "claude-code",\n    "provider": "anthropic",\n    "model": "your-model-name",\n    "prompt_count": 1,\n    "input_tokens": 18450,\n    "output_tokens": 1220,\n    "cache_read_tokens": 96300,\n    "cache_write_tokens": 4100,\n    "token_source": "reported"\n  }\n]',
+          'POST /api/v1/ai/usage'
+        ),
+        p(
+          'Events are keyed by the provider’s own message id, so replaying a transcript cannot double-count a session. Bundled hooks read this from each agent’s local transcript; you can also post it from your own wrapper.'
+        ),
+      ]),
+      section('Which agents are covered', 'agents', [
+        bullets([
+          'Claude Code, Codex CLI and Gemini CLI have bundled hooks that read their local transcripts',
+          'Any other tool can post to the same endpoint directly',
+          'Cursor and Copilot need a provider-specific adapter before their usage can be attributed',
+        ]),
+        p(
+          'A tool with no hook and no adapter is not reported as zero usage. It is simply absent, and the coverage figures show how much of the period that absence accounts for.'
+        ),
+      ]),
+      section('How estimated cost is calculated', 'pricing', [
+        p(
+          'Cost is derived, never guessed. Each provider and model pair has price rows with an effective window, so an event is priced with the rate that was actually in force when it happened rather than with today’s rate.'
+        ),
+        sub('The rules that keep the number honest'),
+        bullets([
+          'Pricing is selected by provider and model together, never by model name alone — two providers can publish the same model label at different rates',
+          'Each price row carries an effective-from date and a version, so a repricing does not silently rewrite last month',
+          'Amounts are held in micro-USD to avoid rounding drift across millions of events',
+          'An unknown provider or model produces an unknown cost, not a cost of zero',
+        ]),
+        p(
+          'The shipped catalogue covers Anthropic list prices. Usage from a provider with no price row still reports its tokens — you keep the consumption figure and lose only the money figure.'
+        ),
+      ]),
+      section('Cost per project', 'per-project', [
+        p(
+          'Usage events carry the agent’s workspace context, reduced to a project name before it leaves your machine, so spend can be grouped the same way coding time is.'
+        ),
+        sub('When an event has no explicit project'),
+        bullets([
+          'If every other event in that session belongs to one project, the event inherits it',
+          'If the session touched more than one project, the event stays unattributed rather than being copied into all of them',
+        ]),
+        p(
+          'The second rule is why a project total can be lower than the account total. Splitting an ambiguous session across projects would make every project look more expensive than it was, and there would be no way to tell which part was invented.'
+        ),
+      ]),
+      section('Coverage instead of false precision', 'coverage', [
+        p(
+          'Attribution, tokens and estimated spend each carry their own coverage percentage, and a value that cannot be derived is returned as null with that coverage attached.'
+        ),
+        code(
+          '{\n  "tokens":          { "total": 1204300, "coverage_percent": 92.4 },\n  "estimated_spend": { "amount_microusd": 3184500, "coverage_percent": 74.1, "currency": "USD" },\n  "coverage":        { "attribution_percent": 88.0, "token_percent": 92.4, "cost_percent": 74.1 }\n}',
+          'GET /api/v1/dashboard/analytics'
+        ),
+        p(
+          'A dashboard that renders an unknown as 0 is telling you something it does not know. Reading "74% priced" tells you how far to trust the total, and a subscription plan that never exposes per-call pricing is visibly out of scope rather than quietly counted as free.'
+        ),
+      ]),
+      section('What is never collected', 'privacy', [
+        bullets([
+          'Prompts, model responses and conversation transcripts',
+          'Source file contents and patches',
+          'Absolute paths — only the final directory name is used as the project label',
+        ]),
+        p(
+          'The usage stream is numeric and identifier-only by design. Prompt length is counted locally and only the character count is sent; the prompt text itself is discarded on your machine.'
+        ),
+      ]),
+      section('Limits worth knowing', 'limits', [
+        bullets([
+          'Estimated cost is a list-price estimate, not an invoice, and will not match a bill that includes negotiated or subscription terms',
+          'A subscription plan with no per-call pricing produces tokens without a cost figure',
+          'Usage arrives only from agents with a hook or an adapter',
+          'Historical events keep the price that was effective when they happened; changing the catalogue does not restate them',
+        ]),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'AI coding activity tracking',
+          description: 'How AI, human and unattributed line counts are decided',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'The metrics produced and how each is derived',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy and data collection',
+          description: 'Every field stored, and everything that is never sent',
+        },
+      ]),
+    ],
+    faq: faq('AI cost and token FAQ', [
+      {
+        question: 'Can I track how many tokens Claude Code uses?',
+        answer:
+          'Yes. A bundled hook reads Claude Code’s local transcript and posts input, output, cache read and cache write tokens per event, grouped by session, project and day.',
+      },
+      {
+        question: 'How is the estimated cost of an AI coding session calculated?',
+        answer:
+          'Reported tokens are multiplied by the price that was in effect for that provider and model when the event happened. Prices are versioned and effective-dated, and an unknown provider or model yields an unknown cost rather than zero.',
+      },
+      {
+        question: 'Does it show AI spend per project?',
+        answer:
+          'Yes. Usage inherits a project from its session when that session touched exactly one project; a session spanning several projects stays unattributed instead of being copied into each.',
+      },
+      {
+        question: 'Which coding agents report token usage?',
+        answer:
+          'Claude Code, Codex CLI and Gemini CLI have bundled hooks. Any other tool can post to the same endpoint. Cursor and Copilot need a provider-specific adapter first.',
+      },
+      {
+        question: 'Will the estimate match my provider invoice?',
+        answer:
+          'No. It is a list-price estimate from reported usage. Negotiated rates, subscription bundles and provider-side adjustments are not visible to it, which is why coverage is reported alongside every total.',
+      },
+      {
+        question: 'Are prompts or responses stored to calculate cost?',
+        answer:
+          'No. The usage stream carries identifiers and numeric counts only. Prompt length is counted on your machine and the text is discarded.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'ติดตาม Token และค่าใช้จ่าย AI Coding',
+    description:
+      'ติดตาม token และค่าใช้จ่ายโดยประมาณของ Claude Code, Codex CLI และ Gemini CLI แยกตามโปรเจกต์ ราคามีเวอร์ชันและช่วงเวลาที่มีผล สิ่งที่คำนวณไม่ได้จะแสดงว่าไม่ทราบ ไม่ใช่ศูนย์',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'ติดตามค่าใช้จ่าย AI', path: '/ai-cost-tracking' },
+    ],
+    title: 'ติดตาม token และค่าใช้จ่าย AI coding',
+    lead: `${SITE_NAME} บันทึกว่า coding agent ของคุณใช้ token ไปเท่าไร และประมาณค่าใช้จ่ายเท่าไร แยกตามโปรเจกต์และรายวัน โดยแยก input, output และ cache token ออกจากกัน ราคามีเวอร์ชันและช่วงเวลาที่มีผลกำกับ ส่วนตัวเลขที่คำนวณจาก usage และราคาที่รู้ไม่ได้ จะรายงานว่าไม่ทราบ ไม่ใช่ศูนย์`,
+    sections: [
+      section('วัดอะไรบ้าง', 'what-is', [
+        p(
+          'coding agent คิดเงินตาม token ไม่ใช่ตามเวลาที่คุณนั่งดูมันทำงาน เวลาตอบคำถามว่า session นี้นานแค่ไหน ส่วน token ตอบว่า session นี้ใช้ทรัพยากรไปเท่าไร ทั้งสองอยู่บน timeline เดียวกัน'
+        ),
+        sub('token สี่ประเภท'),
+        bullets([
+          'Input token: สิ่งที่ส่งเข้า model',
+          'Output token: สิ่งที่ model สร้างออกมา',
+          'Cache read token: เนื้อหา prompt ที่อ่านจาก cache คิดราคาถูกกว่า',
+          'Cache write token: เนื้อหาที่เขียนลง cache คิดราคาแพงกว่า',
+        ]),
+        p(
+          'ที่แยกเก็บเพราะคิดราคาต่างกัน ถ้ายุบเป็นตัวเลขเดียว session ที่ใช้ cache หนักจะดูเหมือน session ที่ส่ง context ใหม่ทั้งก้อน ซึ่งราคาไม่เท่ากัน'
+        ),
+      ]),
+      section('usage เข้ามาอย่างไร', 'how', [
+        p(
+          'usage event ส่งเข้า endpoint เฉพาะที่มีเฉพาะ identifier และตัวเลข ไม่มีฟิลด์สำหรับ prompt, response, patch, file path หรือ source code'
+        ),
+        code(
+          '[\n  {\n    "usage_event_id": "msg_01ExampleProviderMessageId",\n    "ai_session_id": "your-session-id",\n    "occurred_at": "2026-08-23T04:15:00Z",\n    "agent": "claude-code",\n    "provider": "anthropic",\n    "model": "your-model-name",\n    "prompt_count": 1,\n    "input_tokens": 18450,\n    "output_tokens": 1220,\n    "cache_read_tokens": 96300,\n    "cache_write_tokens": 4100,\n    "token_source": "reported"\n  }\n]',
+          'POST /api/v1/ai/usage'
+        ),
+        p(
+          'event ใช้ message id ของ provider เป็นคีย์ ส่งซ้ำจึงนับซ้ำไม่ได้ bundled hook อ่านจาก transcript ในเครื่องคุณเอง หรือจะเขียน wrapper ส่งเองก็ได้'
+        ),
+      ]),
+      section('agent ที่รองรับ', 'agents', [
+        bullets([
+          'Claude Code, Codex CLI และ Gemini CLI มี bundled hook อ่าน transcript ในเครื่อง',
+          'เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้โดยตรง',
+          'Cursor และ Copilot ต้องมี adapter เฉพาะของ provider ก่อน',
+        ]),
+        p(
+          'เครื่องมือที่ยังไม่มี hook จะไม่ถูกรายงานเป็นศูนย์ แต่จะไม่มีข้อมูล และตัวเลข coverage จะบอกว่าช่วงนั้นขาดไปเท่าไร'
+        ),
+      ]),
+      section('คำนวณค่าใช้จ่ายอย่างไร', 'pricing', [
+        p(
+          'ค่าใช้จ่ายมาจากการคำนวณ ไม่ใช่การเดา แต่ละคู่ provider กับ model มีแถวราคาพร้อมช่วงเวลาที่มีผล event จึงคิดด้วยราคา ณ เวลานั้น ไม่ใช่ราคาวันนี้'
+        ),
+        sub('กฎที่ทำให้ตัวเลขน่าเชื่อถือ'),
+        bullets([
+          'เลือกราคาจาก provider คู่กับ model เสมอ ไม่เคยใช้ชื่อ model อย่างเดียว เพราะสอง provider อาจตั้งชื่อซ้ำกันแต่คิดราคาต่างกัน',
+          'แต่ละแถวราคามีวันเริ่มมีผลและเวอร์ชัน การปรับราคาจึงไม่ไปเขียนทับเดือนที่แล้ว',
+          'เก็บมูลค่าเป็น micro-USD เพื่อไม่ให้เกิด rounding drift เมื่อมี event หลายล้านรายการ',
+          'provider หรือ model ที่ไม่รู้จัก จะได้ต้นทุนว่า "ไม่ทราบ" ไม่ใช่ ศูนย์',
+        ]),
+        p(
+          'ชุดราคาที่ให้มาครอบราคา list price ของ Anthropic การใช้งานจาก provider ที่ยังไม่มีแถวราคายังรายงาน token ตามปกติ ขาดไปเฉพาะตัวเลขค่าใช้จ่าย'
+        ),
+      ]),
+      section('ค่าใช้จ่ายแยกตามโปรเจกต์', 'per-project', [
+        p(
+          'usage event นำ workspace context ของ agent มาด้วย โดยย่อเหลือเพียงชื่อโปรเจกต์ก่อนออกจากเครื่อง จึงจัดกลุ่มค่าใช้จ่ายได้แบบเดียวกับ coding time'
+        ),
+        sub('เมื่อ event ไม่ระบุโปรเจกต์'),
+        bullets([
+          'ถ้าทุก event ใน session นั้นอยู่โปรเจกต์เดียว event นั้นจะสืบโปรเจกต์นั้น',
+          'ถ้า session แตะหลายโปรเจกต์ event จะคงเป็น unattributed แทนที่จะคัดลอกไปทุกโปรเจกต์',
+        ]),
+        p(
+          'กฎข้อสองคือเหตุผลที่ยอดรวมรายโปรเจกต์อาจน้อยกว่ายอดรวมของบัญชี การกระจาย session ที่คลุมเครือไปทุกโปรเจกต์จะทำให้ทุกโปรเจกต์ดูแพงเกินจริง และแยกไม่ออกว่าส่วนไหนถูกเดาขึ้นมา'
+        ),
+      ]),
+      section('coverage แทนความแม่นยำเทียม', 'coverage', [
+        p(
+          'attribution, token และค่าใช้จ่ายมี coverage ของตัวเอง ส่วนค่าที่คำนวณไม่ได้จะเป็น null พร้อม coverage กำกับ'
+        ),
+        code(
+          '{\n  "tokens":          { "total": 1204300, "coverage_percent": 92.4 },\n  "estimated_spend": { "amount_microusd": 3184500, "coverage_percent": 74.1, "currency": "USD" },\n  "coverage":        { "attribution_percent": 88.0, "token_percent": 92.4, "cost_percent": 74.1 }\n}',
+          'GET /api/v1/dashboard/analytics'
+        ),
+        p(
+          'dashboard ที่แสดงค่าที่ไม่รู้เป็น 0 คือการบอกสิ่งที่มันไม่รู้ การเห็นว่า "คิดราคาได้ 74%" บอกได้ว่าควรเชื่อตัวเลขรวมแค่ไหน และแพ็กเกจ subscription ที่ไม่เปิดราคาต่อครั้งจะอยู่นอกขอบเขตอย่างชัดเจน ไม่ถูกนับเงียบ ๆ ว่าฟรี'
+        ),
+      ]),
+      section('สิ่งที่ไม่เก็บ', 'privacy', [
+        bullets([
+          'prompt, คำตอบของ model และ transcript ของบทสนทนา',
+          'เนื้อหาไฟล์ source และ patch',
+          'absolute path — ใช้เฉพาะชื่อโฟลเดอร์สุดท้ายเป็นชื่อโปรเจกต์',
+        ]),
+        p(
+          'usage stream ออกแบบมาให้มีเฉพาะตัวเลขและ identifier ความยาว prompt ถูกนับในเครื่องคุณและส่งมาเฉพาะตัวเลข ส่วนตัวข้อความถูกทิ้งไป'
+        ),
+      ]),
+      section('ข้อจำกัดที่ควรรู้', 'limits', [
+        bullets([
+          'ค่าใช้จ่ายเป็นการประมาณจาก list price ไม่ใช่ใบแจ้งหนี้ จึงไม่ตรงกับราคาที่ต่อรองไว้หรือแพ็กเกจ subscription',
+          'แพ็กเกจ subscription ที่ไม่เปิดราคาต่อครั้งจะได้ token แต่ไม่ได้ค่าใช้จ่าย',
+          'usage มาจาก agent ที่มี hook หรือ adapter เท่านั้น',
+          'event เก่าเก็บราคา ณ เวลาที่เกิด การแก้ชุดราคาไม่ย้อนกลับไปแก้ของเดิม',
+        ]),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'ติดตาม AI coding activity',
+          description: 'วิธีแยก AI, human และ unattributed',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'metrics ที่มีและวิธีคำนวณ',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy และการเก็บข้อมูล',
+          description: 'ทุก field ที่เก็บ และสิ่งที่ไม่เคยส่ง',
+        },
+      ]),
+    ],
+    faq: faq('คำถามที่พบบ่อยเรื่อง token และค่าใช้จ่าย AI', [
+      {
+        question: 'ติดตามได้หรือไม่ว่า Claude Code ใช้ token ไปเท่าไร?',
+        answer:
+          'ได้ bundled hook อ่าน transcript ของ Claude Code ในเครื่องแล้วส่ง input, output, cache read และ cache write token แยกตาม session โปรเจกต์และวัน',
+      },
+      {
+        question: 'คำนวณค่าใช้จ่ายของ AI coding session อย่างไร?',
+        answer:
+          'นำ token ที่ provider รายงานมาคูณกับราคาที่มีผล ณ เวลาที่ event เกิด ราคามีเวอร์ชันและช่วงเวลา หากไม่รู้จัก provider หรือ model จะตอบว่าไม่ทราบ ไม่ใช่ 0',
+      },
+      {
+        question: 'ดูค่าใช้จ่าย AI แยกตามโปรเจกต์ได้หรือไม่?',
+        answer:
+          'ได้ usage จะสืบโปรเจกต์จาก session เมื่อ session นั้นแตะโปรเจกต์เดียว ถ้าแตะหลายโปรเจกต์จะคงเป็น unattributed แทนการคัดลอกไปทุกโปรเจกต์',
+      },
+      {
+        question: 'agent ใดบ้างที่รายงาน token ได้?',
+        answer:
+          'Claude Code, Codex CLI และ Gemini CLI มี bundled hook เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้ ส่วน Cursor และ Copilot ต้องมี adapter ก่อน',
+      },
+      {
+        question: 'ตัวเลขจะตรงกับบิลจาก provider หรือไม่?',
+        answer:
+          'ไม่ตรง เป็นการประมาณจาก list price และ usage ที่รายงานมา ราคาที่ต่อรองไว้ แพ็กเกจ และการปรับฝั่ง provider มองไม่เห็น จึงต้องดู coverage ควบคู่เสมอ',
+      },
+      {
+        question: 'ต้องเก็บ prompt หรือ response เพื่อคำนวณค่าใช้จ่ายหรือไม่?',
+        answer:
+          'ไม่ต้อง usage stream มีเฉพาะ identifier และตัวเลข ความยาว prompt นับในเครื่องแล้วทิ้งข้อความ',
+      },
+    ]),
   }
 );
 

@@ -16,7 +16,7 @@ describe('localized marketing contract', () => {
   });
 
   it('has one typed page contract for every English and Thai route', () => {
-    expect(MARKETING_PAGE_KEYS).toHaveLength(14);
+    expect(MARKETING_PAGE_KEYS).toHaveLength(15);
 
     for (const path of MARKETING_PAGE_KEYS) {
       const { en, th } = PAGE_COPY[path];
