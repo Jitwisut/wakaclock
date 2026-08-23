@@ -42,17 +42,17 @@ impl ProjectAnalyticsRepository {
                     sum(toUInt64(ifNull(h.unattributed_lines_added, 0))) AS unattributed_added,
                     sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0))) AS unattributed_deleted,
                     countIf(isNull(h.unattributed_lines_added) OR isNull(h.unattributed_lines_deleted)) AS unattributed_unknown,
-                    ifNull(u.prompts, 0) AS prompts,
-                    ifNull(u.sessions, 0) AS sessions,
-                    ifNull(u.input_tokens, 0) AS input_tokens,
-                    ifNull(u.output_tokens, 0) AS output_tokens,
-                    ifNull(u.cache_read_tokens, 0) AS cache_read_tokens,
-                    ifNull(u.cache_write_tokens, 0) AS cache_write_tokens,
-                    ifNull(u.reported_tokens, 0) AS reported_tokens,
-                    ifNull(u.priced_tokens, 0) AS priced_tokens,
-                    ifNull(u.estimated_cost_microusd, 0) AS estimated_cost_microusd,
-                    ifNull(u.usage_events, 0) AS usage_events,
-                    ifNull(u.priced_events, 0) AS priced_events
+                    ifNull(any(u.prompts), 0) AS prompts,
+                    ifNull(any(u.sessions), 0) AS sessions,
+                    ifNull(any(u.input_tokens), 0) AS input_tokens,
+                    ifNull(any(u.output_tokens), 0) AS output_tokens,
+                    ifNull(any(u.cache_read_tokens), 0) AS cache_read_tokens,
+                    ifNull(any(u.cache_write_tokens), 0) AS cache_write_tokens,
+                    ifNull(any(u.reported_tokens), 0) AS reported_tokens,
+                    ifNull(any(u.priced_tokens), 0) AS priced_tokens,
+                    ifNull(any(u.estimated_cost_microusd), 0) AS estimated_cost_microusd,
+                    ifNull(any(u.usage_events), 0) AS usage_events,
+                    ifNull(any(u.priced_events), 0) AS priced_events
                  FROM wakaclock.heartbeats AS h
                  INNER JOIN (
                     SELECT user_id, project_id,
@@ -63,21 +63,21 @@ impl ProjectAnalyticsRepository {
                  ) AS i ON h.user_id = i.user_id AND h.project_id = i.project_id
                  LEFT JOIN (
                     SELECT user_id, project_id,
-                           sum(prompt_count) AS prompts,
-                           uniqExact(ai_session_id) AS sessions,
-                           sum(toUInt64(ifNull(input_tokens, 0))) AS input_tokens,
-                           sum(toUInt64(ifNull(output_tokens, 0))) AS output_tokens,
-                           sum(toUInt64(ifNull(cache_read_tokens, 0))) AS cache_read_tokens,
-                           sum(toUInt64(ifNull(cache_write_tokens, 0))) AS cache_write_tokens,
-                           sum(toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0))) AS reported_tokens,
-                           sumIf(toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)), isNotNull(estimated_cost_microusd)) AS priced_tokens,
-                           sum(toUInt64(ifNull(estimated_cost_microusd, 0))) AS estimated_cost_microusd,
+                           sum(toUInt64(ifNull(usage.prompt_count, 0))) AS prompts,
+                           uniqExact(usage.ai_session_id) AS sessions,
+                           sum(toUInt64(ifNull(usage.input_tokens, 0))) AS input_tokens,
+                           sum(toUInt64(ifNull(usage.output_tokens, 0))) AS output_tokens,
+                           sum(toUInt64(ifNull(usage.cache_read_tokens, 0))) AS cache_read_tokens,
+                           sum(toUInt64(ifNull(usage.cache_write_tokens, 0))) AS cache_write_tokens,
+                           sum(toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0))) AS reported_tokens,
+                           sumIf(toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)), isNotNull(usage.estimated_cost_microusd)) AS priced_tokens,
+                           sum(toUInt64(ifNull(usage.estimated_cost_microusd, 0))) AS estimated_cost_microusd,
                            count() AS usage_events,
-                           countIf(isNotNull(estimated_cost_microusd)) AS priced_events
-                    FROM wakaclock.ai_usage_events FINAL
-                    WHERE user_id = ? AND event_time >= ? AND event_time < ?
-                      AND project_id IS NOT NULL
-                    GROUP BY user_id, project_id
+                           countIf(isNotNull(usage.estimated_cost_microusd)) AS priced_events
+                    FROM wakaclock.ai_usage_events AS usage FINAL
+                    WHERE usage.user_id = ? AND usage.event_time >= ? AND usage.event_time < ?
+                      AND usage.project_id IS NOT NULL
+                    GROUP BY usage.user_id, usage.project_id
                  ) AS u ON h.user_id = u.user_id AND h.project_id = u.project_id
                  WHERE h.user_id = ?
                    AND h.time >= ? AND h.time < ?
@@ -383,4 +383,197 @@ pub struct ProjectFileRow {
     pub human_changes: u64,
     pub unattributed_changes: u64,
     pub unattributed_unknown: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+    use uuid::Uuid;
+
+    use crate::model::ai_usage::AiUsageEventRow;
+    use crate::model::date_range::ResolvedRange;
+    use crate::model::heartbeat::HeartbeatRow;
+    use crate::model::project_identity::ProjectIdentityRow;
+    use crate::repository::ai_usage::AiUsageRepository;
+    use crate::repository::analytics::AnalyticsRepository;
+    use crate::repository::heartbeat::HeartbeatRepository;
+    use crate::repository::project_identity::ProjectIdentityRepository;
+
+    use super::ProjectAnalyticsRepository;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn project_aggregates_handle_multiple_usage_events_without_nested_aggregates() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        let heartbeat_repo = HeartbeatRepository::new(clickhouse.clone());
+        let identity_repo = ProjectIdentityRepository::new(clickhouse.clone());
+        let usage_repo = AiUsageRepository::new(clickhouse.clone());
+        AnalyticsRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        heartbeat_repo.migrate().await.unwrap();
+        identity_repo.migrate().await.unwrap();
+        usage_repo.migrate().await.unwrap();
+
+        let user_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let day = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let unix_day = day
+            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as u32;
+        let event_base = unix_day * 86_400;
+
+        identity_repo
+            .upsert_identity(&ProjectIdentityRow {
+                user_id,
+                project_id,
+                canonical_name: "demo".to_string(),
+                display_name: "Demo".to_string(),
+                repository: "https://example.com/demo".to_string(),
+                root_fingerprint: "test-root".to_string(),
+                first_heartbeat_at: event_base,
+                last_heartbeat_at: event_base + 180,
+                created_at: event_base,
+                updated_at: event_base,
+                version: 1,
+            })
+            .await
+            .unwrap();
+
+        heartbeat_repo
+            .insert_batch(vec![HeartbeatRow {
+                user_id,
+                entity: "src/main.rs".to_string(),
+                entity_type: "file".to_string(),
+                time: (event_base + 180) as f64,
+                date: unix_day as u16,
+                project: Some("demo".to_string()),
+                project_id: Some(project_id),
+                branch: Some("main".to_string()),
+                head_revision: Some("abc123".to_string()),
+                repository_id: None,
+                language: Some("Rust".to_string()),
+                dependencies: Vec::new(),
+                lines: Some(10),
+                line_number: None,
+                cursor_position: None,
+                is_write: false,
+                category: "coding".to_string(),
+                editor: "vscode".to_string(),
+                operating_system: "macos".to_string(),
+                machine: "test".to_string(),
+                user_agent: "test".to_string(),
+                machine_name_hash: None,
+                hostname_hash: None,
+                timezone: Some("UTC".to_string()),
+                feature_id: None,
+                feature_name: None,
+                heartbeat_id: Some("project-regression-heartbeat".to_string()),
+                ast_language: None,
+                ast_confidence: None,
+                keystrokes: None,
+                chars_added: None,
+                chars_deleted: None,
+                active_seconds: Some(60.0),
+                activity_segments: "[]".to_string(),
+                is_ai_generated: false,
+                ai_agent: None,
+                ai_provider: None,
+                ai_model: None,
+                ai_source: None,
+                ai_confidence: None,
+                ai_event_id: None,
+                ai_change_id: None,
+                prompt_character_count: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                ai_subscription_plan: None,
+                token_source: None,
+                attribution_source: None,
+                attribution_confidence: None,
+                ai_event_fingerprint: None,
+                ai_lines_added: Some(2),
+                ai_lines_deleted: Some(1),
+                human_lines_added: Some(3),
+                human_lines_deleted: Some(1),
+                unattributed_lines_added: Some(0),
+                unattributed_lines_deleted: Some(0),
+                created_at: event_base,
+            }])
+            .await
+            .unwrap();
+
+        usage_repo
+            .insert_usage_events(&[
+                AiUsageEventRow {
+                    user_id,
+                    date: unix_day as u16,
+                    usage_event_id: "project-regression-priced".to_string(),
+                    ai_session_id: "project-session-priced".to_string(),
+                    event_time: event_base + 60,
+                    project_id: Some(project_id),
+                    ai_agent: "test".to_string(),
+                    ai_provider: Some("test".to_string()),
+                    ai_model: Some("test".to_string()),
+                    prompt_count: 2,
+                    prompt_character_count: Some(16),
+                    input_tokens: Some(100),
+                    output_tokens: Some(20),
+                    cache_read_tokens: Some(10),
+                    cache_write_tokens: Some(5),
+                    estimated_cost_microusd: Some(123),
+                    pricing_version: Some("test".to_string()),
+                    token_source: "reported".to_string(),
+                    version: 1,
+                    received_at: event_base + 60,
+                },
+                AiUsageEventRow {
+                    user_id,
+                    date: unix_day as u16,
+                    usage_event_id: "project-regression-unpriced".to_string(),
+                    ai_session_id: "project-session-unpriced".to_string(),
+                    event_time: event_base + 120,
+                    project_id: Some(project_id),
+                    ai_agent: "test".to_string(),
+                    ai_provider: None,
+                    ai_model: None,
+                    prompt_count: 3,
+                    prompt_character_count: None,
+                    input_tokens: Some(50),
+                    output_tokens: Some(30),
+                    cache_read_tokens: Some(0),
+                    cache_write_tokens: Some(0),
+                    estimated_cost_microusd: None,
+                    pricing_version: None,
+                    token_source: "reported".to_string(),
+                    version: 1,
+                    received_at: event_base + 120,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let range = ResolvedRange::parse("2026-08-01", "2026-08-01", Some("UTC")).unwrap();
+        let (start_epoch, end_epoch) = range.unix_bounds();
+        let rows = ProjectAnalyticsRepository::new(clickhouse)
+            .project_aggregates(user_id, start_epoch, end_epoch, None)
+            .await
+            .unwrap();
+        let row = rows.first().expect("the seeded project should be returned");
+
+        assert_eq!(row.prompts, 5);
+        assert_eq!(row.sessions, 2);
+        assert_eq!(row.input_tokens, 150);
+        assert_eq!(row.output_tokens, 50);
+        assert_eq!(row.cache_read_tokens, 10);
+        assert_eq!(row.cache_write_tokens, 5);
+        assert_eq!(row.reported_tokens, 215);
+        assert_eq!(row.priced_tokens, 135);
+        assert_eq!(row.estimated_cost_microusd, 123);
+        assert_eq!(row.usage_events, 2);
+        assert_eq!(row.priced_events, 1);
+    }
 }

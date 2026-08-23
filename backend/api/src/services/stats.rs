@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -8,14 +8,19 @@ use crate::model::stats::{
     AllTimeRangeRow, BestDay, BestDayRow, BreakdownRow, StatsBreakdownItem, StatsData,
     StatsResponse, TotalsRow,
 };
+use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
 
 pub struct StatsService {
     clickhouse: Arc<ClickHouseClient>,
+    idle_timeout_seconds: f64,
 }
 
 impl StatsService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
-        Self { clickhouse }
+    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+        Self {
+            clickhouse,
+            idle_timeout_seconds,
+        }
     }
 
     pub async fn get_by_range(&self, user_id: Uuid, range: &str) -> Result<StatsResponse> {
@@ -111,23 +116,39 @@ impl StatsService {
     }
 
     async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<TotalsRow> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    coalesce(sum(total_seconds), 0.0) AS total_seconds,
-                    count() AS days_with_activity
-                FROM wakaclock.daily_totals
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                ",
+        let start_date = parse_date(start)?;
+        let end_date = parse_date(end)?;
+        let start_epoch = Utc
+            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+            .timestamp() as f64;
+        let end_epoch = Utc
+            .from_utc_datetime(
+                &end_date
+                    .succ_opt()
+                    .expect("valid date")
+                    .and_hms_opt(0, 0, 0)
+                    .expect("valid midnight"),
             )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_one::<TotalsRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse stats totals query error: {error}"))
+            .timestamp() as f64;
+        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let canonical = canonicalize_bridged(
+            &timeline.intervals(user_id, start_epoch, end_epoch).await?,
+            self.idle_timeout_seconds,
+        );
+        let days = canonical
+            .iter()
+            .filter_map(|interval| {
+                DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
+                    .map(|value| value.date_naive())
+            })
+            .collect::<std::collections::HashSet<_>>();
+        Ok(TotalsRow {
+            total_seconds: canonical
+                .iter()
+                .map(|interval| interval.end - interval.start)
+                .sum(),
+            days_with_activity: days.len() as u64,
+        })
     }
 
     async fn fetch_best_day(
@@ -136,25 +157,46 @@ impl StatsService {
         start: &str,
         end: &str,
     ) -> Result<Option<BestDayRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    total_seconds
-                FROM wakaclock.daily_totals
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                ORDER BY total_seconds DESC, date ASC
-                LIMIT 1
-                ",
+        let start_date = parse_date(start)?;
+        let end_date = parse_date(end)?;
+        let start_epoch = Utc
+            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+            .timestamp() as f64;
+        let end_epoch = Utc
+            .from_utc_datetime(
+                &end_date
+                    .succ_opt()
+                    .expect("valid date")
+                    .and_hms_opt(0, 0, 0)
+                    .expect("valid midnight"),
             )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_optional::<BestDayRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse stats best_day query error: {error}"))
+            .timestamp() as f64;
+        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let canonical = canonicalize_bridged(
+            &timeline.intervals(user_id, start_epoch, end_epoch).await?,
+            self.idle_timeout_seconds,
+        );
+        let mut totals = std::collections::HashMap::<String, f64>::new();
+        for interval in canonical {
+            if let Some(timestamp) =
+                DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
+            {
+                *totals
+                    .entry(timestamp.date_naive().to_string())
+                    .or_default() += interval.end - interval.start;
+            }
+        }
+        Ok(totals
+            .into_iter()
+            .max_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| right.0.cmp(&left.0))
+            })
+            .map(|(date, total_seconds)| BestDayRow {
+                date,
+                total_seconds,
+            }))
     }
 
     async fn fetch_breakdown(

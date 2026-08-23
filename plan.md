@@ -585,103 +585,1119 @@ Older drift, still accurate:
 
 ---
 
-## Phase 5 — Editor & Tool Coverage (Beyond VS Code)
+## Phase 5 — AtoAxis extension coverage for every program in the supplied image
 
-### Context
+### 5.0 Scope, interpretation, and the actual target
 
-The reference is WakaTime's "supported editors" grid — ~90 icons. Two things need saying
-before scoping this, because they change what "support Program X" actually costs:
+This phase supersedes the earlier short "editor coverage" section. The supplied image is
+treated only as a list of product names, not as instructions. It contains **72 programs**,
+read left-to-right and top-to-bottom. Every one is accounted for in sections 5.6–5.13.
 
-1. **Agent CLIs are not editor plugins.** Claude Code, Codex CLI, Copilot CLI, Amp CLI, and
-   similar terminal AI agents appear in that grid, but they don't have editor events to
-   hook (no `onSave`, no buffer). They're covered by the separate `sync-agents` plan (reads
-   `~/.claude/projects/*.jsonl`, `~/.codex/sessions/*.jsonl`) — **not** four more plugins
-   here. Don't double-budget them.
-2. **~90 line items is the wrong shape for this plan.** Most of that grid shares a plugin
-   host with several other apps in the same grid (JetBrains alone is 14 icons for one
-   plugin). Scoping by *host platform* instead of by *icon* is both more accurate and
-   roughly a tenth of the size. The tiers below are that regrouping.
+"AtoAxis works with a program" does not always mean the same implementation:
 
-### Prerequisites (block every tier below, do these first)
+- **Native** — an installable extension/add-on uses the host's supported API and emits
+  precise file/document events. This is the preferred result.
+- **Family build** — one codebase is packaged and tested for several compatible hosts,
+  such as one IntelliJ Platform plugin for 13 JetBrains products.
+- **Protocol-compatible** — an existing WakaTime-style plugin can call an AtoAxis-provided
+  `wakatime-cli` compatibility executable and send to the AtoAxis endpoint. This is the
+  fastest migration path, but is not the final branded user experience.
+- **Browser/desktop bridge** — used only where the host does not expose sufficient plugin
+  events. It records the active app/domain/document label with lower precision and must be
+  labelled as such in the UI; it must never be presented as file-level native tracking.
+- **Upstream integration** — the program already has a WakaTime toggle/API contract. Work
+  is an upstream request to allow a custom API URL or an AtoAxis provider, plus a desktop
+  fallback until that ships.
 
-- [ ] **Binary distribution.** There is currently no release artifact anywhere — no
-  `.github/workflows/release.yml`, no install script, no version-check endpoint. Every
-  plugin past VS Code shells out to a `wakaclock` binary the user must already have on
-  `PATH`; right now that only exists via `cargo install --path`. WakaTime's plugins solve
-  this by having each plugin auto-download `wakatime-cli` on first run. Needs, at minimum:
-  cross-compiled release binaries (macOS/Linux/Windows) attached to GitHub releases, and a
-  `GET /api/v1/cli/latest` (or static JSON) version-check endpoint plugins can poll.
-- [ ] **Move buffering logic out of the VS Code extension and into `wakaclock-core`.**
-  Verified: `extensions/vscode/src/buffer.ts` (305 lines) owns the entire flush-timer,
-  keystroke-accumulation, gap/idle-detection, and active-seconds-estimate logic — none of
-  it is in `wakaclock-core`, which only has the offline SQLite queue. Every Tier 2 plugin
-  below would otherwise reimplement ~300 lines of this in Lua, Elisp, Python, C++, or C#.
-  Decide the shape before building anything new: either (a) a `wakaclock watch` background
-  process that owns buffering and accepts raw keystroke events over a local socket/stdin
-  from thin plugins, or (b) a `wakaclock-editor-shim` library crate other language bindings
-  wrap via FFI. Until this lands, each new plugin is a full reimplementation, not the
-  "~150 lines of event wiring" it should be.
-- [ ] **Document the `WAKACLOCK_EDITOR` contract.** The CLI already resolves editor identity
-  via `detect_editor()` (`WAKACLOCK_EDITOR` env var → `TERM_PROGRAM` → `EDITOR` →
-  `"wakaclock-cli"` fallback), and the VS Code extension already sets it to `"vscode"`
-  (`cli.ts:126`). This is currently undocumented and easy to skip. The `editor_daily` table
-  and the dashboard's Editors breakdown are useless if every new plugin doesn't set a
-  distinct, stable value — make it part of the shim contract from the prerequisite above,
-  not an afterthought per plugin.
+The acceptance target is not merely "a heartbeat appeared." For native integrations it is:
+open/focus, edit, save/write, document switch, project identity, language/type, idle/resume,
+offline delivery, duplicate prevention, uninstall, and privacy behaviour all pass the
+shared contract tests. Non-code tools use the closest truthful category (`designing`,
+`modeling`, `communicating`, `notes`, `browsing`, or `coding`) and expose their lower event
+precision on the dashboard.
 
-### Tier 1 — Committed scope (one codebase covers a whole family)
+### 5.1 Current repository gaps that block broad coverage
 
-- [ ] **VS Code Extension API family** — VS Code, Cursor, Trae, Kiro, Qoder, Antigravity,
-  VSCodium. All consume the same Extension API; `extensions/vscode` already targets it.
-  Work is packaging/distribution, not new logic: publish to both the VS Code Marketplace
-  and Open VSX (the forks pull from Open VSX, not Marketplace). Credential store:
-  `vscode.SecretStorage`, already wired (`secrets.ts`).
-- [ ] **IntelliJ Platform SDK family** — IntelliJ IDEA, PyCharm, WebStorm, PhpStorm,
-  RubyMine, CLion, GoLand, DataGrip, DataSpell, Rider, RustRover, AppCode, Android Studio,
-  MPS. One plugin (Kotlin, IntelliJ Platform Plugin Template) covers all 14 icons via one
-  Marketplace listing. New `extensions/jetbrains/`. Spawns the `wakaclock` CLI the same way
-  the VS Code extension does — document-open/save/change listeners → buffer → flush.
-  Credential store: IntelliJ `PasswordSafe` API.
+The repository has a working VS Code extension and AI adapters for Claude Code, Codex CLI,
+and Gemini CLI, but the following must be completed before multiplying extensions:
 
-### Tier 2 — Sequenced, not yet scheduled (one codebase, one app each)
+- [ ] **WakaTime CLI compatibility shim.** Ship a second executable name,
+  `wakatime-cli`/`wakatime-cli.exe`, backed by the same Rust crate. It must accept the
+  common WakaTime flags (`--entity`, `--plugin`, `--alternate-project`, `--alternate-language`,
+  `--lineno`, `--cursorpos`, `--write`, `--category`, `--api-url`, `--key`, `--today`),
+  parse both `~/.wakatime.cfg` and `~/.wakaclock/config.toml`, and default to the AtoAxis API
+  only for an AtoAxis-branded install. Never silently rewrite a user's WakaTime config.
+- [ ] **Prove wire compatibility.** Add golden request tests for single and bulk heartbeat
+  shapes, Basic/Bearer auth, user agent parsing, categories, offline retries, and custom API
+  URLs. The current claim that any WakaTime extension works is not proven while executable
+  and config names differ.
+- [ ] **Central local bridge.** Add `wakaclock bridge serve` to own the two-minute activity
+  window, interval union, per-entity buffers, offline SQLite queue, today/status queries,
+  and deduplication. Expose a versioned local protocol over Unix domain socket on macOS/Linux
+  and named pipe on Windows; use loopback HTTP with a random per-install token only where a
+  host cannot use sockets. Thin plugins send events, not finished duration calculations.
+- [ ] **Versioned event schema.** At minimum:
 
-- [ ] **Neovim** (Lua, native LSP client or a plugin using `vim.loop` timers)
-- [ ] **Vim** (VimScript — no Lua runtime in classic Vim, separate implementation from Neovim)
-- [ ] **Emacs** (Elisp package, distributed via MELPA)
-- [ ] **Sublime Text** (Python 3.8 plugin API)
-- [ ] **Zed** — finish `wakaclock-ls` for real: `tower-lsp` server implementing
-  `didOpen`/`didChange`/`didSave` → heartbeat, plus the `extension.toml` wrapper for Zed's
-  extension registry (this was already Phase 3 scope — it just never got built)
-- [ ] **Visual Studio** (full, not Code) — VSPackage/VSIX, C#/.NET
-- [ ] **Xcode** — Swift Source Editor Extension; flag risk early, Apple's extension API is
-  sandboxed and notoriously limited (no reliable save/change hooks in some Xcode versions)
-- [ ] **Notepad++** (C++, Notepad++ Plugin API)
-- [ ] **Eclipse** (Java, OSGi/Eclipse Platform plugin)
+  ```json
+  {
+    "schema": 1,
+    "event_id": "uuid",
+    "event": "focus|edit|save|blur|close|build|debug|selection",
+    "time": 1787420000.123,
+    "entity": "/absolute/path/or/stable-uri",
+    "entity_type": "file|url|domain|app",
+    "editor": "stable-editor-id",
+    "project": "optional-name",
+    "language": "optional-language",
+    "category": "coding",
+    "cursor": {"line": 10, "position": 240},
+    "delta": {"keystrokes": 1, "chars_added": 1, "chars_deleted": 0},
+    "precision": "native|host-limited|desktop"
+  }
+  ```
 
-Credential store for all of Tier 2: none of these hosts have a secret-storage API wakaclock
-can use, so they fall back to `~/.wakaclock/config.toml` via `wakaclock config set-key` —
-same path the CLI already supports today, just document it per-plugin instead of building
-anything new.
+- [ ] **Shared adapter SDKs.** Generate clients from that schema for TypeScript/JavaScript,
+  Kotlin/Java, Python, Lua, C# and shell. Each client only reconnects, validates, and queues
+  a small bounded memory buffer; timing policy remains in the bridge.
+- [ ] **Binary distribution and trust.** Produce signed/notarized universal macOS binaries,
+  signed Windows x64/arm64 installers, Linux x64/arm64 packages, checksums/SBOM, a static
+  signed release manifest, rollback, and `wakaclock doctor`. Plugins may find an installed
+  bridge or offer the official installer; they must not each implement an unsigned binary
+  downloader.
+- [ ] **Expand categories before non-code tools ship.** The Rust `Category` enum currently
+  lacks several values needed by this list. Add at least `notes`, `researching`, `learning`,
+  `browsing`, `running tests`, `writing tests`, `manual testing`, `code reviewing`, and
+  `ai coding`, with database/API/dashboard migration and unknown-value forward compatibility.
+- [ ] **Identity contract.** Publish stable `editor` IDs for all 72 entries, a canonical
+  user-agent format such as `atoaxis/<plugin-version> <editor-id>/<host-version>`, and a
+  rule that the plugin sends an alternate project hint while the CLI remains authoritative
+  for Git project/branch detection.
+- [ ] **Secrets and sandbox auth.** Native desktop plugins use OS keychain or the host's
+  secret API. Sandboxed web plugins use OAuth device authorization with short-lived access
+  tokens; no API key may be embedded in a Figma, Canva, browser, or web-IDE bundle.
+- [ ] **Privacy controls.** Default to metadata only, support file/project obfuscation and
+  allow/deny patterns centrally, never send document text/cell values/design contents/URLs
+  with query strings, and visibly distinguish native precision from inferred desktop time.
 
-### Tier 3 — Explicitly out (bucket rule, not a per-app decision)
+### 5.2 One canonical event policy for every native adapter
 
-**Rule:** no plugin/extension API with editor-event hooks, or the app isn't primarily a
-coding surface → covered by the Tauri desktop app's active-window tracking (Phase 4), not a
-dedicated plugin. This is a deliberate non-goal, not a gap to fill later per-app.
+All native adapters implement the following behaviour, unless a per-program section states
+that the host cannot expose the event:
 
-Covers the rest of the grid: terminals, browsers (Chrome/Firefox/Edge/Brave/Safari — a
-browser plugin would track *view* time, not *coding* time, which is out of scope for this
-product), Office apps (Word/Excel/PowerPoint), Discord, Postman, IDA Pro, database GUIs
-(DBeaver, MySQL Workbench, Azure Data Studio, SQL Server Studio, Aqua Data Studio — DataGrip
-is the one exception, covered under Tier 1 as JetBrains), and the long tail of niche editors
-(BlueJ, Processing, Qt Creator, Code::Blocks, CodeLite, KDevelop, Light Table, Espresso,
-RStudio, Spyder, TeXstudio, TextMate, Kakoune, Kate, Micro, Helix, Nova, Coda, Geany, Gedit,
-EmEditor, WPS Office, SiYuan, HBuilder X, Delphi, Wing, ReClassEx, Recaf, Oxygen, Maestro,
-Komodo, Cloud9, Brackets, Aptana, Arduino IDE, SlickEdit, Zotero).
+1. On active document change, send `focus` for the new entity and `blur` for the old one.
+2. On a local text/object change, send `edit` with counts only. Never send changed content.
+3. On save, send `save` with `is_write=true`, even if the same entity was sent recently.
+4. Coalesce cursor-only activity and repeated edits in the bridge; plugins do not invent
+   duration. After 120 seconds without a new event, activity stops.
+5. Ignore generated, vendor, temporary, binary, untitled, remote-coauthor, and extension-owned
+   documents by a centrally configurable policy. Allow explicit opt-in for untitled docs.
+6. Use absolute local paths where available. For notebooks/design/cloud documents, use a
+   stable provider URI and a display-safe entity label; strip secrets, tokens, and URL query.
+7. Spawn no synchronous child process on the UI thread. If the bridge is unavailable, queue
+   a bounded set of raw events, show one actionable warning, and retry with backoff.
+8. On shutdown/unload, flush the last local event without extending time beyond the last
+   observed activity. A crash must not create a synthetic time tail.
 
-Two apps already have a home in the *existing* plan and aren't new Phase 5 work:
-**Figma** (Phase 3, direct HTTP plugin) and **Blender** (Phase 3, Python addon) — both
-already scoped above, neither started yet.
+### 5.3 Test kit and definition of done
+
+- [ ] Create `extensions/contract-tests/` with a fake local bridge and a fake AtoAxis API.
+- [ ] Publish fixtures for focus A→B, 100 rapid edits, save, idle >120s, resume, offline then
+  reconnect, duplicate retry, remote edit, unsaved document, renamed document, multi-window,
+  and bridge upgrade during an active session.
+- [ ] Require unit tests for mapping host events, integration tests against the fake bridge,
+  and one automated or recorded smoke test in every supported host/version/OS cell.
+- [ ] Support the current stable host plus the previous stable version. Legacy products get
+  a frozen compatibility build and are marked "legacy," not silently counted as current.
+- [ ] Release telemetry is opt-in and operational only: plugin/host/bridge versions, event
+  counts, queue depth, and error codes. It cannot contain paths, project names, document
+  titles, domains, or user-entered content.
+- [ ] A program moves to "supported" only after install, first heartbeat, today total,
+  offline recovery, update, and uninstall are documented and verified.
+
+### 5.4 Delivery waves (dependency-aware, not 72 independent projects)
+
+| Wave | Deliverable | Programs unlocked | Exit criterion |
+|---|---|---:|---|
+| 0 | Compatibility shim, bridge, schema, release pipeline, test kit | all later work | golden protocol and crash/offline tests green on 3 OSes |
+| 1 | VS Code family + JetBrains family + existing AI adapters | 21+ | one shared build per family, host-specific editor IDs verified |
+| 2 | Browser family + Eclipse family + Office family | 14 | sandbox auth, privacy review, web/desktop parity labels |
+| 3 | Python/JS high-value hosts: Blender, Figma, Jupyter, Obsidian, Postman, Pulsar, Nova | 7 | native edit/save/focus where host permits |
+| 4 | Terminal editors and classic desktop editors | 18 | package-manager/install matrix and contract tests |
+| 5 | Reverse-engineering/security and legacy hosts | 8 | signed packages, version gates, no unsupported-memory access |
+| 6 | Proprietary/host-limited integrations and upstream requests | remainder | desktop fallback shipped and limitation stated |
+
+Effort should be planned by adapter family, but product status must still be reported per
+program. "One JetBrains plugin built" is not enough: the same artifact must be smoke-tested
+and correctly identified in Android Studio, AppCode, CLion, DataGrip, DataSpell, GoLand,
+IntelliJ IDEA, MPS, PhpStorm, PyCharm, Rider, RubyMine, and RustRover.
+
+### 5.5 Support matrix summary
+
+Legend: **N** native extension/add-on, **F** shared family build, **C** compatibility shim,
+**B** browser extension/native-messaging path, **D** desktop tracker fallback, **U** upstream
+integration required, **L** legacy/frozen host.
+
+| Family | Programs from image | Target |
+|---|---|---|
+| AI/agent CLI | Amp CLI, Antigravity, Claude Code, Codex CLI, Copilot CLI, OpenCode | N/F, transcript fallback |
+| VS Code API | Azure Data Studio, Cursor, Kiro, Qoder | F; Azure Data Studio is L |
+| IntelliJ Platform | Android Studio, AppCode, CLion, DataGrip, DataSpell, GoLand, IntelliJ IDEA, MPS, PhpStorm, PyCharm, Rider, RubyMine, RustRover | F; AppCode is L |
+| Eclipse/OSGi | Aptana, DBeaver, Eclipse, Oxygen | F/C; Aptana is L |
+| Chromium/WebExtensions | Brave, Chrome, Edge, Canva web, Cloud9, CodeTasty | B/F |
+| Firefox/Safari | Firefox, Safari | B/F with browser-specific package |
+| RAD Studio | C++ Builder, Delphi | F/N |
+| Microsoft Office | Excel, PowerPoint | F/N plus D fallback |
+| Sandboxed design | Figma, Canva web | N or B with direct OAuth API |
+| Native Python | Blender, Eric, Gedit, IDA Pro | N/F where practical |
+| Remaining host APIs | all other rows below | N when stable; C/D only when explicitly stated |
+
+The implementation notes below are deliberately per icon so no program disappears inside a
+family estimate. References to WakaTime plugins are for protocol/behaviour research only;
+before reusing source, perform a per-repository licence and trademark review, preserve
+required notices, and prefer a clean AtoAxis implementation against the host's official API.
+
+### 5.6 Programs 1–9 (first row)
+
+#### 1. Amp CLI — agent adapter, not an editor extension
+
+- Add `extensions/ai-agents/amp/` using Amp's supported hook/plugin lifecycle if it exposes
+  post-tool events; capture file path, tool name, stable call/event ID, model/provider when
+  available, and added/deleted line counts from the tool result without reading file text.
+- If Amp exposes transcripts but no reliable hook, add an `AmpParser` to `wakaclock agent`
+  with per-file cursor state, tail-only first discovery, idempotent event IDs, and explicit
+  `ai_confidence=verified` only when the transcript proves an applied edit.
+- Send `category=ai coding`, `editor=amp-cli`, `ai_agent=amp`, and continue activity when
+  several tool calls occur within 120 seconds. Test write/edit/patch, rejected tool calls,
+  concurrent sessions, worktrees, transcript rotation, and offline replay.
+
+#### 2. Android Studio — shared IntelliJ Platform plugin
+
+- Create `extensions/jetbrains/` in Kotlin. Subscribe to the global document listener,
+  file-editor selection changes, and `FileDocumentManagerListener` saves; use project and
+  run/debug listeners for `coding`, `building`, and `debugging` events.
+- Resolve `VirtualFile` to a local path where possible, count `DocumentEvent` old/new lengths,
+  obtain caret line/offset, and send raw events to the bridge. Never access PSI/source text for
+  telemetry. Use `PasswordSafe` only for bootstrap credentials and label `editor=android-studio`.
+- Declare Android Studio compatibility in the plugin descriptor, test Gradle project windows,
+  Kotlin/Java/XML, emulator/debug sessions, remote projects, and run JetBrains Plugin Verifier.
+
+#### 3. Antigravity — dual adapter because the name covers agent and IDE surfaces
+
+- For the Antigravity agent/desktop plugin surface, package a managed plugin under its supported
+  Gemini-compatible plugin directory. Record successful write/edit tool events as AI-attributed
+  heartbeats and use transcript parsing as recovery, not as a second source of duration.
+- If the installed product exposes the VS Code Extension API, reuse the VS Code bundle with a
+  distinct product target and `editor=antigravity-ide`; detect capability at activation rather
+  than assuming every Antigravity version is a VS Code fork.
+- Installer and doctor output must say which adapter is active, deduplicate agent and IDE events
+  by event ID/file/time, and test agent-only, IDE-only, and both-active scenarios.
+
+#### 4. AppCode — legacy IntelliJ build
+
+- Reuse `extensions/jetbrains/` but compile a frozen artifact against the last AppCode-compatible
+  IntelliJ SDK. Label it `editor=appcode` and never advertise compatibility with newer APIs that
+  the discontinued host cannot load.
+- Cover Swift/Objective-C file focus/change/save and Xcode project/workspace roots. Disable
+  features whose listener APIs do not exist in that platform version behind source-set gates.
+- Publish the last tested macOS/AppCode matrix, keep the compatibility artifact downloadable,
+  and direct new users to the supported Xcode/JetBrains route without deleting historical support.
+
+#### 5. Aptana — legacy Eclipse/OSGi feature
+
+- Build `extensions/eclipse/` as Java OSGi bundles with a core bundle and product fragments.
+  Use active editor/part listeners, `IDocumentListener`, save/resource change listeners, and
+  workspace project identity; the Aptana fragment only supplies product detection and editor ID.
+- Target the last loadable Eclipse API, ship an archived update site, and label
+  `editor=aptana`, `precision=native`, `support=legacy`. Do not depend on a current Java runtime.
+- Test JavaScript/Ruby/PHP editors, unsaved buffers, perspective switching, and plugin shutdown.
+  If modern signing/runtime constraints prevent installation, offer the CLI shim for the existing
+  compatible plugin and the desktop tracker, explicitly marked lower precision.
+
+#### 6. Arduino IDE — two materially different hosts
+
+- For Arduino IDE 2.x, first validate which VS Code/Theia extension APIs are actually exposed;
+  build a Theia frontend/backend extension if generic VSIX installation cannot access document
+  and save events. Use sketch root as project, `.ino`/`.pde` language mapping, and serial/build/
+  upload events as `building` without logging serial-port contents.
+- Keep Arduino IDE 1.x as a separate legacy Java plugin/tool adapter. Listen to editor changes and
+  sketch saves where its plugin API permits; otherwise launch the bridge from a Tools menu action
+  and use file-watch/focus events as `host-limited` rather than pretending keystroke precision.
+- Package and test 1.x and 2.x separately on all OSes, including unsaved new sketches, multi-file
+  tabs, compile/upload, board package paths, and portable installations. `editor=arduino` remains
+  stable while user agent includes the major host generation.
+
+#### 7. Azure Data Studio — frozen VS Code-family build
+
+- Repackage the existing TypeScript extension for Azure Data Studio's extension gallery/VSIX,
+  with `editor=azure-data-studio`; add SQL notebook and query-document URI handling, connection/
+  server names excluded by default, and query execution as optional `running tests` or `coding`.
+- Because Azure Data Studio has a retirement path, freeze against its last supported VS Code API
+  and maintain only security/bridge compatibility fixes. Do not let its old API constrain the main
+  VS Code extension target.
+- Test `.sql`, SQL notebooks, untitled queries, result panes, remote/virtual URIs, multi-root
+  workspaces, manual VSIX install, and migration messaging to the supported SQL tooling route.
+
+#### 8. Blender — native Python add-on
+
+- Create `extensions/blender/` using `bpy.app.handlers` for load/save and dependency-graph updates,
+  `bpy.msgbus`/timers for active object and mode changes, and persistent handlers that are properly
+  removed on add-on disable. Never perform network or child-process work inside a depsgraph callback.
+- Entity is the `.blend` path or a stable `untitled.blend` session ID; project is the nearest
+  configured/Git root or blend folder. Map object/scene edits to `modeling`, compositor/material/
+  layout work to `designing`, Python text-editor changes to `coding`, and render jobs to `building`.
+- Send only object type/name if the user allows it; default can use scene/file label without object
+  names. Test edit/object/sculpt/animation modes, autosave, Save As, render, background mode,
+  unsaved files, add-on reload, and high-frequency depsgraph throttling.
+
+#### 9. Brackets — legacy JavaScript extension
+
+- Build an AMD/JavaScript Brackets extension using `DocumentManager` current-document changes,
+  document `change`, `FileSystem`/command save events, and `ProjectManager` root. Communicate with
+  the bridge through the supported Node domain, never through synchronous shell execution.
+- Count CodeMirror deltas and caret position, send `editor=brackets`, and provide settings/status
+  commands. Use the compatibility shim as an interim path for users of the existing ecosystem.
+- Brackets distributions vary and the original host is legacy; publish a tested fork/version
+  table, include manual ZIP install, and test live preview events do not create false coding time.
+
+### 5.7 Programs 10–18 (second row)
+
+#### 10. Brave — Chromium browser-family package
+
+- Build one Manifest V3 WebExtension core for Brave, Chrome, and Edge. Observe active-tab changes,
+  window focus, navigation, browser idle/lock, and supported web-app content-script events; send
+  through an AtoAxis native-messaging host so API credentials never live in extension storage.
+- For generic browsing, entity defaults to normalized domain (not full URL), category `browsing`,
+  and Incognito/Private windows are excluded unless explicitly enabled. For known IDEs/design apps,
+  a site adapter can emit a stable workspace/document label without query strings or document text.
+- Package/test a Brave-specific store/manual build with `editor=brave`, aggressive tab suspension,
+  multiple profiles, private mode, sync-disabled storage, native-host missing, and browser shutdown.
+
+#### 11. C++ Builder — shared RAD Studio native package
+
+- Create `extensions/rad-studio/` in Object Pascal using the Open Tools API. One design-time
+  package serves C++ Builder and Delphi; subscribe to module/editor notifiers, modified/save
+  notifications, project-group changes, and compile/debug lifecycle events.
+- Extract active source file, project, caret line/column and modification counts where the editor
+  interface exposes them. Map compilation to `building`, debugger activity to `debugging`, and set
+  `editor=cpp-builder`; execute the bridge asynchronously from a worker/IPC client.
+- Produce version-specific BPL packages because RAD Studio binary interfaces change. Test C++
+  source/header/form/resource modules, multi-project groups, Save All, compile failure, debugger,
+  32/64-bit IDE generations, install/uninstall, and coexistence with the Delphi product personality.
+
+#### 12. Canva — browser adapter plus desktop fallback, not an invasive Canva app
+
+- Canva web is covered by the browser-family extension with a narrowly scoped content script on
+  Canva origins. Track editor presence, tab focus, design ID and sanitized design title only when
+  available from stable URL/accessible page state; map to `designing` and never inspect canvas text,
+  uploaded assets, comments, or collaborator data.
+- A Canva Apps SDK app runs only when the user launches it inside a design and therefore cannot be
+  the sole time tracker. Use an in-product app only if Canva review permits background lifecycle
+  events and OAuth; otherwise keep browser tracking truthful as `precision=host-limited`.
+- Canva Desktop uses the desktop active-window adapter with `entity_type=app`. Test SPA route
+  changes, multiple designs/tabs, presentation mode, background tabs, remote collaborator changes,
+  logged-out state, desktop app, and permission revocation.
+
+#### 13. Chrome — canonical Chromium distribution
+
+- Use the shared Manifest V3 core, a service worker, `tabs`/`windows`/navigation/idle signals, and
+  native messaging to `wakaclock bridge`. The native host installer registers the extension ID on
+  macOS, Windows, and Linux and authenticates each message with an install-scoped token.
+- Provide three privacy modes: allowlisted development/design sites only (default), domain-only
+  browsing, and explicitly approved full-path tracking with query/fragment stripping. Never request
+  history permission when active-tab events are sufficient.
+- Publish to Chrome Web Store, test service-worker suspension/restart, discarded tabs, PWA windows,
+  profiles, ChromeOS (direct OAuth API fallback because native messaging may be unavailable), idle
+  lock, offline events, and extension update while a tab is active. Set `editor=chrome`.
+
+#### 14. Claude Code — harden the existing hook and transcript adapter
+
+- Keep `extensions/ai-agents/plugins/atoaxis-heartbeat/` as the native hook package and the existing
+  transcript parser as recovery. Normalize Write/Edit/MultiEdit tool results into a stable AI event,
+  include model/provider where proven, and do not send rejected/permission-denied edits.
+- The hook and transcript service must share a delivered-event ledger so the same edit is counted
+  once. Use `ai_agent=claude-code`, `ai_provider=anthropic`, `editor=claude-code`, source
+  `agent_hook` or `transcript`, and verified confidence only when a successful tool result exists.
+- Finish real CLI end-to-end tests (not synthetic payload only): concurrent sessions, subagents,
+  worktrees, path spaces/newlines, Write vs Edit line counts, transcript truncation/rotation, service
+  restart, offline replay, plugin repair, upgrade, and uninstall that removes only managed config.
+
+#### 15. CLion — shared IntelliJ Platform plugin
+
+- Use the Kotlin JetBrains core described for Android Studio, but set `editor=clion` and enable
+  C/C++/CMake project metadata. Active `VirtualFile` remains the entity; the CLI detects language,
+  branch and dependencies without the plugin reading source.
+- Add optional run-configuration listeners for CMake/build (`building`), tests (`running tests`),
+  and debugger sessions (`debugging`). Keep these activity streams separate so overlapping build
+  and edit intervals are unioned rather than double-counted.
+- Test local/remote toolchains, CMake reload/indexing exclusion, header/source switching, generated
+  build directories, WSL/SSH paths, JetBrains remote development architecture, and Plugin Verifier.
+
+#### 16. Cloud9 — browser site adapter first, native package only if host API remains available
+
+- Implement an AWS Cloud9 site adapter in the browser extension: observe IDE tab/workspace focus and
+  stable file-tab identifiers exposed to the page without reading editor content. Use
+  `entity_type=url`, sanitized workspace/file label, `editor=cloud9`, and `precision=host-limited`.
+- Run a discovery spike against the current Cloud9 plugin API. If it still supports editor document
+  focus/change/save events and background services, build a JavaScript package that sends native
+  precision events directly to the bridge/API; if not, do not rely on private DOM selectors as a
+  claimed native extension.
+- Test AWS authentication redirects, multiple environments, split editors, terminal focus, browser
+  suspension, renamed/deleted files and remote filesystem paths. Document service lifecycle/legacy
+  status because availability may vary by account and region.
+
+#### 17. Coda — Coda editor plug-in bundle plus macOS bridge
+
+- Target the Coda code editor's supported plug-in mechanism (distinct from the modern collaborative
+  Coda documents product). Use its JavaScript event hooks for active editor, text change and save;
+  package the bundle with `editor=coda` and call the local bridge through the host-supported process
+  or socket mechanism.
+- Map site/project root to project and local file to entity; count deltas without content. If a host
+  release lacks reliable event hooks or process access, downgrade that version to the macOS desktop
+  tracker instead of embedding an unsupported binary workaround.
+- Verify which Coda generations still install plug-ins, then test split panes, remote publishing,
+  CSS/HTML/JS modes, unsaved sites, Save All and app termination. Publish an explicit legacy matrix
+  so this is not confused with coda.io.
+
+#### 18. CodeTasty — web IDE site adapter
+
+- Build a restricted content-script adapter for the CodeTasty web IDE. Capture route/workspace/tab
+  focus and host-provided save/change events if a public extension API exists; otherwise report only
+  focused workspace/file-tab time with `precision=host-limited`, never DOM-derived keystrokes.
+- Use a stable cloud-document URI, strip account IDs/tokens/query strings, set `editor=codetasty`,
+  category `coding`, and send via OAuth-authenticated browser background worker.
+- Test SPA navigation, multiple projects, reconnect/offline editor, split panes, preview/terminal
+  focus, background tabs, minified UI changes, and permission revocation. A DOM contract test must
+  fail closed when selectors change rather than attributing the wrong document.
+
+### 5.8 Programs 19–27 (third row)
+
+#### 19. Codex CLI — finish and verify the existing adapter
+
+- Keep the managed hook and `CodexParser` but verify them against real Codex CLI payloads. Parse all
+  files in an `apply_patch`, successful write operations, move/rename/delete semantics, event ID,
+  provider/model and line deltas; a failed patch emits no applied-code heartbeat.
+- Use `editor=codex-cli`, `ai_agent=codex`, `ai_provider=openai`, category `ai coding`, and share the
+  delivered-event ledger between hook and transcript paths. Multiple files from one patch become
+  separate file heartbeats linked by one parent event ID.
+- Test simultaneous tasks, worktrees, approvals/denials, absolute/relative paths, new/deleted files,
+  patch lines resembling diff markers, transcript compaction, config TOML preservation, feature-flag
+  absence, service restart, repair and uninstall of only AtoAxis-managed hook blocks.
+
+#### 20. Copilot CLI — agent hook/transcript adapter
+
+- Add `extensions/ai-agents/copilot-cli/` only against an officially supported Copilot CLI hook or
+  plugin lifecycle. Record successful file-changing tool calls and commands with stable IDs; if no
+  reliable applied-edit event exists, parse supported local session logs and mark confidence/source
+  accurately rather than inferring from file-system timing.
+- Send `editor=copilot-cli`, `ai_agent=copilot-cli`, provider `github`, category `ai coding`, model
+  only when explicitly reported, and use the same transcript/hook dedup ledger as other agents.
+- Test GitHub authentication renewal, tool approval denial, shell commands that generate many files,
+  multi-repo sessions, concurrent agents, log retention changes, offline queue and uninstall. Do not
+  claim AI line attribution for opaque shell side effects; those remain unattributed.
+
+#### 21. Cursor — VS Code-family build with explicit AI-boundary rules
+
+- Build the current VS Code extension as a Cursor-compatible VSIX/Open VSX artifact, feature-detect
+  APIs at runtime, store credentials in `SecretStorage`, and send `editor=cursor` rather than
+  `vscode`. Reuse text/save/debug/build event code and the central bridge.
+- Human document changes remain human only when backed by input events. Cursor AI attribution must
+  come from a documented Cursor event/export/transcript adapter; bulk changes with no attribution
+  are recorded as `unattributed`, never guessed as AI or silently counted as human.
+- Test Chat/Composer/Agent edits, accept/reject partial suggestions, Apply All, background agent
+  changes, remote workspaces, extension-host restarts, Cursor API divergence, dual installation with
+  the VS Code build, and marketplace/manual VSIX updates.
+
+#### 22. DataGrip — shared IntelliJ Platform plugin
+
+- Reuse the Kotlin core with `editor=datagrip`. Track `.sql` files and console/scratch documents via
+  stable virtual URIs; use project/data-source label only if user allows it, never send hostnames,
+  usernames, SQL text, bound values, result rows, or connection strings.
+- Focus/edit/save map to `coding`; query execution can emit a raw `run` marker but must not extend
+  time without nearby user activity. Database object viewers and result panes are excluded or
+  optionally `researching` at host-limited precision.
+- Test local files, query consoles, scratches, multiple data sources, remote development, password
+  storage isolation, console rename, read-only viewers, query cancellation and Plugin Verifier.
+
+#### 23. DataSpell — shared IntelliJ Platform plugin
+
+- Reuse the Kotlin core with `editor=dataspell`, adding notebook cell and scientific workspace
+  handling. Entity is the `.ipynb`/script path plus optional cell ID kept locally; the server gets
+  the notebook path, language/kernel name, counts and cursor only, never cell source/output.
+- Track cell edit/focus/save as `coding`, execution as `running tests` or `coding` by policy, and
+  exclude kernel/background output events so they cannot fabricate active time.
+- Test Jupyter local/remote kernels, notebooks and Python/R scripts, autosave, cell reorder/delete,
+  large outputs, remote gateways, scientific mode, host restart and Plugin Verifier.
+
+#### 24. DBeaver — Eclipse/OSGi product fragment
+
+- Reuse the Eclipse core with a DBeaver fragment and `editor=dbeaver`. Subscribe to SQL editor part
+  activation, document change/save, and project/resource events; represent SQL consoles/scratch
+  editors by stable virtual URI when no local file exists.
+- Default-redact connection names, database/schema names, SQL text, credentials and result data.
+  Query execution is an event marker only and category `coding`; optional browsing of schema editors
+  is `researching` and clearly host-limited.
+- Publish an Eclipse p2 update site and signed bundle. Test Community/Enterprise where legally
+  available, multiple SQL editors/connections, result tabs, autosave, workspace switch, Java runtime
+  versions, bridge loss, and coexistence with other Eclipse products.
+
+#### 25. Delphi — shared RAD Studio native package
+
+- Use the same Open Tools API package as C++ Builder, with `editor=delphi` selected from the active
+  product personality. Track Pascal/form/project modules, text modification/save, project group,
+  compile/run/debug, and caret location without reading source contents.
+- Map `.pas`/`.dpr` work to `coding`, form designer interactions to `designing`, builds to
+  `building`, and debugger intervals to `debugging`. The bridge unions overlapping designer/source
+  activity and derives Git metadata.
+- Build signed packages for supported RAD Studio versions and a frozen legacy line for old Delphi.
+  Test source/form toggling, DFM binary/text resources, multi-project groups, packages, Save All,
+  debugger, IDE crash recovery and uninstall registry/package cleanup.
+
+#### 26. Discord — BetterDiscord/Vencord community adapter with a safe fallback
+
+- A native Discord client plugin is possible only through third-party mod hosts such as Vencord or
+  BetterDiscord. Keep adapters small: observe selected server/channel and window focus, emit
+  `communicating`, and default entity to `Discord` or a user-defined category—not server/channel/user
+  names. Never collect message text, participant names, voice audio, DMs, or attachments.
+- Because client mods can conflict with Discord policy and break frequently, do not make them the
+  default installer. Offer an opt-in community package and a supported desktop active-window path
+  with `precision=desktop`, `editor=discord`.
+- Test text/voice/video channels, streamer mode, DMs, multiple accounts, minimized/background state,
+  plugin host update, permission revocation, data redaction, and total absence of network payload
+  content. Publish the policy risk prominently.
+
+#### 27. Eclipse — canonical Eclipse/OSGi core
+
+- Build the signed Java OSGi core used by Aptana, DBeaver, and Oxygen. Register workbench window/page
+  part listeners, active text editor/document listeners, resource/save listeners and project lifecycle;
+  send to the bridge off the UI thread and dispose every listener on bundle stop.
+- Use active `IFile` location, `IProject` hint, content-type/language, selection line/offset, delta
+  lengths and save flag. Handle non-file storage editors with sanitized virtual URIs and
+  `editor=eclipse`; ignore Problems, Console and generated preview parts.
+- Distribute through a signed p2 update site and Marketplace listing. Test Java/C/C++/XML/PDE,
+  workspace switching, multiple windows, linked resources, EFS remote files, autosave, crash/offline,
+  Java LTS versions, bundle update/uninstall and the previous/current Eclipse releases.
+
+### 5.9 Programs 28–36 (fourth row)
+
+#### 28. Edge — Chromium browser-family package
+
+- Reuse the Manifest V3 core/native host with an Edge-specific package and `editor=edge`. Track
+  active tab/window/navigation/idle, development web apps and explicit domain-only browsing; strip
+  query/fragment and block InPrivate by default.
+- Publish through Microsoft Edge Add-ons and support enterprise policy deployment of both extension
+  and native-messaging host. Managed policy may set allowlists/privacy mode but cannot inject a
+  plaintext AtoAxis API key.
+- Test personal/work profiles, vertical tabs, sleeping tabs, installed PWAs, InPrivate, enterprise
+  policies, Windows/macOS, native-host registration and service-worker suspension/update.
+
+#### 29. Emacs — native Emacs Lisp package
+
+- Create `extensions/emacs/atoaxis-mode.el` as a global minor mode. Hook buffer/window selection,
+  `after-change-functions`, `after-save-hook`, focus in/out and kill-buffer; use `buffer-file-name`,
+  project.el/VC root, major mode and point line/offset, with remote TRAMP paths sanitized by policy.
+- Send newline/character deltas to the bridge via a long-lived process/filter or local socket; never
+  block redisplay by invoking one process per edit. Provide `atoaxis-status`, `atoaxis-today`,
+  `atoaxis-diagnose`, enable/disable and privacy customization variables.
+- Package for MELPA plus signed source release, lexical binding and byte-compile clean. Test GUI/
+  terminal/daemon Emacs, multiple frames, indirect buffers, Org source blocks, Magit buffers,
+  TRAMP, autosave, mode reload, bridge restart and clean hook removal. Set `editor=emacs`.
+
+#### 30. Eric — native Python plugin
+
+- Build an Eric Python plugin using its project/editor APIs for active editor changes, text
+  modifications and saves. Use project root/file/language/caret metadata, call the Python bridge SDK
+  asynchronously, and set `editor=eric`.
+- Track run/debug lifecycle if the stable plugin API exposes it; map those to `building`/`debugging`
+  while excluding console output and background code analysis. Store only plugin preferences; the
+  bridge owns secrets.
+- Test supported Eric/Python/Qt versions, multi-project sessions, untitled files, external file
+  changes, split editors, debug/run, plugin reload, offline queue and packaged-wheel/ZIP install.
+
+#### 31. Excel — cross-platform Office.js add-in plus Windows precision helper
+
+- Build `extensions/office/` with a shared Office.js task-pane/runtime. Excel registers workbook,
+  worksheet selection and local `onChanged` events, ignores `event.source=Remote`, and emits stable
+  workbook/worksheet metadata without cell addresses/values/formulas by default. Use
+  `category=coding` for VBA/formula authoring only when detectable; otherwise `designing` or `notes`.
+- Office event handlers do not persist across sessions and background auto-activation is constrained.
+  Provide a Windows VSTO/COM companion for precise open/change/save/close and local bridge access;
+  Office.js uses OAuth direct API and visibly reports `host-limited` when its pane/runtime is inactive.
+- Entity is local workbook path when permitted or a stable hashed cloud-document ID. Test desktop/
+  web/Mac, coauthoring, autosave, protected/read-only workbooks, Save As, multiple windows, add-in
+  sideload/store deployment, admin event activation, VSTO signing/installer and uninstall.
+
+#### 32. Figma — native plugin with sandbox-safe direct API
+
+- Create `extensions/figma/` in TypeScript with a minimal UI/auth iframe and Figma plugin main
+  context. Use current page, selection, document-change and close/timer lifecycle events; debounce
+  changes and send direct HTTPS because a Figma plugin cannot spawn the local CLI.
+- Authenticate by OAuth device flow/one-time browser link and short-lived tokens. Entity is sanitized
+  file/page identity, category `designing`; never send node text, layer contents, comments, images,
+  collaborator identities or full document snapshots. Use provider file key only after hashing or
+  explicit consent.
+- Figma plugins are not guaranteed to run continuously unless launched, so clearly state runtime
+  limits; explore widget/background-approved capabilities but do not fake always-on tracking. Test
+  browser/desktop, page/selection/document changes, plugin close/reopen, offline retry in plugin data,
+  FigJam/Slides mode, large documents, team files, auth expiry and duplicate event IDs.
+
+#### 33. Firefox — WebExtensions package
+
+- Port the browser core to Firefox Manifest/WebExtensions differences with `editor=firefox` and a
+  Firefox native-messaging manifest. Use tabs/windows/navigation/idle events and the same allowlist,
+  domain normalization and private-window exclusion as Chromium.
+- Build with browser-polyfill and capability gates; do not assume Manifest V3 service-worker
+  semantics match Chromium. Publish signed AMO XPI and a controlled enterprise distribution build.
+- Test private browsing permission, containers, multiple windows/profiles, discarded tabs, Firefox
+  Developer Edition/ESR, native host missing, extension background restart, SPA adapters, offline
+  OAuth fallback and uninstall of host registration.
+
+#### 34. Geany — native C plugin
+
+- Create a C plugin against Geany's plugin API. Subscribe to document activate/open/change/save/
+  close and project events, read caret position/filetype/project metadata, and send compact JSON to
+  the bridge on a non-UI GLib channel. Set `editor=geany`.
+- Count Scintilla modification deltas without reading changed text into telemetry; saves are
+  unconditional writes and compiler/build commands can emit `building` if available.
+- Build signed packages for Linux/Windows/macOS-supported Geany versions and distro packaging.
+  Test split documents, project/no-project, untitled/save-as, external reload, large files, plugin
+  unload, bridge restart, ABI/version gates and no memory ownership leaks.
+
+#### 35. Gedit — Python/libpeas plugin
+
+- Implement a libpeas Python plugin for supported Gedit/GNOME Text Editor versions, using window/
+  tab active-document, GtkSourceBuffer changed, GFile save/location and focus signals. Keep product
+  variants/source sets separate if their extension APIs diverge; set `editor=gedit`.
+- Send via Python SDK/Unix socket using GLib idle callbacks, never block GTK. Use local path or safe
+  GIO URI, language ID, delta counts and save; key remains in the bridge/keyring.
+- Distribute a user plugin bundle/Flatpak-aware instructions. Test Wayland/X11, sandbox filesystem
+  portals, remote GIO, untitled/save-as, multiple windows, autosave, plugin disable, bridge loss and
+  GNOME API version compatibility.
+
+#### 36. GoLand — shared IntelliJ Platform plugin
+
+- Reuse the Kotlin core with `editor=goland`. Track Go/module/workspace files with standard
+  document/focus/save events; let the CLI determine Git/project/language and avoid source/PSI reads.
+- Map Go build/run to `building`, tests to `running tests`, debugger to `debugging`, and exclude
+  indexing/code-analysis background changes. Support remote development through backend-side bridge
+  execution with path mapping.
+- Test Go modules/workspaces, generated/vendor files, tests/benchmarks, debugger, WSL/SSH/Dev
+  Containers, multiple projects and Plugin Verifier on the current/previous GoLand versions.
+
+### 5.10 Programs 37–45 (fifth row)
+
+#### 37. HBuilder X — native JavaScript plugin
+
+- Build an HBuilder X plugin using its extension API for active text editor, document change/save,
+  workspace/project folders and commands. Use its Node-capable runtime to connect to the bridge and
+  set `editor=hbuilderx`; capability-test rather than importing VS Code APIs it does not implement.
+- Track Vue/uni-app/HTML/JS files and map run/build/publish commands to `building` only when the host
+  exposes lifecycle events. Exclude generated `unpackage`/build output by default.
+- Publish through HBuilder X's plugin market/manual package. Test uni-app multi-platform projects,
+  remote/device run, multiple windows, untitled/save-as, localization, plugin update and host API
+  changes, plus mainland-network/offline installation of the bridge.
+
+#### 38. IDA Pro — signed IDAPython plugin
+
+- Create `extensions/ida/` in IDAPython using UI hooks for database open/close, current address/view
+  changes, rename/comment/type/function modifications and IDB save. Entity is the IDB/i64 path or
+  input-binary hash label—not disassembled bytes, strings, symbols, comments or decompiled text.
+- Map disassembly/decompiler navigation and analysis to `researching`, manual database changes to
+  `coding`, and debugger sessions to `debugging`; set `editor=ida-pro`. High-frequency cursor events
+  are coalesced by the bridge.
+- Security review is mandatory because users analyze untrusted binaries. No network access in IDA,
+  no shell interpolation, strict local socket schema, and no import of target-controlled Python.
+  Test 32/64-bit databases, IDB Save As, Hex-Rays present/absent, debugger, headless batch mode
+  exclusion, multiple databases, plugin reload and supported IDA/Python versions.
+
+#### 39. IntelliJ IDEA — canonical IntelliJ Platform distribution
+
+- Use the shared Kotlin plugin and `editor=intellij-idea`. Global document listener captures delta
+  lengths, file editor manager captures focus, file document manager captures save, and project/
+  execution listeners provide project/build/debug/test markers.
+- Support Community/Ultimate and local/remote development; bridge code belongs in the backend-side
+  plugin module for remote architecture. Credentials use PasswordSafe only for bootstrap and paths
+  respect AtoAxis allow/deny/obfuscation policy.
+- Publish one Marketplace listing with product-specific IDs, run Plugin Verifier, and test Java/
+  Kotlin/XML/scratch/console, multi-module/multi-window, Gradle/Maven, tests/debug, generated files,
+  remote development, dynamic unload and previous/current releases.
+
+#### 40. Jupyter — JupyterLab extension plus server component
+
+- Create a prebuilt JupyterLab TypeScript extension for notebook/editor focus, model content-change,
+  save-state and active cell/kernel execution. Pair it with a small Python server extension that
+  resolves notebook paths/project roots and connects to the local bridge without exposing the API
+  key to browser JavaScript.
+- Entity is notebook/file path; send cell language/kernel and delta counts only, never cell source,
+  outputs, variables or credentials. Execution maps to `running tests`/`coding` by policy and remote
+  collaboration edits are excluded where origin is known. Set `editor=jupyter`.
+- Cover JupyterLab current/previous, Notebook 7, optionally a frozen classic Notebook build. Test
+  autosave, cell reorder/delete/type change, text editor, terminals excluded, remote JupyterHub,
+  RTC collaboration, server restart, multiple browser tabs, package install/uninstall and auth.
+
+#### 41. Kakoune — native hook script
+
+- Create a Kakoune plugin (`atoaxis.kak`) registering `BufOpenFile`, buffer/display focus, insert/
+  normal modification, `BufWritePost`, `BufClose` and client-exit hooks. Send newline-delimited events
+  to one long-lived bridge client, not a shell process for every keystroke.
+- Use `%val{buffile}`, project root, filetype, cursor line/column and edit counters available from
+  hooks; set `editor=kakoune`. Ignore scratch/help/FIFO buffers and allow remote path policy.
+- Distribute through common Kakoune plugin managers plus source. Test multiple clients/sessions,
+  selections, macros generating many edits, FIFO buffers, save-as, remote terminal, bridge restart,
+  hook removal and safe quoting of arbitrary file paths.
+
+#### 42. Kate — KTextEditor plugin
+
+- Build a C++/Qt/KTextEditor plugin using main-window active-view changes, `KTextEditor::Document`
+  text-change/save/URL signals, cursor position and Kate project plugin metadata. Send asynchronously
+  over local socket and set `editor=kate`.
+- Use KIO URLs safely, exclude terminal/output/tool views, and map build/debug plugin lifecycle only
+  when public signals are available. No KDE wallet secret is needed if the bridge owns credentials.
+- Package for KDE Store/distributions with ABI/version guards. Test local/KIO remote files, sessions,
+  multiple windows/splits, untitled/save-as, external reload, autosave, plugin unload, Wayland and
+  current/previous KDE Frameworks/Qt versions.
+
+#### 43. Kiro — VS Code-family build with agent attribution adapter
+
+- Package the TypeScript extension for Kiro's supported extension channel with `editor=kiro`, using
+  capability detection for standard VS Code document/save/debug/task APIs and the central bridge.
+- Integrate Kiro's agent/spec/task execution only through documented events or export/transcript
+  format. AI-applied edits get verified agent attribution; editor changes with unknown origin remain
+  unattributed rather than inferred.
+- Test specs, hooks/steering files, accept/reject agent changes, background changes, remote workspace,
+  extension API/version divergence, Open VSX/manual install, bridge setup and deduplication when an
+  agent adapter and editor adapter both see the same file change.
+
+#### 44. Komodo — legacy add-on with desktop fallback
+
+- Target the last Komodo IDE/Edit add-on SDK with a JavaScript/XUL component listening to current
+  view, Scintilla modification/save and project changes; use `editor=komodo` and the compatibility
+  CLI shim where the host can launch processes.
+- Keep the artifact frozen and isolated from modern JS dependencies. If the supported add-on API is
+  unavailable in a user's build, use the desktop tracker and mark precision lower rather than using
+  binary injection or unsupported preference modifications.
+- Test the final IDE/Edit releases, local/remote files, toolbox/run commands, projects, splits,
+  untitled/save-as, add-on manager install/remove, bridge absence and legacy TLS/runtime constraints.
+
+#### 45. Maestro — upstream integration, not a parallel plug-in host
+
+- Maestro already exposes a WakaTime tracking toggle rather than a general third-party extension
+  surface. Open an upstream issue/PR to add provider selection or a configurable compatible API URL,
+  CLI path and AtoAxis branding while retaining the same privacy semantics.
+- Define the required contract: emit active flow/file focus, YAML edit/save and test-run events with
+  `editor=maestro`; map authoring to `coding` and flow execution to `running tests`, without command
+  output, device data or test secrets.
+- Until upstream support ships, document the `wakatime-cli` shim if Maestro can resolve it and the
+  desktop fallback otherwise. Contract-test any supported API-url override, then test Desktop/CLI,
+  workspace switching, flow run/cancel, secrets redaction, offline queue and duplicate prevention.
+
+### 5.11 Programs 46–54 (sixth row)
+
+#### 46. Micro — native Lua plugin
+
+- Create a Lua plugin using Micro's buffer open/change/save/close, tab/focus and cursor hooks. Maintain
+  one session client to the bridge, send file/project/filetype/cursor/delta metadata, and set
+  `editor=micro`; do not invoke the CLI once per key.
+- Use Micro's config/plugin manager for enable/status/diagnose commands. Ignore help/log/terminal and
+  unnamed buffers until saved unless the user opts in.
+- Test terminal and GUI terminals, multiple panes/tabs, macros/paste, save-as, remote SSH, unusual
+  paths, Lua/plugin API versions, bridge restart, reload/uninstall and bounded queue behaviour.
+
+#### 47. MPS — shared IntelliJ Platform plugin with model-aware events
+
+- Reuse the JetBrains core with `editor=mps` for ordinary text documents, then add an MPS-specific
+  optional module for active editor/node/model changes and model save events. Feature-gate it so an
+  MPS API change cannot break every other JetBrains product.
+- Entity is the model/module file or a stable model URI; default-redact node names/content. Map model
+  edits to `modeling` or `coding` by language configuration, builds/generation to `building`, and
+  send only counts and identifiers permitted by privacy policy.
+- Test projectional editors, multiple nodes/models, generated sources exclusion, model save, make/
+  generation, project switching, plugin dynamic unload and Plugin Verifier for MPS-specific APIs.
+
+#### 48. Neovim — native Lua plugin
+
+- Create `extensions/neovim/` in Lua using `BufEnter`, `TextChanged`, `TextChangedI`, `BufWritePost`,
+  `BufLeave`, `FocusGained/Lost`, `VimLeavePre` and `nvim_buf_attach` deltas. Use libuv local pipe/socket
+  with reconnection and set `editor=neovim`.
+- Resolve project with `vim.fs.root` only as an alternate hint, language from filetype, cursor from
+  the active window, and ignore unlisted/terminal/prompt/help buffers. Batch paste/macros produce
+  character deltas without ever transmitting inserted text.
+- Distribute via LuaRock/source and document lazy.nvim/packer/manual setup. Test headless exclusion,
+  multiple UIs/tabs/windows, LSP edits, remote SSH, unsaved/save-as, huge/binary buffers, plugin lazy
+  load/unload, bridge restart and current/previous Neovim versions.
+
+#### 49. NetBeans — Java module
+
+- Build a NetBeans Platform module using TopComponent/editor activation, EditorCookie documents,
+  `DocumentListener`, SaveCookie/file change and project APIs. Send through JVM bridge SDK off the
+  AWT event thread and set `editor=netbeans`.
+- Entity is FileObject local path/safe URI, project is an alternate hint, MIME type is language, and
+  caret/delta/save events follow the shared policy. Build/run/test/debug lifecycle can map categories
+  through public project action events; ignore output and generated files.
+- Publish signed NBM/update center. Test Java/PHP/C++ distributions where available, Maven/Gradle/
+  Ant, multiple projects, remote files, untitled/save-as, GUI builder source/design, module reload,
+  bridge restart and current/previous NetBeans/JDK LTS versions.
+
+#### 50. Notepad++ — native C++ plugin
+
+- Implement the Notepad++ Plugin API in C++ using `NPPN_BUFFERACTIVATED`, `SCN_MODIFIED`,
+  `NPPN_FILESAVED`, shutdown and Scintilla caret APIs. Maintain one named-pipe client and set
+  `editor=notepad-plus-plus`; build separate x86/x64 binaries if still required.
+- Use full local path, lexer/language, delta lengths and save flag; ignore internal/console/untitled
+  buffers until explicitly allowed. The plugin must never load arbitrary DLLs from project paths.
+- Sign releases and publish through Plugins Admin/manual ZIP. Test split views of the same buffer,
+  sessions, huge files, macros/paste, Save All/Save As, external reload, portable mode, bridge update,
+  plugin unload and current/previous Notepad++ versions.
+
+#### 51. Nova — native Nova extension
+
+- Create a JavaScript/TypeScript Nova extension using workspace text editor activation/change/save/
+  destroy events, workspace path and syntax, and Nova's process API to maintain bridge communication.
+  Store bootstrap secrets in Nova secure storage if needed and set `editor=nova`.
+- Use document path/project workspace, selection/caret and text-change range lengths. Task/run events
+  map to `building` only through supported APIs; remote files use sanitized URI/path mapping.
+- Distribute through Nova Extension Library and signed source. Test local/remote workspaces, multiple
+  windows, extension reload, unsaved/save-as, tasks, clips/multi-cursor edits, bridge install/update,
+  network outage and current/previous Nova releases.
+
+#### 52. Obsidian — native TypeScript community plugin
+
+- Build an Obsidian plugin using workspace active-leaf/file events, editor change/CodeMirror
+  transactions, vault modify/rename/delete and window focus. Register listeners only after layout
+  ready and dispose them through the plugin lifecycle; set `editor=obsidian`.
+- Entity is vault-relative Markdown/canvas path (absolute path stays local if privacy mode demands),
+  project is vault name or configured project, category `notes`; send character counts only and never
+  note text, frontmatter, links, tags, canvas contents or attachment names by default.
+- Desktop can use the local bridge; mobile requires OAuth direct API with encrypted bounded offline
+  storage and must be a separate capability tier. Test Live Preview/source mode, Canvas, rename,
+  sync/remote modifications exclusion, multiple vaults/windows, mobile suspend, plugin reload and
+  Community Plugins review requirements.
+
+#### 53. OpenCode — native npm plugin
+
+- Create an `opencode-atoaxis` package for OpenCode's supported plugin lifecycle, configured in
+  `opencode.json`. Listen to successful file write/edit/patch tool completion and session metadata;
+  emit AI attribution without inspecting prompts/responses and set `editor=opencode`.
+- Use `ai_agent=opencode`, provider/model only when reported, category `ai coding`, stable tool-call
+  event ID and per-file line deltas. Shell commands with opaque side effects are `unattributed` and
+  do not receive fabricated AI line counts.
+- Add an OpenCode transcript parser only as crash recovery and share the delivered ledger. Test npm
+  install/update, local/global config preservation, parallel sessions, permissions/rejected tools,
+  multi-file patches, custom providers/models, offline queue, bridge absence and clean uninstall.
+
+#### 54. Oxygen — Eclipse/RCP fragment
+
+- Determine the current Oxygen XML Editor extension point and Eclipse/RCP compatibility. Where OSGi
+  workbench/document listeners are accessible, reuse the Eclipse core with an Oxygen fragment and
+  `editor=oxygen`; otherwise build the documented Java plugin adapter against Oxygen's SDK.
+- Track XML/XSLT/XQuery/text document focus/change/save and project/framework hint. Exclude document
+  text, validation messages, transformation output and remote credentials; transformation/debug runs
+  can map to `building`/`debugging` through public lifecycle events.
+- Because Oxygen is proprietary, test licensed supported versions in CI/manual matrix and maintain
+  version gates. Cover local/remote WebDAV files, Author/Text/Grid modes, DITA projects, Save As,
+  validation/transformation, plugin install/update/uninstall and desktop fallback for unsupported hosts.
+
+### 5.12 Programs 55–63 (seventh row)
+
+#### 55. PhpStorm — shared IntelliJ Platform plugin
+
+- Reuse the Kotlin core with `editor=phpstorm`; track PHP/JS/template/config documents with standard
+  focus/change/save. CLI derives project/Git/language, while run/debug/test listeners provide truthful
+  `building`, `debugging`, and `running tests` markers.
+- Exclude caches/vendor/generated files by central defaults, support remote development/WSL path
+  mapping, and keep database consoles subject to the same redaction as DataGrip.
+- Test Composer projects, PHPUnit, Xdebug, JavaScript tooling, remote deployment files, multiple
+  projects, generated templates and Plugin Verifier on current/previous PhpStorm.
+
+#### 56. Postman — desktop companion/official API route, not page injection
+
+- First research the current Postman integration surface. If a supported desktop extension API can
+  observe workspace/request/tab focus and local request changes, build against it; Postman scripts
+  execute only during requests and cannot truthfully measure editing time, so do not use collection
+  scripts as a timer.
+- Default plan is an AtoAxis desktop companion that recognizes the Postman app/window and, where a
+  documented local API exposes stable workspace/request IDs, emits `editor=postman`, category
+  `coding`/`manual testing`, `precision=host-limited`. Never capture URLs with secrets, headers,
+  bodies, variables, responses, cookies, environment values or auth tokens.
+- Test desktop and web client, multiple workspaces/tabs, request edit/send, collection runner,
+  background requests, secret redaction, window-title changes, offline mode and no false time when a
+  request is running in the background. Native status waits on a supported host API.
+
+#### 57. PowerPoint — shared Office add-in plus Windows precision helper
+
+- Reuse `extensions/office/` with a PowerPoint manifest. Track presentation open/activation,
+  selection/slide changes and save events available through Office.js; use `designing`, entity as
+  local path or hashed cloud-document ID, and exclude slide text, speaker notes, media, comments and
+  participant identities.
+- Because Office.js background events are limited, ship the signed Windows VSTO companion for precise
+  presentation/window/change/save/close and bridge IPC. macOS/web remain host-limited and visibly
+  report that limitation unless supported event-based activation becomes sufficient.
+- Test Windows/Mac/web, coauthoring/autosave, slide show mode exclusion or separate `presenting`
+  future category, multiple windows, Save As, protected files, add-in deployment, VSTO installer,
+  OAuth expiry and uninstall.
+
+#### 58. Processing — Java Tool/plugin
+
+- Build a Processing Tool or Mode-compatible Java extension using editor/sketch activation,
+  document change/save and run/stop callbacks. Project is sketch folder, entity is `.pde`/Java file,
+  language is Processing/Java, and `editor=processing`.
+- Map authoring to `coding`, sketch run/build to `building`, and exclude console/render-window
+  activity unless a user event returns focus to the editor. Use the JVM bridge client off Swing EDT.
+- Processing major versions have different extension APIs; ship version-specific builds and test
+  multi-tab sketches, new unsaved sketch, Save As, Java mode, contribution manager install, run/
+  stop/error, multiple editors, bridge restart and clean unload.
+
+#### 59. Pulsar — native package
+
+- Create an Atom/Pulsar JavaScript package using workspace active pane item, TextEditor `onDidChange`,
+  `onDidSave`, `onDidDestroy`, project paths and cursor events. Reuse a Node bridge client, dispose
+  subscriptions through a CompositeDisposable, and set `editor=pulsar`.
+- Track local/remote package-supported paths, delta counts and saves; ignore settings, terminal and
+  non-text pane items. Provide status-bar, today, configure/doctor and privacy commands.
+- Publish to Pulsar Package Registry/source, not the retired Atom registry. Test multiple panes,
+  Tree-sitter grammars, Teletype/remote edits, untitled/save-as, large paste, package reload/update,
+  bridge missing/restart and current/previous Pulsar.
+
+#### 60. PyCharm — shared IntelliJ Platform plugin
+
+- Reuse Kotlin core with `editor=pycharm`, supporting Community/Professional, Python files and
+  notebooks through the same native document path. Run/debug/tests map to their categories and
+  background indexing/type analysis is excluded.
+- Virtualenv/interpreter names are not telemetry. Remote interpreters/development require backend
+  bridge and safe path mapping; generated `.venv`, caches and notebooks outputs are ignored.
+- Test pytest/unittest, debugger, scientific/notebook modes, Django templates, remote interpreter,
+  multiple projects and Plugin Verifier on current/previous PyCharm.
+
+#### 61. Qoder — VS Code-family build with agent adapter boundary
+
+- Package the TypeScript extension for Qoder's supported VS Code-compatible channel with
+  `editor=qoder`, capability gates and the shared bridge. Standard editor focus/edit/save/task/debug
+  behaviour stays identical to VS Code.
+- Attribute Qoder agent-generated edits only through documented agent events/transcripts; keep
+  unknown bulk changes unattributed. Deduplicate agent and editor observations through stable event
+  IDs/correlation without converting heuristic confidence into verified attribution.
+- Test chat/agent workflows, accept/reject changes, background edits, remote workspaces, API fork
+  differences, manual VSIX/Open VSX installation, bridge bootstrap, updates and dual-source dedup.
+
+#### 62. Recaf — Java plugin
+
+- Build against Recaf's supported plugin API for workspace/class/file tab activation, text/assembler
+  editor changes and workspace save/export. Use stable archive/workspace plus class/resource URI,
+  `editor=recaf`, category `researching` for navigation and `coding` for actual modifications.
+- Never transmit bytecode, decompiled source, class/member names or target strings by default; allow
+  hashed entity labels. Connect via JVM bridge SDK and treat background decompilation/analysis as idle.
+- Security harden for hostile archives: no project-controlled classloading, strict plugin classloader,
+  bounded strings/events, and safe IPC. Test large/obfuscated archives, multiple tabs, assembler edits,
+  export/save, plugin reload, Recaf/API/JDK versions and desktop fallback when API breaks.
+
+#### 63. ReClassEx — native C++ plugin with strict security boundary
+
+- Implement the documented ReClass.NET/ReClassEx plugin API in C++ for project open/save, active
+  class/node selection and model modifications; verify the exact product/version because plugin APIs
+  differ. Set `editor=reclassex`, entity to project/process-safe label, category `researching` or
+  `modeling`—never memory contents, addresses, process arguments or symbol values.
+- Use signed native binaries and named-pipe IPC only. Do not inject hooks, scan memory, or elevate;
+  if supported callbacks cannot provide sufficient events, fall back to desktop active-window
+  tracking instead of reverse engineering private internals.
+- Test x86/x64, attach/detach, project save, node edits, target process exit, hostile names, plugin
+  install/remove, bridge restart, version gates and an explicit threat-model review.
+
+### 5.13 Programs 64–72 (eighth row)
+
+#### 64. Rider — shared IntelliJ Platform plugin
+
+- Reuse the Kotlin JetBrains core with `editor=rider`, but validate Rider's frontend/backend split.
+  Document focus/change/save lives in the proper IntelliJ-side module while build/test/debug lifecycle
+  may require Rider/ReSharper-specific APIs behind an optional source set.
+- Track C#/F#/VB/Razor/Unity solution files; map build to `building`, test to `running tests`, debug to
+  `debugging`, and exclude generated `obj`/`bin`. Remote development requires the bridge beside the
+  project backend with safe frontend path/display mapping.
+- Test .NET solutions, Unity-generated projects, tests/debugger, multiple solutions, WSL/remote,
+  frontend/backend reconnect, plugin dynamic unload and Plugin Verifier/current/previous Rider.
+
+#### 65. Roblox Studio — native Studio plugin
+
+- Build a Roblox Studio Lua plugin using Script Editor document open/focus/change/close hooks and
+  place publish/save lifecycle where the supported Studio API permits. Because filesystem/process
+  access is sandboxed, send direct HTTPS with OAuth device authorization and encrypted plugin
+  settings; set `editor=roblox-studio`.
+- Entity is stable place/script ID plus user-approved display label, project is place/universe, and
+  category `coding` or `designing`; never send source, game contents, player data, asset contents,
+  collaboration messages or secret keys. Team Create remote edits must not be credited locally.
+- Verify current plugin security/network capabilities before committing native status. Test local/
+  cloud places, Team Create, Script Editor multi-tabs, autosave/publish, play-test (`running tests`),
+  plugin unload/update, OAuth expiry, offline bounded queue and marketplace review.
+
+#### 66. RubyMine — shared IntelliJ Platform plugin
+
+- Reuse Kotlin core with `editor=rubymine`. Standard editor events cover Ruby/Rails/templates; run,
+  test and debugger listeners map categories without collecting console output, environment variables
+  or interpreter credentials.
+- Exclude bundle/vendor/cache/generated files centrally and support remote SDK/development via
+  backend bridge/path mapping. Database console behaviour follows DataGrip redaction.
+- Test Rails projects, RSpec/Minitest, debugger, ERB/JS, remote interpreters, multiple projects and
+  Plugin Verifier on current/previous RubyMine.
+
+#### 67. RustRover — shared IntelliJ Platform plugin
+
+- Reuse Kotlin core with `editor=rustrover`; track Rust/Cargo files via standard events and let the
+  CLI derive workspace/Git/language. Cargo run/build/test/debug become their respective categories,
+  while indexing/macro expansion/background analysis is excluded.
+- Exclude `target` and generated code by default, support WSL/remote development, and keep toolchain/
+  environment values out of telemetry.
+- Test Cargo workspaces, build scripts, tests/benchmarks, debugger, macro-generated files, remote
+  projects, multiple windows and Plugin Verifier/current/previous RustRover.
+
+#### 68. Safari — Safari Web Extension wrapper
+
+- Reuse the browser core through a Safari Web Extension packaged in a signed/notarized macOS/iOS app
+  extension. Track active tab/window/navigation and known web-app site adapters, normalize domains,
+  exclude Private Browsing by default, and set `editor=safari`.
+- macOS can use an App Group/native companion to reach the bridge; iOS/iPadOS must use OAuth direct
+  API with short-lived tokens and bounded encrypted queue. Ask only for per-site access where Safari
+  supports it and make domain allowlisting the default.
+- Test macOS/iOS Safari, extension permission prompts, private windows, tab groups, profiles, PWAs,
+  background suspension, native companion missing, auth expiry, App Store update and uninstall/data
+  deletion.
+
+#### 69. SiYuan — native TypeScript plugin
+
+- Build a SiYuan plugin using its workspace/document/tab lifecycle, editor transaction/change and
+  document save/sync events. Desktop connects to the bridge; mobile uses OAuth direct API. Set
+  `editor=siyuan`, category `notes`.
+- Entity is notebook/document stable ID or privacy-safe path; default-redact titles, block content,
+  backlinks, tags, assets and synced collaborator data. Count local editor deltas only and ignore
+  renderer/index/sync changes.
+- Test desktop/mobile, multiple notebooks/windows, block moves, rename/delete, local vs sync edits,
+  Markdown/source modes, plugin update/reload, bridge unavailable, mobile suspend and marketplace
+  packaging/privacy review.
+
+#### 70. Sketch — native macOS plugin
+
+- Create a signed Sketch JavaScript/CocoaScript plugin (or current official plugin API) observing
+  document open/selection/change/save/close and app focus. Use a native helper/bridge connection,
+  entity as local document path or hashed cloud-document ID, `editor=sketch`, category `designing`.
+- Never send layer text, names, images, symbols, comments, collaborator identity or design snapshots
+  by default. Coalesce high-frequency selection/document events and exclude export/background sync.
+- Verify the current Sketch plugin runtime and notarization rules. Test local/Workspace documents,
+  autosave/versioning, multiple windows/pages, prototypes, libraries, offline documents, plugin
+  update/uninstall, helper missing and host API version changes.
+
+#### 71. SlickEdit — native Slick-C macro package
+
+- Implement a Slick-C macro package using buffer switch/modify/save/quit, project/workspace and
+  cursor callbacks. Maintain one background bridge channel or a debounced CLI-shim call path and set
+  `editor=slickedit`.
+- Send absolute file/project hint/language/cursor/delta/save only; map build/debug through supported
+  callbacks and exclude output/tool buffers. Avoid shell-string construction by passing structured
+  arguments or socket JSON.
+- Package through SlickEdit macro loading with version gates. Test Windows/macOS/Linux, workspaces,
+  multiple MDI windows, remote files, macros/paste, Save All/Save As, debugger/build, bridge restart,
+  Slick-C API changes and clean macro unload.
+
+#### 72. SQL Server Studio (SQL Server Management Studio / SSMS) — Visual Studio Shell VSIX
+
+- Build a signed C# VSIX/VSPackage for supported SSMS generations using Visual Studio Shell document
+  window/selection, text buffer change/save and solution/project services. Version-specific manifests
+  may be required; set `editor=sql-server-management-studio`.
+- Track SQL files and unsaved query buffers via stable session URI. Never send SQL text, server/
+  database/login names, connection strings, query parameters, results or execution plans. Query run
+  is `coding` or `manual testing` by policy and background completion does not extend active time.
+- Ship an MSI/VSIX installer that registers only supported SSMS versions and uninstalls cleanly.
+  Test SSMS 18/19/20+ as applicable, multiple query windows/connections, Save/Save As, results/design
+  panes, admin/non-admin install, extension allowlisting, bridge named pipe, offline and host update.
+
+### 5.14 Proposed repository layout
+
+```text
+extensions/
+├── protocol/                 # JSON Schema + generated SDKs + contract fixtures
+├── browser/                  # Chromium/Firefox core + site adapters
+├── safari/                   # Safari Web Extension wrapper/companion
+├── jetbrains/                # one Kotlin core, product IDs/source sets
+├── eclipse/                  # OSGi core + Aptana/DBeaver/Oxygen fragments
+├── office/                   # Office.js shared code + Excel/PowerPoint manifests
+├── office-windows/           # signed VSTO companions
+├── rad-studio/               # Delphi/C++ Builder Open Tools API package
+├── ai-agents/                # Amp/Claude/Codex/Copilot/OpenCode/Antigravity
+├── blender/ figma/ jupyter/ obsidian/ nova/ pulsar/
+├── emacs/ neovim/ micro/ kakoune/
+├── geany/ gedit/ kate/ netbeans/ notepad-plus-plus/
+├── ida/ recaf/ reclassex/ processing/ roblox-studio/
+└── legacy/                   # AppCode/Aptana/Brackets/Coda/Komodo frozen builds
+
+backend/api/crates/
+├── wakaclock-bridge/         # local daemon, socket/pipe server, raw event state machine
+├── wakaclock-protocol/       # schema types/version negotiation
+└── wakaclock-cli/            # wakaclock + wakatime-cli compatible entry points
+```
+
+Every adapter directory contains `README.md`, `SUPPORT.md`, `PRIVACY.md`, host-version matrix,
+licence notices, package/store metadata, unit tests, contract-test launcher and reproducible release
+instructions. Generated binaries and store credentials are never committed.
+
+### 5.15 Effort and staffing estimate
+
+These are engineering ranges after requirements discovery, not calendar promises. They include
+implementation, tests, packaging and documentation but exclude external store-review waiting time.
+
+| Workstream | Estimated person-weeks | Notes |
+|---|---:|---|
+| Foundation: shim, bridge, protocol, SDKs, release/test infrastructure | 12–18 | critical path; 3 OSes |
+| VS Code and IntelliJ families, including product QA | 10–16 | 17 icons, two codebases |
+| Six AI/agent adapters and dedup ledger | 10–16 | availability of official events is the risk |
+| Browser/Safari/site adapters | 10–15 | privacy/store review/native host |
+| Eclipse, RAD Studio, NetBeans, SSMS, Office | 18–28 | JVM/.NET/Pascal and version matrices |
+| Design/notebook/knowledge tools | 14–22 | sandbox auth and host-limited lifecycle |
+| Classic editors and terminal editors | 18–28 | many packaging ecosystems |
+| Reverse-engineering/security tools | 8–14 | mandatory threat modelling |
+| Legacy/proprietary discovery and frozen builds | 10–18 | APIs may be unavailable |
+| Cross-product QA, docs, installers, support launch | 14–22 | cannot be deferred to the end |
+| **Total** | **124–197 person-weeks** | roughly 8–12 months for a focused 4–6 person team, subject to host APIs/store approval |
+
+Do not start 72 repositories at once. Recommended staffing is one bridge/release engineer, one JVM/
+.NET engineer, one TypeScript/web engineer, one native/Python/editor engineer, and shared QA/security.
+Limit work in progress to two adapter families per engineer and release each wave independently.
+
+### 5.16 Release gates and rollout
+
+- **Alpha:** internal accounts, paths obfuscated by default, fake bridge plus staging API, no stores.
+- **Beta:** signed packages, opt-in users, crash/offline/privacy telemetry only, one-click diagnostic
+  bundle with local redaction preview, rollback tested.
+- **General availability:** host store approval, current/previous version matrix green, privacy and
+  security review, support runbook, uninstall/data deletion, and SLO for heartbeat ingestion.
+- **Legacy:** frozen signed artifact, last-tested host/OS prominently shown, no GA badge for current
+  versions, compatibility shim/desktop fallback offered.
+- **Retirement:** announce at least one stable release ahead, keep data export and uninstall docs,
+  and never auto-convert native precision history into desktop precision without a new source label.
+
+### 5.17 Research references and validation backlog
+
+The architectural pattern follows WakaTime's public plugin guidance—editor event adapter plus common
+CLI—but AtoAxis should implement and test its own bridge contract. The reference list is a discovery
+aid, not proof that every host API is unchanged or that source may be copied:
+
+- [WakaTime public supported-program grid](https://wakatime.com/plugins) and
+  [plugin creation model](https://wakatime.com/help/creating-plugin)
+- [VS Code Extension API](https://code.visualstudio.com/api/references/vscode-api)
+- [IntelliJ document and listener APIs](https://plugins.jetbrains.com/docs/intellij/documents.html)
+  and [Plugin SDK](https://plugins.jetbrains.com/docs/intellij/welcome.html)
+- [Figma plugin events](https://developers.figma.com/docs/plugins/api/properties/figma-on/)
+- [Blender application handlers](https://docs.blender.org/api/current/bpy.app.handlers.html)
+- [Office.js Excel events](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-events),
+  [Office add-in event activation limits](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/event-based-activation),
+  and [Office add-in overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-overview)
+- [Obsidian plugin lifecycle](https://docs.obsidian.md/plugins/guides/lifecycle-management)
+- Existing public install behaviour for special cases:
+  [Canva](https://wakatime.com/canva), [Discord](https://wakatime.com/discord),
+  [Maestro](https://wakatime.com/maestro), [OpenCode](https://wakatime.com/opencode),
+  [C++ Builder](https://wakatime.com/c%2B%2B-builder), and
+  [SQL Server Management Studio](https://wakatime.com/sql-server-management-studio)
+
+Before opening an implementation issue for any program, attach a one-page discovery record containing:
+official SDK/version URL, latest host release tested, event APIs available, process/network/sandbox
+limits, secret-storage option, packaging/store route, licence decision, exact precision level, and a
+working hello-event proof. A failed discovery produces a documented desktop/browser fallback; it does
+not produce an unsupported injection/hooking workaround.
 
 ---
 
@@ -3411,3 +4427,49 @@ not replace idempotent workers or a tested backup/restore procedure.
 - `screenshot/backend/board-backend/Cargo.toml` — dependency versions
 - `screenshot/backend/board-backend/docker-compose.yml` — ClickHouse docker
 - `wakaclock/wakatime-api-routes.json` — all WakaTime API routes
+
+---
+
+## Phase 10 — Feature-parity implementation ledger (2026-08-23)
+
+The executable compatibility source of truth is now split into two machine-readable files:
+
+- `docs/phase-10-feature-matrix.json` — product capability status and owner-facing release state.
+- `docs/wakatime-compatibility-manifest.json` — WakaTime v1 route patterns, auth/envelope defaults
+  and known compatibility status.
+
+Implemented slices in the current backend:
+
+- PostgreSQL transactional foundation with UUIDv7 identity, personal organizations, role/seat
+  membership, encrypted credential containers, OAuth apps/tokens/PKCE/device flow, exports,
+  profiles/share links, reports, leaderboards, billing summaries, SSO configuration and SCIM
+  token/user/group provisioning.
+- ClickHouse telemetry expansion for VCS provenance, feature/dependency dimensions, AI token
+  metadata and rebuildable daily projections. Unknown provider fields remain nullable and are
+  accompanied by coverage metadata.
+- WakaTime v1 aliases for core analytics, data dumps, external durations, goals, heartbeats
+  (including bulk delete), metadata/catalog routes, machine/user-agent discovery, custom rules,
+  organizations and private leaderboards.
+- AtoAxis v2 contracts for integrations, repositories/commits/pull requests, organization
+  administration, SSO/SCIM administration, goals, exports, AI effectiveness and sharing.
+- Privacy-first browser/desktop tracker policy scaffolds and AI follow-up line-ownership ledger;
+  raw source, prompts, responses and diffs are not persisted by the telemetry contract. Transcript
+  project hints are reduced to one bounded final path component before serialization, with a
+  regression test covering Unix absolute paths.
+- The release workflow builds the nested Rust workspace through `backend/api/Cargo.toml`, so the
+  stale root workspace manifest cannot accidentally select missing legacy crate paths.
+
+Still intentionally beta/partial and therefore not marked production-ready in the matrix:
+
+- Kafka/RabbitMQ consumers and the object-storage export worker (the API creates durable jobs,
+  but signed artifact URLs require the deployment worker).
+- Provider-specific GitHub/GitLab/Bitbucket/calendar sync workers and full head-revision activity
+  attribution; metadata ingestion and idempotent storage contracts are present.
+- Native packaged desktop clients, browser store release artifacts and a 600+ language Linguist
+  registry; the shared privacy core and current registry are the compatibility baseline.
+- Complete seven-day human-follow-up denominator, leaderboard ranking snapshots, Stripe webhook
+  reconciliation, and live OIDC/SAML test-login callbacks.
+
+Every rollout must keep the feature flag, migration/reconciliation runbook and rollback path
+described in the Phase 10 request. A capability must not be advertised as production-ready until
+its worker, privacy, tenant-isolation and end-to-end acceptance tests exist.

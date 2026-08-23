@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::ai_usage::AiUsageIngestReport;
+use tracing::error;
 use wakaclock_core::ai::AiUsageRecord;
 
 const MAX_USAGE_EVENTS_PER_REQUEST: usize = 2_000;
@@ -28,6 +29,10 @@ pub async fn ingest(
     Json(records): Json<Vec<AiUsageRecord>>,
 ) -> Result<Json<AiUsageIngestReport>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "write_logged_time") {
+        return Err(auth::forbidden_scope("write_logged_time"));
+    }
+    let record_count = records.len();
 
     if records.len() > MAX_USAGE_EVENTS_PER_REQUEST {
         return Err(app_error(
@@ -43,7 +48,19 @@ pub async fn ingest(
         .ai_usage_service
         .ingest(user_id, records)
         .await
-        .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+        .map_err(|error| {
+            // The trace middleware can only report the resulting 500. Keep the
+            // actual bounded service/ClickHouse error in the server log so an
+            // operator can fix the failing phase instead of guessing from a
+            // repeated status code.
+            error!(
+                %user_id,
+                record_count,
+                error = %error,
+                "AI usage ingest failed"
+            );
+            app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
+        })?;
 
     Ok(Json(report))
 }

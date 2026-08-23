@@ -4,6 +4,25 @@
 # Frontend, Strapi, and Rust backend should be run locally for development
 
 services:
+  # PostgreSQL transactional source of truth for AtoAxis Phase 10.
+  postgres:
+    image: postgres:16-alpine
+    container_name: atoaxis_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-atoaxis}
+      POSTGRES_USER: ${POSTGRES_USER:-atoaxis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atoaxis-dev-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atoaxis} -d ${POSTGRES_DB:-atoaxis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ClickHouse Database
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
@@ -112,6 +131,7 @@ services:
       retries: 3
 
 volumes:
+  postgres-data:
   redis-data:
   rabbitmq-data:
   caddy-data:

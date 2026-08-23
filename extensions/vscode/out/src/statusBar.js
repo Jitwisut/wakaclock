@@ -35,7 +35,29 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatusBarController = void 0;
 const vscode = __importStar(require("vscode"));
-const STATUS_REFRESH_MS = 60_000;
+const activity_1 = require("./activity");
+const STATUS_REFRESH_MS = 15_000;
+function localTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    }
+    catch {
+        return "UTC";
+    }
+}
+function formatLiveDuration(seconds) {
+    const total = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    }
+    if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    }
+    return `${secs}s`;
+}
 /**
  * Recognise the CLI's rejected-key failure. Matched on the wording
  * `ApiClient::reject_unauthorized` produces plus the server's own 401 body, since the
@@ -49,16 +71,29 @@ class StatusBarController {
     getConfig;
     cli;
     logger;
+    getApiKey;
     item;
     interval;
     authFailureReported = false;
-    constructor(getConfig, cli, logger) {
+    legacyCliReported = false;
+    lastSnapshot;
+    getBufferedSeconds = () => 0;
+    getBufferedSegments = () => [];
+    connectionState = "connecting";
+    constructor(getConfig, cli, logger, getApiKey) {
         this.getConfig = getConfig;
         this.cli = cli;
         this.logger = logger;
+        this.getApiKey = getApiKey;
         this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.item.command = "wakaclock.showToday";
         this.item.name = "Wakaclock";
+    }
+    setBufferedSecondsProvider(provider) {
+        this.getBufferedSeconds = provider;
+    }
+    setBufferedSegmentsProvider(provider) {
+        this.getBufferedSegments = provider;
     }
     start() {
         this.applyVisibility();
@@ -70,15 +105,54 @@ class StatusBarController {
     handleHeartbeatSent() {
         void this.refresh();
     }
+    /** Repaint locally accumulated activity without making a network request. */
+    handleActivity() {
+        if (this.lastSnapshot) {
+            this.render(this.lastSnapshot);
+            return;
+        }
+        void this.refresh();
+    }
+    setConnectionState(state) {
+        this.connectionState = state;
+        if (state === "needs-api-key") {
+            this.item.text = "$(plug) AtoAxis: Connect";
+            this.item.tooltip = "Add an AtoAxis API key to start recording coding time.";
+            this.item.command = "wakaclock.setApiKey";
+            this.item.backgroundColor = undefined;
+            this.item.show();
+            return;
+        }
+        if (state === "connecting") {
+            this.item.text = "$(sync~spin) AtoAxis: Connecting";
+            this.item.tooltip = "Checking the AtoAxis server connection…";
+            this.item.command = "wakaclock.setApiKey";
+            this.item.show();
+        }
+    }
     async refresh() {
         if (!this.getConfig().statusBarEnabled) {
             this.item.hide();
             return;
         }
+        if (this.getApiKey) {
+            const key = await this.getApiKey();
+            if (!key) {
+                this.setConnectionState("needs-api-key");
+                return;
+            }
+        }
         try {
-            const snapshot = await this.cli.getToday();
-            this.item.text = `$(clock) ${snapshot.humanReadable}`;
-            this.item.tooltip = `Today: ${snapshot.humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}`;
+            const snapshot = await this.cli.getToday(localTimezone());
+            this.lastSnapshot = snapshot;
+            this.connectionState = snapshot.queuedSeconds && snapshot.queuedSeconds > 0
+                ? "offline-queued"
+                : "verified";
+            this.render(snapshot);
+            if (snapshot.legacyCli && !this.legacyCliReported) {
+                this.legacyCliReported = true;
+                void vscode.window.showWarningMessage("wakaclock-cli is too old for timezone-aware status totals. Upgrade the CLI to the current workspace version.");
+            }
             this.item.backgroundColor = undefined;
             this.item.command = "wakaclock.showToday";
             this.authFailureReported = false;
@@ -97,16 +171,78 @@ class StatusBarController {
                     "The server rejected this API key, so coding time is not being recorded.\nRun \"Wakaclock: Set API Key\" with a fresh key from Settings → API key.";
                 this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
                 this.item.command = "wakaclock.setApiKey";
+                this.connectionState = /subscription|402/i.test(error instanceof Error ? error.message : String(error))
+                    ? "subscription-required"
+                    : "needs-api-key";
                 this.item.show();
                 this.reportAuthFailureOnce();
                 return;
             }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (/subscription|required.*plan|402/.test(errorMessage.toLowerCase())) {
+                this.connectionState = "subscription-required";
+                this.item.text = "$(warning) AtoAxis: Subscription required";
+                this.item.tooltip =
+                    "Your API key is valid, but this account needs an active AtoAxis subscription.";
+                this.item.command = "wakaclock.setApiKey";
+                this.item.show();
+                return;
+            }
             this.item.text = "$(clock) Wakaclock";
-            this.item.tooltip = "Unable to read today's total from wakaclock-cli.";
+            const message = errorMessage;
+            const cliUnavailable = /bundled.*cli|cli.*unavailable|unsupported.*platform/i.test(message);
+            this.connectionState = cliUnavailable ? "cli-unavailable" : "offline-queued";
+            this.item.text = cliUnavailable ? "$(error) AtoAxis: CLI unavailable" : "$(clock) Wakaclock";
+            this.item.tooltip = cliUnavailable
+                ? `${message}\nReinstall the platform-specific AtoAxis Extension or use the advanced cliPath override.`
+                : "Unable to read today's total from the AtoAxis server; activity remains queued locally.";
             this.item.backgroundColor = undefined;
             this.item.command = "wakaclock.showToday";
             this.item.show();
+            this.connectionState = "offline-queued";
         }
+    }
+    render(snapshot) {
+        const bufferedSeconds = Math.max(this.getBufferedSeconds(), snapshot.bufferedSeconds ?? 0);
+        const queued = snapshot.queuedSeconds ?? 0;
+        const confirmed = snapshot.confirmedSeconds ?? Math.max(0, snapshot.totalSeconds - queued);
+        const bufferedSegments = this.getBufferedSegments();
+        const serverIntervals = snapshot.coveredIntervals ?? [];
+        const totalSeconds = serverIntervals.length > 0
+            ? (0, activity_1.unionSeconds)([...serverIntervals, ...bufferedSegments])
+            : confirmed + queued + bufferedSeconds;
+        const humanReadable = formatLiveDuration(totalSeconds);
+        const agentState = snapshot.agentHealth &&
+            typeof snapshot.agentHealth === "object" &&
+            "state" in snapshot.agentHealth
+            ? String(snapshot.agentHealth.state)
+            : undefined;
+        if (this.connectionState === "needs-api-key") {
+            this.item.text = "$(plug) AtoAxis: Connect";
+            this.item.command = "wakaclock.setApiKey";
+        }
+        else if (this.connectionState === "subscription-required") {
+            this.item.text = `$(warning) AtoAxis: ${humanReadable}`;
+            this.item.command = "wakaclock.setApiKey";
+        }
+        else if (this.connectionState === "offline-queued") {
+            this.item.text = `$(cloud-offline) AtoAxis: ${humanReadable}`;
+        }
+        else {
+            this.item.text = `$(clock) ${humanReadable}`;
+        }
+        this.item.tooltip =
+            `Today: ${humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}` +
+                `\nConfirmed: ${formatLiveDuration(confirmed)}` +
+                `\nOffline queued: ${formatLiveDuration(queued)}` +
+                `\nLocal buffer: ${formatLiveDuration(bufferedSeconds)}` +
+                (snapshot.lastIncrementSeconds === undefined
+                    ? ""
+                    : `\nLast increment: ${formatLiveDuration(snapshot.lastIncrementSeconds)}${snapshot.lastIncrementSource ? ` (${snapshot.lastIncrementSource})` : ""}`) +
+                (snapshot.discardedSeconds && snapshot.discardedSeconds > 0
+                    ? `\nDiscarded overlap/idle: ${formatLiveDuration(snapshot.discardedSeconds)}`
+                    : "") +
+                (agentState ? `\nAgent: ${agentState}` : "");
     }
     /**
      * Notify on the transition into the failed state only. The refresh runs every

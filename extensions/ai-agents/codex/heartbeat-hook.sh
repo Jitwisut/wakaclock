@@ -7,7 +7,7 @@
 # Unlike the Claude Code plugin (hooks/hooks.json in ../plugins/atoaxis-heartbeat),
 # Codex has no plugin-marketplace equivalent as of this writing — hooks are behind a
 # feature flag (`codex_hooks = true`) and registered by hand-editing config.toml. This
-# script mirrors the same wakaclock-cli call the Claude Code hook makes; the file-path
+# script mirrors the same wakaclock call the Claude Code hook makes; the file-path
 # extraction is the part most likely to need adjusting as Codex's hook payload schema
 # stabilizes, since it isn't as fully documented yet as Claude Code's.
 set -euo pipefail
@@ -25,7 +25,7 @@ if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
 fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
-  echo "atoaxis-heartbeat (codex): '$WAKACLOCK_BIN' not found on PATH — install wakaclock-cli or set WAKACLOCK_CLI_PATH" >&2
+  echo "atoaxis-heartbeat (codex): '$WAKACLOCK_BIN' not found on PATH — install the wakaclock binary or set WAKACLOCK_CLI_PATH" >&2
   exit 0
 fi
 

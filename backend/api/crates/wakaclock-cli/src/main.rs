@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::{
+    collections::HashSet,
     error::Error,
     fs,
     io::{self, Read},
@@ -8,25 +9,30 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+use uuid::Uuid;
+mod agent_service;
 use wakaclock_ast::detect;
 use wakaclock_core::{
     ai::{
         parse_claude_usage, parse_codex_usage, parse_gemini_usage, AiActivityParser,
         AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser, DiscoveryContext,
-        DiscoveryState, GeminiCliParser, ParseContext, ParserCursor,
+        DiscoveryResult, DiscoveryState, GeminiCliParser, ParseContext, ParserCursor,
     },
     api_client::ApiClient,
     config::Config,
     error::AppError,
     git,
-    heartbeat::{Category, EntityType, Heartbeat},
+    heartbeat::{
+        union_activity_seconds, ActivitySegment, Category, EntityType, Heartbeat,
+        MAX_ACTIVITY_GAP_SECONDS,
+    },
     queue::Queue,
 };
 
 /// Match WakaTime's default keystroke timeout when joining agent heartbeats. AI
 /// transcript/tool events are activity markers too; they should contribute the interval
 /// between nearby events, not remain permanently at zero seconds.
-const AI_ACTIVITY_TIMEOUT_SECONDS: f64 = 15.0 * 60.0;
+const AI_ACTIVITY_TIMEOUT_SECONDS: f64 = MAX_ACTIVITY_GAP_SECONDS;
 const AI_ACTIVITY_STREAM: &str = "ai";
 
 #[derive(Parser)]
@@ -71,6 +77,21 @@ enum Commands {
 
         #[arg(long)]
         active_seconds: Option<f64>,
+
+        /// Stable transport identity. Retries must reuse this value.
+        #[arg(long)]
+        heartbeat_id: Option<String>,
+
+        /// JSON array of `{segment_id,start,end,source}` activity intervals.
+        #[arg(long)]
+        activity_segments: Option<String>,
+
+        /// Identifies the caller in `user_agent`, e.g. `wakaclock-vscode/0.1.0`.
+        /// Without it every heartbeat looks identical on the wire, and a stale editor
+        /// build sending legacy payloads is indistinguishable from a current one — which
+        /// is precisely how a two-hour timing regression stayed invisible.
+        #[arg(long)]
+        plugin: Option<String>,
 
         /// Name of the AI agent that made this edit (e.g. "claude-code", "codex",
         /// "gemini-cli") — presence of this flag is what sets `is_ai_generated`; there
@@ -120,16 +141,88 @@ enum Commands {
 
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
+
+        /// Emit a machine-readable outcome in addition to the normal text mode.
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
     Status,
-    Today,
+    Today {
+        /// IANA timezone used for the user's calendar day (defaults to UTC).
+        #[arg(long)]
+        timezone: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Verify the configured (or WAKACLOCK_API_KEY) identity without mutating
+    /// config.toml. This command always exits successfully for an HTTP outcome so
+    /// editor clients can handle invalid keys and offline servers uniformly.
+    Verify {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     Ai {
         #[command(subcommand)]
         action: AiAction,
+    },
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    Repair {
+        #[command(subcommand)]
+        action: RepairAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RepairAction {
+    /// Rebuild today's canonical interval projection without deleting raw history.
+    Day {
+        #[arg(long, default_value = "today")]
+        date: String,
+        #[arg(long)]
+        timezone: Option<String>,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentAction {
+    /// Run the transcript watcher in the foreground. Service managers invoke this.
+    Run {
+        #[arg(long, default_value_t = 5)]
+        interval_seconds: u64,
+    },
+    /// Install or update the per-user service and start it immediately.
+    Install {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Uninstall {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Start {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Stop {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Status {
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 }
 
@@ -168,7 +261,21 @@ enum AiAction {
 #[derive(Subcommand)]
 enum ConfigAction {
     /// Save an API key generated from the Wakaclock dashboard into ~/.wakaclock/config.toml
-    SetKey { key: String },
+    SetKey {
+        /// Deprecated positional form. Prefer `--stdin` so the secret never appears
+        /// in shell history or process listings.
+        key: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stdin: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Save the API origin used by the CLI and always-on agent.
+    SetServerUrl {
+        url: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Remove the saved API key (heartbeats fall back to the unauthenticated user_id)
     ClearKey,
 }
@@ -195,6 +302,10 @@ struct ExtraHeartbeatInput {
     chars_deleted: Option<u32>,
     #[serde(default)]
     active_seconds: Option<f64>,
+    #[serde(default)]
+    heartbeat_id: Option<String>,
+    #[serde(default)]
+    activity_segments: Vec<ActivitySegment>,
     #[serde(default)]
     ai_agent: Option<String>,
     #[serde(default)]
@@ -247,6 +358,31 @@ async fn run() -> Result<(), Box<dyn Error>> {
             config.api_key = Some(env_key);
         }
     }
+    if let Ok(server_url) = std::env::var("WAKACLOCK_SERVER_URL") {
+        if !server_url.trim().is_empty() {
+            match Config::normalize_server_url(&server_url) {
+                Ok(normalized) => config.server_url = normalized,
+                Err(error) => {
+                    if matches!(&cli.command, Commands::Verify { json: true }) {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "status": "incompatible",
+                                "server_url": server_url,
+                                "authenticated": false,
+                                "reachable": false,
+                                "cli_version": env!("CARGO_PKG_VERSION"),
+                                "queue_count": queue_count(),
+                                "error": error,
+                            })
+                        );
+                        return Ok(());
+                    }
+                    return Err(format!("WAKACLOCK_SERVER_URL: {error}").into());
+                }
+            }
+        }
+    }
 
     let api_client = ApiClient::new(config.clone())?;
 
@@ -263,6 +399,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             chars_added,
             chars_deleted,
             active_seconds,
+            heartbeat_id,
+            activity_segments,
+            plugin,
             ai_agent,
             ai_provider,
             ai_model,
@@ -276,6 +415,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             unattributed_lines_added,
             unattributed_lines_deleted,
             extra_heartbeats,
+            json,
         } => {
             // Hook-originated AI heartbeats are already attributed. Running transcript
             // sync from inside them would create a second event for the same patch.
@@ -287,6 +427,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
             } else {
                 None
             };
+            let parsed_activity_segments = activity_segments
+                .as_deref()
+                .map(serde_json::from_str::<Vec<ActivitySegment>>)
+                .transpose()?;
             let active_seconds = match (ai_agent.is_some(), active_seconds) {
                 (true, explicit) => {
                     let derived = ai_activity_state
@@ -313,6 +457,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 chars_added,
                 chars_deleted,
                 active_seconds,
+                heartbeat_id,
+                activity_segments: parsed_activity_segments.unwrap_or_default(),
                 ai_agent,
                 ai_provider,
                 ai_model,
@@ -326,7 +472,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 unattributed_lines_added,
                 unattributed_lines_deleted,
             };
-            let primary = build_heartbeat(
+            let mut primary = build_heartbeat(
                 &config,
                 &entity,
                 entity_type,
@@ -335,20 +481,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 write,
                 Some(primary_extra),
             )?;
+            ensure_activity_segment(&mut primary);
+            apply_plugin_user_agent(&mut primary, plugin.as_deref());
 
             let mut heartbeats = vec![primary.clone()];
             if extra_heartbeats {
                 let extras = read_extra_heartbeats()?;
                 for mut extra in extras {
                     if extra.ai_agent.is_some() {
-                        let derived = ai_activity_state
+                        if ai_activity_state.is_none() {
+                            ai_activity_state = Some(AiAttributionState::open()?);
+                        }
+                        let state = ai_activity_state
                             .as_mut()
-                            .expect("AI activity state is present")
-                            .record_activity(
-                                AI_ACTIVITY_STREAM,
-                                chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
-                                AI_ACTIVITY_TIMEOUT_SECONDS,
-                            )?;
+                            .expect("AI activity state was initialized above");
+                        let derived = state.record_activity(
+                            AI_ACTIVITY_STREAM,
+                            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                            AI_ACTIVITY_TIMEOUT_SECONDS,
+                        )?;
                         if extra.active_seconds.is_none() {
                             extra.active_seconds = Some(derived);
                         }
@@ -368,7 +519,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         .map(Category::from_str)
                         .transpose()?
                         .unwrap_or_else(|| primary.category.clone());
-                    let heartbeat = build_heartbeat(
+                    let mut heartbeat = build_heartbeat(
                         &config,
                         &resolved_entity,
                         resolved_entity_type,
@@ -377,6 +528,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         extra.write.unwrap_or(false),
                         Some(extra),
                     )?;
+                    ensure_activity_segment(&mut heartbeat);
+                    apply_plugin_user_agent(&mut heartbeat, plugin.as_deref());
                     heartbeats.push(heartbeat);
                 }
             }
@@ -385,12 +538,67 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 run_bounded_ai_sync(&config, &api_client).await;
             }
 
-            let report = api_client.send_heartbeats(heartbeats).await?;
-            println!("{}", identity_line(&config));
-            println!("Sent: {}", report.sent);
-            println!("Deduped: {}", report.deduped);
-            println!("Queued: {}", report.queued);
-            println!("Flushed: {}", report.flushed);
+            let report = api_client.send_heartbeats(heartbeats.clone()).await?;
+            // Persist hook fingerprints even when the request is offline-queued. A
+            // transcript watcher that sees the same patch a few seconds later must not
+            // create a second heartbeat while the queued hook retry is pending.
+            if heartbeats.iter().any(|heartbeat| heartbeat.is_ai_generated) {
+                // Delivery deduplication is best-effort bookkeeping after the server (or
+                // offline queue) has already accepted the heartbeat. A read-only home
+                // directory must not turn a successful network send into a non-zero CLI
+                // exit that makes the editor retry and double-count it.
+                match AiAttributionState::open() {
+                    Ok(delivery_state) => {
+                        for heartbeat in &heartbeats {
+                            if heartbeat.is_ai_generated {
+                                if let Err(error) = delivery_state.mark_fingerprint(
+                                    &heartbeat.entity,
+                                    heartbeat.time,
+                                    heartbeat.ai_lines_added.unwrap_or(0),
+                                    heartbeat.ai_lines_deleted.unwrap_or(0),
+                                    heartbeat.ai_event_id.as_deref(),
+                                ) {
+                                    eprintln!("Warning: could not persist AI fingerprint: {error}");
+                                }
+                                if let Some(event_id) = heartbeat.ai_event_id.as_deref() {
+                                    if let Err(error) =
+                                        delivery_state.mark_delivered(event_id, "hook")
+                                    {
+                                        eprintln!(
+                                            "Warning: could not persist AI event id: {error}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Warning: could not open AI dedup state: {error}");
+                    }
+                }
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "sent": report.sent,
+                        "deduped": report.deduped,
+                        "queued": report.queued,
+                        "flushed": report.flushed,
+                        "error": report.error,
+                        "status": if report.queued > 0 { "queued" } else { "sent" },
+                    }))?
+                );
+            } else {
+                println!("{}", identity_line(&config));
+                println!("Sent: {}", report.sent);
+                println!("Deduped: {}", report.deduped);
+                println!("Queued: {}", report.queued);
+                println!("Flushed: {}", report.flushed);
+                if let Some(error) = report.error {
+                    println!("Error: {error}");
+                }
+            }
         }
         Commands::Config { action } => match action {
             None => {
@@ -398,13 +606,41 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Server URL: {}", config.server_url);
                 println!("{}", identity_line(&config));
             }
-            Some(ConfigAction::SetKey { key }) => {
+            Some(ConfigAction::SetKey { key, stdin, json }) => {
                 // Persist to config.toml, independent of any WAKACLOCK_API_KEY env
                 // override applied above — this always writes the on-disk value.
+                let key = if stdin {
+                    let mut value = String::new();
+                    io::stdin().read_to_string(&mut value)?;
+                    value.trim().to_string()
+                } else {
+                    key.unwrap_or_default().trim().to_string()
+                };
+                if key.is_empty() {
+                    return Err("API key is required (pass a positional key or --stdin)".into());
+                }
                 let mut persisted = Config::load();
                 persisted.api_key = Some(key);
                 persisted.save();
-                println!("API key saved to {}", Config::config_path().display());
+                if json {
+                    println!("{}", serde_json::json!({"saved": true}));
+                } else {
+                    println!("API key saved to {}", Config::config_path().display());
+                }
+            }
+            Some(ConfigAction::SetServerUrl { url, json }) => {
+                let normalized = Config::normalize_server_url(&url)?;
+                let mut persisted = Config::load();
+                persisted.server_url = normalized.clone();
+                persisted.save();
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"saved": true, "server_url": normalized})
+                    );
+                } else {
+                    println!("Server URL saved: {normalized}");
+                }
             }
             Some(ConfigAction::ClearKey) => {
                 let mut persisted = Config::load();
@@ -438,11 +674,162 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Flush stopped: {reason}");
             }
         }
-        Commands::Today => {
-            let snapshot = api_client.today().await?;
-            println!("Today: {}", snapshot.human_readable);
-            println!("Total seconds: {}", snapshot.total_seconds);
-            println!("Heartbeats: {}", snapshot.heartbeat_count);
+        Commands::Today { timezone, json } => {
+            let (mut snapshot, server_error) =
+                match api_client.today_with_timezone(timezone.as_deref()).await {
+                    Ok(snapshot) => (snapshot, None),
+                    Err(AppError::Auth(message)) => return Err(message.into()),
+                    Err(error) => (
+                        wakaclock_core::api_client::StatusBarSnapshot {
+                            total_seconds: 0.0,
+                            human_readable: "0s".to_string(),
+                            heartbeat_count: 0,
+                            confirmed_seconds: Some(0.0),
+                            queued_seconds: 0.0,
+                            last_heartbeat_at: None,
+                            timezone: timezone.clone(),
+                            buffered_seconds: 0.0,
+                            agent_health: None,
+                            covered_intervals: vec![],
+                            last_increment_seconds: None,
+                            last_increment_source: None,
+                            discarded_seconds: 0.0,
+                        },
+                        Some(error.to_string()),
+                    ),
+                };
+            let queue = Queue::open()?;
+            let queued_segments = queue.queued_segments_for_day(timezone.as_deref())?;
+            let queued_seconds = union_activity_seconds(&queued_segments);
+            let confirmed_seconds = snapshot.confirmed_seconds.unwrap_or(snapshot.total_seconds);
+            snapshot.confirmed_seconds = Some(confirmed_seconds);
+            snapshot.queued_seconds = queued_seconds;
+            if !snapshot.covered_intervals.is_empty() {
+                snapshot.covered_intervals.extend(queued_segments);
+                snapshot.total_seconds = union_activity_seconds(&snapshot.covered_intervals);
+            } else {
+                snapshot.total_seconds = confirmed_seconds + queued_seconds;
+            }
+            snapshot.human_readable = format_duration(snapshot.total_seconds);
+            let agent_report = agent_service::status();
+            let agent_health = serde_json::json!({
+                "installed": agent_report.installed,
+                "running": agent_report.running,
+                "last_scan_at": agent_report.last_scan_at,
+                "last_heartbeat_at": agent_report.last_heartbeat_at,
+                "last_error": agent_report.last_error,
+                "queue_count": queue.len().unwrap_or(0),
+            });
+            if snapshot.agent_health.is_none() {
+                snapshot.agent_health = Some(agent_health);
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                    "confirmed_seconds": confirmed_seconds,
+                        "queued_seconds": queued_seconds,
+                        "total_seconds": snapshot.total_seconds,
+                        "human_readable": snapshot.human_readable,
+                        "heartbeat_count": snapshot.heartbeat_count,
+                        "last_heartbeat_at": snapshot.last_heartbeat_at,
+                    "covered_intervals": snapshot.covered_intervals,
+                    "last_increment_seconds": snapshot.last_increment_seconds,
+                    "last_increment_source": snapshot.last_increment_source,
+                    "discarded_seconds": snapshot.discarded_seconds,
+                    "timezone": snapshot.timezone,
+                    "agent_health": snapshot.agent_health,
+                    "error": server_error,
+                    }))?
+                );
+            } else {
+                if let Some(error) = server_error {
+                    println!("Server error: {error}");
+                }
+                println!("Today: {}", snapshot.human_readable);
+                println!("Total seconds: {}", snapshot.total_seconds);
+                println!("Confirmed seconds: {}", confirmed_seconds);
+                println!("Queued seconds: {}", queued_seconds);
+                println!("Heartbeats: {}", snapshot.heartbeat_count);
+                println!(
+                    "Agent: {}",
+                    if agent_report.running {
+                        "running"
+                    } else if agent_report.installed {
+                        "installed (stopped)"
+                    } else {
+                        "not installed"
+                    }
+                );
+                if !snapshot.covered_intervals.is_empty() {
+                    println!(
+                        "Covered intervals: {}",
+                        serde_json::to_string(&snapshot.covered_intervals)?
+                    );
+                }
+                if let Some(seconds) = snapshot.last_increment_seconds {
+                    println!("Last increment seconds: {seconds}");
+                }
+                if let Some(source) = snapshot.last_increment_source {
+                    println!("Last increment source: {source}");
+                }
+                println!("Discarded seconds: {}", snapshot.discarded_seconds);
+                if let Some(last_heartbeat_at) = snapshot.last_heartbeat_at {
+                    println!("Last heartbeat at: {}", last_heartbeat_at);
+                }
+            }
+        }
+        Commands::Verify { json } => {
+            let queue_count = queue_count();
+            let (status, authenticated, reachable, error) = match api_client.verify().await {
+                Ok(()) => ("verified", true, true, None),
+                Err(AppError::Auth(message)) => ("invalid_key", false, true, Some(message)),
+                Err(AppError::Http(error)) => {
+                    let status = error.status().map(|value| value.as_u16());
+                    let outcome = match status {
+                        Some(402) => "subscription_required",
+                        Some(value) if value >= 500 => "server_error",
+                        Some(401) => "invalid_key",
+                        Some(_) => "server_error",
+                        None => "unreachable",
+                    };
+                    (outcome, false, status.is_some(), Some(error.to_string()))
+                }
+                Err(AppError::HttpStatus { status, message }) => {
+                    let outcome = match status {
+                        402 => "subscription_required",
+                        401 => "invalid_key",
+                        value if value >= 500 => "server_error",
+                        _ => "server_error",
+                    };
+                    (outcome, false, true, Some(message))
+                }
+                Err(error) => ("server_error", false, false, Some(error.to_string())),
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": status,
+                        "server_url": config.server_url,
+                        "authenticated": authenticated,
+                        "reachable": reachable,
+                        "cli_version": env!("CARGO_PKG_VERSION"),
+                        "queue_count": queue_count,
+                        "error": error,
+                    })
+                );
+            } else {
+                println!("Status: {status}");
+                println!("Server URL: {}", config.server_url);
+                println!("Authenticated: {authenticated}");
+                println!("Reachable: {reachable}");
+                println!("CLI version: {}", env!("CARGO_PKG_VERSION"));
+                println!("Queue count: {queue_count}");
+                if let Some(error) = error {
+                    println!("Error: {error}");
+                }
+            }
         }
         Commands::Ai { action } => match action {
             AiAction::Status => print_ai_status()?,
@@ -467,9 +854,167 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .await?
             }
         },
+        Commands::Agent { action } => match action {
+            AgentAction::Run { interval_seconds } => {
+                run_agent_loop(&config, &api_client, interval_seconds.max(1)).await?;
+            }
+            AgentAction::Install { json } => {
+                let report = agent_service::install().map_err(io::Error::other)?;
+                print_agent_report(&report, json, queue_count());
+            }
+            AgentAction::Uninstall { json } => {
+                let report = agent_service::uninstall().map_err(io::Error::other)?;
+                print_agent_report(&report, json, queue_count());
+            }
+            AgentAction::Start { json } => {
+                let report = agent_service::start().map_err(io::Error::other)?;
+                print_agent_report(&report, json, queue_count());
+            }
+            AgentAction::Stop { json } => {
+                let report = agent_service::stop().map_err(io::Error::other)?;
+                print_agent_report(&report, json, queue_count());
+            }
+            AgentAction::Status { json } => {
+                let report = agent_service::status();
+                print_agent_report(&report, json, queue_count());
+            }
+        },
+        Commands::Repair { action } => match action {
+            RepairAction::Day {
+                date,
+                timezone,
+                dry_run,
+                apply,
+                json,
+            } => {
+                if dry_run && apply {
+                    return Err("choose exactly one of --dry-run or --apply".into());
+                }
+                let report = api_client
+                    .repair_day(&date, timezone.as_deref(), apply)
+                    .await?;
+                if json {
+                    println!("{}", serde_json::to_string(&report)?);
+                } else {
+                    println!("Date: {}", report.date);
+                    println!("Timezone: {}", report.timezone);
+                    println!("Before seconds: {}", report.before_seconds);
+                    println!("After seconds: {}", report.after_seconds);
+                    println!("Duplicate heartbeats: {}", report.duplicate_heartbeats);
+                    println!("Overlap seconds: {}", report.overlap_seconds);
+                    println!("Long-gap seconds: {}", report.long_gap_seconds);
+                    println!("Applied: {}", report.applied);
+                    println!("Dry run: {}", report.dry_run);
+                    if let Some(revision_id) = report.revision_id {
+                        println!("Revision: {revision_id}");
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
+}
+
+async fn run_agent_loop(
+    config: &Config,
+    api_client: &ApiClient,
+    interval_seconds: u64,
+) -> Result<(), Box<dyn Error>> {
+    let _lock = agent_service::AgentLock::acquire().map_err(io::Error::other)?;
+    agent_service::append_log(&format!(
+        "agent started pid={} interval={}s",
+        std::process::id(),
+        interval_seconds
+    ));
+    let interval = Duration::from_secs(interval_seconds);
+    loop {
+        let started = std::time::Instant::now();
+        let mut cycle_error: Option<String> = None;
+        match run_ai_sync(config, api_client, None, false, false, false, None).await {
+            Ok(()) => agent_service::append_log("scan completed"),
+            Err(error) => {
+                let message = error.to_string();
+                agent_service::append_log(&format!("scan failed: {message}"));
+                cycle_error = Some(message);
+            }
+        }
+
+        // The watcher also owns the durable offline queue. This keeps retries flowing
+        // while VS Code is closed and there are no fresh transcript events to trigger a
+        // normal heartbeat send.
+        match api_client.flush_queue().await {
+            Ok(report) => {
+                if report.flushed > 0 {
+                    agent_service::record_heartbeat();
+                    agent_service::append_log(&format!(
+                        "flushed {} queued heartbeat(s)",
+                        report.flushed
+                    ));
+                }
+                if let Some(error) = report.stopped_because {
+                    agent_service::append_log(&format!("queue flush stopped: {error}"));
+                    cycle_error.get_or_insert(error);
+                }
+            }
+            Err(error) => {
+                let message = format!("queue flush failed: {error}");
+                agent_service::append_log(&message);
+                cycle_error.get_or_insert(message);
+            }
+        }
+
+        if let Some(error) = cycle_error {
+            agent_service::record_scan(false, None, Some(&error));
+        } else {
+            agent_service::record_scan(true, None, None);
+        }
+        let elapsed = started.elapsed();
+        if elapsed < interval {
+            tokio::time::sleep(interval - elapsed).await;
+        }
+    }
+}
+
+fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, queue_count: usize) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "platform": report.platform,
+                "manifest": report.manifest,
+                "installed": report.installed,
+                "running": report.running,
+                "queue_count": queue_count,
+                "last_log": report.message,
+                "last_scan_at": report.last_scan_at,
+                "last_heartbeat_at": report.last_heartbeat_at,
+                "last_error": report.last_error,
+            })
+        );
+    } else {
+        println!("Platform: {}", report.platform);
+        println!("Manifest: {}", report.manifest);
+        println!("Installed: {}", report.installed);
+        println!("Running: {}", report.running);
+        println!("Queue count: {}", queue_count);
+        if let Some(message) = &report.message {
+            println!("Last log: {message}");
+        }
+        if let Some(last_scan_at) = report.last_scan_at {
+            println!("Last scan: {last_scan_at}");
+        }
+        if let Some(last_heartbeat_at) = report.last_heartbeat_at {
+            println!("Last heartbeat: {last_heartbeat_at}");
+        }
+        if let Some(last_error) = &report.last_error {
+            println!("Last error: {last_error}");
+        }
+    }
+}
+
+fn queue_count() -> usize {
+    Queue::open().and_then(|queue| queue.len()).unwrap_or(0)
 }
 
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
@@ -490,12 +1035,35 @@ fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
 fn print_ai_status() -> Result<(), Box<dyn Error>> {
     let context = ai_discovery_context()?;
     for (id, parser) in supported_ai_parsers() {
-        let result = parser.discover(&context);
+        let discoveries = parser.discover_sources(&context);
+        let paths: Vec<PathBuf> = discoveries
+            .iter()
+            .filter_map(|result| match &result.state {
+                DiscoveryState::TranscriptFound { path } => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        let result = discoveries
+            .into_iter()
+            .find(|result| !matches!(result.state, DiscoveryState::TranscriptFound { .. }))
+            .unwrap_or_else(|| DiscoveryResult {
+                state: DiscoveryState::TranscriptFound {
+                    path: paths.first().cloned().unwrap_or_default(),
+                },
+            });
         let description = match result.state {
             DiscoveryState::NotInstalled => "not installed".to_string(),
             DiscoveryState::InstalledNoTranscript => "installed, no transcript found".to_string(),
             DiscoveryState::TranscriptFound { path } => {
-                format!("transcript found: {}", path.display())
+                if paths.len() > 1 {
+                    format!(
+                        "{} transcripts found (latest: {})",
+                        paths.len(),
+                        path.display()
+                    )
+                } else {
+                    format!("transcript found: {}", path.display())
+                }
             }
             DiscoveryState::PermissionDenied { path } => {
                 format!("permission denied: {}", path.display())
@@ -528,6 +1096,13 @@ async fn run_ai_sync(
     let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
     let mut first_delivery_error: Option<AppError> = None;
+    // A sync can discover many transcript files, and each parser currently
+    // returns the usage records for the whole file. Accumulate and deduplicate
+    // them here so one pass makes one bounded upload instead of hammering the
+    // API once per transcript (the previous behavior produced hundreds of
+    // simultaneous 500s when the server was unhealthy).
+    let mut pending_usage_records = Vec::new();
+    let mut pending_usage_ids = HashSet::new();
 
     for (id, parser) in supported_ai_parsers() {
         if agent_filter.is_some_and(|filter| filter != id) {
@@ -537,129 +1112,234 @@ async fn run_ai_sync(
             println!("== {id} ==");
         }
 
-        let transcript_path = if let Some(path) = transcript_override {
+        let transcript_paths: Vec<PathBuf> = if let Some(path) = transcript_override {
             let path = path.canonicalize()?;
             if !path.is_file() {
                 return Err(format!("transcript is not a file: {}", path.display()).into());
             }
-            path
+            vec![path]
         } else {
-            let discovery = parser.discover(&context);
-            match discovery.state {
-                DiscoveryState::TranscriptFound { path } => path,
-                DiscoveryState::NotInstalled => {
-                    if verbose {
-                        println!("  not installed, skipping");
+            let mut paths = Vec::new();
+            for discovery in parser.discover_sources(&context) {
+                match discovery.state {
+                    DiscoveryState::TranscriptFound { path } => paths.push(path),
+                    DiscoveryState::NotInstalled => {
+                        if verbose && paths.is_empty() {
+                            println!("  not installed, skipping");
+                        }
                     }
-                    continue;
-                }
-                DiscoveryState::InstalledNoTranscript => {
-                    if verbose {
-                        println!("  installed but no transcript found, skipping");
+                    DiscoveryState::InstalledNoTranscript => {
+                        if verbose && paths.is_empty() {
+                            println!("  installed but no transcript found, skipping");
+                        }
                     }
-                    continue;
-                }
-                DiscoveryState::PermissionDenied { path } => {
-                    if verbose {
-                        println!("  permission denied reading {}, skipping", path.display());
+                    DiscoveryState::PermissionDenied { path } => {
+                        if verbose {
+                            println!("  permission denied reading {}, skipping", path.display());
+                        }
                     }
-                    continue;
-                }
-                DiscoveryState::UnsupportedVersion { path, .. } => {
-                    if verbose {
-                        println!(
-                            "  unsupported transcript version at {}, skipping",
-                            path.display()
-                        );
+                    DiscoveryState::UnsupportedVersion { path, .. } => {
+                        if verbose {
+                            println!(
+                                "  unsupported transcript version at {}, skipping",
+                                path.display()
+                            );
+                        }
                     }
-                    continue;
                 }
             }
+            paths
         };
 
-        // Resume from the saved cursor only if it still points at the same file — a
-        // new session file (Claude Code starts one per session) means byte offset 0
-        // against the file discover() just found, not a stale offset into a file we
-        // may no longer even be able to read.
-        let source_path_string = transcript_path.to_string_lossy().into_owned();
-        let existing_cursor = state.load_cursor(id)?;
-        let cursor = match existing_cursor {
-            Some(cursor) if !from_start && cursor.source_path == source_path_string => cursor,
-            _ => ParserCursor {
-                source_path: source_path_string,
-                file_identity: None,
-                byte_offset: 0,
-                last_record_id: None,
-                last_record_time: None,
-            },
-        };
+        for transcript_path in transcript_paths {
+            // Resume from the saved cursor only if it still points at the same file — a
+            // new session file (Claude Code starts one per session) means byte offset 0
+            // against the file discover() just found, not a stale offset into a file we
+            // may no longer even be able to read.
+            let source_path_string = transcript_path.to_string_lossy().into_owned();
+            let cursor_key = format!("{id}:{}", source_path_string);
+            let existing_cursor = state.load_cursor(&cursor_key)?;
+            let file_len = fs::metadata(&transcript_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            let file_identity = transcript_identity(&transcript_path);
+            let cursor = match existing_cursor {
+                Some(cursor)
+                    if !from_start
+                        && cursor.source_path == source_path_string
+                        && cursor.file_identity == file_identity
+                        && cursor.byte_offset <= file_len =>
+                {
+                    cursor
+                }
+                _ => ParserCursor {
+                    source_path: source_path_string.clone(),
+                    file_identity: file_identity.clone(),
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                },
+            };
 
-        let batch = parser.parse_since(&ParseContext::default(), Some(&cursor))?;
-        // Usage is parsed independently from file-edit events: one model response may edit
-        // several files, and copying its token count to each file would inflate totals.
-        let usage_records = match id {
-            "claude-code" => parse_claude_usage(&transcript_path)?,
-            "codex" => parse_codex_usage(&transcript_path)?,
-            "gemini-cli" => parse_gemini_usage(&transcript_path)?,
-            _ => Vec::new(),
-        };
-        if verbose {
-            for warning in &batch.warnings {
-                eprintln!("  warning: {}", warning.message);
+            // On first discovery, old transcripts are intentionally seeded at EOF. This
+            // keeps a newly-installed always-on agent from uploading an entire history;
+            // recent files (and explicit --from-start) still replay normally.
+            let is_first_cursor = state.load_cursor(&cursor_key)?.is_none();
+            let is_old = fs::metadata(&transcript_path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
+                .is_some_and(|age| age > Duration::from_secs(24 * 60 * 60));
+            if !from_start && is_first_cursor && is_old {
+                let mut seeded = cursor.clone();
+                seeded.byte_offset = file_len;
+                state.save_cursor(&cursor_key, &seeded)?;
+                if verbose {
+                    println!("  old transcript seeded at EOF ({file_len} bytes)");
+                }
+                continue;
             }
-        }
 
-        let candidate_ids: Vec<String> = batch
-            .events
-            .iter()
-            .map(|event| event.event_id.clone())
-            .collect();
-        let undelivered = state.filter_undelivered(&candidate_ids)?;
-        let new_events: Vec<&AiEditEvent> = batch
-            .events
-            .iter()
-            .filter(|event| undelivered.contains(&event.event_id))
-            .collect();
-        let mut new_events = new_events;
-        new_events.sort_by_key(|event| event.occurred_at);
-
-        if verbose {
-            println!(
-                "  {} event(s) parsed since last sync, {} already delivered, {} new",
-                batch.events.len(),
-                batch.events.len() - new_events.len(),
-                new_events.len()
-            );
-            if !usage_records.is_empty() {
-                println!(
-                    "  {} usage record(s) available for idempotent upload",
-                    usage_records.len()
-                );
-            }
-        }
-
-        if dry_run {
+            let batch = parser.parse_since(&ParseContext::default(), Some(&cursor))?;
+            // Usage is parsed independently from file-edit events: one model response may edit
+            // several files, and copying its token count to each file would inflate totals.
+            let usage_records = match id {
+                "claude-code" => parse_claude_usage(&transcript_path)?,
+                "codex" => parse_codex_usage(&transcript_path)?,
+                "gemini-cli" => parse_gemini_usage(&transcript_path)?,
+                _ => Vec::new(),
+            };
             if verbose {
-                for event in &new_events {
+                for warning in &batch.warnings {
+                    eprintln!("  warning: {}", warning.message);
+                }
+            }
+
+            let candidate_ids: Vec<String> = batch
+                .events
+                .iter()
+                .map(|event| event.event_id.clone())
+                .collect();
+            let undelivered = state.filter_undelivered(&candidate_ids)?;
+            let new_events: Vec<&AiEditEvent> = batch
+                .events
+                .iter()
+                .filter(|event| undelivered.contains(&event.event_id))
+                .collect();
+            let mut new_events = new_events;
+            new_events.sort_by_key(|event| event.occurred_at);
+
+            if verbose {
+                println!(
+                    "  {} event(s) parsed since last sync, {} already delivered, {} new",
+                    batch.events.len(),
+                    batch.events.len() - new_events.len(),
+                    new_events.len()
+                );
+                if !usage_records.is_empty() {
                     println!(
-                        "  [dry-run] {} {} +{}/-{} model={}",
-                        event.event_id,
-                        event.entity.display(),
-                        event.lines_added.unwrap_or(0),
-                        event.lines_deleted.unwrap_or(0),
-                        event.model.as_deref().unwrap_or("unknown")
+                        "  {} usage record(s) available for idempotent upload",
+                        usage_records.len()
                     );
                 }
             }
-            continue;
-        }
 
-        if !usage_records.is_empty() {
-            match api_client.send_ai_usage(&usage_records).await {
+            if dry_run {
+                if verbose {
+                    for event in &new_events {
+                        println!(
+                            "  [dry-run] {} {} +{}/-{} model={}",
+                            event.event_id,
+                            event.entity.display(),
+                            event.lines_added.unwrap_or(0),
+                            event.lines_deleted.unwrap_or(0),
+                            event.model.as_deref().unwrap_or("unknown")
+                        );
+                    }
+                }
+                continue;
+            }
+
+            if !dry_run {
+                for record in usage_records {
+                    if pending_usage_ids.insert(record.usage_event_id.clone()) {
+                        pending_usage_records.push(record);
+                    }
+                }
+            }
+
+            if !new_events.is_empty() {
+                let mut heartbeats = Vec::with_capacity(new_events.len());
+                for event in &new_events {
+                    let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
+                    let fingerprint_entity = normalize_entity(&event.entity.to_string_lossy())?;
+                    if state.has_fingerprint(
+                        &fingerprint_entity,
+                        event_time,
+                        event.lines_added.unwrap_or(0),
+                        event.lines_deleted.unwrap_or(0),
+                    )? {
+                        // The hook path already emitted this patch. Mark the transcript
+                        // event delivered so a future cursor replay remains idempotent.
+                        state.mark_delivered(&event.event_id, &cursor_key)?;
+                        continue;
+                    }
+                    let active_seconds = state.record_activity(
+                        AI_ACTIVITY_STREAM,
+                        event_time,
+                        AI_ACTIVITY_TIMEOUT_SECONDS,
+                    )?;
+                    heartbeats.push(build_ai_heartbeat(config, event, active_seconds));
+                }
+                if !heartbeats.is_empty() {
+                    let report = api_client.send_heartbeats(heartbeats.clone()).await?;
+                    if verbose {
+                        println!(
+                            "  sent {} (deduped {}, queued {}, flushed {})",
+                            report.sent, report.deduped, report.queued, report.flushed
+                        );
+                    }
+                    if report.sent > 0 || report.queued > 0 {
+                        agent_service::record_heartbeat();
+                    }
+                }
+                for event in &new_events {
+                    state.mark_delivered(&event.event_id, &cursor_key)?;
+                    state.mark_fingerprint(
+                        &normalize_entity(&event.entity.to_string_lossy())?,
+                        event.occurred_at.timestamp_millis() as f64 / 1000.0,
+                        event.lines_added.unwrap_or(0),
+                        event.lines_deleted.unwrap_or(0),
+                        Some(&event.event_id),
+                    )?;
+                }
+            }
+
+            state.save_cursor(&cursor_key, &batch.next_cursor)?;
+        }
+    }
+
+    if !dry_run && !pending_usage_records.is_empty() {
+        // Usage parsers intentionally read complete transcripts so they can handle
+        // provider rotations and non-JSONL envelopes. Filter the stable provider IDs
+        // against local acknowledgements before uploading; otherwise the 5-second
+        // watcher would resend every historical token row on every scan.
+        let candidate_usage_ids: Vec<String> = pending_usage_records
+            .iter()
+            .map(|record| record.usage_event_id.clone())
+            .collect();
+        let undelivered_usage = state.filter_undelivered_usage(&candidate_usage_ids)?;
+        pending_usage_records.retain(|record| undelivered_usage.contains(&record.usage_event_id));
+
+        // The API accepts at most 2,000 usage records per request. Keep the
+        // chunks deterministic and stop after the first failure so a broken
+        // server is not flooded with retries during one scan.
+        for chunk in pending_usage_records.chunks(2_000) {
+            match api_client.send_ai_usage(chunk).await {
                 Ok(report) => {
                     if verbose {
                         println!(
-                            "  usage: received {}, stored {}, duplicate-in-batch {}, unpriced {}, sessions {}",
+                            "usage: received {}, stored {}, duplicate-in-batch {}, unpriced {}, sessions {}",
                             report.received,
                             report.stored,
                             report.duplicates_in_batch,
@@ -667,41 +1347,21 @@ async fn run_ai_sync(
                             report.sessions_touched
                         );
                     }
+                    let delivered_ids: Vec<String> = chunk
+                        .iter()
+                        .map(|record| record.usage_event_id.clone())
+                        .collect();
+                    state.mark_usage_delivered(&delivered_ids)?;
                 }
                 Err(error) => {
                     if verbose {
-                        eprintln!("  warning: usage upload failed: {error}");
+                        eprintln!("warning: usage upload failed: {error}");
                     }
-                    if first_delivery_error.is_none() {
-                        first_delivery_error = Some(error);
-                    }
+                    first_delivery_error = Some(error);
+                    break;
                 }
             }
         }
-
-        if !new_events.is_empty() {
-            let mut heartbeats = Vec::with_capacity(new_events.len());
-            for event in &new_events {
-                let active_seconds = state.record_activity(
-                    AI_ACTIVITY_STREAM,
-                    event.occurred_at.timestamp_millis() as f64 / 1000.0,
-                    AI_ACTIVITY_TIMEOUT_SECONDS,
-                )?;
-                heartbeats.push(build_ai_heartbeat(config, event, active_seconds));
-            }
-            let report = api_client.send_heartbeats(heartbeats).await?;
-            if verbose {
-                println!(
-                    "  sent {} (deduped {}, queued {}, flushed {})",
-                    report.sent, report.deduped, report.queued, report.flushed
-                );
-            }
-            for event in &new_events {
-                state.mark_delivered(&event.event_id, id)?;
-            }
-        }
-
-        state.save_cursor(id, &batch.next_cursor)?;
     }
 
     // A dry run must not mutate delivery state. In particular, pruning here used to
@@ -772,6 +1432,7 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
         .and_then(|value| value.into_string().ok())
         .unwrap_or_else(|| "unknown".to_string());
     heartbeat.editor = "wakaclock-ai-sync".to_string();
+    heartbeat.heartbeat_id = Some(format!("ai:{}", event.event_id));
     heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
     heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
 
@@ -797,6 +1458,14 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
     heartbeat.ai_lines_added = event.lines_added;
     heartbeat.ai_lines_deleted = event.lines_deleted;
     heartbeat.active_seconds = Some(active_seconds);
+    if active_seconds > 0.0 {
+        heartbeat.activity_segments.push(ActivitySegment {
+            segment_id: format!("ai:{}:segment", event.event_id),
+            start: (heartbeat.time - active_seconds).max(0.0),
+            end: heartbeat.time,
+            source: Some("ai".to_string()),
+        });
+    }
 
     heartbeat
 }
@@ -848,6 +1517,10 @@ fn build_heartbeat(
         heartbeat.chars_added = extra.chars_added;
         heartbeat.chars_deleted = extra.chars_deleted;
         heartbeat.active_seconds = extra.active_seconds;
+        heartbeat.heartbeat_id = extra
+            .heartbeat_id
+            .or_else(|| Some(Uuid::new_v4().to_string()));
+        heartbeat.activity_segments = extra.activity_segments;
         // Presence of `ai_agent` is the whole signal — see the CLI flag's doc comment
         // for why there is no separate `is_ai_generated` flag to keep in sync with it.
         heartbeat.is_ai_generated = extra.ai_agent.is_some();
@@ -865,8 +1538,68 @@ fn build_heartbeat(
         heartbeat.unattributed_lines_deleted = extra.unattributed_lines_deleted;
     }
 
+    if heartbeat.heartbeat_id.is_none() {
+        heartbeat.heartbeat_id = Some(Uuid::new_v4().to_string());
+    }
+
     heartbeat.validate().map_err(io::Error::other)?;
     Ok(heartbeat)
+}
+
+/// Append the calling plugin to `user_agent`, WakaTime-style (`wakatime/x go/y plugin/z`).
+/// The CLI identity stays first so existing parsing of the prefix is unaffected.
+fn apply_plugin_user_agent(heartbeat: &mut Heartbeat, plugin: Option<&str>) {
+    let Some(plugin) = plugin.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    heartbeat.user_agent = format!("{} {plugin}", heartbeat.user_agent);
+}
+
+fn ensure_activity_segment(heartbeat: &mut Heartbeat) {
+    if !heartbeat.activity_segments.is_empty() {
+        return;
+    }
+    // A legacy client may still send one large `active_seconds` value. It is not split
+    // into a run of apparently-valid 120-second intervals — that would let one heartbeat
+    // manufacture its own idle time, which is exactly what the strict timeline removes.
+    // But it is no longer discarded either: dropping it made the entire heartbeat worth
+    // zero seconds, silently. Keep the trailing window this heartbeat can actually prove
+    // and let the server's idle bridging recover the rest from neighbouring evidence.
+    let Some(raw_seconds) = heartbeat.active_seconds.filter(|value| *value > 0.0) else {
+        return;
+    };
+    let seconds = raw_seconds.min(MAX_ACTIVITY_GAP_SECONDS);
+    if raw_seconds > MAX_ACTIVITY_GAP_SECONDS {
+        eprintln!(
+            "wakaclock: clamped active_seconds {raw_seconds:.0}s -> {seconds:.0}s for {}; \
+             this client should send activity_segments instead",
+            heartbeat.entity
+        );
+    }
+    let base = heartbeat
+        .heartbeat_id
+        .as_deref()
+        .or(heartbeat.ai_event_id.as_deref())
+        .unwrap_or("legacy");
+    let source = Some(if heartbeat.is_ai_generated {
+        "ai".to_string()
+    } else {
+        "editor".to_string()
+    });
+    let start = (heartbeat.time - seconds).max(0.0);
+    let mut cursor = start;
+    let mut index = 0usize;
+    while cursor < heartbeat.time {
+        let end = (cursor + MAX_ACTIVITY_GAP_SECONDS).min(heartbeat.time);
+        heartbeat.activity_segments.push(ActivitySegment {
+            segment_id: format!("{base}:segment:{index}"),
+            start: cursor,
+            end,
+            source: source.clone(),
+        });
+        cursor = end;
+        index += 1;
+    }
 }
 
 fn normalize_entity(entity: &str) -> Result<String, Box<dyn Error>> {
@@ -877,6 +1610,28 @@ fn normalize_entity(entity: &str) -> Result<String, Box<dyn Error>> {
         std::env::current_dir()?.join(path)
     };
     Ok(full_path.to_string_lossy().to_string())
+}
+
+fn transcript_identity(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Some(format!("dev:{}:ino:{}", metadata.dev(), metadata.ino()));
+    }
+    #[cfg(not(unix))]
+    {
+        let modified = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        Some(format!(
+            "len:{}:mtime:{}",
+            metadata.len(),
+            modified.as_secs()
+        ));
+    }
 }
 
 fn read_extra_heartbeats() -> Result<Vec<ExtraHeartbeatInput>, Box<dyn Error>> {
@@ -910,7 +1665,7 @@ fn identity_line(config: &Config) -> String {
     if config.api_key.is_some() {
         "API key: present in config.toml (not verified here)".to_string()
     } else {
-        "API key: missing — run `wakaclock config set-key <KEY>`; requests will be rejected"
+        "API key: missing — run `printf '<KEY>\\n' | wakaclock config set-key --stdin; requests will be rejected"
             .to_string()
     }
 }
@@ -922,4 +1677,18 @@ fn detect_editor() -> String {
         .or_else(|| std::env::var("TERM_PROGRAM").ok())
         .or_else(|| std::env::var("EDITOR").ok())
         .unwrap_or_else(|| "wakaclock-cli".to_string())
+}
+
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0).floor() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let secs = total % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {secs}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {secs}s")
+    } else {
+        format!("{secs}s")
+    }
 }

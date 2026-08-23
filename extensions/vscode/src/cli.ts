@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
 import type {
     ApiKeySyncResult,
+    ActivitySegment,
     CliResult,
     ExtraHeartbeatPayload,
     HeartbeatCategory,
     StatusBarSnapshot,
     StatusSnapshot,
     WakaclockConfigSnapshot,
+    VerifyResult,
 } from "./types";
 import { Logger } from "./logging";
+import type { CliPathResolver } from "./managedCli";
 
 export class WakaclockCliService {
     public constructor(
@@ -18,6 +21,13 @@ export class WakaclockCliService {
         private readonly getApiKey: () => Thenable<
             string | undefined
         > = () => Promise.resolve(undefined),
+        private readonly managedCli?: CliPathResolver,
+        /**
+         * Stamped into every heartbeat's `user_agent`. A running extension host keeps
+         * the JS it loaded at window start, so a rebuilt extension can go unused for
+         * hours; without this the stored heartbeats give no hint which build sent them.
+         */
+        private readonly pluginId?: string,
     ) {}
 
     public async sendHeartbeat(
@@ -69,6 +79,11 @@ export class WakaclockCliService {
             "--active-seconds",
             primaryExtra.active_seconds,
         );
+        this.pushOptionalString(args, "--heartbeat-id", primaryExtra.heartbeat_id);
+        this.pushOptionalString(args, "--plugin", this.pluginId);
+        if (primaryExtra.activity_segments?.length) {
+            args.push("--activity-segments", JSON.stringify(primaryExtra.activity_segments));
+        }
         this.pushOptionalString(args, "--ai-agent", primaryExtra.ai_agent);
         this.pushOptionalString(args, "--ai-provider", primaryExtra.ai_provider);
         this.pushOptionalString(args, "--ai-model", primaryExtra.ai_model);
@@ -101,13 +116,64 @@ export class WakaclockCliService {
         return this.runCli(args, stdinPayload);
     }
 
-    public async getToday(): Promise<StatusBarSnapshot> {
-        const result = await this.runCli(["today"]);
+    public async getToday(timezone?: string): Promise<StatusBarSnapshot> {
+        const args = ["today"];
+        if (timezone?.trim()) {
+            args.push("--timezone", timezone.trim());
+        }
+        let legacyCli = false;
+        let result: CliResult;
+        try {
+            result = await this.runCli(args);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+                !timezone ||
+                !/unexpected argument|found argument.*timezone|usage:/i.test(message)
+            ) {
+                throw error;
+            }
+            // Older binaries predate timezone/JSON support. Keep the status bar
+            // useful while explicitly surfacing that the CLI should be upgraded.
+            legacyCli = true;
+            this.logger.warn("wakaclock-cli does not support --timezone; using UTC fallback", {
+                error: message
+            });
+            result = await this.runCli(["today"]);
+        }
         const lines = this.parseKeyValueLines(result.stdout);
+        const queuedSeconds = lines["Queued seconds"];
+        const confirmedSeconds = lines["Confirmed seconds"];
+        const lastHeartbeatAt = lines["Last heartbeat at"];
+        const agentState = lines.Agent;
+        const coveredIntervals = this.parseJson<ActivitySegment[]>(lines["Covered intervals"]);
         return {
             humanReadable: lines.Today ?? "0s",
             totalSeconds: Number(lines["Total seconds"] ?? "0"),
             heartbeatCount: Number(lines.Heartbeats ?? "0"),
+            ...(confirmedSeconds === undefined
+                ? {}
+                : { confirmedSeconds: Number(confirmedSeconds) }),
+            ...(queuedSeconds === undefined
+                ? {}
+                : { queuedSeconds: Number(queuedSeconds) }),
+            ...(lastHeartbeatAt === undefined
+                ? {}
+                : { lastHeartbeatAt: Number(lastHeartbeatAt) }),
+            ...(agentState === undefined
+                ? {}
+                : { agentHealth: { state: agentState } }),
+            ...(coveredIntervals === undefined ? {} : { coveredIntervals }),
+            ...(lines["Last increment seconds"] === undefined
+                ? {}
+                : { lastIncrementSeconds: Number(lines["Last increment seconds"]) }),
+            ...(lines["Last increment source"] === undefined
+                ? {}
+                : { lastIncrementSource: lines["Last increment source"] }),
+            ...(lines["Discarded seconds"] === undefined
+                ? {}
+                : { discardedSeconds: Number(lines["Discarded seconds"]) }),
+            ...(legacyCli ? { legacyCli: true } : {}),
         };
     }
 
@@ -118,7 +184,60 @@ export class WakaclockCliService {
     // extension passes to its own spawned CLI calls (see runCli below) — config.toml
     // is the only channel those hooks can read a key from.
     public async setApiKey(key: string): Promise<void> {
-        await this.runCli(["config", "set-key", key]);
+        // Compatibility for callers that construct this service without the
+        // ManagedCliManager (older integrations/tests). The published Extension
+        // always supplies the manager and therefore uses the stdin path below.
+        if (!this.managedCli) {
+            await this.runCli(["config", "set-key", key]);
+            return;
+        }
+        await this.persistApiKey(key);
+    }
+
+    /** Persist credentials only after the user has explicitly enabled an AI agent. */
+    public async persistApiKey(key: string): Promise<void> {
+        await this.runCli(
+            ["config", "set-key", "--stdin", "--json"],
+            `${key.trim()}\n`,
+        );
+        const serverUrl = this.getConfig().serverUrl?.trim();
+        if (serverUrl) {
+            await this.runCli(["config", "set-server-url", serverUrl, "--json"]);
+        }
+    }
+
+    /** Verify a candidate through the managed CLI without writing it to config.toml. */
+    public async verifyApiKey(key?: string): Promise<VerifyResult> {
+        try {
+            const result = await this.runCli(
+                ["verify", "--json"],
+                undefined,
+                key,
+            );
+            const parsed = this.parseJson<VerifyResult>(result.stdout.trim());
+            if (
+                parsed?.status &&
+                new Set([
+                    "verified",
+                    "invalid_key",
+                    "subscription_required",
+                    "unreachable",
+                    "server_error",
+                    "incompatible",
+                ]).has(parsed.status)
+            ) {
+                return parsed;
+            }
+            return {
+                status: "incompatible",
+                error: "wakaclock-cli returned an invalid verify response",
+            };
+        } catch (error) {
+            return {
+                status: "incompatible",
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
     }
 
     /**
@@ -132,23 +251,38 @@ export class WakaclockCliService {
      * the user pastes the key, turns that silent failure into an immediate answer.
      */
     public async syncAndVerifyApiKey(key: string): Promise<ApiKeySyncResult> {
-        const result: ApiKeySyncResult = { mirroredToCliConfig: true, verified: false };
-
-        try {
-            await this.setApiKey(key);
-        } catch (error) {
-            result.mirroredToCliConfig = false;
-            result.mirrorError = error instanceof Error ? error.message : String(error);
+        // Keep the pre-managed-CLI contract for external embedders. A packaged
+        // AtoAxis activation always takes the secure candidate-verification branch.
+        if (!this.managedCli) {
+            const legacy: ApiKeySyncResult = { mirroredToCliConfig: true, verified: false };
+            try {
+                await this.setApiKey(key);
+            } catch (error) {
+                legacy.mirroredToCliConfig = false;
+                legacy.mirrorError = error instanceof Error ? error.message : String(error);
+            }
+            try {
+                await this.getToday();
+                legacy.verified = true;
+            } catch (error) {
+                legacy.verifyError = error instanceof Error ? error.message : String(error);
+            }
+            return legacy;
         }
-
-        try {
-            await this.getToday();
-            result.verified = true;
-        } catch (error) {
-            result.verifyError = error instanceof Error ? error.message : String(error);
-        }
-
-        return result;
+        const verification = await this.verifyApiKey(key);
+        const verified = verification.status === "verified";
+        const pending =
+            verification.status === "unreachable" || verification.status === "server_error";
+        return {
+            // The key deliberately remains in SecretStorage until an AI integration
+            // is consented to. Ordinary editor heartbeats inherit it through env.
+            mirroredToCliConfig: false,
+            verified,
+            status: verification.status,
+            pending,
+            serverUrl: verification.server_url ?? this.getConfig().serverUrl,
+            ...(verification.error ? { verifyError: verification.error } : {}),
+        };
     }
 
     public async clearApiKey(): Promise<void> {
@@ -167,15 +301,60 @@ export class WakaclockCliService {
         };
     }
 
+    public async installAgent(): Promise<CliResult> {
+        return this.runCli(["agent", "install", "--json"]);
+    }
+
+    /**
+     * Hosts without LaunchAgent/systemd/Task Scheduler (containers, Codespaces and
+     * some remote SSH sessions) keep the watcher alive with the Extension Host. It
+     * is intentionally a separate child from ordinary heartbeat requests.
+     */
+    public async startExtensionOwnedAgent(): Promise<{ dispose(): void }> {
+        const config = this.getConfig();
+        const cliPath = this.managedCli
+            ? await this.managedCli.ensureReady()
+            : config.cliPath || "wakaclock";
+        const apiKey = await this.getApiKey();
+        const child = spawn(cliPath, ["agent", "run"], {
+            stdio: "ignore",
+            detached: false,
+            env: {
+                ...process.env,
+                WAKACLOCK_EDITOR: "vscode",
+                WAKACLOCK_SERVER_URL:
+                    config.serverUrl?.trim() || "https://api.atoaxis.com",
+                ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
+            },
+        });
+        child.on("error", (error) => {
+            this.logger.warn("extension-owned AtoAxis agent stopped unexpectedly", {
+                error: error.message,
+            });
+        });
+        this.logger.debug("started extension-owned AtoAxis agent", { cliPath });
+        return {
+            dispose: () => {
+                if (!child.killed) {
+                    child.kill();
+                }
+            },
+        };
+    }
+
     private async runCli(
         args: string[],
         stdinPayload?: string,
+        apiKeyOverride?: string,
     ): Promise<CliResult> {
-        const { cliPath } = this.getConfig();
+        const config = this.getConfig();
+        const cliPath = this.managedCli
+            ? await this.managedCli.ensureReady()
+            : config.cliPath || "wakaclock";
         // Passed as an env var, not a `--api-key` CLI flag: process argv is visible to
         // any other process on the machine via `ps`, an env var passed directly to the
         // child is not.
-        const apiKey = await this.getApiKey();
+        const apiKey = apiKeyOverride ?? (await this.getApiKey());
         this.logger.debug("spawning wakaclock-cli", {
             cliPath,
             args,
@@ -189,6 +368,8 @@ export class WakaclockCliService {
                 env: {
                     ...process.env,
                     WAKACLOCK_EDITOR: "vscode",
+                    WAKACLOCK_SERVER_URL:
+                        config.serverUrl?.trim() || "https://api.atoaxis.com",
                     ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
                 },
             });
@@ -208,7 +389,7 @@ export class WakaclockCliService {
             child.on("error", (error) => {
                 reject(
                     new Error(
-                        `Failed to start wakaclock-cli at "${cliPath}". ${error.message}. Configure wakaclock.cliPath if needed.`,
+                        `Failed to start wakaclock-cli at "${cliPath}". ${error.message}. The bundled AtoAxis CLI may be unavailable; check the Extension installation or use the advanced cliPath override.`,
                     ),
                 );
             });
@@ -256,6 +437,18 @@ export class WakaclockCliService {
         }
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    private parseJson<T>(value?: string): T | undefined {
+        if (!value?.trim()) {
+            return undefined;
+        }
+        try {
+            return JSON.parse(value) as T;
+        } catch {
+            this.logger.warn("wakaclock-cli returned malformed JSON field", { value });
+            return undefined;
+        }
     }
 
     private pushOptionalNumber(

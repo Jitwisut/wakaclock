@@ -18,6 +18,7 @@ pub mod claude;
 pub mod codex;
 pub mod correlation;
 pub mod event;
+pub mod follow_up;
 pub mod gemini;
 mod jsonl;
 pub mod parser;
@@ -32,6 +33,7 @@ pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
+pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,

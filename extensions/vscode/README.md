@@ -2,8 +2,10 @@
 
 AtoAxis records how long you spend coding in VS Code and breaks it down by project,
 programming language, branch and editor. This extension captures editor activity,
-buffers it in memory, and delegates heartbeat delivery to `wakaclock-cli`, which sends
-it to a self-hosted AtoAxis server you run yourself.
+buffers it in memory, and delegates heartbeat delivery to the `wakaclock` binary, which sends
+it to the hosted AtoAxis API. The Marketplace package contains the native CLI for
+your operating system, so no Rust toolchain, terminal process or manual binary path
+is required.
 
 > **Naming:** the product is AtoAxis, but the CLI binary, config directory and setting
 > keys still ship under the original `wakaclock` name. Commands below are written
@@ -16,48 +18,40 @@ it to a self-hosted AtoAxis server you run yourself.
 - Emits `debugging` heartbeats for debug sessions and `building` heartbeats for tasks
 - Shows today's total coding time in the status bar
 - Stores your API key in VS Code secret storage, not in `settings.json`
-- Buffers activity in memory and flushes on an interval instead of sending per keystroke
+- Sends the first edit/save/switch marker immediately, then rate-limits the same file to
+  120 seconds while new activity continues
+- Keeps one global activity timeline so switching files cannot count the same seconds twice
+- Shows server-confirmed, offline-queued and local-buffer seconds (including seconds), and
+  stops increasing as soon as activity stops
 
 ## Requirements
 
 - VS Code 1.90 or newer
-- `wakaclock-cli` on your `PATH`, or configured via `wakaclock.cliPath`
-- A running AtoAxis server and a config file at `~/.wakaclock/config.toml`
+- An AtoAxis API key from your account
 
 ## Installation
 
-Install the extension, then set your API key from the command palette:
+Install the platform-specific AtoAxis extension from the VS Code Marketplace, then
+set your API key from the command palette:
 
 ```
 > Wakaclock: Set API Key
-> Wakaclock: Configure CLI Path   # only if the binary is not on PATH
 ```
-
-Alternatively, point at an explicit binary in `settings.json`:
-
-```json
-{
-  "wakaclock.cliPath": "/usr/local/bin/wakaclock-cli",
-  "wakaclock.statusBarEnabled": true
-}
-```
-
-Verify that tracking works:
-
-```bash
-wakaclock-cli status   # server reachable and key present
-wakaclock-cli today    # today's total
-```
+The extension verifies the candidate key before replacing an existing one. If the
+server is temporarily offline, it keeps the key pending and queues activity locally.
+The status bar shows `AtoAxis: Connect`, `Connecting`, `Verified` or `Offline queued`.
 
 ## How it works
 
 - Typing updates an in-memory buffer for the current file
 - Saving flushes immediately and marks the heartbeat as a write
 - Switching files flushes the file you left
-- Pending typing is flushed on a timer, every 30 seconds by default
-- Resuming the same file after a gap starts a new heartbeat window
-- Background heartbeats stop after the idle threshold passes with no activity
-- The status bar total comes from `wakaclock-cli today`
+- A 30-second timer checks buffers, but does not bypass the 120-second heartbeat cadence
+- Resuming the same file after a gap starts a new heartbeat window; gaps over 120 seconds
+  are never counted, even when the deprecated `idleMinutes` setting is 15
+- CLI delivery is serialized and retains activity that arrives while a request is in flight
+- The status bar refreshes every 15 seconds and renders local activity immediately without
+  creating a persisted or visual tail after the final event
 
 ## Supported editors
 
@@ -67,12 +61,13 @@ plugin can point its `api_url` at your AtoAxis server instead.
 
 ## AI tracking
 
-After installation, run `AtoAxis: Show AI Tracking Status`. If Claude Code, Codex CLI or
-Gemini CLI is present, `AtoAxis: Set Up AI Tracking` registers the corresponding hook
-with a stable path that survives VS Code extension updates. The first activation also
-offers this setup once; it never edits another tool's config without your confirmation.
-The configured `wakaclock.cliPath` is mirrored to `~/.wakaclock/cli-path` so hooks can
-use an absolute CLI path even when the binary is not on the AI tool's `PATH`.
+After the API key is verified, AtoAxis detects Claude Code, Codex CLI and Gemini CLI in
+the background. A multi-select consent dialog lets you enable each tool independently;
+`Not now` defers the prompt and `Don't ask again` disables it. Only after consent does
+the extension install hooks/transcript watching and write the key to the protected
+agent config. The agent scans transcripts every five seconds, so AI edits are still
+recorded when VS Code is closed. Windows and hosts without a service manager use the
+transcript watcher while the Extension Host is open.
 
 The hooks send only metadata: agent/provider, optional model, file path, line deltas,
 timestamp and a stable event id. Claude Code is attributed to Anthropic, Codex to
@@ -95,10 +90,12 @@ ClickHouse database on infrastructure you control.
 
 | Setting                              | Default | Description                                            |
 | ------------------------------------ | ------- | ------------------------------------------------------ |
-| `wakaclock.cliPath`                  | `""`    | Absolute path to `wakaclock-cli`; empty resolves `PATH` |
-| `wakaclock.flushIntervalSeconds`     | `30`    | How often buffered typing is flushed                    |
-| `wakaclock.sameFileHeartbeatMinutes` | `2`     | Gap after which the same file starts a new window       |
-| `wakaclock.idleMinutes`              | `5`     | Stop background heartbeats after this much inactivity   |
+| `wakaclock.cliPath`                  | `""`    | Advanced global development override; bundled CLI is used by default |
+| `wakaclock.serverUrl`                | `https://api.atoaxis.com` | Advanced global server-origin override |
+| `wakaclock.flushIntervalSeconds`     | `30`    | How often buffered activity is checked                  |
+| `wakaclock.heartbeatRateLimitSeconds`| `120`   | Strict heartbeat/activity gap; gaps over 120s add zero |
+| `wakaclock.sameFileHeartbeatMinutes` | `2`     | Deprecated alias for the rate limit                     |
+| `wakaclock.idleMinutes`              | `15`    | Deprecated; strict activity timing always uses 120 seconds |
 | `wakaclock.statusBarEnabled`         | `true`  | Show today's total in the status bar                    |
 | `wakaclock.trackDebugSessions`       | `true`  | Emit `debugging` heartbeats                             |
 | `wakaclock.trackBuildTasks`          | `true`  | Emit `building` heartbeats                              |
@@ -123,7 +120,8 @@ ClickHouse database on infrastructure you control.
 - Sends file activity only — no `app`, `domain` or `url` heartbeats
 - AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need
   provider-specific adapters
-- Requires `wakaclock-cli`; it does not talk to the server directly
+- Native binaries are bundled per Marketplace target; unsupported platforms are
+  rejected with a clear CLI-unavailable status rather than executing an unverified file
 
 ## Local development
 

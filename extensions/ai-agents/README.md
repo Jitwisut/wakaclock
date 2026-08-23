@@ -21,14 +21,18 @@ wakaclock heartbeat --entity <file> --write --ai-agent <name> \
 agent (see `backend/api/crates/wakaclock-cli` — there is no separate boolean flag to
 keep in sync with it). The hooks read `WAKACLOCK_CLI_PATH` first and then
 `~/.wakaclock/cli-path` (written by the VS Code setup wizard), so the binary does not
-have to be on the AI tool's own `PATH`. This requires `wakaclock-cli` and a saved API key
+have to be on the AI tool's own `PATH`. This requires the `wakaclock` binary and a saved API key
 (`wakaclock config set-key <key>`, from the dashboard's Settings → API key) already
 working — see the repo root README's Quick Start if that isn't set up yet.
 
 The VS Code extension bundles these files, detects the corresponding CLIs and offers
 `AtoAxis: Set Up AI Tracking`. The setup writes only its own managed hook block and
 keeps a stable copy under `~/.wakaclock/agent-plugins/`, so a VSIX update does not
-leave another tool pointing at a deleted extension directory.
+leave another tool pointing at a deleted extension directory. It also installs a
+per-user `wakaclock agent` service. The service scans Codex, Claude and Gemini
+transcripts every five seconds, resumes per-agent/per-file cursors, and starts old
+transcripts at their tail (only the last 24 hours are replayed on first discovery).
+Use `wakaclock agent status --json` to inspect process, scan, queue and error state.
 
 ## Claude Code (`plugins/atoaxis-heartbeat/`)
 

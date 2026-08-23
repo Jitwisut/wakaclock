@@ -34,6 +34,12 @@ pub struct AiStatsData {
     pub total_human_keystrokes: u64,
     pub total_human_chars_added: u64,
     pub total_heartbeats: u64,
+    pub total_prompt_characters: Option<u64>,
+    pub total_input_tokens: Option<u64>,
+    pub total_output_tokens: Option<u64>,
+    pub total_cache_read_tokens: Option<u64>,
+    pub total_cache_write_tokens: Option<u64>,
+    pub total_estimated_cost_microusd: Option<u64>,
     /// เปอร์เซ็นต์ heartbeat ที่มาจาก AI agent เทียบกับ heartbeat ทั้งหมดในช่วงเวลานี้
     pub ai_heartbeat_percentage: f64,
     pub agents: Vec<AiAgentItem>,
@@ -57,6 +63,16 @@ pub struct AiTotalsRow {
     pub total_human_chars_added: u64,
     pub total_heartbeats: u64,
     pub ai_heartbeats: u64,
+}
+
+#[derive(Debug, Deserialize, Row)]
+pub struct AiUsageMetricsRow {
+    pub prompt_characters: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub estimated_cost_microusd: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Row)]

@@ -86,22 +86,43 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             await vscode.window.showWarningMessage("No API key entered — nothing was saved.");
             return;
         }
-        // Stored via SecretStorage (OS keychain), never in settings.json. Written first
-        // so the verification below authenticates with the key the user just entered.
-        await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
-        // Mirror into wakaclock-cli's config.toml (the only channel AI agent hooks can
-        // read a key from) and confirm the server accepts it, rather than reporting
-        // "saved" for a key that silently fails on every heartbeat from here on.
+        // Verify the candidate before replacing an existing key. The candidate is
+        // passed to the managed CLI through an environment variable, never argv or
+        // settings.json.
         const result = await cliService.syncAndVerifyApiKey(trimmed);
-        if (!result.verified) {
-            await vscode.window.showErrorMessage(`Wakaclock API key saved, but the server rejected it — heartbeats will not be recorded. ${result.verifyError ?? ""}`.trim());
+        if (result.status === "invalid_key") {
+            await vscode.window.showErrorMessage(`AtoAxis rejected this API key; your previous key was kept. ${result.verifyError ?? ""}`.trim());
             return;
         }
-        if (!result.mirroredToCliConfig) {
-            await vscode.window.showWarningMessage(`Wakaclock API key saved and verified for VS Code, but it couldn't be written to wakaclock-cli's config, so AI agent integrations (Claude Code, Codex, Gemini CLI) will not be able to authenticate: ${result.mirrorError ?? ""}`.trim());
+        if (result.status === "subscription_required") {
+            await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
+            await (0, secrets_1.clearPendingApiKey)(context.secrets);
+            await statusBar.refresh();
+            await vscode.window.showWarningMessage("This API key is valid, but the account needs an active AtoAxis subscription before time can be uploaded.");
             return;
         }
-        await vscode.window.showInformationMessage("Wakaclock API key saved, verified with the server, and synced to wakaclock-cli for AI agent integrations.");
+        if (result.status === "unreachable" || result.status === "server_error") {
+            // A pending identity is useful for offline queueing. It is safe to retain in
+            // SecretStorage, but do not mirror it to the background agent until verified.
+            const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
+            await (0, secrets_1.setPendingApiKey)(context.secrets, trimmed);
+            if (!existing) {
+                await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
+            }
+            await statusBar.refresh();
+            void retryPendingVerification(context, cliService, statusBar);
+            await vscode.window.showWarningMessage("AtoAxis is unreachable right now. The key is stored securely and editor activity will be queued offline; verification will retry automatically.");
+            return;
+        }
+        if (!result.verified || result.status !== "verified") {
+            await vscode.window.showErrorMessage(`AtoAxis connection is incompatible with this Extension: ${result.verifyError ?? "upgrade the bundled CLI/server"}`);
+            return;
+        }
+        await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
+        await (0, secrets_1.clearPendingApiKey)(context.secrets);
+        await statusBar.refresh();
+        void cliService.getStatus().catch(() => undefined);
+        await vscode.window.showInformationMessage("AtoAxis API key verified and saved securely. Time tracking is now active.");
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
         if (!existing) {
@@ -109,6 +130,8 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             return;
         }
         await (0, secrets_1.clearStoredApiKey)(context.secrets);
+        await (0, secrets_1.clearPendingApiKey)(context.secrets);
+        await statusBar.refresh();
         await vscode.window.showInformationMessage("Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again.");
         try {
             await cliService.clearApiKey();
@@ -125,24 +148,69 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect AI integrations.");
         }
     }), vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
-        return setupAiTracking(aiIntegrations);
+        return setupAiTracking(aiIntegrations, cliService, context);
     }), vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
-        return setupAiTracking(aiIntegrations, true);
+        return setupAiTracking(aiIntegrations, cliService, context, true);
     }));
 }
-async function setupAiTracking(aiIntegrations, repairing = false) {
+async function setupAiTracking(aiIntegrations, cliService, context, repairing = false) {
     try {
-        const result = await aiIntegrations.setup();
+        const selectedIds = await chooseAiAgents(aiIntegrations, context);
+        if (!selectedIds || selectedIds.length === 0) {
+            return false;
+        }
+        const key = await (0, secrets_1.getStoredApiKey)(context.secrets);
+        if (!key || (await cliService.verifyApiKey(key)).status !== "verified") {
+            await vscode.window.showWarningMessage("Verify an AtoAxis API key before enabling AI tracking. Editor heartbeats remain available offline.");
+            return false;
+        }
+        const result = await aiIntegrations.setup(selectedIds);
+        for (const id of result.configured) {
+            await context.globalState.update(`atoaxis.aiConsent.${id}`, {
+                state: "enabled",
+                integrationVersion: "1",
+                updatedAt: Date.now(),
+            });
+        }
         const configured = result.configured.length;
         const failed = result.failed.length;
         const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
-        if (failed > 0) {
-            await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed. Run “AtoAxis: Show AI Tracking Status” for details.`);
-            return false;
-        }
-        else if (configured > 0) {
-            await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
-            return true;
+        if (configured > 0) {
+            let serviceInstalled = true;
+            try {
+                const key = await (0, secrets_1.getStoredApiKey)(context.secrets);
+                if (key) {
+                    await cliService.persistApiKey(key);
+                }
+                await cliService.installAgent();
+            }
+            catch (error) {
+                serviceInstalled = false;
+                if (vscode.env.remoteName || process.platform === "linux") {
+                    try {
+                        const owned = await cliService.startExtensionOwnedAgent();
+                        context.subscriptions.push(owned);
+                        serviceInstalled = true;
+                    }
+                    catch (fallbackError) {
+                        await vscode.window.showWarningMessage(`AtoAxis could not install a service or start the remote watcher: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+                    }
+                }
+                if (serviceInstalled) {
+                    await vscode.window.showInformationMessage(`${prefix}; the Extension Host will keep the transcript watcher running while this remote workspace is open.`);
+                }
+                if (!serviceInstalled) {
+                    await vscode.window.showWarningMessage(`${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            if (failed > 0) {
+                await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed.${serviceInstalled ? "" : " The always-on agent also needs an upgrade or repair."} Run “AtoAxis: Show AI Tracking Status” for details.`);
+                return false;
+            }
+            if (serviceInstalled) {
+                await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
+            }
+            return serviceInstalled;
         }
         else {
             await vscode.window.showInformationMessage("No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
@@ -153,6 +221,46 @@ async function setupAiTracking(aiIntegrations, repairing = false) {
         await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to configure AI integrations.");
         return false;
     }
+}
+/** Ask per detected tool; no integration is changed until the user confirms. */
+async function chooseAiAgents(aiIntegrations, context) {
+    const statuses = await aiIntegrations.getStatus();
+    const candidates = statuses.filter((status) => status.detected && !status.enabled);
+    if (candidates.length === 0) {
+        await vscode.window.showInformationMessage("No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+        return undefined;
+    }
+    const picked = await vscode.window.showQuickPick(candidates.map((status) => ({
+        label: status.label,
+        description: status.id,
+        detail: "Adds an AtoAxis hook when supported and enables the background transcript watcher. Prompts and source code are never uploaded.",
+        id: status.id,
+    })), {
+        title: "Choose AI tools for AtoAxis tracking",
+        placeHolder: "Select one or more detected tools",
+        canPickMany: true,
+        ignoreFocusOut: true,
+    });
+    if (!picked || picked.length === 0) {
+        return undefined;
+    }
+    const action = await vscode.window.showQuickPick(["Enable selected", "Not now", "Don't ask again"], {
+        title: "Confirm AI tracking setup",
+        placeHolder: "Choose when to install the selected integrations",
+        ignoreFocusOut: true,
+    });
+    if (action !== "Enable selected") {
+        const state = action === "Don't ask again" ? "denied" : "deferred";
+        for (const item of picked) {
+            await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {
+                state,
+                integrationVersion: "1",
+                updatedAt: Date.now(),
+            });
+        }
+        return undefined;
+    }
+    return picked.map((item) => item.id);
 }
 async function showAiStatus(statuses) {
     const items = statuses.map((status) => ({
@@ -168,5 +276,28 @@ async function showAiStatus(statuses) {
         title: "AtoAxis AI Tracking Status",
         placeHolder: "Supported CLI integrations"
     });
+}
+async function retryPendingVerification(context, cliService, statusBar) {
+    let delayMs = 5_000;
+    for (;;) {
+        const pending = await (0, secrets_1.getPendingApiKey)(context.secrets);
+        if (!pending) {
+            return;
+        }
+        const result = await cliService.verifyApiKey(pending);
+        if (result.status === "verified") {
+            await (0, secrets_1.setStoredApiKey)(context.secrets, pending);
+            await (0, secrets_1.clearPendingApiKey)(context.secrets);
+            await statusBar.refresh();
+            void cliService.getStatus().catch(() => undefined);
+            await vscode.window.showInformationMessage("AtoAxis is connected again; pending activity will be uploaded once.");
+            return;
+        }
+        if (result.status !== "unreachable" && result.status !== "server_error") {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        delayMs = Math.min(delayMs * 2, 5 * 60_000);
+    }
 }
 //# sourceMappingURL=commands.js.map

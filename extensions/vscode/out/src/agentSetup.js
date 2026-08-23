@@ -150,7 +150,10 @@ async function setupDetectedAiAgents(options) {
     const statuses = await detectAiAgents({ homeDir });
     const configured = [];
     const failed = [];
-    for (const status of statuses.filter((item) => item.detected)) {
+    const selected = options.selectedIds
+        ? new Set(options.selectedIds)
+        : undefined;
+    for (const status of statuses.filter((item) => item.detected && (!selected || selected.has(item.id)))) {
         try {
             if (status.id === "claude-code") {
                 await setupClaudeCode(options.stableDir, options.logger);
@@ -178,20 +181,25 @@ async function setupDetectedAiAgents(options) {
 }
 async function setupClaudeCode(stableDir, logger) {
     if (process.platform === "win32") {
-        throw new Error("Claude Code hook scripts require a POSIX shell on Windows");
+        // Windows uses the transcript watcher baseline; shell hooks are an optional
+        // fast path and must not turn a successful consent into a failed setup.
+        logger.debug("agentSetup: Claude Code configured in transcript-only mode on Windows");
+        return;
     }
     await runCommandAllowAlreadyConfigured("claude", ["plugin", "marketplace", "add", stableDir], logger);
     await runCommandAllowAlreadyConfigured("claude", ["plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"], logger);
 }
 async function setupGeminiCli(stableDir, logger) {
     if (process.platform === "win32") {
-        throw new Error("Gemini CLI hook scripts require a POSIX shell on Windows");
+        logger.debug("agentSetup: Gemini CLI configured in transcript-only mode on Windows");
+        return;
     }
     await runCommandAllowAlreadyConfigured("gemini", ["extensions", "install", path.join(stableDir, "gemini-cli")], logger);
 }
 async function setupCodex(stableDir, homeDir, logger) {
     if (process.platform === "win32") {
-        throw new Error("Codex hook scripts require a POSIX shell on Windows");
+        logger.debug("agentSetup: Codex configured in transcript-only mode on Windows");
+        return;
     }
     const configDir = path.join(homeDir, ".codex");
     const configPath = path.join(configDir, "config.toml");

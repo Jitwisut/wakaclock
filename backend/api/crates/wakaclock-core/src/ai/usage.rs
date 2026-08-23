@@ -25,6 +25,11 @@ pub struct AiUsageRecord {
     /// messages and provider retries contribute zero; sessions sum these values rather
     /// than counting heartbeats or model requests.
     pub prompt_count: u32,
+    /// Number of Unicode scalar values in the associated human prompt. The prompt text is
+    /// counted locally and discarded; only this aggregate is sent to the server.
+    /// `None` means no human prompt was paired with this usage event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_character_count: Option<u64>,
     /// `None` means the transcript did not report the figure — never zero. plan.md 9.4: "Nullable
     /// token fields mean unavailable. Missing is not zero."
     pub input_tokens: Option<u64>,
@@ -188,6 +193,7 @@ fn parse_generic_usage_str(
 ) -> Vec<AiUsageRecord> {
     let mut seen = HashSet::new();
     let mut pending_prompts = std::collections::HashMap::<String, u32>::new();
+    let mut pending_prompt_chars = std::collections::HashMap::<String, u64>::new();
     let mut records = Vec::new();
     for line in contents.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
@@ -206,10 +212,18 @@ fn parse_generic_usage_str(
             })
             .unwrap_or_else(|| "unknown-session".to_string());
         if record_type == "user" || record_type == "prompt" {
+            let prompt_chars = value
+                .get("content")
+                .or_else(|| value.get("message").and_then(|message| message.get("content")))
+                .map(content_character_count)
+                .unwrap_or(0);
             pending_prompts
-                .entry(session)
+                .entry(session.clone())
                 .and_modify(|count| *count += 1)
                 .or_insert(1);
+            if prompt_chars > 0 {
+                *pending_prompt_chars.entry(session).or_default() += prompt_chars;
+            }
             continue;
         }
         let usage = value
@@ -296,6 +310,8 @@ fn parse_generic_usage_str(
         if input.is_none() && output.is_none() && cache_read.is_none() && cache_write.is_none() {
             continue;
         }
+        let prompt_count = pending_prompts.remove(&session).unwrap_or(0);
+        let prompt_character_count = pending_prompt_chars.remove(&session);
         records.push(AiUsageRecord {
             usage_event_id: format!("{agent}-usage-v1:{event_id}"),
             ai_session_id: session.clone(),
@@ -303,20 +319,18 @@ fn parse_generic_usage_str(
             agent: agent.to_string(),
             provider: provider.map(str::to_string),
             model,
-            prompt_count: pending_prompts.remove(&session).unwrap_or(0),
+            prompt_count,
+            prompt_character_count: (prompt_count > 0).then_some(prompt_character_count.unwrap_or(0)),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: cache_read,
             cache_write_tokens: cache_write,
             token_source: TokenSource::Transcript,
             project_hint: first_string_value(&value, &["project", "project_name", "projectName"])
+                .and_then(|value| sanitize_project_hint(&value))
                 .or_else(|| {
                     first_string_value(&value, &["cwd", "working_directory", "workingDirectory"])
-                        .and_then(|cwd| {
-                            Path::new(&cwd)
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                        })
+                        .and_then(|cwd| sanitize_project_hint(&cwd))
                 }),
         });
     }
@@ -330,6 +344,24 @@ fn first_string_value(value: &serde_json::Value, keys: &[&str]) -> Option<String
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     })
+}
+
+/// Keep only a bounded, path-free project label. Providers disagree on whether their
+/// `project` field is a display name or an absolute workspace path, so the client applies
+/// the same final privacy boundary to both forms before serialization.
+fn sanitize_project_hint(raw: &str) -> Option<String> {
+    let candidate = raw
+        .trim()
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+        .next_back()?;
+    if candidate.is_empty()
+        || candidate.len() > 160
+        || candidate.chars().any(|character| character.is_control())
+    {
+        return None;
+    }
+    Some(candidate.to_string())
 }
 
 fn first_u64_value(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
@@ -370,6 +402,8 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
     // calls remains one prompt rather than becoming a count of messages or retries.
     let mut pending_prompts: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
+    let mut pending_prompt_chars: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     let mut records = Vec::new();
 
     for line in contents.lines() {
@@ -390,7 +424,11 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
         };
         if record.record_type.as_deref() == Some("user") {
             if !record.is_meta && is_user_submission(&message) {
-                *pending_prompts.entry(session_id).or_default() += 1;
+                *pending_prompts.entry(session_id.clone()).or_default() += 1;
+                let prompt_chars = user_submission_character_count(&message);
+                if prompt_chars > 0 {
+                    *pending_prompt_chars.entry(session_id).or_default() += prompt_chars;
+                }
             }
             continue;
         }
@@ -423,6 +461,7 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
             TokenSource::Transcript
         };
         let prompt_count = pending_prompts.remove(&session_id).unwrap_or(0);
+        let prompt_character_count = pending_prompt_chars.remove(&session_id);
 
         records.push(AiUsageRecord {
             usage_event_id: id,
@@ -432,16 +471,13 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
             provider: Some("anthropic".to_string()),
             model: message.model.filter(|model| model != SYNTHETIC_MODEL),
             prompt_count,
+            prompt_character_count: (prompt_count > 0).then_some(prompt_character_count.unwrap_or(0)),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_read_tokens: usage.cache_read_input_tokens,
             cache_write_tokens: usage.cache_creation_input_tokens,
             token_source,
-            project_hint: record
-                .cwd
-                .as_deref()
-                .and_then(|cwd| Path::new(cwd).file_name())
-                .map(|name| name.to_string_lossy().into_owned()),
+            project_hint: record.cwd.as_deref().and_then(sanitize_project_hint),
         });
     }
 
@@ -465,6 +501,46 @@ fn is_user_submission(message: &TranscriptMessage) -> bool {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|kind| kind != "tool_result"),
         _ => false,
+    }
+}
+
+fn user_submission_character_count(message: &TranscriptMessage) -> u64 {
+    message
+        .content
+        .as_ref()
+        .map(content_character_count)
+        .unwrap_or(0)
+}
+
+/// Count only user-visible text fields. Tool result blocks are excluded so returned source or
+/// diagnostics cannot be mistaken for a prompt length.
+fn content_character_count(value: &serde_json::Value) -> u64 {
+    match value {
+        serde_json::Value::String(text) => text.chars().count() as u64,
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter(|item| {
+                item.get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or(true, |kind| kind != "tool_result")
+            })
+            .map(content_character_count)
+            .sum(),
+        serde_json::Value::Object(object) => {
+            if object
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "tool_result")
+            {
+                return 0;
+            }
+            ["text", "content", "value"]
+                .iter()
+                .filter_map(|key| object.get(*key))
+                .map(content_character_count)
+                .sum()
+        }
+        _ => 0,
     }
 }
 
@@ -529,6 +605,40 @@ mod tests {
             parsed[0].prompt_count, 0,
             "an assistant record is not itself a prompt"
         );
+    }
+
+    #[test]
+    fn counts_prompt_characters_without_retaining_prompt_text() {
+        let prompt = r#"{"type":"user","sessionId":"s1","message":{"content":"สวัสดี AI"}}"#;
+        let assistant = record("msg_1", r#""input_tokens":10"#);
+        let parsed = parse_claude_usage_str(&format!("{prompt}\n{assistant}"));
+
+        assert_eq!(parsed[0].prompt_count, 1);
+        assert_eq!(
+            parsed[0].prompt_character_count,
+            Some("สวัสดี AI".chars().count() as u64)
+        );
+        let serialized = serde_json::to_string(&parsed[0]).expect("serializes");
+        assert!(!serialized.contains("สวัสดี AI"));
+    }
+
+    #[test]
+    fn tool_results_do_not_count_as_prompt_characters() {
+        let tool = r#"{"type":"user","sessionId":"s1","message":{"content":[{"type":"tool_result","content":"secret source"}]}}"#;
+        let assistant = record("msg_1", r#""input_tokens":10"#);
+        let parsed = parse_claude_usage_str(&format!("{tool}\n{assistant}"));
+
+        assert_eq!(parsed[0].prompt_count, 0);
+        assert_eq!(parsed[0].prompt_character_count, None);
+    }
+
+    #[test]
+    fn project_hints_never_leave_an_absolute_path() {
+        let line = r#"{"type":"assistant","id":"msg-1","session_id":"s1","timestamp":"2026-08-22T10:00:00Z","project":"/Users/alice/private-repo","usage":{"input_tokens":1}}"#;
+        let parsed = parse_codex_usage_str(line);
+        assert_eq!(parsed[0].project_hint.as_deref(), Some("private-repo"));
+        let serialized = serde_json::to_string(&parsed[0]).expect("serializes");
+        assert!(!serialized.contains("/Users/alice"));
     }
 
     #[test]

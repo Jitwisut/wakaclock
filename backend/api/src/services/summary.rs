@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{NaiveDate, TimeZone, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -8,14 +9,19 @@ use crate::model::summary::{
     DailyTotalRow, EditorDailyRow, LanguageDailyRow, OsDailyRow, ProjectDailyRow,
     SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem,
 };
+use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
 
 pub struct SummaryService {
     clickhouse: Arc<ClickHouseClient>,
+    idle_timeout_seconds: f64,
 }
 
 impl SummaryService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
-        Self { clickhouse }
+    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+        Self {
+            clickhouse,
+            idle_timeout_seconds,
+        }
     }
 
     pub async fn get_range(
@@ -107,28 +113,40 @@ impl SummaryService {
         start: &str,
         end: &str,
     ) -> Result<Vec<DailyTotalRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    sum(total_seconds) AS total_seconds,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.daily_totals
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY day
-                ORDER BY day ASC
-                ",
+        let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")?;
+        let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")?;
+        let start_epoch = Utc
+            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+            .timestamp() as f64;
+        let end_epoch = Utc
+            .from_utc_datetime(
+                &end_date
+                    .succ_opt()
+                    .expect("valid end date")
+                    .and_hms_opt(0, 0, 0)
+                    .expect("valid midnight"),
             )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<DailyTotalRow>()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("ClickHouse summaries daily_totals query error: {error}")
-            })
+            .timestamp() as f64;
+        let timeline =
+            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let intervals = timeline.intervals(user_id, start_epoch, end_epoch).await?;
+        let canonical = canonicalize_bridged(&intervals, self.idle_timeout_seconds);
+        let mut grouped = BTreeMap::<String, DailyTotalRow>::new();
+        for interval in canonical {
+            let day = Utc
+                .timestamp_opt(interval.start.floor() as i64, 0)
+                .single()
+                .map(|value| value.date_naive().to_string())
+                .unwrap_or_else(|| start.to_string());
+            let row = grouped.entry(day.clone()).or_insert(DailyTotalRow {
+                date: day,
+                total_seconds: 0.0,
+                heartbeat_count: 0,
+            });
+            row.total_seconds += interval.end - interval.start;
+            row.heartbeat_count += 1;
+        }
+        Ok(grouped.into_values().collect())
     }
 
     async fn fetch_languages(

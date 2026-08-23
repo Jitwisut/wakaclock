@@ -112,6 +112,45 @@ impl AiActivityParser for GeminiCliParser {
         }
     }
 
+    fn discover_sources(&self, context: &DiscoveryContext) -> Vec<DiscoveryResult> {
+        let root = Self::root(context);
+        if !root.exists() {
+            return vec![DiscoveryResult {
+                state: DiscoveryState::NotInstalled,
+            }];
+        }
+        let mut files = Vec::new();
+        match walk(&root, 0, &mut files) {
+            Ok(()) => {
+                files.retain(|path| {
+                    path.extension()
+                        .is_some_and(|ext| ext == "json" || ext == "jsonl")
+                });
+                files.sort();
+                if files.is_empty() {
+                    vec![DiscoveryResult {
+                        state: DiscoveryState::InstalledNoTranscript,
+                    }]
+                } else {
+                    files
+                        .into_iter()
+                        .map(|path| DiscoveryResult {
+                            state: DiscoveryState::TranscriptFound { path },
+                        })
+                        .collect()
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                vec![DiscoveryResult {
+                    state: DiscoveryState::PermissionDenied { path: root },
+                }]
+            }
+            Err(_) => vec![DiscoveryResult {
+                state: DiscoveryState::InstalledNoTranscript,
+            }],
+        }
+    }
+
     fn parse_since(
         &self,
         context: &ParseContext,

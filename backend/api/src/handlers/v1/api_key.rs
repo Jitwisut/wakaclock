@@ -34,6 +34,7 @@ pub async fn generate(
 
     // Hash is recomputed here rather than threaded back from the service so the cache
     // insert stays in the handler layer, next to the other auth-cache mutation (revoke).
+    state.auth_cache.remove_for_user(user_id);
     let key_hash = auth::hash_key(&response.data.api_key);
     state.auth_cache.insert(key_hash, user_id);
 

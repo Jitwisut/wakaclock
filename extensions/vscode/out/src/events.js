@@ -59,8 +59,17 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         if (editor) {
             bufferManager.updateCursor(editor.document, editor.selection, workspaceProject(editor.document), now);
         }
-        void bufferManager.recordEditorSwitch(previousEditor ?? undefined, now);
+        void bufferManager.recordEditorSwitch(previousEditor ?? undefined, editor ?? undefined, now);
         previousEditor = editor;
+    }), 
+    // Losing focus is the last moment the editor can prove the developer was here.
+    // Without this the buffered tail of a session sat unflushed until the next edit —
+    // which, if the session simply ended, never came.
+    vscode.window.onDidChangeWindowState((windowState) => {
+        if (windowState.focused) {
+            return;
+        }
+        void bufferManager.flushDueBuffers("focus-lost");
     }), vscode.window.onDidChangeTextEditorSelection((event) => {
         bufferManager.updateCursor(event.textEditor.document, event.selections[0], workspaceProject(event.textEditor.document), Date.now());
     }), vscode.debug.onDidStartDebugSession(() => {
@@ -100,8 +109,18 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         clearInterval(timer);
         timer = startFlushTimer();
     }), {
-        dispose: () => clearInterval(timer)
+        dispose: () => {
+            clearInterval(timer);
+            // VS Code shutdown: flush what is already measured instead of discarding it.
+            void bufferManager.flushDueBuffers("shutdown");
+        }
     });
+    // Emit an initial marker for the editor that was already active when the extension
+    // started. Without this, opening VS Code into an existing file produced no heartbeat
+    // until the first text edit or cursor movement.
+    if (previousEditor) {
+        void bufferManager.recordEditorSwitch(undefined, previousEditor, Date.now());
+    }
     function startFlushTimer() {
         return setInterval(() => {
             void bufferManager.flushDueBuffers("timer");

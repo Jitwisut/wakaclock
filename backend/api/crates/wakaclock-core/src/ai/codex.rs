@@ -103,6 +103,40 @@ impl AiActivityParser for CodexParser {
         }
     }
 
+    fn discover_sources(&self, context: &DiscoveryContext) -> Vec<DiscoveryResult> {
+        let root = Self::sessions_root(context);
+        if !root.exists() {
+            return vec![DiscoveryResult {
+                state: DiscoveryState::NotInstalled,
+            }];
+        }
+        match Self::find_rollout_files(&root) {
+            Ok(mut files) => {
+                files.sort();
+                if files.is_empty() {
+                    vec![DiscoveryResult {
+                        state: DiscoveryState::InstalledNoTranscript,
+                    }]
+                } else {
+                    files
+                        .into_iter()
+                        .map(|path| DiscoveryResult {
+                            state: DiscoveryState::TranscriptFound { path },
+                        })
+                        .collect()
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                vec![DiscoveryResult {
+                    state: DiscoveryState::PermissionDenied { path: root },
+                }]
+            }
+            Err(_) => vec![DiscoveryResult {
+                state: DiscoveryState::InstalledNoTranscript,
+            }],
+        }
+    }
+
     fn parse_since(
         &self,
         context: &ParseContext,

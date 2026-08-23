@@ -8,6 +8,7 @@ import type { WakaclockCliService } from "./cli";
 import { AiAttributionStore } from "./aiAttribution";
 import { Logger } from "./logging";
 import type {
+  ActivitySegment,
   BufferedFileState,
   ExtraHeartbeatPayload,
   FlushOverrides,
@@ -15,6 +16,8 @@ import type {
   HeartbeatCategory,
   WakaclockConfigSnapshot
 } from "./types";
+import { appendSegment, MAX_ACTIVITY_GAP_MS, unionSeconds } from "./activity";
+import { randomUUID } from "node:crypto";
 import {
   getEditorEntity,
   getSelectionMetrics,
@@ -23,7 +26,29 @@ import {
   summarizeTextChanges
 } from "./utils";
 
+/** Float timestamps survive a JSON round trip; compare interval edges with slack. */
+const SEGMENT_MATCH_EPSILON_SECONDS = 0.001;
+
 type HeartbeatSentHandler = () => void;
+type ActivityHandler = () => void;
+
+interface FlushSnapshot {
+  payload: ExtraHeartbeatPayload;
+  category: HeartbeatCategory;
+  write: boolean;
+  activitySegments: ActivitySegment[];
+  activeSeconds: number;
+  keystrokes: number;
+  charsAdded: number;
+  charsDeleted: number;
+  humanLinesAdded: number;
+  humanLinesDeleted: number;
+  unattributedLinesAdded: number;
+  unattributedLinesDeleted: number;
+  pendingWrite: boolean;
+  lastEditAt?: number;
+  lastActivityAt?: number;
+}
 
 export class HeartbeatBufferManager {
   private readonly states = new Map<string, BufferedFileState>();
@@ -35,13 +60,17 @@ export class HeartbeatBufferManager {
   */
   private lastObservedActivityAt?: number;
   private lastObservedEntity?: string;
+  private flushTail: Promise<void> = Promise.resolve();
+  /** Snapshots whose CLI request failed. They retain their original heartbeat ID. */
+  private readonly retrySnapshots = new Map<string, FlushSnapshot[]>();
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
     private readonly cli: Pick<WakaclockCliService, "sendHeartbeat">,
     private readonly logger: Logger,
     private readonly onHeartbeatSent?: HeartbeatSentHandler,
-    private readonly aiAttributionStore: AiAttributionStore = new AiAttributionStore()
+    private readonly aiAttributionStore: AiAttributionStore = new AiAttributionStore(),
+    private readonly onActivity?: ActivityHandler
   ) {}
 
   public async recordTextChange(
@@ -62,11 +91,17 @@ export class HeartbeatBufferManager {
     this.updateProjectState(state, project);
     const summary = summarizeTextChanges(changes);
 
+    // Captured before `observeActivity` moves the cursor: this is the start of the
+    // interval this very edit is about to close, and the only thing an agent edit is
+    // ever allowed to take back.
+    const intervalStartAt = this.lastObservedActivityAt;
     this.observeActivity(state, now);
+    state.heartbeatId ||= randomUUID();
     // Cross-file duration accounting may advance `lastActivityAt` on this state while
     // another file is edited. Attribution must use the actual editor-change timestamp,
     // otherwise a nearby AI sidecar event can fall outside the correlation window.
     state.lastEditAt = now;
+    state.lastEditIntervalStartAt = intervalStartAt;
     state.keystrokes += summary.keystrokes;
     state.charsAdded += summary.charsAdded;
     state.charsDeleted += summary.charsDeleted;
@@ -74,9 +109,13 @@ export class HeartbeatBufferManager {
     state.humanLinesDeleted += summary.linesDeleted;
     this.updateSelectionState(state, selection);
 
+    this.onActivity?.();
+
+    // WakaTime sends the first file-change heartbeat immediately. Subsequent
+    // same-file heartbeats are rate limited to the configured cadence.
     if (
-      state.lastHeartbeatAt &&
-      now - state.lastHeartbeatAt >= this.getConfig().sameFileHeartbeatMs &&
+      (state.lastHeartbeatAt === undefined ||
+        now - state.lastHeartbeatAt >= this.getConfig().heartbeatRateLimitMs) &&
       this.hasPendingActivity(state)
     ) {
       await this.flushFile(entity, "gap", { now });
@@ -96,19 +135,38 @@ export class HeartbeatBufferManager {
     const state = this.getOrCreateState(entity);
     this.updateProjectState(state, project);
     this.observeActivity(state, now);
+    state.heartbeatId ||= randomUUID();
     state.pendingWrite = true;
+    this.onActivity?.();
     await this.flushFile(entity, "save", { now, write: true, force: true });
   }
 
   public async recordEditorSwitch(
     previousEditor?: Pick<TextEditor, "document">,
+    currentEditorOrNow?: Pick<TextEditor, "document"> | number,
     now = Date.now()
   ): Promise<void> {
-    const entity = getEditorEntity(previousEditor);
-    if (!entity) {
-      return;
+    const currentEditor =
+      typeof currentEditorOrNow === "number" ? undefined : currentEditorOrNow;
+    if (typeof currentEditorOrNow === "number") {
+      now = currentEditorOrNow;
     }
-    await this.flushFile(entity, "switch", { now });
+
+    const previousEntity = getEditorEntity(previousEditor);
+    if (previousEntity) {
+      await this.flushFile(previousEntity, "switch", { now });
+    }
+
+    const currentEntity = getEditorEntity(currentEditor);
+    if (currentEntity && currentEntity !== previousEntity) {
+      const state = this.getOrCreateState(currentEntity);
+      // A switch is an activity marker even when the file has no pending edits.
+      await this.flushFile(currentEntity, "switch", { now, force: true });
+      this.logger.debug("recorded active editor switch", {
+        entity: state.entity,
+        previousEntity
+      });
+    }
   }
 
   public updateCursor(
@@ -125,6 +183,7 @@ export class HeartbeatBufferManager {
     this.updateProjectState(state, project);
     this.updateSelectionState(state, selection);
     this.observeActivity(state, now);
+    this.onActivity?.();
   }
 
   public async flushCurrentEditor(
@@ -143,57 +202,52 @@ export class HeartbeatBufferManager {
   }
 
   public async flushDueBuffers(reason: FlushReason, now = Date.now()): Promise<void> {
-    const duePayloads: Array<{
-      entity: string;
-      payload: ExtraHeartbeatPayload;
-      category: HeartbeatCategory;
-      write: boolean;
-      now: number;
-    }> = [];
+    return this.enqueueFlush(() => this.flushDueBuffersInternal(reason, now));
+  }
 
+  public getBufferedSeconds(now = Date.now()): number {
+    void now;
+    // Do not turn an idle clock into coding time. The duration is closed only by the
+    // next editor activity event (or a save/switch), exactly like the persisted
+    // `active_seconds` calculation. This keeps the status bar from climbing after the
+    // user stops typing while still exposing every interval as soon as activity arrives.
+    return unionSeconds(this.getBufferedSegments());
+  }
+
+  public getBufferedSegments(): ActivitySegment[] {
+    const current = Array.from(this.states.values()).flatMap((state) =>
+      state.activitySegments.map((segment) => ({ ...segment }))
+    );
+    const retries = Array.from(this.retrySnapshots.values()).flatMap((snapshots) =>
+      snapshots.flatMap((snapshot) =>
+        snapshot.activitySegments.map((segment) => ({ ...segment }))
+      )
+    );
+    return [...current, ...retries];
+  }
+
+  private async flushDueBuffersInternal(reason: FlushReason, now: number): Promise<void> {
+    // Keep each file's serialized snapshot independent. A failed request can then
+    // retain its stable ID while another file continues accumulating activity; the
+    // next pass may still use the CLI's bulk stdin path, but correctness no longer
+    // depends on a cross-file all-or-nothing in-memory snapshot.
     for (const [entity, state] of this.states.entries()) {
       if (!this.shouldFlushOnTimer(state, now)) {
         continue;
       }
-
-      await this.classifyPendingAttribution(state, now);
-      if (!this.hasPendingActivity(state)) {
-        this.markFlushed(entity, now);
-        continue;
-      }
-
-      duePayloads.push({
-        entity,
-        payload: this.buildPayload(state, "coding", false),
-        category: "coding",
-        write: false,
-        now
-      });
-    }
-
-    if (duePayloads.length === 0) {
-      return;
-    }
-
-    const [primary, ...rest] = duePayloads;
-    try {
-      await this.cli.sendHeartbeat(
-        primary.entity,
-        primary.write,
-        primary.category,
-        rest.map((item) => item.payload),
-        primary.payload
-      );
-      for (const item of duePayloads) {
-        this.markFlushed(item.entity, item.now);
-      }
-      this.onHeartbeatSent?.();
-    } catch (error) {
-      this.logger.error("failed to flush buffered heartbeats", error);
+      await this.flushFileInternal(entity, reason, { now });
     }
   }
 
   public async flushFile(
+    entity: string,
+    reason: FlushReason,
+    overrides: FlushOverrides = {}
+  ): Promise<void> {
+    return this.enqueueFlush(() => this.flushFileInternal(entity, reason, overrides));
+  }
+
+  private async flushFileInternal(
     entity: string,
     reason: FlushReason,
     overrides: FlushOverrides = {}
@@ -207,21 +261,62 @@ export class HeartbeatBufferManager {
     const category = overrides.category ?? "coding";
     const write = overrides.write ?? state.pendingWrite;
     const force = overrides.force ?? false;
+    const retries = this.retrySnapshots.get(entity) ?? [];
 
-    if (!force && !this.hasPendingActivity(state)) {
+    // A second editor event can enqueue a flush while the first request is still in
+    // flight. Re-check the cadence at execution time so that queued work remains in
+    // the next 120-second snapshot instead of bypassing the rate limit after the first
+    // request commits.
+    if (
+      !force &&
+      reason === "gap" &&
+      state.lastHeartbeatAt !== undefined &&
+      now - state.lastHeartbeatAt < this.getConfig().heartbeatRateLimitMs
+    ) {
+      return;
+    }
+
+    if (!force && !this.hasPendingActivity(state) && retries.length === 0) {
       return;
     }
 
     try {
       await this.classifyPendingAttribution(state, now);
-      if (!force && !this.hasPendingActivity(state)) {
-        this.markFlushed(entity, now);
+      if (!force && !this.hasPendingActivity(state) && retries.length === 0) {
+        this.clearEmptyState(state);
         return;
       }
-      await this.cli.sendHeartbeat(entity, write, category, [], this.buildPayload(state, category, write));
-      this.markFlushed(entity, now);
+
+      const snapshots = [...retries];
+      if (this.hasPendingActivity(state)) {
+        snapshots.push(this.captureSnapshot(state, category, write));
+      }
+      if (snapshots.length === 0) {
+        return;
+      }
+      this.retrySnapshots.delete(entity);
+      const [primary, ...rest] = snapshots;
+      try {
+        await this.cli.sendHeartbeat(
+          entity,
+          primary.write,
+          primary.category,
+          rest.map((snapshot) => snapshot.payload),
+          primary.payload
+        );
+      } catch (error) {
+        this.retrySnapshots.set(entity, snapshots);
+        throw error;
+      }
+      this.commitSnapshot(entity, now, snapshots[snapshots.length - 1]);
       this.onHeartbeatSent?.();
-      this.logger.debug("flushed heartbeat", { entity, reason, category, write });
+      this.logger.debug("flushed heartbeat", {
+        entity,
+        reason,
+        category,
+        write,
+        snapshots: snapshots.length
+      });
     } catch (error) {
       this.logger.error(`failed to flush heartbeat for ${entity}`, { reason, error });
     }
@@ -235,7 +330,9 @@ export class HeartbeatBufferManager {
 
     const created: BufferedFileState = {
       entity,
+      heartbeatId: undefined,
       activeSeconds: 0,
+      activitySegments: [],
       keystrokes: 0,
       charsAdded: 0,
       charsDeleted: 0,
@@ -259,19 +356,24 @@ export class HeartbeatBufferManager {
       state.humanLinesAdded > 0 ||
       state.humanLinesDeleted > 0 ||
       state.unattributedLinesAdded > 0 ||
-      state.unattributedLinesDeleted > 0
+      state.unattributedLinesDeleted > 0 ||
+      state.activitySegments.length > 0
     );
   }
 
   private shouldFlushOnTimer(state: BufferedFileState, now: number): boolean {
-    const { idleMs } = this.getConfig();
-    if (!this.hasPendingActivity(state)) {
+    const { heartbeatRateLimitMs } = this.getConfig();
+    const hasRetry = (this.retrySnapshots.get(state.entity)?.length ?? 0) > 0;
+    if (!this.hasPendingActivity(state) && !hasRetry) {
       return false;
     }
-    if (state.lastActivityAt === undefined) {
+    if (state.lastActivityAt === undefined && !hasRetry) {
       return false;
     }
-    return now - state.lastActivityAt <= idleMs;
+    return (
+      state.lastHeartbeatAt === undefined ||
+      now - state.lastHeartbeatAt >= heartbeatRateLimitMs
+    );
   }
 
   private buildPayload(
@@ -294,7 +396,9 @@ export class HeartbeatBufferManager {
       human_lines_deleted: state.humanLinesDeleted || undefined,
       unattributed_lines_added: state.unattributedLinesAdded || undefined,
       unattributed_lines_deleted: state.unattributedLinesDeleted || undefined,
-      active_seconds: state.activeSeconds
+      active_seconds: unionSeconds(state.activitySegments),
+      heartbeat_id: state.heartbeatId,
+      activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined
     };
   }
 
@@ -339,21 +443,35 @@ export class HeartbeatBufferManager {
     state.unattributedLinesAdded = 0;
     state.unattributedLinesDeleted = 0;
     // A transcript-confirmed AI patch is not evidence that the developer was actively
-    // interacting with the editor. Keep the existing no-duplicate-heartbeat behaviour;
-    // a later save can still emit a zero-duration write marker.
-    state.activeSeconds = 0;
+    // interacting with the editor, so the interval the patch itself closed is dropped.
+    //
+    // Only that interval. Clearing the whole list — which is what this used to do —
+    // also deleted every interval the developer had genuinely earned in this file
+    // before the agent touched it, so one agent edit could erase minutes of real
+    // typing. Everything up to the moment the agent's edit landed is the developer's
+    // and stands on its own evidence; the segment list is truncated there rather than
+    // emptied. Adjacent intervals merge, so truncation has to cut a segment in half
+    // instead of only dropping whole ones.
+    const boundary = (state.lastEditIntervalStartAt ?? state.lastEditAt ?? now) / 1000;
+    state.activitySegments = state.activitySegments.flatMap((segment) => {
+      if (segment.end <= boundary + SEGMENT_MATCH_EPSILON_SECONDS) {
+        return [segment];
+      }
+      if (segment.start >= boundary - SEGMENT_MATCH_EPSILON_SECONDS) {
+        return [];
+      }
+      return [{ ...segment, end: boundary }];
+    });
+    state.activeSeconds = unionSeconds(state.activitySegments);
   }
 
   private observeActivity(state: BufferedFileState, now: number): void {
     const previous = this.lastObservedActivityAt;
     if (previous !== undefined) {
       const elapsedMs = now - previous;
-      const { idleMs } = this.getConfig();
-
-      // WakaTime gives a heartbeat the interval to the next heartbeat only while the
-      // gap is below the user's keystroke timeout. Use the same strict boundary and do
-      // not invent a minimum duration for an isolated event.
-      if (elapsedMs >= 0 && elapsedMs < idleMs) {
+      // Strict Wakaclock timing gives a heartbeat the interval to the next activity only
+      // while the gap is at most 120 seconds.
+      if (elapsedMs >= 0 && elapsedMs <= MAX_ACTIVITY_GAP_MS) {
         // Attribute the interval to the earlier activity's file, just as WakaTime's
         // heartbeat-to-next-heartbeat mini-duration algorithm does. The state remains
         // in the map after a flush, so a later event can safely account for a thinking
@@ -362,7 +480,15 @@ export class HeartbeatBufferManager {
           ? this.states.get(this.lastObservedEntity)
           : undefined;
         if (previousState) {
-          previousState.activeSeconds += elapsedMs / 1000;
+          const start = previous / 1000;
+          const end = now / 1000;
+          appendSegment(previousState.activitySegments, {
+            segment_id: randomUUID(),
+            start,
+            end,
+            source: "editor"
+          });
+          previousState.activeSeconds = unionSeconds(previousState.activitySegments);
           previousState.lastActivityAt = now;
         }
       }
@@ -375,13 +501,7 @@ export class HeartbeatBufferManager {
     state.lastActivityAt = now;
   }
 
-  private markFlushed(entity: string, now: number): void {
-    const state = this.states.get(entity);
-    if (!state) {
-      return;
-    }
-
-    state.lastHeartbeatAt = now;
+  private clearMeasurements(state: BufferedFileState): void {
     state.keystrokes = 0;
     state.charsAdded = 0;
     state.charsDeleted = 0;
@@ -390,9 +510,106 @@ export class HeartbeatBufferManager {
     state.unattributedLinesAdded = 0;
     state.unattributedLinesDeleted = 0;
     state.activeSeconds = 0;
+    state.activitySegments = [];
+    state.heartbeatId = undefined;
     state.lastEditAt = undefined;
+    state.lastEditIntervalStartAt = undefined;
     state.lastActivityAt = undefined;
     state.pendingWrite = false;
+  }
+
+  private captureSnapshot(
+    state: BufferedFileState,
+    category: HeartbeatCategory,
+    write: boolean
+  ): FlushSnapshot {
+    state.heartbeatId ||= randomUUID();
+    const snapshot: FlushSnapshot = {
+      payload: this.buildPayload(state, category, write),
+      category,
+      write,
+      activitySegments: state.activitySegments.map((segment) => ({ ...segment })),
+      activeSeconds: unionSeconds(state.activitySegments),
+      keystrokes: state.keystrokes,
+      charsAdded: state.charsAdded,
+      charsDeleted: state.charsDeleted,
+      humanLinesAdded: state.humanLinesAdded,
+      humanLinesDeleted: state.humanLinesDeleted,
+      unattributedLinesAdded: state.unattributedLinesAdded,
+      unattributedLinesDeleted: state.unattributedLinesDeleted,
+      pendingWrite: state.pendingWrite,
+      lastEditAt: state.lastEditAt,
+      lastActivityAt: state.lastActivityAt
+    };
+    this.clearMeasurements(state);
+    return snapshot;
+  }
+
+  private restoreSnapshot(entity: string, snapshot: FlushSnapshot): void {
+    const state = this.states.get(entity);
+    if (!state) {
+      return;
+    }
+
+    state.activeSeconds += snapshot.activeSeconds;
+    const existingSegments = state.activitySegments;
+    state.activitySegments = [...snapshot.activitySegments, ...existingSegments];
+    state.activeSeconds = unionSeconds(state.activitySegments);
+    state.heartbeatId ||= snapshot.payload.heartbeat_id;
+    state.keystrokes += snapshot.keystrokes;
+    state.charsAdded += snapshot.charsAdded;
+    state.charsDeleted += snapshot.charsDeleted;
+    state.humanLinesAdded += snapshot.humanLinesAdded;
+    state.humanLinesDeleted += snapshot.humanLinesDeleted;
+    state.unattributedLinesAdded += snapshot.unattributedLinesAdded;
+    state.unattributedLinesDeleted += snapshot.unattributedLinesDeleted;
+    state.pendingWrite ||= snapshot.pendingWrite;
+    state.lastEditAt = Math.min(
+      state.lastEditAt ?? Number.POSITIVE_INFINITY,
+      snapshot.lastEditAt ?? Number.POSITIVE_INFINITY
+    );
+    if (state.lastEditAt === Number.POSITIVE_INFINITY) {
+      state.lastEditAt = undefined;
+    }
+    state.lastActivityAt = Math.max(
+      state.lastActivityAt ?? Number.NEGATIVE_INFINITY,
+      snapshot.lastActivityAt ?? Number.NEGATIVE_INFINITY
+    );
+    if (state.lastActivityAt === Number.NEGATIVE_INFINITY) {
+      state.lastActivityAt = undefined;
+    }
+  }
+
+  private commitSnapshot(entity: string, now: number, _snapshot: FlushSnapshot): void {
+    const state = this.states.get(entity);
+    if (!state) {
+      return;
+    }
+    state.lastHeartbeatAt = now;
+    // New activity may have arrived while the request was in flight. Its counters
+    // remain in the state and must belong to the next heartbeat.
+    if (!this.hasPendingActivity(state)) {
+      state.lastEditAt = undefined;
+      state.lastActivityAt = undefined;
+      state.pendingWrite = false;
+    }
+  }
+
+  private clearEmptyState(state: BufferedFileState): void {
+    if (!this.hasPendingActivity(state)) {
+      state.lastEditAt = undefined;
+      state.lastActivityAt = undefined;
+      state.pendingWrite = false;
+    }
+  }
+
+  private enqueueFlush<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.flushTail.catch(() => undefined).then(operation);
+    this.flushTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   private updateSelectionState(

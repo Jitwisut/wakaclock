@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "AtoAxis Activity Tracker",
+  "version": "0.1.0",
+  "description": "Privacy-first browser activity tracking for AtoAxis",
+  "permissions": ["storage", "tabs", "idle"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "options_page": "options.html",
+  "action": { "default_title": "AtoAxis" },
+  "incognito": "not_allowed"
+}

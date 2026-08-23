@@ -12,6 +12,8 @@ mod middleware;
 mod model;
 mod repository;
 mod services;
+#[cfg(test)]
+mod test_support;
 use config::CorsOrigins;
 use infrastructure::app::create_app_state;
 
@@ -26,7 +28,13 @@ fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
 
             CorsLayer::new()
                 .allow_origin(parsed)
-                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                ])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
         }
     }
@@ -64,6 +72,14 @@ async fn main() -> Result<()> {
         error!("Migration failed: {}", e);
         return Err(e);
     }
+    if let Err(e) = app_state.external_duration_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
+    if let Err(e) = app_state.follow_up_repo.migrate().await {
+        error!("Migration failed: {}", e);
+        return Err(e);
+    }
     if let Err(e) = app_state.account_analytics_repo.migrate().await {
         error!("Migration failed: {}", e);
         return Err(e);
@@ -94,6 +110,13 @@ async fn main() -> Result<()> {
         error!("Migration failed: {}", e);
         return Err(e);
     }
+    if let Some(postgres) = &app_state.postgres {
+        info!("Running PostgreSQL Phase 10 foundation migration...");
+        if let Err(e) = postgres.migrate().await {
+            error!("PostgreSQL migration failed: {}", e);
+            return Err(e);
+        }
+    }
     info!("Migrations completed successfully.");
 
     // Load any existing API key hashes into memory (wakaclock.users now exists).
@@ -101,12 +124,41 @@ async fn main() -> Result<()> {
         error!("Failed to load auth key cache: {}", e);
         return Err(e);
     }
+    if let Some(postgres) = &app_state.postgres {
+        if let Err(e) = app_state.auth_cache.refresh_from_postgres(postgres).await {
+            error!("Failed to load OAuth token cache: {}", e);
+            return Err(e);
+        }
+    }
 
     // 3. Setup router
     let api_v1 = handlers::v1::router(app_state.clone());
+    let api_v2 = handlers::v2::router(app_state.clone());
+    let scim_router = axum::Router::new()
+        .route(
+            "/Users",
+            axum::routing::get(handlers::enterprise::scim_users_list)
+                .post(handlers::enterprise::scim_users_create),
+        )
+        .route(
+            "/Users/:user_id",
+            axum::routing::get(handlers::enterprise::scim_user_get)
+                .patch(handlers::enterprise::scim_user_patch)
+                .delete(handlers::enterprise::scim_user_delete),
+        )
+        .route(
+            "/Groups",
+            axum::routing::get(handlers::enterprise::scim_groups_list)
+                .post(handlers::enterprise::scim_groups_create),
+        )
+        .with_state(app_state.clone());
 
     let router = axum::Router::new()
         .nest("/api/v1", api_v1)
+        .nest("/api/v2", api_v2)
+        .nest("/oauth", handlers::oauth::router(app_state.clone()))
+        .nest("/public", handlers::public::router(app_state.clone()))
+        .nest("/scim/v2", scim_router)
         // Add middleware (Logger, CORS, etc.)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         // Analytics and user/account responses are private data. Do not let a browser,
@@ -143,4 +195,56 @@ async fn main() -> Result<()> {
     .context("Server error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, routing::get, Router};
+    use tower::ServiceExt;
+
+    fn cors_app() -> Router {
+        Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .layer(build_cors_layer(&CorsOrigins::List(vec![
+                "https://www.atoaxis.com".to_string(),
+                "https://app.atoaxis.com".to_string(),
+            ])))
+    }
+
+    async fn preflight(origin: &str) -> axum::http::Response<Body> {
+        cors_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/health")
+                    .header(header::ORIGIN, origin)
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .expect("preflight request is valid"),
+            )
+            .await
+            .expect("CORS layer should return a response")
+    }
+
+    #[tokio::test]
+    async fn production_origins_are_allowed_by_preflight() {
+        for origin in ["https://www.atoaxis.com", "https://app.atoaxis.com"] {
+            let response = preflight(origin).await;
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(
+                response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+                Some(&HeaderValue::from_str(origin).unwrap())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_origin_does_not_receive_cors_access() {
+        let response = preflight("https://attacker.example").await;
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+    }
 }

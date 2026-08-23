@@ -18,11 +18,18 @@ members = [
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.10", features = ["v4", "v5", "serde"] }
+chrono-tz = "0.10"
+uuid = { version = "1.10", features = ["v4", "v5", "v7", "serde"] }
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -33,6 +40,7 @@ clap = { version = "4.5.43", features = ["derive"] }
 axum = { version = "0.7", features = ["multipart", "ws", "macros"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "timeout", "fs", "set-header"] }
 clickhouse = { version = "0.13.3", features = ["lz4", "uuid", "rustls-tls", "inserter"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 governor = "0.8"
 rusqlite = { version = "0.29", features = ["bundled"] }
 gix = { version = "0.68", default-features = false, features = ["worktree-mutation"] }
@@ -53,7 +61,7 @@ wakaclock-core = { path = "crates/wakaclock-core" }
 
 # Web framework
 axum = { workspace = true }
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { workspace = true }
 
 # Async runtime
@@ -65,6 +73,7 @@ serde_json = { workspace = true }
 
 # Database
 clickhouse = { workspace = true }
+tokio-postgres = { workspace = true }
 
 # Authentication & Crypto
 jsonwebtoken = "9.3"
@@ -81,9 +90,9 @@ reqwest = { workspace = true }
 
 # Date/Time
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 # IANA timezone database — Phase 9 computes local day boundaries, weekdays and
 # "today" in the user's zone, which fixed UTC offsets cannot do correctly across DST.
-chrono-tz = "0.10"
 
 # UUID
 uuid = { workspace = true }

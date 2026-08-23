@@ -5,7 +5,7 @@ Multi-shop eCommerce connector backend built with Rust, Axum, and modern cloud-n
 ## Architecture
 
 - **API Framework**: Axum (async Rust web framework)
-- **Database**: ClickHouse (columnar database for analytics)
+- **Database**: PostgreSQL for transactional product state; ClickHouse for telemetry and analytics
 - **Cache/Session**: Redis (OAuth tokens and session management)
 - **Vector Store**: Qdrant (semantic search and AI embeddings)
 - **Message Queue**: RabbitMQ (async job processing)
@@ -143,6 +143,15 @@ cargo tarpaulin
 cargo test --test '*' -- --test-threads=1
 ```
 
+The analytics regression tests that execute the real SQL are opt-in and require an isolated
+ClickHouse 24.10 instance. They use `CLICKHOUSE_TEST_URL` deliberately so a normal
+`CLICKHOUSE_URL` cannot be modified by accident:
+
+```bash
+CLICKHOUSE_TEST_URL=http://localhost:8123 \
+  cargo test -- --ignored
+```
+
 ## Background Workers
 
 Two asynchronous workers power the ingestion pipeline:
@@ -160,6 +169,39 @@ cargo run -- crawler-consumer -g crawler-worker-1
 Both workers block until interrupted (Ctrl+C) and require RabbitMQ, Redis, and ClickHouse connections.
 
 ## Configuration
+
+### Production browser access
+
+The API uses an explicit allowlist for browser origins. For the hosted AtoAxis deployment,
+set this environment variable on the backend service and restart it after changing the value:
+
+```env
+CORS_ORIGINS=https://www.atoaxis.com,https://app.atoaxis.com
+```
+
+Do not use `*` in production. `api.atoaxis.com` is the API host, not a browser origin, so it
+does not belong in this list. Local development defaults to `http://localhost:3000`; deploy
+previews need to be added explicitly only if they are allowed to call the production API.
+
+### How long a pause still counts as working
+
+A heartbeat can only ever prove 120 seconds of activity — that is the window an editor
+event can vouch for. Everything longer is a *pause*, and whether a pause counts is the
+single knob that decides what a day is worth:
+
+```env
+IDLE_TIMEOUT_MINUTES=15
+```
+
+Two activity intervals separated by no more than this are treated as one continuous
+session and the pause between them is credited to the earlier one, which is exactly what
+WakaTime's per-user timeout does. Time is only ever added *between* two things that
+actually happened, so the clock can never run past the last observed activity, and a
+trailing pause at the end of a session stays uncounted.
+
+Set it to `0` to count only directly measured intervals. Expect the reported totals to
+drop sharply: reading, thinking, running tests and waiting on an agent all happen in
+pauses longer than two minutes.
 
 The ingestion stack is controlled via environment variables:
 

@@ -480,19 +480,19 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         r#"
         INSERT INTO wakaclock.ai_model_daily
         SELECT
-            user_id, date, provider, model,
-            sum(ai_events) AS ai_events,
-            sum(ai_lines_added) AS ai_lines_added,
-            sum(ai_lines_deleted) AS ai_lines_deleted,
-            sum(prompts) AS prompts,
-            uniqExactIf(ai_session_id, ai_session_id != '') AS sessions,
-            sum(input_tokens) AS input_tokens,
-            sum(output_tokens) AS output_tokens,
-            sum(cache_read_tokens) AS cache_read_tokens,
-            sum(cache_write_tokens) AS cache_write_tokens,
-            CAST(if(sum(total_reported_tokens) = 0 OR sum(unpriced_tokens) > 0, NULL, sum(cost_microusd)) AS Nullable(UInt64)) AS estimated_cost_microusd,
-            sum(priced_tokens) AS priced_tokens,
-            sum(total_reported_tokens) AS total_reported_tokens,
+            source.user_id, source.date, source.provider, source.model,
+            sum(source.ai_events) AS ai_events,
+            sum(source.ai_lines_added) AS ai_lines_added,
+            sum(source.ai_lines_deleted) AS ai_lines_deleted,
+            sum(source.prompts) AS prompts,
+            uniqExactIf(source.ai_session_id, source.ai_session_id != '') AS sessions,
+            sum(source.input_tokens) AS input_tokens,
+            sum(source.output_tokens) AS output_tokens,
+            sum(source.cache_read_tokens) AS cache_read_tokens,
+            sum(source.cache_write_tokens) AS cache_write_tokens,
+            CAST(if(sum(source.total_reported_tokens) = 0 OR sum(source.unpriced_tokens) > 0, NULL, sum(source.cost_microusd)) AS Nullable(UInt64)) AS estimated_cost_microusd,
+            sum(source.priced_tokens) AS priced_tokens,
+            sum(source.total_reported_tokens) AS total_reported_tokens,
             __DATA_VERSION__ AS data_version
         FROM (
             SELECT
@@ -508,26 +508,26 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(0) AS cache_read_tokens, toUInt64(0) AS cache_write_tokens,
                 toUInt64(0) AS cost_microusd, toUInt64(0) AS priced_tokens,
                 toUInt64(0) AS total_reported_tokens, toUInt64(0) AS unpriced_tokens
-            FROM wakaclock.heartbeats
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND is_ai_generated
+            FROM wakaclock.heartbeats AS heartbeat
+            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.is_ai_generated
             UNION ALL
             SELECT
-                user_id, date,
-                ifNull(ai_provider, 'Unknown') AS provider,
-                ifNull(ai_model, 'Unknown') AS model,
+                usage.user_id, usage.date,
+                ifNull(usage.ai_provider, 'Unknown') AS provider,
+                ifNull(usage.ai_model, 'Unknown') AS model,
                 toUInt64(0) AS ai_events, toUInt64(0) AS ai_lines_added, toUInt64(0) AS ai_lines_deleted,
-                toUInt64(prompt_count) AS prompts,
-                ai_session_id,
-                toUInt64(ifNull(input_tokens, 0)), toUInt64(ifNull(output_tokens, 0)),
-                toUInt64(ifNull(cache_read_tokens, 0)), toUInt64(ifNull(cache_write_tokens, 0)),
-                toUInt64(ifNull(estimated_cost_microusd, 0)),
-                if(isNull(estimated_cost_microusd), toUInt64(0), toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0))),
-                toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)),
-                if(isNull(estimated_cost_microusd), toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)), toUInt64(0))
-            FROM wakaclock.ai_usage_events FINAL
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)
-        )
-        GROUP BY user_id, date, provider, model
+                toUInt64(usage.prompt_count) AS prompts,
+                usage.ai_session_id,
+                toUInt64(ifNull(usage.input_tokens, 0)), toUInt64(ifNull(usage.output_tokens, 0)),
+                toUInt64(ifNull(usage.cache_read_tokens, 0)), toUInt64(ifNull(usage.cache_write_tokens, 0)),
+                toUInt64(ifNull(usage.estimated_cost_microusd, 0)),
+                if(isNull(usage.estimated_cost_microusd), toUInt64(0), toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0))),
+                toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)),
+                if(isNull(usage.estimated_cost_microusd), toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)), toUInt64(0))
+            FROM wakaclock.ai_usage_events AS usage FINAL
+            WHERE usage.user_id = ? AND toDate(usage.date) BETWEEN toDate(?) AND toDate(?)
+        ) AS source
+        GROUP BY source.user_id, source.date, source.provider, source.model
         "#,
     ),
     (
@@ -535,11 +535,11 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         r#"
         INSERT INTO wakaclock.ai_client_daily
         SELECT
-            user_id, date, ai_agent, ai_client, editor,
-            sum(active_seconds) AS active_seconds,
-            sum(ai_events) AS ai_events,
-            uniqExactIf(ai_session_id, ai_session_id != '') AS sessions,
-            sum(ai_lines_changed) AS ai_lines_changed,
+            source.user_id, source.date, source.ai_agent, source.ai_client, source.editor,
+            sum(source.active_seconds) AS active_seconds,
+            sum(source.ai_events) AS ai_events,
+            uniqExactIf(source.ai_session_id, source.ai_session_id != '') AS sessions,
+            sum(source.ai_lines_changed) AS ai_lines_changed,
             __DATA_VERSION__ AS data_version
         FROM (
             SELECT
@@ -551,22 +551,22 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(1) AS ai_events,
                 '' AS ai_session_id,
                 toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)) AS ai_lines_changed
-            FROM wakaclock.heartbeats
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND is_ai_generated
+            FROM wakaclock.heartbeats AS heartbeat
+            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.is_ai_generated
             UNION ALL
             SELECT
-                user_id, date,
-                ai_agent,
-                ai_agent AS ai_client,
+                usage.user_id, usage.date,
+                usage.ai_agent,
+                usage.ai_agent AS ai_client,
                 'Unknown' AS editor,
                 toFloat64(0) AS active_seconds,
                 toUInt64(0) AS ai_events,
-                ai_session_id,
+                usage.ai_session_id,
                 toUInt64(0) AS ai_lines_changed
-            FROM wakaclock.ai_usage_events FINAL
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)
-        )
-        GROUP BY user_id, date, ai_agent, ai_client, editor
+            FROM wakaclock.ai_usage_events AS usage FINAL
+            WHERE usage.user_id = ? AND toDate(usage.date) BETWEEN toDate(?) AND toDate(?)
+        ) AS source
+        GROUP BY source.user_id, source.date, source.ai_agent, source.ai_client, source.editor
         "#,
     ),
     (
@@ -574,23 +574,23 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         r#"
         INSERT INTO wakaclock.ai_project_daily
         SELECT
-            user_id, date, project_id,
-            sum(total_seconds) AS total_seconds,
-            sum(ai_lines_added) AS ai_lines_added,
-            sum(ai_lines_deleted) AS ai_lines_deleted,
-            sum(human_lines_added) AS human_lines_added,
-            sum(human_lines_deleted) AS human_lines_deleted,
-            sum(toUInt64(ifNull(unattributed_lines_added, 0))) AS unattributed_lines_added,
-            sum(toUInt64(ifNull(unattributed_lines_deleted, 0))) AS unattributed_lines_deleted,
-            CAST(if(sum(has_usage) = 0, NULL, sum(prompts)) AS Nullable(UInt64)) AS prompts,
-            CAST(if(sum(has_usage) = 0, NULL, uniqExactIf(ai_session_id, ai_session_id != '')) AS Nullable(UInt64)) AS sessions,
-            CAST(if(sum(has_usage) = 0, NULL, sum(input_tokens)) AS Nullable(UInt64)) AS input_tokens,
-            CAST(if(sum(has_usage) = 0, NULL, sum(output_tokens)) AS Nullable(UInt64)) AS output_tokens,
-            CAST(if(sum(has_usage) = 0, NULL, sum(cache_read_tokens)) AS Nullable(UInt64)) AS cache_read_tokens,
-            CAST(if(sum(has_usage) = 0, NULL, sum(cache_write_tokens)) AS Nullable(UInt64)) AS cache_write_tokens,
-            CAST(if(sum(has_usage) = 0 OR sum(total_reported_tokens) = 0 OR sum(unpriced_tokens) > 0, NULL, sum(cost_microusd)) AS Nullable(UInt64)) AS estimated_cost_microusd,
-            CAST(if(sum(has_usage) = 0, NULL, sum(priced_tokens)) AS Nullable(UInt64)) AS priced_tokens,
-            CAST(if(sum(has_usage) = 0, NULL, sum(total_reported_tokens)) AS Nullable(UInt64)) AS total_reported_tokens,
+            source.user_id, source.date, source.project_id,
+            sum(source.total_seconds) AS total_seconds,
+            sum(source.ai_lines_added) AS ai_lines_added,
+            sum(source.ai_lines_deleted) AS ai_lines_deleted,
+            sum(source.human_lines_added) AS human_lines_added,
+            sum(source.human_lines_deleted) AS human_lines_deleted,
+            sum(toUInt64(ifNull(source.unattributed_lines_added, 0))) AS unattributed_lines_added,
+            sum(toUInt64(ifNull(source.unattributed_lines_deleted, 0))) AS unattributed_lines_deleted,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.prompts)) AS Nullable(UInt64)) AS prompts,
+            CAST(if(sum(source.has_usage) = 0, NULL, uniqExactIf(source.ai_session_id, source.ai_session_id != '')) AS Nullable(UInt64)) AS sessions,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.input_tokens)) AS Nullable(UInt64)) AS input_tokens,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.output_tokens)) AS Nullable(UInt64)) AS output_tokens,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.cache_read_tokens)) AS Nullable(UInt64)) AS cache_read_tokens,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.cache_write_tokens)) AS Nullable(UInt64)) AS cache_write_tokens,
+            CAST(if(sum(source.has_usage) = 0 OR sum(source.total_reported_tokens) = 0 OR sum(source.unpriced_tokens) > 0, NULL, sum(source.cost_microusd)) AS Nullable(UInt64)) AS estimated_cost_microusd,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.priced_tokens)) AS Nullable(UInt64)) AS priced_tokens,
+            CAST(if(sum(source.has_usage) = 0, NULL, sum(source.total_reported_tokens)) AS Nullable(UInt64)) AS total_reported_tokens,
             __DATA_VERSION__ AS data_version
         FROM (
             SELECT
@@ -607,26 +607,26 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(0) AS cache_read_tokens, toUInt64(0) AS cache_write_tokens,
                 toUInt64(0) AS cost_microusd, toUInt64(0) AS priced_tokens,
                 toUInt64(0) AS total_reported_tokens, toUInt64(0) AS unpriced_tokens
-            FROM wakaclock.heartbeats
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
+            FROM wakaclock.heartbeats AS heartbeat
+            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.project_id IS NOT NULL
             UNION ALL
             SELECT
-                user_id, date, project_id,
+                usage.user_id, usage.date, usage.project_id,
                 toFloat64(0) AS total_seconds,
                 toUInt64(0) AS ai_lines_added, toUInt64(0) AS ai_lines_deleted,
                 toUInt64(0) AS human_lines_added, toUInt64(0) AS human_lines_deleted,
                 toUInt64(0) AS unattributed_lines_added, toUInt64(0) AS unattributed_lines_deleted,
-                toUInt64(1) AS has_usage, toUInt64(prompt_count) AS prompts, ai_session_id,
-                toUInt64(ifNull(input_tokens, 0)), toUInt64(ifNull(output_tokens, 0)),
-                toUInt64(ifNull(cache_read_tokens, 0)), toUInt64(ifNull(cache_write_tokens, 0)),
-                toUInt64(ifNull(estimated_cost_microusd, 0)),
-                if(isNull(estimated_cost_microusd), toUInt64(0), toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0))),
-                toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)),
-                if(isNull(estimated_cost_microusd), toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0) + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)), toUInt64(0))
-            FROM wakaclock.ai_usage_events FINAL
-            WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
-        )
-        GROUP BY user_id, date, project_id
+                toUInt64(1) AS has_usage, toUInt64(usage.prompt_count) AS prompts, usage.ai_session_id,
+                toUInt64(ifNull(usage.input_tokens, 0)), toUInt64(ifNull(usage.output_tokens, 0)),
+                toUInt64(ifNull(usage.cache_read_tokens, 0)), toUInt64(ifNull(usage.cache_write_tokens, 0)),
+                toUInt64(ifNull(usage.estimated_cost_microusd, 0)),
+                if(isNull(usage.estimated_cost_microusd), toUInt64(0), toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0))),
+                toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)),
+                if(isNull(usage.estimated_cost_microusd), toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0) + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)), toUInt64(0))
+            FROM wakaclock.ai_usage_events AS usage FINAL
+            WHERE usage.user_id = ? AND toDate(usage.date) BETWEEN toDate(?) AND toDate(?) AND usage.project_id IS NOT NULL
+        ) AS source
+        GROUP BY source.user_id, source.date, source.project_id
         "#,
     ),
 ];
@@ -747,3 +747,33 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         "#,
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use crate::repository::ai_usage::AiUsageRepository;
+    use crate::repository::heartbeat::HeartbeatRepository;
+
+    use super::AccountAnalyticsRepository;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn snapshot_rebuild_queries_parse_without_alias_collisions() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        AiUsageRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+
+        let repo = AccountAnalyticsRepository::new(clickhouse);
+        repo.migrate().await.unwrap();
+        repo.build_snapshot(Uuid::new_v4(), "2026-08-01", "2026-08-01", 1)
+            .await
+            .unwrap();
+    }
+}
