@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -8,6 +8,7 @@ use crate::model::ai_usage::{
 };
 use crate::repository::ai_usage::AiUsageRepository;
 use crate::services::project_identity::ProjectIdentityService;
+use tracing::warn;
 use wakaclock_core::ai::AiUsageRecord;
 
 pub struct AiUsageService {
@@ -60,7 +61,23 @@ impl AiUsageService {
             {
                 let key = (provider.to_string(), model.to_string());
                 if !pricing_cache.contains_key(&key) {
-                    pricing_cache.insert(key, self.repo.pricing_for_model(provider, model).await?);
+                    let windows = match self.repo.pricing_for_model(provider, model).await {
+                        Ok(windows) => windows,
+                        Err(error) => {
+                            // Pricing is a derived enrichment. A catalog/query
+                            // problem must not reject the authoritative usage
+                            // event; store it as unpriced and make the failure
+                            // visible for an operator.
+                            warn!(
+                                %error,
+                                provider,
+                                model,
+                                "AI usage pricing unavailable; storing event as unpriced"
+                            );
+                            Vec::new()
+                        }
+                    };
+                    pricing_cache.insert(key, windows);
                 }
             }
         }
@@ -89,11 +106,24 @@ impl AiUsageService {
             }
 
             let project_id = match record.project_hint.as_deref() {
-                Some(project) if !project.trim().is_empty() => {
-                    self.project_identity_service
-                        .resolve_project_id(user_id, Some(project), None)
-                        .await?
-                }
+                Some(project) if !project.trim().is_empty() => match self
+                    .project_identity_service
+                    .resolve_project_id(user_id, Some(project), None)
+                    .await
+                {
+                    Ok(project_id) => project_id,
+                    Err(error) => {
+                        // Project attribution is also derived data. Keep the
+                        // token event usable in the unattributed bucket when
+                        // identity tables are unavailable.
+                        warn!(
+                            %user_id,
+                            %error,
+                            "AI usage project identity unavailable; storing event unattributed"
+                        );
+                        None
+                    }
+                },
                 _ => None,
             };
 
@@ -111,6 +141,7 @@ impl AiUsageService {
                 ai_provider: record.provider.clone(),
                 ai_model: record.model.clone(),
                 prompt_count: record.prompt_count,
+                prompt_character_count: record.prompt_character_count,
                 input_tokens: record.input_tokens,
                 output_tokens: record.output_tokens,
                 cache_read_tokens: record.cache_read_tokens,
@@ -123,7 +154,7 @@ impl AiUsageService {
             });
         }
 
-        let already_present: HashSet<String> = self
+        let already_present: HashSet<String> = match self
             .repo
             .existing_event_ids(
                 user_id,
@@ -132,9 +163,22 @@ impl AiUsageService {
                     .map(|row| row.usage_event_id.clone())
                     .collect::<Vec<_>>(),
             )
-            .await?
-            .into_iter()
-            .collect();
+            .await
+        {
+            Ok(ids) => ids.into_iter().collect(),
+            Err(error) => {
+                // The stable event id and ReplacingMergeTree remain the
+                // server-side safety net. If the read-side dedup query is
+                // temporarily unavailable, accepting the batch is preferable
+                // to retrying the same transcript forever.
+                warn!(
+                    %user_id,
+                    %error,
+                    "AI usage existing-event lookup unavailable; relying on server dedup"
+                );
+                HashSet::new()
+            }
+        };
 
         // Attach project-less events to a session's sole known project. We collect from both
         // the existing authoritative events and the explicit hints in this batch, so retries
@@ -151,11 +195,22 @@ impl AiUsageService {
                 explicit_session_projects.insert((row.ai_session_id.clone(), project_id));
             }
         }
-        for row in self.repo.session_project_ids(user_id, &session_ids).await? {
-            session_projects
-                .entry(row.ai_session_id)
-                .or_default()
-                .insert(row.project_id);
+        match self.repo.session_project_ids(user_id, &session_ids).await {
+            Ok(rows) => {
+                for row in rows {
+                    session_projects
+                        .entry(row.ai_session_id)
+                        .or_default()
+                        .insert(row.project_id);
+                }
+            }
+            Err(error) => {
+                warn!(
+                    %user_id,
+                    %error,
+                    "AI usage session-project lookup unavailable; leaving events unattributed"
+                );
+            }
         }
         let mut rows = rows;
         for row in &mut rows {
@@ -181,10 +236,31 @@ impl AiUsageService {
             .filter(|row| !already_present.contains(&row.usage_event_id))
             .collect();
 
-        self.repo.insert_usage_events(&new_rows).await?;
-        self.persist_session_projects(user_id, &new_rows, &explicit_session_projects, now)
-            .await?;
-        let sessions_touched = self.refresh_sessions(user_id, &session_ids, now).await?;
+        self.repo
+            .insert_usage_events(&new_rows)
+            .await
+            .context("AI usage event insert failed")?;
+        if let Err(error) = self
+            .persist_session_projects(user_id, &new_rows, &explicit_session_projects, now)
+            .await
+        {
+            warn!(
+                %user_id,
+                %error,
+                "AI usage session-project projection failed after event acceptance"
+            );
+        }
+        let sessions_touched = match self.refresh_sessions(user_id, &session_ids, now).await {
+            Ok(touched) => touched,
+            Err(error) => {
+                warn!(
+                    %user_id,
+                    %error,
+                    "AI usage session projection failed after event acceptance"
+                );
+                0
+            }
+        };
 
         Ok(AiUsageIngestReport {
             received,
@@ -391,6 +467,7 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: Some("claude-opus-5".to_string()),
             prompt_count: 1,
+            prompt_character_count: Some(12),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,

@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WakaclockConfigService = void 0;
 const vscode = __importStar(require("vscode"));
 const SECTION = "wakaclock";
+const PRODUCTION_SERVER_URL = "https://api.atoaxis.com";
 class WakaclockConfigService {
     emitter = new vscode.EventEmitter();
     configChangeSubscription;
@@ -52,12 +53,21 @@ class WakaclockConfigService {
     }
     getSnapshot() {
         const config = vscode.workspace.getConfiguration(SECTION);
+        const configuredRate = config.inspect("heartbeatRateLimitSeconds");
+        const legacyRate = config.get("sameFileHeartbeatMinutes", 2) * 60;
+        const heartbeatRateSeconds = configuredRate?.globalValue === undefined &&
+            configuredRate?.workspaceValue === undefined &&
+            configuredRate?.workspaceFolderValue === undefined
+            ? legacyRate
+            : config.get("heartbeatRateLimitSeconds", 120);
         return {
             cliPath: this.resolveCliPath(config),
+            serverUrl: this.resolveServerUrl(config),
             flushIntervalMs: Math.max(5, config.get("flushIntervalSeconds", 30)) * 1000,
+            heartbeatRateLimitMs: Math.max(30, heartbeatRateSeconds) * 1000,
             sameFileHeartbeatMs: Math.max(1, config.get("sameFileHeartbeatMinutes", 2)) * 60 * 1000,
-            // WakaTime's default keystroke timeout is 15 minutes. Keeping the same default
-            // makes short thinking/reading gaps part of the surrounding coding duration.
+            // Kept in the snapshot for backwards-compatible consumers, but the timing engine
+            // intentionally ignores it: all clients use the fixed strict 120-second gap.
             idleMs: Math.max(1, config.get("idleMinutes", 15)) * 60 * 1000,
             statusBarEnabled: config.get("statusBarEnabled", true),
             debugLogging: config.get("debugLogging", false),
@@ -74,11 +84,39 @@ class WakaclockConfigService {
         this.emitter.dispose();
     }
     resolveCliPath(config) {
-        const configuredPath = config.get("cliPath", "").trim();
-        // The package is named `wakaclock-cli`, but its `[[bin]] name` in Cargo.toml is
-        // "wakaclock" — that's the binary that actually gets built, so it's what has to be
-        // resolved from PATH when no explicit wakaclock.cliPath is configured.
-        return configuredPath || "wakaclock";
+        // cliPath is intentionally a global-only emergency/development override. A
+        // repository's .vscode/settings.json must not be able to replace the executable
+        // that receives a user's API key.
+        const configuredPath = config.inspect("cliPath")?.globalValue;
+        return typeof configuredPath === "string" ? configuredPath.trim() : "";
+    }
+    resolveServerUrl(config) {
+        const configured = config.inspect("serverUrl")?.globalValue;
+        if (typeof configured !== "string" || !configured.trim()) {
+            return PRODUCTION_SERVER_URL;
+        }
+        const value = configured.trim().replace(/\/+$/, "");
+        try {
+            const parsed = new URL(value);
+            const loopback = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+            if (!['https:', 'http:'].includes(parsed.protocol)) {
+                return PRODUCTION_SERVER_URL;
+            }
+            if (parsed.protocol === "http:" && !loopback.has(parsed.hostname)) {
+                return PRODUCTION_SERVER_URL;
+            }
+            if ((parsed.pathname !== "/" && parsed.pathname !== "") ||
+                parsed.search ||
+                parsed.hash ||
+                parsed.username ||
+                parsed.password) {
+                return PRODUCTION_SERVER_URL;
+            }
+            return value;
+        }
+        catch {
+            return PRODUCTION_SERVER_URL;
+        }
     }
 }
 exports.WakaclockConfigService = WakaclockConfigService;

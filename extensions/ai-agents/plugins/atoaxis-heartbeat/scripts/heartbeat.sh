@@ -22,12 +22,13 @@ if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
 fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
-  echo "atoaxis-heartbeat: '$WAKACLOCK_BIN' not found on PATH — install wakaclock-cli or set WAKACLOCK_CLI_PATH" >&2
+  echo "atoaxis-heartbeat: '$WAKACLOCK_BIN' not found on PATH — install the wakaclock binary or set WAKACLOCK_CLI_PATH" >&2
   exit 0
 fi
 
 TOOL_NAME="$(jq -r '.tool_name // empty' <<<"$INPUT")"
-FILE_PATH="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT")"
+# NotebookEdit names its target `notebook_path`, every other file tool uses `file_path`.
+FILE_PATH="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$INPUT")"
 AI_MODEL="$(jq -r '.model // .model_name // .model_id // .session.model // empty' <<<"$INPUT")"
 
 # The PostToolUse payload carries no model field, so the lookup above always came up
@@ -86,6 +87,14 @@ case "$TOOL_NAME" in
       LINES_ADDED=$((LINES_ADDED + $(count_lines "$NEW")))
       LINES_DELETED=$((LINES_DELETED + $(count_lines "$OLD")))
     done < <(jq -c '.tool_input.edits[]? // empty' <<<"$INPUT")
+    ;;
+  NotebookEdit)
+    # A notebook cell edit is a real file edit. It was silently unreported before, so
+    # every notebook-heavy session looked like the developer had stopped working.
+    OLD="$(jq -r '.tool_input.old_source // empty' <<<"$INPUT")"
+    NEW="$(jq -r '.tool_input.new_source // empty' <<<"$INPUT")"
+    LINES_ADDED="$(count_lines "$NEW")"
+    LINES_DELETED="$(count_lines "$OLD")"
     ;;
   *)
     exit 0

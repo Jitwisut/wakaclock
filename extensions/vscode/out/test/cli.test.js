@@ -13,6 +13,7 @@ function createConfig() {
     return {
         cliPath: "wakaclock-cli",
         flushIntervalMs: 30_000,
+        heartbeatRateLimitMs: 120_000,
         sameFileHeartbeatMs: 120_000,
         idleMs: 300_000,
         statusBarEnabled: true,
@@ -112,6 +113,22 @@ function mockChild(result = {}) {
             "3"
         ]));
     });
+    (0, vitest_1.it)("passes stable heartbeat ids and explicit activity segments", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+            heartbeat_id: "hb-1",
+            activity_segments: [
+                { segment_id: "segment-1", start: 100, end: 120, source: "editor" }
+            ],
+        });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(vitest_1.expect.arrayContaining([
+            "--heartbeat-id",
+            "hb-1",
+            "--activity-segments",
+            JSON.stringify([{ segment_id: "segment-1", start: 100, end: 120, source: "editor" }])
+        ]));
+    });
     (0, vitest_1.it)("parses today output", async () => {
         spawnMock.mockImplementation(() => mockChild({
             stdout: "Today: 1 hr 20 mins\nTotal seconds: 4800\nHeartbeats: 42\n",
@@ -122,6 +139,21 @@ function mockChild(result = {}) {
             humanReadable: "1 hr 20 mins",
             totalSeconds: 4800,
             heartbeatCount: 42
+        });
+    });
+    (0, vitest_1.it)("parses additive confirmed and offline queue fields", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            stdout: "Today: 5m 4s\nTotal seconds: 304\nConfirmed seconds: 300\nQueued seconds: 4\nHeartbeats: 42\nLast heartbeat at: 1770000000\n",
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.getToday()).resolves.toEqual({
+            humanReadable: "5m 4s",
+            totalSeconds: 304,
+            confirmedSeconds: 300,
+            queuedSeconds: 4,
+            heartbeatCount: 42,
+            lastHeartbeatAt: 1770000000
         });
     });
     (0, vitest_1.it)("surfaces missing cli errors", async () => {

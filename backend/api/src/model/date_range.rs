@@ -61,19 +61,25 @@ pub struct ResolvedRange {
 }
 
 impl ResolvedRange {
+    /// Return today's calendar date in the requested timezone.
+    ///
+    /// This is used by single-day endpoints that accept an optional `date`. Keeping
+    /// the default in the same timezone parser as explicit ranges prevents a request
+    /// with `timezone=Asia/Bangkok` from silently defaulting to the server's UTC day.
+    pub fn today_date_string(timezone: Option<&str>) -> Result<String, RangeError> {
+        let timezone = parse_timezone(timezone)?;
+        Ok(Utc::now()
+            .with_timezone(&timezone)
+            .format("%Y-%m-%d")
+            .to_string())
+    }
+
     /// Parse and validate a request's range.
     ///
     /// An absent timezone falls back to UTC rather than the server's local zone: a
     /// server that moves hosts would otherwise silently re-bucket everyone's days.
     pub fn parse(start: &str, end: &str, timezone: Option<&str>) -> Result<Self, RangeError> {
-        let timezone: Tz = timezone
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(DEFAULT_TIMEZONE)
-            .parse()
-            .map_err(|_| {
-                RangeError::InvalidTimezone(timezone.unwrap_or(DEFAULT_TIMEZONE).to_string())
-            })?;
+        let timezone = parse_timezone(timezone)?;
 
         let start = NaiveDate::parse_from_str(start, "%Y-%m-%d")
             .map_err(|_| RangeError::InvalidDate(start.to_string()))?;
@@ -161,6 +167,16 @@ impl ResolvedRange {
     }
 }
 
+fn parse_timezone(timezone: Option<&str>) -> Result<Tz, RangeError> {
+    let value = timezone
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_TIMEZONE);
+    value
+        .parse()
+        .map_err(|_| RangeError::InvalidTimezone(value.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +253,13 @@ mod tests {
         let (start, end) = range.unix_bounds();
         assert_eq!(end - start, 86_400.0);
         assert!(start > 0.0);
+    }
+
+    #[test]
+    fn bangkok_midnight_starts_on_the_previous_utc_date() {
+        let range = ResolvedRange::parse("2026-08-23", "2026-08-23", Some("Asia/Bangkok")).unwrap();
+        let (start, end) = range.unix_bounds();
+        assert_eq!(start, 1_787_418_000.0); // 2026-08-22 17:00:00 UTC
+        assert_eq!(end - start, 86_400.0);
     }
 }

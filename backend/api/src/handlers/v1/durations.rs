@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
+use crate::model::date_range::ResolvedRange;
 use crate::model::duration::{DurationBlock, DurationsResponse};
-use crate::services::duration::DurationService;
 
 #[derive(Debug, Deserialize)]
 pub struct DurationsQuery {
     pub date: Option<String>,
+    pub timezone: Option<String>,
 }
 
 pub async fn list(
@@ -21,14 +22,21 @@ pub async fn list(
     headers: HeaderMap,
     Query(params): Query<DurationsQuery>,
 ) -> Result<Json<DurationsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let date = params
-        .date
-        .unwrap_or_else(DurationService::today_date_string);
+    let date = match params.date {
+        Some(date) => date,
+        None => ResolvedRange::today_date_string(params.timezone.as_deref())
+            .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?,
+    };
+    let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())
+        .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "read_logged_time") {
+        return Err(auth::forbidden_scope("read_logged_time"));
+    }
 
     let rows = state
         .duration_service
-        .get_by_date(user_id, &date)
+        .get_by_date(user_id, &range)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 

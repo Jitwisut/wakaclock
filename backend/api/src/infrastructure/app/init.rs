@@ -6,11 +6,14 @@ use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::logger::Logger;
 use crate::infrastructure::presence_store::PresenceStore;
+use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::rate_limiter::{AnalyticsRateLimiter, AuthRateLimiter};
 use crate::repository::account_analytics::AccountAnalyticsRepository;
 use crate::repository::ai_usage::AiUsageRepository;
 use crate::repository::analytics::AnalyticsRepository;
 use crate::repository::coworking_session::CoworkingSessionRepository;
+use crate::repository::external_durations::ExternalDurationRepository;
+use crate::repository::follow_up::FollowUpRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::org::OrgRepository;
 use crate::repository::project_analytics::ProjectAnalyticsRepository;
@@ -19,16 +22,31 @@ use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
+use crate::services::authorization::AuthorizationService;
+use crate::services::billing::BillingService;
+use crate::services::activity_timeline::ActivityTimelineService;
 use crate::services::ai_stats::AiStatsService;
 use crate::services::ai_usage::AiUsageService;
 use crate::services::all_time::AllTimeService;
 use crate::services::coworking_session::CoworkingSessionService;
 use crate::services::dashboard_analytics::DashboardAnalyticsService;
 use crate::services::duration::DurationService;
+use crate::services::enterprise::EnterpriseService;
+use crate::services::vcs::VcsService;
+use crate::services::external_durations::ExternalDurationService;
+use crate::services::follow_up::FollowUpService;
+use crate::services::exports::ExportService;
+use crate::services::profile::ProfileService;
+use crate::services::reports::ReportService;
 use crate::services::heartbeat::HeartbeatService;
+use crate::services::goals::GoalService;
 use crate::services::insights::InsightsService;
+use crate::services::integrations::IntegrationService;
+use crate::services::leaderboards::LeaderboardService;
 use crate::services::keystroke_stats::KeystrokeStatsService;
 use crate::services::org::OrgService;
+use crate::services::organizations::OrganizationsService;
+use crate::services::oauth::OAuthService;
 use crate::services::project_analytics::ProjectAnalyticsService;
 use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_merge::ProjectMergeService;
@@ -46,6 +64,9 @@ pub struct AppState {
     pub logger: Arc<Logger>,
     pub config: Arc<Config>,
     pub clickhouse: Arc<ClickHouseClient>,
+    /// Transactional product store. Optional only during the ClickHouse-only compatibility
+    /// rollout; production deployments should set POSTGRES_URL.
+    pub postgres: Option<Arc<PostgresClient>>,
     pub auth_cache: Arc<AuthKeyCache>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
@@ -53,6 +74,8 @@ pub struct AppState {
     /// `presence_store` module docs for what that does and does not mean.
     pub presence: Arc<PresenceStore>,
     pub analytics_repo: Arc<AnalyticsRepository>,
+    pub external_duration_repo: Arc<ExternalDurationRepository>,
+    pub follow_up_repo: Arc<FollowUpRepository>,
     pub account_analytics_repo: Arc<AccountAnalyticsRepository>,
     pub ai_usage_repo: Arc<AiUsageRepository>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
@@ -64,12 +87,25 @@ pub struct AppState {
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
     pub ai_stats_service: Arc<AiStatsService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
+    pub authorization_service: Arc<AuthorizationService>,
+    pub billing_service: Arc<BillingService>,
     pub ai_usage_service: Arc<AiUsageService>,
     pub all_time_service: Arc<AllTimeService>,
     pub user_service: Arc<UserService>,
     pub heartbeat_service: Arc<HeartbeatService>,
+    pub goal_service: Arc<GoalService>,
     pub duration_service: Arc<DurationService>,
+    pub enterprise_service: Arc<EnterpriseService>,
+    pub vcs_service: Arc<VcsService>,
+    pub external_duration_service: Arc<ExternalDurationService>,
+    pub follow_up_service: Arc<FollowUpService>,
+    pub export_service: Arc<ExportService>,
+    pub profile_service: Arc<ProfileService>,
+    pub report_service: Arc<ReportService>,
+    pub activity_timeline_service: Arc<ActivityTimelineService>,
     pub insights_service: Arc<InsightsService>,
+    pub integration_service: Arc<IntegrationService>,
+    pub leaderboard_service: Arc<LeaderboardService>,
     pub keystroke_stats_service: Arc<KeystrokeStatsService>,
     /// Stable project identity (plan.md 9.3): mints and resolves `project_id`.
     pub project_identity_service: Arc<ProjectIdentityService>,
@@ -86,6 +122,8 @@ pub struct AppState {
     /// carry a real team name. Not org-scoped analytics, not billing, see
     /// `handlers/v1/orgs.rs` for the exact boundary.
     pub org_service: Arc<OrgService>,
+    pub organizations_service: Arc<OrganizationsService>,
+    pub oauth_service: Arc<OAuthService>,
     pub team_service: Arc<TeamService>,
     /// Group co-working sessions (plan.md 7.4).
     pub coworking_session_service: Arc<CoworkingSessionService>,
@@ -104,7 +142,12 @@ pub enum HealthStatus {
 
 impl AppState {
     pub async fn health(&self) -> AppHealth {
-        let status = if self.clickhouse.health_check().await.is_ok() {
+        let clickhouse_ok = self.clickhouse.health_check().await.is_ok();
+        let postgres_ok = match &self.postgres {
+            Some(postgres) => postgres.health_check().await.is_ok(),
+            None => true,
+        };
+        let status = if clickhouse_ok && postgres_ok {
             HealthStatus::Ok
         } else {
             HealthStatus::Error
@@ -128,6 +171,20 @@ pub async fn create_app_state() -> Result<AppState> {
             .context("Failed to initialize ClickHouse client")?,
     );
 
+    let postgres = match &config.postgres.url {
+        Some(_) => Some(Arc::new(
+            PostgresClient::connect(&config.postgres)
+                .await
+                .context("Failed to initialize PostgreSQL client")?,
+        )),
+        None => {
+            tracing::warn!(
+                "POSTGRES_URL is not configured; running in ClickHouse-only compatibility mode"
+            );
+            None
+        }
+    };
+
     // Auth key cache starts empty — populated by `AuthKeyCache::refresh()` in main.rs
     // once migrations have created `wakaclock.users`.
     let auth_cache = AuthKeyCache::new();
@@ -137,6 +194,8 @@ pub async fn create_app_state() -> Result<AppState> {
 
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
+    let external_duration_repo = Arc::new(ExternalDurationRepository::new(clickhouse.clone()));
+    let follow_up_repo = Arc::new(FollowUpRepository::new(clickhouse.clone()));
     let account_analytics_repo = Arc::new(AccountAnalyticsRepository::new(clickhouse.clone()));
     let ai_usage_repo = Arc::new(AiUsageRepository::new(clickhouse.clone()));
     let heartbeat_repo = Arc::new(HeartbeatRepository::new(clickhouse.clone()));
@@ -152,11 +211,44 @@ pub async fn create_app_state() -> Result<AppState> {
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
     let account_analytics_service =
         Arc::new(AccountAnalyticsService::new(account_analytics_repo.clone()));
-    let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(clickhouse.clone()));
-    let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone()));
-    let user_service = Arc::new(UserService::new(clickhouse.clone()));
-    let duration_service = Arc::new(DurationService::new(clickhouse.clone()));
+    let authorization_service = Arc::new(AuthorizationService::new(postgres.clone()));
+    let enterprise_service = Arc::new(EnterpriseService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+    ));
+    let vcs_service = Arc::new(VcsService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+    ));
+    let billing_service = Arc::new(BillingService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+    ));
+    let idle_timeout_seconds = config.idle_timeout_seconds;
+    let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(
+        clickhouse.clone(),
+        idle_timeout_seconds,
+    ));
+    let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone(), idle_timeout_seconds));
+    let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
+    let duration_service = Arc::new(DurationService::new(clickhouse.clone(), idle_timeout_seconds));
+    let external_duration_service = Arc::new(ExternalDurationService::new(
+        external_duration_repo.clone(),
+    ));
+    let follow_up_service = Arc::new(FollowUpService::new(follow_up_repo.clone()));
+    let export_service = Arc::new(ExportService::new(postgres.clone()));
+    let profile_service = Arc::new(ProfileService::new(postgres.clone()));
+    let report_service = Arc::new(ReportService::new(postgres.clone()));
+    let activity_timeline_service = Arc::new(ActivityTimelineService::new(
+        clickhouse.clone(),
+        idle_timeout_seconds,
+    ));
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone()));
+    let integration_service = Arc::new(IntegrationService::new(postgres.clone()));
+    let leaderboard_service = Arc::new(LeaderboardService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+    ));
     let keystroke_stats_service = Arc::new(KeystrokeStatsService::new(clickhouse.clone()));
     let project_merge_service = Arc::new(ProjectMergeService::new(project_merge_repo.clone()));
     let project_identity_service = Arc::new(ProjectIdentityService::new(
@@ -176,6 +268,10 @@ pub async fn create_app_state() -> Result<AppState> {
         heartbeat_repo.clone(),
         project_identity_service.clone(),
     ));
+    let goal_service = Arc::new(GoalService::with_clickhouse(
+        postgres.clone(),
+        clickhouse.clone(),
+    ));
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone()));
     let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
     let reprocess_service = Arc::new(ReprocessService::new(
@@ -184,10 +280,15 @@ pub async fn create_app_state() -> Result<AppState> {
         project_identity_service.clone(),
         account_analytics_service.clone(),
     ));
-    let stats_service = Arc::new(StatsService::new(clickhouse.clone()));
-    let summary_service = Arc::new(SummaryService::new(clickhouse.clone()));
+    let stats_service = Arc::new(StatsService::new(clickhouse.clone(), idle_timeout_seconds));
+    let summary_service = Arc::new(SummaryService::new(clickhouse.clone(), idle_timeout_seconds));
     let wakatime_import_service = Arc::new(WakaTimeImportService::new(heartbeat_repo.clone()));
     let org_service = Arc::new(OrgService::new(org_repo.clone()));
+    let organizations_service = Arc::new(OrganizationsService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+    ));
+    let oauth_service = Arc::new(OAuthService::new(postgres.clone()));
     let team_service = Arc::new(TeamService::new(team_repo.clone(), org_service.clone()));
     let coworking_session_service =
         Arc::new(CoworkingSessionService::new(coworking_session_repo.clone()));
@@ -196,11 +297,14 @@ pub async fn create_app_state() -> Result<AppState> {
         logger,
         config,
         clickhouse,
+        postgres,
         auth_cache,
         auth_rate_limiter,
         analytics_rate_limiter,
         presence,
         analytics_repo,
+        external_duration_repo,
+        follow_up_repo,
         account_analytics_repo,
         ai_usage_repo,
         heartbeat_repo,
@@ -212,12 +316,25 @@ pub async fn create_app_state() -> Result<AppState> {
         coworking_session_repo,
         ai_stats_service,
         account_analytics_service,
+        authorization_service,
+        billing_service,
         ai_usage_service,
         all_time_service,
         user_service,
         heartbeat_service,
+        goal_service,
         duration_service,
+        enterprise_service,
+        vcs_service,
+        external_duration_service,
+        follow_up_service,
+        export_service,
+        profile_service,
+        report_service,
+        activity_timeline_service,
         insights_service,
+        integration_service,
+        leaderboard_service,
         keystroke_stats_service,
         project_identity_service,
         project_analytics_service,
@@ -230,6 +347,8 @@ pub async fn create_app_state() -> Result<AppState> {
         summary_service,
         wakatime_import_service,
         org_service,
+        organizations_service,
+        oauth_service,
         team_service,
         coworking_session_service,
     })

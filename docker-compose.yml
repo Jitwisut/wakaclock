@@ -1,4 +1,23 @@
 services:
+  # PostgreSQL transactional source of truth for AtoAxis product state.
+  postgres:
+    image: postgres:16-alpine
+    container_name: wakaclock_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wakaclock
+      POSTGRES_USER: wakaclock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wakaclock-dev-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wakaclock -d wakaclock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ClickHouse Database
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
@@ -21,6 +40,63 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: wakaclock_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka-compatible event bus for heartbeat ingestion and PostgreSQL outbox delivery.
+  redpanda:
+    image: redpandadata/redpanda:v24.1.8
+    container_name: wakaclock_redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --check=false
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q Healthy"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: wakaclock_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-wakaclock}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-wakaclock-dev-password}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   # ClickHouse Web UI
   ch-ui:
     image: ghcr.io/caioricciuti/ch-ui:latest
@@ -37,7 +113,12 @@ services:
       - "5521:5521"
 
 volumes:
+  postgres_data:
   clickhouse_data:
     driver: local
   clickhouse_logs:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
     driver: local

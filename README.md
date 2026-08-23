@@ -6,10 +6,9 @@
 
 ---
 
-**Naming:** the product is branded **AtoAxis**. The binary (`wakaclock-cli`), config
-directory (`~/.wakaclock/config.toml`), crate names and editor setting keys still use the
-original `wakaclock` naming, and are written that way throughout these docs because that is
-what actually ships.
+**Naming:** the product is branded **AtoAxis**. The Rust package is `wakaclock-cli`, but
+the installed binary is `wakaclock`; the config directory (`~/.wakaclock/config.toml`),
+crate names and editor setting keys still use the original `wakaclock` naming.
 
 ## What is AtoAxis?
 
@@ -47,7 +46,7 @@ AtoAxis tracks how long you spend coding across editors, languages, and projects
                ┌────────────────────┼────────────────────┐
                │                    │                     │
     ┌──────────┴──────────┐  ┌──────┴───────┐  ┌─────────┴────────┐
-    │   wakaclock-cli     │  │ figma plugin  │  │  desktop app     │
+    │   wakaclock         │  │ figma plugin  │  │  desktop app     │
     │   (Rust binary)     │  │ (direct HTTP) │  │  (Tauri, in-proc)│
     └──────────▲──────────┘  └──────────────-┘  └──────────────────┘
                │ child process / LSP
@@ -57,7 +56,7 @@ AtoAxis tracks how long you spend coding across editors, languages, and projects
  (TS)       wakaclock-ls)      (Python)
 ```
 
-All IDE extensions delegate to `wakaclock-cli` for heartbeat construction, project/branch detection, language detection, offline queue, and API communication.
+All IDE extensions delegate to the `wakaclock` binary for heartbeat construction, project/branch detection, language detection, offline queue, and API communication.
 
 ## Tech Stack
 
@@ -153,6 +152,58 @@ Auth: `Authorization: Basic base64(api_key)` or `Bearer <api_key>`
 | GET/PUT/DELETE | `/api/v1/project_rules[/:id]` | CRUD regex project rules |
 | GET/PUT/DELETE | `/api/v1/project_merges[/:id]` | CRUD merge mappings |
 | POST | `/api/v1/import/wakatime` | Import WakaTime data dump |
+
+Phase 10 adds a versioned API surface without breaking WakaTime-compatible clients:
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| GET | `/api/v2/capabilities` | Machine-readable AtoAxis/WakaTime capability matrix |
+| GET | `/api/v2/me` | Stable v2 user envelope |
+| GET | `/api/v2/me/analytics` | Stable analytics envelope with freshness metadata |
+| GET | `/api/v2/me/ai/effectiveness` | AI line share, token/cost coverage and prompt-length aggregates |
+| GET/POST | `/api/v2/me/goals` | PostgreSQL-backed goal listing and creation |
+| DELETE | `/api/v2/me/goals/:goal_id` | Owner-scoped goal deletion |
+| GET | `/api/v2/integrations/providers` | Supported calendar, meeting, chat and VCS providers |
+| GET/POST | `/api/v2/integrations` | Encrypted-credential connection lifecycle |
+| POST | `/api/v2/integrations/:integration_id/sync` | Queue an idempotent background sync request |
+| GET | `/api/v2/integrations/:integration_id/status` | Connection health |
+| DELETE | `/api/v2/integrations/:integration_id` | Disconnect and remove stored credentials |
+| GET/POST | `/api/v1/users/current/data_dumps` | WakaTime-compatible asynchronous export jobs |
+| GET/POST | `/api/v2/organizations` | PostgreSQL organization and personal-org membership surface |
+| GET/POST | `/api/v2/organizations/:id/members` | Role/seat-aware member administration |
+| GET/POST | `/api/v2/organizations/:id/teams` | Team lifecycle behind centralized authorization |
+| GET | `/api/v2/leaderboards` | Private/public opt-in leaderboard configuration |
+| GET | `/api/v2/organizations/:id/billing` | Provider-neutral billing and seat summary |
+| POST | `/api/v2/vcs/:provider/connect` | Connect GitHub, GitLab or Bitbucket with encrypted credentials |
+| GET | `/api/v2/repositories` | List repositories available to the organization |
+| POST | `/api/v2/repositories/:id/project-mapping` | Map a repository to an AtoAxis project |
+| GET | `/api/v2/commits` | List synchronized commits with attribution metadata |
+| GET | `/api/v2/pull-requests` | List synchronized pull/merge requests |
+| GET | `/api/v2/pull-requests/:id/analytics` | Pull-request analytics with coverage indicators |
+| GET/POST | `/api/v2/organizations/:id/sso` | Read or configure OIDC/SAML connection metadata |
+| POST | `/api/v2/organizations/:id/sso/enforce` | Enforce SSO only after a verified test login |
+| POST | `/api/v2/organizations/:id/scim-tokens` | Issue a one-time SCIM bearer token |
+| GET/POST/PATCH/DELETE | `/scim/v2/Users` and `/scim/v2/Groups` | Tenant-scoped SCIM 2.0 provisioning endpoints |
+
+The VCS, SSO/SCIM, export, report and integration surfaces are intentionally exposed
+behind capability flags while their provider workers are being hardened. Credentials are
+accepted only as encrypted payloads, tokens are returned once, and the API never returns
+stored credential material.
+
+OAuth clients use the standard authorization-code flow with PKCE S256:
+
+1. Register an app with `POST /api/v2/developer/apps` using a dashboard session.
+2. Send the user to `GET /oauth/authorize` with `client_id`, exact `redirect_uri`, `scope`,
+   `state`, `code_challenge` and `code_challenge_method=S256`.
+3. Exchange the returned code at `POST /oauth/token` as an
+   `application/x-www-form-urlencoded` request.
+4. Revoke access or refresh tokens with `POST /oauth/revoke`.
+
+Only token hashes are stored. Access tokens are inserted into the in-memory auth cache on
+issuance, and active OAuth hashes/scopes are warmed from PostgreSQL on restart.
+
+Set `POSTGRES_URL` to enable the transactional foundation and goal APIs. When it is absent,
+the existing ClickHouse-only compatibility mode remains available for local installations.
 
 Full endpoint list in [plan.md](./plan.md).
 

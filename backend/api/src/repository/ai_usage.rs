@@ -36,6 +36,7 @@ impl AiUsageRepository {
                     ai_provider Nullable(String),
                     ai_model Nullable(String),
                     prompt_count UInt32,
+                    prompt_character_count Nullable(UInt64),
                     input_tokens Nullable(UInt64),
                     output_tokens Nullable(UInt64),
                     cache_read_tokens Nullable(UInt64),
@@ -89,6 +90,27 @@ impl AiUsageRepository {
                 "#,
             ),
             (
+                "ai_changes_raw",
+                r#"
+                CREATE TABLE IF NOT EXISTS wakaclock.ai_changes_raw (
+                    user_id UUID,
+                    ai_change_id String,
+                    file_identity String,
+                    start_line UInt32,
+                    end_line UInt32,
+                    lines_added UInt32,
+                    lines_deleted UInt32,
+                    provider Nullable(String),
+                    model Nullable(String),
+                    occurred_at UInt32,
+                    attribution_source String,
+                    attribution_confidence Nullable(Float32),
+                    created_at UInt32 DEFAULT toUInt32(now())
+                ) ENGINE = ReplacingMergeTree(created_at)
+                ORDER BY (user_id, ai_change_id)
+                "#,
+            ),
+            (
                 "ai_model_pricing",
                 r#"
                 CREATE TABLE IF NOT EXISTS wakaclock.ai_model_pricing (
@@ -120,6 +142,16 @@ impl AiUsageRepository {
                 .await
                 .with_context(|| format!("Failed to create {table} table"))?;
         }
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 ADD COLUMN IF NOT EXISTS prompt_character_count Nullable(UInt64)",
+            )
+            .execute()
+            .await
+            .context("Failed to add ai_usage_events.prompt_character_count")?;
 
         // Existing development databases may have been created by the short-lived
         // FixedString(3) schema above. Pricing is always USD today, but using String
@@ -257,7 +289,12 @@ impl AiUsageRepository {
         self.client
             .get_client()
             .query(
-                "SELECT ai_session_id, project_id
+                /* `project_id` is Nullable(UUID) in the table, and the `IS NOT NULL`
+                filter does not change the column's declared type: ClickHouse still
+                sends a null-flag byte per row that the non-optional UUID decoder in
+                `SessionProjectIdRow` never reads. `assumeNotNull` narrows the type
+                at the projection, which the filter has already made true. */
+                "SELECT ai_session_id, assumeNotNull(project_id) AS project_id
                  FROM wakaclock.ai_usage_events FINAL
                  WHERE user_id = ? AND ai_session_id IN ? AND project_id IS NOT NULL
                  GROUP BY ai_session_id, project_id",

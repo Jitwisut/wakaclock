@@ -3,6 +3,8 @@ export type HeartbeatCategory = "coding" | "building" | "debugging";
 export type FlushReason =
     | "save"
     | "timer"
+    | "focus-lost"
+    | "shutdown"
     | "switch"
     | "gap"
     | "manual"
@@ -13,12 +15,20 @@ export type FlushReason =
 
 export interface BufferedFileState {
     entity: string;
+    heartbeatId?: string;
     project?: string;
     /** Timestamp of the most recent text edit, kept separate from cross-file activity time. */
     lastEditAt?: number;
+    /**
+     * Where the interval that `lastEditAt` closed began. Only an agent-attribution
+     * decision needs it: it is the exact boundary between time the developer had
+     * already earned and the interval the agent's edit created.
+     */
+    lastEditIntervalStartAt?: number;
     lastActivityAt?: number;
     lastHeartbeatAt?: number;
     activeSeconds: number;
+    activitySegments: ActivitySegment[];
     keystrokes: number;
     charsAdded: number;
     charsDeleted: number;
@@ -43,6 +53,8 @@ export interface ExtraHeartbeatPayload {
     chars_added?: number;
     chars_deleted?: number;
     active_seconds?: number;
+    heartbeat_id?: string;
+    activity_segments?: ActivitySegment[];
     ai_agent?: string;
     ai_provider?: string;
     ai_model?: string;
@@ -70,13 +82,54 @@ export interface ApiKeySyncResult {
     /** The server accepted the key on a real authenticated request. */
     verified: boolean;
     mirrorError?: string;
-    verifyError?: string;
+  verifyError?: string;
+  /** Machine-readable outcome returned by `wakaclock verify --json`. */
+  status?: VerifyStatus;
+  /** The key may be retained in SecretStorage while the server is offline. */
+  pending?: boolean;
+  serverUrl?: string;
+}
+
+export type VerifyStatus =
+  | "verified"
+  | "invalid_key"
+  | "subscription_required"
+  | "unreachable"
+  | "server_error"
+  | "incompatible";
+
+export type ConnectionState =
+  | "needs-api-key"
+  | "connecting"
+  | "verified"
+  | "offline-queued"
+  | "subscription-required"
+  | "cli-unavailable";
+
+export interface VerifyResult {
+  status: VerifyStatus;
+  server_url?: string;
+  authenticated?: boolean;
+  reachable?: boolean;
+  cli_version?: string;
+  queue_count?: number;
+  error?: string | null;
 }
 
 export interface StatusBarSnapshot {
     humanReadable: string;
     totalSeconds: number;
     heartbeatCount: number;
+    confirmedSeconds?: number;
+    queuedSeconds?: number;
+    bufferedSeconds?: number;
+    lastHeartbeatAt?: number;
+    agentHealth?: unknown;
+    coveredIntervals?: ActivitySegment[];
+    lastIncrementSeconds?: number;
+    lastIncrementSource?: string;
+    discardedSeconds?: number;
+    legacyCli?: boolean;
 }
 
 export interface StatusSnapshot {
@@ -88,8 +141,11 @@ export interface StatusSnapshot {
 }
 
 export interface WakaclockConfigSnapshot {
-    cliPath: string;
+  cliPath: string;
+  /** Production origin; kept optional so older third-party test/config providers remain additive. */
+  serverUrl?: string;
     flushIntervalMs: number;
+    heartbeatRateLimitMs: number;
     sameFileHeartbeatMs: number;
     idleMs: number;
     statusBarEnabled: boolean;
@@ -103,4 +159,18 @@ export interface FlushOverrides {
     write?: boolean;
     force?: boolean;
     now?: number;
+}
+
+export interface BufferedActivitySnapshot {
+    /** Seconds accumulated locally since the last successful/queued flush. */
+    bufferedSeconds: number;
+    activitySegments?: ActivitySegment[];
+}
+
+/** A non-overlapping piece of observed activity, expressed in epoch seconds. */
+export interface ActivitySegment {
+    segment_id: string;
+    start: number;
+    end: number;
+    source?: "editor" | "ai" | "other" | string;
 }

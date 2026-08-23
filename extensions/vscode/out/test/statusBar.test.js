@@ -35,6 +35,7 @@ function createConfig(overrides = {}) {
     return {
         cliPath: "wakaclock-cli",
         flushIntervalMs: 30_000,
+        heartbeatRateLimitMs: 120_000,
         sameFileHeartbeatMs: 120_000,
         idleMs: 300_000,
         statusBarEnabled: true,
@@ -88,7 +89,7 @@ function createConfig(overrides = {}) {
         const controller = new statusBar_1.StatusBarController(() => createConfig(), { getToday }, new logging_1.Logger(() => false));
         await controller.refresh();
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(clock) 5 m");
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 5m 0s");
         (0, vitest_1.expect)(item.backgroundColor).toBeUndefined();
         (0, vitest_1.expect)(item.command).toBe("wakaclock.showToday");
         await controller.refresh();
@@ -97,14 +98,32 @@ function createConfig(overrides = {}) {
     (0, vitest_1.it)("renders today output", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig(), {
             getToday: vitest_1.vi.fn().mockResolvedValue({
-                humanReadable: "1 hr",
+                humanReadable: "1h 0m 0s",
                 totalSeconds: 3600,
                 heartbeatCount: 10
             })
         }, new logging_1.Logger(() => false));
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(clock) 1 hr");
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 1h 0m 0s");
         (0, vitest_1.expect)(item.show).toHaveBeenCalled();
+    });
+    (0, vitest_1.it)("unions server intervals with the local buffer instead of adding overlap", async () => {
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi.fn().mockResolvedValue({
+                humanReadable: "1m",
+                totalSeconds: 60,
+                confirmedSeconds: 60,
+                heartbeatCount: 2,
+                coveredIntervals: [
+                    { segment_id: "server", start: 100, end: 160, source: "editor" }
+                ]
+            })
+        }, new logging_1.Logger(() => false));
+        controller.setBufferedSegmentsProvider(() => [
+            { segment_id: "local", start: 130, end: 190, source: "editor" }
+        ]);
+        await controller.refresh();
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 1m 30s");
     });
     (0, vitest_1.it)("hides when disabled", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig({ statusBarEnabled: false }), {

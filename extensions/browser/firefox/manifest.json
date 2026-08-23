@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "AtoAxis Activity Tracker",
+  "version": "0.1.0",
+  "description": "Privacy-first browser activity tracking for AtoAxis",
+  "permissions": ["storage", "tabs", "idle", "http://*/*", "https://*/*"],
+  "background": { "scripts": ["background.js"], "persistent": false },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "browser_specific_settings": { "gecko": { "id": "browser@atoaxis.com" } },
+  "incognito": "not_allowed"
+}

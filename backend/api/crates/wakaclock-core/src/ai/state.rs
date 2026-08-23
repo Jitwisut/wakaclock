@@ -1,3 +1,4 @@
+use crate::ai::follow_up::HumanFollowUpLedger;
 use crate::ai::parser::ParserCursor;
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -50,6 +51,16 @@ impl AiAttributionState {
                 delivered_at INTEGER NOT NULL
             );
 
+            -- Usage parsers read a whole transcript because providers do not share
+            -- one append-only format. Keep successful usage IDs locally so the
+            -- always-on scan does not upload the same full transcript every tick.
+            -- IDs are marked only after the API acknowledges the batch; an error or
+            -- process crash therefore remains safely retryable.
+            CREATE TABLE IF NOT EXISTS delivered_usage (
+                usage_event_id TEXT PRIMARY KEY,
+                delivered_at   INTEGER NOT NULL
+            );
+
             -- A single cursor for activity observed outside the editor (Claude/Codex
             -- hooks and transcript sync). It lets separate CLI processes join AI
             -- heartbeats into WakaTime-style durations without counting each process'
@@ -58,9 +69,60 @@ impl AiAttributionState {
                 stream_id TEXT PRIMARY KEY,
                 last_time REAL NOT NULL
             );
+
+            -- Hook and transcript paths can observe the same patch with different
+            -- provider event IDs. Keep a short-lived content/time fingerprint so the
+            -- always-on watcher does not upload a second heartbeat for that patch.
+            CREATE TABLE IF NOT EXISTS delivered_fingerprints (
+                entity TEXT NOT NULL,
+                occurred_at REAL NOT NULL,
+                lines_added INTEGER NOT NULL,
+                lines_deleted INTEGER NOT NULL,
+                event_id TEXT,
+                delivered_at INTEGER NOT NULL
+            );
+
+            -- Source-free AI line ownership. The JSON contains only opaque file IDs,
+            -- line ranges, timestamps and follow-up flags; it is never uploaded as-is.
+            CREATE TABLE IF NOT EXISTS follow_up_ledger (
+                ledger_id TEXT PRIMARY KEY CHECK (ledger_id = 'default'),
+                ledger_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             ",
         )?;
         Ok(Self { conn })
+    }
+
+    pub fn load_follow_up_ledger(&self) -> Result<HumanFollowUpLedger, AppError> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT ledger_json FROM follow_up_ledger WHERE ledger_id = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            Some(value) => Ok(serde_json::from_str(&value)?),
+            None => Ok(HumanFollowUpLedger::default()),
+        }
+    }
+
+    pub fn save_follow_up_ledger(
+        &self,
+        ledger: &HumanFollowUpLedger,
+    ) -> Result<(), AppError> {
+        let json = serde_json::to_string(ledger)?;
+        self.conn.execute(
+            "INSERT INTO follow_up_ledger (ledger_id, ledger_json, updated_at)
+             VALUES ('default', ?1, ?2)
+             ON CONFLICT(ledger_id) DO UPDATE SET
+                ledger_json = excluded.ledger_json,
+                updated_at = excluded.updated_at",
+            params![json, chrono::Utc::now().timestamp()],
+        )?;
+        Ok(())
     }
 
     /// Record an activity timestamp and return the duration from the previous activity
@@ -98,7 +160,7 @@ impl AiAttributionState {
             Some(last) if timestamp <= last => 0.0,
             Some(last) => {
                 let gap = timestamp - last;
-                if gap < timeout_seconds {
+                if gap <= timeout_seconds {
                     gap
                 } else {
                     0.0
@@ -187,6 +249,92 @@ impl AiAttributionState {
         Ok(())
     }
 
+    /// Returns usage IDs that have not yet been acknowledged by the API.
+    ///
+    /// This is deliberately separate from edit-event delivery: a model response may
+    /// produce several file heartbeats, but its token usage is one logical event.
+    pub fn filter_undelivered_usage(
+        &self,
+        candidates: &[String],
+    ) -> Result<HashSet<String>, AppError> {
+        let mut undelivered = HashSet::with_capacity(candidates.len());
+        for usage_event_id in candidates {
+            let exists: bool = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM delivered_usage WHERE usage_event_id = ?1",
+                    params![usage_event_id],
+                    |_| Ok(true),
+                )
+                .optional()?
+                .unwrap_or(false);
+            if !exists {
+                undelivered.insert(usage_event_id.clone());
+            }
+        }
+        Ok(undelivered)
+    }
+
+    /// Marks an acknowledged usage batch. `INSERT OR IGNORE` makes this safe when
+    /// a retry races with another scan or when a process restarts after the server
+    /// accepted the request but before local state was persisted.
+    pub fn mark_usage_delivered(&self, usage_event_ids: &[String]) -> Result<(), AppError> {
+        let now = chrono::Utc::now().timestamp();
+        for usage_event_id in usage_event_ids {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO delivered_usage (usage_event_id, delivered_at)
+                 VALUES (?1, ?2)",
+                params![usage_event_id, now],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_fingerprint(
+        &self,
+        entity: &str,
+        occurred_at: f64,
+        lines_added: u32,
+        lines_deleted: u32,
+        event_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        self.conn.execute(
+            "INSERT INTO delivered_fingerprints
+             (entity, occurred_at, lines_added, lines_deleted, event_id, delivered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                entity,
+                occurred_at,
+                lines_added,
+                lines_deleted,
+                event_id,
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn has_fingerprint(
+        &self,
+        entity: &str,
+        occurred_at: f64,
+        lines_added: u32,
+        lines_deleted: u32,
+    ) -> Result<bool, AppError> {
+        let found: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM delivered_fingerprints
+                 WHERE entity = ?1 AND abs(occurred_at - ?2) <= 15
+                   AND lines_added = ?3 AND lines_deleted = ?4
+                 ORDER BY delivered_at DESC LIMIT 1",
+                params![entity, occurred_at, lines_added, lines_deleted],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
     /// Bounded retention for the delivered-event dedup table — plan.md 8.6's "30 days
     /// or 50,000 IDs, whichever is smaller" default, applied here as a simple age cutoff.
     /// Returns the number of rows removed.
@@ -194,6 +342,14 @@ impl AiAttributionState {
         let cutoff = chrono::Utc::now().timestamp() - retention_days * 24 * 60 * 60;
         let removed = self.conn.execute(
             "DELETE FROM delivered_events WHERE delivered_at < ?1",
+            params![cutoff],
+        )?;
+        self.conn.execute(
+            "DELETE FROM delivered_fingerprints WHERE delivered_at < ?1",
+            params![cutoff],
+        )?;
+        self.conn.execute(
+            "DELETE FROM delivered_usage WHERE delivered_at < ?1",
             params![cutoff],
         )?;
         Ok(removed)
@@ -318,6 +474,44 @@ mod tests {
     }
 
     #[test]
+    fn usage_ids_are_filtered_until_the_api_acknowledges_them() {
+        let path = temp_db_path("usage-delivery");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let ids = vec!["usage-1".to_string(), "usage-2".to_string()];
+
+        assert_eq!(state.filter_undelivered_usage(&ids).unwrap().len(), 2);
+        state.mark_usage_delivered(&ids[..1]).unwrap();
+        let remaining = state.filter_undelivered_usage(&ids).unwrap();
+        assert!(!remaining.contains("usage-1"));
+        assert!(remaining.contains("usage-2"));
+
+        // A repeated acknowledgement is idempotent and does not make the row
+        // appear as pending again.
+        state.mark_usage_delivered(&ids[..1]).unwrap();
+        assert!(!state
+            .filter_undelivered_usage(&ids[..1])
+            .unwrap()
+            .contains("usage-1"));
+    }
+
+    #[test]
+    fn hook_fingerprint_deduplicates_a_transcript_event_with_a_different_id() {
+        let path = temp_db_path("fingerprint");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        state
+            .mark_fingerprint("/workspace/src/lib.rs", 100.0, 3, 1, Some("hook-1"))
+            .unwrap();
+        assert!(state
+            .has_fingerprint("/workspace/src/lib.rs", 112.0, 3, 1)
+            .unwrap());
+        assert!(!state
+            .has_fingerprint("/workspace/src/lib.rs", 116.0, 4, 1)
+            .unwrap());
+    }
+
+    #[test]
     fn activity_cursor_joins_only_gaps_inside_the_timeout() {
         let path = temp_db_path("activity-cursor");
         let _ = std::fs::remove_file(&path);
@@ -325,9 +519,30 @@ mod tests {
 
         assert_eq!(state.record_activity("ai", 100.0, 900.0).unwrap(), 0.0);
         assert_eq!(state.record_activity("ai", 160.0, 900.0).unwrap(), 60.0);
-        assert_eq!(state.record_activity("ai", 1_060.0, 900.0).unwrap(), 0.0);
+        assert_eq!(state.record_activity("ai", 1_060.0, 900.0).unwrap(), 900.0);
         assert_eq!(state.record_activity("ai", 1_000.0, 900.0).unwrap(), 0.0);
         assert_eq!(state.record_activity("ai", 1_090.0, 900.0).unwrap(), 30.0);
+    }
+
+    #[test]
+    fn activity_cursor_includes_exactly_two_minutes_but_not_more() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-ai-strict-{}.db", uuid::Uuid::new_v4()));
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+        assert_eq!(
+            state.record_activity("ai-strict", 1_000.0, 120.0).unwrap(),
+            0.0
+        );
+        assert_eq!(
+            state.record_activity("ai-strict", 1_120.0, 120.0).unwrap(),
+            120.0
+        );
+        assert_eq!(
+            state.record_activity("ai-strict", 1_241.0, 120.0).unwrap(),
+            0.0
+        );
+        drop(state);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

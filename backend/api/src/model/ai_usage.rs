@@ -37,6 +37,8 @@ pub struct AiUsageEventRow {
     pub token_source: String,
     pub version: u64,
     pub received_at: u32,
+    /// Nullable so old transcript imports remain distinguishable from a measured zero.
+    pub prompt_character_count: Option<u64>,
 }
 
 /// A coding session as the agent itself identifies it (plan.md 9.4).

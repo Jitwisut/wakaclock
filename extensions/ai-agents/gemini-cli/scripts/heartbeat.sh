@@ -21,7 +21,7 @@ if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
 fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
-  echo "atoaxis-heartbeat (gemini): '$WAKACLOCK_BIN' not found on PATH — install wakaclock-cli or set WAKACLOCK_CLI_PATH" >&2
+  echo "atoaxis-heartbeat (gemini): '$WAKACLOCK_BIN' not found on PATH — install the wakaclock binary or set WAKACLOCK_CLI_PATH" >&2
   exit 0
 fi
 

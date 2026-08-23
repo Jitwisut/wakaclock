@@ -14,14 +14,38 @@ pub struct StatusBarSnapshot {
     pub total_seconds: f64,
     pub human_readable: String,
     pub heartbeat_count: u64,
+    #[serde(default)]
+    pub confirmed_seconds: Option<f64>,
+    /// Additive fields returned by newer servers. Older servers omit them and the
+    /// client treats the missing values as zero/unknown.
+    #[serde(default)]
+    pub queued_seconds: f64,
+    #[serde(default)]
+    pub last_heartbeat_at: Option<f64>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub buffered_seconds: f64,
+    #[serde(default)]
+    pub agent_health: Option<serde_json::Value>,
+    #[serde(default)]
+    pub covered_intervals: Vec<crate::heartbeat::ActivitySegment>,
+    #[serde(default)]
+    pub last_increment_seconds: Option<f64>,
+    #[serde(default)]
+    pub last_increment_source: Option<String>,
+    #[serde(default)]
+    pub discarded_seconds: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SendReport {
     pub sent: usize,
     pub deduped: usize,
     pub queued: usize,
     pub flushed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// What a queue flush actually did. `flushed` alone was ambiguous in the one place it
@@ -37,13 +61,30 @@ pub struct FlushReport {
     pub stopped_because: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairDayReport {
+    pub date: String,
+    pub timezone: String,
+    pub before_seconds: f64,
+    pub after_seconds: f64,
+    pub duplicate_heartbeats: u64,
+    pub overlap_seconds: f64,
+    pub long_gap_seconds: f64,
+    #[serde(default)]
+    pub revision_id: Option<String>,
+    pub applied: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 impl SendReport {
-    fn queued(sent: usize, deduped: usize, queued: usize) -> Self {
+    fn queued(sent: usize, deduped: usize, queued: usize, error: Option<String>) -> Self {
         Self {
             sent,
             deduped,
             queued,
             flushed: 0,
+            error,
         }
     }
 }
@@ -71,17 +112,37 @@ impl ApiClient {
         self.send_heartbeats(vec![heartbeat]).await
     }
 
-    pub async fn send_heartbeats(&self, heartbeats: Vec<Heartbeat>) -> AppResult<SendReport> {
+    pub async fn send_heartbeats(&self, mut heartbeats: Vec<Heartbeat>) -> AppResult<SendReport> {
+        // Every transport payload gets an identity before it touches the dedup cache or
+        // durable queue. This makes a retry/restart indistinguishable from the original
+        // request at the backend even for older callers that did not know the field yet.
+        for heartbeat in &mut heartbeats {
+            if heartbeat.heartbeat_id.is_none() {
+                heartbeat.heartbeat_id = Some(uuid::Uuid::new_v4().to_string());
+            }
+        }
         let queue = Queue::open()?;
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 
         if filtered.heartbeats.is_empty() {
+            // A previous attempt may have queued this same stable heartbeat ID after
+            // the server was unreachable. The local cache can call the retry a
+            // duplicate, but that must not prevent the durable queue from being
+            // drained (otherwise it waits for an unrelated heartbeat).
+            let flush = match self.flush_queue_inner(&queue).await {
+                Ok(flush) => flush,
+                Err(error) => FlushReport {
+                    flushed: 0,
+                    stopped_because: Some(format!("could not flush offline queue: {error}")),
+                },
+            };
             return Ok(SendReport {
                 sent: 0,
                 deduped,
                 queued: 0,
-                flushed: 0,
+                flushed: flush.flushed,
+                error: flush.stopped_because,
             });
         }
 
@@ -101,20 +162,49 @@ impl ApiClient {
             Ok(()) => {
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
-                self.store_last_heartbeats(&last_by_entity)?;
-                let flush = self.flush_queue_inner(&queue).await?;
+                // The server has accepted the current payload at this point. Cache and
+                // queue-maintenance failures are reported to the caller but must not turn
+                // that confirmed send into a non-zero exit (which would make an editor
+                // retry and double-count the heartbeat).
+                let cache_error = self
+                    .store_last_heartbeats(&last_by_entity)
+                    .err()
+                    .map(|error| format!("could not persist local dedup cache: {error}"));
+                let flush = match self.flush_queue_inner(&queue).await {
+                    Ok(flush) => flush,
+                    Err(error) => FlushReport {
+                        flushed: 0,
+                        stopped_because: Some(format!("could not flush offline queue: {error}")),
+                    },
+                };
+                let error = match (cache_error, flush.stopped_because) {
+                    (Some(cache_error), Some(flush_error)) => {
+                        Some(format!("{cache_error}; {flush_error}"))
+                    }
+                    (Some(cache_error), None) => Some(cache_error),
+                    (None, flush_error) => flush_error,
+                };
                 Ok(SendReport {
                     sent: payloads.len(),
                     deduped,
                     queued: 0,
                     flushed: flush.flushed,
+                    error,
                 })
             }
-            Err(_) => {
+            Err(error) => {
                 for payload in &payloads {
                     queue.push(payload)?;
                 }
-                Ok(SendReport::queued(0, deduped, payloads.len()))
+                // Do not persist a failed payload in the local last-heartbeat cache:
+                // the stable ID must remain retryable, and the durable queue already
+                // provides the deduplication needed while the server is offline.
+                Ok(SendReport::queued(
+                    0,
+                    deduped,
+                    payloads.len(),
+                    Some(error.to_string()),
+                ))
             }
         }
     }
@@ -125,6 +215,13 @@ impl ApiClient {
     }
 
     pub async fn today(&self) -> AppResult<StatusBarSnapshot> {
+        self.today_with_timezone(None).await
+    }
+
+    /// Probe authentication without requiring the status payload to be decoded.
+    /// The CLI uses this for first-run onboarding, where a machine-readable result
+    /// is more useful than an exit code and an opaque reqwest error.
+    pub async fn verify(&self) -> AppResult<()> {
         let response = self
             .client
             .get(format!(
@@ -133,6 +230,23 @@ impl ApiClient {
             ))
             .send()
             .await?;
+        let response = Self::reject_unauthorized(response)?;
+        response.error_for_status()?;
+        Ok(())
+    }
+
+    pub async fn today_with_timezone(
+        &self,
+        timezone: Option<&str>,
+    ) -> AppResult<StatusBarSnapshot> {
+        let mut request = self.client.get(format!(
+            "{}/api/v1/status_bar/today",
+            self.config.server_url
+        ));
+        if let Some(timezone) = timezone.filter(|value| !value.trim().is_empty()) {
+            request = request.query(&[("timezone", timezone)]);
+        }
+        let response = request.send().await?;
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
         Ok(response.json::<StatusBarSnapshot>().await?)
@@ -150,8 +264,31 @@ impl ApiClient {
             .send()
             .await?;
         let response = Self::reject_unauthorized(response)?;
-        let response = response.error_for_status()?;
+        let response = Self::error_for_status_with_body(response).await?;
         Ok(response.json::<AiUsageIngestReport>().await?)
+    }
+
+    pub async fn repair_day(
+        &self,
+        date: &str,
+        timezone: Option<&str>,
+        apply: bool,
+    ) -> AppResult<RepairDayReport> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/repair/day", self.config.server_url))
+            .json(&serde_json::json!({
+                "date": date,
+                "timezone": timezone,
+                "apply": apply,
+            }))
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        Ok(response
+            .error_for_status()?
+            .json::<RepairDayReport>()
+            .await?)
     }
 
     /// Turns a 401 into a message that actually says what to do about it, instead of
@@ -198,6 +335,7 @@ impl ApiClient {
                 }
                 Err(error) => {
                     stopped_because = Some(error.to_string());
+                    queue.mark_retry(id)?;
                     break;
                 }
             }
@@ -218,8 +356,36 @@ impl ApiClient {
             .await?;
 
         let response = Self::reject_unauthorized(response)?;
-        response.error_for_status()?;
+        Self::error_for_status_with_body(response).await?;
         Ok(())
+    }
+
+    /// Preserve the API's bounded JSON/text error body instead of returning only
+    /// reqwest's status label. This is especially important for the transcript
+    /// agent: its server-side ingest path can fail in several independent
+    /// ClickHouse operations, and the response body identifies which one failed.
+    async fn error_for_status_with_body(
+        response: reqwest::Response,
+    ) -> AppResult<reqwest::Response> {
+        let status = response.status();
+        if !status.is_client_error() && !status.is_server_error() {
+            return Ok(response);
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        let body = body.trim();
+        let message = if body.is_empty() {
+            status
+                .canonical_reason()
+                .unwrap_or("request failed")
+                .to_string()
+        } else {
+            body.chars().take(2_048).collect::<String>()
+        };
+        Err(AppError::HttpStatus {
+            status: status.as_u16(),
+            message,
+        })
     }
 
     /// Read the per-entity dedup cache.

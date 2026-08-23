@@ -16,7 +16,13 @@ use std::path::{Path, PathBuf};
 
 /// Tool names whose result proves a file edit (plan.md 8.5.2: "Parse only tool-result
 /// records that prove a file edit/write. A conversational claim ... is not evidence").
-const FILE_EDIT_TOOLS: [&str; 3] = ["Edit", "Write", "MultiEdit"];
+/// Kept in step with the PostToolUse matcher in the atoaxis-heartbeat plugin: a tool
+/// that only one of the two knows about produces either a missing heartbeat or a
+/// duplicate one. Edits a model makes through `Bash` (`sed -i`, a heredoc redirect) are
+/// deliberately *not* here — a shell command cannot be reliably read as "these files
+/// changed", and a wrong attribution is worse than a missing one. That gap needs a
+/// file-watcher, not a bigger list.
+const FILE_EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 pub struct ClaudeCodeParser;
 
@@ -98,6 +104,56 @@ impl AiActivityParser for ClaudeCodeParser {
             state: DiscoveryState::TranscriptFound {
                 path: latest.expect("non-empty candidates has a max"),
             },
+        }
+    }
+
+    fn discover_sources(&self, context: &DiscoveryContext) -> Vec<DiscoveryResult> {
+        let root = Self::projects_root(context);
+        if !root.exists() {
+            return vec![DiscoveryResult {
+                state: DiscoveryState::NotInstalled,
+            }];
+        }
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return vec![DiscoveryResult {
+                    state: DiscoveryState::PermissionDenied { path: root },
+                }]
+            }
+            Err(_) => {
+                return vec![DiscoveryResult {
+                    state: DiscoveryState::InstalledNoTranscript,
+                }]
+            }
+        };
+        let mut candidates = Vec::new();
+        for project_dir in entries.flatten() {
+            let project_path = project_dir.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+            if let Ok(session_files) = fs::read_dir(project_path) {
+                for session_file in session_files.flatten() {
+                    let path = session_file.path();
+                    if path.extension().is_some_and(|ext| ext == "jsonl") {
+                        candidates.push(path);
+                    }
+                }
+            }
+        }
+        candidates.sort();
+        if candidates.is_empty() {
+            vec![DiscoveryResult {
+                state: DiscoveryState::InstalledNoTranscript,
+            }]
+        } else {
+            candidates
+                .into_iter()
+                .map(|path| DiscoveryResult {
+                    state: DiscoveryState::TranscriptFound { path },
+                })
+                .collect()
         }
     }
 
@@ -200,7 +256,11 @@ impl AiActivityParser for ClaudeCodeParser {
                     let Some(result) = record.tool_use_result.as_ref() else {
                         continue;
                     };
-                    let Some(file_path) = result.file_path.clone() else {
+                    let Some(file_path) = result
+                        .file_path
+                        .clone()
+                        .or_else(|| result.notebook_path.clone())
+                    else {
                         continue;
                     };
                     // A populated structuredPatch proves an edit to existing content;
@@ -315,6 +375,11 @@ struct ClaudeContentBlock {
 struct ClaudeToolUseResult {
     #[serde(rename = "filePath")]
     file_path: Option<String>,
+    /// `NotebookEdit`'s result shape has not been verified against a real transcript.
+    /// The alias costs nothing and lets the event through if it turns out to use this
+    /// key; if it uses neither, the tool is still covered by the PostToolUse hook.
+    #[serde(rename = "notebookPath")]
+    notebook_path: Option<String>,
     #[serde(rename = "structuredPatch")]
     structured_patch: Option<Vec<StructuredPatchHunk>>,
     content: Option<String>,

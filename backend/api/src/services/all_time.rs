@@ -1,17 +1,23 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::all_time::{AllTimeData, AllTimeResponse, AllTimeRow};
+use crate::services::activity_timeline::{
+    canonicalize_bridged, total_seconds, ActivityTimelineService,
+};
 
 pub struct AllTimeService {
-    clickhouse: Arc<ClickHouseClient>,
+    timeline: ActivityTimelineService,
 }
 
 impl AllTimeService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
-        Self { clickhouse }
+    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+        Self {
+            timeline: ActivityTimelineService::new(clickhouse, idle_timeout_seconds),
+        }
     }
 
     pub async fn get(&self, user_id: Uuid) -> Result<AllTimeResponse> {
@@ -29,22 +35,24 @@ impl AllTimeService {
     }
 
     async fn fetch_all_time(&self, user_id: Uuid) -> Result<AllTimeRow> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    coalesce(sum(total_seconds), 0.0) AS total_seconds,
-                    count() AS days_with_activity,
-                    if(count() = 0, NULL, toString(min(date))) AS since
-                FROM wakaclock.daily_totals
-                WHERE user_id = ?
-                ",
-            )
-            .bind(user_id)
-            .fetch_one::<AllTimeRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse all_time query error: {error}"))
+        let intervals = self.timeline.intervals(user_id, 0.0, f64::MAX).await?;
+        let canonical = canonicalize_bridged(&intervals, self.timeline.idle_timeout_seconds());
+        let total = total_seconds(&canonical);
+        let mut days = std::collections::HashSet::new();
+        let since = canonical
+            .iter()
+            .filter_map(|interval| {
+                let timestamp = DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)?;
+                let date = timestamp.date_naive().to_string();
+                days.insert(date.clone());
+                Some(date)
+            })
+            .min();
+        Ok(AllTimeRow {
+            total_seconds: total,
+            days_with_activity: days.len() as u64,
+            since,
+        })
     }
 }
 

@@ -1,0 +1,135 @@
+name: Release AtoAxis VS Code extension
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: darwin-x64
+            runner: macos-13
+            rust_target: x86_64-apple-darwin
+          - target: darwin-arm64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+          - target: win32-x64
+            runner: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+          - target: win32-arm64
+            runner: windows-2022
+            rust_target: aarch64-pc-windows-msvc
+          - target: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-musl
+          - target: alpine-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-musl
+          - target: linux-arm64
+            runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-musl
+          - target: alpine-arm64
+            runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: backend/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Install musl/cross toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.rust_target }}
+      - name: Build signed CLI
+        shell: bash
+        run: |
+          manifest=backend/api/Cargo.toml
+          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.rust_target }}" == aarch64-* ]]; then
+            cargo install cross --git https://github.com/cross-rs/cross --locked
+            cross build --manifest-path "$manifest" -p wakaclock-cli --release --target ${{ matrix.rust_target }}
+          else
+            cargo build --manifest-path "$manifest" -p wakaclock-cli --release --target ${{ matrix.rust_target }}
+          fi
+          test -f backend/api/target/${{ matrix.rust_target }}/release/wakaclock${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Install extension dependencies
+        working-directory: extensions/vscode
+        run: npm ci
+      - name: Package target VSIX
+        working-directory: extensions/vscode
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "Git tag and Extension version must match ($GITHUB_REF_NAME vs $version)"
+            exit 1
+          fi
+          binary="../../backend/api/target/${{ matrix.rust_target }}/release/wakaclock"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then binary="${binary}.exe"; fi
+          # Signing is deliberately a required precondition in production. The
+          # secrets are configured only on the release environment, never in PRs.
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            test -n "${MACOS_SIGNING_IDENTITY:-}" || { echo "macOS Developer ID signing identity is required"; exit 1; }
+            codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" "$binary"
+            test -n "${APPLE_ID:-}" -a -n "${APPLE_TEAM_ID:-}" -a -n "${APPLE_APP_PASSWORD:-}" || { echo "Apple notarization credentials are required"; exit 1; }
+            ditto -c -k --keepParent "$binary" "/tmp/atoaxis-${{ matrix.target }}.zip"
+            xcrun notarytool submit "/tmp/atoaxis-${{ matrix.target }}.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$binary" || true
+          fi
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            test -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" || { echo "Windows Authenticode certificate is required"; exit 1; }
+            signtool sign /sha1 "$WINDOWS_CERTIFICATE_THUMBPRINT" /fd SHA256 "$binary"
+          fi
+          "$binary" --version
+          smoke_home="$(mktemp -d)"
+          HOME="$smoke_home" "$binary" verify --json || true
+          CLI_VERSION="$version" npm run package:target -- ${{ matrix.target }} "$binary"
+          unzip -l atoaxis-vscode-*.vsix | grep -E "resources/(bin/wakaclock(\\.exe)?|cli-manifest.json)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atoaxis-vscode-${{ matrix.target }}
+          path: extensions/vscode/*.vsix
+
+  publish:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: atoaxis-vscode-*
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: test "$(find dist -name '*.vsix' | wc -l)" -eq 8
+      - name: Publish every platform package
+        run: |
+          for package in dist/*.vsix; do
+            npx --yes @vscode/vsce publish --packagePath "$package" --pat "${{ secrets.VSCE_PAT }}"
+          done

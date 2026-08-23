@@ -7,7 +7,57 @@ use uuid::Uuid;
 /// considered a duplicate. Ported from WakaTime's same-file rule, which its editor
 /// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
 /// this window to mean the same thing here as it does there.
-pub const DEDUP_WINDOW_SECONDS: f64 = 120.0;
+pub const MAX_ACTIVITY_GAP_SECONDS: f64 = 120.0;
+pub const DEDUP_WINDOW_SECONDS: f64 = MAX_ACTIVITY_GAP_SECONDS;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivitySegment {
+    pub segment_id: String,
+    pub start: f64,
+    pub end: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Length of the union of valid activity intervals. Overlapping heartbeats from
+/// multiple windows/sources therefore contribute a second only once.
+pub fn union_activity_seconds(segments: &[ActivitySegment]) -> f64 {
+    let mut ordered: Vec<(f64, f64)> = segments
+        .iter()
+        .filter(|segment| {
+            segment.start.is_finite() && segment.end.is_finite() && segment.end > segment.start
+        })
+        .map(|segment| (segment.start, segment.end))
+        .collect();
+    ordered.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let mut total = 0.0;
+    let mut current: Option<(f64, f64)> = None;
+    for (start, end) in ordered {
+        match current {
+            None => current = Some((start, end)),
+            Some((current_start, current_end)) if start > current_end => {
+                total += current_end - current_start;
+                current = Some((start, end));
+            }
+            Some((current_start, current_end)) => {
+                current = Some((current_start, current_end.max(end)));
+            }
+        }
+    }
+    if let Some((start, end)) = current {
+        total += end - start;
+    }
+    total.max(0.0)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -103,6 +153,11 @@ pub struct Heartbeat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<Uuid>,
     pub branch: Option<String>,
+    /// VCS provenance supplied by an official integration when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<Uuid>,
     pub language: Option<String>,
     pub dependencies: Vec<String>,
     pub lines: Option<u32>,
@@ -114,12 +169,30 @@ pub struct Heartbeat {
     pub operating_system: String,
     pub machine: String,
     pub user_agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_name_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_name: Option<String>,
+    /// Stable transport identity. Retries, offline queue flushes and process restarts
+    /// must carry the same value so the server can accept a heartbeat at most once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_id: Option<String>,
     pub ast_language: Option<String>,
     pub ast_confidence: Option<f32>,
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
     pub active_seconds: Option<f64>,
+    /// Explicit intervals are the canonical source of duration. `active_seconds` remains
+    /// for backwards compatibility with older clients and imported WakaTime payloads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity_segments: Vec<ActivitySegment>,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
     /// Provider that emitted the attribution event (for example `openai` or `anthropic`).
@@ -136,6 +209,26 @@ pub struct Heartbeat {
     /// Stable id supplied by an agent hook. This is used for retry/deduplication and is
     /// intentionally opaque to the server.
     pub ai_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_change_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_character_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_subscription_plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution_confidence: Option<f32>,
     pub ai_lines_added: Option<u32>,
     pub ai_lines_deleted: Option<u32>,
     pub human_lines_added: Option<u32>,
@@ -165,6 +258,8 @@ impl Heartbeat {
             project: None,
             project_id: None,
             branch: None,
+            head_revision: None,
+            repository_id: None,
             language: None,
             dependencies: vec![],
             lines: None,
@@ -176,12 +271,19 @@ impl Heartbeat {
             operating_system: String::new(),
             machine: String::new(),
             user_agent,
+            machine_name_hash: None,
+            hostname_hash: None,
+            timezone: None,
+            feature_id: None,
+            feature_name: None,
+            heartbeat_id: None,
             ast_language: None,
             ast_confidence: None,
             keystrokes: None,
             chars_added: None,
             chars_deleted: None,
             active_seconds: None,
+            activity_segments: vec![],
             is_ai_generated: false,
             ai_agent: None,
             ai_provider: None,
@@ -189,6 +291,16 @@ impl Heartbeat {
             ai_source: None,
             ai_confidence: None,
             ai_event_id: None,
+            ai_change_id: None,
+            prompt_character_count: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            ai_subscription_plan: None,
+            token_source: None,
+            attribution_source: None,
+            attribution_confidence: None,
             ai_lines_added: None,
             ai_lines_deleted: None,
             human_lines_added: None,
@@ -222,6 +334,22 @@ impl Heartbeat {
                 return Err("active_seconds must be a non-negative finite number".to_string());
             }
         }
+        if let Some(heartbeat_id) = self.heartbeat_id.as_deref() {
+            if heartbeat_id.trim().is_empty() {
+                return Err("heartbeat_id cannot be empty".to_string());
+            }
+        }
+        for segment in &self.activity_segments {
+            if segment.segment_id.trim().is_empty()
+                || !segment.start.is_finite()
+                || !segment.end.is_finite()
+                || segment.start < 0.0
+                || segment.end < segment.start
+                || segment.end - segment.start > MAX_ACTIVITY_GAP_SECONDS
+            {
+                return Err("activity segment is invalid or exceeds the 120 second gap".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -233,6 +361,9 @@ impl Heartbeat {
     /// arrived shortly after it from ever being sent; a save is a meaningful event on
     /// either side of the comparison and must never let a pair be coalesced into one.
     pub fn is_duplicate_of(&self, other: &Heartbeat) -> bool {
+        if self.heartbeat_id.is_some() && self.heartbeat_id == other.heartbeat_id {
+            return true;
+        }
         let time_diff = (self.time - other.time).abs();
         self.entity == other.entity
             && self.entity_type == other.entity_type
@@ -273,6 +404,7 @@ impl Heartbeat {
             || positive(self.ai_lines_added)
             || positive(self.ai_lines_deleted)
             || self.active_seconds.is_some_and(|seconds| seconds > 0.0)
+            || !self.activity_segments.is_empty()
     }
 }
 

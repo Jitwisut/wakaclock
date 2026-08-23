@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::ai_stats::{
-    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
+    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse,
+    AiTotalsRow, AiUsageMetricsRow,
 };
 
 pub struct AiStatsService {
@@ -26,6 +27,7 @@ impl AiStatsService {
         validate_date(end)?;
 
         let totals = self.fetch_totals(user_id, start, end).await?;
+        let usage = self.fetch_usage_metrics(user_id, start, end).await?;
         let agents = self.fetch_agents(user_id, start, end).await?;
         let daily = self.fetch_daily(user_id, start, end).await?;
 
@@ -46,6 +48,12 @@ impl AiStatsService {
                 total_human_keystrokes: totals.total_human_keystrokes,
                 total_human_chars_added: totals.total_human_chars_added,
                 total_heartbeats: totals.total_heartbeats,
+                total_prompt_characters: usage.prompt_characters,
+                total_input_tokens: usage.input_tokens,
+                total_output_tokens: usage.output_tokens,
+                total_cache_read_tokens: usage.cache_read_tokens,
+                total_cache_write_tokens: usage.cache_write_tokens,
+                total_estimated_cost_microusd: usage.estimated_cost_microusd,
                 ai_heartbeat_percentage,
                 agents: agents
                     .into_iter()
@@ -129,6 +137,33 @@ impl AiStatsService {
             .fetch_all::<AiAgentRow>()
             .await
             .map_err(|error| anyhow::anyhow!("ClickHouse ai_stats agents query error: {error}"))
+    }
+
+    async fn fetch_usage_metrics(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+    ) -> Result<AiUsageMetricsRow> {
+        self.clickhouse
+            .get_client()
+            .query(
+                "SELECT
+                    sumOrNull(prompt_character_count) AS prompt_characters,
+                    sumOrNull(input_tokens) AS input_tokens,
+                    sumOrNull(output_tokens) AS output_tokens,
+                    sumOrNull(cache_read_tokens) AS cache_read_tokens,
+                    sumOrNull(cache_write_tokens) AS cache_write_tokens,
+                    sumOrNull(estimated_cost_microusd) AS estimated_cost_microusd
+                 FROM wakaclock.ai_usage_events FINAL
+                 WHERE user_id = ? AND toDate(toDateTime(event_time)) BETWEEN toDate(?) AND toDate(?)",
+            )
+            .bind(user_id)
+            .bind(start)
+            .bind(end)
+            .fetch_one::<AiUsageMetricsRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse ai usage metrics query error: {error}"))
     }
 
     async fn fetch_daily(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiDailyRow>> {

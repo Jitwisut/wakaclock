@@ -105,6 +105,13 @@ pub trait AiActivityParser {
 
     fn discover(&self, context: &DiscoveryContext) -> DiscoveryResult;
 
+    /// Return every usable transcript source. The original `discover` API reports the
+    /// newest source for backwards compatibility, while the always-on agent uses this
+    /// additive method so concurrent sessions are never silently skipped.
+    fn discover_sources(&self, context: &DiscoveryContext) -> Vec<DiscoveryResult> {
+        vec![self.discover(context)]
+    }
+
     /// Errors here must be isolated per agent — plan.md 8.4: "One broken Claude record
     /// must not suppress a valid Codex batch or the ordinary editor heartbeat," so
     /// callers should treat an `Err` as "skip this agent for this cycle," never as fatal.

@@ -1,7 +1,7 @@
 {
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis \u2014 Developer Time Tracking",
-  "description": "Developer time tracking for VS Code with AI agent attribution. Records coding time, human/AI line counts and keystrokes, and sends it to your self-hosted AtoAxis server.",
+  "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
   "version": "0.1.0",
   "publisher": "atoaxis",
   "license": "SEE LICENSE IN LICENSE",
@@ -31,6 +31,9 @@
     "Visualization"
   ],
   "main": "./out/src/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onCommand:wakaclock.configureCliPath",
@@ -85,25 +88,38 @@
         "wakaclock.cliPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to wakaclock-cli. Leave empty to resolve from PATH."
+          "scope": "machine",
+          "description": "Advanced development override for the wakaclock binary. Leave empty to use the bundled, verified CLI. Workspace values are ignored."
+        },
+        "wakaclock.serverUrl": {
+          "type": "string",
+          "default": "https://api.atoaxis.com",
+          "scope": "window",
+          "description": "Advanced global server-origin override. Production users should keep https://api.atoaxis.com; workspace values are ignored."
         },
         "wakaclock.flushIntervalSeconds": {
           "type": "number",
           "default": 30,
           "minimum": 5,
-          "description": "How often buffered file activity is flushed to wakaclock-cli."
+          "description": "How often the extension checks buffered file activity. Heartbeats are rate-limited separately."
+        },
+        "wakaclock.heartbeatRateLimitSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 30,
+          "description": "Strict activity window and minimum non-write heartbeat cadence in seconds. Gaps above 120 seconds never add time."
         },
         "wakaclock.sameFileHeartbeatMinutes": {
           "type": "number",
           "default": 2,
           "minimum": 1,
-          "description": "If activity resumes on the same file after this gap, send a new heartbeat window."
+          "description": "Deprecated compatibility setting. Use wakaclock.heartbeatRateLimitSeconds."
         },
         "wakaclock.idleMinutes": {
           "type": "number",
           "default": 15,
           "minimum": 1,
-          "description": "Maximum gap joined into active coding time, matching WakaTime's keystroke-timeout model."
+          "description": "Deprecated compatibility setting. Activity timing always uses the fixed 120-second strict gap."
         },
         "wakaclock.statusBarEnabled": {
           "type": "boolean",
@@ -134,11 +150,14 @@
     "lint": "tsc --noEmit -p ./",
     "test": "vitest run",
     "build:resources": "node scripts/copy-ai-agents.js",
+    "package:target": "node scripts/package-target.js",
+    "generate:cli-manifest": "node scripts/generate-cli-manifest.js",
     "vscode:prepublish": "npm run compile && npm run build:resources"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

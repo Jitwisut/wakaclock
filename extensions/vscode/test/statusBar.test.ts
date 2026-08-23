@@ -35,6 +35,7 @@ function createConfig(overrides: Partial<WakaclockConfigSnapshot> = {}): Wakaclo
   return {
     cliPath: "wakaclock-cli",
     flushIntervalMs: 30_000,
+    heartbeatRateLimitMs: 120_000,
     sameFileHeartbeatMs: 120_000,
     idleMs: 300_000,
     statusBarEnabled: true,
@@ -109,7 +110,7 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
     await controller.refresh();
-    expect(item.text).toBe("$(clock) 5 m");
+    expect(item.text).toBe("$(clock) 5m 0s");
     expect(item.backgroundColor).toBeUndefined();
     expect(item.command).toBe("wakaclock.showToday");
 
@@ -122,7 +123,7 @@ describe("StatusBarController", () => {
       () => createConfig(),
       {
         getToday: vi.fn().mockResolvedValue({
-          humanReadable: "1 hr",
+          humanReadable: "1h 0m 0s",
           totalSeconds: 3600,
           heartbeatCount: 10
         })
@@ -132,8 +133,33 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(clock) 1 hr");
+    expect(item.text).toBe("$(clock) 1h 0m 0s");
     expect(item.show).toHaveBeenCalled();
+  });
+
+  it("unions server intervals with the local buffer instead of adding overlap", async () => {
+    const controller = new StatusBarController(
+      () => createConfig(),
+      {
+        getToday: vi.fn().mockResolvedValue({
+          humanReadable: "1m",
+          totalSeconds: 60,
+          confirmedSeconds: 60,
+          heartbeatCount: 2,
+          coveredIntervals: [
+            { segment_id: "server", start: 100, end: 160, source: "editor" }
+          ]
+        })
+      },
+      new Logger(() => false)
+    );
+    controller.setBufferedSegmentsProvider(() => [
+      { segment_id: "local", start: 130, end: 190, source: "editor" }
+    ]);
+
+    await controller.refresh();
+
+    expect(item.text).toBe("$(clock) 1m 30s");
   });
 
   it("hides when disabled", async () => {

@@ -12,6 +12,8 @@ export function registerEventSubscriptions(
     | "recordSave"
     | "recordTextChange"
     | "updateCursor"
+    | "getBufferedSeconds"
+    | "getBufferedSegments"
     | "flushCurrentEditor"
     | "flushDueBuffers"
   >,
@@ -57,8 +59,17 @@ export function registerEventSubscriptions(
           now
         );
       }
-      void bufferManager.recordEditorSwitch(previousEditor ?? undefined, now);
+      void bufferManager.recordEditorSwitch(previousEditor ?? undefined, editor ?? undefined, now);
       previousEditor = editor;
+    }),
+    // Losing focus is the last moment the editor can prove the developer was here.
+    // Without this the buffered tail of a session sat unflushed until the next edit —
+    // which, if the session simply ended, never came.
+    vscode.window.onDidChangeWindowState((windowState) => {
+      if (windowState.focused) {
+        return;
+      }
+      void bufferManager.flushDueBuffers("focus-lost");
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
       bufferManager.updateCursor(
@@ -130,9 +141,20 @@ export function registerEventSubscriptions(
       timer = startFlushTimer();
     }),
     {
-      dispose: () => clearInterval(timer)
+      dispose: () => {
+        clearInterval(timer);
+        // VS Code shutdown: flush what is already measured instead of discarding it.
+        void bufferManager.flushDueBuffers("shutdown");
+      }
     }
   );
+
+  // Emit an initial marker for the editor that was already active when the extension
+  // started. Without this, opening VS Code into an existing file produced no heartbeat
+  // until the first text edit or cursor movement.
+  if (previousEditor) {
+    void bufferManager.recordEditorSwitch(undefined, previousEditor, Date.now());
+  }
 
   function startFlushTimer(): NodeJS.Timeout {
     return setInterval(() => {

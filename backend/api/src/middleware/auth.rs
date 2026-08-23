@@ -127,6 +127,33 @@ pub fn require_session_user(state: &AppState, headers: &HeaderMap) -> Option<Uui
     verify_session_token(&token, &state.config.jwt_secret)
 }
 
+/// Require an OAuth scope for an endpoint while preserving the compatibility
+/// semantics of API keys and dashboard sessions. OAuth access tokens carry a
+/// scope set in the in-memory auth index; API keys are account credentials and
+/// therefore have no scope entry, and session JWTs are already restricted to
+/// the first-party dashboard.
+pub fn require_scope(state: &AppState, headers: &HeaderMap, scope: &str) -> bool {
+    let Some(token) = extract_key(headers) else {
+        return false;
+    };
+    if verify_session_token(&token, &state.config.jwt_secret).is_some() {
+        return true;
+    }
+    state.auth_cache.has_scope(&hash_key(&token), scope)
+}
+
+/// Shared 403 body for an authenticated OAuth client that did not grant the
+/// scope required by the resource.
+pub fn forbidden_scope(scope: &str) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        axum::Json(serde_json::json!({
+            "error": "insufficient_scope",
+            "scope": scope,
+        })),
+    )
+}
+
 /// Shared 401 body for every handler that requires authentication.
 pub fn unauthorized() -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
     (

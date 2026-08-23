@@ -7,7 +7,7 @@
 //! here is measured from real ingested data, and unavailable usage/pricing remains null.
 
 use anyhow::Result;
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -21,6 +21,7 @@ use crate::model::dashboard_analytics::{
 };
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
+use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
 
 /// Weekday order the chart always renders, including days with no activity, so the axis
 /// does not reshuffle between requests (plan.md 9.9).
@@ -36,11 +37,15 @@ const WEEKDAYS: [&str; 7] = [
 
 pub struct DashboardAnalyticsService {
     clickhouse: Arc<ClickHouseClient>,
+    idle_timeout_seconds: f64,
 }
 
 impl DashboardAnalyticsService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
-        Self { clickhouse }
+    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+        Self {
+            clickhouse,
+            idle_timeout_seconds,
+        }
     }
 
     pub async fn overview(
@@ -152,26 +157,23 @@ impl DashboardAnalyticsService {
         range: &ResolvedRange,
     ) -> Result<Vec<DailyTotalRow>> {
         let (start_epoch, end_epoch) = range.unix_bounds();
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT toString(toDate(toDateTime(toUInt32(time), ?))) AS day,
-                       toInt64(round(sum(ifNull(active_seconds, 0.0)))) AS total
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND time >= ? AND time < ?
-                GROUP BY day
-                ORDER BY day ASC
-                ",
-            )
-            .bind(range.timezone.to_string())
-            .bind(user_id)
-            .bind(start_epoch)
-            .bind(end_epoch)
-            .fetch_all::<DailyTotalRow>()
-            .await
-            .map(|rows| zero_fill_totals(rows, range))
-            .map_err(|error| anyhow::anyhow!("ClickHouse dashboard daily query error: {error}"))
+        let timeline =
+            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let intervals = timeline.intervals(user_id, start_epoch, end_epoch).await?;
+        let canonical = canonicalize_bridged(&intervals, self.idle_timeout_seconds);
+        let mut totals = HashMap::<String, i64>::new();
+        for interval in canonical {
+            let timestamp = DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
+                .unwrap_or_else(Utc::now)
+                .with_timezone(&range.timezone);
+            let day = timestamp.date_naive().to_string();
+            *totals.entry(day).or_default() += (interval.end - interval.start).round() as i64;
+        }
+        let rows = totals
+            .into_iter()
+            .map(|(day, total)| DailyTotalRow { day, total })
+            .collect::<Vec<_>>();
+        Ok(zero_fill_totals(rows, range))
     }
 
     async fn daily_attribution(
@@ -218,21 +220,21 @@ impl DashboardAnalyticsService {
             .get_client()
             .query(
                 "SELECT count() AS usage_events,
-                        sum(toUInt64(ifNull(prompt_count, 0))) AS prompts,
-                        uniqExact(ai_session_id) AS sessions,
-                        sum(toUInt64(ifNull(input_tokens, 0))) AS input_tokens,
-                        sum(toUInt64(ifNull(output_tokens, 0))) AS output_tokens,
-                        sum(toUInt64(ifNull(cache_read_tokens, 0))) AS cache_read_tokens,
-                        sum(toUInt64(ifNull(cache_write_tokens, 0))) AS cache_write_tokens,
-                        sum(toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0)
-                            + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0))) AS reported_tokens,
-                        sumIf(toUInt64(ifNull(input_tokens, 0) + ifNull(output_tokens, 0)
-                            + ifNull(cache_read_tokens, 0) + ifNull(cache_write_tokens, 0)),
-                              isNotNull(estimated_cost_microusd)) AS priced_tokens,
-                        sum(toUInt64(ifNull(estimated_cost_microusd, 0))) AS estimated_cost_microusd,
-                        countIf(isNotNull(estimated_cost_microusd)) AS priced_events
-                 FROM wakaclock.ai_usage_events FINAL
-                 WHERE user_id = ? AND event_time >= ? AND event_time < ?",
+                        sum(toUInt64(ifNull(usage.prompt_count, 0))) AS prompts,
+                        uniqExact(usage.ai_session_id) AS sessions,
+                        sum(toUInt64(ifNull(usage.input_tokens, 0))) AS input_tokens,
+                        sum(toUInt64(ifNull(usage.output_tokens, 0))) AS output_tokens,
+                        sum(toUInt64(ifNull(usage.cache_read_tokens, 0))) AS cache_read_tokens,
+                        sum(toUInt64(ifNull(usage.cache_write_tokens, 0))) AS cache_write_tokens,
+                        sum(toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0)
+                            + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0))) AS reported_tokens,
+                        sumIf(toUInt64(ifNull(usage.input_tokens, 0) + ifNull(usage.output_tokens, 0)
+                            + ifNull(usage.cache_read_tokens, 0) + ifNull(usage.cache_write_tokens, 0)),
+                              isNotNull(usage.estimated_cost_microusd)) AS priced_tokens,
+                        sum(toUInt64(ifNull(usage.estimated_cost_microusd, 0))) AS estimated_cost_microusd,
+                        countIf(isNotNull(usage.estimated_cost_microusd)) AS priced_events
+                 FROM wakaclock.ai_usage_events AS usage FINAL
+                 WHERE usage.user_id = ? AND usage.event_time >= ? AND usage.event_time < ?",
             )
             .bind(user_id)
             .bind(start_epoch.max(0.0) as u32)
@@ -472,7 +474,13 @@ fn zero_fill_attribution(
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
+
+    use crate::model::ai_usage::AiUsageEventRow;
+    use crate::repository::ai_usage::AiUsageRepository;
+
     use super::*;
+    use crate::config::DEFAULT_IDLE_TIMEOUT_MINUTES;
 
     #[test]
     fn nullable_dimensions_are_normalized_to_a_non_nullable_string_expression() {
@@ -515,5 +523,94 @@ mod tests {
         let breakdown = weekday_breakdown(&[day("not-a-date", 999), day("2026-08-13", 10)]);
         assert_eq!(breakdown.items.len(), 7);
         assert_eq!(breakdown.total, 10);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn usage_summary_handles_reported_and_nullable_tokens_without_nested_aggregates() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        let usage_repo = AiUsageRepository::new(clickhouse.clone());
+        usage_repo.migrate().await.unwrap();
+
+        let user_id = Uuid::new_v4();
+        let range = ResolvedRange::parse("2026-08-01", "2026-08-01", Some("UTC")).unwrap();
+        let service = DashboardAnalyticsService::new(clickhouse, DEFAULT_IDLE_TIMEOUT_MINUTES * 60.0);
+
+        assert!(service
+            .usage_summary(user_id, &range)
+            .await
+            .unwrap()
+            .is_none());
+
+        let day = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let unix_day = day
+            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as u32;
+        usage_repo
+            .insert_usage_events(&[
+                AiUsageEventRow {
+                    user_id,
+                    date: unix_day as u16,
+                    usage_event_id: "dashboard-regression-priced".to_string(),
+                    ai_session_id: "dashboard-session-priced".to_string(),
+                    event_time: unix_day * 86_400 + 60,
+                    project_id: None,
+                    ai_agent: "test".to_string(),
+                    ai_provider: Some("test".to_string()),
+                    ai_model: Some("test".to_string()),
+                    prompt_count: 2,
+                    prompt_character_count: Some(16),
+                    input_tokens: Some(100),
+                    output_tokens: Some(20),
+                    cache_read_tokens: Some(10),
+                    cache_write_tokens: Some(5),
+                    estimated_cost_microusd: Some(123),
+                    pricing_version: Some("test".to_string()),
+                    token_source: "reported".to_string(),
+                    version: 1,
+                    received_at: unix_day * 86_400 + 60,
+                },
+                AiUsageEventRow {
+                    user_id,
+                    date: unix_day as u16,
+                    usage_event_id: "dashboard-regression-unpriced".to_string(),
+                    ai_session_id: "dashboard-session-unpriced".to_string(),
+                    event_time: unix_day * 86_400 + 120,
+                    project_id: None,
+                    ai_agent: "test".to_string(),
+                    ai_provider: None,
+                    ai_model: None,
+                    prompt_count: 3,
+                    prompt_character_count: None,
+                    input_tokens: None,
+                    output_tokens: Some(30),
+                    cache_read_tokens: None,
+                    cache_write_tokens: None,
+                    estimated_cost_microusd: None,
+                    pricing_version: None,
+                    token_source: "reported".to_string(),
+                    version: 1,
+                    received_at: unix_day * 86_400 + 120,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let summary = service
+            .usage_summary(user_id, &range)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.usage_events, 2);
+        assert_eq!(summary.prompts, 5);
+        assert_eq!(summary.sessions, 2);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 50);
+        assert_eq!(summary.cache_read_tokens, 10);
+        assert_eq!(summary.cache_write_tokens, 5);
+        assert_eq!(summary.reported_tokens, 165);
+        assert_eq!(summary.priced_tokens, 135);
+        assert_eq!(summary.estimated_cost_microusd, 123);
+        assert_eq!(summary.priced_events, 1);
     }
 }

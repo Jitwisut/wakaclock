@@ -35,6 +35,8 @@ export interface AiAgentSetupOptions {
   stableDir: string;
   homeDir?: string;
   cliPath?: string;
+  /** When omitted, setup is backwards-compatible and configures all detected tools. */
+  selectedIds?: AiAgentId[];
   logger: Logger;
 }
 
@@ -159,7 +161,12 @@ export async function setupDetectedAiAgents(
   const configured: AiAgentId[] = [];
   const failed: Array<{ id: AiAgentId; error: string }> = [];
 
-  for (const status of statuses.filter((item) => item.detected)) {
+  const selected = options.selectedIds
+    ? new Set(options.selectedIds)
+    : undefined;
+  for (const status of statuses.filter(
+    (item) => item.detected && (!selected || selected.has(item.id)),
+  )) {
     try {
       if (status.id === "claude-code") {
         await setupClaudeCode(options.stableDir, options.logger);
@@ -186,7 +193,10 @@ export async function setupDetectedAiAgents(
 
 async function setupClaudeCode(stableDir: string, logger: Logger): Promise<void> {
   if (process.platform === "win32") {
-    throw new Error("Claude Code hook scripts require a POSIX shell on Windows");
+    // Windows uses the transcript watcher baseline; shell hooks are an optional
+    // fast path and must not turn a successful consent into a failed setup.
+    logger.debug("agentSetup: Claude Code configured in transcript-only mode on Windows");
+    return;
   }
   await runCommandAllowAlreadyConfigured(
     "claude",
@@ -202,7 +212,8 @@ async function setupClaudeCode(stableDir: string, logger: Logger): Promise<void>
 
 async function setupGeminiCli(stableDir: string, logger: Logger): Promise<void> {
   if (process.platform === "win32") {
-    throw new Error("Gemini CLI hook scripts require a POSIX shell on Windows");
+    logger.debug("agentSetup: Gemini CLI configured in transcript-only mode on Windows");
+    return;
   }
   await runCommandAllowAlreadyConfigured(
     "gemini",
@@ -213,7 +224,8 @@ async function setupGeminiCli(stableDir: string, logger: Logger): Promise<void> 
 
 async function setupCodex(stableDir: string, homeDir: string, logger: Logger): Promise<void> {
   if (process.platform === "win32") {
-    throw new Error("Codex hook scripts require a POSIX shell on Windows");
+    logger.debug("agentSetup: Codex configured in transcript-only mode on Windows");
+    return;
   }
 
   const configDir = path.join(homeDir, ".codex");
