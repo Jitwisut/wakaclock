@@ -19,9 +19,9 @@ function initialsOf(username: string) {
 }
 
 /**
- * Header identity widget. Purely a display + logout affordance — the actual login/
- * register form lives in AuthPanel, shown by RequireUser on every page when there's no
- * session, so there's nothing else for this component to do when logged out.
+ * Header identity widget. Purely a display + logout affordance — the actual login and
+ * register forms live on their own routes at /login and /register, which RequireUser
+ * redirects to, so there's nothing else for this component to do when logged out.
  */
 export function UserSwitcher() {
   const username = useWakaclockUserStore((s) => s.username);

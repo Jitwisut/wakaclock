@@ -17,6 +17,8 @@ const STORAGE_KEY = 'wakaclock-session';
  * so this is Context + useReducer instead.
  */
 export interface WakaclockUserState {
+  /** False until the stored session has been read; `userId` is not meaningful before it. */
+  hydrated: boolean;
   logout: () => void;
   setSession: (session: { token: string; userId: string; username: string }) => void;
   token: null | string;
@@ -55,6 +57,13 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     token: null,
   });
   const hydrated = React.useRef(false);
+  /*
+   * Exposed as state, not just the ref above, because consumers have to be able to tell
+   * "no session" apart from "the session has not been read out of localStorage yet". They
+   * look identical on the first render, and a gate that cannot tell them apart bounces a
+   * logged-in visitor to the login page every time they open the app.
+   */
+  const [isHydrated, setIsHydrated] = React.useState(false);
 
   React.useEffect(() => {
     try {
@@ -74,6 +83,7 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
       // ignore malformed localStorage state
     } finally {
       hydrated.current = true;
+      setIsHydrated(true);
     }
   }, []);
 
@@ -91,6 +101,7 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
 
   const value = React.useMemo<WakaclockUserState>(
     () => ({
+      hydrated: isHydrated,
       userId: state.userId,
       username: state.username,
       token: state.token,
@@ -103,7 +114,7 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
         }),
       logout: () => dispatch({ type: 'clear' }),
     }),
-    [state]
+    [isHydrated, state]
   );
 
   return <WakaclockUserContext.Provider value={value}>{children}</WakaclockUserContext.Provider>;
