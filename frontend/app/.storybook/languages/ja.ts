@@ -15050,7 +15050,7 @@ export const ja = {
     'logisticsDashboard.story.comingSoon': '物流管理ダッシュボードテンプレートは近日公開予定です。',
     'logisticsDashboard.story.title': '物流ダッシュボード',
     'logisticsDashboard.story.underConstruction': 'このページは現在作成中です。',
-    'logo.alt': 'shadcn ui kit ロゴ',
+    'logo.alt': 'AtoAxis ロゴ',
     'logo.story.customCompanyLogo': 'カスタム会社ロゴ',
     'logo.story.defaultLogo': 'Default Logo',
     'logo.story.factoryData': 'Factory Data',

@@ -83,7 +83,7 @@ export function absoluteUrl(path: string): string {
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
   legalName: 'Lodash (Thailand) Co., Ltd.',
-  logo: absoluteUrl('/logo.png'),
+  logo: absoluteUrl('/atoaxis-logo.png'),
   name: 'StandUpCode / Lodash (Thailand) Co., Ltd.',
   url: SITE_URL,
 } as const;

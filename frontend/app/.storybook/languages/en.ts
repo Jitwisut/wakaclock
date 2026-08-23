@@ -15089,7 +15089,7 @@ export const en = {
     'logisticsDashboard.story.comingSoon': 'Logistics admin dashboard template coming soon.',
     'logisticsDashboard.story.title': 'Logistics Dashboard',
     'logisticsDashboard.story.underConstruction': UNDER_CONSTRUCTION,
-    'logo.alt': 'shadcn ui kit logo',
+    'logo.alt': 'AtoAxis logo',
     'logo.story.customCompanyLogo': 'Custom company logo',
     'logo.story.defaultLogo': 'Default Logo',
     'logo.story.factoryData': 'Factory Data',
