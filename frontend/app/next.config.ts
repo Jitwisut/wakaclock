@@ -26,6 +26,13 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
 
+  // The repository contains other lockfiles above this app. Keep Turbopack's
+  // project boundary at the Netlify base directory instead of the parent
+  // `frontend` directory.
+  turbopack: {
+    root: process.cwd(),
+  },
+
   // ---------------------------------------------------------------------------
   // Images
   // ---------------------------------------------------------------------------

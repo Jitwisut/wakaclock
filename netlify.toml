@@ -10,3 +10,6 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # Next.js type-checking reaches Node's default ~2 GB heap on Netlify.
+  # Give the build process enough headroom for the production type pass.
+  NODE_OPTIONS = "--max-old-space-size=4096"
