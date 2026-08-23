@@ -68,6 +68,42 @@ export function softwareApplicationSchema(): JsonLdValue {
   };
 }
 
+export interface HowToStep {
+  name: string;
+  text: string;
+}
+
+/**
+ * Ordered instructions for a task the page actually walks through.
+ *
+ * Google retired HowTo *rich results* in 2023, so this earns no snippet there. It is
+ * emitted for answer engines, which read JSON-LD to decide what a page teaches and in
+ * what order — the same reason `llms.txt` exists. Like `faqSchema`, the steps must be
+ * generated from the visible instructions rather than written separately, or the markup
+ * starts describing a page that no longer exists.
+ */
+export function howToSchema({
+  name,
+  description,
+  steps,
+}: {
+  description: string;
+  name: string;
+  steps: readonly HowToStep[];
+}): JsonLdValue {
+  return {
+    '@type': 'HowTo',
+    name,
+    description,
+    step: steps.map((step, index) => ({
+      '@type': 'HowToStep',
+      position: index + 1,
+      name: step.name,
+      text: step.text,
+    })),
+  };
+}
+
 export function faqSchema(entries: readonly FaqEntry[]): JsonLdValue {
   return {
     '@type': 'FAQPage',

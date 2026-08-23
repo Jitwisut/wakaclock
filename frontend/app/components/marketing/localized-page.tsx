@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
 
 import { JsonLd } from '@/components/seo/json-ld';
-import { breadcrumbSchema, faqSchema, graph, organizationSchema } from '@/lib/seo/schema';
+import {
+  breadcrumbSchema,
+  faqSchema,
+  graph,
+  howToSchema,
+  type HowToStep,
+  organizationSchema,
+} from '@/lib/seo/schema';
 import {
   createMarketingMetadata,
   localizedPath,
@@ -103,6 +110,27 @@ function getCopy(path: MarketingPageKey, locale: SiteLocale) {
   return PAGE_COPY[path][locale];
 }
 
+/**
+ * The first prose in a section, used as that step's instruction text.
+ *
+ * Reading it back off the rendered blocks is what keeps the HowTo markup and the visible
+ * page in step — a section that is reworded or removed changes the structured data with
+ * it, and there is no second copy to forget to update.
+ */
+function stepText(blocks: readonly MarketingBlock[]): string {
+  for (const block of blocks) {
+    if (block.kind === 'paragraph') return block.text;
+    if (block.kind === 'bullets') return block.items.join('. ');
+  }
+  return '';
+}
+
+function howToSteps(sections: readonly MarketingSectionCopy[]): HowToStep[] {
+  return sections
+    .map((item) => ({ name: item.heading, text: stepText(item.blocks) }))
+    .filter((step) => step.text.length > 0);
+}
+
 export function LocalizedMarketingPage({
   path,
   locale,
@@ -118,6 +146,14 @@ export function LocalizedMarketingPage({
   const schemas = [breadcrumbSchema(breadcrumbs)];
   if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
   if (copy.schema === 'organization') schemas.push(organizationSchema());
+  if (copy.howTo) {
+    const steps = howToSteps(copy.sections);
+    if (steps.length > 0) {
+      schemas.push(
+        howToSchema({ name: copy.howTo.name, description: copy.howTo.description, steps })
+      );
+    }
+  }
 
   const comparisonIndex =
     copy.component?.kind === 'comparison'

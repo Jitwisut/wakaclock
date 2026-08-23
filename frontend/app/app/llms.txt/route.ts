@@ -24,6 +24,7 @@ It is a hosted service operated by AtoAxis; customers do not deploy or maintain 
 - [${SITE_NAME}](${absoluteUrl('/')}): What it is, how it works, use cases, limitations and FAQ.
 - [WakaTime alternative](${absoluteUrl('/wakatime-alternative')}): How it compares to WakaTime, how to switch, and how to import a WakaTime export.
 - [AI coding activity tracking](${absoluteUrl('/ai-coding-tracker')}): How AI-attributed work is recorded, and what is not automatic.
+- [AI cost and token tracking](${absoluteUrl('/ai-cost-tracking')}): Token classes, how estimated cost is derived from versioned effective prices, cost per project, and the coverage reported with every total.
 - [Developer analytics](${absoluteUrl('/developer-analytics')}): The metrics produced and how each is derived.
 - [Pricing](${absoluteUrl('/pricing')}): Planned launch pricing and Early Access status.
 - [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — Early Access prototype, not available as a production feature.
