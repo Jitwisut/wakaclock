@@ -183,6 +183,22 @@ Do not use `*` in production. `api.atoaxis.com` is the API host, not a browser o
 does not belong in this list. Local development defaults to `http://localhost:3000`; deploy
 previews need to be added explicitly only if they are allowed to call the production API.
 
+### Enabling the transactional features
+
+Coding time, projects and analytics need only ClickHouse. Goals, leaderboards, share
+links and exports are stored in PostgreSQL, and the server starts happily without one —
+it logs `POSTGRES_URL is not configured; running in ClickHouse-only compatibility mode`
+and those endpoints stay unavailable rather than failing at request time.
+
+```env
+POSTGRES_URL=postgres://wakaclock:wakaclock-dev-password@localhost:5432/wakaclock
+```
+
+Then apply `migrations/postgres/001_phase10_foundation.sql`. `GET /api/v2/capabilities`
+reports `postgres_enabled`, which is what the dashboard reads to decide whether to offer
+those pages at all — a deployment without PostgreSQL is a supported configuration, not a
+broken one, so the UI hides what it cannot serve instead of showing links that fail.
+
 ### How long a pause still counts as working
 
 A heartbeat can only ever prove 120 seconds of activity — that is the window an editor

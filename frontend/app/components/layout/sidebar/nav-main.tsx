@@ -12,7 +12,9 @@ import {
   RadioIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
+  TargetIcon,
   TrendingUpIcon,
+  TrophyIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -39,6 +41,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { useCapabilities } from '@/hooks/use-capabilities';
 
 /** Navigation group containing a title and list of navigation items */
 export type NavGroup = {
@@ -66,6 +69,13 @@ export type NavItem = {
   items?: NavItem;
   /** Opens link in new tab when true */
   newTab?: boolean;
+  /**
+   * Hide this item unless the server has a transactional store. Goals and leaderboards
+   * live in PostgreSQL, and a ClickHouse-only deployment is a supported configuration —
+   * listing links that cannot work there reads as a broken product rather than as a
+   * feature that install does not include.
+   */
+  requiresPostgres?: boolean;
   /** Test ID for the item */
   testId?: string;
   /** Display title for the navigation item */
@@ -109,6 +119,18 @@ export const navItems: NavGroup[] = [
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
       { title: 'Keystrokes', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
+      {
+        title: 'Goals',
+        href: '/dashboard/wakaclock/goals',
+        icon: TargetIcon,
+        requiresPostgres: true,
+      },
+      {
+        title: 'Leaderboards',
+        href: '/dashboard/wakaclock/leaderboards',
+        icon: TrophyIcon,
+        requiresPostgres: true,
+      },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
       { title: 'Presence (prototype)', href: '/dashboard/wakaclock/presence', icon: RadioIcon },
       { title: 'Settings', href: '/dashboard/wakaclock/settings', icon: SlidersHorizontalIcon },
@@ -157,12 +179,22 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
 ) {
   const pathname = usePathname();
   const { isMobile } = useSidebar();
+  const { postgresEnabled } = useCapabilities();
   const comingBadge = labels?.comingBadge ?? 'Coming';
   const newBadge = labels?.newBadge ?? 'New';
 
+  // While capabilities are still unknown the Postgres-only entries stay hidden rather
+  // than appearing and then vanishing, which is the more jarring of the two flickers.
+  const visibleGroups = items
+    .map((nav) => ({
+      ...nav,
+      items: nav.items.filter((item) => !item.requiresPostgres || postgresEnabled === true),
+    }))
+    .filter((nav) => nav.items.length > 0);
+
   return (
     <div data-slot="nav-main" data-testid={testId} ref={ref}>
-      {items.map((nav) => (
+      {visibleGroups.map((nav) => (
         <SidebarGroup key={nav.title}>
           <SidebarGroupLabel data-testid={nav.testId}>{nav.title}</SidebarGroupLabel>
           <SidebarGroupContent className="flex flex-col gap-2">

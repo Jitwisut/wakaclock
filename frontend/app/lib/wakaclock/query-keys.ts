@@ -4,6 +4,13 @@
  */
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
+  capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
+  goals: (userId: string) => [...wakaclockKeys.all, 'goals', userId] as const,
+  goalProgress: (userId: string, goalId: string) =>
+    [...wakaclockKeys.all, 'goal-progress', userId, goalId] as const,
+  leaderboards: (userId: string) => [...wakaclockKeys.all, 'leaderboards', userId] as const,
+  leaderboardMembers: (userId: string, leaderboardId: string) =>
+    [...wakaclockKeys.all, 'leaderboard-members', userId, leaderboardId] as const,
   statusBar: (userId: string) => [...wakaclockKeys.all, 'status-bar', userId] as const,
   allTime: (userId: string) => [...wakaclockKeys.all, 'all-time', userId] as const,
   stats: (userId: string, range: string) => [...wakaclockKeys.all, 'stats', userId, range] as const,

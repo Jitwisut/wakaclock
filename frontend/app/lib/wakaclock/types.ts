@@ -815,6 +815,100 @@ export interface CreatePresenceRoomResponse {
   room_id: string;
 }
 
+/** Every /api/v2 response is wrapped in this. See `unwrapV2` in `client-v2.ts`. */
+export interface V2Envelope<T> {
+  data: T;
+  meta: {
+    coverage: null | unknown;
+    data_freshness: string;
+    generated_at: string;
+    request_id: string;
+    timezone: string;
+  };
+}
+
+export interface V2Capabilities {
+  analytics_store: string;
+  api_version: string;
+  postgres_enabled: boolean;
+  product: string;
+  transactional_store: string;
+}
+
+export interface Goal {
+  created_at: string;
+  direction: string;
+  ends_on: null | string;
+  filter_kind: string;
+  filter_value: null | string;
+  id: string;
+  metric: string;
+  name: string;
+  period: string;
+  priority: number;
+  public: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone: string;
+  updated_at: string;
+}
+
+export interface CreateGoalPayload {
+  direction: string;
+  ends_on?: null | string;
+  filter_kind: string;
+  filter_value?: null | string;
+  metric: string;
+  name: string;
+  period: string;
+  priority?: number;
+  public?: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone?: string;
+}
+
+export interface GoalProgress {
+  /** 0 means no data covered this window — render it as unknown, never as 0%. */
+  coverage: number;
+  current_seconds: number;
+  direction: string;
+  goal_id: string;
+  on_track: boolean;
+  percentage: number;
+  period: string;
+  target_seconds: number;
+}
+
+export interface Leaderboard {
+  anonymous: boolean;
+  country: null | string;
+  created_at: string;
+  id: string;
+  language: null | string;
+  metric: string;
+  organization_id: null | string;
+  owner_user_id: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface CreateLeaderboardPayload {
+  anonymous?: boolean;
+  country?: null | string;
+  language?: null | string;
+  metric: string;
+  organization_id?: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface LeaderboardMember {
+  joined_at: string;
+  user_id: string;
+  username: string;
+}
+
 export interface PresenceStreamTicketResponse {
   expires_in_seconds: number;
   ticket: string;
