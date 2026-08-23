@@ -24,6 +24,9 @@ const nextConfig: NextConfig = {
   // ---------------------------------------------------------------------------
   typescript: {
     ignoreBuildErrors: false,
+    // Storybook and test tooling use a separate dependency graph. Production
+    // builds should type-check the shipped Next.js app only.
+    tsconfigPath: 'tsconfig.build.json',
   },
 
   // The repository contains other lockfiles above this app. Keep Turbopack's
