@@ -283,11 +283,44 @@ pub async fn leave_session(
 
 #[derive(Debug, Deserialize)]
 pub struct StreamQuery {
-    /// See `auth::resolve_user_id_from_token` — browser `EventSource` cannot set an
-    /// `Authorization` header, so the session token travels here instead for this one
-    /// endpoint. Callers that can set headers (a future non-browser client) may still
-    /// send `Authorization: Bearer <token>`; that is checked first.
-    token: Option<String>,
+    /// Browser `EventSource` cannot set an `Authorization` header, so this one endpoint
+    /// accepts a credential in the query string. It is a room-scoped ticket from
+    /// `POST /presence/rooms/:room_id/stream-ticket` that expires in minutes — not the
+    /// session token, which is account-wide and lives for a day and therefore has no
+    /// business in a URL that proxies and browser history will retain. Callers that can
+    /// set headers (any non-browser client) should send `Authorization: Bearer <token>`
+    /// instead; that is checked first.
+    ticket: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StreamTicketResponse {
+    pub ticket: String,
+    pub expires_in_seconds: u64,
+}
+
+// POST /presence/rooms/:room_id/stream-ticket
+pub async fn create_stream_ticket(
+    State(state): State<Arc<AppState>>,
+    Path(room_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<StreamTicketResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+
+    // Membership is checked here as well as in `stream_presence`: a ticket should never
+    // exist for a room the caller cannot already watch.
+    if !state.presence.is_member(room_id, user_id).await {
+        return Err(app_error(
+            StatusCode::FORBIDDEN,
+            "join this room before streaming its presence",
+        ));
+    }
+
+    let ticket = state.presence.issue_stream_ticket(room_id, user_id).await;
+    Ok(Json(StreamTicketResponse {
+        ticket,
+        expires_in_seconds: 300,
+    }))
 }
 
 /// How often each open connection re-reads the room's state from the store and pushes
@@ -306,12 +339,17 @@ pub async fn stream_presence(
     Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<serde_json::Value>),
 > {
-    let user_id = auth::resolve_user_id(&state, &headers)
-        .or_else(|| {
-            let token = query.token.as_deref()?;
-            auth::resolve_user_id_from_token(&state, token)
-        })
-        .ok_or_else(auth::unauthorized)?;
+    let user_id = match auth::resolve_user_id(&state, &headers) {
+        Some(user_id) => user_id,
+        None => {
+            let ticket = query.ticket.as_deref().ok_or_else(auth::unauthorized)?;
+            state
+                .presence
+                .resolve_stream_ticket(room_id, ticket)
+                .await
+                .ok_or_else(auth::unauthorized)?
+        }
+    };
 
     if !state.presence.is_member(room_id, user_id).await {
         return Err(app_error(

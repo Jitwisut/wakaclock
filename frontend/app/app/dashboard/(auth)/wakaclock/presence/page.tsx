@@ -19,6 +19,7 @@ import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import {
   createOrg,
   createPresenceRoom,
+  createPresenceStreamTicket,
   createTeam,
   joinPresenceRoom,
   leavePresenceRoom,
@@ -260,33 +261,42 @@ function PresenceApp() {
     });
   }, []);
 
-  // One SSE connection per active room. EventSource reconnects on its own after a
-  // network blip; the effect only needs to tear it down on unmount or room change.
+  // One SSE connection per active room. Opening it needs a round trip first: the stream
+  // is authenticated by a short-lived room-scoped ticket rather than by the session
+  // token, which has no business sitting in a URL. The ticket stays valid for its whole
+  // TTL precisely so EventSource's own reconnect-after-a-blip keeps working without this
+  // effect having to re-run.
   React.useEffect(() => {
     if (!roomId) return;
 
-    const url = presenceStreamUrl(roomId);
-    if (!url) {
-      toast.error('No active session — sign in again');
-      return;
-    }
+    let source: EventSource | null = null;
+    let cancelled = false;
 
-    const source = new EventSource(url);
+    const open = async () => {
+      const { ticket } = await createPresenceStreamTicket(roomId);
+      if (cancelled) return;
 
-    source.addEventListener('open', () => setConnected(true));
-    source.addEventListener('error', () => setConnected(false));
-    source.addEventListener('message', (event: MessageEvent<string>) => {
-      try {
-        const snapshot = JSON.parse(event.data) as PresenceRoomSnapshot;
-        setRoster(snapshot.roster);
-        setRoomTeamName(snapshot.team_name);
-      } catch {
-        // A malformed tick is not worth surfacing to the user — the next tick corrects it.
-      }
+      source = new EventSource(presenceStreamUrl(roomId, ticket));
+      source.addEventListener('open', () => setConnected(true));
+      source.addEventListener('error', () => setConnected(false));
+      source.addEventListener('message', (event: MessageEvent<string>) => {
+        try {
+          const snapshot = JSON.parse(event.data) as PresenceRoomSnapshot;
+          setRoster(snapshot.roster);
+          setRoomTeamName(snapshot.team_name);
+        } catch {
+          // A malformed tick is not worth surfacing — the next tick corrects it.
+        }
+      });
+    };
+
+    void open().catch(() => {
+      if (!cancelled) toast.error('Could not open the live roster — try rejoining');
     });
 
     return () => {
-      source.close();
+      cancelled = true;
+      source?.close();
       setConnected(false);
     };
   }, [roomId]);

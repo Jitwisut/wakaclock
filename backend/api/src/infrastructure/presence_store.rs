@@ -40,6 +40,24 @@ pub struct PresenceStore {
     /// state is a property of the user, not of any one room they happen to be in.
     last_heartbeat: RwLock<HashMap<Uuid, Instant>>,
     rooms: RwLock<HashMap<Uuid, Room>>,
+    /// Short-lived credentials for the SSE stream, keyed by the opaque ticket value.
+    stream_tickets: RwLock<HashMap<String, StreamTicket>>,
+}
+
+/// How long a stream ticket stays valid.
+///
+/// Deliberately reusable for its whole lifetime rather than single-use: browser
+/// `EventSource` reconnects on its own after a network blip and replays the same URL, so
+/// a one-shot ticket would make every reconnect fail authentication and freeze the
+/// roster with no visible error. A few minutes is short enough that a ticket leaking
+/// into a log is worth far less than the 24-hour session token it replaces.
+const STREAM_TICKET_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct StreamTicket {
+    user_id: Uuid,
+    room_id: Uuid,
+    issued_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -115,6 +133,38 @@ fn derive_state(last_heartbeat: Option<Instant>) -> PresenceState {
 impl PresenceStore {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// Issue a credential that authenticates exactly one room's SSE stream.
+    ///
+    /// `EventSource` cannot set an `Authorization` header, so something has to travel in
+    /// the query string. Sending the session token there put a 24-hour, account-wide
+    /// credential into access logs, proxy logs and browser history; this puts a
+    /// minutes-long credential scoped to a single room there instead.
+    pub async fn issue_stream_ticket(&self, room_id: Uuid, user_id: Uuid) -> String {
+        let ticket = Uuid::new_v4().simple().to_string();
+        let mut tickets = self.stream_tickets.write().await;
+        tickets.retain(|_, entry| entry.issued_at.elapsed() < STREAM_TICKET_TTL);
+        tickets.insert(
+            ticket.clone(),
+            StreamTicket {
+                user_id,
+                room_id,
+                issued_at: Instant::now(),
+            },
+        );
+        ticket
+    }
+
+    /// The user a ticket authenticates, if it is still valid **and** was issued for this
+    /// room. A ticket for one room must never open another room's stream.
+    pub async fn resolve_stream_ticket(&self, room_id: Uuid, ticket: &str) -> Option<Uuid> {
+        let tickets = self.stream_tickets.read().await;
+        tickets
+            .get(ticket)
+            .filter(|entry| entry.room_id == room_id)
+            .filter(|entry| entry.issued_at.elapsed() < STREAM_TICKET_TTL)
+            .map(|entry| entry.user_id)
     }
 
     /// Called from the heartbeat ingest path. Must never be allowed to fail a heartbeat
@@ -267,6 +317,43 @@ mod tests {
 
     fn uid() -> Uuid {
         Uuid::new_v4()
+    }
+
+    /// A ticket is a room credential, not an account credential. If it opened any room
+    /// the holder happened to know the id of, it would be strictly worse than the
+    /// session token it replaced.
+    #[tokio::test]
+    async fn a_stream_ticket_only_opens_the_room_it_was_issued_for() {
+        let store = PresenceStore::new();
+        let user = uid();
+        let room = uid();
+        let other_room = uid();
+
+        let ticket = store.issue_stream_ticket(room, user).await;
+
+        assert_eq!(store.resolve_stream_ticket(room, &ticket).await, Some(user));
+        assert_eq!(store.resolve_stream_ticket(other_room, &ticket).await, None);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_stream_ticket_resolves_to_nobody() {
+        let store = PresenceStore::new();
+        assert_eq!(store.resolve_stream_ticket(uid(), "not-a-ticket").await, None);
+    }
+
+    /// Reusable within its TTL on purpose: `EventSource` reconnects by replaying the
+    /// same URL, and a single-use ticket would turn every network blip into a silently
+    /// frozen roster.
+    #[tokio::test]
+    async fn a_stream_ticket_survives_being_used_more_than_once() {
+        let store = PresenceStore::new();
+        let user = uid();
+        let room = uid();
+
+        let ticket = store.issue_stream_ticket(room, user).await;
+
+        assert_eq!(store.resolve_stream_ticket(room, &ticket).await, Some(user));
+        assert_eq!(store.resolve_stream_ticket(room, &ticket).await, Some(user));
     }
 
     #[test]

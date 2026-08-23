@@ -1,5 +1,4 @@
 import { wakaclockClient } from './client';
-import { getCurrentToken } from './session';
 
 import type {
   AiStatsResponse,
@@ -20,6 +19,7 @@ import type {
   OrgResponse,
   OrgsResponse,
   PresenceActionResponse,
+  PresenceStreamTicketResponse,
   ProjectAiResponse,
   ProjectAnalyticsDetailResponse,
   ProjectAnalyticsListResponse,
@@ -369,12 +369,25 @@ export async function leaveSession(roomId: string) {
  * Returns `null` if there is no current session — callers should not open a connection
  * without one.
  */
-export function presenceStreamUrl(roomId: string): null | string {
-  const token = getCurrentToken();
-  if (!token) return null;
+// POST /presence/rooms/:room_id/stream-ticket
+/**
+ * Mint a short-lived, room-scoped credential for the SSE stream.
+ *
+ * `EventSource` cannot send an `Authorization` header, so something has to go in the
+ * query string. This used to be the session token — account-wide and valid for a day,
+ * which then sat in access logs, proxy logs and browser history. A ticket expires in
+ * minutes and opens exactly one room.
+ */
+export async function createPresenceStreamTicket(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceStreamTicketResponse>(
+    `/presence/rooms/${roomId}/stream-ticket`
+  );
+  return data;
+}
 
+export function presenceStreamUrl(roomId: string, ticket: string): string {
   const base = wakaclockClient.defaults.baseURL;
-  return `${base}/presence/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
+  return `${base}/presence/rooms/${roomId}/stream?ticket=${encodeURIComponent(ticket)}`;
 }
 
 // GET /project_rules?user_id= — user_id REQUIRED (400 if omitted)

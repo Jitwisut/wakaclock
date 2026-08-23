@@ -241,6 +241,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(presence::leave_session),
         )
         .route(
+            "/presence/rooms/:room_id/stream-ticket",
+            post(presence::create_stream_ticket),
+        )
+        .route(
             "/presence/rooms/:room_id/stream",
             get(presence::stream_presence),
         )

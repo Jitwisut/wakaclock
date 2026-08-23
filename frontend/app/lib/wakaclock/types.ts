@@ -815,6 +815,11 @@ export interface CreatePresenceRoomResponse {
   room_id: string;
 }
 
+export interface PresenceStreamTicketResponse {
+  expires_in_seconds: number;
+  ticket: string;
+}
+
 export interface PresenceActionResponse {
   status: string;
 }
