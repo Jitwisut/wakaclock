@@ -218,10 +218,15 @@ const STATEMENTS: &[&str] = &[
     ORDER BY (user_id, date, dependency)
     "#,
     r#"
+    -- `repository_id` is part of the sorting key, so it cannot be Nullable: ClickHouse
+    -- rejects the whole CREATE with `Sorting key contains nullable columns` unless
+    -- `allow_nullable_key` is on, and a nullable key under SummingMergeTree is a known
+    -- source of surprising merge behaviour. Activity that is not mapped to a repository
+    -- carries the nil UUID instead, which sorts and sums predictably.
     CREATE TABLE IF NOT EXISTS wakaclock.commit_activity_daily
     (
         user_id UUID,
-        repository_id Nullable(UUID),
+        repository_id UUID,
         head_revision String,
         date Date,
         total_seconds Float64,
