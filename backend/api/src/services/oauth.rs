@@ -295,7 +295,9 @@ impl OAuthService {
             return Err(anyhow!("authorization code has already been consumed"));
         }
         let scopes: Vec<String> = row.get("scopes");
-        let response = self.issue_tokens(postgres, app_id, user_id, &scopes).await?;
+        let response = self
+            .issue_tokens(postgres, app_id, user_id, &scopes)
+            .await?;
         Ok((response, user_id))
     }
 
@@ -343,7 +345,9 @@ impl OAuthService {
         let app_id: Uuid = row.get("app_id");
         let user_id: Uuid = row.get("user_id");
         let scopes: Vec<String> = row.get("scopes");
-        let response = self.issue_tokens(postgres, app_id, user_id, &scopes).await?;
+        let response = self
+            .issue_tokens(postgres, app_id, user_id, &scopes)
+            .await?;
         Ok((response, user_id))
     }
 
@@ -485,7 +489,9 @@ impl OAuthService {
             )
             .await
             .context("failed to consume OAuth device code")?;
-        let response = self.issue_tokens(postgres, app_id, user_id, &scopes).await?;
+        let response = self
+            .issue_tokens(postgres, app_id, user_id, &scopes)
+            .await?;
         Ok((response, user_id))
     }
 

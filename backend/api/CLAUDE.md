@@ -1,74 +1,80 @@
-# CLAUDE.md
+# AtoAxis backend contributor guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+`backend/api` is the live Rust workspace for the AtoAxis developer-time
+tracking API. The old e-commerce tree under `src_ecommerce_backup/` is
+historical and is not part of the build.
 
-## Project Overview
+## Commands
 
-**ecommerce-connect** — a Rust multi-tenant e-commerce gateway connecting 20+ platforms (TikTok Shop, Shopee, Lazada, Shopify, Amazon, etc.) with unified APIs for product management, synchronization, and AI-powered vector search.
+Run these from `backend/api` (or use the root `Makefile`):
 
-## Common Commands
+```bash
+cargo fmt --all
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --release
+```
 
-| Command | Purpose |
-|---|---|
-| `make super` | Run check + lint + test + build (full validation) |
-| `make check` | `cargo check --all-features` |
-| `make lint` | `cargo clippy -- -D warnings` |
-| `make test` | `cargo test` |
-| `make build` | `cargo build --release` |
-| `make fix` | `cargo fix --allow-dirty --allow-staged && cargo fmt` |
-| `cargo test <test_name>` | Run a single test |
-| `cargo test --lib <module>::tests` | Run tests for a specific module |
+Three ClickHouse SQL regression tests are opt-in:
 
-## Architecture
+```bash
+CLICKHOUSE_TEST_URL=http://localhost:8123 \
+  cargo test --workspace -- --ignored --test-threads=1
+```
 
-Clean Architecture with 4 layers. Dependencies point inward: Presentation → Application → Domain → Infrastructure.
+## Live module layout
 
-- **`handlers/`** (Presentation) — Axum HTTP handlers, versioned under `v1/` split into `gateway/` (external) and `platform/` (internal management)
-- **`services/`** (Application) — Business logic: product, vector search, webhook, OAuth, product sync, backpressure, DLQ
-- **`repository/`** + **`interfaces/`** (Domain) — Data access traits and implementations (ClickHouse, Qdrant, unified product, webhook)
-- **`infrastructure/`** + **`client/`** (Infrastructure) — DI container (`app/container.rs`), database/cache/queue connections, 20+ platform connectors, Casbin RBAC, observability
-- **`worker/`** — Background consumers: product sync, vector sync, batch processor, webhook ingest, crawler
-- **`model/`** — DTOs and domain models, versioned under `v1/` split into `gateway/` and `platfrom/` (known typo)
-- **`middleware/`** — Auth, CORS, rate limiting, error handling, usage tracking
-- **`helpers/`** — Crypto/JWT (`auth/`), platform data mappers (`mapping/`)
-- **`modules/`** — Additional binary entry points (product_consumer)
+- `src/main.rs` — Axum server, `/health`, `/api/v1`, `/api/v2`, OAuth, public
+  share routes and SCIM.
+- `src/handlers/` — HTTP adapters. Resolve authorization before querying
+  analytics; never trust a client-supplied user ID.
+- `src/services/` — domain rules, entitlements, OAuth, goals, integrations,
+  analytics and imports/exports.
+- `src/repository/` — ClickHouse analytics and PostgreSQL transactional access.
+- `src/infrastructure/` — database clients, auth cache, rate limits, provider-
+  neutral queue/cache/object-store/credential contracts and app state.
+- `src/model/` — request, response and analytics types.
+- `src/bin/` — independently deployable worker entrypoints.
+- `crates/wakaclock-core` — client-side heartbeat/AI attribution logic.
+- `crates/wakaclock-ast` — language/dependency detection.
+- `crates/wakaclock-cli` and `crates/wakaclock-ls` — CLI and LSP clients.
 
-### Key Patterns
+`src_ecommerce_backup/` and its interfaces are not imported by `main.rs` and
+must not be used for new AtoAxis features. New infrastructure dependencies
+belong under `src/infrastructure/contracts.rs` and should receive an adapter
+and an integration test before production rollout.
 
-- **DI Container**: `infrastructure/app/container.rs` — `App` struct (aliased as `AppState`) holds `Arc` references to all managers
-- **Trait-first**: Define contracts in `interfaces/` before writing implementations
-- **PlatformGateway trait**: All e-commerce connectors implement this (connect, callback, list_products, get_product, sync_inventory, refresh_token). Factory in `client/ecommerce/connector.rs`
-- **Worker trait**: `async_trait`-based with `start()`, `stop()`, `process_job()`
-- **Error handling**: `InterfaceError` enum via `thiserror`, `AppResult<T>` alias
+## Data and privacy invariants
 
-### Runtime Modes (CLI via clap)
+- PostgreSQL is the source of truth for identity, access, organization,
+  configuration, billing and OAuth state.
+- ClickHouse is the source of truth for telemetry analytics.
+- Redis is cache/lock only; it is never the sole copy of product data.
+- Every queue message carries `event_id`, `event_version`, `tenant_id`,
+  `occurred_at`, `trace_id` and `idempotency_key`.
+- Do not store or log source code, prompts, AI responses, diffs, API keys or
+  OAuth refresh tokens. Use metadata and coverage reasons instead.
+- Credentials must pass through `CredentialVault`, and every provider sync is
+  idempotent with bounded retry and a dead-letter path.
 
-1. **`web-service`** (port 8080) — Full API server with all routes and middleware
-2. **`gateway`** (port 8081) — Lightweight stateless gateway only
-3. **`consumer`** — Background workers, selected via `--tasks` flag (e.g., `product-sync-to-ch-list`, `product-detail`, `product-embedding`, `webhook`)
+## Configuration
 
-Can also be set via `RUN_MODE` env var.
+Production must set `JWT_SECRET`, `CLICKHOUSE_URL`, `POSTGRES_URL` and an
+explicit allowlist such as:
 
-## Tech Stack
+```env
+CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
+```
 
-Axum 0.7, Tokio, ClickHouse, Qdrant (vector DB), Redis, RabbitMQ (via Lapin), Sea-ORM 0.12, Casbin (RBAC), jsonwebtoken/argon2/aes-gcm, OpenTelemetry + Prometheus, Utoipa + Aide (API docs).
+`ALLOW_INSECURE_JWT_SECRET=1` and `CORS_ORIGINS=*` are development-only
+overrides. `IDLE_TIMEOUT_MINUTES` defaults to 15, matching WakaTime's default
+pause timeout.
 
-## Code Conventions
+## Contract ownership
 
-- **MSRV**: 1.94.0
-- **No `std::sync::Mutex`/`RwLock`** — use `tokio::sync::` async variants
-- **No `stdout`/`stderr`** — use `tracing` macros
-- **Clippy thresholds**: max 8 args, 25 cognitive complexity, 350 lines/fn
-- **Banned variable names**: `foo`, `bar`, `baz`, `quux`, `temp`, `tmp`, `data2`, `result2`, `ret`, `val`
-- **Mocking**: `mockall` 0.12 for test doubles
-- **Tests are inline**: `#[cfg(test)]` modules inside source files, no separate `tests/` directory
-
-## Config
-
-Configuration loads from environment variables via `Config::from_env()` in `src/config/mod.rs`. The app tries `dotenvy::dotenv().ok()` at startup. Credential files live in `credentials/` (Casbin model/policy, platform configs).
-
-## Docker
-
-- `Dockerfile` — multi-stage release build on `rust:1.81-slim-bookworm`
-- `Dockerfile.dev` — nightly with `cargo-watch` for hot reload
-- Docker Compose files are at `../../docker-compose*.yaml` (two levels up)
+`docs/wakatime-compatibility-manifest.json` is the inventory for all 87 v1
+routes. `/api/v1` preserves WakaTime envelopes and auth behavior; `/api/v2`
+uses AtoAxis's `data`/`meta` envelope and must include coverage when data is
+incomplete. Run `node scripts/verify-compatibility-manifest.mjs` after editing
+the manifest.

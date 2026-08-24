@@ -6,10 +6,10 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
-use chrono::Utc;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -116,7 +116,11 @@ pub async fn authorize(
         )
         .await
         .map_err(OAuthError::service_unavailable)?;
-    let separator = if query.redirect_uri.contains('?') { '&' } else { '?' };
+    let separator = if query.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     let mut location = format!(
         "{}{separator}code={}",
         query.redirect_uri,
@@ -134,11 +138,8 @@ pub async fn token(
     headers: HeaderMap,
     Form(form): Form<TokenForm>,
 ) -> Result<Json<crate::services::oauth::TokenResponse>, OAuthError> {
-    let (client_id, client_secret) = client_credentials(
-        &headers,
-        &form.client_id,
-        form.client_secret.as_deref(),
-    )?;
+    let (client_id, client_secret) =
+        client_credentials(&headers, &form.client_id, form.client_secret.as_deref())?;
     let (response, user_id) = match form.grant_type.as_str() {
         "authorization_code" => state
             .oauth_service
@@ -168,18 +169,16 @@ pub async fn token(
             .map_err(OAuthError::invalid_grant)?,
         _ => return Err(OAuthError::bad_request("unsupported grant_type")),
     };
-    state
-        .auth_cache
-        .insert_with_expiry_and_scopes(
-            auth::hash_key(&response.access_token),
-            user_id,
-            Utc::now().timestamp() + response.expires_in,
-            &response
-                .scope
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
-        );
+    state.auth_cache.insert_with_expiry_and_scopes(
+        auth::hash_key(&response.access_token),
+        user_id,
+        Utc::now().timestamp() + response.expires_in,
+        &response
+            .scope
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    );
     Ok(Json(response))
 }
 
@@ -291,9 +290,20 @@ pub async fn device_approve(
 fn parse_scopes(raw: Option<&str>) -> Result<Vec<String>, OAuthError> {
     let scopes: Vec<String> = raw
         .map(|value| value.split_whitespace().map(str::to_string).collect())
-        .unwrap_or_else(|| DEFAULT_SCOPES.iter().map(|scope| (*scope).to_string()).collect());
-    if scopes.is_empty() || scopes.iter().any(|scope| !SUPPORTED_SCOPES.contains(&scope.as_str())) {
-        return Err(OAuthError::bad_request("scope contains an unsupported value"));
+        .unwrap_or_else(|| {
+            DEFAULT_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_string())
+                .collect()
+        });
+    if scopes.is_empty()
+        || scopes
+            .iter()
+            .any(|scope| !SUPPORTED_SCOPES.contains(&scope.as_str()))
+    {
+        return Err(OAuthError::bad_request(
+            "scope contains an unsupported value",
+        ));
     }
     Ok(scopes)
 }
@@ -303,7 +313,10 @@ fn client_credentials(
     form_client_id: &str,
     form_secret: Option<&str>,
 ) -> Result<(String, Option<String>), OAuthError> {
-    if let Some(value) = headers.get("authorization").and_then(|value| value.to_str().ok()) {
+    if let Some(value) = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+    {
         if let Some(encoded) = value.strip_prefix("Basic ") {
             let decoded = BASE64
                 .decode(encoded.trim())

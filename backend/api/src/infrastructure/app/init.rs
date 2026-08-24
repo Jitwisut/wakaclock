@@ -4,9 +4,8 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
-use crate::infrastructure::logger::Logger;
-use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::postgres::PostgresClient;
+use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::rate_limiter::{AnalyticsRateLimiter, AuthRateLimiter};
 use crate::repository::account_analytics::AccountAnalyticsRepository;
 use crate::repository::ai_usage::AiUsageRepository;
@@ -22,46 +21,45 @@ use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
-use crate::services::authorization::AuthorizationService;
-use crate::services::billing::BillingService;
 use crate::services::activity_timeline::ActivityTimelineService;
 use crate::services::ai_stats::AiStatsService;
 use crate::services::ai_usage::AiUsageService;
 use crate::services::all_time::AllTimeService;
+use crate::services::authorization::AuthorizationService;
+use crate::services::billing::BillingService;
 use crate::services::coworking_session::CoworkingSessionService;
 use crate::services::dashboard_analytics::DashboardAnalyticsService;
 use crate::services::duration::DurationService;
 use crate::services::enterprise::EnterpriseService;
-use crate::services::vcs::VcsService;
+use crate::services::exports::ExportService;
 use crate::services::external_durations::ExternalDurationService;
 use crate::services::follow_up::FollowUpService;
-use crate::services::exports::ExportService;
-use crate::services::profile::ProfileService;
-use crate::services::reports::ReportService;
-use crate::services::heartbeat::HeartbeatService;
 use crate::services::goals::GoalService;
+use crate::services::heartbeat::HeartbeatService;
 use crate::services::insights::InsightsService;
 use crate::services::integrations::IntegrationService;
-use crate::services::leaderboards::LeaderboardService;
 use crate::services::keystroke_stats::KeystrokeStatsService;
+use crate::services::leaderboards::LeaderboardService;
+use crate::services::oauth::OAuthService;
 use crate::services::org::OrgService;
 use crate::services::organizations::OrganizationsService;
-use crate::services::oauth::OAuthService;
+use crate::services::profile::ProfileService;
 use crate::services::project_analytics::ProjectAnalyticsService;
 use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_merge::ProjectMergeService;
 use crate::services::project_rule::ProjectRuleService;
 use crate::services::projects::ProjectsService;
+use crate::services::reports::ReportService;
 use crate::services::reprocess::ReprocessService;
 use crate::services::stats::StatsService;
 use crate::services::summary::SummaryService;
 use crate::services::team::TeamService;
 use crate::services::user::UserService;
+use crate::services::vcs::VcsService;
 use crate::services::wakatime_import::WakaTimeImportService;
 
 /// โครงสร้าง App Container ที่ปฏิบัติตาม Clean Architecture
 pub struct AppState {
-    pub logger: Arc<Logger>,
     pub config: Arc<Config>,
     pub clickhouse: Arc<ClickHouseClient>,
     /// Transactional product store. Optional only during the ClickHouse-only compatibility
@@ -87,7 +85,6 @@ pub struct AppState {
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
     pub ai_stats_service: Arc<AiStatsService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
-    pub authorization_service: Arc<AuthorizationService>,
     pub billing_service: Arc<BillingService>,
     pub ai_usage_service: Arc<AiUsageService>,
     pub all_time_service: Arc<AllTimeService>,
@@ -158,7 +155,9 @@ impl AppState {
 }
 
 pub async fn create_app_state() -> Result<AppState> {
-    let logger = Arc::new(Logger::new());
+    // Initialise structured logging once during application startup. The logger is a
+    // process-level subscriber, so it does not belong in the request state container.
+    crate::infrastructure::logger::Logger::new();
 
     // โหลด Config
     let config = Config::from_env().context("Failed to load application configuration")?;
@@ -229,12 +228,17 @@ pub async fn create_app_state() -> Result<AppState> {
         clickhouse.clone(),
         idle_timeout_seconds,
     ));
-    let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone(), idle_timeout_seconds));
-    let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
-    let duration_service = Arc::new(DurationService::new(clickhouse.clone(), idle_timeout_seconds));
-    let external_duration_service = Arc::new(ExternalDurationService::new(
-        external_duration_repo.clone(),
+    let all_time_service = Arc::new(AllTimeService::new(
+        clickhouse.clone(),
+        idle_timeout_seconds,
     ));
+    let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
+    let duration_service = Arc::new(DurationService::new(
+        clickhouse.clone(),
+        idle_timeout_seconds,
+    ));
+    let external_duration_service =
+        Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
     let follow_up_service = Arc::new(FollowUpService::new(follow_up_repo.clone()));
     let export_service = Arc::new(ExportService::new(postgres.clone()));
     let profile_service = Arc::new(ProfileService::new(postgres.clone()));
@@ -281,7 +285,10 @@ pub async fn create_app_state() -> Result<AppState> {
         account_analytics_service.clone(),
     ));
     let stats_service = Arc::new(StatsService::new(clickhouse.clone(), idle_timeout_seconds));
-    let summary_service = Arc::new(SummaryService::new(clickhouse.clone(), idle_timeout_seconds));
+    let summary_service = Arc::new(SummaryService::new(
+        clickhouse.clone(),
+        idle_timeout_seconds,
+    ));
     let wakatime_import_service = Arc::new(WakaTimeImportService::new(heartbeat_repo.clone()));
     let org_service = Arc::new(OrgService::new(org_repo.clone()));
     let organizations_service = Arc::new(OrganizationsService::new(
@@ -294,7 +301,6 @@ pub async fn create_app_state() -> Result<AppState> {
         Arc::new(CoworkingSessionService::new(coworking_session_repo.clone()));
 
     Ok(AppState {
-        logger,
         config,
         clickhouse,
         postgres,
@@ -316,7 +322,6 @@ pub async fn create_app_state() -> Result<AppState> {
         coworking_session_repo,
         ai_stats_service,
         account_analytics_service,
-        authorization_service,
         billing_service,
         ai_usage_service,
         all_time_service,

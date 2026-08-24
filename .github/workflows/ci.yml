@@ -1,0 +1,151 @@
+name: AtoAxis CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend validate and production build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate typecheck, lint and unit tests
+        run: npm run validate
+      - name: Build with production URL
+        env:
+          NEXT_PUBLIC_APP_URL: https://atoaxis.com
+        run: npm run build
+      - name: Verify generated routes and SEO artifacts
+        run: npm run check:prerender
+
+  frontend-e2e:
+    name: Frontend browser smoke tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run browser tests
+        env:
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+        run: npm run test:e2e -- --project=chromium
+
+  backend:
+    name: Rust format, Clippy and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run strict Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run unit and service tests
+        run: cargo test --workspace
+
+  backend-integration:
+    name: Rust ClickHouse integration tests
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.10
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run ignored database tests against isolated ClickHouse
+        env:
+          CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+        run: cargo test --workspace -- --ignored --test-threads=1
+
+  extensions:
+    name: Extension compile, tests and package checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile extension
+        run: npm run compile
+      - name: Run extension tests
+        run: npm test
+      - name: Verify resource packaging without native binaries
+        run: npm run vscode:prepublish
+      - name: Verify package metadata
+        run: npm pack --dry-run
+
+  contracts-and-security:
+    name: Compatibility, secrets and dependency gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/app/package-lock.json
+      - name: Validate WakaTime compatibility manifest
+        run: node scripts/verify-compatibility-manifest.mjs
+      - name: Scan tracked files for private keys and API key literals
+        shell: bash
+        run: |
+          if git grep -nE 'BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY|sk-[A-Za-z0-9]{20,}' -- ':!*.lock'; then
+            echo "Potential credential material found in tracked files" >&2
+            exit 1
+          fi
+      - name: Audit frontend dependencies
+        working-directory: frontend/app
+        run: npm ci && npm audit --audit-level=high

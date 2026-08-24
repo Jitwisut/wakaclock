@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiKeyPanel } from '@/app/dashboard/(auth)/wakaclock/settings/components/api-key-panel';
 
@@ -34,6 +34,12 @@ function renderPanel() {
     </QueryClientProvider>
   );
 }
+
+beforeEach(() => {
+  // Vitest resets mock implementations between tests. Keep the read query a valid
+  // Promise in every case; individual tests override it when they need a stored key.
+  getCurrentApiKey.mockResolvedValue({ data: { api_key: null, user_id: 'user-1' } });
+});
 
 describe('ApiKeyPanel', () => {
   it('shows the generated key so it can be copied', async () => {

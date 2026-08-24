@@ -338,7 +338,10 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_stream_ticket_resolves_to_nobody() {
         let store = PresenceStore::new();
-        assert_eq!(store.resolve_stream_ticket(uid(), "not-a-ticket").await, None);
+        assert_eq!(
+            store.resolve_stream_ticket(uid(), "not-a-ticket").await,
+            None
+        );
     }
 
     /// Reusable within its TTL on purpose: `EventSource` reconnects by replaying the

@@ -118,7 +118,12 @@ impl OrganizationsService {
         request: UpdateOrganizationRequest,
     ) -> Result<Option<Organization>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageTeams, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
             .await?;
         let Some(name) = request.name else {
             return self.get(actor, organization_id).await;
@@ -158,7 +163,12 @@ impl OrganizationsService {
         organization_id: Uuid,
     ) -> Result<Vec<OrganizationMember>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres
@@ -185,7 +195,12 @@ impl OrganizationsService {
         request: AddOrganizationMemberRequest,
     ) -> Result<OrganizationMember> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageMembers, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
             .await?;
         let role = request.role.unwrap_or_else(|| "member".to_string());
         let seat_type = request.seat_type.unwrap_or_else(|| "developer".to_string());
@@ -257,7 +272,12 @@ impl OrganizationsService {
         member_user_id: Uuid,
     ) -> Result<bool> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageMembers, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let changed = postgres
@@ -284,11 +304,7 @@ impl OrganizationsService {
         Ok(changed == 1)
     }
 
-    pub async fn teams(
-        &self,
-        actor: Uuid,
-        organization_id: Uuid,
-    ) -> Result<Vec<OrganizationTeam>> {
+    pub async fn teams(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<OrganizationTeam>> {
         self.authorization
             .require(actor, organization_id, OrganizationAction::ReadTeam, None)
             .await?;
@@ -312,7 +328,12 @@ impl OrganizationsService {
         request: CreateOrganizationTeamRequest,
     ) -> Result<OrganizationTeam> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageTeams, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
             .await?;
         let name = request.name.trim();
         if name.is_empty() || name.len() > 120 {
@@ -380,9 +401,18 @@ impl OrganizationsService {
         })
     }
 
-    pub async fn audit_logs(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<serde_json::Value>> {
+    pub async fn audit_logs(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<serde_json::Value>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres

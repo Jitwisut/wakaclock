@@ -38,4 +38,3 @@ pub struct LeaderboardMember {
 pub struct LeaderboardMemberRequest {
     pub user_id: Uuid,
 }
-

@@ -15,7 +15,7 @@ mod services;
 #[cfg(test)]
 mod test_support;
 use config::CorsOrigins;
-use infrastructure::app::create_app_state;
+use infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
 
 fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
     match origins {
@@ -38,6 +38,16 @@ fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
         }
     }
+}
+
+async fn health_endpoint(state: Arc<AppState>) -> (axum::http::StatusCode, axum::Json<AppHealth>) {
+    let health = state.health().await;
+    let status = if matches!(&health.status, HealthStatus::Ok) {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, axum::Json(health))
 }
 
 #[tokio::main]
@@ -153,7 +163,12 @@ async fn main() -> Result<()> {
         )
         .with_state(app_state.clone());
 
+    let health_state = app_state.clone();
     let router = axum::Router::new()
+        .route(
+            "/health",
+            axum::routing::get(move || health_endpoint(health_state.clone())),
+        )
         .nest("/api/v1", api_v1)
         .nest("/api/v2", api_v2)
         .nest("/oauth", handlers::oauth::router(app_state.clone()))

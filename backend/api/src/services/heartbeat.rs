@@ -159,9 +159,7 @@ impl HeartbeatService {
                 // `Heartbeat::validate` already rejects oversized explicit segments, so
                 // this clamp only guards replayed/imported rows.
                 let segment = ActivitySegment {
-                    start: segment
-                        .start
-                        .max(segment.end - MAX_ACTIVITY_GAP_SECONDS),
+                    start: segment.start.max(segment.end - MAX_ACTIVITY_GAP_SECONDS),
                     ..segment
                 };
                 if segment.end <= segment.start

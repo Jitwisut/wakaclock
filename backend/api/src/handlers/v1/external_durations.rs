@@ -67,7 +67,9 @@ pub async fn list(
     if query.start.is_some_and(|value| !value.is_finite())
         || query.end.is_some_and(|value| !value.is_finite())
     {
-        return Err(map_error("start/end must be finite Unix timestamps".to_string()));
+        return Err(map_error(
+            "start/end must be finite Unix timestamps".to_string(),
+        ));
     }
     let rows = state
         .external_duration_service
@@ -92,13 +94,16 @@ pub async fn create_bulk(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Json(requests): Json<Vec<ExternalDurationRequest>>,
-) -> Result<(StatusCode, Json<ExternalDurationBulkResponse>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<ExternalDurationBulkResponse>), (StatusCode, Json<serde_json::Value>)>
+{
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
     if !auth::require_scope(&state, &headers, "write_external_durations") {
         return Err(auth::forbidden_scope("write_external_durations"));
     }
     if requests.len() > 2_000 {
-        return Err(map_error("at most 2000 external durations per request".to_string()));
+        return Err(map_error(
+            "at most 2000 external durations per request".to_string(),
+        ));
     }
     let mut data = Vec::with_capacity(requests.len());
     for request in requests {

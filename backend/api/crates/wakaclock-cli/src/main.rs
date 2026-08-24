@@ -43,6 +43,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     Heartbeat {
         #[arg(short, long)]
@@ -1617,7 +1618,7 @@ fn transcript_identity(path: &Path) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        return Some(format!("dev:{}:ino:{}", metadata.dev(), metadata.ino()));
+        Some(format!("dev:{}:ino:{}", metadata.dev(), metadata.ino()))
     }
     #[cfg(not(unix))]
     {

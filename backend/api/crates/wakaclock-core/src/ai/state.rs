@@ -109,10 +109,7 @@ impl AiAttributionState {
         }
     }
 
-    pub fn save_follow_up_ledger(
-        &self,
-        ledger: &HumanFollowUpLedger,
-    ) -> Result<(), AppError> {
+    pub fn save_follow_up_ledger(&self, ledger: &HumanFollowUpLedger) -> Result<(), AppError> {
         let json = serde_json::to_string(ledger)?;
         self.conn.execute(
             "INSERT INTO follow_up_ledger (ledger_id, ledger_json, updated_at)
@@ -169,7 +166,7 @@ impl AiAttributionState {
             None => 0.0,
         };
 
-        if previous.map_or(true, |last| timestamp > last) {
+        if previous.is_none_or(|last| timestamp > last) {
             tx.execute(
                 "INSERT INTO activity_cursors (stream_id, last_time) VALUES (?1, ?2)
                  ON CONFLICT(stream_id) DO UPDATE SET last_time = excluded.last_time",

@@ -45,12 +45,20 @@ impl WakaTimeImportService {
         let mut skipped = 0usize;
 
         for day in dump.days {
+            let day_date = day.date;
             let Some(heartbeats) = day.heartbeats else {
                 continue;
             };
 
             for heartbeat in heartbeats {
-                match map_heartbeat(user_id, heartbeat, &editor, &operating_system, &user_agent) {
+                match map_heartbeat(
+                    user_id,
+                    heartbeat,
+                    &editor,
+                    &operating_system,
+                    &user_agent,
+                    &day_date,
+                ) {
                     Some(row) => rows.push(row),
                     None => skipped += 1,
                 }
@@ -110,6 +118,7 @@ fn map_heartbeat(
     editor: &str,
     operating_system: &str,
     user_agent: &str,
+    day_date: &str,
 ) -> Option<HeartbeatRow> {
     if heartbeat.entity.trim().is_empty() || heartbeat.time <= 0.0 {
         return None;
@@ -117,7 +126,7 @@ fn map_heartbeat(
 
     let entity_type = normalize_entity_type(&heartbeat.entity_type)?;
     let date = (heartbeat.time as i64 / 86400).max(0) as u16;
-    let created_at = parse_created_at(heartbeat.created_at.as_deref());
+    let created_at = parse_created_at(heartbeat.created_at.as_deref(), day_date);
     let category = normalize_category(heartbeat.category.as_deref());
     let is_ai_generated = is_ai_generated(&heartbeat);
     let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
@@ -267,10 +276,16 @@ fn infer_operating_system(last_plugin: Option<&str>) -> String {
     }
 }
 
-fn parse_created_at(created_at: Option<&str>) -> u32 {
+fn parse_created_at(created_at: Option<&str>, day_date: &str) -> u32 {
     created_at
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|dt| dt.timestamp().max(0) as u32)
+        .or_else(|| {
+            chrono::NaiveDate::parse_from_str(day_date, "%Y-%m-%d")
+                .ok()
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .map(|midnight| midnight.and_utc().timestamp().max(0) as u32)
+        })
         .unwrap_or_else(|| Utc::now().timestamp().max(0) as u32)
 }
 
@@ -295,5 +310,5 @@ fn to_positive_u32(value: Option<i32>) -> Option<u32> {
 fn to_negative_u32(value: Option<i32>) -> Option<u32> {
     value
         .filter(|current| *current < 0)
-        .and_then(|current| u32::try_from(current.unsigned_abs()).ok())
+        .map(|current| current.unsigned_abs())
 }

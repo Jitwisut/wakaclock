@@ -10,7 +10,8 @@ use tokio_postgres::{Client, NoTls};
 
 use crate::config::PostgresConfig;
 
-const FOUNDATION_MIGRATION: &str = include_str!("../../migrations/postgres/001_phase10_foundation.sql");
+const FOUNDATION_MIGRATION: &str =
+    include_str!("../../migrations/postgres/001_phase10_foundation.sql");
 
 pub struct PostgresClient {
     client: Client,

@@ -271,7 +271,10 @@ pub async fn delete_bulk(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     if payload.heartbeat_ids.len() > 1000 {
-        return Err(app_error(StatusCode::BAD_REQUEST, "at most 1000 heartbeat ids may be deleted"));
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "at most 1000 heartbeat ids may be deleted",
+        ));
     }
     let ids: Vec<String> = payload
         .heartbeat_ids
@@ -283,7 +286,9 @@ pub async fn delete_bulk(
         .delete_ids(user_id, &ids)
         .await
         .map_err(|error| app_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()))?;
-    Ok(Json(json!({ "status": "ok", "heartbeats_deleted": accepted })))
+    Ok(Json(
+        json!({ "status": "ok", "heartbeats_deleted": accepted }),
+    ))
 }
 
 /// GET /api/v1/heartbeats?date=2026-04-10&user_id=...

@@ -128,22 +128,4 @@ impl OrgRepository {
 
         Ok(rows)
     }
-
-    pub async fn get(&self, org_id: Uuid) -> Result<Option<OrgRow>> {
-        let row = self
-            .client
-            .get_client()
-            .query(
-                "SELECT org_id, name, owner_user_id, created_at, updated_at
-                 FROM wakaclock.orgs FINAL
-                 WHERE org_id = ?
-                 LIMIT 1",
-            )
-            .bind(org_id)
-            .fetch_optional::<OrgRow>()
-            .await
-            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))?;
-
-        Ok(row)
-    }
 }

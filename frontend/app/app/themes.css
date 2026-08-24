@@ -31,11 +31,9 @@ body {
  * secondary an amber/gold accent. `--radius: 0rem` plus the `border-radius: 0 !important`
  * safety net further down (`--radius-xl`'s calc() would otherwise still leave 4px of
  * rounding, and `rounded-full` circles ignore `--radius` entirely) commit fully to sharp
- * pixel corners. Display font is Pixelify Sans (headings/buttons/short labels — a
- * multi-weight pixel-cut face, not the single crude weight Press Start 2P shipped with
- * initially); body font is Space Mono, a retro-terminal monospace chosen because this
- * dashboard has dense data tables (heartbeats, insights) where a true bitmap font would
- * fail the readable-font-size/line-length guidelines badly. See `lib/fonts.ts`.
+ * pixel corners. Display and body tokens resolve through the local bundled sans/mono
+ * assets. The aliases below preserve the existing theme contract without remote font
+ * requests during production builds. See `lib/fonts.ts`.
  */
 [data-theme-preset='retro-pixel'] {
   --base-50: oklch(0.99 0.004 158);
@@ -355,6 +353,21 @@ body {
 
   --display-family: var(--font-plus-jakarta-sans), sans-serif;
   --display-weight: 700;
+
+  /* Offline-safe local font aliases. `lib/fonts.ts` loads Geist/Geist Mono from the
+   * installed Next.js package; these names keep all existing theme presets stable. */
+  --font-inter: var(--font-geist), sans-serif;
+  --font-roboto: var(--font-geist), sans-serif;
+  --font-plus-jakarta-sans: var(--font-geist), sans-serif;
+  --font-montserrat: var(--font-geist), sans-serif;
+  --font-poppins: var(--font-geist), sans-serif;
+  --font-overpass-mono: var(--font-geist-mono), monospace;
+  --font-pt-sans: var(--font-geist), sans-serif;
+  --font-hedvig-letters-serif: var(--font-geist), sans-serif;
+  --font-kumbh-sans: var(--font-geist), sans-serif;
+  --font-outfit: var(--font-geist), sans-serif;
+  --font-pixelify-sans: var(--font-geist), sans-serif;
+  --font-space-mono: var(--font-geist-mono), monospace;
   --text-family: var(--font-inter), sans-serif;
 
   @variant dark {

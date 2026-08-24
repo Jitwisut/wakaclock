@@ -35,22 +35,6 @@ thread_local! {
         std::cell::RefCell::new(ParserPool::new());
 }
 
-/// Parse source แล้วคืน (errors, total_nodes) — สำหรับ confidence calculation
-/*pub fn parse_counts(
-    lang_name: &'static str,
-    language: &Language,
-    source: &[u8],
-) -> Option<(usize, usize)> {
-    POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        let parser = pool.get_or_create(lang_name, language)?;
-        parser.reset();
-        let tree = parser.parse(source, None)?;
-        let root = tree.root_node();
-        Some((count_errors(root), count_nodes(root)))
-    })
-}*/
-
 /// Parse source แล้วเรียก callback ด้วย root node ภายใน closure
 /// (Tree ต้องใช้งานภายใน scope เดียวกับ parser)
 pub fn with_parsed_tree<F, R>(

@@ -32,4 +32,3 @@ pub struct IntegrationConnection {
     pub created_at: DateTime<Utc>,
     pub disconnected_at: Option<DateTime<Utc>>,
 }
-

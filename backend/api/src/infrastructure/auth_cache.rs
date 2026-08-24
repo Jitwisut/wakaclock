@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clickhouse::Row;
+use parking_lot::RwLock;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -54,15 +55,9 @@ impl AuthKeyCache {
             map.insert(row.api_key, row.user_id);
         }
 
-        *self.by_hash.write().expect("auth cache lock poisoned") = map;
-        self.oauth_expirations
-            .write()
-            .expect("auth cache lock poisoned")
-            .clear();
-        self.oauth_scopes
-            .write()
-            .expect("auth cache lock poisoned")
-            .clear();
+        *self.by_hash.write() = map;
+        self.oauth_expirations.write().clear();
+        self.oauth_scopes.write().clear();
         Ok(())
     }
 
@@ -80,13 +75,14 @@ impl AuthKeyCache {
             )
             .await
             .context("failed to refresh API key cache from PostgreSQL")?;
-        let mut map = self.by_hash.write().expect("auth cache lock poisoned");
-        for row in api_key_rows {
-            let user_id: Uuid = row.get("user_id");
-            let key_hash: String = row.get("key_hash");
-            map.insert(key_hash, user_id);
+        {
+            let mut map = self.by_hash.write();
+            for row in api_key_rows {
+                let user_id: Uuid = row.get("user_id");
+                let key_hash: String = row.get("key_hash");
+                map.insert(key_hash, user_id);
+            }
         }
-        drop(map);
 
         let rows = postgres
             .client()
@@ -99,39 +95,28 @@ impl AuthKeyCache {
             )
             .await
             .context("failed to refresh OAuth token cache from PostgreSQL")?;
-        let mut map = self.by_hash.write().expect("auth cache lock poisoned");
+        let mut map = self.by_hash.write();
+        let mut expirations = self.oauth_expirations.write();
+        let mut scopes_by_hash = self.oauth_scopes.write();
         for row in rows {
             let user_id: Uuid = row.get("user_id");
             let token_hash: String = row.get("token_hash");
             let scopes: Vec<String> = row.get("scopes");
             let expires_at: i64 = row.get("expires_epoch");
             map.insert(token_hash.clone(), user_id);
-            self.oauth_expirations
-                .write()
-                .expect("auth cache lock poisoned")
-                .insert(token_hash.clone(), expires_at);
-            self.oauth_scopes
-                .write()
-                .expect("auth cache lock poisoned")
-                .insert(token_hash, scopes.into_iter().collect());
+            expirations.insert(token_hash.clone(), expires_at);
+            scopes_by_hash.insert(token_hash, scopes.into_iter().collect());
         }
         Ok(())
     }
 
     pub fn lookup(&self, key_hash: &str) -> Option<Uuid> {
-        let user_id = self
-            .by_hash
-            .read()
-            .expect("auth cache lock poisoned")
-            .get(key_hash)
-            .copied()
-            .filter(|_| {
-                self.oauth_expirations
-                    .read()
-                    .expect("auth cache lock poisoned")
-                    .get(key_hash)
-                    .map_or(true, |expires_at| *expires_at > chrono::Utc::now().timestamp())
-            });
+        let user_id = self.by_hash.read().get(key_hash).copied().filter(|_| {
+            self.oauth_expirations
+                .read()
+                .get(key_hash)
+                .is_none_or(|expires_at| *expires_at > chrono::Utc::now().timestamp())
+        });
         if user_id.is_none() {
             self.remove_hash(key_hash);
         }
@@ -139,14 +124,7 @@ impl AuthKeyCache {
     }
 
     pub fn insert(&self, key_hash: String, user_id: Uuid) {
-        self.by_hash
-            .write()
-            .expect("auth cache lock poisoned")
-            .insert(key_hash, user_id);
-    }
-
-    pub fn insert_with_expiry(&self, key_hash: String, user_id: Uuid, expires_at: i64) {
-        self.insert_with_expiry_and_scopes(key_hash, user_id, expires_at, &[]);
+        self.by_hash.write().insert(key_hash, user_id);
     }
 
     pub fn insert_with_expiry_and_scopes(
@@ -156,18 +134,13 @@ impl AuthKeyCache {
         expires_at: i64,
         scopes: &[String],
     ) {
-        self.by_hash
-            .write()
-            .expect("auth cache lock poisoned")
-            .insert(key_hash.clone(), user_id);
+        self.by_hash.write().insert(key_hash.clone(), user_id);
         self.oauth_expirations
             .write()
-            .expect("auth cache lock poisoned")
             .insert(key_hash.clone(), expires_at);
         if !scopes.is_empty() {
             self.oauth_scopes
                 .write()
-                .expect("auth cache lock poisoned")
                 .insert(key_hash, scopes.iter().cloned().collect());
         }
     }
@@ -181,24 +154,14 @@ impl AuthKeyCache {
         }
         self.oauth_scopes
             .read()
-            .expect("auth cache lock poisoned")
             .get(key_hash)
-            .map_or(true, |scopes| scopes.contains(scope) || scopes.contains("*"))
+            .is_none_or(|scopes| scopes.contains(scope) || scopes.contains("*"))
     }
 
     pub fn remove_hash(&self, key_hash: &str) {
-        self.by_hash
-            .write()
-            .expect("auth cache lock poisoned")
-            .remove(key_hash);
-        self.oauth_expirations
-            .write()
-            .expect("auth cache lock poisoned")
-            .remove(key_hash);
-        self.oauth_scopes
-            .write()
-            .expect("auth cache lock poisoned")
-            .remove(key_hash);
+        self.by_hash.write().remove(key_hash);
+        self.oauth_expirations.write().remove(key_hash);
+        self.oauth_scopes.write().remove(key_hash);
     }
 
     /// Drop the user's API-key credentials after rotation/revocation. OAuth access tokens are
@@ -208,32 +171,22 @@ impl AuthKeyCache {
         let oauth_hashes = self
             .oauth_scopes
             .read()
-            .expect("auth cache lock poisoned")
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
         let mut removed = Vec::new();
-        self.by_hash
-            .write()
-            .expect("auth cache lock poisoned")
-            .retain(|hash, uid| {
-                let keep = *uid != user_id || oauth_hashes.contains(hash);
-                if !keep {
-                    removed.push(hash.clone());
-                }
-                keep
-            });
-        let mut expirations = self
-            .oauth_expirations
-            .write()
-            .expect("auth cache lock poisoned");
+        self.by_hash.write().retain(|hash, uid| {
+            let keep = *uid != user_id || oauth_hashes.contains(hash);
+            if !keep {
+                removed.push(hash.clone());
+            }
+            keep
+        });
+        let mut expirations = self.oauth_expirations.write();
         for hash in &removed {
             expirations.remove(hash);
         }
-        let mut scopes = self
-            .oauth_scopes
-            .write()
-            .expect("auth cache lock poisoned");
+        let mut scopes = self.oauth_scopes.write();
         for hash in &removed {
             scopes.remove(hash);
         }
@@ -248,24 +201,22 @@ mod tests {
     fn oauth_entries_expire_without_a_database_round_trip() {
         let cache = AuthKeyCache::default();
         let user_id = Uuid::now_v7();
-        cache.insert_with_expiry(
+        cache.insert_with_expiry_and_scopes(
             "live".to_string(),
             user_id,
             chrono::Utc::now().timestamp() + 60,
+            &[],
         );
         assert_eq!(cache.lookup("live"), Some(user_id));
 
-        cache.insert_with_expiry(
+        cache.insert_with_expiry_and_scopes(
             "expired".to_string(),
             user_id,
             chrono::Utc::now().timestamp() - 1,
+            &[],
         );
         assert_eq!(cache.lookup("expired"), None);
-        assert!(!cache
-            .by_hash
-            .read()
-            .expect("auth cache lock poisoned")
-            .contains_key("expired"));
+        assert!(!cache.by_hash.read().contains_key("expired"));
     }
 
     #[test]
@@ -274,11 +225,7 @@ mod tests {
         let user_id = Uuid::now_v7();
         cache.insert("api-key".to_string(), user_id);
         assert_eq!(cache.lookup("api-key"), Some(user_id));
-        assert!(!cache
-            .oauth_expirations
-            .read()
-            .expect("auth cache lock poisoned")
-            .contains_key("api-key"));
+        assert!(!cache.oauth_expirations.read().contains_key("api-key"));
         assert!(cache.has_scope("api-key", "export_data"));
     }
 

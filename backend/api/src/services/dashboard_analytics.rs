@@ -534,7 +534,8 @@ mod tests {
 
         let user_id = Uuid::new_v4();
         let range = ResolvedRange::parse("2026-08-01", "2026-08-01", Some("UTC")).unwrap();
-        let service = DashboardAnalyticsService::new(clickhouse, DEFAULT_IDLE_TIMEOUT_MINUTES * 60.0);
+        let service =
+            DashboardAnalyticsService::new(clickhouse, DEFAULT_IDLE_TIMEOUT_MINUTES * 60.0);
 
         assert!(service
             .usage_summary(user_id, &range)

@@ -18,13 +18,15 @@ use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
-use crate::model::date_range::ResolvedRange;
 use crate::model::ai_stats::AiStatsData;
 use crate::model::billing::{Invoice, OrganizationBilling};
+use crate::model::date_range::ResolvedRange;
 use crate::model::export::{CreateExportRequest, ExportJob};
 use crate::model::follow_up::{HumanFollowUpEventRequest, HumanFollowUpStats};
 use crate::model::goal::{CreateGoalRequest, Goal, GoalProgress, UpdateGoalRequest};
-use crate::model::integration::{CreateIntegrationRequest, IntegrationConnection, IntegrationProvider};
+use crate::model::integration::{
+    CreateIntegrationRequest, IntegrationConnection, IntegrationProvider,
+};
 use crate::model::leaderboard::{
     CreateLeaderboardRequest, Leaderboard, LeaderboardMember, LeaderboardMemberRequest,
 };
@@ -33,10 +35,15 @@ use crate::model::organization::{
     Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
     UpdateOrganizationRequest,
 };
-use crate::model::profile::{CreateShareLinkRequest, PublicProfile, ShareLink, UpdateProfileRequest};
+use crate::model::profile::{
+    CreateShareLinkRequest, PublicProfile, ShareLink, UpdateProfileRequest,
+};
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
+const WAKATIME_COMPATIBILITY_MANIFEST: &str =
+    include_str!("../../../../docs/wakatime-compatibility-manifest.json");
+const PHASE10_FEATURE_MATRIX: &str = include_str!("../../../../docs/phase-10-feature-matrix.json");
 
 #[derive(Debug, Serialize)]
 pub struct V2Meta {
@@ -92,9 +99,9 @@ pub struct ClientCapabilities {
 
 #[derive(Debug, Serialize)]
 pub struct FeatureCapability {
-    pub key: &'static str,
-    pub status: &'static str,
-    pub api: &'static str,
+    pub key: String,
+    pub status: String,
+    pub api: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,7 +109,31 @@ pub struct WakaTimeRouteCapability {
     pub method: String,
     pub route: String,
     pub section: String,
-    pub status: &'static str,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatibilityManifest {
+    routes: Vec<CompatibilityRoute>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatibilityRoute {
+    method: String,
+    path: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeatureMatrix {
+    features: Vec<FeatureMatrixEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeatureMatrixEntry {
+    key: String,
+    status: String,
+    api: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -271,22 +302,27 @@ pub fn router(app_state: Arc<AppState>) -> Router {
 }
 
 /// Public capability discovery endpoint used by clients and the plugin directory.
-pub async fn capabilities(
-    State(state): State<Arc<AppState>>,
-) -> Json<V2Envelope<CapabilityData>> {
+pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope<CapabilityData>> {
     let inventory: Value = serde_json::from_str(WAKATIME_ROUTE_INVENTORY)
         .expect("wakatime-api-routes.json must remain valid JSON");
+    let compatibility: CompatibilityManifest =
+        serde_json::from_str(WAKATIME_COMPATIBILITY_MANIFEST)
+            .expect("wakatime-compatibility-manifest.json must remain valid JSON");
+    let features: FeatureMatrix = serde_json::from_str(PHASE10_FEATURE_MATRIX)
+        .expect("phase-10-feature-matrix.json must remain valid JSON");
     let routes = inventory
         .get("documented_routes")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|route| {
+            let method = route.get("method")?.as_str()?.to_string();
+            let path = route.get("route")?.as_str()?.to_string();
             Some(WakaTimeRouteCapability {
-                method: route.get("method")?.as_str()?.to_string(),
-                route: route.get("route")?.as_str()?.to_string(),
+                status: compatibility_route_status(&compatibility, &method, &path),
+                method,
+                route: path,
                 section: route.get("section")?.as_str()?.to_string(),
-                status: route_status(route.get("route")?.as_str()?),
             })
         })
         .collect();
@@ -314,98 +350,15 @@ pub async fn capabilities(
                 desktop_tracker: "privacy-policy-skeleton",
                 browser_extensions: "webextension-core",
             },
-            features: vec![
-                FeatureCapability {
-                    key: "complete_history",
-                    status: "production_ready",
-                    api: "/api/v1",
-                },
-                FeatureCapability {
-                    key: "ai_line_attribution",
-                    status: "production_ready",
-                    api: "/api/v2/me/ai/effectiveness",
-                },
-                FeatureCapability {
-                    key: "ai_effectiveness_coverage",
-                    status: "partial",
-                    api: "/api/v2/me/ai/effectiveness",
-                },
-                FeatureCapability {
-                    key: "oauth_pkce",
-                    status: "beta",
-                    api: "/oauth/authorize",
-                },
-                FeatureCapability {
-                    key: "oauth_device_flow",
-                    status: "beta",
-                    api: "/oauth/device/code",
-                },
-                FeatureCapability {
-                    key: "oauth_scope_enforcement",
-                    status: "beta",
-                    api: "/api/v2",
-                },
-                FeatureCapability {
-                    key: "goals_crud_and_progress",
-                    status: "beta",
-                    api: "/api/v2/me/goals",
-                },
-                FeatureCapability {
-                    key: "external_durations",
-                    status: "beta",
-                    api: "/api/v1/users/current/external_durations",
-                },
-                FeatureCapability {
-                    key: "ai_human_follow_up_ledger",
-                    status: "beta",
-                    api: "/api/v2/ai/follow-up",
-                },
-                FeatureCapability {
-                    key: "data_exports",
-                    status: "beta",
-                    api: "/api/v2/exports",
-                },
-                FeatureCapability {
-                    key: "public_profiles_and_embeds",
-                    status: "beta",
-                    api: "/api/v2/share-links",
-                },
-                FeatureCapability {
-                    key: "scheduled_reports",
-                    status: "beta",
-                    api: "/api/v2/report-schedules",
-                },
-                FeatureCapability {
-                    key: "integration_registry_and_connections",
-                    status: "beta",
-                    api: "/api/v2/integrations",
-                },
-                FeatureCapability {
-                    key: "private_leaderboards",
-                    status: "beta",
-                    api: "/api/v2/leaderboards",
-                },
-                FeatureCapability {
-                    key: "organization_analytics",
-                    status: "beta",
-                    api: "/api/v2/organizations/:id/analytics",
-                },
-                FeatureCapability {
-                    key: "vcs_repository_commit_pr_metadata",
-                    status: "beta",
-                    api: "/api/v2/repositories",
-                },
-                FeatureCapability {
-                    key: "sso_oidc_saml_configuration",
-                    status: "beta",
-                    api: "/api/v2/organizations/:id/sso",
-                },
-                FeatureCapability {
-                    key: "scim_users_and_groups",
-                    status: "beta",
-                    api: "/scim/v2",
-                },
-            ],
+            features: features
+                .features
+                .into_iter()
+                .map(|feature| FeatureCapability {
+                    key: feature.key,
+                    status: feature.status,
+                    api: feature.api,
+                })
+                .collect(),
             wakatime_routes: routes,
         },
         "UTC",
@@ -423,7 +376,11 @@ pub async fn me(
         .get_current(user_id)
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(envelope(serde_json::to_value(user).map_err(ApiError::internal)?, "UTC", None)))
+    Ok(Json(envelope(
+        serde_json::to_value(user).map_err(ApiError::internal)?,
+        "UTC",
+        None,
+    )))
 }
 
 pub async fn analytics(
@@ -481,9 +438,7 @@ pub async fn ai_effectiveness(
         .total_input_tokens
         .zip(stats_data.total_output_tokens)
         .map(|(input, output)| input.saturating_add(output));
-    let tokens_per_ai_line = reported_tokens.map(|tokens| {
-        tokens as f64 / ai_lines.max(1.0)
-    });
+    let tokens_per_ai_line = reported_tokens.map(|tokens| tokens as f64 / ai_lines.max(1.0));
     let cost_per_ai_line_microusd = stats_data
         .total_estimated_cost_microusd
         .map(|cost| cost as f64 / ai_lines.max(1.0));
@@ -548,12 +503,8 @@ pub async fn follow_up_stats(
 ) -> Result<Json<V2Envelope<HumanFollowUpStats>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics")?;
     let (start_date, end_date) = resolve_range(query.start, query.end)?;
-    let range = ResolvedRange::parse(
-        &start_date,
-        &end_date,
-        query.timezone.as_deref(),
-    )
-    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let range = ResolvedRange::parse(&start_date, &end_date, query.timezone.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let (start, end) = range.unix_bounds();
     let stats = state
         .follow_up_service
@@ -747,7 +698,9 @@ pub async fn exports_cancel(
     {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(ApiError::not_found("export job not found or already finished"))
+        Err(ApiError::not_found(
+            "export job not found or already finished",
+        ))
     }
 }
 
@@ -795,9 +748,7 @@ pub async fn share_links_create(
         .create_share_link(user_id, input)
         .await
         .map_err(|error| {
-            if error.to_string().contains("unsupported")
-                || error.to_string().contains("expiry")
-            {
+            if error.to_string().contains("unsupported") || error.to_string().contains("expiry") {
                 ApiError::bad_request(error.to_string())
             } else {
                 ApiError::service_unavailable(error)
@@ -833,7 +784,9 @@ pub async fn share_links_delete(
     {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(ApiError::not_found("share link not found or already revoked"))
+        Err(ApiError::not_found(
+            "share link not found or already revoked",
+        ))
     }
 }
 
@@ -920,10 +873,7 @@ pub async fn integration_connect(
                 ApiError::service_unavailable(error)
             }
         })?;
-    Ok((
-        StatusCode::CREATED,
-        Json(envelope(connection, "UTC", None)),
-    ))
+    Ok((StatusCode::CREATED, Json(envelope(connection, "UTC", None))))
 }
 
 pub async fn integrations_list(
@@ -1306,7 +1256,9 @@ pub async fn leaderboard_add_member(
     {
         Ok(StatusCode::CREATED)
     } else {
-        Err(ApiError::bad_request("user is already a leaderboard member or inactive"))
+        Err(ApiError::bad_request(
+            "user is already a leaderboard member or inactive",
+        ))
     }
 }
 
@@ -1346,45 +1298,27 @@ fn resolve_range(start: Option<String>, end: Option<String>) -> Result<(String, 
     let default_start = today - Duration::days(29);
     let start = start.unwrap_or_else(|| default_start.to_string());
     let end = end.unwrap_or_else(|| today.to_string());
-    NaiveDate::parse_from_str(&start, "%Y-%m-%d").map_err(|_| ApiError::bad_request("start must be YYYY-MM-DD"))?;
-    NaiveDate::parse_from_str(&end, "%Y-%m-%d").map_err(|_| ApiError::bad_request("end must be YYYY-MM-DD"))?;
+    NaiveDate::parse_from_str(&start, "%Y-%m-%d")
+        .map_err(|_| ApiError::bad_request("start must be YYYY-MM-DD"))?;
+    NaiveDate::parse_from_str(&end, "%Y-%m-%d")
+        .map_err(|_| ApiError::bad_request("end must be YYYY-MM-DD"))?;
     if start > end {
         return Err(ApiError::bad_request("start must be on or before end"));
     }
     Ok((start, end))
 }
 
-fn route_status(route: &str) -> &'static str {
-    let implemented_suffixes = [
-        "/users/:user",
-        "/users/current",
-        "/all_time_since_today",
-        "/durations",
-        "/heartbeats",
-        "/heartbeats.bulk",
-        "/insights/:insight_type/:range",
-        "/projects",
-        "/stats/:range",
-        "/summaries",
-        "/status_bar/today",
-        "/data_dumps",
-        "/editors",
-        "/leaders",
-        "/meta",
-        "/program_languages",
-        "/machine_names",
-        "/user_agents",
-        "/custom_rules",
-        "/custom_rules_progress",
-        "/leaderboards",
-        "/orgs",
-        "/goals",
-    ];
-    if implemented_suffixes.iter().any(|suffix| route.ends_with(suffix)) {
-        "compatible"
-    } else {
-        "planned"
-    }
+fn compatibility_route_status(
+    manifest: &CompatibilityManifest,
+    method: &str,
+    route: &str,
+) -> String {
+    manifest
+        .routes
+        .iter()
+        .find(|entry| entry.method.eq_ignore_ascii_case(method) && entry.path == route)
+        .map(|entry| entry.status.clone())
+        .unwrap_or_else(|| "not_started".to_string())
 }
 
 fn require_scope(
@@ -1451,12 +1385,15 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        (self.status, Json(json!({
-            "error": {
-                "code": self.status.as_u16(),
-                "message": self.message,
-            }
-        })))
+        (
+            self.status,
+            Json(json!({
+                "error": {
+                    "code": self.status.as_u16(),
+                    "message": self.message,
+                }
+            })),
+        )
             .into_response()
     }
 }

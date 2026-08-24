@@ -61,9 +61,8 @@ that block casually.
   a standalone ClickHouse schema **not referenced by any code path**. It
   overlaps with the in-code DDL and may be stale. The in-code `migrate()`
   functions are authoritative.
-- `backend/api/migrations/clickhouse/` contains only a `.gitkeep`, a
-  `run_migration.sh` and a `README.md` describing *e-commerce connector*
-  migrations that do not exist. Template leftover —
+- `backend/api/migrations/clickhouse/` contains legacy template notes and is not
+  invoked by the live server. Template leftover —
   [../dead-code.md](../dead-code.md).
 - [../../ch_schema.json](../../ch_schema.json) and
   [../../schema.txt](../../schema.txt) are schema snapshots, not applied

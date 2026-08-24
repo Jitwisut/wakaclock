@@ -29,17 +29,12 @@ pub enum OrganizationAction {
     ManageIntegrations,
     ManageBilling,
     ManageSecurity,
-    DeleteOrganization,
-    ExportData,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entitlement {
     OrganizationDashboards,
-    Integrations,
-    Export,
     SsoScim,
-    Billing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,13 +80,12 @@ impl AuthorizationService {
             OrganizationAction::ReadOrganization
             | OrganizationAction::ManageMembers
             | OrganizationAction::ManageTeams
-            | OrganizationAction::ManageIntegrations
-            | OrganizationAction::ExportData => {
+            | OrganizationAction::ManageIntegrations => {
                 matches!(role, OrganizationRole::Owner | OrganizationRole::Admin)
             }
-            OrganizationAction::ManageBilling
-            | OrganizationAction::ManageSecurity
-            | OrganizationAction::DeleteOrganization => role == OrganizationRole::Owner,
+            OrganizationAction::ManageBilling | OrganizationAction::ManageSecurity => {
+                role == OrganizationRole::Owner
+            }
         };
         let entitlement_allowed = entitlement.is_none() || entitlement_enabled;
         AuthorizationDecision {
@@ -175,10 +169,7 @@ fn parse_role(value: &str) -> Result<OrganizationRole> {
 fn entitlement_key(entitlement: Entitlement) -> &'static str {
     match entitlement {
         Entitlement::OrganizationDashboards => "organization_dashboards",
-        Entitlement::Integrations => "integrations",
-        Entitlement::Export => "export",
         Entitlement::SsoScim => "sso_scim",
-        Entitlement::Billing => "billing",
     }
 }
 
@@ -188,31 +179,38 @@ mod tests {
 
     #[test]
     fn owner_can_manage_security_but_member_cannot() {
-        assert!(AuthorizationService::decide(
-            Some(OrganizationRole::Owner),
-            OrganizationAction::ManageSecurity,
-            Some(Entitlement::SsoScim),
-            true,
-        )
-        .allowed);
-        assert!(!AuthorizationService::decide(
-            Some(OrganizationRole::Member),
-            OrganizationAction::ManageSecurity,
-            Some(Entitlement::SsoScim),
-            true,
-        )
-        .allowed);
+        assert!(
+            AuthorizationService::decide(
+                Some(OrganizationRole::Owner),
+                OrganizationAction::ManageSecurity,
+                Some(Entitlement::SsoScim),
+                true,
+            )
+            .allowed
+        );
+        assert!(
+            !AuthorizationService::decide(
+                Some(OrganizationRole::Member),
+                OrganizationAction::ManageSecurity,
+                Some(Entitlement::SsoScim),
+                true,
+            )
+            .allowed
+        );
     }
 
     #[test]
     fn entitlements_gate_allowed_roles() {
         let decision = AuthorizationService::decide(
             Some(OrganizationRole::Admin),
-            OrganizationAction::ExportData,
-            Some(Entitlement::Export),
+            OrganizationAction::ReadOrganization,
+            Some(Entitlement::OrganizationDashboards),
             false,
         );
         assert!(!decision.allowed);
-        assert_eq!(decision.reason, "feature is not enabled for this organization");
+        assert_eq!(
+            decision.reason,
+            "feature is not enabled for this organization"
+        );
     }
 }

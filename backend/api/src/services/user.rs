@@ -24,7 +24,10 @@ pub struct UserService {
 
 impl UserService {
     pub fn new(clickhouse: Arc<ClickHouseClient>, postgres: Option<Arc<PostgresClient>>) -> Self {
-        Self { clickhouse, postgres }
+        Self {
+            clickhouse,
+            postgres,
+        }
     }
 
     /// คืนข้อมูล user ปัจจุบัน — ถ้ายังไม่เคย register (ตาราง users ว่าง)
@@ -210,7 +213,10 @@ impl UserService {
             .await?;
 
         if let Some(postgres) = &self.postgres {
-            if let Err(error) = self.sync_postgres_api_key(postgres, user_id, &key_hash).await {
+            if let Err(error) = self
+                .sync_postgres_api_key(postgres, user_id, &key_hash)
+                .await
+            {
                 tracing::error!(%user_id, %error, "failed to sync API key to PostgreSQL");
             }
         }
@@ -401,7 +407,12 @@ impl UserService {
                 "INSERT INTO organizations (id, slug, name, personal_owner_id)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT (slug) DO UPDATE SET updated_at = now()",
-                &[&organization_id, &slug, &format!("{username}'s AtoAxis"), &user_id],
+                &[
+                    &organization_id,
+                    &slug,
+                    &format!("{username}'s AtoAxis"),
+                    &user_id,
+                ],
             )
             .await
             .context("failed to create personal PostgreSQL organization")?;

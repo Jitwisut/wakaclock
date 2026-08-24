@@ -5,7 +5,7 @@ lives in `.context/`.
 
 ## Project
 
-Wakaclock (product name **AtoAxis**) is a self-hostable, WakaTime-compatible
+Wakaclock (product name **AtoAxis**) is a hosted, WakaTime-compatible
 developer time-tracking platform. Editor/CLI/browser clients send *heartbeats*
 to a Rust API; the API stores them in ClickHouse and derives durations,
 summaries, project analytics, AI-assistance attribution and team/org reporting,
@@ -21,8 +21,8 @@ More: [.context/project-overview.md](.context/project-overview.md)
   shadcn/ui, TanStack Query, zustand, axios.
 - **Clients** — VS Code extension (TypeScript), browser extension, Rust CLI +
   language server, AI-agent hooks.
-- **Tooling** — Cargo workspace, Makefile, docker-compose, lefthook, Netlify
-  (frontend deploy), GitHub Actions (extension release only).
+- **Tooling** — Cargo workspace under `backend/api`, Makefile, docker-compose,
+  lefthook, Netlify (frontend deploy), and GitHub Actions CI/release workflows.
 
 ## Repository Structure
 
@@ -38,7 +38,7 @@ More: [.context/project-overview.md](.context/project-overview.md)
 ## Essential Commands
 
 ```bash
-# Backend — MUST run from backend/api (root Cargo.toml is broken, see below)
+# Backend — the live Cargo workspace is backend/api
 cd backend/api && cargo run          # start API server
 cd backend/api && cargo test         # all backend tests
 cd backend/api && cargo clippy -- -D warnings
@@ -49,16 +49,16 @@ cd frontend/app && npm run validate  # typecheck + lint:strict + tests
 cd frontend/app && npm run test:run
 
 # Infrastructure
-make docker-up                       # ClickHouse, Postgres, Redis, RabbitMQ, ...
+make infra-up                        # ClickHouse, Postgres, Redis, Redpanda, RabbitMQ
 ```
 
 Full list and known-broken targets: [.context/commands.md](.context/commands.md)
 
 ## Critical Rules
 
-1. **Never run `cargo` from the repo root.** The root [Cargo.toml](Cargo.toml)
-   points at `crates/*` paths that do not exist; `cargo metadata` fails there.
-   The working workspace is [backend/api/Cargo.toml](backend/api/Cargo.toml).
+1. **Run Rust commands in the live workspace.** There is intentionally no
+   repository-root Cargo manifest; use [backend/api/Cargo.toml](backend/api/Cargo.toml)
+   or the root Makefile so Cargo resolves the `backend/api/crates/*` paths.
 2. **Never run `npm`/`pnpm` from `frontend/`.** There is no `package.json`
    there. Use `frontend/app/`.
 3. **Do not copy patterns from the dead e-commerce/gateway module tree.** Large
@@ -130,7 +130,7 @@ Two mechanisms back this routing up, so it does not rely on judgement alone:
   and carry the non-negotiable rules inline plus a pointer to the full workflow.
 - **PreToolUse hooks** (`.claude/settings.json`, scripts in `.claude/hooks/`) —
   ask for confirmation before editing a file in an unreachable backend tree, and
-  before running `cargo` from the repo root, `npm`/`pnpm` outside a
+  before running `cargo` outside the live workspace, `npm`/`pnpm` outside a
   `package.json` directory, or a known-broken Makefile target.
 
 A hook prompt is a signal to stop and read the file it names, not an obstacle to

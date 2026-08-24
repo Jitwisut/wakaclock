@@ -105,8 +105,9 @@ established practice. **Do not apply these unless the user asks.**
 3. **Codegen for the API contract** (utoipa → OpenAPI → TS types) instead of
    hand-mirroring Rust `model/` structs in `lib/wakaclock/types.ts`.
 4. **Deleting the dead template tree** (`src/interfaces/`, `src/docs/`,
-   `src/model/v1/`, `src/helpers/*`, `backend/api/credentials/`) and fixing the
-   root `Cargo.toml` and `Makefile` — [dead-code.md](dead-code.md).
-5. **Choosing one package manager** and removing the other lockfiles —
-   [commands.md](commands.md).
+   `src/model/v1/`, `src/helpers/*`) remains a future cleanup; the live build
+   no longer references it, and `backend/api/credentials/` plus the invalid root
+   Cargo manifest have already been removed — [dead-code.md](dead-code.md).
+5. **Choosing one package manager** is complete: npm and `package-lock.json` are
+   authoritative; the old pnpm lockfile is gone — [commands.md](commands.md).
 6. **`X-Forwarded-For` handling** so rate limiting works behind a proxy.

@@ -130,7 +130,8 @@ impl StatsService {
                     .expect("valid midnight"),
             )
             .timestamp() as f64;
-        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let timeline =
+            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
         let canonical = canonicalize_bridged(
             &timeline.intervals(user_id, start_epoch, end_epoch).await?,
             self.idle_timeout_seconds,
@@ -171,7 +172,8 @@ impl StatsService {
                     .expect("valid midnight"),
             )
             .timestamp() as f64;
-        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let timeline =
+            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
         let canonical = canonicalize_bridged(
             &timeline.intervals(user_id, start_epoch, end_epoch).await?,
             self.idle_timeout_seconds,

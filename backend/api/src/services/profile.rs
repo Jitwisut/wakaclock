@@ -202,7 +202,10 @@ impl ProfileService {
             .context("failed to resolve share link")?;
         let Some(row) = row else { return Ok(None) };
         let resource_type: String = row.get("resource_type");
-        let profile = if row.try_get::<_, Option<bool>>("is_public")?.unwrap_or(false) {
+        let profile = if row
+            .try_get::<_, Option<bool>>("is_public")?
+            .unwrap_or(false)
+        {
             Some(PublicProfile {
                 user_id: row.get("profile_user_id"),
                 username: row.get("username"),
@@ -252,11 +255,13 @@ fn profile_from_row(row: Row) -> Result<PublicProfile> {
 
 fn validate_username(username: &str) -> Result<()> {
     if !(3..=64).contains(&username.len())
-        || !username
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || "_-".contains(character))
+        || !username.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || "_-".contains(character)
+        })
     {
-        return Err(anyhow!("username must be 3-64 lowercase letters, numbers, '-' or '_'"));
+        return Err(anyhow!(
+            "username must be 3-64 lowercase letters, numbers, '-' or '_'"
+        ));
     }
     Ok(())
 }

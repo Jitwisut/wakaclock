@@ -113,6 +113,8 @@ config = "0.14"
 futures = "0.3"
 lazy_static = "1.4"
 bytes = "1.5"
+parking_lot = "0.12"
+async-trait = "0.1"
 
 # Validation
 validator = { version = "0.18", features = ["derive"] }

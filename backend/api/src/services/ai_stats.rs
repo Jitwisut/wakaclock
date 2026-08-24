@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::ai_stats::{
-    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse,
-    AiTotalsRow, AiUsageMetricsRow,
+    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
+    AiUsageMetricsRow,
 };
 
 pub struct AiStatsService {

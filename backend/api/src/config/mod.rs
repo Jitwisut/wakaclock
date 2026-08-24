@@ -127,7 +127,10 @@ impl Config {
 pub const DEFAULT_IDLE_TIMEOUT_MINUTES: f64 = 15.0;
 
 fn parse_idle_timeout(value: Option<String>) -> Result<f64> {
-    let Some(raw) = value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else {
+    let Some(raw) = value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
         return Ok(DEFAULT_IDLE_TIMEOUT_MINUTES * 60.0);
     };
     let minutes: f64 = raw

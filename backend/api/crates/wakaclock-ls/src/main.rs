@@ -140,66 +140,6 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     Some(heartbeat)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_heartbeat_returns_none_for_a_non_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("untitled:Untitled-1").unwrap();
-
-        assert!(build_heartbeat(&config, &uri, "fn main() {}", false).is_none());
-    }
-
-    #[test]
-    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false)
-            .expect("a file:// URI should always produce a heartbeat");
-
-        assert_eq!(heartbeat.user_id, config.user_id);
-        assert_eq!(heartbeat.entity_type, EntityType::File);
-        assert_eq!(heartbeat.category, Category::Coding);
-        assert_eq!(heartbeat.editor, "Zed");
-        assert!(!heartbeat.is_write);
-        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
-    }
-
-    #[test]
-    fn build_heartbeat_marks_is_write_when_asked() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
-
-        assert!(heartbeat.is_write);
-    }
-
-    #[test]
-    fn build_heartbeat_detects_language_from_content() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
-        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
-    }
-
-    #[test]
-    fn build_heartbeat_result_passes_its_own_validation() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert!(heartbeat.validate().is_ok());
-    }
-}
-
 impl Shared {
     /// Builds one heartbeat for `uri` and hands it to the delivery worker (see
     /// `spawn_heartbeat_worker`) if it both resolves to a real file path and passes its
@@ -375,4 +315,64 @@ async fn main() {
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_heartbeat_returns_none_for_a_non_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("untitled:Untitled-1").unwrap();
+
+        assert!(build_heartbeat(&config, &uri, "fn main() {}", false).is_none());
+    }
+
+    #[test]
+    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false)
+            .expect("a file:// URI should always produce a heartbeat");
+
+        assert_eq!(heartbeat.user_id, config.user_id);
+        assert_eq!(heartbeat.entity_type, EntityType::File);
+        assert_eq!(heartbeat.category, Category::Coding);
+        assert_eq!(heartbeat.editor, "Zed");
+        assert!(!heartbeat.is_write);
+        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
+    }
+
+    #[test]
+    fn build_heartbeat_marks_is_write_when_asked() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
+
+        assert!(heartbeat.is_write);
+    }
+
+    #[test]
+    fn build_heartbeat_detects_language_from_content() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
+
+        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
+        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
+    }
+
+    #[test]
+    fn build_heartbeat_result_passes_its_own_validation() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
+
+        assert!(heartbeat.validate().is_ok());
+    }
 }

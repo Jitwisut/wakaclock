@@ -2,7 +2,7 @@
 
 ## What it is
 
-Wakaclock — shipped under the product name **AtoAxis** — is a self-hostable
+Wakaclock — shipped under the product name **AtoAxis** — is a hosted
 developer time-tracking platform that is wire-compatible with WakaTime.
 Existing WakaTime editor plugins can point at this server instead.
 
@@ -61,6 +61,7 @@ Do not restate these — read them when the task needs them.
 ## Status caveat
 
 This repository was scaffolded from an unrelated e-commerce connector template.
-A significant fraction of `backend/api/src` and `frontend/app` is inherited
-template code that is **not part of the product**. Always check
+A significant fraction of `backend/api/src_ecommerce_backup/` and a few legacy
+model/helper directories are inherited template code that is **not part of the
+live product**. Always check
 [dead-code.md](dead-code.md) before assuming a directory is live.

@@ -186,6 +186,9 @@ mod tests {
         ledger.record_ai_change("ai-1", "file-hash", 1, 2, 0);
         ledger.record_manual_edit("file-hash", 1, 1, 1);
         assert_eq!(ledger.follow_up_rate(6 * 86_400, 7 * 86_400).rate, None);
-        assert_eq!(ledger.follow_up_rate(7 * 86_400, 7 * 86_400).rate, Some(1.0));
+        assert_eq!(
+            ledger.follow_up_rate(7 * 86_400, 7 * 86_400).rate,
+            Some(1.0)
+        );
     }
 }

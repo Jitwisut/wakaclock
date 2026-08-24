@@ -35,11 +35,7 @@ impl FollowUpRepository {
         Ok(())
     }
 
-    pub async fn insert(
-        &self,
-        user_id: Uuid,
-        request: HumanFollowUpEventRequest,
-    ) -> Result<()> {
+    pub async fn insert(&self, user_id: Uuid, request: HumanFollowUpEventRequest) -> Result<()> {
         validate(&request)?;
         let row = HumanFollowUpEventRow {
             user_id,

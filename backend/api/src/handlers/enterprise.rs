@@ -90,7 +90,10 @@ pub async fn sso_enforce(
         .await
         .map_err(client_or_service_error)?;
     if !changed {
-        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "SSO connection not found or not verified" }))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "SSO connection not found or not verified" })),
+        ));
     }
     Ok(Json(v2_envelope(json!({ "enforced": input.enforced }))))
 }
@@ -138,7 +141,10 @@ pub async fn scim_tokens_revoke(
     if changed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, Json(json!({ "error": "SCIM token not found" }))))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "SCIM token not found" })),
+        ))
     }
 }
 
@@ -191,7 +197,12 @@ pub async fn scim_user_get(
         .scim_user(organization_id, user_id)
         .await
         .map_err(service_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "detail": "user not found" }))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "detail": "user not found" })),
+            )
+        })?;
     Ok(Json(scim_user_json(row)))
 }
 
@@ -211,7 +222,12 @@ pub async fn scim_user_patch(
         .scim_patch_user(organization_id, user_id, patch)
         .await
         .map_err(client_or_service_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "detail": "user not found" }))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "detail": "user not found" })),
+            )
+        })?;
     Ok(Json(scim_user_json(row)))
 }
 
@@ -231,7 +247,10 @@ pub async fn scim_user_delete(
     {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, Json(json!({ "detail": "user not found" }))))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": "user not found" })),
+        ))
     }
 }
 
@@ -294,12 +313,22 @@ async fn scim_org(
         .and_then(|value| value.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(json!({ "detail": "SCIM bearer token required" }))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "detail": "SCIM bearer token required" })),
+            )
+        })?;
     state
         .enterprise_service
         .organization_for_scim_token(value)
         .await
-        .map_err(|_| (StatusCode::UNAUTHORIZED, Json(json!({ "detail": "invalid or expired SCIM token" }))))
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "detail": "invalid or expired SCIM token" })),
+            )
+        })
 }
 
 fn require_admin_scope(
@@ -351,7 +380,9 @@ fn normalize_scim_patch(value: &mut Value) -> Result<ScimPatchRequest, String> {
             return Err("only add and replace SCIM operations are supported".to_string());
         }
         let path = operation.get("path").and_then(Value::as_str).unwrap_or("");
-        let Some(value) = operation.get("value") else { continue };
+        let Some(value) = operation.get("value") else {
+            continue;
+        };
         match path.to_ascii_lowercase().as_str() {
             "active" => patch.active = value.as_bool(),
             "displayname" => patch.display_name = value.as_str().map(str::to_string),

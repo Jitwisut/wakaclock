@@ -71,7 +71,10 @@ async fn embed_svg(
     );
     Ok((
         [
-            (header::CONTENT_TYPE, HeaderValue::from_static("image/svg+xml")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/svg+xml"),
+            ),
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
         body,

@@ -23,26 +23,27 @@ dead.
 | `backend/api/src/helpers/auth/`, `backend/api/src/helpers/mapping/` (~27 files) | `helpers/mod.rs` is literally `// Empty helpers module` — the subdirectories are never declared. Real auth lives in `middleware/auth.rs`. |
 | `backend/api/src/handlers/v1/handler.rs` | not listed in `handlers/v1/mod.rs`; references `super::platform` / `super::gateway`, which do not exist. |
 
-## Infrastructure declared but unused by the server
+## Infrastructure declared but not yet connected by the server
 
-`make docker-up` starts services the Rust code never connects to:
+`make infra-up` starts the standard local services. The Rust server currently
+uses ClickHouse and optionally PostgreSQL; Redis, RabbitMQ and Redpanda are
+represented by provider-neutral contracts but still need production adapters:
 
 | Service | Reality |
 | --- | --- |
-| Redis | Referenced only in comments. `presence_store.rs` is deliberately in-memory; `interfaces/queue.rs` is dead. |
-| RabbitMQ / Redpanda | No client dependency in [../backend/api/Cargo.toml](../backend/api/Cargo.toml). |
+| Redis | `presence_store.rs` is deliberately in-memory; `CacheStore`/lock contracts are live but no provider adapter is wired yet. |
+| RabbitMQ / Redpanda | `EventBus`/`JobQueue` contracts are live; provider adapters remain a Phase 10 task. |
 | Qdrant (`docker-compose.dev.yaml`) | Referenced only from the dead `model/v1` tree. |
 
 Actually used: **ClickHouse** (required) and **PostgreSQL** (optional). See
 [data/overview.md](data/overview.md).
 
-## Broken build files
+## Build-file history
 
-- [../Cargo.toml](../Cargo.toml) (root) — declares members at `crates/*`, which
-  do not exist at repo root. `cargo metadata` fails. The live workspace is
-  [../backend/api/Cargo.toml](../backend/api/Cargo.toml).
-- [../Makefile](../Makefile) — `FRONTEND_DIR = frontend` is wrong; see
-  [commands.md](commands.md) for the affected targets.
+The invalid repository-root Cargo manifest and old e-commerce Makefile were
+removed. The live workspace is [../backend/api/Cargo.toml](../backend/api/Cargo.toml)
+and the root [../Makefile](../Makefile) points at `backend/api` and
+`frontend/app`. Keep this page updated if a legacy file is reintroduced.
 - [../migrations/001_init.sql](../migrations/001_init.sql) — standalone SQL not
   referenced by any code path. See [data/migrations.md](data/migrations.md).
 
@@ -59,8 +60,7 @@ Actually used: **ClickHouse** (required) and **PostgreSQL** (optional). See
 
 ## Security flag
 
-`backend/api/credentials/` is **tracked in git and not gitignored**. It holds
-e-commerce template config (`platforms.json`, `policy.csv`, `model.conf`,
-`crendential.json`). Do not read, print, or copy its contents into any file.
-Flag it to the user for review — it belongs to the dead template tree and
-should probably be removed and the history audited.
+`backend/api/credentials/` contained e-commerce template configuration. Those
+files are removed from the working tree and the path is now ignored. The
+published Git history still needs a separate credential-rotation/history audit;
+this change does not rewrite history or claim that old blobs are unrecoverable.

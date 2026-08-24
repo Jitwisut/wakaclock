@@ -214,7 +214,9 @@ impl ActivityTimelineService {
                 let clamped_start = segment.start.max(segment.end - MAX_ACTIVITY_GAP_SECONDS);
                 let segment_start = clamped_start.max(start);
                 let segment_end = segment.end.min(end);
-                if !segment_start.is_finite() || !segment_end.is_finite() || segment_end <= segment_start
+                if !segment_start.is_finite()
+                    || !segment_end.is_finite()
+                    || segment_end <= segment_start
                 {
                     continue;
                 }
@@ -460,7 +462,12 @@ pub fn canonicalize_bridged(
         .filter(|interval| interval.end <= interval.start)
         .cloned()
         .collect();
-    bridge_idle_gaps_with_anchors(canonicalize(intervals), &anchors, idle_timeout_seconds)
+    let canonical = canonicalize(intervals);
+    if anchors.is_empty() {
+        bridge_idle_gaps(canonical, idle_timeout_seconds)
+    } else {
+        bridge_idle_gaps_with_anchors(canonical, &anchors, idle_timeout_seconds)
+    }
 }
 
 pub fn total_seconds(intervals: &[CanonicalInterval]) -> f64 {
@@ -530,7 +537,10 @@ mod tests {
             interval("a", "editor", 0.0, 60.0),
             interval("b", "editor", 1_260.0, 1_320.0),
         ]);
-        assert_eq!(total_seconds(&bridge_idle_gaps(canonical.clone(), 900.0)), 120.0);
+        assert_eq!(
+            total_seconds(&bridge_idle_gaps(canonical.clone(), 900.0)),
+            120.0
+        );
 
         let bridged = bridge_idle_gaps_with_anchors(canonical, &[anchor("mid", 660.0)], 900.0);
         assert_eq!(total_seconds(&bridged), 1_320.0);
@@ -549,8 +559,7 @@ mod tests {
         // WakaTime's first heartbeat opens the session; the pause up to the next proven
         // activity is working time, and it belongs to the file the anchor named.
         let canonical = canonicalize(&[interval("later", "editor", 600.0, 660.0)]);
-        let bridged =
-            bridge_idle_gaps_with_anchors(canonical, &[anchor("first", 0.0)], 900.0);
+        let bridged = bridge_idle_gaps_with_anchors(canonical, &[anchor("first", 0.0)], 900.0);
         assert_eq!(total_seconds(&bridged), 660.0);
         assert_eq!(bridged[0].segment_id, "first");
         assert_eq!(bridged[0].end, 600.0);

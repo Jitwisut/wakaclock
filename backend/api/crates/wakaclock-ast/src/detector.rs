@@ -405,7 +405,7 @@ fn extract_go(root: tree_sitter::Node, source: &[u8]) -> Vec<String> {
         if node.kind() == "import_spec" {
             if let Some(path_node) = node.child_by_field_name("path") {
                 if let Some(text) = string_content(path_node, source) {
-                    let last = text.split('/').last().unwrap_or(text).trim();
+                    let last = text.split('/').next_back().unwrap_or(text).trim();
                     deps.push(last.to_string());
                 }
             }
@@ -477,7 +477,7 @@ fn string_content<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a s
 
 fn strip_path_specifier(path: &str) -> String {
     if path.starts_with('.') {
-        path.split('/').last().unwrap_or(path).to_string()
+        path.split('/').next_back().unwrap_or(path).to_string()
     } else if path.starts_with('@') {
         let parts: Vec<&str> = path.splitn(3, '/').collect();
         parts[..2.min(parts.len())].join("/")

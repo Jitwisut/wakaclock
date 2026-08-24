@@ -1,24 +1,19 @@
-import { IBM_Plex_Mono, Press_Start_2P } from 'next/font/google';
+import localFont from 'next/font/local';
 
 /**
  * Loaded here, scoped to the presence page only — same pattern the marketing site and
  * the dashboard's retro-pixel theme preset use for their own font sets, so this doesn't
  * add weight to every other page's bundle.
  *
- * Press Start 2P is true 8-bit bitmap type — used for the page title, room name, and a
- * few short button labels only (see `presence-theme.css`); it only ships weight 400 and
- * is unreadable as body copy at normal sizes. IBM Plex Mono carries everything else
- * (subtitle, invite URL, helper text) — still unmistakably "developer monospace" in
- * character, but legible at paragraph sizes.
+ * The local sans/mono assets are reused here so this page does not trigger a remote font
+ * fetch. Browsers fall back to a system face for scripts not covered by the bundled files.
  */
-export const presenceHeadingFont = Press_Start_2P({
-  subsets: ['latin'],
-  weight: '400',
+export const presenceHeadingFont = localFont({
+  src: '../../public/fonts/atoaxis-sans.woff2',
   variable: '--font-presence-heading',
 });
 
-export const presenceBodyFont = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+export const presenceBodyFont = localFont({
+  src: '../../public/fonts/atoaxis-mono.woff2',
   variable: '--font-presence-body',
 });

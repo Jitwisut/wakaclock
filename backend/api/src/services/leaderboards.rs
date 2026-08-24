@@ -155,7 +155,8 @@ impl LeaderboardService {
         leaderboard_id: Uuid,
         request: LeaderboardMemberRequest,
     ) -> Result<bool> {
-        self.require_owner_or_org_admin(actor, leaderboard_id).await?;
+        self.require_owner_or_org_admin(actor, leaderboard_id)
+            .await?;
         let postgres = self.required()?;
         let changed = postgres
             .client()
@@ -176,7 +177,8 @@ impl LeaderboardService {
         leaderboard_id: Uuid,
         member_user_id: Uuid,
     ) -> Result<bool> {
-        self.require_owner_or_org_admin(actor, leaderboard_id).await?;
+        self.require_owner_or_org_admin(actor, leaderboard_id)
+            .await?;
         let postgres = self.required()?;
         let changed = postgres
             .client()
@@ -239,14 +241,23 @@ fn validate(request: &CreateLeaderboardRequest) -> Result<()> {
     if !matches!(request.visibility.as_str(), "public" | "private") {
         return Err(anyhow!("visibility must be public or private"));
     }
-    if !matches!(request.metric.as_str(), "time" | "manual_time" | "ai_time" | "ai_spend") {
+    if !matches!(
+        request.metric.as_str(),
+        "time" | "manual_time" | "ai_time" | "ai_spend"
+    ) {
         return Err(anyhow!("unsupported leaderboard metric"));
     }
     if !matches!(request.period.as_str(), "weekly" | "monthly") {
         return Err(anyhow!("period must be weekly or monthly"));
     }
-    if request.language.as_ref().is_some_and(|value| value.len() > 120)
-        || request.country.as_ref().is_some_and(|value| value.len() > 120)
+    if request
+        .language
+        .as_ref()
+        .is_some_and(|value| value.len() > 120)
+        || request
+            .country
+            .as_ref()
+            .is_some_and(|value| value.len() > 120)
     {
         return Err(anyhow!("leaderboard filter is too long"));
     }

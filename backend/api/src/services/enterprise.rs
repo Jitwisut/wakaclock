@@ -36,7 +36,11 @@ impl EnterpriseService {
         }
     }
 
-    pub async fn get_sso(&self, actor: Uuid, organization_id: Uuid) -> Result<Option<SsoConnection>> {
+    pub async fn get_sso(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Option<SsoConnection>> {
         self.authorization
             .require(
                 actor,
@@ -119,26 +123,6 @@ impl EnterpriseService {
         sso_from_row(row)
     }
 
-    /// Called by the identity gateway after a real OIDC/SAML test login. There is no
-    /// public endpoint that can mark a connection verified from an arbitrary boolean.
-    pub async fn record_successful_test_login(
-        &self,
-        organization_id: Uuid,
-        connection_id: Uuid,
-    ) -> Result<bool> {
-        let postgres = self.required()?;
-        let changed = postgres
-            .client()
-            .execute(
-                "UPDATE sso_connections SET verified_at = now(), updated_at = now()
-                 WHERE id = $1 AND organization_id = $2",
-                &[&connection_id, &organization_id],
-            )
-            .await
-            .context("failed to mark SSO connection verified")?;
-        Ok(changed == 1)
-    }
-
     pub async fn set_sso_enforced(
         &self,
         actor: Uuid,
@@ -166,7 +150,9 @@ impl EnterpriseService {
             .await
             .context("failed to update SSO enforcement")?;
         if changed == 0 && enforced {
-            return Err(anyhow!("SSO must pass a successful test login before enforcement"));
+            return Err(anyhow!(
+                "SSO must pass a successful test login before enforcement"
+            ));
         }
         Ok(changed == 1)
     }
@@ -299,10 +285,19 @@ impl EnterpriseService {
             )
             .await
             .context("failed to list SCIM users")?;
-        Ok((total, rows.into_iter().map(scim_user_from_row).collect::<Result<Vec<_>>>()?))
+        Ok((
+            total,
+            rows.into_iter()
+                .map(scim_user_from_row)
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 
-    pub async fn scim_user(&self, organization_id: Uuid, user_id: Uuid) -> Result<Option<ScimUserRecord>> {
+    pub async fn scim_user(
+        &self,
+        organization_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<ScimUserRecord>> {
         let postgres = self.required()?;
         let row = postgres
             .client()
@@ -334,7 +329,12 @@ impl EnterpriseService {
         let email = input
             .emails
             .as_ref()
-            .and_then(|emails| emails.iter().find(|email| email.primary).or_else(|| emails.first()))
+            .and_then(|emails| {
+                emails
+                    .iter()
+                    .find(|email| email.primary)
+                    .or_else(|| emails.first())
+            })
             .map(|email| email.value.trim().to_string());
         if email.as_deref().is_some_and(|value| value.len() > 320) {
             return Err(anyhow!("SCIM email is too long"));
@@ -398,7 +398,12 @@ impl EnterpriseService {
         let email = input
             .emails
             .as_ref()
-            .and_then(|emails| emails.iter().find(|email| email.primary).or_else(|| emails.first()))
+            .and_then(|emails| {
+                emails
+                    .iter()
+                    .find(|email| email.primary)
+                    .or_else(|| emails.first())
+            })
             .map(|email| email.value.trim().to_string());
         let postgres = self.required()?;
         let row = postgres
@@ -412,14 +417,24 @@ impl EnterpriseService {
                     SELECT 1 FROM organization_members WHERE organization_id = $2 AND user_id = $1
                  )
                  RETURNING id, username, display_name, email, is_active, created_at, updated_at",
-                &[&user_id, &organization_id, &input.display_name, &email, &input.active],
+                &[
+                    &user_id,
+                    &organization_id,
+                    &input.display_name,
+                    &email,
+                    &input.active,
+                ],
             )
             .await
             .context("failed to patch SCIM user")?;
         scim_user_from_row(row).map(Some)
     }
 
-    pub async fn scim_deprovision_user(&self, organization_id: Uuid, user_id: Uuid) -> Result<bool> {
+    pub async fn scim_deprovision_user(
+        &self,
+        organization_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool> {
         let postgres = self.required()?;
         let changed = postgres
             .client()
@@ -457,10 +472,16 @@ impl EnterpriseService {
             .collect()
     }
 
-    pub async fn scim_create_group(&self, organization_id: Uuid, display_name: &str) -> Result<ScimGroupRecord> {
+    pub async fn scim_create_group(
+        &self,
+        organization_id: Uuid,
+        display_name: &str,
+    ) -> Result<ScimGroupRecord> {
         let name = display_name.trim();
         if name.is_empty() || name.len() > 120 {
-            return Err(anyhow!("SCIM group displayName must contain 1-120 characters"));
+            return Err(anyhow!(
+                "SCIM group displayName must contain 1-120 characters"
+            ));
         }
         let slug = slugify(name)?;
         let postgres = self.required()?;
@@ -482,7 +503,10 @@ impl EnterpriseService {
         })
     }
 
-    async fn list_scim_tokens_unchecked(&self, organization_id: Uuid) -> Result<Vec<ScimTokenSummary>> {
+    async fn list_scim_tokens_unchecked(
+        &self,
+        organization_id: Uuid,
+    ) -> Result<Vec<ScimTokenSummary>> {
         let postgres = self.required()?;
         let rows = postgres
             .client()
@@ -507,8 +531,14 @@ fn validate_sso(request: &UpsertSsoRequest) -> Result<()> {
     if !matches!(request.protocol.as_str(), "oidc" | "saml") {
         return Err(anyhow!("protocol must be oidc or saml"));
     }
-    if request.issuer.as_deref().is_some_and(|value| value.len() > 2048)
-        || request.entity_id.as_deref().is_some_and(|value| value.len() > 2048)
+    if request
+        .issuer
+        .as_deref()
+        .is_some_and(|value| value.len() > 2048)
+        || request
+            .entity_id
+            .as_deref()
+            .is_some_and(|value| value.len() > 2048)
     {
         return Err(anyhow!("SSO issuer/entity_id is too long"));
     }
@@ -519,7 +549,13 @@ fn slugify(value: &str) -> Result<String> {
     let slug = value
         .to_ascii_lowercase()
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|part| !part.is_empty())

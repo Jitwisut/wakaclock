@@ -15,13 +15,6 @@ pub struct GoalService {
 }
 
 impl GoalService {
-    pub fn new(postgres: Option<Arc<PostgresClient>>) -> Self {
-        Self {
-            postgres,
-            clickhouse: None,
-        }
-    }
-
     pub fn with_clickhouse(
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Arc<ClickHouseClient>,
@@ -266,10 +259,16 @@ fn validate_goal(input: &CreateGoalRequest) -> Result<()> {
     if input.name.trim().is_empty() || input.name.len() > 160 {
         return Err(anyhow!("goal name must contain 1-160 characters"));
     }
-    if !matches!(input.metric.as_str(), "time" | "manual_time" | "ai_time" | "heartbeats") {
+    if !matches!(
+        input.metric.as_str(),
+        "time" | "manual_time" | "ai_time" | "heartbeats"
+    ) {
         return Err(anyhow!("unsupported goal metric"));
     }
-    if !matches!(input.filter_kind.as_str(), "project" | "language" | "category" | "editor" | "all") {
+    if !matches!(
+        input.filter_kind.as_str(),
+        "project" | "language" | "category" | "editor" | "all"
+    ) {
         return Err(anyhow!("unsupported goal filter"));
     }
     if !matches!(input.period.as_str(), "daily" | "weekly" | "monthly") {
@@ -353,8 +352,12 @@ fn goal_from_row(row: Row) -> Result<Goal> {
         ends_on: row.try_get::<_, Option<NaiveDate>>("ends_on")?,
         priority: row.try_get("priority")?,
         public: row.try_get("public")?,
-        created_at: row.try_get::<_, chrono::DateTime<chrono::Utc>>("created_at")?.naive_utc(),
-        updated_at: row.try_get::<_, chrono::DateTime<chrono::Utc>>("updated_at")?.naive_utc(),
+        created_at: row
+            .try_get::<_, chrono::DateTime<chrono::Utc>>("created_at")?
+            .naive_utc(),
+        updated_at: row
+            .try_get::<_, chrono::DateTime<chrono::Utc>>("updated_at")?
+            .naive_utc(),
     })
 }
 

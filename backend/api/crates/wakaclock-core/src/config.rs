@@ -31,8 +31,12 @@ impl Config {
         if parsed.path() != "" && parsed.path() != "/" {
             return Err("server URL must be an origin without an API path".to_string());
         }
-        if parsed.query().is_some() || parsed.fragment().is_some() || !parsed.username().is_empty() {
-            return Err("server URL must not contain credentials, query parameters or fragments".to_string());
+        if parsed.query().is_some() || parsed.fragment().is_some() || !parsed.username().is_empty()
+        {
+            return Err(
+                "server URL must not contain credentials, query parameters or fragments"
+                    .to_string(),
+            );
         }
         Ok(trimmed.to_string())
     }

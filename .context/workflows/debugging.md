@@ -7,10 +7,10 @@ than a real bug.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `cargo` fails: *failed to read `crates/wakaclock-core/Cargo.toml`* | you are at repo root | `cd backend/api` |
-| `npm`/`pnpm` finds no `package.json` | you are in `frontend/` | `cd frontend/app` |
-| `make dev` / `make test-frontend` fails | `FRONTEND_DIR` is wrong in the Makefile | use explicit `cd` commands — [../commands.md](../commands.md) |
-| `cargo run --bin worker` fails | no `worker` binary exists | n/a — `make dev-worker` is broken |
+| `cargo` fails: *failed to read a workspace member* | command is using a stale path or wrong directory | use `backend/api` or the root Makefile |
+| `npm`/`pnpm` finds no `package.json` | you are in `frontend/` | `cd frontend/app` and use npm |
+| `make` cannot find a frontend package | a legacy command is being used | use the root `Makefile` targets documented in [../commands.md](../commands.md) |
+| a worker name is unknown | worker binaries are hyphenated | use `cargo run --bin heartbeat-enrichment` (or another name listed in `backend/api/README.md`) |
 | A backend file's code seems to have no effect | it is probably not compiled | check the `mod` chain — [../dead-code.md](../dead-code.md) |
 
 ## Server will not start
@@ -27,7 +27,7 @@ than a real bug.
 4. **PostgreSQL migration failed** — only when `POSTGRES_URL` is set. Unset it
    to boot ClickHouse-only.
 
-`make docker-up` first; ClickHouse is required.
+Run `make infra-up` first; ClickHouse is required.
 
 ## 401 on every request
 

@@ -72,7 +72,6 @@ impl ProjectAnalyticsService {
                 cards
                     .iter()
                     .position(|card| cursor_is_after(card, &payload, sort, order))
-                    .map(|index| index)
                     .or_else(|| {
                         cards
                             .iter()
@@ -234,13 +233,11 @@ impl ProjectAnalyticsService {
                     TokenTotals {
                         cache_read: usage.map(|row| row.cache_read_tokens),
                         cache_write: usage.map(|row| row.cache_write_tokens),
-                        coverage_percent: usage
-                            .map(|row| {
-                                (row.reported_tokens > 0).then(|| {
-                                    row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64
-                                })
+                        coverage_percent: usage.and_then(|row| {
+                            (row.reported_tokens > 0).then(|| {
+                                row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64
                             })
-                            .flatten(),
+                        }),
                         input: usage.map(|row| row.input_tokens),
                         output: usage.map(|row| row.output_tokens),
                         total: total_tokens,
@@ -705,14 +702,16 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
         .saturating_add(row.cache_write_tokens);
     let token_coverage = (row.reported_tokens > 0)
         .then(|| row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64);
-    let estimated_spend = (row.priced_events > 0)
-        .then_some(EstimatedSpend {
+    let estimated_spend = if row.priced_events > 0 {
+        EstimatedSpend {
             amount_microusd: Some(row.estimated_cost_microusd),
             coverage_percent: (row.usage_events > 0)
                 .then(|| row.priced_events as f64 * 100.0 / row.usage_events as f64),
             currency: "USD",
-        })
-        .unwrap_or_else(unknown_spend);
+        }
+    } else {
+        unknown_spend()
+    };
     ProjectAnalyticsCard {
         ai: AttributionTotals {
             changes: ai_changes,
