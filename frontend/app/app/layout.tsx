@@ -53,6 +53,9 @@ export const metadata: Metadata = {
     description: SITE_TAGLINE,
     images: [SOCIAL_IMAGE_PATH],
   },
+  verification: {
+    google: 'RA0nx3aI674qLp5GwkgzJPk3-7a7ulAAaDNcBgvtLs4',
+  },
   icons: {
     icon: '/favicon.ico',
     apple: '/apple-icon',
