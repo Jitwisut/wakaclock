@@ -5,25 +5,34 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
-use crate::model::summary::{
-    DailyTotalRow, EditorDailyRow, LanguageDailyRow, OsDailyRow, ProjectDailyRow,
-    SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem,
+use crate::model::summary::{SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem};
+use crate::services::activity_timeline::{
+    heartbeat_count, totals_by, ActivityTimelineService, BridgeConfig, CanonicalInterval,
+    Dimension, EvidenceSplit, Timeline,
 };
-use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
 
 pub struct SummaryService {
     clickhouse: Arc<ClickHouseClient>,
-    idle_timeout_seconds: f64,
+    bridge: BridgeConfig,
 }
 
 impl SummaryService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
             clickhouse,
-            idle_timeout_seconds,
+            bridge: bridge.into(),
         }
     }
 
+    /// Every figure in the response comes from one canonical timeline.
+    ///
+    /// The breakdowns used to be read from `language_daily` / `project_daily` /
+    /// `editor_daily` / `os_daily`, which aggregate `sum(active_seconds)` — no union
+    /// across overlapping sources, no idle bridging, and not even the 120-second clamp
+    /// the timeline applies. The grand total has always come from the timeline, so the
+    /// parts of a day could not add up to the day: over 14 days of real data the two
+    /// paths reported 4h24m and 13h18m for the same evidence. See
+    /// docs/duration-accuracy-audit.md.
     pub async fn get_range(
         &self,
         user_id: Uuid,
@@ -33,259 +42,114 @@ impl SummaryService {
         validate_date(start)?;
         validate_date(end)?;
 
-        let daily_totals = self.fetch_daily_totals(user_id, start, end).await?;
-        let language_rows = self.fetch_languages(user_id, start, end).await?;
-        let project_rows = self.fetch_projects(user_id, start, end).await?;
-        let editor_rows = self.fetch_editors(user_id, start, end).await?;
-        let os_rows = self.fetch_operating_systems(user_id, start, end).await?;
+        let (start_epoch, end_epoch) = utc_bounds(start, end)?;
+        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
+        let raw = timeline.intervals(user_id, start_epoch, end_epoch).await?;
 
-        let mut days = BTreeMap::<String, SummaryDay>::new();
+        let timeline = Timeline::build(&raw, self.bridge);
 
-        for row in daily_totals {
-            days.insert(
-                row.date.clone(),
+        // A day owns an interval if the interval starts in it, matching how the daily
+        // totals have always been bucketed. An interval that runs past midnight is not
+        // split, so it counts wholly towards the day the work began in.
+        //
+        // The per-day proven figure is apportioned from the range total by each day's
+        // share of the reported seconds. Re-sweeping per day would be a second O(n^2)
+        // pass, and bridging already makes the days interdependent, so an exact per-day
+        // proven number is not recoverable from a per-day slice anyway.
+        let mut bridged_by_day: BTreeMap<String, Vec<CanonicalInterval>> = BTreeMap::new();
+        for interval in timeline.bridged {
+            bridged_by_day
+                .entry(utc_day(interval.start, start))
+                .or_default()
+                .push(interval);
+        }
+        let range_total: f64 = bridged_by_day
+            .values()
+            .flatten()
+            .map(|interval| interval.end - interval.start)
+            .sum();
+
+        let days = bridged_by_day
+            .into_iter()
+            .map(|(date, intervals)| {
+                let total: f64 = intervals
+                    .iter()
+                    .map(|interval| interval.end - interval.start)
+                    .sum();
+                let proven = if range_total > 0.0 {
+                    timeline.proven_seconds * (total / range_total)
+                } else {
+                    0.0
+                };
                 SummaryDay {
-                    date: row.date,
                     grand_total: SummaryGrandTotal {
-                        total_seconds: row.total_seconds,
-                        hours: row.total_seconds / 3600.0,
-                        text: format_duration(row.total_seconds),
-                        heartbeats: row.heartbeat_count,
+                        total_seconds: total,
+                        hours: total / 3600.0,
+                        text: format_duration(total),
+                        heartbeats: heartbeat_count(&intervals),
+                        evidence: EvidenceSplit::new(proven, &intervals),
                     },
-                    languages: vec![],
-                    projects: vec![],
-                    editors: vec![],
-                    operating_systems: vec![],
-                },
-            );
-        }
-
-        for row in language_rows {
-            if let Some(day) = days.get_mut(&row.date) {
-                day.languages.push(summary_item(
-                    row.language,
-                    row.total_seconds,
-                    row.heartbeat_count,
-                ));
-            }
-        }
-
-        for row in project_rows {
-            if let Some(day) = days.get_mut(&row.date) {
-                day.projects.push(summary_item(
-                    row.project,
-                    row.total_seconds,
-                    row.heartbeat_count,
-                ));
-            }
-        }
-
-        for row in editor_rows {
-            if let Some(day) = days.get_mut(&row.date) {
-                day.editors.push(summary_item(
-                    row.editor,
-                    row.total_seconds,
-                    row.heartbeat_count,
-                ));
-            }
-        }
-
-        for row in os_rows {
-            if let Some(day) = days.get_mut(&row.date) {
-                day.operating_systems.push(summary_item(
-                    row.os,
-                    row.total_seconds,
-                    row.heartbeat_count,
-                ));
-            }
-        }
+                    languages: summary_items(&intervals, Dimension::Language),
+                    projects: summary_items(&intervals, Dimension::Project),
+                    editors: summary_items(&intervals, Dimension::Editor),
+                    operating_systems: summary_items(&intervals, Dimension::OperatingSystem),
+                    categories: summary_items(&intervals, Dimension::Category),
+                    date,
+                }
+            })
+            .collect();
 
         Ok(SummariesResponse {
             start: start.to_string(),
             end: end.to_string(),
-            days: days.into_values().collect(),
+            days,
         })
     }
+}
 
-    async fn fetch_daily_totals(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<DailyTotalRow>> {
-        let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")?;
-        let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")?;
-        let start_epoch = Utc
-            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
-            .timestamp() as f64;
-        let end_epoch = Utc
-            .from_utc_datetime(
-                &end_date
-                    .succ_opt()
-                    .expect("valid end date")
-                    .and_hms_opt(0, 0, 0)
-                    .expect("valid midnight"),
-            )
-            .timestamp() as f64;
-        let timeline =
-            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
-        let intervals = timeline.intervals(user_id, start_epoch, end_epoch).await?;
-        let canonical = canonicalize_bridged(&intervals, self.idle_timeout_seconds);
-        let mut grouped = BTreeMap::<String, DailyTotalRow>::new();
-        for interval in canonical {
-            let day = Utc
-                .timestamp_opt(interval.start.floor() as i64, 0)
-                .single()
-                .map(|value| value.date_naive().to_string())
-                .unwrap_or_else(|| start.to_string());
-            let row = grouped.entry(day.clone()).or_insert(DailyTotalRow {
-                date: day,
-                total_seconds: 0.0,
-                heartbeat_count: 0,
-            });
-            row.total_seconds += interval.end - interval.start;
-            row.heartbeat_count += 1;
-        }
-        Ok(grouped.into_values().collect())
-    }
+fn summary_items(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<SummaryItem> {
+    totals_by(intervals, dimension)
+        .into_iter()
+        .map(|(name, total_seconds, heartbeats)| SummaryItem {
+            name,
+            total_seconds,
+            hours: total_seconds / 3600.0,
+            text: format_duration(total_seconds),
+            heartbeats,
+        })
+        .collect()
+}
 
-    async fn fetch_languages(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<LanguageDailyRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    language,
-                    sum(total_seconds) AS total_seconds,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.language_daily
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY day, language
-                ORDER BY day ASC, total_seconds DESC
-                ",
-            )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<LanguageDailyRow>()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("ClickHouse summaries language_daily query error: {error}")
-            })
-    }
+/// Inclusive local dates to the UTC epoch window the timeline reads.
+fn utc_bounds(start: &str, end: &str) -> Result<(f64, f64)> {
+    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")?;
+    let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")?;
+    let start_epoch = Utc
+        .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+        .timestamp() as f64;
+    let end_epoch = Utc
+        .from_utc_datetime(
+            &end_date
+                .succ_opt()
+                .context("end date has no successor")?
+                .and_hms_opt(0, 0, 0)
+                .expect("valid midnight"),
+        )
+        .timestamp() as f64;
+    Ok((start_epoch, end_epoch))
+}
 
-    async fn fetch_projects(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<ProjectDailyRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    project,
-                    sum(total_seconds) AS total_seconds,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.project_daily
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY day, project
-                ORDER BY day ASC, total_seconds DESC
-                ",
-            )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<ProjectDailyRow>()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("ClickHouse summaries project_daily query error: {error}")
-            })
-    }
-
-    async fn fetch_editors(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<EditorDailyRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    editor,
-                    sum(total_seconds) AS total_seconds,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.editor_daily
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY day, editor
-                ORDER BY day ASC, total_seconds DESC
-                ",
-            )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<EditorDailyRow>()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("ClickHouse summaries editor_daily query error: {error}")
-            })
-    }
-
-    async fn fetch_operating_systems(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<OsDailyRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
-                SELECT
-                    toString(date) AS day,
-                    os,
-                    sum(total_seconds) AS total_seconds,
-                    sum(heartbeat_count) AS heartbeat_count
-                FROM wakaclock.os_daily
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY day, os
-                ORDER BY day ASC, total_seconds DESC
-                ",
-            )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<OsDailyRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse summaries os_daily query error: {error}"))
-    }
+fn utc_day(at: f64, fallback: &str) -> String {
+    Utc.timestamp_opt(at.floor() as i64, 0)
+        .single()
+        .map(|value| value.date_naive().to_string())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn validate_date(date: &str) -> Result<()> {
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .context("Invalid date format, expected YYYY-MM-DD")?;
     Ok(())
-}
-
-fn summary_item(name: String, total_seconds: f64, heartbeats: u64) -> SummaryItem {
-    SummaryItem {
-        name,
-        total_seconds,
-        hours: total_seconds / 3600.0,
-        text: format_duration(total_seconds),
-        heartbeats,
-    }
 }
 
 fn format_duration(secs: f64) -> String {

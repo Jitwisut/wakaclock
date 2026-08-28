@@ -196,6 +196,11 @@ pub async fn create(
     // heartbeat, and `record_heartbeat` cannot itself fail (see presence_store).
     if inserted > 0 {
         state.presence.record_heartbeat(user_id).await;
+        if let Some(redis_presence) = &state.redis_presence {
+            if let Err(error) = redis_presence.heartbeat(user_id).await {
+                tracing::warn!(%error, %user_id, "failed to mirror heartbeat to Redis presence");
+            }
+        }
     }
 
     Ok(Json(HeartbeatResponse {
@@ -245,6 +250,11 @@ pub async fn create_bulk(
     // sent zero actual heartbeats — does not mark the user as having just been active.
     if count > 0 {
         state.presence.record_heartbeat(user_id).await;
+        if let Some(redis_presence) = &state.redis_presence {
+            if let Err(error) = redis_presence.heartbeat(user_id).await {
+                tracing::warn!(%error, %user_id, "failed to mirror bulk heartbeat to Redis presence");
+            }
+        }
     }
 
     Ok(Json(HeartbeatResponse {

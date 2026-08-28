@@ -22,6 +22,7 @@ pub mod leaderboard;
 pub mod metrics;
 pub mod org;
 pub mod organization;
+pub mod presence;
 pub mod profile;
 pub mod project_analytics;
 pub mod project_identity;

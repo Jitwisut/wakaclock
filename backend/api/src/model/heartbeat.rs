@@ -42,7 +42,14 @@ pub struct HeartbeatRow {
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
+    /// Clamped to `MAX_ACTIVITY_GAP_SECONDS` at ingest, so it means the same thing as
+    /// the evidence written to `activity_intervals`. The `mv_*_summary` views sum this
+    /// column; before the clamp moved here they summed a raw client claim that the
+    /// canonical timeline had already rejected, and no MV-backed surface could agree
+    /// with a duration endpoint. The unclamped claim is kept in `active_seconds_claimed`.
     pub active_seconds: Option<f64>,
+    /// What the client actually claimed, retained for audit. Never summed into a total.
+    pub active_seconds_claimed: Option<f64>,
     pub activity_segments: String,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
@@ -84,7 +91,17 @@ pub struct ActivityIntervalRow {
     pub source: String,
     pub entity: String,
     pub project: Option<String>,
+    /// Carried alongside the display name so a project breakdown can group by the stable
+    /// identity the project pages key on. Without it those pages could not be built from
+    /// this timeline at all and had to keep summing `active_seconds`.
+    #[serde(with = "clickhouse::serde::uuid::option")]
+    pub project_id: Option<Uuid>,
+    /// Carried so a branch-filtered project view can be served from this timeline instead
+    /// of falling back to `sum(active_seconds)` and disagreeing with every other surface.
+    pub branch: Option<String>,
     pub language: Option<String>,
     pub category: String,
+    pub editor: String,
+    pub operating_system: String,
     pub created_at: u32,
 }

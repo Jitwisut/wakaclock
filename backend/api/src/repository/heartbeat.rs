@@ -84,6 +84,10 @@ impl HeartbeatRepository {
         for column in [
             "heartbeat_id Nullable(String)",
             "activity_segments String DEFAULT '[]'",
+            // `active_seconds` is clamped at ingest so the MV path and the canonical
+            // timeline measure the same thing; the raw claim lands here instead of
+            // being overwritten, so nothing a client sent is lost.
+            "active_seconds_claimed Nullable(Float64)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -153,6 +157,8 @@ impl HeartbeatRepository {
                     project Nullable(String),
                     language Nullable(String),
                     category String,
+                    editor String DEFAULT '',
+                    operating_system String DEFAULT '',
                     created_at UInt32
                  ) ENGINE = ReplacingMergeTree(created_at)
                  ORDER BY (user_id, segment_id)",
@@ -160,6 +166,27 @@ impl HeartbeatRepository {
             .execute()
             .await
             .context("Failed to create activity_intervals table")?;
+
+        // Additive: an activity_intervals table created before the editor/OS breakdowns
+        // moved onto the canonical timeline has neither column. Both default to '',
+        // which groups as "unknown" rather than losing the interval.
+        for column in [
+            "editor String DEFAULT ''",
+            "operating_system String DEFAULT ''",
+            // Same reason, one release later: the project pages key on the stable id, so
+            // the timeline has to carry it to be able to serve them.
+            "project_id Nullable(UUID)",
+            "branch Nullable(String)",
+        ] {
+            let sql = format!(
+                "ALTER TABLE wakaclock.activity_intervals ADD COLUMN IF NOT EXISTS {column}"
+            );
+            ch_client
+                .query(&sql)
+                .execute()
+                .await
+                .with_context(|| format!("Failed to add activity_intervals column: {column}"))?;
+        }
 
         ch_client
             .query(
@@ -418,7 +445,8 @@ impl HeartbeatRepository {
                     machine, user_agent, machine_name_hash, hostname_hash, timezone,
                     feature_id, feature_name,
                     heartbeat_id, ast_language, ast_confidence,
-                    keystrokes, chars_added, chars_deleted, active_seconds, activity_segments,
+                    keystrokes, chars_added, chars_deleted,
+                    active_seconds, active_seconds_claimed, activity_segments,
                     is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
                     ai_confidence, ai_event_id, ai_change_id,
                     prompt_character_count, input_tokens, output_tokens,
@@ -441,5 +469,32 @@ impl HeartbeatRepository {
             .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))?;
 
         Ok(rows)
+    }
+
+    /// Returns only the caller's own project labels overlapping a co-working session.
+    /// This is intentionally kept separate from participant data so the history endpoint
+    /// cannot accidentally disclose another user's project or branch.
+    pub async fn projects_for_window(
+        &self,
+        user_id: uuid::Uuid,
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<String>> {
+        self.client
+            .get_client()
+            .query(
+                "SELECT DISTINCT project
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND time >= ? AND time <= ?
+                   AND project IS NOT NULL AND project != ''
+                 ORDER BY project
+                 LIMIT 100",
+            )
+            .bind(user_id)
+            .bind(from as f64)
+            .bind(to as f64)
+            .fetch_all::<String>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
     }
 }

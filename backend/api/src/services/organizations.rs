@@ -10,6 +10,7 @@ use crate::model::organization::{
     Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
     UpdateOrganizationRequest,
 };
+use crate::repository::presence::PresenceRepository;
 use crate::services::authorization::{AuthorizationService, Entitlement, OrganizationAction};
 
 // Keep the role validation in one place. PostgreSQL also has a CHECK constraint,
@@ -20,16 +21,19 @@ const SEAT_TYPES: &[&str] = &["developer", "viewer"];
 pub struct OrganizationsService {
     postgres: Option<Arc<PostgresClient>>,
     authorization: Arc<AuthorizationService>,
+    presence_repo: Option<Arc<PresenceRepository>>,
 }
 
 impl OrganizationsService {
     pub fn new(
         postgres: Option<Arc<PostgresClient>>,
         authorization: Arc<AuthorizationService>,
+        presence_repo: Option<Arc<PresenceRepository>>,
     ) -> Self {
         Self {
             postgres,
             authorization,
+            presence_repo,
         }
     }
 
@@ -352,6 +356,22 @@ impl OrganizationsService {
             )
             .await
             .context("failed to create organization team")?;
+        postgres
+            .client()
+            .execute(
+                "INSERT INTO team_members (team_id, user_id, role)
+                 VALUES ($1, $2, 'lead')
+                 ON CONFLICT (team_id, user_id) DO NOTHING",
+                &[&id, &actor],
+            )
+            .await
+            .context("failed to add team creator as lead")?;
+        if let Some(presence_repo) = &self.presence_repo {
+            presence_repo
+                .ensure_team_room(id, name)
+                .await
+                .context("failed to create team presence room")?;
+        }
         self.audit(
             organization_id,
             actor,

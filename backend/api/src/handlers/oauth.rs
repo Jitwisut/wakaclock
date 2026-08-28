@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
+use uuid::Uuid;
+
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::services::oauth::{DEFAULT_SCOPES, SUPPORTED_SCOPES};
@@ -60,6 +62,18 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .with_state(app_state)
 }
 
+/// Mirror an authenticated identity into PostgreSQL before an OAuth write puts a foreign
+/// key on it. Identity lives in ClickHouse and PostgreSQL is optional, so a session
+/// minted before `POSTGRES_URL` was configured names a user with no `users` row — the
+/// INSERT would then fail with a foreign-key violation instead of granting the consent.
+async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), OAuthError> {
+    state
+        .user_service
+        .ensure_postgres_identity(user_id)
+        .await
+        .map_err(OAuthError::service_unavailable)
+}
+
 pub async fn list_apps(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -103,6 +117,7 @@ pub async fn authorize(
     }
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, user_id).await?;
     let scopes = parse_scopes(query.scope.as_deref())?;
     let code = state
         .oauth_service
@@ -207,6 +222,7 @@ pub async fn register_app(
 ) -> Result<(StatusCode, Json<crate::services::oauth::RegisteredApp>), OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, owner_user_id).await?;
     let app = state
         .oauth_service
         .register_app(
@@ -279,6 +295,7 @@ pub async fn device_approve(
 ) -> Result<StatusCode, OAuthError> {
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, user_id).await?;
     state
         .oauth_service
         .approve_device_code(user_id, &form.user_code)

@@ -51,6 +51,8 @@ Required in production:
 ```env
 CLICKHOUSE_URL=https://clickhouse.example.internal:8443
 POSTGRES_URL=postgres://...
+REDIS_URL=rediss://:<password>@redis.example.internal:6380
+PRESENCE_V2_ENABLED=true
 JWT_SECRET=<long random value>
 CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
 ```
@@ -58,6 +60,12 @@ CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
 `ALLOW_INSECURE_JWT_SECRET=1` is for local development only. Never use
 `CORS_ORIGINS=*` for a multi-tenant deployment. `IDLE_TIMEOUT_MINUTES`
 defaults to 15 and controls the WakaTime-style pause bridge.
+
+Presence v2 is opt-in during rollout. Setting `PRESENCE_V2_ENABLED=true` requires
+both `POSTGRES_URL` and `REDIS_URL` to be reachable at boot. `redis://` and
+TLS-protected `rediss://` URLs are supported. PostgreSQL migration
+`002_presence_v2.sql` creates durable team rooms and the three fixed pairing
+zones; Redis owns only leases/live snapshots and ClickHouse owns session history.
 
 The frontend uses `https://api.atoaxis.com` as its production API origin. Set
 `NEXT_PUBLIC_WAKACLOCK_API_URL` to a local API URL during development.

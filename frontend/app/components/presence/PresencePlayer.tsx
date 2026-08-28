@@ -33,6 +33,7 @@ function clampPercent(value: number): number {
 interface PresencePlayerProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   isNearby?: boolean;
+  onEnterZone?: () => void;
   onMove?: (next: { x: number; y: number }) => void;
   reducedMotion: boolean;
   user: PresenceUser;
@@ -45,12 +46,17 @@ interface PresencePlayerProps {
  * everyone else is what prevents silently moving your own marker while trying to drag
  * a teammate's.
  *
- * Keyed by its own position (`key={`${x}-${y}`}` at the call site in
- * `PresencePlayground`) — after a drag ends and the position is updated, that forces a
- * clean remount so Framer Motion's internal drag transform resets to zero instead of
- * stacking on top of the new `left`/`top`.
+ * The player keeps a stable React key while its position changes. Framer Motion receives
+ * the shared server position through props, preserving drag/animation state across updates.
  */
-export function PresencePlayer({ containerRef, isNearby, onMove, reducedMotion, user }: PresencePlayerProps) {
+export function PresencePlayer({
+  containerRef,
+  isNearby,
+  onEnterZone,
+  onMove,
+  reducedMotion,
+  user,
+}: PresencePlayerProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const shirtColor = shirtColorFor(user.id);
 
@@ -73,6 +79,11 @@ export function PresencePlayer({ containerRef, isNearby, onMove, reducedMotion, 
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent) => {
+      if (event.key === 'Enter' && onEnterZone) {
+        event.preventDefault();
+        onEnterZone();
+        return;
+      }
       const deltas: Record<string, [number, number]> = {
         ArrowUp: [0, -KEYBOARD_STEP_PERCENT],
         ArrowDown: [0, KEYBOARD_STEP_PERCENT],
@@ -84,7 +95,7 @@ export function PresencePlayer({ containerRef, isNearby, onMove, reducedMotion, 
       event.preventDefault();
       onMove({ x: clampPercent(user.x + delta[0]), y: clampPercent(user.y + delta[1]) });
     },
-    [onMove, user.x, user.y]
+    [onEnterZone, onMove, user.x, user.y]
   );
 
   const wrapperStyle: React.CSSProperties = {

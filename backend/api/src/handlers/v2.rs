@@ -7,7 +7,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{Duration, NaiveDate, Utc};
@@ -75,6 +75,7 @@ pub struct CapabilityData {
     pub transactional_store: &'static str,
     pub analytics_store: &'static str,
     pub postgres_enabled: bool,
+    pub presence_v2_available: bool,
     pub privacy: PrivacyCapabilities,
     pub clients: ClientCapabilities,
     pub features: Vec<FeatureCapability>,
@@ -171,6 +172,59 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/capabilities", get(capabilities))
         .route("/me", get(me))
         .route("/me/analytics", get(analytics))
+        .route(
+            "/me/presence/rooms",
+            get(crate::handlers::presence_v2::list_rooms),
+        )
+        .route(
+            "/me/coworking-sessions",
+            get(crate::handlers::presence_v2::history),
+        )
+        .route(
+            "/presence/rooms",
+            post(crate::handlers::presence_v2::create_room),
+        )
+        .route(
+            "/presence/rooms/:room_id",
+            get(crate::handlers::presence_v2::get_room),
+        )
+        .route(
+            "/presence/invites/resolve",
+            post(crate::handlers::presence_v2::resolve_invite),
+        )
+        .route(
+            "/presence/rooms/:room_id/join",
+            post(crate::handlers::presence_v2::join_room),
+        )
+        .route(
+            "/presence/rooms/:room_id/leave",
+            post(crate::handlers::presence_v2::leave_room),
+        )
+        .route(
+            "/presence/rooms/:room_id/end",
+            post(crate::handlers::presence_v2::end_room),
+        )
+        .route(
+            "/presence/rooms/:room_id/me",
+            put(crate::handlers::presence_v2::update_member),
+        )
+        .route(
+            "/presence/rooms/:room_id/stream-ticket",
+            post(crate::handlers::presence_v2::create_stream_ticket),
+        )
+        .route(
+            "/presence/rooms/:room_id/stream",
+            get(crate::handlers::presence_v2::stream_presence),
+        )
+        .route(
+            "/presence/rooms/:room_id/invites",
+            get(crate::handlers::presence_v2::list_invites)
+                .post(crate::handlers::presence_v2::create_invite),
+        )
+        .route(
+            "/presence/rooms/:room_id/invites/:invite_id",
+            delete(crate::handlers::presence_v2::revoke_invite),
+        )
         .route("/me/ai/effectiveness", get(ai_effectiveness))
         .route("/ai/follow-up-events", post(follow_up_event))
         .route("/ai/follow-up", get(follow_up_stats))
@@ -232,6 +286,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route(
             "/organizations/:organization_id/analytics",
             get(organization_analytics),
+        )
+        .route(
+            "/organizations/:organization_id/presence/summary",
+            get(crate::handlers::presence_v2::organization_summary),
         )
         .route("/organizations/:organization_id/ai", get(organization_analytics))
         .route(
@@ -338,6 +396,9 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             },
             analytics_store: "clickhouse",
             postgres_enabled: state.postgres.is_some(),
+            presence_v2_available: state.config.presence_v2_enabled
+                && state.postgres.is_some()
+                && state.redis_presence.is_some(),
             privacy: PrivacyCapabilities {
                 stores_source_code: false,
                 stores_prompts: false,
@@ -537,6 +598,7 @@ pub async fn goals_create(
     Json(input): Json<CreateGoalRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Goal>>), ApiError> {
     let user_id = require_scope(&state, &headers, "write_goals")?;
+    ensure_pg_identity(&state, user_id).await?;
     let goal = state
         .goal_service
         .create(user_id, input)
@@ -642,6 +704,7 @@ pub async fn exports_create(
     Json(input): Json<CreateExportRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ExportJob>>), ApiError> {
     let user_id = require_scope(&state, &headers, "export_data")?;
+    ensure_pg_identity(&state, user_id).await?;
     let job = state
         .export_service
         .create(user_id, input)
@@ -723,6 +786,7 @@ pub async fn profile_update(
     Json(input): Json<UpdateProfileRequest>,
 ) -> Result<Json<V2Envelope<PublicProfile>>, ApiError> {
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    ensure_pg_identity(&state, user_id).await?;
     let profile = state
         .profile_service
         .update_profile(user_id, input)
@@ -743,6 +807,7 @@ pub async fn share_links_create(
     Json(input): Json<CreateShareLinkRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ShareLink>>), ApiError> {
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    ensure_pg_identity(&state, user_id).await?;
     let link = state
         .profile_service
         .create_share_link(user_id, input)
@@ -796,6 +861,7 @@ pub async fn report_schedules_create(
     Json(input): Json<CreateReportScheduleRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ReportSchedule>>), ApiError> {
     let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    ensure_pg_identity(&state, user_id).await?;
     let schedule = state
         .report_service
         .create(user_id, input)
@@ -856,6 +922,7 @@ pub async fn integration_connect(
     Json(input): Json<CreateIntegrationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<IntegrationConnection>>), ApiError> {
     let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    ensure_pg_identity(&state, user_id).await?;
     let connection = state
         .integration_service
         .create(user_id, &provider, input)
@@ -963,6 +1030,7 @@ pub async fn organizations_create(
     Json(input): Json<CreateOrganizationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Organization>>), ApiError> {
     let user_id = require_scope(&state, &headers, "read_orgs")?;
+    ensure_pg_identity(&state, user_id).await?;
     let organization = state
         .organizations_service
         .create(user_id, input)
@@ -1195,6 +1263,7 @@ pub async fn leaderboards_create(
     Json(input): Json<CreateLeaderboardRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Leaderboard>>), ApiError> {
     let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    ensure_pg_identity(&state, user_id).await?;
     let board = state
         .leaderboard_service
         .create(user_id, input)
@@ -1319,6 +1388,22 @@ fn compatibility_route_status(
         .find(|entry| entry.method.eq_ignore_ascii_case(method) && entry.path == route)
         .map(|entry| entry.status.clone())
         .unwrap_or_else(|| "not_started".to_string())
+}
+
+/// Mirror an authenticated identity into PostgreSQL before a PostgreSQL-backed write
+/// puts a foreign key on it.
+///
+/// Identity lives in ClickHouse and PostgreSQL is optional, so an account created before
+/// `POSTGRES_URL` was configured — or one that has only ever authenticated with an API
+/// key, which never goes through `register()`/`login()`'s sync path — has no `users` row
+/// there. Without this the INSERT fails with a foreign-key violation that reaches the
+/// caller as an opaque 503 on an otherwise valid request.
+async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), ApiError> {
+    state
+        .user_service
+        .ensure_postgres_identity(user_id)
+        .await
+        .map_err(ApiError::service_unavailable)
 }
 
 fn require_scope(

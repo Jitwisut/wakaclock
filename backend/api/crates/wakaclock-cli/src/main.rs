@@ -346,14 +346,14 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
-    let mut config = Config::load();
-
-    // An API key from the environment (set by the VS Code extension via SecretStorage)
-    // takes precedence over the persisted config.toml, without writing it back to disk —
-    // that keeps the editor's own secret store as the single place the key lives when set
-    // this way.
+/// Environment overrides layered on top of `config.toml`.
+///
+/// An API key from the environment (set by the VS Code extension via SecretStorage)
+/// takes precedence over the persisted config.toml, without writing it back to disk —
+/// that keeps the editor's own secret store as the single place the key lives when set
+/// this way. Anything that re-reads the persisted config while running must re-apply
+/// these, or it would silently fall back to the on-disk identity.
+fn apply_env_overrides(config: &mut Config) -> Result<(), String> {
     if let Ok(env_key) = std::env::var("WAKACLOCK_API_KEY") {
         if !env_key.trim().is_empty() {
             config.api_key = Some(env_key);
@@ -361,28 +361,33 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
     if let Ok(server_url) = std::env::var("WAKACLOCK_SERVER_URL") {
         if !server_url.trim().is_empty() {
-            match Config::normalize_server_url(&server_url) {
-                Ok(normalized) => config.server_url = normalized,
-                Err(error) => {
-                    if matches!(&cli.command, Commands::Verify { json: true }) {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "status": "incompatible",
-                                "server_url": server_url,
-                                "authenticated": false,
-                                "reachable": false,
-                                "cli_version": env!("CARGO_PKG_VERSION"),
-                                "queue_count": queue_count(),
-                                "error": error,
-                            })
-                        );
-                        return Ok(());
-                    }
-                    return Err(format!("WAKACLOCK_SERVER_URL: {error}").into());
-                }
-            }
+            config.server_url = Config::normalize_server_url(&server_url)?;
         }
+    }
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    let mut config = Config::load();
+
+    if let Err(error) = apply_env_overrides(&mut config) {
+        if matches!(&cli.command, Commands::Verify { json: true }) {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "incompatible",
+                    "server_url": std::env::var("WAKACLOCK_SERVER_URL").unwrap_or_default(),
+                    "authenticated": false,
+                    "reachable": false,
+                    "cli_version": env!("CARGO_PKG_VERSION"),
+                    "queue_count": queue_count(),
+                    "error": error,
+                })
+            );
+            return Ok(());
+        }
+        return Err(format!("WAKACLOCK_SERVER_URL: {error}").into());
     }
 
     let api_client = ApiClient::new(config.clone())?;
@@ -700,6 +705,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     ),
                 };
             let queue = Queue::open()?;
+            let delivery_failure = wakaclock_core::api_client::ApiClient::last_delivery_failure();
             let queued_segments = queue.queued_segments_for_day(timezone.as_deref())?;
             let queued_seconds = union_activity_seconds(&queued_segments);
             let confirmed_seconds = snapshot.confirmed_seconds.unwrap_or(snapshot.total_seconds);
@@ -741,6 +747,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "timezone": snapshot.timezone,
                     "agent_health": snapshot.agent_health,
                     "error": server_error,
+                    // Depth, not just today's seconds: a backlog rejected yesterday is
+                    // still a backlog, and `queued_seconds` scoped to today reports 0 for
+                    // it — which is exactly how a day and a half of refused heartbeats
+                    // stayed invisible.
+                    "queued_heartbeats": queue.len().unwrap_or(0),
+                    "delivery_failure": delivery_failure,
                     }))?
                 );
             } else {
@@ -752,6 +764,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Confirmed seconds: {}", confirmed_seconds);
                 println!("Queued seconds: {}", queued_seconds);
                 println!("Heartbeats: {}", snapshot.heartbeat_count);
+                // The whole point of the lines below: an expired entitlement and a broken
+                // hook look identical from the dashboard. Say which one it is.
+                let queued_heartbeats = queue.len().unwrap_or(0);
+                if queued_heartbeats > 0 {
+                    println!(
+                        "Queued heartbeats: {queued_heartbeats} (not yet accepted by the server)"
+                    );
+                }
+                if let Some(failure) = &delivery_failure {
+                    println!("Delivery: REFUSED - {}", failure.message);
+                    println!(
+                        "  No heartbeat accepted since {}. Queued activity stays local until one is.",
+                        chrono::DateTime::from_timestamp(failure.at as i64, 0)
+                            .map(|at| at.to_rfc3339())
+                            .unwrap_or_else(|| "an earlier time".to_string())
+                    );
+                } else if queued_heartbeats > 0 {
+                    println!("Delivery: ok - the queue is draining");
+                }
                 println!(
                     "Agent: {}",
                     if agent_report.running {
@@ -857,7 +888,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         },
         Commands::Agent { action } => match action {
             AgentAction::Run { interval_seconds } => {
-                run_agent_loop(&config, &api_client, interval_seconds.max(1)).await?;
+                run_agent_loop(config, interval_seconds.max(1)).await?;
             }
             AgentAction::Install { json } => {
                 let report = agent_service::install().map_err(io::Error::other)?;
@@ -917,11 +948,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_agent_loop(
-    config: &Config,
-    api_client: &ApiClient,
-    interval_seconds: u64,
-) -> Result<(), Box<dyn Error>> {
+/// The on-disk identity, when it differs from the one the agent is currently using.
+///
+/// Returns `None` on an unreadable or half-written config.toml: a watcher that is
+/// already authenticated must keep running rather than abort on a transient read.
+fn reloaded_agent_config(current: &Config) -> Option<Config> {
+    let mut candidate = Config::try_load()?;
+    apply_env_overrides(&mut candidate).ok()?;
+    let changed = candidate.api_key != current.api_key
+        || candidate.server_url != current.server_url
+        || candidate.user_id != current.user_id;
+    changed.then_some(candidate)
+}
+
+async fn run_agent_loop(mut config: Config, interval_seconds: u64) -> Result<(), Box<dyn Error>> {
     let _lock = agent_service::AgentLock::acquire().map_err(io::Error::other)?;
     agent_service::append_log(&format!(
         "agent started pid={} interval={}s",
@@ -929,10 +969,29 @@ async fn run_agent_loop(
         interval_seconds
     ));
     let interval = Duration::from_secs(interval_seconds);
+    let mut api_client = ApiClient::new(config.clone())?;
     loop {
         let started = std::time::Instant::now();
         let mut cycle_error: Option<String> = None;
-        match run_ai_sync(config, api_client, None, false, false, false, None).await {
+
+        // The agent outlives key rotation. Regenerating a key on the dashboard rewrites
+        // config.toml, and a process that kept its startup credentials would 401 on
+        // every send until someone noticed and restarted it — while the durable queue
+        // kept growing. Re-read the identity each cycle instead.
+        if let Some(updated) = reloaded_agent_config(&config) {
+            match ApiClient::new(updated.clone()) {
+                Ok(client) => {
+                    agent_service::append_log("reloaded config.toml: identity changed");
+                    config = updated;
+                    api_client = client;
+                }
+                Err(error) => {
+                    agent_service::append_log(&format!("config reload rejected: {error}"));
+                }
+            }
+        }
+
+        match run_ai_sync(&config, &api_client, None, false, false, false, None).await {
             Ok(()) => agent_service::append_log("scan completed"),
             Err(error) => {
                 let message = error.to_string();

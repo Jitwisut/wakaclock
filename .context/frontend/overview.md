@@ -26,6 +26,7 @@ admin UI kit. Two populations of code:
 | `app/(marketing)/**` — public site | `components/theme-customizer/**` |
 | `components/wakaclock/**` | most of `.storybook/stories/**` |
 | `components/auth/**` | `frontend/app/tasks/`, `ralph/`, `docs/` scratch |
+| `components/presence/**` | |
 | `lib/wakaclock/**` | |
 
 **Avoid large edits in `components/ui/`** unless upgrading vendor components.
@@ -54,6 +55,12 @@ components live in `components/wakaclock/`.
 | `page-header.tsx`, `range-picker.tsx`, `stat-tile.tsx`, `breakdown-chart.tsx`, `subscription-badge.tsx`, `user-switcher.tsx` | shared panel furniture |
 | `hooks/use-wakaclock-range.ts` (outside this dir) | start/end range state persisted in the URL — every range panel uses it |
 | `rpg/` | gamification widgets (`xp-bar`, `rank-badge`, `active-days-badge`, `today-quest-card`), backed by `lib/wakaclock/rpg.ts` |
+
+`components/presence/` is a **separate surface** with its own conventions: a
+pixel-art theme (`presence-theme.css`, `presence-fonts.ts`) isolated from the
+dashboard's shadcn tokens, SSE-driven state instead of TanStack Query, and no
+`QueryState`/`useWakaclockRange`. Do not apply the normal panel pattern there,
+and do not apply its conventions to a normal dashboard panel.
 
 ## State management — Existing Convention
 

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::infrastructure::redis_presence::LiveSession;
 use crate::model::coworking_session::{CoworkingParticipantRow, CoworkingSessionRow};
 use crate::repository::coworking_session::CoworkingSessionRepository;
 use crate::services::org::now_secs;
@@ -64,9 +65,13 @@ impl CoworkingSessionService {
                         session_id,
                         room_id,
                         team_id,
+                        zone_id: None,
+                        source: "legacy_proximity".to_string(),
+                        ended_reason: String::new(),
                         started_at: now,
                         ended_at: None,
                         updated_at: now,
+                        last_observed_at: now,
                     })
                     .await?;
                 session_id
@@ -129,6 +134,56 @@ impl CoworkingSessionService {
         Ok(())
     }
 
+    /// Checkpoints the Redis collaboration-zone projection into ClickHouse and closes
+    /// sessions that disappeared from the projection. ClickHouse is deliberately best
+    /// effort here: a telemetry outage must not make a live room unavailable, and the next
+    /// checkpoint/reconciler can safely retry the same snapshot.
+    pub async fn reconcile_live_snapshot(
+        &self,
+        room_id: Uuid,
+        team_id: Option<Uuid>,
+        sessions: &[LiveSession],
+    ) -> Result<()> {
+        let active_ids: std::collections::HashSet<Uuid> =
+            sessions.iter().map(|session| session.session_id).collect();
+        for session in sessions {
+            self.repo
+                .checkpoint_live_session(
+                    room_id,
+                    team_id,
+                    session.session_id,
+                    session.zone_id,
+                    session.started_at.max(0) as u32,
+                    &session.participant_ids,
+                )
+                .await?;
+        }
+        for session in self.repo.active_sessions_for_room(room_id).await? {
+            if session.source == "collaboration_zone" && !active_ids.contains(&session.session_id) {
+                self.repo
+                    .close_live_session(session.session_id, "participant_left")
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Recovery boundary for a Redis outage or an API restart. A live session must
+    /// receive a checkpoint at least once every ten minutes; otherwise it is closed with
+    /// an explicit reason so personal history and team aggregates never imply that work
+    /// continued after the last observable state.
+    pub async fn recover_stale_sessions(&self, before: u32) -> Result<u64> {
+        let session_ids = self.repo.stale_live_session_ids(before).await?;
+        let mut closed = 0;
+        for session_id in session_ids {
+            self.repo
+                .close_live_session(session_id, "recovery_timeout")
+                .await?;
+            closed += 1;
+        }
+        Ok(closed)
+    }
+
     async fn end_session(&self, session_id: Uuid) -> Result<()> {
         let Some(mut session) = self.repo.get_session(session_id).await? else {
             return Ok(());
@@ -139,7 +194,9 @@ impl CoworkingSessionService {
 
         let now = now_secs();
         session.ended_at = Some(now);
+        session.ended_reason = "participant_left".to_string();
         session.updated_at = now;
+        session.last_observed_at = now;
         self.repo.insert_session(&session).await
     }
 }

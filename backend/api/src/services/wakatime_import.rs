@@ -175,6 +175,7 @@ fn map_heartbeat(
         chars_added: human_lines_added,
         chars_deleted: human_lines_deleted,
         active_seconds: None,
+        active_seconds_claimed: None,
         activity_segments: "[]".to_string(),
         is_ai_generated,
         ai_agent,

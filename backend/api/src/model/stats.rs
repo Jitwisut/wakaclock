@@ -31,6 +31,11 @@ pub struct StatsData {
     pub projects: Vec<StatsBreakdownItem>,
     pub editors: Vec<StatsBreakdownItem>,
     pub operating_systems: Vec<StatsBreakdownItem>,
+    /// Additive; WakaTime's stats payload has no categories array.
+    pub categories: Vec<StatsBreakdownItem>,
+    /// Additive: how much of `total_seconds` was measured rather than inferred, and
+    /// how much was attended by a human rather than produced by an agent.
+    pub evidence: crate::services::activity_timeline::EvidenceSplit,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,26 +44,6 @@ pub struct StatsResponse {
     pub start: String,
     pub end: String,
     pub data: StatsData,
-}
-
-#[derive(Debug, Deserialize, Row)]
-pub struct TotalsRow {
-    pub total_seconds: f64,
-    pub days_with_activity: u64,
-}
-
-#[derive(Debug, Deserialize, Row)]
-pub struct BestDayRow {
-    #[serde(rename = "day")]
-    pub date: String,
-    pub total_seconds: f64,
-}
-
-#[derive(Debug, Deserialize, Row)]
-pub struct BreakdownRow {
-    pub name: String,
-    pub total_seconds: f64,
-    pub heartbeat_count: u64,
 }
 
 #[derive(Debug, Deserialize, Row)]

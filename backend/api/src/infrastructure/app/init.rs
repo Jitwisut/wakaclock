@@ -6,7 +6,10 @@ use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
-use crate::infrastructure::rate_limiter::{AnalyticsRateLimiter, AuthRateLimiter};
+use crate::infrastructure::rate_limiter::{
+    AnalyticsRateLimiter, AuthRateLimiter, PresenceRateLimiter,
+};
+use crate::infrastructure::redis_presence::RedisPresenceStore;
 use crate::repository::account_analytics::AccountAnalyticsRepository;
 use crate::repository::ai_usage::AiUsageRepository;
 use crate::repository::analytics::AnalyticsRepository;
@@ -15,13 +18,14 @@ use crate::repository::external_durations::ExternalDurationRepository;
 use crate::repository::follow_up::FollowUpRepository;
 use crate::repository::heartbeat::HeartbeatRepository;
 use crate::repository::org::OrgRepository;
+use crate::repository::presence::PresenceRepository;
 use crate::repository::project_analytics::ProjectAnalyticsRepository;
 use crate::repository::project_identity::ProjectIdentityRepository;
 use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
-use crate::services::activity_timeline::ActivityTimelineService;
+use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
 use crate::services::ai_stats::AiStatsService;
 use crate::services::ai_usage::AiUsageService;
 use crate::services::all_time::AllTimeService;
@@ -68,9 +72,12 @@ pub struct AppState {
     pub auth_cache: Arc<AuthKeyCache>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
+    pub presence_rate_limiter: Arc<PresenceRateLimiter>,
     /// Live coding presence (plan.md Phase 7) — in-memory prototype, see
     /// `presence_store` module docs for what that does and does not mean.
     pub presence: Arc<PresenceStore>,
+    pub redis_presence: Option<Arc<RedisPresenceStore>>,
+    pub presence_repo: Option<Arc<PresenceRepository>>,
     pub analytics_repo: Arc<AnalyticsRepository>,
     pub external_duration_repo: Arc<ExternalDurationRepository>,
     pub follow_up_repo: Arc<FollowUpRepository>,
@@ -144,7 +151,11 @@ impl AppState {
             Some(postgres) => postgres.health_check().await.is_ok(),
             None => true,
         };
-        let status = if clickhouse_ok && postgres_ok {
+        let redis_ok = match &self.redis_presence {
+            Some(redis) => redis.health_check().await.is_ok(),
+            None => true,
+        };
+        let status = if clickhouse_ok && postgres_ok && redis_ok {
             HealthStatus::Ok
         } else {
             HealthStatus::Error
@@ -189,7 +200,26 @@ pub async fn create_app_state() -> Result<AppState> {
     let auth_cache = AuthKeyCache::new();
     let auth_rate_limiter = AuthRateLimiter::new();
     let analytics_rate_limiter = AnalyticsRateLimiter::new();
+    let presence_rate_limiter = PresenceRateLimiter::new();
     let presence = PresenceStore::new();
+    let (redis_presence, presence_repo) = if config.presence_v2_enabled {
+        if postgres.is_none() {
+            anyhow::bail!("PRESENCE_V2_ENABLED=true requires POSTGRES_URL");
+        }
+        if config.redis.url.is_none() {
+            anyhow::bail!("PRESENCE_V2_ENABLED=true requires REDIS_URL");
+        }
+        let redis = RedisPresenceStore::connect(&config.redis)
+            .await?
+            .context("PRESENCE_V2_ENABLED=true requires a reachable Redis instance")?;
+        let repository = postgres
+            .as_ref()
+            .map(|postgres| Arc::new(PresenceRepository::new(postgres.clone())))
+            .expect("PostgreSQL presence repository checked above");
+        (Some(redis), Some(repository))
+    } else {
+        (None, None)
+    };
 
     // Initialise Repositories
     let analytics_repo = Arc::new(AnalyticsRepository::new(clickhouse.clone()));
@@ -223,20 +253,20 @@ pub async fn create_app_state() -> Result<AppState> {
         postgres.clone(),
         authorization_service.clone(),
     ));
-    let idle_timeout_seconds = config.idle_timeout_seconds;
+    // One bridging policy for every duration surface: the human timeout is WakaTime's,
+    // and agent-emitted activity gets its own, much shorter allowance so an unattended
+    // agent run cannot bill as continuous work. See docs/duration-accuracy-audit.md.
+    let bridge_config = match config.agent_idle_timeout_seconds {
+        Some(agent) => BridgeConfig::split(config.idle_timeout_seconds, agent),
+        None => BridgeConfig::single(config.idle_timeout_seconds),
+    };
     let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(
         clickhouse.clone(),
-        idle_timeout_seconds,
+        bridge_config,
     ));
-    let all_time_service = Arc::new(AllTimeService::new(
-        clickhouse.clone(),
-        idle_timeout_seconds,
-    ));
+    let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone(), bridge_config));
     let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
-    let duration_service = Arc::new(DurationService::new(
-        clickhouse.clone(),
-        idle_timeout_seconds,
-    ));
+    let duration_service = Arc::new(DurationService::new(clickhouse.clone(), bridge_config));
     let external_duration_service =
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
     let follow_up_service = Arc::new(FollowUpService::new(follow_up_repo.clone()));
@@ -245,9 +275,9 @@ pub async fn create_app_state() -> Result<AppState> {
     let report_service = Arc::new(ReportService::new(postgres.clone()));
     let activity_timeline_service = Arc::new(ActivityTimelineService::new(
         clickhouse.clone(),
-        idle_timeout_seconds,
+        bridge_config,
     ));
-    let insights_service = Arc::new(InsightsService::new(clickhouse.clone()));
+    let insights_service = Arc::new(InsightsService::new(clickhouse.clone(), bridge_config));
     let integration_service = Arc::new(IntegrationService::new(postgres.clone()));
     let leaderboard_service = Arc::new(LeaderboardService::new(
         postgres.clone(),
@@ -267,6 +297,8 @@ pub async fn create_app_state() -> Result<AppState> {
         project_analytics_repo.clone(),
         project_identity_service.clone(),
         config.jwt_secret.clone(),
+        clickhouse.clone(),
+        bridge_config,
     ));
     let heartbeat_service = Arc::new(HeartbeatService::new(
         heartbeat_repo.clone(),
@@ -275,8 +307,9 @@ pub async fn create_app_state() -> Result<AppState> {
     let goal_service = Arc::new(GoalService::with_clickhouse(
         postgres.clone(),
         clickhouse.clone(),
+        bridge_config,
     ));
-    let projects_service = Arc::new(ProjectsService::new(clickhouse.clone()));
+    let projects_service = Arc::new(ProjectsService::new(clickhouse.clone(), bridge_config));
     let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
     let reprocess_service = Arc::new(ReprocessService::new(
         clickhouse.clone(),
@@ -284,16 +317,14 @@ pub async fn create_app_state() -> Result<AppState> {
         project_identity_service.clone(),
         account_analytics_service.clone(),
     ));
-    let stats_service = Arc::new(StatsService::new(clickhouse.clone(), idle_timeout_seconds));
-    let summary_service = Arc::new(SummaryService::new(
-        clickhouse.clone(),
-        idle_timeout_seconds,
-    ));
+    let stats_service = Arc::new(StatsService::new(clickhouse.clone(), bridge_config));
+    let summary_service = Arc::new(SummaryService::new(clickhouse.clone(), bridge_config));
     let wakatime_import_service = Arc::new(WakaTimeImportService::new(heartbeat_repo.clone()));
     let org_service = Arc::new(OrgService::new(org_repo.clone()));
     let organizations_service = Arc::new(OrganizationsService::new(
         postgres.clone(),
         authorization_service.clone(),
+        presence_repo.clone(),
     ));
     let oauth_service = Arc::new(OAuthService::new(postgres.clone()));
     let team_service = Arc::new(TeamService::new(team_repo.clone(), org_service.clone()));
@@ -307,7 +338,10 @@ pub async fn create_app_state() -> Result<AppState> {
         auth_cache,
         auth_rate_limiter,
         analytics_rate_limiter,
+        presence_rate_limiter,
         presence,
+        redis_presence,
+        presence_repo,
         analytics_repo,
         external_duration_repo,
         follow_up_repo,

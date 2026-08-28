@@ -180,6 +180,8 @@ Backend production minimum:
 ```env
 CLICKHOUSE_URL=<managed ClickHouse URL>
 POSTGRES_URL=<managed PostgreSQL URL>
+REDIS_URL=<managed Redis URL; use rediss:// when TLS is required>
+PRESENCE_V2_ENABLED=true
 JWT_SECRET=<long random value>
 CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
 ```

@@ -275,26 +275,6 @@ impl ProjectAnalyticsRepository {
             .await
             .map_err(|error| anyhow::anyhow!("Project files query failed: {error}"))
     }
-
-    pub async fn all_projects_seconds(
-        &self,
-        user_id: Uuid,
-        start_epoch: f64,
-        end_epoch: f64,
-    ) -> Result<f64> {
-        self.client
-            .get_client()
-            .query(
-                "SELECT sum(ifNull(active_seconds, 0.0)) FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND time >= ? AND time < ?",
-            )
-            .bind(user_id)
-            .bind(start_epoch)
-            .bind(end_epoch)
-            .fetch_one::<f64>()
-            .await
-            .map_err(|error| anyhow::anyhow!("All-project duration query failed: {error}"))
-    }
 }
 
 fn scoped_sql(base: &str, suffix: &str, branch: Option<&str>) -> (String, bool) {
@@ -476,6 +456,7 @@ mod tests {
                 chars_added: None,
                 chars_deleted: None,
                 active_seconds: Some(60.0),
+                active_seconds_claimed: Some(60.0),
                 activity_segments: "[]".to_string(),
                 is_ai_generated: false,
                 ai_agent: None,

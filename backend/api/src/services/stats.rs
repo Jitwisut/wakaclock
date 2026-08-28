@@ -1,51 +1,80 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
-use crate::model::stats::{
-    AllTimeRangeRow, BestDay, BestDayRow, BreakdownRow, StatsBreakdownItem, StatsData,
-    StatsResponse, TotalsRow,
+use crate::model::stats::{AllTimeRangeRow, BestDay, StatsBreakdownItem, StatsData, StatsResponse};
+use crate::services::activity_timeline::{
+    totals_by, ActivityTimelineService, BridgeConfig, CanonicalInterval, Dimension, Timeline,
 };
-use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
 
 pub struct StatsService {
     clickhouse: Arc<ClickHouseClient>,
-    idle_timeout_seconds: f64,
+    bridge: BridgeConfig,
 }
 
 impl StatsService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
             clickhouse,
-            idle_timeout_seconds,
+            bridge: bridge.into(),
         }
     }
 
+    /// One canonical timeline per request, and every figure below derived from it.
+    ///
+    /// The breakdowns used to come from `language_daily` / `project_daily` /
+    /// `editor_daily` / `os_daily` — `sum(active_seconds)` with no union, no idle
+    /// bridging and no 120-second clamp — while the total came from the timeline, so
+    /// they could not agree. The totals and best-day queries also rebuilt the timeline
+    /// once each; now it is built once. See docs/duration-accuracy-audit.md.
     pub async fn get_by_range(&self, user_id: Uuid, range: &str) -> Result<StatsResponse> {
         let (start, end) = self.resolve_range(user_id, range).await?;
-
-        let totals = self.fetch_totals(user_id, &start, &end).await?;
-        let best_day = self.fetch_best_day(user_id, &start, &end).await?;
-        let languages = self
-            .fetch_breakdown(user_id, &start, &end, "language_daily", "language")
-            .await?;
-        let projects = self
-            .fetch_breakdown(user_id, &start, &end, "project_daily", "project")
-            .await?;
-        let editors = self
-            .fetch_breakdown(user_id, &start, &end, "editor_daily", "editor")
-            .await?;
-        let operating_systems = self
-            .fetch_breakdown(user_id, &start, &end, "os_daily", "os")
-            .await?;
-
         let start_date = parse_date(&start)?;
         let end_date = parse_date(&end)?;
+
+        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
+        let raw = timeline
+            .intervals(
+                user_id,
+                utc_midnight(start_date),
+                utc_midnight(end_date.succ_opt().context("end date has no successor")?),
+            )
+            .await?;
+        let timeline = Timeline::build(&raw, self.bridge);
+        let evidence = timeline.evidence();
+        let canonical = timeline.bridged;
+
+        let total_seconds: f64 = canonical
+            .iter()
+            .map(|interval| interval.end - interval.start)
+            .sum();
+        let mut per_day: BTreeMap<String, f64> = BTreeMap::new();
+        for interval in &canonical {
+            if let Some(timestamp) =
+                DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
+            {
+                *per_day
+                    .entry(timestamp.date_naive().to_string())
+                    .or_default() += interval.end - interval.start;
+            }
+        }
+        let days_with_activity = per_day.len() as u64;
+        // Ties go to the earlier date, so a repeated request cannot swap the answer.
+        let best_day = per_day
+            .iter()
+            .max_by(|left, right| left.1.total_cmp(right.1).then_with(|| right.0.cmp(left.0)))
+            .map(|(date, seconds)| BestDay {
+                date: date.clone(),
+                total_seconds: *seconds,
+                text: format_duration(*seconds),
+            });
+
         let days_included = (end_date - start_date).num_days() as u64 + 1;
-        let daily_average_seconds = if totals.days_with_activity > 0 {
-            totals.total_seconds / totals.days_with_activity as f64
+        let daily_average_seconds = if days_with_activity > 0 {
+            total_seconds / days_with_activity as f64
         } else {
             0.0
         };
@@ -55,22 +84,20 @@ impl StatsService {
             start,
             end,
             data: StatsData {
-                total_seconds: totals.total_seconds,
-                hours: totals.total_seconds / 3600.0,
-                text: format_duration(totals.total_seconds),
+                total_seconds,
+                hours: total_seconds / 3600.0,
+                text: format_duration(total_seconds),
                 days_included,
-                days_with_activity: totals.days_with_activity,
+                days_with_activity,
                 daily_average_seconds,
                 daily_average_text: format_duration(daily_average_seconds),
-                best_day: best_day.map(|row| BestDay {
-                    date: row.date,
-                    total_seconds: row.total_seconds,
-                    text: format_duration(row.total_seconds),
-                }),
-                languages,
-                projects,
-                editors,
-                operating_systems,
+                best_day,
+                languages: breakdown(&canonical, Dimension::Language),
+                projects: breakdown(&canonical, Dimension::Project),
+                editors: breakdown(&canonical, Dimension::Editor),
+                operating_systems: breakdown(&canonical, Dimension::OperatingSystem),
+                categories: breakdown(&canonical, Dimension::Category),
+                evidence,
             },
         })
     }
@@ -103,7 +130,12 @@ impl StatsService {
                 SELECT
                     toString(min(date)) AS start_day,
                     toString(max(date)) AS end_day
-                FROM wakaclock.daily_totals
+                -- Read the span from the heartbeats themselves. A `SummingMergeTree`
+                -- rollup survives deletion of its source rows, so an aggregate that has
+                -- been repaired or partially cleaned can report an all-time range that
+                -- extends past any surviving activity. See docs/duration-accuracy-audit.md,
+                -- Finding 5.
+                FROM wakaclock.heartbeats
                 WHERE user_id = ?
                 ",
             )
@@ -114,138 +146,24 @@ impl StatsService {
                 anyhow::anyhow!("ClickHouse stats all_time range query error: {error}")
             })
     }
+}
 
-    async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<TotalsRow> {
-        let start_date = parse_date(start)?;
-        let end_date = parse_date(end)?;
-        let start_epoch = Utc
-            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
-            .timestamp() as f64;
-        let end_epoch = Utc
-            .from_utc_datetime(
-                &end_date
-                    .succ_opt()
-                    .expect("valid date")
-                    .and_hms_opt(0, 0, 0)
-                    .expect("valid midnight"),
-            )
-            .timestamp() as f64;
-        let timeline =
-            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
-        let canonical = canonicalize_bridged(
-            &timeline.intervals(user_id, start_epoch, end_epoch).await?,
-            self.idle_timeout_seconds,
-        );
-        let days = canonical
-            .iter()
-            .filter_map(|interval| {
-                DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
-                    .map(|value| value.date_naive())
-            })
-            .collect::<std::collections::HashSet<_>>();
-        Ok(TotalsRow {
-            total_seconds: canonical
-                .iter()
-                .map(|interval| interval.end - interval.start)
-                .sum(),
-            days_with_activity: days.len() as u64,
+fn breakdown(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<StatsBreakdownItem> {
+    totals_by(intervals, dimension)
+        .into_iter()
+        .map(|(name, total_seconds, heartbeats)| StatsBreakdownItem {
+            name,
+            total_seconds,
+            hours: total_seconds / 3600.0,
+            text: format_duration(total_seconds),
+            heartbeats,
         })
-    }
+        .collect()
+}
 
-    async fn fetch_best_day(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-    ) -> Result<Option<BestDayRow>> {
-        let start_date = parse_date(start)?;
-        let end_date = parse_date(end)?;
-        let start_epoch = Utc
-            .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
-            .timestamp() as f64;
-        let end_epoch = Utc
-            .from_utc_datetime(
-                &end_date
-                    .succ_opt()
-                    .expect("valid date")
-                    .and_hms_opt(0, 0, 0)
-                    .expect("valid midnight"),
-            )
-            .timestamp() as f64;
-        let timeline =
-            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
-        let canonical = canonicalize_bridged(
-            &timeline.intervals(user_id, start_epoch, end_epoch).await?,
-            self.idle_timeout_seconds,
-        );
-        let mut totals = std::collections::HashMap::<String, f64>::new();
-        for interval in canonical {
-            if let Some(timestamp) =
-                DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
-            {
-                *totals
-                    .entry(timestamp.date_naive().to_string())
-                    .or_default() += interval.end - interval.start;
-            }
-        }
-        Ok(totals
-            .into_iter()
-            .max_by(|left, right| {
-                left.1
-                    .total_cmp(&right.1)
-                    .then_with(|| right.0.cmp(&left.0))
-            })
-            .map(|(date, total_seconds)| BestDayRow {
-                date,
-                total_seconds,
-            }))
-    }
-
-    async fn fetch_breakdown(
-        &self,
-        user_id: Uuid,
-        start: &str,
-        end: &str,
-        table: &str,
-        column: &str,
-    ) -> Result<Vec<StatsBreakdownItem>> {
-        let sql = format!(
-            "
-            SELECT
-                {column} AS name,
-                sum(total_seconds) AS total_seconds,
-                sum(heartbeat_count) AS heartbeat_count
-            FROM wakaclock.{table}
-            WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-            GROUP BY name
-            ORDER BY total_seconds DESC, name ASC
-            "
-        );
-
-        let rows = self
-            .clickhouse
-            .get_client()
-            .query(&sql)
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<BreakdownRow>()
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("ClickHouse stats {table} breakdown query error: {error}")
-            })?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| StatsBreakdownItem {
-                name: row.name,
-                total_seconds: row.total_seconds,
-                hours: row.total_seconds / 3600.0,
-                text: format_duration(row.total_seconds),
-                heartbeats: row.heartbeat_count,
-            })
-            .collect())
-    }
+fn utc_midnight(date: NaiveDate) -> f64 {
+    Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("valid midnight"))
+        .timestamp() as f64
 }
 
 fn parse_date(date: &str) -> Result<NaiveDate> {

@@ -72,6 +72,34 @@ impl UserService {
         Ok(UserResponse { data })
     }
 
+    /// Ensure an authenticated legacy/ClickHouse identity exists in PostgreSQL before a
+    /// PostgreSQL-backed feature writes a foreign key to it. Accounts created before the
+    /// transactional store was enabled will not have gone through `register()`'s sync path.
+    pub async fn ensure_postgres_identity(&self, user_id: Uuid) -> Result<()> {
+        let Some(postgres) = &self.postgres else {
+            return Ok(());
+        };
+
+        let exists = postgres
+            .client()
+            .query_opt("SELECT 1 FROM users WHERE id = $1", &[&user_id])
+            .await
+            .context("failed to check PostgreSQL user identity")?
+            .is_some();
+        if exists {
+            return Ok(());
+        }
+
+        let identity = self.existing_identity(user_id).await?;
+        self.sync_postgres_identity(
+            postgres,
+            user_id,
+            &identity.username,
+            &identity.password_hash,
+        )
+        .await
+    }
+
     /// Create an account: username must be unique, password is hashed with argon2 (a
     /// slow KDF is correct here — unlike an API key, a password is a low-entropy secret
     /// a human chose). Returns a session JWT so the frontend is logged in immediately.
@@ -185,6 +213,18 @@ impl UserService {
         Argon2::default()
             .verify_password(password.as_bytes(), &parsed_hash)
             .map_err(|_| anyhow!("invalid username or password"))?;
+
+        // Users created before PostgreSQL became the transactional store still authenticate
+        // through the ClickHouse compatibility path. Bring their identity across on the next
+        // successful login so PostgreSQL-backed features can safely reference their user_id.
+        if let Some(postgres) = &self.postgres {
+            if let Err(error) = self
+                .sync_postgres_identity(postgres, user_id, username, &password_hash)
+                .await
+            {
+                tracing::error!(%user_id, %error, "failed to sync logged-in user to PostgreSQL");
+            }
+        }
 
         let token = auth::issue_session_token(user_id, jwt_secret)
             .map_err(|error| anyhow!("failed to issue session token: {error}"))?;

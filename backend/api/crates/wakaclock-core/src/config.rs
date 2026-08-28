@@ -61,6 +61,14 @@ impl Config {
         }
     }
 
+    /// Non-panicking counterpart to [`Config::load`], for callers that re-read the file
+    /// while running. The always-on agent must survive a missing or half-written
+    /// config.toml by keeping the identity it already has, not by aborting the process.
+    pub fn try_load() -> Option<Self> {
+        let content = fs::read_to_string(Self::config_path()).ok()?;
+        toml::from_str(&content).ok()
+    }
+
     pub fn save(&self) {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {

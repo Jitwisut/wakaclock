@@ -6,3 +6,4 @@ pub mod logger;
 pub mod postgres;
 pub mod presence_store;
 pub mod rate_limiter;
+pub mod redis_presence;

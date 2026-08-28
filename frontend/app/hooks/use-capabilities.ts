@@ -33,5 +33,6 @@ export function useCapabilities() {
      * a skeleton rather than flashing an unavailable notice at every page load.
      */
     postgresEnabled: data?.postgres_enabled,
+    presenceV2Available: data?.presence_v2_available,
   };
 }

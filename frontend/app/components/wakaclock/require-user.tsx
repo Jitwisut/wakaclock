@@ -28,7 +28,15 @@ export function RequireUser({ children }: { children: React.ReactNode }) {
     // Waiting for hydration matters: before the stored session is read, a signed-in
     // visitor is indistinguishable from a signed-out one, and redirecting on that would
     // bounce everyone to the login page on every page load.
-    if (hydrated && !userId) router.replace(`/login?next=${encodeURIComponent(next)}`);
+    if (hydrated && !userId) {
+      // URL fragments never reach Next's server/router, but invite tokens deliberately
+      // live in the fragment so proxies cannot log them. Preserve it client-side while
+      // sending the visitor through sign-in, then AuthScreen returns to the original join
+      // preview with the same fragment intact.
+      const { hash } = window.location;
+      const destination = hash && !next.includes('#') ? `${next}${hash}` : next;
+      router.replace(`/login?next=${encodeURIComponent(destination)}`);
+    }
   }, [hydrated, next, router, userId]);
 
   if (!userId) {

@@ -31,6 +31,22 @@ export const INSIGHT_TYPES: InsightType[] = [
 // ---------------------------------------------------------------------------
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
+/**
+ * How much of a reported total the server can show a reason for.
+ *
+ * `proven_seconds` is time a client actually measured; `inferred_seconds` is the
+ * pause-filling the server's idle bridge adds on top to stay WakaTime-compatible, and
+ * on real data it is the larger of the two. `attended + agent + other` is a second
+ * partition of the same total. Both sum to the surface's `total_seconds`.
+ */
+export interface EvidenceSplit {
+  agent_seconds: number;
+  attended_seconds: number;
+  inferred_seconds: number;
+  other_seconds: number;
+  proven_seconds: number;
+}
+
 export interface StatusBarResponse {
   agent_health?: unknown;
   buffered_seconds?: number;
@@ -42,6 +58,7 @@ export interface StatusBarResponse {
     start: number;
   }>;
   discarded_seconds?: number;
+  evidence?: EvidenceSplit;
   heartbeat_count: number;
   human_readable: string;
   last_heartbeat_at?: null | number;
@@ -86,11 +103,13 @@ export interface BestDay {
 
 export interface StatsData {
   best_day: BestDay | null;
+  categories?: StatsBreakdownItem[];
   daily_average_seconds: number;
   daily_average_text: string;
   days_included: number;
   days_with_activity: number;
   editors: StatsBreakdownItem[];
+  evidence?: EvidenceSplit;
   hours: number;
   languages: StatsBreakdownItem[];
   operating_systems: StatsBreakdownItem[];
@@ -118,6 +137,7 @@ export interface SummaryItem {
 }
 
 export interface SummaryGrandTotal {
+  evidence?: EvidenceSplit;
   heartbeats: number;
   hours: number;
   text: string;
@@ -125,6 +145,7 @@ export interface SummaryGrandTotal {
 }
 
 export interface SummaryDay {
+  categories?: SummaryItem[];
   date: string;
   editors: SummaryItem[];
   grand_total: SummaryGrandTotal;
@@ -802,6 +823,7 @@ export interface PresenceRosterEntry {
   state: PresenceState;
   user_id: string;
   username: string;
+  zone_id?: null | string;
 }
 
 /** What the SSE stream at /presence/rooms/:roomId/stream delivers on every tick. */
@@ -831,6 +853,7 @@ export interface V2Capabilities {
   analytics_store: string;
   api_version: string;
   postgres_enabled: boolean;
+  presence_v2_available?: boolean;
   product: string;
   transactional_store: string;
 }
@@ -919,6 +942,118 @@ export interface PresenceActionResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Presence v2 — durable rooms, Redis live state and collaboration zones.
+// ---------------------------------------------------------------------------
+export type PresenceRoomKindV2 = 'adhoc' | 'team';
+
+export interface PresenceV2Zone {
+  center_x: number;
+  center_y: number;
+  height: number;
+  id: string;
+  label: string;
+  room_id: string;
+  sort_order: number;
+  width: number;
+}
+
+export interface PresenceV2Room {
+  ended_at: null | string;
+  expires_at: null | string;
+  id: string;
+  kind: PresenceRoomKindV2;
+  name: string;
+  owner_user_id?: null | string;
+  team_id: null | string;
+}
+
+export interface PresenceV2RoomData extends PresenceV2Room {
+  zones: PresenceV2Zone[];
+}
+
+export type PresenceV2State = 'coding' | 'idle' | 'offline';
+
+export interface PresenceV2RosterEntry {
+  position: null | PresencePoint;
+  state: PresenceV2State;
+  user_id: string;
+  username: string;
+  zone_id: null | string;
+}
+
+export interface PresenceV2SessionParticipant {
+  user_id: string;
+  username: string;
+}
+
+export interface PresenceV2Session {
+  leaving_deadlines: Record<string, number>;
+  participants: PresenceV2SessionParticipant[];
+  session_id: string;
+  started_at: number;
+  zone_id: string;
+}
+
+export interface PresenceV2Snapshot {
+  room: PresenceV2Room;
+  roster: PresenceV2RosterEntry[];
+  server_time: number;
+  sessions: PresenceV2Session[];
+  version: number;
+  zones: PresenceV2Zone[];
+}
+
+export interface PresenceV2Invite {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  invite_url_token?: null | string;
+  revoked_at: null | string;
+  room_id: string;
+  used_count: number;
+}
+
+export interface PresenceV2Ticket {
+  expires_in_seconds: number;
+  ticket: string;
+}
+
+export interface PresenceHistoryParticipant {
+  user_id: string;
+  username: string;
+}
+
+export interface PresenceHistoryItem {
+  duration_seconds: number;
+  ended_at: null | number;
+  ended_reason: string;
+  participants: PresenceHistoryParticipant[];
+  room_id: string;
+  room_name: string;
+  session_id: string;
+  source: string;
+  started_at: number;
+  team_id: null | string;
+  your_joined_at: number;
+  your_left_at: null | number;
+  your_projects: string[];
+  zone_id: null | string;
+}
+
+export interface PresenceHistoryData {
+  items: PresenceHistoryItem[];
+  next_cursor: null | string;
+}
+
+export interface PresenceSummaryData {
+  active_days: null | number;
+  average_group_size: null | number;
+  session_count: null | number;
+  suppressed: boolean;
+  total_collaboration_seconds: null | number;
+}
+
+// ---------------------------------------------------------------------------
 // Orgs & teams — minimal slice (plan.md 6.1, scoped down), exists only so a presence
 // room can carry a real, permission-checked team name instead of free text. Not
 // org-scoped analytics, not billing — see backend/api/src/handlers/v1/orgs.rs.
@@ -955,5 +1090,5 @@ export interface TeamsResponse {
 // Error shape — every handler returns this on failure
 // ---------------------------------------------------------------------------
 export interface ApiErrorBody {
-  error: string;
+  error: { code?: number; message?: string } | string;
 }

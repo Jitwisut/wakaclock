@@ -129,6 +129,12 @@ export interface StatusBarSnapshot {
     lastIncrementSeconds?: number;
     lastIncrementSource?: string;
     discardedSeconds?: number;
+    /** Heartbeats the server has not accepted yet, across every day — see cli.ts. */
+    queuedHeartbeats?: number;
+    /** The CLI's one-line delivery verdict. Starts with "REFUSED" when the server is
+     *  turning heartbeats away (an expired trial, a revoked key), which is otherwise
+     *  indistinguishable from a quiet day. */
+    delivery?: string;
     legacyCli?: boolean;
 }
 

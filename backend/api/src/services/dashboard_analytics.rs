@@ -21,7 +21,9 @@ use crate::model::dashboard_analytics::{
 };
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
-use crate::services::activity_timeline::{canonicalize_bridged, ActivityTimelineService};
+use crate::services::activity_timeline::{
+    canonicalize_bridged, ActivityTimelineService, BridgeConfig,
+};
 
 /// Weekday order the chart always renders, including days with no activity, so the axis
 /// does not reshuffle between requests (plan.md 9.9).
@@ -37,14 +39,14 @@ const WEEKDAYS: [&str; 7] = [
 
 pub struct DashboardAnalyticsService {
     clickhouse: Arc<ClickHouseClient>,
-    idle_timeout_seconds: f64,
+    bridge: BridgeConfig,
 }
 
 impl DashboardAnalyticsService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
             clickhouse,
-            idle_timeout_seconds,
+            bridge: bridge.into(),
         }
     }
 
@@ -157,10 +159,9 @@ impl DashboardAnalyticsService {
         range: &ResolvedRange,
     ) -> Result<Vec<DailyTotalRow>> {
         let (start_epoch, end_epoch) = range.unix_bounds();
-        let timeline =
-            ActivityTimelineService::new(self.clickhouse.clone(), self.idle_timeout_seconds);
+        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
         let intervals = timeline.intervals(user_id, start_epoch, end_epoch).await?;
-        let canonical = canonicalize_bridged(&intervals, self.idle_timeout_seconds);
+        let canonical = canonicalize_bridged(&intervals, self.bridge);
         let mut totals = HashMap::<String, i64>::new();
         for interval in canonical {
             let timestamp = DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)

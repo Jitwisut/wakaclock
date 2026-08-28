@@ -60,7 +60,8 @@ and an integration test before production rollout.
 
 ## Configuration
 
-Production must set `JWT_SECRET`, `CLICKHOUSE_URL`, `POSTGRES_URL` and an
+Production must set `JWT_SECRET`, `CLICKHOUSE_URL`, `POSTGRES_URL`, `REDIS_URL`
+and `PRESENCE_V2_ENABLED=true` when Presence v2 is enabled, plus an
 explicit allowlist such as:
 
 ```env

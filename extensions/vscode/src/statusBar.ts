@@ -43,6 +43,7 @@ export class StatusBarController implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
   private interval?: NodeJS.Timeout;
   private authFailureReported = false;
+  private deliveryFailureReported = false;
   private legacyCliReported = false;
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
   private getBufferedSeconds: () => number = () => 0;
@@ -124,9 +125,29 @@ export class StatusBarController implements vscode.Disposable {
     try {
       const snapshot = await this.cli.getToday(localTimezone());
       this.lastSnapshot = snapshot;
-      this.connectionState = snapshot.queuedSeconds && snapshot.queuedSeconds > 0
-        ? "offline-queued"
-        : "verified";
+      // A refusal is not an outage and must not be reported as one. Reading today's
+      // total is a GET and keeps working while POST /heartbeats returns 402, so this
+      // branch is the *success* path even when nothing is being recorded — which is
+      // exactly how an expired trial spent a day and a half looking like an idle one.
+      // `queuedSeconds` cannot catch it either: it is scoped to today, so yesterday's
+      // refused backlog reads zero.
+      const refused = snapshot.delivery?.startsWith("REFUSED") ?? false;
+      const backlog = snapshot.queuedHeartbeats ?? 0;
+      this.connectionState = refused
+        ? "subscription-required"
+        : (snapshot.queuedSeconds && snapshot.queuedSeconds > 0) || backlog > 0
+          ? "offline-queued"
+          : "verified";
+      if (refused && !this.deliveryFailureReported) {
+        this.deliveryFailureReported = true;
+        void vscode.window.showWarningMessage(
+          `AtoAxis is not recording your time: ${snapshot.delivery}. ` +
+            `${backlog} heartbeat(s) are held locally and will be sent once the server accepts them.`
+        );
+      }
+      if (!refused) {
+        this.deliveryFailureReported = false;
+      }
       this.render(snapshot);
       if (snapshot.legacyCli && !this.legacyCliReported) {
         this.legacyCliReported = true;
@@ -134,7 +155,9 @@ export class StatusBarController implements vscode.Disposable {
           "wakaclock-cli is too old for timezone-aware status totals. Upgrade the CLI to the current workspace version."
         );
       }
-      this.item.backgroundColor = undefined;
+      this.item.backgroundColor = refused
+        ? new vscode.ThemeColor("statusBarItem.warningBackground")
+        : undefined;
       this.item.command = "wakaclock.showToday";
       this.authFailureReported = false;
       this.item.show();
@@ -227,6 +250,10 @@ export class StatusBarController implements vscode.Disposable {
       (snapshot.discardedSeconds && snapshot.discardedSeconds > 0
         ? `\nDiscarded overlap/idle: ${formatLiveDuration(snapshot.discardedSeconds)}`
         : "") +
+      (snapshot.queuedHeartbeats
+        ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
+        : "") +
+      (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
       (agentState ? `\nAgent: ${agentState}` : "");
   }
 

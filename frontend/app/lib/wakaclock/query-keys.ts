@@ -33,6 +33,17 @@ export const wakaclockKeys = {
   projectMerges: (userId: string) => [...wakaclockKeys.all, 'project-merges', userId] as const,
   projectAnalytics: (userId: string, start: string, end: string, timezone?: string) =>
     [...wakaclockKeys.all, 'project-analytics', userId, start, end, timezone] as const,
+  /**
+   * Deliberately a distinct root segment rather than a discriminator appended to
+   * `projectAnalytics`. The projects page keys its *infinite* query as
+   * `[...projectAnalytics(...), sort]` with `sort` defaulting to 'duration'; the overview
+   * panel reads the same endpoint with the same default 30-day window and the same sort,
+   * so an appended-discriminator key would collide byte-for-byte. The two cache entries
+   * hold different shapes — `{ pages: [...] }` vs a bare response — and whichever query
+   * mounted second would read the other's data and render nothing.
+   */
+  topProjects: (userId: string, start: string, end: string, limit: number, timezone?: string) =>
+    [...wakaclockKeys.all, 'top-projects', userId, start, end, limit, timezone] as const,
   projectAnalyticsDetail: (
     userId: string,
     projectId: string,

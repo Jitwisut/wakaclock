@@ -38,6 +38,14 @@ pub struct StatusBarSnapshot {
     pub discarded_seconds: f64,
 }
 
+/// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
+/// process that saw it — see `record_delivery_failure`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryFailure {
+    pub at: f64,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SendReport {
     pub sent: usize,
@@ -160,6 +168,7 @@ impl ApiClient {
 
         match send_result {
             Ok(()) => {
+                self.clear_delivery_failure();
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 // The server has accepted the current payload at this point. Cache and
@@ -193,6 +202,7 @@ impl ApiClient {
                 })
             }
             Err(error) => {
+                self.record_delivery_failure(&error.to_string());
                 for payload in &payloads {
                     queue.push(payload)?;
                 }
@@ -330,10 +340,16 @@ impl ApiClient {
         for (id, payload) in pending {
             match self.post_json("/api/v1/heartbeats", &payload).await {
                 Ok(()) => {
+                    // A drained queue is proof the server is accepting again, and the
+                    // editor reads this state to decide whether to warn. Leaving a stale
+                    // refusal here would keep the warning up after recovery, which trains
+                    // the developer to ignore it — the opposite of the point.
+                    self.clear_delivery_failure();
                     queue.remove(id)?;
                     flushed += 1;
                 }
                 Err(error) => {
+                    self.record_delivery_failure(&error.to_string());
                     stopped_because = Some(error.to_string());
                     queue.mark_retry(id)?;
                     break;
@@ -431,6 +447,54 @@ impl ApiClient {
         let home =
             dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
         Ok(home.join(".wakaclock").join("last_heartbeat.json"))
+    }
+
+    fn delivery_failure_path() -> AppResult<PathBuf> {
+        let home =
+            dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
+        Ok(home.join(".wakaclock").join("last-delivery-failure.json"))
+    }
+
+    /// Remember why the server last refused a heartbeat.
+    ///
+    /// Without this the refusal existed only in the `SendReport` handed back to the
+    /// caller, and every caller that matters discards it — the agent hooks end their CLI
+    /// invocation with `>/dev/null 2>&1 || true` precisely so a tracking failure can never
+    /// break the tool call it is observing. The heartbeat went quietly into the offline
+    /// queue and the developer's dashboard simply showed a light day.
+    ///
+    /// That is how an expired trial spent a day and a half looking exactly like an idle
+    /// one. Writing the reason down is what lets `wakaclock status` and the editor say
+    /// "the server is refusing these" instead of nothing at all. Best-effort: failing to
+    /// record a failure must never turn into a second failure.
+    fn record_delivery_failure(&self, message: &str) {
+        let Ok(path) = Self::delivery_failure_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let failure = DeliveryFailure {
+            at: chrono::Utc::now().timestamp() as f64,
+            message: message.to_string(),
+        };
+        if let Ok(serialized) = serde_json::to_string(&failure) {
+            let _ = fs::write(&path, serialized);
+        }
+    }
+
+    /// A send got through, so whatever was wrong no longer is.
+    fn clear_delivery_failure(&self) {
+        if let Ok(path) = Self::delivery_failure_path() {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// The last recorded refusal, if the server has not accepted anything since.
+    pub fn last_delivery_failure() -> Option<DeliveryFailure> {
+        let path = Self::delivery_failure_path().ok()?;
+        let raw = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&raw).ok()
     }
 }
 

@@ -8,19 +8,24 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::goal::{CreateGoalRequest, Goal, GoalProgress, UpdateGoalRequest};
+use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
 pub struct GoalService {
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickHouseClient>>,
+    /// Duration goals are measured against this, not `daily_totals`. See `progress`.
+    timeline: Option<ActivityTimelineService>,
 }
 
 impl GoalService {
     pub fn with_clickhouse(
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Arc<ClickHouseClient>,
+        bridge: impl Into<BridgeConfig>,
     ) -> Self {
         Self {
             postgres,
+            timeline: Some(ActivityTimelineService::new(clickhouse.clone(), bridge)),
             clickhouse: Some(clickhouse),
         }
     }
@@ -197,20 +202,52 @@ impl GoalService {
             samples: u64,
         }
 
-        let (query, bind_filter) = progress_query(&goal);
-        let mut request = clickhouse
-            .get_client()
-            .query(&query)
-            .bind(user_id)
-            .bind(start)
-            .bind(end);
-        if let Some(filter) = bind_filter {
-            request = request.bind(filter);
-        }
-        let row = request
-            .fetch_one::<ProgressRow>()
-            .await
-            .context("failed to calculate goal progress")?;
+        // Every duration metric comes from the canonical timeline. Reading `daily_totals`
+        // meant a "code 4 hours today" goal was measured against a `sum(active_seconds)`
+        // rollup — a different number from the one the dashboard showed the user, and one
+        // that a `SummingMergeTree` can leave permanently high after any repair. Only the
+        // heartbeat-count metric is still a genuine row count. See
+        // docs/duration-accuracy-audit.md, Finding 4.
+        let row = match goal.metric.as_str() {
+            "heartbeats" => {
+                let (query, bind_filter) = progress_query(&goal);
+                let mut request = clickhouse
+                    .get_client()
+                    .query(&query)
+                    .bind(user_id)
+                    .bind(start)
+                    .bind(end);
+                if let Some(filter) = bind_filter {
+                    request = request.bind(filter);
+                }
+                request
+                    .fetch_one::<ProgressRow>()
+                    .await
+                    .context("failed to calculate goal progress")?
+            }
+            _ => {
+                let (start_epoch, end_epoch) = goal_period_bounds(start, end)?;
+                let canonical = self
+                    .timeline
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("timeline is required to calculate goal progress"))?
+                    .canonical(user_id, start_epoch, end_epoch)
+                    .await?;
+                let mut value = 0.0;
+                let mut heartbeats = std::collections::HashSet::new();
+                for interval in &canonical {
+                    if !goal_matches(&goal, interval) {
+                        continue;
+                    }
+                    value += interval.end - interval.start;
+                    heartbeats.insert(interval.heartbeat_id.as_str());
+                }
+                ProgressRow {
+                    value,
+                    samples: heartbeats.len() as u64,
+                }
+            }
+        };
         let percentage = if goal.target_seconds > 0 {
             (row.value / goal.target_seconds as f64 * 100.0).min(100.0)
         } else if row.value > 0.0 {
@@ -286,6 +323,49 @@ fn validate_goal(input: &CreateGoalRequest) -> Result<()> {
     Ok(())
 }
 
+/// Inclusive goal-period days as epoch bounds, matching the `date BETWEEN ? AND ?` the
+/// heartbeat-count metric still uses.
+fn goal_period_bounds(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Result<(f64, f64)> {
+    let to_epoch = |day: chrono::NaiveDate| -> Result<f64> {
+        day.and_hms_opt(0, 0, 0)
+            .map(|naive| naive.and_utc().timestamp() as f64)
+            .ok_or_else(|| anyhow!("invalid goal period boundary {day}"))
+    };
+    Ok((to_epoch(start)?, to_epoch(end + chrono::Duration::days(1))?))
+}
+
+/// Does this interval count towards the goal?
+///
+/// `ai_time` and `manual_time` split on the interval's own source, which is the same
+/// attribution the evidence split reports — a goal and the dashboard can no longer
+/// disagree about which seconds were the developer's.
+fn goal_matches(
+    goal: &Goal,
+    interval: &crate::services::activity_timeline::CanonicalInterval,
+) -> bool {
+    let metric_ok = match goal.metric.as_str() {
+        "ai_time" => interval.source == "ai",
+        "manual_time" => interval.source == "editor",
+        _ => true,
+    };
+    if !metric_ok {
+        return false;
+    }
+    let Some(wanted) = goal.filter_value.as_deref() else {
+        return goal.filter_kind == "all";
+    };
+    if goal.filter_kind == "all" {
+        return true;
+    }
+    let dimension = match goal.filter_kind.as_str() {
+        "language" => Dimension::Language,
+        "category" => Dimension::Category,
+        "editor" => Dimension::Editor,
+        _ => Dimension::Project,
+    };
+    dimension.value_of(interval) == wanted
+}
+
 fn progress_query(goal: &Goal) -> (String, Option<String>) {
     let filter = goal.filter_value.clone();
     let value_expression = match goal.metric.as_str() {
@@ -299,15 +379,6 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
             return (
                 "SELECT count() AS value, count() AS samples
                  FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND date BETWEEN ? AND ?"
-                    .to_string(),
-                None,
-            );
-        }
-        if goal.metric == "time" {
-            return (
-                "SELECT sum(total_seconds) AS value, sum(heartbeat_count) AS samples
-                 FROM wakaclock.daily_totals
                  WHERE user_id = ? AND date BETWEEN ? AND ?"
                     .to_string(),
                 None,

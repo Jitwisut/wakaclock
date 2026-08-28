@@ -26,6 +26,27 @@ pub struct AnalyticsRateLimiter {
     inner: Governor<Uuid, DefaultKeyedStateStore<Uuid>, DefaultClock>,
 }
 
+/// Movement/zone updates are intentionally much cheaper than analytics, but a browser
+/// can still generate unbounded drag events. This limiter keeps the public contract at
+/// ten accepted updates per second per authenticated user.
+pub struct PresenceRateLimiter {
+    inner: Governor<Uuid, DefaultKeyedStateStore<Uuid>, DefaultClock>,
+}
+
+impl PresenceRateLimiter {
+    pub fn new() -> Arc<Self> {
+        let quota = Quota::per_second(NonZeroU32::new(10).expect("10 is non-zero"))
+            .allow_burst(NonZeroU32::new(10).expect("10 is non-zero"));
+        Arc::new(Self {
+            inner: Governor::keyed(quota),
+        })
+    }
+
+    pub fn check(&self, user_id: Uuid) -> Result<(), ()> {
+        self.inner.check_key(&user_id).map_err(|_| ())
+    }
+}
+
 impl AnalyticsRateLimiter {
     /// 30 expensive operations per minute, with a burst of 10 for a dashboard's initial
     /// parallel requests. A normal dashboard refresh stays well below this; pathological

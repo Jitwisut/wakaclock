@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use axum::http::{header, HeaderValue, Method};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer};
 use tracing::{error, info};
 
@@ -139,6 +139,71 @@ async fn main() -> Result<()> {
             error!("Failed to load OAuth token cache: {}", e);
             return Err(e);
         }
+    }
+
+    // Reconcile active Redis projections into ClickHouse even when no browser is currently
+    // connected. This closes sessions after lease expiry and provides the recovery timeout
+    // boundary for an API restart without making analytics a dependency of live room joins.
+    if let (Some(redis), Some(presence_repo)) = (
+        app_state.redis_presence.clone(),
+        app_state.presence_repo.clone(),
+    ) {
+        let session_service = app_state.coworking_session_service.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                ticker.tick().await;
+                let recovery_before =
+                    chrono::Utc::now().timestamp().saturating_sub(600).max(0) as u32;
+                if let Err(error) = session_service
+                    .recover_stale_sessions(recovery_before)
+                    .await
+                {
+                    tracing::warn!(%error, "presence reconciler could not recover stale sessions");
+                }
+                let rooms = match redis.active_rooms().await {
+                    Ok(rooms) => rooms,
+                    Err(error) => {
+                        tracing::warn!(%error, "presence reconciler could not list Redis rooms");
+                        continue;
+                    }
+                };
+                for room_id in rooms {
+                    let room = match presence_repo.get(room_id).await {
+                        Ok(room) => room,
+                        Err(error) => {
+                            tracing::warn!(%error, %room_id, "presence reconciler could not load room");
+                            continue;
+                        }
+                    };
+                    let Some(room) = room else {
+                        let _ = redis.clear_room(room_id).await;
+                        continue;
+                    };
+                    if room.ended_at.is_some()
+                        || room
+                            .expires_at
+                            .is_some_and(|expires_at| expires_at <= chrono::Utc::now())
+                    {
+                        let _ = redis.clear_room(room_id).await;
+                        continue;
+                    }
+                    match redis.snapshot(room_id).await {
+                        Ok(live) => {
+                            if let Err(error) = session_service
+                                .reconcile_live_snapshot(room_id, room.team_id, &live.sessions)
+                                .await
+                            {
+                                tracing::warn!(%error, %room_id, "presence reconciler could not checkpoint session");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, %room_id, "presence reconciler could not read Redis snapshot");
+                        }
+                    }
+                }
+            }
+        });
     }
 
     // 3. Setup router

@@ -31,8 +31,9 @@ wakaclockV2Client.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiErrorBody>) => {
     const status = error.response?.status ?? null;
+    const payload = error.response?.data?.error;
     const message =
-      error.response?.data?.error ??
+      (typeof payload === 'string' ? payload : payload?.message) ??
       (error.code === 'ECONNABORTED'
         ? 'Request timed out — is the backend running?'
         : error.message);

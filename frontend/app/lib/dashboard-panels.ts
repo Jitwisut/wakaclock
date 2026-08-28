@@ -84,6 +84,12 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     description: 'Totals and averages for the selected date range.',
   },
   {
+    id: 'overview.top-projects',
+    page: OVERVIEW,
+    label: 'Projects',
+    description: 'The projects with the most time in the selected range. Each name opens its charts.',
+  },
+  {
     id: 'overview.summaries',
     page: OVERVIEW,
     label: 'Summaries',
