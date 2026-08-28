@@ -51,6 +51,8 @@ pub struct Config {
     pub presence_v2_enabled: bool,
     pub jwt_secret: String,
     pub cors_origins: CorsOrigins,
+    /// Public browser origin used for human-facing OAuth/device approval links.
+    pub public_app_url: String,
     /// Gates POST /internal/subscription — the seam an external payment system calls
     /// to mark an account active/canceled. `None` (the env var unset) disables the
     /// route entirely (404, same as an admin surface with no token configured) rather
@@ -103,6 +105,7 @@ impl Config {
         // tuning IDLE_TIMEOUT_MINUTES moves both streams together unless the agent one is
         // set explicitly.
         let idle_timeout_seconds = parse_idle_timeout(std::env::var("IDLE_TIMEOUT_MINUTES").ok())?;
+        let public_app_url = parse_public_app_url(std::env::var("ATOAXIS_APP_URL").ok())?;
 
         Ok(Self {
             server: ServerConfig {
@@ -141,6 +144,7 @@ impl Config {
                 .unwrap_or(false),
             jwt_secret,
             cors_origins,
+            public_app_url,
             internal_api_secret: std::env::var("INTERNAL_API_SECRET")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
@@ -221,6 +225,18 @@ fn parse_agent_idle_timeout(
         anyhow::bail!("AGENT_IDLE_TIMEOUT_MINUTES must be between 0 and 1440, or `off`");
     }
     Ok(Some(minutes * 60.0))
+}
+
+fn parse_public_app_url(value: Option<String>) -> Result<String> {
+    let value = value.unwrap_or_else(|| "http://localhost:3000".to_string());
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("ATOAXIS_APP_URL must not be empty");
+    }
+    validate_cors_origin(value).context(
+        "ATOAXIS_APP_URL must be an http(s) origin without a path, query, or trailing slash",
+    )?;
+    Ok(value.to_string())
 }
 
 fn parse_cors_origins(value: Option<String>) -> Result<CorsOrigins> {
@@ -364,6 +380,16 @@ mod tests {
         assert!(parse_agent_idle_timeout(Some("soon".to_string()), 900.0).is_err());
         assert!(parse_agent_idle_timeout(Some("-1".to_string()), 900.0).is_err());
         assert!(parse_agent_idle_timeout(Some("1441".to_string()), 900.0).is_err());
+    }
+
+    #[test]
+    fn public_app_url_defaults_to_localhost_and_rejects_paths() {
+        assert_eq!(parse_public_app_url(None).unwrap(), "http://localhost:3000");
+        assert_eq!(
+            parse_public_app_url(Some(" https://atoaxis.com ".to_string())).unwrap(),
+            "https://atoaxis.com"
+        );
+        assert!(parse_public_app_url(Some("https://atoaxis.com/device".to_string())).is_err());
     }
 
     #[test]

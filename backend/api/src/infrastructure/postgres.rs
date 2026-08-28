@@ -88,6 +88,10 @@ mod tests {
                 "migration is missing {table}"
             );
         }
+        assert!(
+            FOUNDATION_MIGRATION.contains("'atoaxis_figma'"),
+            "migration is missing the first-party Figma OAuth client"
+        );
         assert!(PRESENCE_MIGRATION.contains("CREATE EXTENSION IF NOT EXISTS pgcrypto"));
         assert!(PRESENCE_MIGRATION.contains("Pairing Table A"));
         for table in [

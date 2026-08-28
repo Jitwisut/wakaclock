@@ -87,17 +87,28 @@ impl AuthKeyCache {
         let rows = postgres
             .client()
             .query(
-                "SELECT user_id, token_hash, scopes,
-                        extract(epoch from expires_at)::bigint AS expires_epoch
-                 FROM oauth_access_tokens
-                 WHERE revoked_at IS NULL AND expires_at > now()",
+                "SELECT t.user_id, t.token_hash, t.scopes,
+                        extract(epoch from t.expires_at)::bigint AS expires_epoch
+                 FROM oauth_access_tokens t
+                 JOIN oauth_apps a ON a.id = t.app_id
+                 WHERE t.revoked_at IS NULL AND t.expires_at > now()
+                   AND a.revoked_at IS NULL",
                 &[],
             )
             .await
             .context("failed to refresh OAuth token cache from PostgreSQL")?;
+        let previous_oauth_hashes = self
+            .oauth_scopes
+            .read()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
         let mut map = self.by_hash.write();
+        map.retain(|hash, _| !previous_oauth_hashes.contains(hash));
         let mut expirations = self.oauth_expirations.write();
+        expirations.clear();
         let mut scopes_by_hash = self.oauth_scopes.write();
+        scopes_by_hash.clear();
         for row in rows {
             let user_id: Uuid = row.get("user_id");
             let token_hash: String = row.get("token_hash");

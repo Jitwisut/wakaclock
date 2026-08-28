@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS oauth_apps (
     revoked_at TIMESTAMPTZ
 );
 
+INSERT INTO oauth_apps
+    (id, owner_user_id, organization_id, name, client_id, client_secret_hash, is_confidential)
+VALUES
+    ('019c91f4-4c3e-7b31-a102-3a5f9d0b7e10', NULL, NULL, 'AtoAxis Figma', 'atoaxis_figma', NULL, FALSE)
+ON CONFLICT (client_id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS oauth_redirect_uris (
     app_id UUID NOT NULL REFERENCES oauth_apps(id) ON DELETE CASCADE,
     redirect_uri TEXT NOT NULL,

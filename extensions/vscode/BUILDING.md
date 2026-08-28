@@ -22,6 +22,19 @@ notarization on macOS and Authenticode on Windows. The GitHub Actions matrix in
 `.github/workflows/release-extension.yml` packages all eight targets and blocks
 publication when an artifact, checksum or signature is missing.
 
+GitHub-hosted runners are ephemeral, so the workflow imports the signing certificates on every
+release. Configure these repository/environment secrets before tagging a release:
+
+- `MACOS_CERTIFICATE_BASE64` — base64-encoded Developer ID `.p12` including its private key;
+- `MACOS_CERTIFICATE_PASSWORD` — password protecting that `.p12`;
+- `MACOS_SIGNING_IDENTITY` — Developer ID Application identity used by `codesign`;
+- `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` — notarization credentials;
+- `WINDOWS_CERTIFICATE_BASE64` — base64-encoded Authenticode `.pfx` including its private key;
+- `WINDOWS_CERTIFICATE_PASSWORD` — password protecting that `.pfx`.
+
+The Windows certificate thumbprint is derived from the certificate imported into the runner; it
+is not stored as a separate secret.
+
 For a local CLI smoke test (without changing the user's config), point the extension
 at a development override and use the new machine-readable probe:
 

@@ -40,6 +40,8 @@ const node_child_process_1 = require("node:child_process");
 const path = __importStar(require("node:path"));
 const node_util_1 = require("node:util");
 const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
+const SUPPORTED_CLI_PROTOCOL_VERSION = 1;
+const SAFE_CLI_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 /**
  * Owns the lifecycle of the native CLI shipped in the VSIX. The executable is
  * copied out of VS Code's versioned extension directory before it is used by an
@@ -81,6 +83,12 @@ class ManagedCliManager {
         const sourceBinary = path.join(this.context.extensionPath, "resources", "bin", binaryName);
         const manifestPath = path.join(this.context.extensionPath, "resources", "cli-manifest.json");
         const manifest = await readManifest(manifestPath);
+        if (manifest.protocolVersion !== SUPPORTED_CLI_PROTOCOL_VERSION) {
+            throw new Error(`Bundled AtoAxis CLI protocol ${manifest.protocolVersion} is not supported by this Extension.`);
+        }
+        if (this.context.extensionVersion && manifest.cliVersion !== this.context.extensionVersion) {
+            throw new Error(`Bundled AtoAxis CLI version ${manifest.cliVersion} does not match Extension ${this.context.extensionVersion}.`);
+        }
         if (manifest.target !== target) {
             throw new Error(`Bundled AtoAxis CLI targets ${manifest.target}, but this Extension Host requires ${target}. ` +
                 "Install the platform-specific AtoAxis package for this machine.");
@@ -146,6 +154,7 @@ async function readManifest(file) {
     const manifest = parsed;
     if (manifest.schemaVersion !== 1 ||
         typeof manifest.cliVersion !== "string" ||
+        !SAFE_CLI_VERSION.test(manifest.cliVersion) ||
         typeof manifest.protocolVersion !== "number" ||
         typeof manifest.target !== "string" ||
         typeof manifest.binary !== "string" ||
@@ -201,5 +210,11 @@ async function resolveTarget() {
     }
     throw new Error(`Unsupported AtoAxis platform: ${process.platform}/${process.arch}`);
 }
-exports.managedCliInternals = { readManifest, resolveTarget, sha256 };
+exports.managedCliInternals = {
+    readManifest,
+    resolveTarget,
+    sha256,
+    SAFE_CLI_VERSION,
+    SUPPORTED_CLI_PROTOCOL_VERSION,
+};
 //# sourceMappingURL=managedCli.js.map

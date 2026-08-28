@@ -95,16 +95,18 @@ pub async fn revoke_app(
 ) -> Result<StatusCode, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
-    if state
+    let Some(access_hashes) = state
         .oauth_service
         .revoke_app(owner_user_id, &client_id)
         .await
         .map_err(OAuthError::service_unavailable)?
-    {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(OAuthError::bad_request("OAuth application not found"))
+    else {
+        return Err(OAuthError::bad_request("OAuth application not found"));
+    };
+    for hash in access_hashes {
+        state.auth_cache.remove_hash(&hash);
     }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn authorize(
@@ -201,12 +203,14 @@ pub async fn revoke(
     State(state): State<Arc<AppState>>,
     Form(form): Form<RevokeForm>,
 ) -> Result<StatusCode, OAuthError> {
-    state
+    let revoked_hashes = state
         .oauth_service
         .revoke(&form.token)
         .await
         .map_err(OAuthError::service_unavailable)?;
-    state.auth_cache.remove_hash(&auth::hash_key(&form.token));
+    for hash in revoked_hashes {
+        state.auth_cache.remove_hash(&hash);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -258,9 +262,10 @@ pub async fn device_code(
     Form(form): Form<DeviceCodeForm>,
 ) -> Result<Json<crate::services::oauth::DeviceCodeResponse>, OAuthError> {
     let scopes = parse_scopes(form.scope.as_deref())?;
+    let verification_uri = format!("{}/device", state.config.public_app_url);
     let response = state
         .oauth_service
-        .issue_device_code(&form.client_id, &scopes)
+        .issue_device_code(&form.client_id, &scopes, &verification_uri)
         .await
         .map_err(OAuthError::invalid_grant)?;
     Ok(Json(response))
