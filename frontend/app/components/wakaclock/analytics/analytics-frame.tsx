@@ -23,6 +23,8 @@ export interface AnalyticsFrameContext {
   setRange: ReturnType<typeof useAnalyticsFilters>['setRange'];
 }
 
+type AnalyticsHrefOverrides = Parameters<ReturnType<typeof useAnalyticsFilters>['href']>[1];
+
 export function AnalyticsFrame({
   children,
   description,
@@ -35,10 +37,16 @@ export function AnalyticsFrame({
   title: string;
 }) {
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
-  const filterState = useAnalyticsFilters(30);
-  const buildHref = filterState.href;
+  const {
+    filters,
+    href: buildHref,
+    reset,
+    setFilter,
+    setRange,
+    toRequest,
+  } = useAnalyticsFilters(30);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const request = filterState.toRequest(timezone, lockedProjectId);
+  const request = toRequest(timezone, lockedProjectId);
   const query = useQuery({
     enabled: Boolean(userId),
     queryFn: () => getAnalyticsExplorer(request),
@@ -59,7 +67,7 @@ export function AnalyticsFrame({
     ] as const,
   });
   const href = React.useCallback(
-    (path: string, overrides: Parameters<typeof filterState.href>[1] = {}) =>
+    (path: string, overrides: AnalyticsHrefOverrides = {}) =>
       buildHref(path, {
         ...overrides,
         ...(lockedProjectId ? { projectId: lockedProjectId } : {}),
@@ -82,19 +90,19 @@ export function AnalyticsFrame({
             {query.data && (
               <>
                 <AnalyticsFilterBar
-                  filters={filterState.filters}
+                  filters={filters}
                   lockedProjectId={lockedProjectId}
-                  onReset={filterState.reset}
-                  onSetFilter={filterState.setFilter}
-                  onSetRange={filterState.setRange}
+                  onReset={reset}
+                  onSetFilter={setFilter}
+                  onSetRange={setRange}
                   options={query.data.filter_options}
                 />
                 {children({
                   data: query.data,
-                  filters: filterState.filters,
+                  filters,
                   href,
-                  setFilter: filterState.setFilter,
-                  setRange: filterState.setRange,
+                  setFilter,
+                  setRange,
                 })}
               </>
             )}

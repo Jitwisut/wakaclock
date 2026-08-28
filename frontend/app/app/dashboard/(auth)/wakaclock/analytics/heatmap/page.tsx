@@ -1,9 +1,6 @@
 'use client';
 
-import {
-  CalendarHeatmap,
-  TimeOfDayHeatmap,
-} from '@/components/wakaclock/analytics/activity-heatmaps';
+import { ActivityHeatmapBoard } from '@/components/wakaclock/analytics/activity-heatmaps';
 import { AnalyticsEmptyState } from '@/components/wakaclock/analytics/analytics-empty-state';
 import { AnalyticsFrame } from '@/components/wakaclock/analytics/analytics-frame';
 import { SourceSummary } from '@/components/wakaclock/analytics/source-summary';
@@ -24,11 +21,10 @@ export default function ActivityHeatmapPage() {
           {data.summary.total_seconds === 0 && (
             <AnalyticsEmptyState message="No activity is available for this heatmap filter." />
           )}
-          <CalendarHeatmap
+          <ActivityHeatmapBoard
             data={data}
             onSelectDate={(date) => setRange({ start: date, end: date })}
           />
-          <TimeOfDayHeatmap data={data} />
         </div>
       )}
     </AnalyticsFrame>
