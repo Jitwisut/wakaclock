@@ -1,2 +1,9 @@
 .env
 target/
+.worktrees/
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo

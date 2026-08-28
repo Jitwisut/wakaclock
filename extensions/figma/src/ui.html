@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root { font-family: Inter, system-ui, sans-serif; color-scheme: light dark; }
+      body { margin: 0; padding: 20px; background: var(--figma-color-bg); color: var(--figma-color-text); }
+      h1 { font-size: 16px; margin: 0 0 8px; }
+      p { font-size: 12px; line-height: 1.5; margin: 0 0 16px; color: var(--figma-color-text-secondary); }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      button { border: 1px solid var(--figma-color-border); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+      #connect { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); border-color: transparent; }
+    </style>
+  </head>
+  <body>
+    <h1 id="status">Starting AtoAxis…</h1>
+    <p id="detail">Checking your device authorization.</p>
+    <div class="actions">
+      <button id="connect" type="button" hidden>Connect AtoAxis</button>
+      <button id="disconnect" type="button" hidden>Disconnect</button>
+      <button id="close" type="button">Close</button>
+    </div>
+    <!-- ATOAXIS_UI_SCRIPT -->
+  </body>
+</html>

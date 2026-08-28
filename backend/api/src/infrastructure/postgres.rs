@@ -83,5 +83,9 @@ mod tests {
                 "migration is missing {table}"
             );
         }
+        assert!(
+            FOUNDATION_MIGRATION.contains("'atoaxis_figma'"),
+            "migration is missing the first-party Figma OAuth client"
+        );
     }
 }

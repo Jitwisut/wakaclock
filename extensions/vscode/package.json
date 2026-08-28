@@ -1,6 +1,6 @@
 {
   "name": "atoaxis-vscode",
-  "displayName": "AtoAxis \u2014 Developer Time Tracking",
+  "displayName": "AtoAxis — Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
   "version": "0.1.0",
   "publisher": "atoaxis",
@@ -159,6 +159,6 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.2.1",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   }
 }

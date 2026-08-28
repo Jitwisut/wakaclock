@@ -18,6 +18,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `POSTGRES_MAX_CONNECTIONS` | no | |
 | `DATABASE_URL` | no | Also read; overlaps with `POSTGRES_URL` — `Unknown / Needs verification` which wins. |
 | `CORS_ORIGINS` | no | Comma-separated allowlist, or `*` for permissive. `*` is only safe single-tenant. |
+| `ATOAXIS_APP_URL` | no | Public browser origin used in OAuth/device approval links; defaults to `http://localhost:3000`. |
 | `SERVER_HOST`, `SERVER_PORT` | no | Default `0.0.0.0`, see `config/mod.rs`. |
 | `INTERNAL_API_SECRET` | no | Unset ⇒ `POST /api/v1/internal/subscription` returns 404 rather than being reachable uncredentialed. |
 | `IDLE_TIMEOUT_MINUTES` | no | Max pause between proven activity intervals. `0` disables idle bridging. |

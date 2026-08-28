@@ -4,11 +4,33 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const ALLOWED_TARGETS = new Set([
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64",
+  "win32-arm64",
+  "linux-x64",
+  "linux-arm64",
+  "alpine-x64",
+  "alpine-arm64",
+]);
+const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
 const target = process.argv[2];
 const binary = process.argv[3] || (process.platform === "win32" ? "wakaclock.exe" : "wakaclock");
 const version = process.argv[4] || process.env.CLI_VERSION || "0.1.0";
 if (!target) {
   throw new Error("usage: generate-cli-manifest.js <target> [binary] [version]");
+}
+if (!ALLOWED_TARGETS.has(target)) {
+  throw new Error(`unsupported VS Code target: ${target}`);
+}
+if (!SAFE_VERSION.test(version)) {
+  throw new Error(`invalid CLI version: ${version}`);
+}
+const expectedBinary = target.startsWith("win32-") ? "wakaclock.exe" : "wakaclock";
+if (binary !== expectedBinary) {
+  throw new Error(`target ${target} requires ${expectedBinary}, got ${binary}`);
 }
 
 const root = path.resolve(__dirname, "..");

@@ -7,6 +7,8 @@ import type { Logger } from "./logging";
 import type { WakaclockConfigSnapshot } from "./types";
 
 const execFileAsync = promisify(execFile);
+const SUPPORTED_CLI_PROTOCOL_VERSION = 1;
+const SAFE_CLI_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export interface CliManifest {
   schemaVersion: number;
@@ -71,6 +73,16 @@ export class ManagedCliManager implements CliPathResolver {
     const sourceBinary = path.join(this.context.extensionPath, "resources", "bin", binaryName);
     const manifestPath = path.join(this.context.extensionPath, "resources", "cli-manifest.json");
     const manifest = await readManifest(manifestPath);
+    if (manifest.protocolVersion !== SUPPORTED_CLI_PROTOCOL_VERSION) {
+      throw new Error(
+        `Bundled AtoAxis CLI protocol ${manifest.protocolVersion} is not supported by this Extension.`,
+      );
+    }
+    if (this.context.extensionVersion && manifest.cliVersion !== this.context.extensionVersion) {
+      throw new Error(
+        `Bundled AtoAxis CLI version ${manifest.cliVersion} does not match Extension ${this.context.extensionVersion}.`,
+      );
+    }
     if (manifest.target !== target) {
       throw new Error(
         `Bundled AtoAxis CLI targets ${manifest.target}, but this Extension Host requires ${target}. ` +
@@ -143,6 +155,7 @@ async function readManifest(file: string): Promise<CliManifest> {
   if (
     manifest.schemaVersion !== 1 ||
     typeof manifest.cliVersion !== "string" ||
+    !SAFE_CLI_VERSION.test(manifest.cliVersion) ||
     typeof manifest.protocolVersion !== "number" ||
     typeof manifest.target !== "string" ||
     typeof manifest.binary !== "string" ||
@@ -195,4 +208,10 @@ async function resolveTarget(): Promise<string> {
   throw new Error(`Unsupported AtoAxis platform: ${process.platform}/${process.arch}`);
 }
 
-export const managedCliInternals = { readManifest, resolveTarget, sha256 };
+export const managedCliInternals = {
+  readManifest,
+  resolveTarget,
+  sha256,
+  SAFE_CLI_VERSION,
+  SUPPORTED_CLI_PROTOCOL_VERSION,
+};

@@ -42,6 +42,8 @@ pub struct Config {
     pub postgres: PostgresConfig,
     pub jwt_secret: String,
     pub cors_origins: CorsOrigins,
+    /// Public browser origin used for human-facing OAuth/device approval links.
+    pub public_app_url: String,
     /// Gates POST /internal/subscription — the seam an external payment system calls
     /// to mark an account active/canceled. `None` (the env var unset) disables the
     /// route entirely (404, same as an admin surface with no token configured) rather
@@ -83,6 +85,7 @@ impl Config {
         };
 
         let cors_origins = parse_cors_origins(std::env::var("CORS_ORIGINS").ok())?;
+        let public_app_url = parse_public_app_url(std::env::var("ATOAXIS_APP_URL").ok())?;
 
         Ok(Self {
             server: ServerConfig {
@@ -113,6 +116,7 @@ impl Config {
             },
             jwt_secret,
             cors_origins,
+            public_app_url,
             internal_api_secret: std::env::var("INTERNAL_API_SECRET")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
@@ -140,6 +144,18 @@ fn parse_idle_timeout(value: Option<String>) -> Result<f64> {
         anyhow::bail!("IDLE_TIMEOUT_MINUTES must be between 0 and 1440");
     }
     Ok(minutes * 60.0)
+}
+
+fn parse_public_app_url(value: Option<String>) -> Result<String> {
+    let value = value.unwrap_or_else(|| "http://localhost:3000".to_string());
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("ATOAXIS_APP_URL must not be empty");
+    }
+    validate_cors_origin(value).context(
+        "ATOAXIS_APP_URL must be an http(s) origin without a path, query, or trailing slash",
+    )?;
+    Ok(value.to_string())
 }
 
 fn parse_cors_origins(value: Option<String>) -> Result<CorsOrigins> {
@@ -227,6 +243,16 @@ fn validate_cors_origin(origin: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_app_url_defaults_to_localhost_and_rejects_paths() {
+        assert_eq!(parse_public_app_url(None).unwrap(), "http://localhost:3000");
+        assert_eq!(
+            parse_public_app_url(Some(" https://atoaxis.com ".to_string())).unwrap(),
+            "https://atoaxis.com"
+        );
+        assert!(parse_public_app_url(Some("https://atoaxis.com/device".to_string())).is_err());
+    }
 
     #[test]
     fn parses_explicit_origins_without_silently_dropping_entries() {
