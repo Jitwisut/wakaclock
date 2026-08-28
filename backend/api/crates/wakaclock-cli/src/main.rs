@@ -4,14 +4,14 @@ use std::{
     collections::HashSet,
     error::Error,
     fs,
-    io::{self, Read},
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
 use uuid::Uuid;
 mod agent_service;
-use wakaclock_ast::detect;
+use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
         parse_claude_usage, parse_codex_usage, parse_gemini_usage, AiActivityParser,
@@ -1496,15 +1496,16 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
     heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
     heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
 
-    if Path::new(&entity_path).exists() {
-        if let Ok(source) = fs::read(&entity_path) {
-            heartbeat.lines = Some(source.iter().filter(|&&b| b == b'\n').count() as u32 + 1);
-            if let Some(ast) = detect(&entity_path, &source) {
-                heartbeat.language = Some(ast.language.clone());
-                heartbeat.ast_language = Some(ast.language);
-                heartbeat.ast_confidence = Some(ast.confidence);
-                heartbeat.dependencies = ast.dependencies;
-            }
+    let entity_file = Path::new(&entity_path);
+    if entity_file.exists() {
+        if let Ok(lines) = count_file_lines(entity_file) {
+            heartbeat.lines = Some(lines);
+        }
+        if let Ok(Some(ast)) = detect_file(entity_file) {
+            heartbeat.language = Some(ast.language.clone());
+            heartbeat.ast_language = Some(ast.language);
+            heartbeat.ast_confidence = Some(ast.confidence);
+            heartbeat.dependencies = ast.dependencies;
         }
     }
 
@@ -1528,6 +1529,25 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
     }
 
     heartbeat
+}
+
+fn count_file_lines(path: &Path) -> io::Result<u32> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut newline_count = 0u32;
+
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        newline_count = newline_count
+            .saturating_add(buffer.iter().filter(|&&byte| byte == b'\n').count() as u32);
+        let consumed = buffer.len();
+        reader.consume(consumed);
+    }
+
+    Ok(newline_count.saturating_add(1))
 }
 
 fn build_heartbeat(
@@ -1559,10 +1579,10 @@ fn build_heartbeat(
         .unwrap_or_else(|| "unknown".to_string());
     heartbeat.editor = detect_editor();
 
-    if Path::new(&entity_path).exists() {
-        let source = fs::read(&entity_path)?;
-        heartbeat.lines = Some(source.iter().filter(|&&b| b == b'\n').count() as u32 + 1);
-        if let Some(ast) = detect(&entity_path, &source) {
+    let entity_file = Path::new(&entity_path);
+    if entity_file.exists() {
+        heartbeat.lines = Some(count_file_lines(entity_file)?);
+        if let Some(ast) = detect_file(entity_file)? {
             heartbeat.language = Some(ast.language.clone());
             heartbeat.ast_language = Some(ast.language);
             heartbeat.ast_confidence = Some(ast.confidence);

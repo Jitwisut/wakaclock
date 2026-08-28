@@ -14,4 +14,5 @@ tree-sitter-go = "0.23"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 dashmap = "6"
+parking_lot = "0.12"
 tracing = { workspace = true }
