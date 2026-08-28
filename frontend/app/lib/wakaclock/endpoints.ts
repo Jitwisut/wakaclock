@@ -1,5 +1,6 @@
 import { wakaclockClient } from './client';
 
+import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from './analytics';
 import type {
   AiStatsResponse,
   AllTimeResponse,
@@ -157,6 +158,13 @@ export async function getCurrentUser(userId: string) {
 
 // POST /users/current/api_key — requires a logged-in session; user_id comes from that
 // session (Authorization header, attached automatically), not a query param.
+export async function getAnalyticsExplorer(params: AnalyticsExplorerParams) {
+  const { data } = await wakaclockClient.get<AnalyticsExplorerResponse>('/dashboard/explorer', {
+    params,
+  });
+  return data;
+}
+
 // GET /dashboard/analytics — the Phase 9 overview: summary plus every breakdown in
 // one request, sized for the initial dashboard render.
 export async function getDashboardAnalytics(params: {

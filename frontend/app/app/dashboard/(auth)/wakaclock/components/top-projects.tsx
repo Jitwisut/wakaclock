@@ -58,7 +58,7 @@ export function TopProjects() {
                     "my-project 4h 12m", and the duration stays readable as adjacent text. */}
                 <Link
                   className="focus-visible:ring-ring hover:text-primary flex min-h-11 min-w-0 flex-1 cursor-pointer items-center rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
-                  href={`/dashboard/wakaclock/projects/${project.project_id}`}
+                  href={`/dashboard/wakaclock/analytics/projects/${project.project_id}?start=${start}&end=${end}&project_id=${project.project_id}`}
                 >
                   <span className="truncate text-sm font-medium">{project.name}</span>
                 </Link>
@@ -71,7 +71,7 @@ export function TopProjects() {
 
           <Link
             className="text-muted-foreground hover:text-foreground mt-4 inline-flex min-h-11 cursor-pointer items-center text-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            href="/dashboard/wakaclock/projects"
+            href={`/dashboard/wakaclock/analytics/projects?start=${start}&end=${end}`}
           >
             View all projects
           </Link>

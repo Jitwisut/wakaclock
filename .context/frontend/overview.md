@@ -62,6 +62,13 @@ dashboard's shadcn tokens, SSE-driven state instead of TanStack Query, and no
 `QueryState`/`useWakaclockRange`. Do not apply the normal panel pattern there,
 and do not apply its conventions to a normal dashboard panel.
 
+`components/wakaclock/analytics/` is the shared Analytics Explorer surface. Its
+Timeline, Human vs AI, Projects and Heatmap routes all read one URL-backed filter
+contract from `use-analytics-filters.ts` and one canonical duration response from
+`GET /api/v1/dashboard/explorer`. New analytics views should preserve those URL
+filters and derive duration from the canonical activity timeline rather than
+summing raw heartbeat `active_seconds` independently.
+
 ## State management — Existing Convention
 
 - **Server state:** TanStack Query. See [data-layer.md](data-layer.md).

@@ -107,18 +107,21 @@ describe('TopProjects', () => {
     const link = await screen.findByRole('link', { name: 'wakaclock' });
     expect(link).toHaveAttribute(
       'href',
-      '/dashboard/wakaclock/projects/11111111-1111-4111-8111-111111111111'
+      expect.stringContaining('/dashboard/wakaclock/analytics/projects/11111111-1111-4111-8111-111111111111?')
     );
-    expect(
-      await screen.findByRole('link', { name: 'atoaxis-vscode' })
-    ).toHaveAttribute('href', '/dashboard/wakaclock/projects/22222222-2222-4222-8222-222222222222');
+    expect(await screen.findByRole('link', { name: 'atoaxis-vscode' })).toHaveAttribute(
+      'href',
+      expect.stringContaining(
+        '/dashboard/wakaclock/analytics/projects/22222222-2222-4222-8222-222222222222?'
+      )
+    );
 
     // The requirement is that the NAME is the link. If the duration ever slips inside the
     // anchor, the accessible name becomes "wakaclock 2h" and this fails.
     expect(within(link).queryByText(/2h/)).toBeNull();
     expect(screen.getByRole('link', { name: 'View all projects' })).toHaveAttribute(
       'href',
-      '/dashboard/wakaclock/projects'
+      expect.stringContaining('/dashboard/wakaclock/analytics/projects?')
     );
   });
 
