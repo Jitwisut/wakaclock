@@ -124,6 +124,13 @@ class WakaclockCliService {
             ...(lines["Discarded seconds"] === undefined
                 ? {}
                 : { discardedSeconds: Number(lines["Discarded seconds"]) }),
+            // Queue *depth*, which `Queued seconds` cannot stand in for: that figure is
+            // scoped to today, so a backlog the server refused yesterday reports zero and
+            // the status bar looked perfectly healthy while nothing was being recorded.
+            ...(lines["Queued heartbeats"] === undefined
+                ? {}
+                : { queuedHeartbeats: Number.parseInt(lines["Queued heartbeats"], 10) }),
+            ...(lines.Delivery === undefined ? {} : { delivery: lines.Delivery }),
             ...(legacyCli ? { legacyCli: true } : {}),
         };
     }
