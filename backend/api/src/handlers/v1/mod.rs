@@ -2,6 +2,7 @@ pub mod account_analytics;
 pub mod ai_stats;
 pub mod ai_usage;
 pub mod all_time;
+pub mod analytics_explorer;
 pub mod api_key;
 pub mod auth;
 pub mod catalog;
@@ -212,6 +213,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/:user/ai_stats", get(ai_stats::get))
         .route("/dashboard/analytics", get(dashboard_analytics::overview))
+        .route("/dashboard/explorer", get(analytics_explorer::get))
         .route(
             "/users/current/api_key",
             get(api_key::current)

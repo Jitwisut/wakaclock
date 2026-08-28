@@ -17,7 +17,7 @@ import {
   TrophyIcon,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 
 import { LinkPending } from '@/components/link-pending';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -115,7 +115,17 @@ export const navItems: NavGroup[] = [
     title: 'Wakaclock',
     items: [
       { title: 'Overview', href: '/dashboard/wakaclock', icon: LayoutDashboardIcon },
-      { title: 'Projects', href: '/dashboard/wakaclock/projects', icon: FolderGit2Icon },
+      {
+        title: 'Analytics',
+        href: '/dashboard/wakaclock/analytics/timeline',
+        icon: TrendingUpIcon,
+        items: [
+          { title: 'Activity Timeline', href: '/dashboard/wakaclock/analytics/timeline' },
+          { title: 'Human vs AI', href: '/dashboard/wakaclock/analytics/human-ai' },
+          { title: 'Projects', href: '/dashboard/wakaclock/analytics/projects', icon: FolderGit2Icon },
+          { title: 'Activity Heatmap', href: '/dashboard/wakaclock/analytics/heatmap' },
+        ],
+      },
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
       { title: 'Keystrokes', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
@@ -137,6 +147,23 @@ export const navItems: NavGroup[] = [
     ],
   },
 ];
+
+export function preserveAnalyticsQuery(pathname: string, queryString: string, href: string) {
+  if (
+    !pathname.startsWith('/dashboard/wakaclock/analytics') ||
+    !href.startsWith('/dashboard/wakaclock/analytics')
+  ) {
+    return href;
+  }
+  const params = new URLSearchParams(queryString);
+  const projectPrefix = '/dashboard/wakaclock/analytics/projects/';
+  if (pathname.startsWith(projectPrefix) && !params.has('project_id')) {
+    const projectId = pathname.slice(projectPrefix.length).split('/')[0];
+    if (projectId) params.set('project_id', projectId);
+  }
+  const query = params.toString();
+  return query ? `${href}?${query}` : href;
+}
 
 /**
  * NavMain component - Main sidebar navigation
@@ -178,7 +205,10 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
   ref
 ) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { isMobile } = useSidebar();
+  const analyticsHref = (href: string) =>
+    preserveAnalyticsQuery(pathname, searchParams.toString(), href);
   const comingBadge = labels?.comingBadge ?? 'Coming';
   const newBadge = labels?.newBadge ?? 'New';
   const visibleGroups = useVisibleNavItems(items);
@@ -215,7 +245,7 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                                 className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10! active:bg-[var(--primary)]/10!"
                                 key={subMenuItem.title}
                               >
-                                <a data-testid={subMenuItem.testId} href={subMenuItem.href}>
+                                <a data-testid={subMenuItem.testId} href={analyticsHref(subMenuItem.href)}>
                                   {subMenuItem.title}
                                 </a>
                               </DropdownMenuItem>
@@ -225,7 +255,9 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                       </div>
                       <Collapsible
                         className="group/collapsible block group-data-[collapsible=icon]:hidden"
-                        defaultOpen={item.items.some((s) => s.href === pathname)}
+                        defaultOpen={item.items.some(
+                          (s) => pathname === s.href || pathname.startsWith(`${s.href}/`)
+                        )}
                       >
                         <CollapsibleTrigger asChild>
                           <SidebarMenuButton
@@ -243,13 +275,19 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                             {item?.items?.map((subItem) => (
                               <SidebarMenuSubItem key={subItem.href}>
                                 <SidebarMenuSubButton
-                                  aria-current={pathname === subItem.href ? 'page' : undefined}
+                                  aria-current={
+                                    pathname === subItem.href || pathname.startsWith(`${subItem.href}/`)
+                                      ? 'page'
+                                      : undefined
+                                  }
                                   asChild
                                   className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10 active:bg-[var(--primary)]/10"
                                   data-testid={subItem.testId}
-                                  isActive={pathname === subItem.href}
+                                  isActive={
+                                    pathname === subItem.href || pathname.startsWith(`${subItem.href}/`)
+                                  }
                                 >
-                                  <Link href={subItem.href} target={subItem.newTab ? '_blank' : ''}>
+                                  <Link href={analyticsHref(subItem.href)} target={subItem.newTab ? '_blank' : ''}>
                                     <span>
                                       {subItem.title}
                                       <LinkPending label={labels?.loading ?? 'Loading page'} />
