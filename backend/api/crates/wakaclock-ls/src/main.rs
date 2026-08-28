@@ -367,6 +367,32 @@ mod tests {
     }
 
     #[test]
+    fn build_heartbeat_uses_latest_unsaved_buffer_for_ast_dependencies() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.ts").unwrap();
+
+        let first = build_heartbeat(
+            &config,
+            &uri,
+            "import react from 'react';\nconst n: number = 1;",
+            false,
+        )
+        .unwrap();
+        let second = build_heartbeat(
+            &config,
+            &uri,
+            "import axios from 'axios';\nconst n: number = 2;",
+            false,
+        )
+        .unwrap();
+
+        assert!(first.dependencies.contains(&"react".to_string()));
+        assert!(!first.dependencies.contains(&"axios".to_string()));
+        assert!(second.dependencies.contains(&"axios".to_string()));
+        assert!(!second.dependencies.contains(&"react".to_string()));
+    }
+
+    #[test]
     fn build_heartbeat_result_passes_its_own_validation() {
         let config = Config::default();
         let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();

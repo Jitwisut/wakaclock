@@ -4664,6 +4664,7 @@ name = "wakaclock-ast"
 version = "0.1.0"
 dependencies = [
  "dashmap 6.2.1",
+ "parking_lot",
  "tracing",
  "tree-sitter",
  "tree-sitter-c",

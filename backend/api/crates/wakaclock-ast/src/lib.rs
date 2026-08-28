@@ -5,4 +5,4 @@ mod detector;
 mod languages;
 mod pool;
 
-pub use detector::{detect, AstResult};
+pub use detector::{detect, detect_file, AstResult, MAX_SOURCE_BYTES};
