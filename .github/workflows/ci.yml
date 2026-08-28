@@ -6,6 +6,10 @@ on:
     branches:
       - main
       - "feature/**"
+      - "phase3/**"
+      - "phase4/**"
+      - "phase7/**"
+      - "fix/**"
 
 permissions:
   contents: read
