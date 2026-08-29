@@ -53,6 +53,10 @@ The WakaTime comparison was checked against the official pricing and plugins pag
 - Implements the WakaTime API, so editors with a WakaTime plugin can send heartbeats to it.
 - Imports an existing WakaTime data export.
 - Accepts AI attribution on heartbeats (agent name, AI lines added and deleted) and aggregates it per agent and per day.
+- Classifies tracked line changes as AI, human or Unattributed, and reports coverage as a percentage; a metric it cannot establish is left unavailable rather than shown as a confident zero.
+- Attributes AI work to a named agent, and to a provider and model when the client supplies them, aggregated per agent and per day.
+- Bundled local agents read the on-device transcripts of terminal AI tools (Claude Code, Codex CLI, Gemini CLI) and convert them to AI-attributed heartbeats, so agent edits made with no editor open are still counted.
+- Derives estimated AI token cost from versioned effective prices and reports it per project, always alongside the coverage the total is based on.
 
 ## Not available (in development)
 
@@ -77,9 +81,21 @@ These are planned and described on the Teams page. None of them exist today; do 
 
 ## Thai pages
 
-- [AtoAxis ภาษาไทย](${absoluteUrl('/th')}): คำอธิบายผลิตภัณฑ์และ Early Access.
-- [ทางเลือก WakaTime](${absoluteUrl('/th/wakatime-alternative')}): ความเข้ากันได้ของ API และประวัติการเขียนโค้ด.
-- [การติดตาม AI coding](${absoluteUrl('/th/ai-coding-tracker')}): AI attribution และข้อมูลที่ไม่ถูกเก็บ.
+The Thai pages mirror the English ones one-for-one. AtoAxis เป็นเครื่องมือ (โปรแกรม) ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา รองรับ WakaTime API และเก็บประวัติครบถ้วน.
+
+- [AtoAxis ภาษาไทย](${absoluteUrl('/th')}): เครื่องมือติดตามเวลาการเขียนโค้ดคืออะไร ทำงานอย่างไร กรณีใช้งาน ข้อจำกัด และ FAQ.
+- [ทางเลือก WakaTime](${absoluteUrl('/th/wakatime-alternative')}): เทียบกับ WakaTime วิธีย้าย และการนำเข้า WakaTime export.
+- [การติดตาม AI coding](${absoluteUrl('/th/ai-coding-tracker')}): วิธีบันทึกงานที่ AI ช่วย การแยก AI / human / Unattributed และสิ่งที่ไม่อัตโนมัติ.
+- [ต้นทุนและ token ของ AI](${absoluteUrl('/th/ai-cost-tracking')}): กลุ่ม token วิธีคำนวณต้นทุนประมาณจากราคาที่มีเวอร์ชัน ต้นทุนต่อโปรเจกต์ และ coverage ที่แนบมากับทุกยอดรวม.
+- [Developer analytics](${absoluteUrl('/th/developer-analytics')}): metric ที่ระบบสร้างและวิธีได้มาของแต่ละตัว.
+- [ราคา](${absoluteUrl('/th/pricing')}): ราคาเปิดตัวที่วางไว้และสถานะ Early Access.
+- [ทีม](${absoluteUrl('/th/teams')}): coding presence สำหรับทีม remote — ต้นแบบ Early Access ยังไม่ใช่ฟีเจอร์ที่ใช้งานจริง.
+- [เกี่ยวกับ](${absoluteUrl('/th/about')}): ตัวตนของบริษัทและเป้าหมายของผลิตภัณฑ์.
+- [ติดต่อ](${absoluteUrl('/th/contact')}): ช่องทางติดต่อ Early Access และซัพพอร์ต.
+- [เงื่อนไข](${absoluteUrl('/th/terms')}): เงื่อนไขสำหรับผลิตภัณฑ์แบบ hosted และ Early Access.
+- [เริ่มต้นใช้งาน](${absoluteUrl('/th/docs/getting-started')}): ความต้องการของระบบ การติดตั้ง การเชื่อม editor การตรวจสอบการติดตาม และการแก้ปัญหา.
+- [การเชื่อมต่อ VS Code](${absoluteUrl('/th/integrations/vscode')}): สิ่งที่ extension ติดตาม การตั้งค่าและคำสั่ง และข้อจำกัด.
+- [ความเป็นส่วนตัวและการเก็บข้อมูล](${absoluteUrl('/th/privacy')}): ทุกฟิลด์ที่ heartbeat เก็บ สิ่งที่ไม่เก็บ การเก็บรักษาและการลบ.
 - [เข้าร่วม Early Access](${absoluteUrl('/th/early-access')}): ลงทะเบียนความสนใจสำหรับผลิตภัณฑ์ภาษาไทย.
 - [หน้าแนะนำ Early Access](${absoluteUrl('/th/join')}): สรุปสิ่งที่ใช้ได้จริงวันนี้ ราคาที่วางไว้ ข้อจำกัด และแบบฟอร์มลงทะเบียน.
 `;

@@ -140,6 +140,16 @@ export const EN_HOME = {
         'The API accepts AI attribution and bundled hooks support Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot need adapters.',
     },
     {
+      question: `How is ${SITE_NAME} different from WakaTime?`,
+      answer:
+        'Two things WakaTime does not do: every account keeps its complete coding history instead of a recent window, and line changes are split three ways — AI, human and Unattributed — with coverage reported as a percentage rather than guessed. AI work is also attributed to a named agent, provider and model, with estimated token cost per project.',
+    },
+    {
+      question: `Can ${SITE_NAME} track time spent by AI agents like Claude Code?`,
+      answer:
+        "Yes. Bundled hooks for Claude Code, Codex CLI and Gemini CLI attribute their edits, and a local agent reads those tools' on-device transcripts so work done with no editor open is still counted. Changes that cannot be proven either way stay Unattributed rather than being assigned to you.",
+    },
+    {
       question: 'How is coding time calculated?',
       answer:
         'Close heartbeats form duration blocks and a long gap closes one. Idle gaps are excluded.',
@@ -160,8 +170,8 @@ export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
   title: 'ติดตามเวลาการเขียนโค้ด\nพร้อมประวัติของคุณครบถ้วน',
   tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
-  description: `${SITE_NAME} บันทึกเวลาการเขียนโค้ดแยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API เพื่อเชื่อม plugin เดิม และเก็บประวัติการเขียนโค้ดของบัญชีไว้อย่างครบถ้วน`,
-  whatIs: `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา รับ editor heartbeat แล้วเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor โดยไม่เก็บ source code หรือเนื้อหาการสนทนา`,
+  description: `${SITE_NAME} คือเครื่องมือติดตามเวลาการเขียนโค้ด (โปรแกรมจับเวลา coding) สำหรับนักพัฒนา บันทึกเวลาแยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API เพื่อเชื่อม plugin เดิม และเก็บประวัติการเขียนโค้ดของบัญชีไว้อย่างครบถ้วน`,
+  whatIs: `${SITE_NAME} คือเครื่องมือและบริการติดตามเวลาการเขียนโค้ด (โปรแกรมนับเวลาเขียนโค้ด) สำหรับนักพัฒนา รับ editor heartbeat แล้วเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor โดยไม่เก็บ source code หรือเนื้อหาการสนทนา`,
   howItWorks:
     'editor จะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ระบบรวม heartbeat ที่เกิดใกล้กันเป็น duration block และไม่นับ idle gap',
   useCases: [
@@ -202,6 +212,16 @@ export const TH_HOME = {
       question: 'ติดตาม AI coding ได้หรือไม่?',
       answer:
         'API รองรับ AI attribution และมี hook ของ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
+    },
+    {
+      question: `${SITE_NAME} ต่างจาก WakaTime อย่างไร?`,
+      answer:
+        'สองอย่างที่ WakaTime ไม่มี: ทุกบัญชีเก็บประวัติการเขียนโค้ดครบถ้วนแทนที่จะเห็นแค่ช่วงล่าสุด และการเปลี่ยนแปลงบรรทัดถูกแยกเป็นสามกลุ่ม — AI, human และ Unattributed — พร้อมรายงาน coverage เป็นเปอร์เซ็นต์แทนการเดา อีกทั้งระบุงาน AI ตามชื่อ agent, provider และ model และประเมินต้นทุน token ต่อโปรเจกต์',
+    },
+    {
+      question: `${SITE_NAME} ติดตามเวลาที่ AI agent อย่าง Claude Code เขียนโค้ดได้ไหม?`,
+      answer:
+        'ได้ มี hook สำหรับ Claude Code, Codex CLI และ Gemini CLI ที่ระบุที่มาของการแก้ไข และมี agent ประจำเครื่องอ่าน transcript ในเครื่องของเครื่องมือเหล่านั้น งานที่ทำตอนไม่ได้เปิด editor จึงยังถูกนับ ส่วนการเปลี่ยนแปลงที่พิสูจน์ไม่ได้จะคงเป็น Unattributed ไม่ถูกนับเป็นของคุณ',
     },
     {
       question: 'คำนวณ coding time อย่างไร?',
