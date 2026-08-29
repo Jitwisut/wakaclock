@@ -2327,13 +2327,13 @@ generic(
   {
     title: `About ${SITE_NAME}`,
     description: `Learn why ${SITE_NAME} exists and who publishes it.`,
-    lead: `${SITE_NAME} is published by StandUpCode / Lodash (Thailand) Co., Ltd.`,
+    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product published by StandUpCode / Lodash (Thailand) Co., Ltd. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
     headings: ['Why we are building it', 'Current status', 'Publisher'],
   },
   {
     title: `เกี่ยวกับ ${SITE_NAME}`,
     description: `รู้จักเหตุผลและผู้เผยแพร่ ${SITE_NAME}`,
-    lead: `${SITE_NAME} เผยแพร่โดย StandUpCode / Lodash (Thailand) Co., Ltd.`,
+    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา เผยแพร่โดย StandUpCode / Lodash (Thailand) Co., Ltd. ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
     headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้เผยแพร่'],
   }
 );
