@@ -310,7 +310,7 @@ fn parse_created_at(created_at: &str) -> u32 {
         .unwrap_or_else(|_| Utc::now().timestamp().max(0) as u32)
 }
 
-fn normalize_interval_source(source: Option<&str>, is_ai_generated: bool) -> String {
+pub(crate) fn normalize_interval_source(source: Option<&str>, is_ai_generated: bool) -> String {
     let source = source.unwrap_or(if is_ai_generated { "ai" } else { "editor" });
     if source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor") {
         "editor".to_string()

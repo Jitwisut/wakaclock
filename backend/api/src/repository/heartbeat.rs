@@ -201,6 +201,9 @@ impl HeartbeatRepository {
         for column in [
             "heartbeat_id Nullable(String)",
             "activity_segments String DEFAULT '[]'",
+            // The Null replay table is long-lived, so columns added to raw heartbeats
+            // after its first CREATE ... AS must be mirrored explicitly.
+            "active_seconds_claimed Nullable(Float64)",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"

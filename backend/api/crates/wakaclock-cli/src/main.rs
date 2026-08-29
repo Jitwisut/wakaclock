@@ -1476,13 +1476,8 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
     heartbeat.project = git_info
         .as_ref()
         .map(|info| info.project.clone())
-        .or_else(|| {
-            event
-                .project_root
-                .as_ref()
-                .and_then(|root| root.file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-        });
+        .or_else(|| infer_non_git_project_name(Path::new(&entity_path)))
+        .or_else(|| project_name_from_root(event.project_root.as_deref()));
     heartbeat.branch = git_info.map(|info| info.branch);
     heartbeat.is_write = true;
     heartbeat.category = Category::Coding;
@@ -1550,6 +1545,73 @@ fn count_file_lines(path: &Path) -> io::Result<u32> {
     Ok(newline_count.saturating_add(1))
 }
 
+fn project_name_from_root(root: Option<&Path>) -> Option<String> {
+    root.and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// Resolve a stable project name for a non-Git workspace.
+///
+/// Git remains authoritative when present. For folders that are intentionally not Git
+/// repositories (for example a pnpm monorepo copied from elsewhere), prefer a strong
+/// workspace marker over a nested package.json. This prevents an edit inside
+/// `apps/foo/node_modules/bar` or `apps/foo` from being reported as project `bar`/`foo`
+/// when the real workspace root is the parent monorepo.
+fn infer_non_git_project_name(entity_path: &Path) -> Option<String> {
+    discover_non_git_workspace_root(entity_path)
+        .as_deref()
+        .and_then(|root| project_name_from_root(Some(root)))
+}
+
+fn discover_non_git_workspace_root(entity_path: &Path) -> Option<PathBuf> {
+    let start = if entity_path.is_dir() {
+        entity_path
+    } else {
+        entity_path.parent()?
+    };
+    let mut nearest_project_root = None;
+
+    for ancestor in start.ancestors() {
+        if has_workspace_marker(ancestor) {
+            return Some(ancestor.to_path_buf());
+        }
+        if nearest_project_root.is_none() && has_project_marker(ancestor) {
+            nearest_project_root = Some(ancestor.to_path_buf());
+        }
+    }
+
+    nearest_project_root
+}
+
+fn has_workspace_marker(path: &Path) -> bool {
+    if ["pnpm-workspace.yaml", "lerna.json", "nx.json", "rush.json"]
+        .iter()
+        .any(|marker| path.join(marker).is_file())
+    {
+        return true;
+    }
+
+    let package_json = path.join("package.json");
+    fs::read_to_string(package_json)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|value| value.get("workspaces").cloned())
+        .is_some()
+}
+
+fn has_project_marker(path: &Path) -> bool {
+    [
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "composer.json",
+    ]
+    .iter()
+    .any(|marker| path.join(marker).is_file())
+}
+
 fn build_heartbeat(
     config: &Config,
     entity: &str,
@@ -1568,7 +1630,9 @@ fn build_heartbeat(
     );
 
     let git_info = git::discover(&entity_path);
-    heartbeat.project = project_override.or_else(|| git_info.as_ref().map(|g| g.project.clone()));
+    heartbeat.project = project_override
+        .or_else(|| git_info.as_ref().map(|g| g.project.clone()))
+        .or_else(|| infer_non_git_project_name(Path::new(&entity_path)));
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
     heartbeat.category = category;
@@ -1770,5 +1834,58 @@ fn format_duration(seconds: f64) -> String {
         format!("{minutes}m {secs}s")
     } else {
         format!("{secs}s")
+    }
+}
+
+#[cfg(test)]
+mod generic_ai_ingress_tests {
+    use super::*;
+
+    #[test]
+    fn non_git_monorepo_root_wins_over_nested_package_names() {
+        let root = std::env::temp_dir().join(format!("wakaclock-project-root-{}", Uuid::new_v4()));
+        let nested = root
+            .join("apps/desktop/node_modules/ibm-plex-sans-thai/src")
+            .join("styles.css");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(
+            root.join("pnpm-workspace.yaml"),
+            "packages:\n  - 'apps/*'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"private":true,"workspaces":["apps/*"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/desktop/node_modules/ibm-plex-sans-thai/package.json"),
+            r#"{"name":"ibm-plex-sans-thai"}"#,
+        )
+        .unwrap();
+        fs::write(&nested, "body {}\n").unwrap();
+
+        assert_eq!(
+            infer_non_git_project_name(&nested),
+            project_name_from_root(Some(&root))
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn plain_non_git_package_uses_its_package_root() {
+        let root = std::env::temp_dir().join(format!("wakaclock-package-root-{}", Uuid::new_v4()));
+        let nested = root.join("src/lib.ts");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(root.join("package.json"), r#"{"name":"plain-project"}"#).unwrap();
+        fs::write(&nested, "export {};\n").unwrap();
+
+        assert_eq!(
+            infer_non_git_project_name(&nested),
+            project_name_from_root(Some(&root))
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

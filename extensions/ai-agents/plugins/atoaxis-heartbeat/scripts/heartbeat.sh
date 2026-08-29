@@ -30,6 +30,52 @@ TOOL_NAME="$(jq -r '.tool_name // empty' <<<"$INPUT")"
 # NotebookEdit names its target `notebook_path`, every other file tool uses `file_path`.
 FILE_PATH="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$INPUT")"
 AI_MODEL="$(jq -r '.model // .model_name // .model_id // .session.model // empty' <<<"$INPUT")"
+TRANSCRIPT_PATH="$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null || true)"
+SESSION_CWD="$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || true)"
+
+# Claude's native file hook runs outside the editor heartbeat path. In a non-Git
+# workspace the CLI cannot infer a project from `.git`, so preserve the session root
+# explicitly. Some hook payloads omit cwd; the transcript still carries it on nearby
+# records, so use that as a metadata-only fallback.
+if [ -z "$SESSION_CWD" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+  SESSION_CWD="$(tail -n 1000 "$TRANSCRIPT_PATH" 2>/dev/null \
+    | jq -r 'select((.cwd // "") != "") | .cwd' 2>/dev/null \
+    | tail -n 1 || true)"
+fi
+
+resolve_workspace_root() {
+  local candidate="$1"
+  [ -n "$candidate" ] && [ -d "$candidate" ] || return 0
+
+  local git_root
+  git_root="$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$git_root" ]; then
+    printf '%s\n' "$git_root"
+    return 0
+  fi
+
+  local current="$candidate"
+  while [ -n "$current" ] && [ "$current" != "/" ]; do
+    if [ -f "$current/pnpm-workspace.yaml" ] \
+      || [ -f "$current/lerna.json" ] \
+      || [ -f "$current/nx.json" ] \
+      || [ -f "$current/rush.json" ]; then
+      printf '%s\n' "$current"
+      return 0
+    fi
+    current="$(dirname "$current")"
+  done
+
+  # For a plain non-Git project, Claude's session cwd is still a better identity than
+  # the edited file's nested package directory.
+  printf '%s\n' "$candidate"
+}
+
+PROJECT_ROOT="$(resolve_workspace_root "$SESSION_CWD")"
+PROJECT_NAME=""
+if [ -n "$PROJECT_ROOT" ]; then
+  PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+fi
 
 # The PostToolUse payload carries no model field, so the lookup above always came up
 # empty and every AI heartbeat was recorded with an unknown model. The model does exist
@@ -41,7 +87,6 @@ AI_MODEL="$(jq -r '.model // .model_name // .model_id // .session.model // empty
 # (`set -o pipefail` is active) because an unknown model must degrade to "unknown", never
 # break the heartbeat this hook exists to send.
 if [ -z "$AI_MODEL" ] || [ "$AI_MODEL" = "null" ]; then
-  TRANSCRIPT_PATH="$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null || true)"
   if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
     AI_MODEL="$(tail -n 400 "$TRANSCRIPT_PATH" 2>/dev/null \
       | jq -r 'select(.type == "assistant") | .message.model // empty' 2>/dev/null \
@@ -128,6 +173,9 @@ CLI_ARGS=(
   --ai-lines-added "$LINES_ADDED"
   --ai-lines-deleted "$LINES_DELETED"
 )
+if [ -n "$PROJECT_NAME" ]; then
+  CLI_ARGS+=(--project "$PROJECT_NAME")
+fi
 if [ -n "$AI_MODEL" ]; then
   CLI_ARGS+=(--ai-model "$AI_MODEL")
 fi
