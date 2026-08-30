@@ -114,18 +114,17 @@ def main() -> int:
     actor_partition_error = 0.0
     actor_filter_error = 0.0
     duration_surface_error = 0.0
+    filtered_totals = {
+        actor: explorer_duration(fetch_explorer(args.base, args.key, start, end, actor))["total"]
+        for actor in ACTOR_TYPES
+    }
     for day in sorted(by_day):
         reference, _ = wakatime_durations(by_day[day], 900.0)
         entry = reported.get(day)
         api_seconds = float((entry or {}).get("grand_total", {}).get("total_seconds", 0.0))
         explorer = explorer_duration(fetch_explorer(args.base, args.key, day, day))
-        filtered = {
-            actor: explorer_duration(fetch_explorer(args.base, args.key, day, day, actor))["total"]
-            for actor in ACTOR_TYPES
-        }
         for actor in ACTOR_TYPES:
             actor_totals[actor] += explorer[actor]
-            actor_filter_error = max(actor_filter_error, abs(explorer[actor] - filtered[actor]))
         actor_partition_error = max(
             actor_partition_error,
             abs(sum(explorer[actor] for actor in ACTOR_TYPES) - explorer["total"]),
@@ -139,6 +138,12 @@ def main() -> int:
                 "relative_error": relative_error(api_seconds, reference),
                 "actor_total_seconds": explorer["total"],
             }
+        )
+
+    for actor in ACTOR_TYPES:
+        actor_filter_error = max(
+            actor_filter_error,
+            abs(actor_totals[actor] - filtered_totals[actor]),
         )
 
     api_total = sum(item["api_seconds"] for item in daily)
