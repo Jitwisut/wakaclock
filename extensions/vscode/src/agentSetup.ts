@@ -240,37 +240,77 @@ async function setupCodex(stableDir: string, homeDir: string, logger: Logger): P
 }
 
 export function ensureCodexHooksFeature(config: string): string {
-  if (/^\s*codex_hooks\s*=\s*true\s*$/m.test(config)) {
+  if (/^\s*hooks\s*=\s*true\s*$/m.test(config)) {
     return config;
+  }
+
+  // `codex_hooks` was the experimental feature name. Current Codex releases use
+  // `[features].hooks`; migrate the managed setting instead of perpetuating the
+  // deprecation warning for users who configured AI tracking on an older release.
+  if (/^\s*codex_hooks\s*=\s*true\s*$/m.test(config)) {
+    return config.replace(/^([ \t]*)codex_hooks([ \t]*)=([ \t]*)true([ \t]*)$/m, "$1hooks$2=$3true$4");
   }
 
   const featureHeader = /^\s*\[features\]\s*$/m.exec(config);
   if (featureHeader && featureHeader.index !== undefined) {
     const insertAt = featureHeader.index + featureHeader[0].length;
-    return `${config.slice(0, insertAt)}\ncodex_hooks = true${config.slice(insertAt)}`;
+    return `${config.slice(0, insertAt)}\nhooks = true${config.slice(insertAt)}`;
   }
 
-  return `${config.trimEnd()}\n\n[features]\ncodex_hooks = true\n`;
+  return `${config.trimEnd()}\n\n[features]\nhooks = true\n`;
 }
 
 export function ensureCodexHook(config: string, hookPath: string): string {
-  const marker = "# AtoAxis managed AI attribution hook";
-  if (config.includes(marker)) {
-    return config;
+  const attributionMarker = "# AtoAxis managed AI attribution hook";
+  const sweepMarker = "# AtoAxis managed AI shell sweep hooks";
+  let updated = config;
+
+  if (!updated.includes(attributionMarker)) {
+    const block = [
+      "",
+      attributionMarker,
+      "[[hooks.PostToolUse]]",
+      'matcher = "apply_patch"',
+      "[[hooks.PostToolUse.hooks]]",
+      'type = "command"',
+      `command = ${tomlString(hookPath)}`,
+      "timeout = 60",
+      ""
+    ].join("\n");
+    updated = `${updated.trimEnd()}\n${block}`;
   }
 
-  const block = [
-    "",
-    marker,
-    "[[hooks.PostToolUse]]",
-    'matcher = "apply_patch"',
-    "[[hooks.PostToolUse.hooks]]",
-    'type = "command"',
-    `command = ${tomlString(hookPath)}`,
-    "timeout = 60",
-    ""
-  ].join("\n");
-  return `${config.trimEnd()}\n${block}`;
+  // Shell/MCP tools can mutate files without an apply_patch payload. Snapshot the Git
+  // worktree before the tool and compare it after, emitting inferred metadata events
+  // only for files that changed during that call. Keep this in a separate managed
+  // marker so existing installations get upgraded instead of returning early.
+  if (!updated.includes(sweepMarker)) {
+    const hookDir = path.dirname(hookPath);
+    const beforePath = path.join(hookDir, "git-sweep-before.sh");
+    const afterPath = path.join(hookDir, "git-sweep-after.sh");
+    const matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*";
+    const block = [
+      "",
+      sweepMarker,
+      "[[hooks.PreToolUse]]",
+      `matcher = ${tomlString(matcher)}`,
+      "[[hooks.PreToolUse.hooks]]",
+      'type = "command"',
+      `command = ${tomlString(beforePath)}`,
+      "timeout = 60",
+      "",
+      "[[hooks.PostToolUse]]",
+      `matcher = ${tomlString(matcher)}`,
+      "[[hooks.PostToolUse.hooks]]",
+      'type = "command"',
+      `command = ${tomlString(afterPath)}`,
+      "timeout = 60",
+      ""
+    ].join("\n");
+    updated = `${updated.trimEnd()}\n${block}`;
+  }
+
+  return updated;
 }
 
 function tomlString(value: string): string {

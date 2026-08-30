@@ -48,6 +48,8 @@ class WakaclockCliService {
         if (primaryExtra.activity_segments?.length) {
             args.push("--activity-segments", JSON.stringify(primaryExtra.activity_segments));
         }
+        this.pushOptionalString(args, "--actor-type", primaryExtra.actor_type);
+        this.pushOptionalNumber(args, "--actor-confidence", primaryExtra.actor_confidence);
         this.pushOptionalString(args, "--ai-agent", primaryExtra.ai_agent);
         this.pushOptionalString(args, "--ai-provider", primaryExtra.ai_provider);
         this.pushOptionalString(args, "--ai-model", primaryExtra.ai_model);
@@ -246,7 +248,15 @@ class WakaclockCliService {
         };
     }
     async installAgent() {
-        return this.runCli(["agent", "install", "--json"]);
+        return this.runCli(["broker", "install", "--json"]);
+    }
+    async getBrokerStatus() {
+        const result = await this.runCli(["broker", "status", "--json"]);
+        const status = this.parseJson(result.stdout.trim());
+        if (!status) {
+            throw new Error("wakaclock broker status returned invalid JSON");
+        }
+        return status;
     }
     /**
      * Hosts without LaunchAgent/systemd/Task Scheduler (containers, Codespaces and
@@ -259,7 +269,7 @@ class WakaclockCliService {
             ? await this.managedCli.ensureReady()
             : config.cliPath || "wakaclock";
         const apiKey = await this.getApiKey();
-        const child = (0, node_child_process_1.spawn)(cliPath, ["agent", "run"], {
+        const child = (0, node_child_process_1.spawn)(cliPath, ["broker", "run"], {
             stdio: "ignore",
             detached: false,
             env: {

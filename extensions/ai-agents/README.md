@@ -8,18 +8,16 @@ VS Code's own document-change events) — each integration here hooks directly i
 agent's own tool-call lifecycle, the same mechanism WakaTime's official Claude Code /
 Codex / Gemini CLI plugins use.
 
-All three call the same underlying command:
+All three send the same metadata-only event to the local Broker through the existing
+`wakaclock` binary:
 
 ```
-wakaclock heartbeat --entity <file> --write --ai-agent <name> \
-  --ai-provider <provider> --ai-source agent_hook \
-  --ai-confidence verified --ai-event-id <id> \
-  --ai-lines-added <n> --ai-lines-deleted <n>
+cat event.json | wakaclock ai emit --json
 ```
 
-`--ai-agent` is what flips `is_ai_generated` on and attributes the heartbeat to that
-agent (see `backend/api/crates/wakaclock-cli` — there is no separate boolean flag to
-keep in sync with it). The hooks read `WAKACLOCK_CLI_PATH` first and then
+The Broker resolves the canonical `actor_type` and `actor_confidence`, then derives the
+deprecated `is_ai_generated` compatibility field from that enum at heartbeat creation
+(see `backend/api/crates/wakaclock-cli`). The hooks read `WAKACLOCK_CLI_PATH` first and then
 `~/.wakaclock/cli-path` (written by the VS Code setup wizard), so the binary does not
 have to be on the AI tool's own `PATH`. This requires the `wakaclock` binary and a saved API key
 (`wakaclock config set-key <key>`, from the dashboard's Settings → API key) already
@@ -29,10 +27,11 @@ The VS Code extension bundles these files, detects the corresponding CLIs and of
 `AtoAxis: Set Up AI Tracking`. The setup writes only its own managed hook block and
 keeps a stable copy under `~/.wakaclock/agent-plugins/`, so a VSIX update does not
 leave another tool pointing at a deleted extension directory. It also installs a
-per-user `wakaclock agent` service. The service scans Codex, Claude and Gemini
+per-user `wakaclock broker` service. The service scans Codex, Claude and Gemini
 transcripts every five seconds, resumes per-agent/per-file cursors, and starts old
 transcripts at their tail (only the last 24 hours are replayed on first discovery).
-Use `wakaclock agent status --json` to inspect process, scan, queue and error state.
+Use `wakaclock broker status --json` to inspect process, inbox, outbound queue and
+delivery error state. `wakaclock agent status --json` remains a compatibility alias.
 
 ## Claude Code (`plugins/atoaxis-heartbeat/`)
 
@@ -44,10 +43,15 @@ claude plugin marketplace add <path-or-git-url-to>/extensions/ai-agents
 claude plugin install atoaxis-heartbeat@atoaxis-plugins
 ```
 
-Registers a `PostToolUse` hook on `Write|Edit|MultiEdit` (`hooks/hooks.json`) that runs
-`scripts/heartbeat.sh`. Verified end-to-end against a running AtoAxis server this
-session: a real Edit produced a heartbeat with correct `ai_agent`/line-count
-attribution, confirmed via `GET /users/current/ai_stats`.
+Registers a verified `PostToolUse` hook on `Write|Edit|MultiEdit|NotebookEdit` and a
+Before/After snapshot around `Bash`/MCP tool calls. The thin hook adapters call
+`wakaclock ai tool-before` and `wakaclock ai tool-after`; the Rust engine fingerprints
+the workspace, persists the BeforeTool snapshot in SQLite, and emits `inferred` events
+only for files whose content actually changed. Git workspaces reuse clean index blob IDs
+and hash only dirty/untracked files; non-Git workspaces use filesystem SHA-256. This
+covers `sed`, heredocs, Python scripts, codemods and `git apply` without parsing command
+text. The older post-only `heartbeat-sweep.sh` remains only for compatibility with
+previously installed plugin versions.
 
 ## Codex CLI (`codex/`)
 
@@ -56,7 +60,7 @@ registered by hand in `~/.codex/config.toml`:
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 
 [[hooks.PostToolUse]]
 matcher = "apply_patch"
@@ -64,14 +68,28 @@ matcher = "apply_patch"
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/heartbeat-hook.sh"
 timeout = 60
+
+[[hooks.PreToolUse]]
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/absolute/path/to/extensions/ai-agents/codex/git-sweep-before.sh"
+timeout = 60
+
+[[hooks.PostToolUse]]
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/absolute/path/to/extensions/ai-agents/codex/git-sweep-after.sh"
+timeout = 60
 ```
 
-`apply_patch`'s payload is Codex's own patch-text format (`*** Update File: <path>`
-markers), not a single `file_path` field — `heartbeat-hook.sh` extracts the path and
-counts `+`/`-` prefixed lines from the patch body. Mechanism verified with a synthetic
-payload matching the documented shape; **not** verified against a real Codex CLI
-session (this environment can't run one) — the file-path extraction is the part most
-likely to need adjusting if Codex's real hook payload differs from what's documented.
+`apply_patch` still uses the verified per-file delta adapter when that hook fires. Shell
+and MCP mutations use the shared Before/After fingerprint engine and therefore do not
+need to parse command text. Current Codex releases use `[features].hooks = true`; the VS Code setup
+helper migrates the deprecated `codex_hooks = true` setting automatically. Codex hook
+coverage has varied between releases/tool execution paths, so the always-on transcript
+parser remains a second independent fallback rather than treating hooks as infallible.
 
 ## Gemini CLI (`gemini-cli/`)
 
@@ -82,16 +100,81 @@ Codex's):
 gemini extensions install <path-or-git-url-to>/extensions/ai-agents/gemini-cli
 ```
 
-Registers an `AfterTool` hook on `write_file|replace` (Gemini's file-edit tools).
-Same caveat as Codex: built from the documented hook event/payload shape, sanity-tested
-with a synthetic payload, not against a real Gemini CLI session.
+Registers the verified `AfterTool` adapter on `write_file|replace`, plus Before/After
+fingerprint snapshots around `run_shell_command|mcp_.*`. Gemini's hook matcher is regex-based, so
+this also covers file mutations performed through Gemini MCP tools without trying to
+parse arbitrary shell command text.
+
+## Shell / MCP mutation snapshot engine
+
+For tools that can mutate files indirectly, use the same stable tool id on both sides:
+
+```bash
+printf '%s' '{"tool_event_id":"session:call-1","agent":"codex","provider":"openai","tool":"shell_command","workspace_root":"/project"}' \
+  | wakaclock ai tool-before --json
+# the AI shell command runs here
+printf '%s' '{"tool_event_id":"session:call-1","agent":"codex","provider":"openai","tool":"shell_command","workspace_root":"/project"}' \
+  | wakaclock ai tool-after --json
+```
+
+The BeforeTool snapshot contains only paths, Git/content fingerprints, file metadata and
+agent/session/tool identifiers — never source text, prompts, responses or command
+arguments. It survives CLI/editor restarts in `~/.wakaclock/ai-attribution.sqlite3` and
+is pruned after 24 hours if abandoned. AfterTool detects create/modify/delete and
+one-to-one pure renames. Exact line deltas are emitted only when they can be proven:
+new/deleted whole files and clean tracked Git diffs are exact; a file that was already
+dirty before AI remains `lines_added/deleted = unknown` instead of inheriting the user's
+pre-existing changes.
+
+All file events from one shell call share `ai_change_id = tool_event_id`. Only the first
+heartbeat carries the tool-call activity interval; the rest carry zero duration, so a
+codemod touching 100 files does not multiply coding time by 100. If an exact native-hook
+fingerprint already exists, the weaker inferred event is suppressed.
+
+## Generic MCP / tool ingress
+
+WakaClock now exposes a normalized metadata-only ingress for agents that are not
+covered by a native transcript parser or hook adapter:
+
+```bash
+cat <<'JSON' | wakaclock ai emit --json
+{
+  "event_id": "chatgpt-session-42:src/app.ts:1",
+  "agent": "chatgpt",
+  "provider": "openai",
+  "session_id": "session-42",
+  "entity": "/absolute/project/src/app.ts",
+  "project_root": "/absolute/project",
+  "lines_added": 12,
+  "lines_deleted": 4,
+  "source": "mcp",
+  "confidence": "verified",
+  "transport": "mcp",
+  "tool": "tan.apply_patch"
+}
+JSON
+```
+
+The command converts the event into the same durable Broker inbox used by transcript
+sync. The BrokerProcessor appends a metadata-only record to
+`~/.wakaclock/ai-events.jsonl` after local acceptance so an open VS Code document can
+correlate the external edit instead of counting the same change as manual typing.
+`prompt`, response text, patch/source content, and arbitrary unknown fields are rejected
+by the ingress contract. `transport` and `tool` are local diagnostic metadata only; tool
+arguments are never recorded. See `docs/ai-activity-broker.md` for the HTTP v1 contract,
+authentication, retry semantics, and privacy guarantees.
+
+This is the preferred integration surface for ChatGPT/Tan/MCP and future agents. The
+external MCP server still needs a small adapter that emits one event after each
+successful file mutation (`write_file`, `apply_patch`, `move_file`, etc.).
 
 ## Adding another agent
 
 Any agent with a hook/event system that can run a shell command and receives a file
 path (however it's nested in the payload) needs a new adapter that extracts the path,
-line delta, provider/model metadata and event id, then calls
-`wakaclock heartbeat --ai-agent <new-name> ...`. Events are intentionally not
-rate-limited: an agent may edit the same file several times in one minute and every
-line delta must survive the offline queue. Activity-time heartbeats can still be
-coalesced separately by the editor extension.
+line delta, provider/model metadata and event id, then calls `wakaclock ai emit` with
+the Broker Event v1 envelope. Events are intentionally not rate-limited: an agent may
+edit the same file several times in one minute and every line delta must survive the
+durable inbox. Activity-time heartbeats can still be coalesced separately by the editor
+extension. The old `wakaclock heartbeat --ai-agent ...` form remains only as a
+compatibility adapter and is routed through the Broker internally.

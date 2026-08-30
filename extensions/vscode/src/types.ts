@@ -1,4 +1,5 @@
 export type HeartbeatCategory = "coding" | "building" | "debugging";
+export type ActorType = "human" | "ai_verified" | "ai_inferred" | "unknown";
 
 export type FlushReason =
     | "save"
@@ -55,6 +56,8 @@ export interface ExtraHeartbeatPayload {
     active_seconds?: number;
     heartbeat_id?: string;
     activity_segments?: ActivitySegment[];
+    actor_type?: ActorType;
+    actor_confidence?: number;
     ai_agent?: string;
     ai_provider?: string;
     ai_model?: string;
@@ -144,6 +147,31 @@ export interface StatusSnapshot {
     userId?: string;
     queuedHeartbeats?: number;
     flushedNow?: number;
+}
+
+export interface BrokerStatusSnapshot {
+    running?: boolean;
+    pid?: number | null;
+    endpoint?: string | null;
+    protocol?: number;
+    started_at?: number | null;
+    uptime_seconds?: number;
+    last_received_at?: number | null;
+    last_processed_at?: number | null;
+    last_delivery_at?: number | null;
+    inbox?: {
+        pending?: number;
+        processing?: number;
+        processed?: number;
+        retry?: number;
+        dead_letter?: number;
+        last_received_at?: number | null;
+        last_processed_at?: number | null;
+        last_delivery_at?: number | null;
+        last_error_code?: string | null;
+        last_error_message?: string | null;
+    };
+    outbound_queue_count?: number;
 }
 
 export interface WakaclockConfigSnapshot {

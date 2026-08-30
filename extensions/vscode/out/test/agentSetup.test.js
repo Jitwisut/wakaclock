@@ -144,19 +144,91 @@ async function runHook(script, input, env) {
     });
 });
 (0, vitest_1.describe)("Codex hook config helpers", () => {
-    (0, vitest_1.it)("adds the hooks feature without duplicating an existing features table", () => {
+    (0, vitest_1.it)("adds the current hooks feature without duplicating an existing features table", () => {
         const config = "[features]\nother = true\n";
         const updated = (0, agentSetup_1.ensureCodexHooksFeature)(config);
-        (0, vitest_1.expect)(updated).toContain("[features]\ncodex_hooks = true\nother = true");
+        (0, vitest_1.expect)(updated).toContain("[features]\nhooks = true\nother = true");
         (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHooksFeature)(updated)).toBe(updated);
     });
-    (0, vitest_1.it)("adds an idempotent managed PostToolUse block with a quoted path", () => {
+    (0, vitest_1.it)("migrates the deprecated codex_hooks feature name", () => {
+        const updated = (0, agentSetup_1.ensureCodexHooksFeature)("[features]\ncodex_hooks = true\nother = true\n");
+        (0, vitest_1.expect)(updated).toContain("[features]\nhooks = true\nother = true");
+        (0, vitest_1.expect)(updated).not.toContain("codex_hooks = true");
+    });
+    (0, vitest_1.it)("adds idempotent apply-patch and shell-sweep hook blocks", () => {
         const config = (0, agentSetup_1.ensureCodexHooksFeature)("");
         const updated = (0, agentSetup_1.ensureCodexHook)(config, "/tmp/Ato Axis/heartbeat-hook.sh");
         (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI attribution hook");
         (0, vitest_1.expect)(updated).toContain('matcher = "apply_patch"');
         (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/heartbeat-hook.sh"');
+        (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell sweep hooks");
+        (0, vitest_1.expect)(updated).toContain('matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"');
+        (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/git-sweep-before.sh"');
+        (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/git-sweep-after.sh"');
         (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHook)(updated, "/tmp/Ato Axis/heartbeat-hook.sh")).toBe(updated);
+    });
+    (0, vitest_1.it)("upgrades an existing attribution-only config with shell sweep hooks", () => {
+        const legacy = [
+            "[features]",
+            "hooks = true",
+            "",
+            "# AtoAxis managed AI attribution hook",
+            "[[hooks.PostToolUse]]",
+            'matcher = "apply_patch"',
+            "[[hooks.PostToolUse.hooks]]",
+            'type = "command"',
+            'command = "/tmp/Ato Axis/heartbeat-hook.sh"',
+            "timeout = 60",
+            ""
+        ].join("\n");
+        const updated = (0, agentSetup_1.ensureCodexHook)(legacy, "/tmp/Ato Axis/heartbeat-hook.sh");
+        (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell sweep hooks");
+    });
+});
+(0, vitest_1.describe)("AI shell snapshot adapters", () => {
+    (0, vitest_1.it)("forwards stable matching Before/After tool metadata to the CLI engine", async () => {
+        const homeDir = path.join(workDir, "home");
+        const fakeCli = path.join(workDir, "fake-wakaclock");
+        const callsLog = path.join(workDir, "snapshot-calls.log");
+        await fs.mkdir(path.join(homeDir, ".wakaclock"), { recursive: true });
+        await fs.writeFile(fakeCli, '#!/usr/bin/env bash\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n');
+        await fs.chmod(fakeCli, 0o755);
+        await fs.writeFile(path.join(homeDir, ".wakaclock", "cli-path"), `${fakeCli}\n`);
+        const beforeScript = path.resolve(process.cwd(), "../ai-agents/codex/git-sweep-before.sh");
+        const afterScript = path.resolve(process.cwd(), "../ai-agents/codex/git-sweep-after.sh");
+        const hookInput = {
+            cwd: workDir,
+            session_id: "session-1",
+            tool_use_id: "call-1",
+            tool_name: "shell_command",
+            model: "gpt-test"
+        };
+        const env = {
+            ...process.env,
+            HOME: homeDir,
+            WAKACLOCK_TEST_CALLS: callsLog
+        };
+        await runHook(beforeScript, hookInput, env);
+        await runHook(afterScript, hookInput, env);
+        const calls = (await fs.readFile(callsLog, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => {
+            const [args, payload] = line.split("\t", 2);
+            return { args, payload: JSON.parse(payload) };
+        });
+        (0, vitest_1.expect)(calls).toHaveLength(2);
+        (0, vitest_1.expect)(calls[0].args).toBe("ai tool-before --json");
+        (0, vitest_1.expect)(calls[1].args).toBe("ai tool-after --json");
+        (0, vitest_1.expect)(calls[0].payload.tool_event_id).toBe(calls[1].payload.tool_event_id);
+        (0, vitest_1.expect)(calls[0].payload).toMatchObject({
+            agent: "codex",
+            provider: "openai",
+            session_id: "session-1",
+            tool: "shell_command",
+            transport: "shell_hook",
+            cwd: workDir
+        });
     });
 });
 (0, vitest_1.describe)("Codex heartbeat hook", () => {
@@ -164,9 +236,8 @@ async function runHook(script, input, env) {
         const homeDir = path.join(workDir, "home");
         const fakeCli = path.join(workDir, "fake-wakaclock");
         const callsLog = path.join(workDir, "calls.log");
-        const eventsLog = path.join(workDir, "events.jsonl");
         await fs.mkdir(path.join(homeDir, ".wakaclock"), { recursive: true });
-        await fs.writeFile(fakeCli, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$WAKACLOCK_TEST_CALLS"\n');
+        await fs.writeFile(fakeCli, '#!/usr/bin/env bash\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n');
         await fs.chmod(fakeCli, 0o755);
         await fs.writeFile(path.join(homeDir, ".wakaclock", "cli-path"), `${fakeCli}\n`);
         const script = path.resolve(process.cwd(), "../ai-agents/codex/heartbeat-hook.sh");
@@ -180,25 +251,49 @@ async function runHook(script, input, env) {
             "+hello",
             "*** End Patch"
         ].join("\n");
-        await runHook(script, { tool_input: { input: patch }, model: "gpt-test" }, {
+        await runHook(script, {
+            cwd: workDir,
+            session_id: "session-1",
+            tool_use_id: "apply-1",
+            tool_input: { input: patch },
+            model: "gpt-test"
+        }, {
             ...process.env,
             HOME: homeDir,
-            WAKACLOCK_TEST_CALLS: callsLog,
-            WAKACLOCK_AI_EVENT_LOG: eventsLog
+            WAKACLOCK_TEST_CALLS: callsLog
         });
-        const calls = (await fs.readFile(callsLog, "utf8")).trim().split("\n");
-        (0, vitest_1.expect)(calls).toHaveLength(2);
-        (0, vitest_1.expect)(calls[0]).toContain("--entity src/one.ts");
-        (0, vitest_1.expect)(calls[0]).toContain("--ai-lines-added 2 --ai-lines-deleted 1");
-        (0, vitest_1.expect)(calls[1]).toContain("--entity src/two file.ts");
-        (0, vitest_1.expect)(calls[1]).toContain("--ai-lines-added 1 --ai-lines-deleted 0");
-        const events = (await fs.readFile(eventsLog, "utf8"))
+        const calls = (await fs.readFile(callsLog, "utf8"))
             .trim()
             .split("\n")
-            .map((line) => JSON.parse(line));
-        (0, vitest_1.expect)(events).toMatchObject([
-            { entity: "src/one.ts", lines_added: 2, lines_deleted: 1 },
-            { entity: "src/two file.ts", lines_added: 1, lines_deleted: 0 }
+            .map((line) => {
+            const [args, payload] = line.split("\t", 2);
+            return { args, payload: JSON.parse(payload) };
+        });
+        (0, vitest_1.expect)(calls).toHaveLength(2);
+        (0, vitest_1.expect)(calls.map((call) => call.args)).toEqual(["ai emit --json", "ai emit --json"]);
+        (0, vitest_1.expect)(calls.map((call) => call.payload)).toMatchObject([
+            {
+                schema_version: 1,
+                event_type: "file_change",
+                entity: path.join(workDir, "src/one.ts"),
+                lines_added: 2,
+                lines_deleted: 1,
+                agent: "codex",
+                source: "agent_hook",
+                confidence: "verified",
+                session_id: "session-1"
+            },
+            {
+                schema_version: 1,
+                event_type: "file_change",
+                entity: path.join(workDir, "src/two file.ts"),
+                lines_added: 1,
+                lines_deleted: 0,
+                agent: "codex",
+                source: "agent_hook",
+                confidence: "verified",
+                session_id: "session-1"
+            }
         ]);
     });
 });

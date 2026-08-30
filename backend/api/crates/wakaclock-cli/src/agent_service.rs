@@ -1,7 +1,7 @@
-//! Per-user service lifecycle for the always-on transcript watcher.
+//! Per-user service lifecycle for the always-on AI Activity Broker.
 //!
 //! The watcher deliberately has a small dependency footprint: filesystem scans are
-//! bounded by each parser and run every five seconds, while these manifests let the OS
+//! bounded by the broker worker and transcript parsers, while these manifests let the OS
 //! restart the same binary after login/reboot without administrator privileges.
 
 use serde::Serialize;
@@ -152,7 +152,7 @@ pub fn install() -> Result<AgentServiceReport, String> {
     #[cfg(target_os = "macos")]
     {
         let content = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>agent</string><string>run</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>broker</string><string>run</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
             xml_escape(&executable.to_string_lossy()),
             xml_escape(&log_path().to_string_lossy()),
             xml_escape(&log_path().to_string_lossy()),
@@ -181,7 +181,7 @@ pub fn install() -> Result<AgentServiceReport, String> {
     #[cfg(target_os = "linux")]
     {
         let content = format!(
-            "[Unit]\nDescription=Wakaclock transcript heartbeat agent\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} agent run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Wakaclock AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
             shell_escape(&executable.to_string_lossy())
         );
         fs::write(&manifest, content).map_err(|error| error.to_string())?;
@@ -200,9 +200,9 @@ pub fn install() -> Result<AgentServiceReport, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let content = format!("{} agent run\r\n", executable.display());
+        let content = format!("{} broker run\r\n", executable.display());
         fs::write(&manifest, content).map_err(|error| error.to_string())?;
-        let command = format!("\"{}\" agent run", executable.display());
+        let command = format!("\"{}\" broker run", executable.display());
         run_command(
             "schtasks",
             &[

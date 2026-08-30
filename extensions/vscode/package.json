@@ -40,6 +40,7 @@
     "onCommand:wakaclock.showToday",
     "onCommand:wakaclock.setupAiTracking",
     "onCommand:wakaclock.showAiTrackingStatus",
+    "onCommand:wakaclock.showBrokerStatus",
     "onCommand:wakaclock.repairAiIntegrations",
     "workspaceContains:**/*"
   ],
@@ -76,6 +77,10 @@
       {
         "command": "wakaclock.showAiTrackingStatus",
         "title": "AtoAxis: Show AI Tracking Status"
+      },
+      {
+        "command": "wakaclock.showBrokerStatus",
+        "title": "AtoAxis: Show AI Broker Status"
       },
       {
         "command": "wakaclock.repairAiIntegrations",

@@ -7,7 +7,7 @@
 # Unlike the Claude Code plugin (hooks/hooks.json in ../plugins/atoaxis-heartbeat),
 # Codex has no plugin-marketplace equivalent as of this writing — hooks are behind a
 # feature flag (`codex_hooks = true`) and registered by hand-editing config.toml. This
-# script mirrors the same wakaclock call the Claude Code hook makes; the file-path
+# script mirrors the same wakaclock broker call the Claude Code hook makes; the file-path
 # extraction is the part most likely to need adjusting as Codex's hook payload schema
 # stabilizes, since it isn't as fully documented yet as Claude Code's.
 set -euo pipefail
@@ -29,6 +29,11 @@ if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
   exit 0
 fi
 
+WORKING_DIR="$(jq -r '.cwd // .workdir // .working_dir // .tool_input.cwd // empty' <<<"$INPUT" 2>/dev/null || true)"
+[ -n "$WORKING_DIR" ] && [ -d "$WORKING_DIR" ] || WORKING_DIR="$PWD"
+SESSION_ID="$(jq -r '.session_id // .sessionId // empty' <<<"$INPUT" 2>/dev/null || true)"
+CALL_ID="$(jq -r '.tool_use_id // .toolUseId // .call_id // .callId // .tool_call_id // .toolCallId // empty' <<<"$INPUT" 2>/dev/null || true)"
+
 # Codex's apply_patch payload is a patch-text blob using "*** Update File: <path>" /
 # "*** Add File: <path>" markers (its own patch format, not unified diff), not a single
 # `file_path` field the way Claude Code's Write/Edit tools have — so this tries the
@@ -39,9 +44,6 @@ AI_MODEL="$(jq -r '.model // .model_name // .model_id // .context.model // empty
 if [ -z "$PATCH_TEXT" ] || [ "$PATCH_TEXT" = "null" ]; then
   exit 0
 fi
-
-EVENT_LOG="${WAKACLOCK_AI_EVENT_LOG:-${HOME}/.wakaclock/ai-events.jsonl}"
-mkdir -p "$(dirname "$EVENT_LOG")"
 
 # Emit one record per file. The previous implementation used `head -n1`, assigned the
 # whole patch's line totals to that first path and silently lost every other file. The
@@ -78,36 +80,27 @@ printf '%s\n' "$PATCH_TEXT" | awk '
     continue
   fi
 
-  EVENT_TIME="$(date +%s)"
-  EVENT_NONCE="${EVENT_TIME}-${PPID}-${RANDOM}"
-  EVENT_ID="codex-${EVENT_NONCE}-$(printf '%s' "$FILE_PATH" | shasum | cut -c1-12)"
-
-  jq -cn \
-    --arg event_id "$EVENT_ID" \
-    --arg entity "$FILE_PATH" \
-    --argjson time "$EVENT_TIME" \
-    --argjson lines_added "$LINES_ADDED" \
-    --argjson lines_deleted "$LINES_DELETED" \
-    '{event_id: $event_id, entity: $entity, time: $time, lines_added: $lines_added, lines_deleted: $lines_deleted}' \
-    >>"$EVENT_LOG" 2>/dev/null || true
-
-  CLI_ARGS=(
-    heartbeat
-    --entity "$FILE_PATH"
-    --write
-    --ai-agent codex
-    --ai-provider openai
-    --ai-source agent_hook
-    --ai-confidence verified
-    --ai-event-id "$EVENT_ID"
-    --ai-lines-added "$LINES_ADDED"
-    --ai-lines-deleted "$LINES_DELETED"
-  )
-  if [ -n "$AI_MODEL" ]; then
-    CLI_ARGS+=(--ai-model "$AI_MODEL")
+  if [[ "$FILE_PATH" != /* ]]; then
+    FILE_PATH="${WORKING_DIR}/${FILE_PATH}"
   fi
 
-  "$WAKACLOCK_BIN" "${CLI_ARGS[@]}" >/dev/null 2>&1 || true
+  EVENT_ID="codex-$(printf '%s|%s|%s' "$SESSION_ID" "${CALL_ID:-apply_patch}" "$FILE_PATH" | shasum -a 256 | cut -c1-40)"
+  OCCURRED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  # The CLI owns broker authentication, durable acceptance and offline fallback.
+  # BrokerProcessor writes the metadata-only VS Code sidecar once after acceptance.
+  jq -cn \
+    --arg event_id "$EVENT_ID" \
+    --arg occurred_at "$OCCURRED_AT" \
+    --arg entity "$FILE_PATH" \
+    --arg session_id "$SESSION_ID" \
+    --arg agent "codex" \
+    --arg provider "openai" \
+    --arg model "$AI_MODEL" \
+    --argjson lines_added "$LINES_ADDED" \
+    --argjson lines_deleted "$LINES_DELETED" \
+    '{schema_version:1,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,change_kind:"modify",agent:$agent,provider:$provider,model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"shell_hook",tool:"apply_patch",tool_event_id:$event_id}' \
+    | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
 done
 
 exit 0

@@ -7,6 +7,7 @@ import type {
     HeartbeatCategory,
     StatusBarSnapshot,
     StatusSnapshot,
+    BrokerStatusSnapshot,
     WakaclockConfigSnapshot,
     VerifyResult,
 } from "./types";
@@ -84,6 +85,8 @@ export class WakaclockCliService {
         if (primaryExtra.activity_segments?.length) {
             args.push("--activity-segments", JSON.stringify(primaryExtra.activity_segments));
         }
+        this.pushOptionalString(args, "--actor-type", primaryExtra.actor_type);
+        this.pushOptionalNumber(args, "--actor-confidence", primaryExtra.actor_confidence);
         this.pushOptionalString(args, "--ai-agent", primaryExtra.ai_agent);
         this.pushOptionalString(args, "--ai-provider", primaryExtra.ai_provider);
         this.pushOptionalString(args, "--ai-model", primaryExtra.ai_model);
@@ -309,7 +312,16 @@ export class WakaclockCliService {
     }
 
     public async installAgent(): Promise<CliResult> {
-        return this.runCli(["agent", "install", "--json"]);
+        return this.runCli(["broker", "install", "--json"]);
+    }
+
+    public async getBrokerStatus(): Promise<BrokerStatusSnapshot> {
+        const result = await this.runCli(["broker", "status", "--json"]);
+        const status = this.parseJson<BrokerStatusSnapshot>(result.stdout.trim());
+        if (!status) {
+            throw new Error("wakaclock broker status returned invalid JSON");
+        }
+        return status;
     }
 
     /**
@@ -323,7 +335,7 @@ export class WakaclockCliService {
             ? await this.managedCli.ensureReady()
             : config.cliPath || "wakaclock";
         const apiKey = await this.getApiKey();
-        const child = spawn(cliPath, ["agent", "run"], {
+        const child = spawn(cliPath, ["broker", "run"], {
             stdio: "ignore",
             detached: false,
             env: {

@@ -65,9 +65,12 @@ After the API key is verified, AtoAxis detects Claude Code, Codex CLI and Gemini
 the background. A multi-select consent dialog lets you enable each tool independently;
 `Not now` defers the prompt and `Don't ask again` disables it. Only after consent does
 the extension install hooks/transcript watching and write the key to the protected
-agent config. The agent scans transcripts every five seconds, so AI edits are still
-recorded when VS Code is closed. Windows and hosts without a service manager use the
-transcript watcher while the Extension Host is open.
+agent config. The local AI Activity Broker accepts these events durably before handing
+them to the existing heartbeat/outbound queue, and scans transcripts every five
+seconds, so AI edits are still recorded when VS Code is closed. Use
+`wakaclock broker status --json` or `AtoAxis: Show AI Broker Status` to inspect
+pending/retry/dead-letter work. Windows and hosts without a service manager use the
+broker as an Extension Host child while the remote workspace is open.
 
 The hooks send only metadata: agent/provider, optional model, file path, line deltas,
 timestamp and a stable event id. Claude Code is attributed to Anthropic, Codex to

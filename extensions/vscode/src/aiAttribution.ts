@@ -16,12 +16,13 @@ export interface AiEditEvent {
   event_id: string;
   entity: string;
   time: number;
-  lines_added: number;
-  lines_deleted: number;
+  /** Null is an explicit unknown, never a zero-line edit. */
+  lines_added: number | null;
+  lines_deleted: number | null;
 }
 
 /**
- * Reads the tiny metadata-only sidecar written by the CLI agent hooks. It lets the
+ * Reads the tiny metadata-only sidecar written by the local BrokerProcessor. It lets the
  * editor extension avoid counting the same external AI edit as human typing when the
  * edited file is open in VS Code. No source text or prompt is ever written here.
  */
@@ -84,6 +85,10 @@ export class AiAttributionStore {
     });
 
     if (candidates.length === 0) {
+      // No nearby AI evidence exists for this file after the correlation window, so
+      // preserve ordinary editor activity as Human. `unattributed` is reserved for a
+      // genuinely ambiguous case where an AI event is nearby but its line delta does
+      // not prove that it owns this exact editor change.
       return "human";
     }
 
@@ -94,6 +99,12 @@ export class AiAttributionStore {
         Math.abs(left.event.time - nowSeconds) - Math.abs(right.event.time - nowSeconds)
     );
     const { event } = candidates[0];
+    if (event.lines_added === null || event.lines_deleted === null) {
+      // The broker has evidence that an AI producer touched this entity, but the
+      // producer did not provide line counters. It is unsafe to call the editor's
+      // change Human merely because an exact delta cannot be proven.
+      return "unattributed";
+    }
     const lineMatch =
       Math.abs(event.lines_added - linesAdded) <= LINE_MATCH_SLACK &&
       Math.abs(event.lines_deleted - linesDeleted) <= LINE_MATCH_SLACK;
@@ -124,8 +135,8 @@ export class AiAttributionStore {
           typeof candidate.event_id === "string" &&
           typeof candidate.entity === "string" &&
           typeof candidate.time === "number" &&
-          typeof candidate.lines_added === "number" &&
-          typeof candidate.lines_deleted === "number"
+          (typeof candidate.lines_added === "number" || candidate.lines_added === null) &&
+          (typeof candidate.lines_deleted === "number" || candidate.lines_deleted === null)
         ) {
           parsed.push(candidate as AiEditEvent);
         }

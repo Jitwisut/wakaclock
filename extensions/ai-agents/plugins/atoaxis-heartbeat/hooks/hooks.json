@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/git-sweep-before.sh\" claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
@@ -12,11 +24,11 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/heartbeat-sweep.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/git-sweep-after.sh\" claude-code anthropic",
             "timeout": 10
           }
         ]

@@ -4681,15 +4681,19 @@ dependencies = [
 name = "wakaclock-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "clap",
  "dirs",
  "hostname",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "toml",
+ "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
  "uuid",

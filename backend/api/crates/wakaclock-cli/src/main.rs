@@ -11,20 +11,25 @@ use std::{
 };
 use uuid::Uuid;
 mod agent_service;
+mod broker;
+mod tool_snapshot;
+use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
-        parse_claude_usage, parse_codex_usage, parse_gemini_usage, AiActivityParser,
-        AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser, DiscoveryContext,
-        DiscoveryResult, DiscoveryState, GeminiCliParser, ParseContext, ParserCursor,
+        normalize_agent_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
+        AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent, AiEventSource,
+        ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult, DiscoveryState,
+        GeminiCliParser, ParseContext, ParserCursor,
     },
     api_client::ApiClient,
+    broker::BrokerEventV1,
     config::Config,
     error::AppError,
     git,
     heartbeat::{
-        union_activity_seconds, ActivitySegment, Category, EntityType, Heartbeat,
-        MAX_ACTIVITY_GAP_SECONDS,
+        resolve_attribution, union_activity_seconds, ActivitySegment, ActorType, AttributionInput,
+        Category, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
     },
     queue::Queue,
 };
@@ -87,6 +92,15 @@ enum Commands {
         #[arg(long)]
         activity_segments: Option<String>,
 
+        /// Canonical attribution state. Legacy clients may omit this and use the
+        /// existing AI fields instead.
+        #[arg(long)]
+        actor_type: Option<ActorType>,
+
+        /// Canonical attribution confidence in the range 0.0..=1.0.
+        #[arg(long)]
+        actor_confidence: Option<f32>,
+
         /// Identifies the caller in `user_agent`, e.g. `wakaclock-vscode/0.1.0`.
         /// Without it every heartbeat looks identical on the wire, and a stale editor
         /// build sending legacy payloads is indistinguishable from a current one — which
@@ -95,9 +109,9 @@ enum Commands {
         plugin: Option<String>,
 
         /// Name of the AI agent that made this edit (e.g. "claude-code", "codex",
-        /// "gemini-cli") — presence of this flag is what sets `is_ai_generated`; there
-        /// is no separate boolean flag, since a heartbeat naming an agent is AI-generated
-        /// by definition and a redundant flag is just another way for the two to disagree.
+        /// "gemini-cli") — this is legacy-compatible AI evidence. The canonical
+        /// `actor_type`/`actor_confidence` fields are derived from it unless explicitly
+        /// supplied and validated.
         #[arg(long)]
         ai_agent: Option<String>,
 
@@ -170,6 +184,10 @@ enum Commands {
         #[command(subcommand)]
         action: AiAction,
     },
+    Broker {
+        #[command(subcommand)]
+        action: BrokerAction,
+    },
     Agent {
         #[command(subcommand)]
         action: AgentAction,
@@ -177,6 +195,48 @@ enum Commands {
     Repair {
         #[command(subcommand)]
         action: RepairAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BrokerAction {
+    /// Run the local AI Activity Broker in the foreground.
+    Run {
+        #[arg(long, default_value_t = 1)]
+        interval_seconds: u64,
+    },
+    /// Install or update the per-user broker service and start it immediately.
+    Install {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Uninstall {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Start {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Stop {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Status {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Re-queue dead-letter events, or one selected event, for processing.
+    Retry {
+        #[arg(long)]
+        event_id: Option<String>,
+        #[arg(long, default_value_t = false)]
+        all: bool,
+    },
+    /// Rotate the local bearer token and restart the service.
+    RotateToken {
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 }
 
@@ -232,6 +292,26 @@ enum AiAction {
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
     Status,
+    /// Ingest one privacy-safe AI file-mutation event from stdin as JSON. This is the
+    /// universal adapter surface for MCP/tool bridges (for example ChatGPT -> Tan) and
+    /// agents that do not expose a transcript format WakaClock can parse itself.
+    Emit {
+        /// Print a machine-readable delivery outcome.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Capture a metadata-only workspace fingerprint immediately before an AI shell
+    /// or MCP tool runs. The snapshot is persisted in local SQLite for crash-safe retry.
+    ToolBefore {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Compare the current workspace against a matching ToolBefore snapshot and emit
+    /// inferred AI file events for the actual changes caused during that tool call.
+    ToolAfter {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Parse new events from each agent's local transcript since the last sync and
     /// send one AI-attributed heartbeat per event. There is no editor buffer to
     /// correlate against here (this reads transcripts directly, not via an IDE
@@ -308,6 +388,10 @@ struct ExtraHeartbeatInput {
     #[serde(default)]
     activity_segments: Vec<ActivitySegment>,
     #[serde(default)]
+    actor_type: Option<ActorType>,
+    #[serde(default)]
+    actor_confidence: Option<f32>,
+    #[serde(default)]
     ai_agent: Option<String>,
     #[serde(default)]
     ai_provider: Option<String>,
@@ -331,6 +415,189 @@ struct ExtraHeartbeatInput {
     unattributed_lines_added: Option<u32>,
     #[serde(default)]
     unattributed_lines_deleted: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenericAiEventInput {
+    event_id: String,
+    agent: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    occurred_at: Option<chrono::DateTime<chrono::Utc>>,
+    entity: PathBuf,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+    #[serde(default)]
+    lines_added: Option<u32>,
+    #[serde(default)]
+    lines_deleted: Option<u32>,
+    #[serde(default)]
+    source: Option<AiEventSource>,
+    #[serde(default)]
+    confidence: Option<AiConfidence>,
+    #[serde(default)]
+    actor_type: Option<ActorType>,
+    #[serde(default)]
+    actor_confidence: Option<f32>,
+    #[serde(default)]
+    active_seconds: Option<f64>,
+    /// Local-only transport metadata kept in the editor sidecar for diagnostics.
+    #[serde(default)]
+    transport: Option<String>,
+    /// Local-only tool name, e.g. `tan.apply_patch`; never includes arguments/content.
+    #[serde(default)]
+    tool: Option<String>,
+    /// Parent tool-call identity shared by every file event from one shell execution.
+    #[serde(default)]
+    tool_event_id: Option<String>,
+    /// Metadata-only filesystem operation derived from Before/After fingerprints.
+    #[serde(default)]
+    change_kind: Option<String>,
+    /// Old path for a one-to-one inferred rename. No file content is retained.
+    #[serde(default)]
+    previous_entity: Option<PathBuf>,
+}
+
+/// Flat pre-v1 input accepted only by the CLI compatibility adapter. This shape was
+/// used by early hook/sidecar experiments (`time` plus `ai_*` metadata); it is converted
+/// into the strict Broker Event v1 envelope before validation and durable ingestion.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyAiEventInput {
+    #[serde(alias = "ai_event_id")]
+    event_id: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default, alias = "ai_agent")]
+    legacy_agent: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default, alias = "ai_provider")]
+    legacy_provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, alias = "ai_model")]
+    legacy_model: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    occurred_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    time: Option<f64>,
+    #[serde(alias = "file", alias = "path")]
+    entity: PathBuf,
+    #[serde(default, alias = "workspace")]
+    project_root: Option<PathBuf>,
+    #[serde(default, alias = "ai_lines_added")]
+    lines_added: Option<u32>,
+    #[serde(default, alias = "ai_lines_deleted")]
+    lines_deleted: Option<u32>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default, alias = "ai_source")]
+    legacy_source: Option<String>,
+    #[serde(default)]
+    confidence: Option<String>,
+    #[serde(default, alias = "ai_confidence")]
+    legacy_confidence: Option<String>,
+    #[serde(default)]
+    actor_type: Option<ActorType>,
+    #[serde(default)]
+    actor_confidence: Option<f32>,
+    #[serde(default)]
+    active_seconds: Option<f64>,
+    #[serde(default)]
+    transport: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    tool_event_id: Option<String>,
+    #[serde(default)]
+    change_kind: Option<String>,
+    #[serde(default)]
+    previous_entity: Option<PathBuf>,
+    #[serde(default)]
+    is_ai_generated: Option<bool>,
+}
+
+impl LegacyAiEventInput {
+    fn into_generic(self) -> Result<GenericAiEventInput, Box<dyn Error>> {
+        if self.is_ai_generated == Some(false) {
+            return Err("legacy AI event cannot set is_ai_generated=false".into());
+        }
+        if self.occurred_at.is_some() && self.time.is_some() {
+            return Err("legacy event must set only one of occurred_at or time".into());
+        }
+        let occurred_at = match (self.occurred_at, self.time) {
+            (Some(value), None) => Some(value),
+            (None, Some(value)) => Some(legacy_unix_time(value)?),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("validated above"),
+        };
+        let source = self.source.or(self.legacy_source).map(|value| {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "agent_hook" => AiEventSource::AgentHook,
+                "ide_telemetry" => AiEventSource::IdeTelemetry,
+                "mcp" => AiEventSource::Mcp,
+                _ => AiEventSource::Transcript,
+            }
+        });
+        let confidence = self.confidence.or(self.legacy_confidence).map(|value| {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "verified" => AiConfidence::Verified,
+                "correlated" => AiConfidence::Correlated,
+                "unknown" => AiConfidence::Unknown,
+                _ => AiConfidence::Inferred,
+            }
+        });
+        Ok(GenericAiEventInput {
+            event_id: self.event_id,
+            agent: self
+                .agent
+                .or(self.legacy_agent)
+                .unwrap_or_else(|| "legacy-ai".to_string()),
+            provider: self.provider.or(self.legacy_provider),
+            model: self.model.or(self.legacy_model),
+            session_id: self.session_id,
+            occurred_at,
+            entity: self.entity,
+            project_root: self.project_root,
+            lines_added: self.lines_added,
+            lines_deleted: self.lines_deleted,
+            source,
+            confidence,
+            actor_type: self.actor_type,
+            actor_confidence: self.actor_confidence,
+            active_seconds: self.active_seconds,
+            transport: self.transport,
+            tool: self.tool,
+            tool_event_id: self.tool_event_id,
+            change_kind: self.change_kind,
+            previous_entity: self.previous_entity,
+        })
+    }
+}
+
+fn legacy_unix_time(value: f64) -> Result<chrono::DateTime<chrono::Utc>, Box<dyn Error>> {
+    if !value.is_finite() {
+        return Err("legacy time must be finite".into());
+    }
+    let millis = if value.abs() >= 100_000_000_000.0 {
+        value.round()
+    } else {
+        (value * 1_000.0).round()
+    };
+    if millis < i64::MIN as f64 || millis > i64::MAX as f64 {
+        return Err("legacy time is outside the supported timestamp range".into());
+    }
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis as i64)
+        .ok_or_else(|| "legacy time is outside the supported timestamp range".into())
 }
 
 #[tokio::main]
@@ -407,6 +674,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
             active_seconds,
             heartbeat_id,
             activity_segments,
+            actor_type,
+            actor_confidence,
             plugin,
             ai_agent,
             ai_provider,
@@ -465,6 +734,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 active_seconds,
                 heartbeat_id,
                 activity_segments: parsed_activity_segments.unwrap_or_default(),
+                actor_type,
+                actor_confidence,
                 ai_agent,
                 ai_provider,
                 ai_model,
@@ -544,44 +815,41 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 run_bounded_ai_sync(&config, &api_client).await;
             }
 
-            let report = api_client.send_heartbeats(heartbeats.clone()).await?;
-            // Persist hook fingerprints even when the request is offline-queued. A
-            // transcript watcher that sees the same patch a few seconds later must not
-            // create a second heartbeat while the queued hook retry is pending.
-            if heartbeats.iter().any(|heartbeat| heartbeat.is_ai_generated) {
-                // Delivery deduplication is best-effort bookkeeping after the server (or
-                // offline queue) has already accepted the heartbeat. A read-only home
-                // directory must not turn a successful network send into a non-zero CLI
-                // exit that makes the editor retry and double-count it.
-                match AiAttributionState::open() {
-                    Ok(delivery_state) => {
-                        for heartbeat in &heartbeats {
-                            if heartbeat.is_ai_generated {
-                                if let Err(error) = delivery_state.mark_fingerprint(
-                                    &heartbeat.entity,
-                                    heartbeat.time,
-                                    heartbeat.ai_lines_added.unwrap_or(0),
-                                    heartbeat.ai_lines_deleted.unwrap_or(0),
-                                    heartbeat.ai_event_id.as_deref(),
-                                ) {
-                                    eprintln!("Warning: could not persist AI fingerprint: {error}");
-                                }
-                                if let Some(event_id) = heartbeat.ai_event_id.as_deref() {
-                                    if let Err(error) =
-                                        delivery_state.mark_delivered(event_id, "hook")
-                                    {
-                                        eprintln!(
-                                            "Warning: could not persist AI event id: {error}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("Warning: could not open AI dedup state: {error}");
-                    }
+            // AI-compatible `wakaclock heartbeat --ai-agent ...` is retained for old
+            // integrations, but it must enter the same durable broker as native hooks.
+            // Keep ordinary editor heartbeats on the legacy API path and never mark the
+            // AI fingerprint here: BrokerProcessor owns that write after it has claimed
+            // the inbox row, otherwise it could suppress its own event before delivery.
+            let (ai_heartbeats, human_heartbeats): (Vec<_>, Vec<_>) = heartbeats
+                .into_iter()
+                .partition(|heartbeat| heartbeat.actor_type.is_ai());
+            let mut report = wakaclock_core::api_client::SendReport {
+                sent: 0,
+                deduped: 0,
+                queued: 0,
+                flushed: 0,
+                error: None,
+            };
+            if !ai_heartbeats.is_empty() {
+                let ai_events = ai_heartbeats
+                    .iter()
+                    .map(broker_event_from_heartbeat)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let broker_report =
+                    broker::submit_events_chunked(&config, &api_client, &ai_events).await?;
+                report.sent += broker_report.accepted;
+                report.deduped += broker_report.duplicate;
+                if broker_report.accepted > 0 || broker_report.duplicate > 0 {
+                    agent_service::record_heartbeat();
                 }
+            }
+            if !human_heartbeats.is_empty() {
+                let human_report = api_client.send_heartbeats(human_heartbeats).await?;
+                report.sent += human_report.sent;
+                report.deduped += human_report.deduped;
+                report.queued += human_report.queued;
+                report.flushed += human_report.flushed;
+                report.error = human_report.error;
             }
             if json {
                 println!(
@@ -592,7 +860,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "queued": report.queued,
                         "flushed": report.flushed,
                         "error": report.error,
-                        "status": if report.queued > 0 { "queued" } else { "sent" },
+                        "status": if report.queued > 0 { "queued" } else if report.sent > 0 { "sent" } else { "deduped" },
                     }))?
                 );
             } else {
@@ -865,6 +1133,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::Ai { action } => match action {
             AiAction::Status => print_ai_status()?,
+            AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
+            AiAction::ToolBefore { json } => run_ai_tool_before(json)?,
+            AiAction::ToolAfter { json } => run_ai_tool_after(&config, &api_client, json).await?,
             AiAction::Sync {
                 agent,
                 dry_run,
@@ -886,31 +1157,113 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .await?
             }
         },
-        Commands::Agent { action } => match action {
-            AgentAction::Run { interval_seconds } => {
-                run_agent_loop(config, interval_seconds.max(1)).await?;
+        Commands::Broker { action } => match action {
+            BrokerAction::Run { interval_seconds } => {
+                broker::run(config, interval_seconds.max(1)).await?;
             }
-            AgentAction::Install { json } => {
+            BrokerAction::Install { json } => {
+                broker::ensure_token()?;
                 let report = agent_service::install().map_err(io::Error::other)?;
-                print_agent_report(&report, json, queue_count());
+                print_broker_report(&report, json, broker_status_json()?);
             }
-            AgentAction::Uninstall { json } => {
+            BrokerAction::Uninstall { json } => {
                 let report = agent_service::uninstall().map_err(io::Error::other)?;
-                print_agent_report(&report, json, queue_count());
+                broker::cleanup_discovery();
+                print_broker_report(&report, json, broker_status_json()?);
             }
-            AgentAction::Start { json } => {
+            BrokerAction::Start { json } => {
                 let report = agent_service::start().map_err(io::Error::other)?;
-                print_agent_report(&report, json, queue_count());
+                print_broker_report(&report, json, broker_status_json()?);
             }
-            AgentAction::Stop { json } => {
+            BrokerAction::Stop { json } => {
                 let report = agent_service::stop().map_err(io::Error::other)?;
-                print_agent_report(&report, json, queue_count());
+                print_broker_report(&report, json, broker_status_json()?);
             }
-            AgentAction::Status { json } => {
+            BrokerAction::Status { json } => {
                 let report = agent_service::status();
-                print_agent_report(&report, json, queue_count());
+                print_broker_report(&report, json, broker_status_json()?);
+            }
+            BrokerAction::Retry { event_id, all } => {
+                if event_id.is_some() == all {
+                    return Err("choose exactly one of --event-id or --all".into());
+                }
+                let changed = wakaclock_core::broker::BrokerStore::open()?
+                    .retry_dead_letters(event_id.as_deref())?;
+                println!("Requeued broker events: {changed}");
+            }
+            BrokerAction::RotateToken { json } => {
+                let before = agent_service::status();
+                if before.running && !before.installed {
+                    return Err(
+                        "cannot rotate a foreground broker token while it is running; stop the broker first"
+                            .into(),
+                    );
+                }
+                broker::rotate_token()?;
+                // A running broker keeps its bearer token in memory. Stop/start is
+                // intentionally explicit here so rotation takes effect immediately on
+                // every supported service manager, not only on the next login.
+                let service_restarted = if before.running {
+                    let _ = agent_service::stop();
+                    agent_service::start().map_err(io::Error::other)?.running
+                } else {
+                    false
+                };
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "rotated": true,
+                            "service_restarted": service_restarted,
+                        })
+                    );
+                } else {
+                    println!("Broker token rotated; service restart requested.");
+                }
             }
         },
+        Commands::Agent { action } => {
+            let machine_readable = match &action {
+                AgentAction::Run { .. } => false,
+                AgentAction::Install { json }
+                | AgentAction::Uninstall { json }
+                | AgentAction::Start { json }
+                | AgentAction::Stop { json }
+                | AgentAction::Status { json } => *json,
+            };
+            if !machine_readable {
+                eprintln!(
+                    "Warning: `wakaclock agent` is deprecated; use `wakaclock broker` instead."
+                );
+            }
+            match action {
+                AgentAction::Run { interval_seconds } => {
+                    broker::run(config, interval_seconds.max(1)).await?;
+                }
+                AgentAction::Install { json } => {
+                    broker::ensure_token()?;
+                    let report = agent_service::install().map_err(io::Error::other)?;
+                    print_agent_report(&report, json, queue_count());
+                }
+                AgentAction::Uninstall { json } => {
+                    let report = agent_service::uninstall().map_err(io::Error::other)?;
+                    broker::cleanup_discovery();
+                    print_agent_report(&report, json, queue_count());
+                }
+                AgentAction::Start { json } => {
+                    let report = agent_service::start().map_err(io::Error::other)?;
+                    print_agent_report(&report, json, queue_count());
+                }
+                AgentAction::Stop { json } => {
+                    let report = agent_service::stop().map_err(io::Error::other)?;
+                    print_agent_report(&report, json, queue_count());
+                }
+                AgentAction::Status { json } => {
+                    let report = agent_service::status();
+                    print_agent_report(&report, json, queue_count());
+                }
+            }
+        }
         Commands::Repair { action } => match action {
             RepairAction::Day {
                 date,
@@ -952,7 +1305,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 ///
 /// Returns `None` on an unreadable or half-written config.toml: a watcher that is
 /// already authenticated must keep running rather than abort on a transient read.
-fn reloaded_agent_config(current: &Config) -> Option<Config> {
+pub(crate) fn reloaded_agent_config(current: &Config) -> Option<Config> {
     let mut candidate = Config::try_load()?;
     apply_env_overrides(&mut candidate).ok()?;
     let changed = candidate.api_key != current.api_key
@@ -961,88 +1314,12 @@ fn reloaded_agent_config(current: &Config) -> Option<Config> {
     changed.then_some(candidate)
 }
 
-async fn run_agent_loop(mut config: Config, interval_seconds: u64) -> Result<(), Box<dyn Error>> {
-    let _lock = agent_service::AgentLock::acquire().map_err(io::Error::other)?;
-    agent_service::append_log(&format!(
-        "agent started pid={} interval={}s",
-        std::process::id(),
-        interval_seconds
-    ));
-    let interval = Duration::from_secs(interval_seconds);
-    let mut api_client = ApiClient::new(config.clone())?;
-    loop {
-        let started = std::time::Instant::now();
-        let mut cycle_error: Option<String> = None;
-
-        // The agent outlives key rotation. Regenerating a key on the dashboard rewrites
-        // config.toml, and a process that kept its startup credentials would 401 on
-        // every send until someone noticed and restarted it — while the durable queue
-        // kept growing. Re-read the identity each cycle instead.
-        if let Some(updated) = reloaded_agent_config(&config) {
-            match ApiClient::new(updated.clone()) {
-                Ok(client) => {
-                    agent_service::append_log("reloaded config.toml: identity changed");
-                    config = updated;
-                    api_client = client;
-                }
-                Err(error) => {
-                    agent_service::append_log(&format!("config reload rejected: {error}"));
-                }
-            }
-        }
-
-        match run_ai_sync(&config, &api_client, None, false, false, false, None).await {
-            Ok(()) => agent_service::append_log("scan completed"),
-            Err(error) => {
-                let message = error.to_string();
-                agent_service::append_log(&format!("scan failed: {message}"));
-                cycle_error = Some(message);
-            }
-        }
-
-        // The watcher also owns the durable offline queue. This keeps retries flowing
-        // while VS Code is closed and there are no fresh transcript events to trigger a
-        // normal heartbeat send.
-        match api_client.flush_queue().await {
-            Ok(report) => {
-                if report.flushed > 0 {
-                    agent_service::record_heartbeat();
-                    agent_service::append_log(&format!(
-                        "flushed {} queued heartbeat(s)",
-                        report.flushed
-                    ));
-                }
-                if let Some(error) = report.stopped_because {
-                    agent_service::append_log(&format!("queue flush stopped: {error}"));
-                    cycle_error.get_or_insert(error);
-                }
-            }
-            Err(error) => {
-                let message = format!("queue flush failed: {error}");
-                agent_service::append_log(&message);
-                cycle_error.get_or_insert(message);
-            }
-        }
-
-        if let Some(error) = cycle_error {
-            agent_service::record_scan(false, None, Some(&error));
-        } else {
-            agent_service::record_scan(true, None, None);
-        }
-        let elapsed = started.elapsed();
-        if elapsed < interval {
-            tokio::time::sleep(interval - elapsed).await;
-        }
-    }
-}
-
 fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, queue_count: usize) {
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "platform": report.platform,
-                "manifest": report.manifest,
                 "installed": report.installed,
                 "running": report.running,
                 "queue_count": queue_count,
@@ -1054,7 +1331,6 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
         );
     } else {
         println!("Platform: {}", report.platform);
-        println!("Manifest: {}", report.manifest);
         println!("Installed: {}", report.installed);
         println!("Running: {}", report.running);
         println!("Queue count: {}", queue_count);
@@ -1073,7 +1349,54 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
     }
 }
 
-fn queue_count() -> usize {
+fn print_broker_report(
+    report: &agent_service::AgentServiceReport,
+    json: bool,
+    broker_status: serde_json::Value,
+) {
+    if json {
+        let mut status = broker_status.as_object().cloned().unwrap_or_default();
+        status.insert(
+            "platform".to_string(),
+            serde_json::Value::String(report.platform.clone()),
+        );
+        status.insert(
+            "service_installed".to_string(),
+            serde_json::Value::Bool(report.installed),
+        );
+        status.insert(
+            "service_running".to_string(),
+            serde_json::Value::Bool(report.running),
+        );
+        println!("{}", serde_json::Value::Object(status));
+    } else {
+        println!("Platform: {}", report.platform);
+        println!("Installed: {}", report.installed);
+        println!("Running: {}", report.running);
+        if let Some(running) = broker_status.get("running") {
+            println!("Broker running: {}", running);
+        }
+        if let Some(inbox) = broker_status.get("inbox") {
+            println!("Broker inbox: {inbox}");
+        }
+        if let Some(queue) = broker_status.get("outbound_queue_count") {
+            println!("Outbound queue: {queue}");
+        }
+        if let Some(error) = broker_status
+            .get("inbox")
+            .and_then(|inbox| inbox.get("last_error_message"))
+            .filter(|error| !error.is_null())
+        {
+            println!("Last broker error: {error}");
+        }
+    }
+}
+
+fn broker_status_json() -> Result<serde_json::Value, AppError> {
+    broker::status_for_cli()
+}
+
+pub(crate) fn queue_count() -> usize {
     Queue::open().and_then(|queue| queue.len()).unwrap_or(0)
 }
 
@@ -1329,7 +1652,7 @@ async fn run_ai_sync(
             }
 
             if !new_events.is_empty() {
-                let mut heartbeats = Vec::with_capacity(new_events.len());
+                let mut broker_events = Vec::with_capacity(new_events.len());
                 for event in &new_events {
                     let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
                     let fingerprint_entity = normalize_entity(&event.entity.to_string_lossy())?;
@@ -1349,29 +1672,23 @@ async fn run_ai_sync(
                         event_time,
                         AI_ACTIVITY_TIMEOUT_SECONDS,
                     )?;
-                    heartbeats.push(build_ai_heartbeat(config, event, active_seconds));
+                    broker_events.push(broker::event_from_ai_edit(event, active_seconds));
                 }
-                if !heartbeats.is_empty() {
-                    let report = api_client.send_heartbeats(heartbeats.clone()).await?;
+                if !broker_events.is_empty() {
+                    let report =
+                        broker::submit_events_chunked(config, api_client, &broker_events).await?;
                     if verbose {
                         println!(
-                            "  sent {} (deduped {}, queued {}, flushed {})",
-                            report.sent, report.deduped, report.queued, report.flushed
+                            "  broker accepted {} (duplicates {})",
+                            report.accepted, report.duplicate
                         );
                     }
-                    if report.sent > 0 || report.queued > 0 {
+                    if report.accepted > 0 || report.duplicate > 0 {
                         agent_service::record_heartbeat();
                     }
                 }
                 for event in &new_events {
                     state.mark_delivered(&event.event_id, &cursor_key)?;
-                    state.mark_fingerprint(
-                        &normalize_entity(&event.entity.to_string_lossy())?,
-                        event.occurred_at.timestamp_millis() as f64 / 1000.0,
-                        event.lines_added.unwrap_or(0),
-                        event.lines_deleted.unwrap_or(0),
-                        Some(&event.event_id),
-                    )?;
                 }
             }
 
@@ -1440,6 +1757,519 @@ async fn run_ai_sync(
     Ok(())
 }
 
+fn read_broker_event_input() -> Result<BrokerEventV1, Box<dyn Error>> {
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    parse_broker_event_input(&stdin)
+}
+
+fn parse_broker_event_input(stdin: &str) -> Result<BrokerEventV1, Box<dyn Error>> {
+    if stdin.trim().is_empty() {
+        return Err("AI event JSON is required on stdin".into());
+    }
+
+    // Native adapters may already send the stable v1 envelope. The old flat
+    // `wakaclock ai emit` shape remains accepted below and is normalized into the
+    // same contract before it reaches the inbox.
+    if let Ok(event) = serde_json::from_str::<BrokerEventV1>(stdin) {
+        return Ok(event.normalize()?);
+    }
+
+    let input: GenericAiEventInput = match serde_json::from_str(stdin) {
+        Ok(input) => input,
+        Err(generic_error) => {
+            // Keep the old flat producer shape working without weakening the v1
+            // HTTP contract. The fallback is still deny-unknown-fields and is
+            // normalized through the exact same BrokerEventV1 path below.
+            let legacy =
+                serde_json::from_str::<LegacyAiEventInput>(stdin).map_err(|_| generic_error)?;
+            legacy.into_generic()?
+        }
+    };
+    if input.event_id.trim().is_empty() {
+        return Err("event_id must not be empty".into());
+    }
+    if input.agent.trim().is_empty() {
+        return Err("agent must not be empty".into());
+    }
+    if input.entity.as_os_str().is_empty() {
+        return Err("entity must not be empty".into());
+    }
+    if let Some(seconds) = input.active_seconds {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return Err("active_seconds must be a finite non-negative number".into());
+        }
+    }
+    Ok(broker_event_from_generic(&input)?.normalize()?)
+}
+
+fn read_ai_tool_input() -> Result<AiToolInput, Box<dyn Error>> {
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    if stdin.trim().is_empty() {
+        return Err("AI tool metadata JSON is required on stdin".into());
+    }
+    let input: AiToolInput = serde_json::from_str(&stdin)?;
+    tool_snapshot::validate_input(&input).map_err(io::Error::other)?;
+    Ok(input)
+}
+
+fn run_ai_tool_before(json: bool) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_tool_input()?;
+    let snapshot = tool_snapshot::capture(&input)?;
+    let snapshot_json = serde_json::to_string(&snapshot)?;
+    let state = AiAttributionState::open()?;
+    // Keep interrupted tool calls retryable across an editor/CLI restart while bounding
+    // metadata-only state. Pruning never emits attribution on its own.
+    let _ = state.prune_tool_sessions_older_than(24 * 60 * 60)?;
+    state.save_tool_session(
+        &snapshot.tool_event_id,
+        &snapshot_json,
+        snapshot.started_at.timestamp(),
+    )?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "snapshotted",
+                "tool_event_id": snapshot.tool_event_id,
+                "workspace_root": snapshot.workspace_root,
+                "files": snapshot.files.len(),
+                "git_backed": snapshot.git_backed,
+            })
+        );
+    } else {
+        println!(
+            "AI tool snapshot {}: {} files ({})",
+            snapshot.tool_event_id,
+            snapshot.files.len(),
+            if snapshot.git_backed {
+                "git"
+            } else {
+                "filesystem"
+            }
+        );
+    }
+    Ok(())
+}
+
+fn tool_change_input(
+    before: &ToolSnapshot,
+    after_input: &AiToolInput,
+    change: &WorkspaceChange,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+) -> GenericAiEventInput {
+    let transport = before
+        .transport
+        .clone()
+        .or_else(|| after_input.transport.clone())
+        .or_else(|| Some("shell_hook".to_string()));
+    let source = if transport
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("mcp"))
+    {
+        AiEventSource::Mcp
+    } else {
+        // A Before/After filesystem diff proves that a tool changed the file, but
+        // does not identify the exact writer as strongly as a native hook. Keep it
+        // inferred instead of upgrading shell observation to verified AI.
+        AiEventSource::IdeTelemetry
+    };
+    GenericAiEventInput {
+        event_id: tool_snapshot::stable_change_event_id(&before.tool_event_id, change),
+        agent: before.agent.clone(),
+        provider: after_input
+            .provider
+            .clone()
+            .or_else(|| before.provider.clone()),
+        model: before.model.clone().or_else(|| after_input.model.clone()),
+        session_id: before
+            .session_id
+            .clone()
+            .or_else(|| after_input.session_id.clone()),
+        occurred_at: Some(occurred_at),
+        entity: change.entity.clone(),
+        project_root: Some(before.workspace_root.clone()),
+        lines_added: change.lines_added,
+        lines_deleted: change.lines_deleted,
+        source: Some(source),
+        confidence: Some(AiConfidence::Inferred),
+        actor_type: None,
+        actor_confidence: None,
+        active_seconds: None,
+        transport,
+        tool: before.tool.clone().or_else(|| after_input.tool.clone()),
+        tool_event_id: Some(before.tool_event_id.clone()),
+        change_kind: Some(change.kind.as_str().to_string()),
+        previous_entity: change.previous_entity.clone(),
+    }
+}
+
+async fn run_ai_tool_after(
+    config: &Config,
+    api_client: &ApiClient,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_tool_input()?;
+    let state = AiAttributionState::open()?;
+    let Some(snapshot_json) = state.load_tool_session(&input.tool_event_id)? else {
+        return Err(format!(
+            "no matching BeforeTool snapshot for {} — refusing to guess attribution",
+            input.tool_event_id
+        )
+        .into());
+    };
+    let before: ToolSnapshot = serde_json::from_str(&snapshot_json)?;
+    let after = tool_snapshot::capture_for_existing(&input, &before)?;
+    let changes = tool_snapshot::diff(&before, &after)?;
+
+    if changes.is_empty() {
+        state.delete_tool_session(&before.tool_event_id)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "no_changes",
+                    "tool_event_id": before.tool_event_id,
+                    "changed_files": 0,
+                })
+            );
+        } else {
+            println!("AI tool {} changed no files", before.tool_event_id);
+        }
+        return Ok(());
+    }
+
+    let occurred_at = chrono::Utc::now();
+    let elapsed_seconds =
+        (occurred_at - before.started_at).num_milliseconds().max(0) as f64 / 1000.0;
+    let tool_active_seconds = elapsed_seconds.min(MAX_ACTIVITY_GAP_SECONDS);
+    let inputs: Vec<GenericAiEventInput> = changes
+        .iter()
+        .map(|change| tool_change_input(&before, &input, change, occurred_at))
+        .collect();
+    let events: Vec<AiEditEvent> = inputs
+        .iter()
+        .map(generic_ai_edit_event)
+        .collect::<Result<Vec<_>, _>>()?;
+    let ids: Vec<String> = events.iter().map(|event| event.event_id.clone()).collect();
+    let undelivered = state.filter_undelivered(&ids)?;
+
+    let mut pending: Vec<(&AiEditEvent, &GenericAiEventInput)> = Vec::new();
+    for (event, event_input) in events.iter().zip(inputs.iter()) {
+        if !undelivered.contains(&event.event_id) {
+            continue;
+        }
+        // If a stronger native hook already reported the exact same file/time/line
+        // delta, suppress this inferred shell observer event. Unknown line deltas are
+        // deliberately not guessed into a fingerprint match.
+        if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
+            let entity = normalize_entity(&event.entity.to_string_lossy())?;
+            let time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
+            if state.has_fingerprint(&entity, time, added, deleted)? {
+                state.mark_delivered(&event.event_id, "tool_snapshot_shadowed")?;
+                continue;
+            }
+        }
+        pending.push((event, event_input));
+    }
+    pending.sort_by(|(left, _), (right, _)| left.entity.cmp(&right.entity));
+
+    if pending.is_empty() {
+        state.delete_tool_session(&before.tool_event_id)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "deduped",
+                    "tool_event_id": before.tool_event_id,
+                    "changed_files": changes.len(),
+                    "deduped": changes.len(),
+                })
+            );
+        }
+        return Ok(());
+    }
+
+    // One tool call owns one duration interval, regardless of how many files it touched.
+    // Only the first deterministic file heartbeat carries that interval; the rest are
+    // zero-duration attribution evidence linked by ai_change_id/tool_event_id.
+    let mut broker_events = Vec::with_capacity(pending.len());
+    for (index, (_, event_input)) in pending.iter().enumerate() {
+        let mut event_input = (*event_input).clone();
+        event_input.active_seconds = Some(if index == 0 { tool_active_seconds } else { 0.0 });
+        broker_events.push(broker_event_from_generic(&event_input)?);
+    }
+    let report = broker::submit_events_chunked(config, api_client, &broker_events).await?;
+
+    for (event, _) in &pending {
+        state.mark_delivered(&event.event_id, "tool_snapshot")?;
+    }
+    state.delete_tool_session(&before.tool_event_id)?;
+    if report.accepted > 0 || report.duplicate > 0 {
+        agent_service::record_heartbeat();
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": if report.accepted > 0 { "accepted" } else { "deduped" },
+                "tool_event_id": before.tool_event_id,
+                "changed_files": changes.len(),
+                "emitted": pending.len(),
+                "tool_active_seconds": tool_active_seconds,
+                "accepted": report.accepted,
+                "duplicate": report.duplicate,
+                "changes": changes.iter().map(|change| serde_json::json!({
+                    "kind": change.kind.as_str(),
+                    "entity": change.entity,
+                    "previous_entity": change.previous_entity,
+                    "lines_added": change.lines_added,
+                    "lines_deleted": change.lines_deleted,
+                })).collect::<Vec<_>>(),
+            })
+        );
+    } else {
+        println!(
+            "AI tool {}: {} changed file(s), {:.3}s activity",
+            before.tool_event_id,
+            changes.len(),
+            tool_active_seconds
+        );
+    }
+    Ok(())
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box<dyn Error>> {
+    let entity = PathBuf::from(normalize_entity(&input.entity.to_string_lossy())?);
+    let project_root = input
+        .project_root
+        .as_ref()
+        .map(|root| normalize_entity(&root.to_string_lossy()).map(PathBuf::from))
+        .transpose()?;
+    let source = input.source.clone().unwrap_or_else(|| {
+        if input
+            .transport
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("mcp"))
+        {
+            AiEventSource::Mcp
+        } else {
+            // A legacy flat event without a structured transport has only weak
+            // provenance and must remain inferred rather than becoming Human or
+            // accidentally claiming native verification.
+            AiEventSource::Transcript
+        }
+    });
+    let confidence = input.confidence.clone().unwrap_or({
+        if matches!(source, AiEventSource::Mcp) {
+            AiConfidence::Verified
+        } else {
+            AiConfidence::Inferred
+        }
+    });
+    Ok(AiEditEvent {
+        event_id: input.event_id.trim().to_string(),
+        agent: normalize_agent_id(&input.agent),
+        provider: normalize_optional_text(input.provider.clone()),
+        model: normalize_optional_text(input.model.clone()),
+        session_id: normalize_optional_text(input.session_id.clone()),
+        occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
+        entity,
+        project_root,
+        lines_added: input.lines_added,
+        lines_deleted: input.lines_deleted,
+        input_tokens: None,
+        output_tokens: None,
+        // A flat legacy `ai emit` payload has no proof that it came from a native
+        // hook or structured MCP transport. Keep it on the inferred path; callers
+        // that have stronger evidence must send the explicit source/confidence pair.
+        source,
+        confidence,
+    })
+}
+
+fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV1, Box<dyn Error>> {
+    let event = generic_ai_edit_event(input)?;
+    let change_kind = match input
+        .change_kind
+        .as_deref()
+        .unwrap_or("modify")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "create" => wakaclock_core::broker::BrokerChangeKind::Create,
+        "modify" | "write" | "update" => wakaclock_core::broker::BrokerChangeKind::Modify,
+        "rename" | "move" => wakaclock_core::broker::BrokerChangeKind::Rename,
+        "delete" | "remove" => wakaclock_core::broker::BrokerChangeKind::Delete,
+        other => return Err(format!("unsupported broker change_kind: {other}").into()),
+    };
+    let previous_entity = input
+        .previous_entity
+        .as_ref()
+        .map(|path| normalize_entity(&path.to_string_lossy()))
+        .transpose()?
+        .map(|path| path.to_string());
+    Ok(BrokerEventV1 {
+        schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        event_type: wakaclock_core::broker::BrokerEventType::FileChange,
+        event_id: event.event_id,
+        occurred_at: event.occurred_at,
+        entity: event.entity.to_string_lossy().into_owned(),
+        project_root: event
+            .project_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        change_kind,
+        previous_entity,
+        agent: event.agent,
+        provider: event.provider,
+        model: event.model,
+        session_id: event.session_id,
+        source: event.source,
+        confidence: event.confidence,
+        actor_type: input.actor_type,
+        actor_confidence: input.actor_confidence,
+        lines_added: event.lines_added,
+        lines_deleted: event.lines_deleted,
+        active_seconds: input.active_seconds,
+        transport: input.transport.clone(),
+        tool: input.tool.clone(),
+        tool_event_id: input.tool_event_id.clone(),
+    })
+}
+
+/// Convert the pre-Phase-2 `heartbeat --ai-agent` compatibility payload into the
+/// canonical broker envelope. New integrations should use `ai emit`; keeping this
+/// adapter here prevents an old hook from bypassing durable ingress and creating a
+/// second attribution implementation.
+fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, Box<dyn Error>> {
+    let occurred_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        (heartbeat.time * 1_000.0).round() as i64,
+    )
+    .ok_or_else(|| "heartbeat time is outside the supported timestamp range".to_string())?;
+    let source = match heartbeat
+        .ai_source
+        .as_deref()
+        .unwrap_or("transcript")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "agent_hook" => AiEventSource::AgentHook,
+        "ide_telemetry" => AiEventSource::IdeTelemetry,
+        "mcp" => AiEventSource::Mcp,
+        _ => AiEventSource::Transcript,
+    };
+    let confidence = match heartbeat
+        .ai_confidence
+        .as_deref()
+        .unwrap_or("inferred")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "verified" => AiConfidence::Verified,
+        "correlated" => AiConfidence::Correlated,
+        "unknown" => AiConfidence::Unknown,
+        _ => AiConfidence::Inferred,
+    };
+    let event_id = heartbeat
+        .ai_event_id
+        .clone()
+        .or_else(|| heartbeat.heartbeat_id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            let material = format!(
+                "{}|{}|{}|{}|{}",
+                heartbeat.entity,
+                heartbeat.time,
+                heartbeat
+                    .ai_lines_added
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                heartbeat
+                    .ai_lines_deleted
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                heartbeat.ai_agent.as_deref().unwrap_or("legacy-ai"),
+            );
+            format!(
+                "legacy-heartbeat:{}",
+                Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
+            )
+        });
+    Ok(BrokerEventV1 {
+        schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        event_type: wakaclock_core::broker::BrokerEventType::FileChange,
+        event_id,
+        occurred_at,
+        entity: heartbeat.entity.clone(),
+        project_root: None,
+        change_kind: wakaclock_core::broker::BrokerChangeKind::Modify,
+        previous_entity: None,
+        agent: heartbeat
+            .ai_agent
+            .clone()
+            .unwrap_or_else(|| "legacy-ai".to_string()),
+        provider: heartbeat.ai_provider.clone(),
+        model: heartbeat.ai_model.clone(),
+        session_id: None,
+        source,
+        confidence,
+        actor_type: Some(heartbeat.actor_type),
+        actor_confidence: Some(heartbeat.actor_confidence),
+        lines_added: heartbeat.ai_lines_added,
+        lines_deleted: heartbeat.ai_lines_deleted,
+        active_seconds: heartbeat.active_seconds,
+        transport: Some("cli_compat".to_string()),
+        tool: None,
+        tool_event_id: heartbeat.ai_change_id.clone(),
+    })
+}
+
+async fn run_ai_emit(
+    config: &Config,
+    api_client: &ApiClient,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let event = read_broker_event_input()?;
+    let ack = broker::submit_event(config, api_client, event.clone()).await?;
+    let accepted = ack.status == "accepted";
+    let duplicate = ack.status == "duplicate";
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": ack.status,
+                "event_id": event.event_id,
+                "agent": event.agent,
+                "source": event.source,
+                "confidence": event.confidence,
+                "actor_type": ack.actor_type,
+                "actor_confidence": ack.actor_confidence,
+                "accepted": accepted,
+                "duplicate": duplicate,
+            })
+        );
+    } else {
+        println!("AI event {}: {}", event.event_id, ack.status);
+        println!("Agent: {} ({})", event.agent, event.source.as_str());
+        println!("Actor: {} ({:.2})", ack.actor_type, ack.actor_confidence);
+    }
+    Ok(())
+}
+
 /// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
 /// are not dependent on a user remembering to run `wakaclock ai sync`. The bound keeps
 /// extension heartbeat latency predictable; any timeout/error leaves the ordinary
@@ -1463,7 +2293,11 @@ async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
 /// is always `"transcript"` here — never `"agent_hook"` — because the value must
 /// describe how *this* event was obtained, not how some other integration might have
 /// reported the same file.
-fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64) -> Heartbeat {
+pub(crate) fn build_ai_heartbeat(
+    config: &Config,
+    event: &AiEditEvent,
+    active_seconds: f64,
+) -> Heartbeat {
     let entity_path = event.entity.to_string_lossy().into_owned();
     let mut heartbeat = Heartbeat::new(
         config.user_id,
@@ -1504,7 +2338,6 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
         }
     }
 
-    heartbeat.is_ai_generated = true;
     heartbeat.ai_agent = Some(event.agent.clone());
     heartbeat.ai_provider = event.provider.clone();
     heartbeat.ai_model = event.model.clone();
@@ -1513,6 +2346,20 @@ fn build_ai_heartbeat(config: &Config, event: &AiEditEvent, active_seconds: f64)
     heartbeat.ai_event_id = Some(event.event_id.clone());
     heartbeat.ai_lines_added = event.lines_added;
     heartbeat.ai_lines_deleted = event.lines_deleted;
+    let attribution = resolve_attribution(AttributionInput {
+        legacy_is_ai_generated: Some(true),
+        ai_agent: heartbeat.ai_agent.as_deref(),
+        ai_source: heartbeat.ai_source.as_deref(),
+        ai_confidence: heartbeat.ai_confidence.as_deref(),
+        ai_event_id: heartbeat.ai_event_id.as_deref(),
+        ai_lines_added: heartbeat.ai_lines_added,
+        ai_lines_deleted: heartbeat.ai_lines_deleted,
+        ..Default::default()
+    })
+    .expect("a parsed AI event must resolve to an AI actor");
+    heartbeat.actor_type = attribution.actor_type;
+    heartbeat.actor_confidence = attribution.confidence;
+    heartbeat.is_ai_generated = attribution.actor_type.is_ai();
     heartbeat.active_seconds = Some(active_seconds);
     if active_seconds > 0.0 {
         heartbeat.activity_segments.push(ActivitySegment {
@@ -1655,6 +2502,49 @@ fn build_heartbeat(
     }
 
     if let Some(extra) = extra {
+        let has_ai_metadata = extra
+            .ai_agent
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || extra
+                .ai_source
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || extra
+                .ai_event_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || extra.ai_lines_added.is_some_and(|value| value > 0)
+            || extra.ai_lines_deleted.is_some_and(|value| value > 0)
+            || extra.actor_type.is_some_and(ActorType::is_ai);
+        let positive_editor_evidence = !has_ai_metadata
+            && (is_write
+                || extra.activity_segments.iter().any(|segment| {
+                    segment.source.as_deref().is_some_and(|source| {
+                        source.eq_ignore_ascii_case("human")
+                            || source.eq_ignore_ascii_case("editor")
+                    })
+                }));
+        let attribution = resolve_attribution(AttributionInput {
+            explicit_actor_type: extra.actor_type,
+            explicit_confidence: extra.actor_confidence,
+            legacy_is_ai_generated: None,
+            ai_agent: extra.ai_agent.as_deref(),
+            ai_source: extra.ai_source.as_deref(),
+            ai_confidence: extra.ai_confidence.as_deref(),
+            ai_event_id: extra.ai_event_id.as_deref(),
+            ai_lines_added: extra.ai_lines_added,
+            ai_lines_deleted: extra.ai_lines_deleted,
+            human_lines_added: extra.human_lines_added,
+            human_lines_deleted: extra.human_lines_deleted,
+            unattributed_lines_added: extra.unattributed_lines_added,
+            unattributed_lines_deleted: extra.unattributed_lines_deleted,
+            keystrokes: extra.keystrokes,
+            chars_added: extra.chars_added,
+            chars_deleted: extra.chars_deleted,
+            positive_editor_evidence,
+        })
+        .map_err(io::Error::other)?;
         heartbeat.line_number = extra.line_number;
         heartbeat.cursor_position = extra.cursor_position;
         heartbeat.keystrokes = extra.keystrokes;
@@ -1665,9 +2555,9 @@ fn build_heartbeat(
             .heartbeat_id
             .or_else(|| Some(Uuid::new_v4().to_string()));
         heartbeat.activity_segments = extra.activity_segments;
-        // Presence of `ai_agent` is the whole signal — see the CLI flag's doc comment
-        // for why there is no separate `is_ai_generated` flag to keep in sync with it.
-        heartbeat.is_ai_generated = extra.ai_agent.is_some();
+        heartbeat.actor_type = attribution.actor_type;
+        heartbeat.actor_confidence = attribution.confidence;
+        heartbeat.is_ai_generated = attribution.actor_type.is_ai();
         heartbeat.ai_agent = extra.ai_agent;
         heartbeat.ai_provider = extra.ai_provider;
         heartbeat.ai_model = extra.ai_model;
@@ -1725,7 +2615,7 @@ fn ensure_activity_segment(heartbeat: &mut Heartbeat) {
         .as_deref()
         .or(heartbeat.ai_event_id.as_deref())
         .unwrap_or("legacy");
-    let source = Some(if heartbeat.is_ai_generated {
+    let source = Some(if heartbeat.actor_type.is_ai() {
         "ai".to_string()
     } else {
         "editor".to_string()
@@ -1887,5 +2777,117 @@ mod generic_ai_ingress_tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn sample_input() -> GenericAiEventInput {
+        GenericAiEventInput {
+            event_id: "chatgpt-session-1:src/lib.rs:1".to_string(),
+            agent: "ChatGPT MCP".to_string(),
+            provider: Some("openai".to_string()),
+            model: Some("gpt".to_string()),
+            session_id: Some("session-1".to_string()),
+            occurred_at: Some(chrono::Utc::now()),
+            entity: std::env::temp_dir()
+                .join("wakaclock-ingress")
+                .join("src/lib.rs"),
+            project_root: Some(std::env::temp_dir().join("wakaclock-ingress")),
+            lines_added: Some(12),
+            lines_deleted: Some(4),
+            source: None,
+            confidence: None,
+            actor_type: None,
+            actor_confidence: None,
+            active_seconds: None,
+            transport: Some("mcp".to_string()),
+            tool: Some("tan.apply_patch".to_string()),
+            tool_event_id: None,
+            change_kind: None,
+            previous_entity: None,
+        }
+    }
+
+    #[test]
+    fn ai_emit_is_a_first_class_cli_subcommand() {
+        let parsed = Cli::try_parse_from(["wakaclock", "ai", "emit", "--json"])
+            .expect("ai emit should parse");
+        assert!(matches!(
+            parsed.command,
+            Commands::Ai {
+                action: AiAction::Emit { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn generic_ingress_defaults_to_verified_mcp_and_normalizes_agent() {
+        let event = generic_ai_edit_event(&sample_input()).expect("event normalizes");
+        assert_eq!(event.agent, "chatgpt-mcp");
+        assert_eq!(event.provider.as_deref(), Some("openai"));
+        assert_eq!(event.source, AiEventSource::Mcp);
+        assert_eq!(event.confidence, AiConfidence::Verified);
+        assert_eq!(event.lines_added, Some(12));
+        assert_eq!(event.lines_deleted, Some(4));
+        assert!(event.entity.is_absolute());
+        assert!(event
+            .project_root
+            .as_ref()
+            .is_some_and(|root| root.is_absolute()));
+    }
+
+    #[test]
+    fn generic_ingress_protocol_rejects_raw_prompt_or_content_fields() {
+        let json = serde_json::json!({
+            "event_id": "evt-1",
+            "agent": "chatgpt",
+            "entity": "/tmp/file.rs",
+            "lines_added": 1,
+            "lines_deleted": 0,
+            "prompt": "this must never become part of the ingress contract"
+        });
+        let parsed = serde_json::from_value::<GenericAiEventInput>(json);
+        assert!(
+            parsed.is_err(),
+            "unknown/raw-content fields must be rejected"
+        );
+    }
+
+    #[test]
+    fn legacy_flat_ai_emit_is_normalized_into_broker_v1() {
+        let event = parse_broker_event_input(
+            r#"{
+                "event_id":"legacy-1",
+                "entity":"/workspace/src/lib.rs",
+                "time":1700000000,
+                "ai_agent":"Codex CLI",
+                "ai_provider":"openai",
+                "ai_source":"legacy",
+                "ai_confidence":"inferred",
+                "ai_lines_added":3,
+                "ai_lines_deleted":1
+            }"#,
+        )
+        .expect("legacy flat input should be accepted");
+        assert_eq!(
+            event.schema_version,
+            wakaclock_core::broker::BROKER_SCHEMA_VERSION
+        );
+        assert_eq!(event.agent, "codex");
+        assert_eq!(event.source, AiEventSource::Transcript);
+        assert_eq!(event.confidence, AiConfidence::Inferred);
+        assert_eq!(event.actor_type, Some(ActorType::AiInferred));
+        assert_eq!(event.actor_confidence, Some(0.6));
+        assert_eq!(event.lines_added, Some(3));
+        assert_eq!(event.lines_deleted, Some(1));
+        assert_eq!(event.occurred_at.timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn generic_ingress_accepts_explicit_lower_confidence_sources() {
+        let mut input = sample_input();
+        input.source = Some(AiEventSource::AgentHook);
+        input.confidence = Some(AiConfidence::Correlated);
+        let event = generic_ai_edit_event(&input).expect("event normalizes");
+        assert_eq!(event.source, AiEventSource::AgentHook);
+        assert_eq!(event.confidence, AiConfidence::Correlated);
     }
 }

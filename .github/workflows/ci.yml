@@ -82,6 +82,29 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run unit and service tests
         run: cargo test --workspace
+      - name: Run Phase 2 broker acceptance tests
+        run: |
+          cargo test -p wakaclock-core broker:: -- --test-threads=1
+          cargo test -p wakaclock-cli broker:: -- --test-threads=1
+          cargo test -p wakaclock-cli --test broker_process -- --test-threads=1
+
+  duration-baseline:
+    name: Phase 0 duration and attribution baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Python port against Rust timeline semantics
+        run: python3 scripts/duration-audit/verify_port.py
+      - name: Replay metadata-only Golden Dataset
+        run: python3 scripts/duration-audit/golden.py
+      - name: Verify legacy boolean is compatibility-only
+        run: python3 scripts/duration-audit/verify_actor_migration.py
+      - name: Validate sanitized release certification when present
+        if: ${{ hashFiles('scripts/duration-audit/certifications/latest.json') != '' }}
+        run: python3 scripts/duration-audit/verify_certification.py
 
   backend-integration:
     name: Rust ClickHouse integration tests

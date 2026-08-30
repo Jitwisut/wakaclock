@@ -68,22 +68,21 @@ while IFS= read -r path; do
   # not turn into hundreds of heartbeats; the time is bridged from the ones that do land.
   [ "$CHANGED" -le 20 ] || break
 
-  EVENT_ID="claude-code-sweep-$(date +%s)-$(printf '%s' "$FULL" | shasum | cut -c1-12)"
-  CLI_ARGS=(
-    heartbeat
-    --entity "$FULL"
-    --write
-    --ai-agent claude-code
-    --ai-provider anthropic
-    --ai-source agent_hook
-    # `inferred`, not `verified`: git proves the file changed during this tool call, not
-    # that this specific command is what changed it. The companion hook, which is handed
-    # the path by the tool itself, keeps `verified`.
-    --ai-confidence inferred
-    --ai-event-id "$EVENT_ID"
-  )
-  [ -n "$AI_MODEL" ] && CLI_ARGS+=(--ai-model "$AI_MODEL")
-  "$WAKACLOCK_BIN" "${CLI_ARGS[@]}" >/dev/null 2>&1 || true
+  FILE_MARK="$(stat -f '%m:%z' "$FULL" 2>/dev/null || stat -c '%Y:%s' "$FULL" 2>/dev/null || true)"
+  EVENT_ID="claude-code-sweep-$(printf '%s|%s|%s' "$ROOT" "$FULL" "$FILE_MARK" | shasum -a 256 | cut -c1-40)"
+  # Keep the compatibility sweep on the same durable broker path as native hooks. The
+  # file changed during a shell call, but the sweep cannot prove the exact writer or
+  # line delta, so it is explicitly inferred with nullable counters.
+  jq -cn \
+    --arg event_id "$EVENT_ID" \
+    --arg occurred_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg entity "$FULL" \
+    --arg project_root "$ROOT" \
+    --arg agent "claude-code" \
+    --arg provider "anthropic" \
+    --arg model "$AI_MODEL" \
+    '{schema_version:1,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:$project_root,change_kind:"modify",agent:$agent,provider:$provider,model:(if $model=="" then null else $model end),source:"agent_hook",confidence:"inferred",lines_added:null,lines_deleted:null,transport:"shell_hook",tool:"shell-sweep",tool_event_id:$event_id}' \
+    | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
 done < <(git -C "$ROOT" status --porcelain --untracked-files=normal 2>/dev/null \
          | sed 's/^...//' | sed 's/.* -> //')
 

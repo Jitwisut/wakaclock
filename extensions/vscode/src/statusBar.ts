@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import type { WakaclockCliService } from "./cli";
 import { Logger } from "./logging";
-import type { ConnectionState, WakaclockConfigSnapshot } from "./types";
+import type {
+  BrokerStatusSnapshot,
+  ConnectionState,
+  WakaclockConfigSnapshot,
+} from "./types";
 import type { ActivitySegment } from "./types";
 import { unionSeconds } from "./activity";
 
@@ -46,13 +50,15 @@ export class StatusBarController implements vscode.Disposable {
   private deliveryFailureReported = false;
   private legacyCliReported = false;
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
+  private lastBrokerStatus?: BrokerStatusSnapshot;
   private getBufferedSeconds: () => number = () => 0;
   private getBufferedSegments: () => ActivitySegment[] = () => [];
   private connectionState: ConnectionState = "connecting";
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
-    private readonly cli: Pick<WakaclockCliService, "getToday">,
+    private readonly cli: Pick<WakaclockCliService, "getToday"> &
+      Partial<Pick<WakaclockCliService, "getBrokerStatus">>,
     private readonly logger: Logger,
     private readonly getApiKey?: () => Thenable<string | undefined>,
   ) {
@@ -121,6 +127,11 @@ export class StatusBarController implements vscode.Disposable {
         return;
       }
     }
+
+    // Broker status is local and remains useful while the hosted API is offline.
+    // Older test/embedded CLI adapters may not expose it, so this is deliberately
+    // additive and never blocks the regular total refresh.
+    await this.refreshBrokerStatus();
 
     try {
       const snapshot = await this.cli.getToday(localTimezone());
@@ -228,6 +239,12 @@ export class StatusBarController implements vscode.Disposable {
       "state" in snapshot.agentHealth
         ? String((snapshot.agentHealth as { state?: unknown }).state)
         : undefined;
+    const brokerState = this.lastBrokerStatus
+      ? this.lastBrokerStatus.running
+        ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+        : "stopped"
+      : undefined;
+    const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
     if (this.connectionState === "needs-api-key") {
       this.item.text = "$(plug) AtoAxis: Connect";
       this.item.command = "wakaclock.setApiKey";
@@ -254,7 +271,22 @@ export class StatusBarController implements vscode.Disposable {
         ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
         : "") +
       (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
-      (agentState ? `\nAgent: ${agentState}` : "");
+      (agentState ? `\nAgent: ${agentState}` : "") +
+      (brokerState ? `\nBroker: ${brokerState}` : "") +
+      (brokerError ? `\nBroker last error: ${brokerError}` : "");
+  }
+
+  private async refreshBrokerStatus(): Promise<void> {
+    if (!this.cli.getBrokerStatus) {
+      return;
+    }
+    try {
+      this.lastBrokerStatus = await this.cli.getBrokerStatus();
+    } catch (error) {
+      this.logger.debug("failed to read local broker status", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

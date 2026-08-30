@@ -32,10 +32,12 @@ export function registerCommands(
     | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
+    | "getBrokerStatus"
   >,
   bufferManager: Pick<HeartbeatBufferManager, "flushCurrentEditor">,
   statusBar: Pick<StatusBarController, "applyVisibility" | "refresh">,
-  aiIntegrations: AiIntegrationController
+  aiIntegrations: AiIntegrationController,
+  onVerifiedApiKey?: () => void,
 ): void {
   function workspaceProject(editor?: vscode.TextEditor): string | undefined {
     if (!editor) {
@@ -155,7 +157,11 @@ export function registerCommands(
       await setStoredApiKey(context.secrets, trimmed);
       await clearPendingApiKey(context.secrets);
       await statusBar.refresh();
-      void cliService.getStatus().catch(() => undefined);
+      // The activation bootstrap may already have returned because no key was
+      // available at startup. Re-run it after verification so an existing AI
+      // consent immediately refreshes the broker service, and a newly eligible
+      // integration can receive the normal consent prompt.
+      onVerifiedApiKey?.();
 
       await vscode.window.showInformationMessage(
         "AtoAxis API key verified and saved securely. Time tracking is now active."
@@ -195,6 +201,23 @@ export function registerCommands(
         );
       }
     }),
+    vscode.commands.registerCommand("wakaclock.showBrokerStatus", async () => {
+      try {
+        const status = await cliService.getBrokerStatus();
+        const inbox = status.inbox;
+        const lastError = inbox?.last_error_message;
+        await vscode.window.showInformationMessage(
+          `Broker ${status.running ? "running" : "stopped"}; ` +
+            `pending ${inbox?.pending ?? 0}, retry ${inbox?.retry ?? 0}, ` +
+            `dead-letter ${inbox?.dead_letter ?? 0}, outbound ${status.outbound_queue_count ?? 0}.` +
+            (lastError ? ` Last error: ${lastError}` : "")
+        );
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : "Unable to inspect the local AI broker."
+        );
+      }
+    }),
     vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
       return setupAiTracking(aiIntegrations, cliService, context);
     }),
@@ -218,7 +241,7 @@ async function setupAiTracking(
   repairing = false
 ): Promise<boolean> {
   try {
-    const selectedIds = await chooseAiAgents(aiIntegrations, context);
+    const selectedIds = await chooseAiAgents(aiIntegrations, context, repairing);
     if (!selectedIds || selectedIds.length === 0) {
       return false;
     }
@@ -269,11 +292,11 @@ async function setupAiTracking(
           );
         }
         if (!serviceInstalled) {
-        await vscode.window.showWarningMessage(
-          `${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+          await vscode.window.showWarningMessage(
+            `${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
       }
       if (failed > 0) {
@@ -306,12 +329,17 @@ async function setupAiTracking(
 async function chooseAiAgents(
   aiIntegrations: AiIntegrationController,
   context: vscode.ExtensionContext,
+  repairing = false,
 ): Promise<AiAgentId[] | undefined> {
   const statuses = await aiIntegrations.getStatus();
-  const candidates = statuses.filter((status) => status.detected && !status.enabled);
+  const candidates = statuses.filter(
+    (status) => status.detected && (repairing || !status.enabled),
+  );
   if (candidates.length === 0) {
     await vscode.window.showInformationMessage(
-      "No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.",
+      repairing
+        ? "No configured supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run repair again."
+        : "No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.",
     );
     return undefined;
   }
@@ -324,7 +352,9 @@ async function chooseAiAgents(
       id: status.id,
     })),
     {
-      title: "Choose AI tools for AtoAxis tracking",
+      title: repairing
+        ? "Choose AI tools to repair for AtoAxis"
+        : "Choose AI tools for AtoAxis tracking",
       placeHolder: "Select one or more detected tools",
       canPickMany: true,
       ignoreFocusOut: true,
@@ -334,14 +364,21 @@ async function chooseAiAgents(
     return undefined;
   }
   const action = await vscode.window.showQuickPick(
-    ["Enable selected", "Not now", "Don't ask again"],
+    repairing
+      ? ["Repair selected", "Cancel"]
+      : ["Enable selected", "Not now", "Don't ask again"],
     {
-      title: "Confirm AI tracking setup",
-      placeHolder: "Choose when to install the selected integrations",
+      title: repairing ? "Confirm AI integration repair" : "Confirm AI tracking setup",
+      placeHolder: repairing
+        ? "Reinstall hooks, broker service and token permissions"
+        : "Choose when to install the selected integrations",
       ignoreFocusOut: true,
     },
   );
-  if (action !== "Enable selected") {
+  if (action !== (repairing ? "Repair selected" : "Enable selected")) {
+    if (repairing) {
+      return undefined;
+    }
     const state = action === "Don't ask again" ? "denied" : "deferred";
     for (const item of picked) {
       await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {

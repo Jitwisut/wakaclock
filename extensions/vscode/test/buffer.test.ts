@@ -34,6 +34,35 @@ function createConfig(): WakaclockConfigSnapshot {
 }
 
 describe("HeartbeatBufferManager", () => {
+  it("does not call an editor change Human when broker line evidence is unknown", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+    try {
+      const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          event_id: "shell-unknown-lines",
+          entity: "C:/project/a.ts",
+          time: 10,
+          lines_added: null,
+          lines_deleted: null
+        }) + "\n"
+      );
+
+      await expect(
+        new AiAttributionStore(homeDir).classifyRecentEdit(
+          "C:/project/a.ts",
+          10_000,
+          2,
+          0
+        )
+      ).resolves.toBe("unattributed");
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("text changes send the first heartbeat immediately", async () => {
     const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
     const manager = new HeartbeatBufferManager(
@@ -65,6 +94,8 @@ describe("HeartbeatBufferManager", () => {
         // editor activity establishes the interval after it.
         active_seconds: 0,
         human_lines_added: 1,
+        actor_type: "human",
+        actor_confidence: 1,
         line_number: 5,
         cursor_position: 3
       })
@@ -86,7 +117,12 @@ describe("HeartbeatBufferManager", () => {
       true,
       "coding",
       [],
-      expect.objectContaining({ write: true, active_seconds: 0 })
+      expect.objectContaining({
+        write: true,
+        active_seconds: 0,
+        actor_type: "human",
+        actor_confidence: 1
+      })
     );
   });
 
@@ -495,7 +531,9 @@ describe("HeartbeatBufferManager", () => {
         expect.objectContaining({
           unattributed_lines_added: 1,
           human_lines_added: undefined,
-          keystrokes: 5
+          keystrokes: 5,
+          actor_type: "unknown",
+          actor_confidence: 0
         })
       );
     } finally {
@@ -633,7 +671,9 @@ describe("HeartbeatBufferManager", () => {
         [],
         expect.objectContaining({
           unattributed_lines_added: 1,
-          human_lines_added: undefined
+          human_lines_added: undefined,
+          actor_type: "unknown",
+          actor_confidence: 0
         })
       );
     } finally {

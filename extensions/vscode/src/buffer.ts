@@ -381,6 +381,16 @@ export class HeartbeatBufferManager {
     category: HeartbeatCategory,
     write: boolean
   ): ExtraHeartbeatPayload {
+    const hasAmbiguousLines =
+      state.unattributedLinesAdded > 0 || state.unattributedLinesDeleted > 0;
+    const hasHumanEvidence =
+      write ||
+      state.humanLinesAdded > 0 ||
+      state.humanLinesDeleted > 0 ||
+      state.keystrokes > 0 ||
+      state.charsAdded > 0 ||
+      state.charsDeleted > 0 ||
+      state.activitySegments.length > 0;
     return {
       entity: state.entity,
       entity_type: "file",
@@ -398,7 +408,9 @@ export class HeartbeatBufferManager {
       unattributed_lines_deleted: state.unattributedLinesDeleted || undefined,
       active_seconds: unionSeconds(state.activitySegments),
       heartbeat_id: state.heartbeatId,
-      activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined
+      activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined,
+      actor_type: hasAmbiguousLines ? "unknown" : hasHumanEvidence ? "human" : "unknown",
+      actor_confidence: hasAmbiguousLines ? 0 : hasHumanEvidence ? 1 : 0
     };
   }
 

@@ -78,6 +78,7 @@ class StatusBarController {
     deliveryFailureReported = false;
     legacyCliReported = false;
     lastSnapshot;
+    lastBrokerStatus;
     getBufferedSeconds = () => 0;
     getBufferedSegments = () => [];
     connectionState = "connecting";
@@ -143,6 +144,10 @@ class StatusBarController {
                 return;
             }
         }
+        // Broker status is local and remains useful while the hosted API is offline.
+        // Older test/embedded CLI adapters may not expose it, so this is deliberately
+        // additive and never blocks the regular total refresh.
+        await this.refreshBrokerStatus();
         try {
             const snapshot = await this.cli.getToday(localTimezone());
             this.lastSnapshot = snapshot;
@@ -238,6 +243,12 @@ class StatusBarController {
             "state" in snapshot.agentHealth
             ? String(snapshot.agentHealth.state)
             : undefined;
+        const brokerState = this.lastBrokerStatus
+            ? this.lastBrokerStatus.running
+                ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+                : "stopped"
+            : undefined;
+        const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
         if (this.connectionState === "needs-api-key") {
             this.item.text = "$(plug) AtoAxis: Connect";
             this.item.command = "wakaclock.setApiKey";
@@ -267,7 +278,22 @@ class StatusBarController {
                     ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
                     : "") +
                 (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
-                (agentState ? `\nAgent: ${agentState}` : "");
+                (agentState ? `\nAgent: ${agentState}` : "") +
+                (brokerState ? `\nBroker: ${brokerState}` : "") +
+                (brokerError ? `\nBroker last error: ${brokerError}` : "");
+    }
+    async refreshBrokerStatus() {
+        if (!this.cli.getBrokerStatus) {
+            return;
+        }
+        try {
+            this.lastBrokerStatus = await this.cli.getBrokerStatus();
+        }
+        catch (error) {
+            this.logger.debug("failed to read local broker status", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
     }
     /**
      * Notify on the transition into the failed state only. The refresh runs every
