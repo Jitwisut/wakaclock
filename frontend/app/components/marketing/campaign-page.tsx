@@ -87,7 +87,7 @@ const COPY = {
       {
         question: 'What is not ready yet?',
         answer:
-          'Team and organisation dashboards are still in development, only the VS Code plugin is first-party, and Cursor and Copilot need adapters before their activity is attributed.',
+          'Full team and organisation dashboards are still in development, though opt-in leaderboards and a presence prototype exist where the server runs PostgreSQL. Only the VS Code plugin is first-party, and Cursor and Copilot need adapters before their activity is attributed.',
       },
     ],
   },
@@ -141,7 +141,7 @@ const COPY = {
       {
         question: 'อะไรที่ยังไม่พร้อม',
         answer:
-          'dashboard สำหรับทีมและองค์กรยังอยู่ระหว่างพัฒนา plugin ที่เราดูแลเองมีเฉพาะ VS Code ส่วน Cursor และ Copilot ต้องมี adapter ก่อนจึงจะ attribute งานได้',
+          'dashboard สำหรับทีมและองค์กรเต็มรูปแบบยังอยู่ระหว่างพัฒนา แต่มี leaderboard แบบ opt-in และ presence prototype เมื่อ server รัน PostgreSQL plugin ที่เราดูแลเองมีเฉพาะ VS Code ส่วน Cursor และ Copilot ต้องมี adapter ก่อนจึงจะ attribute งานได้',
       },
     ],
   },
