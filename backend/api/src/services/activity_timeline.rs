@@ -9,7 +9,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
-use wakaclock_core::heartbeat::{ActivitySegment, MAX_ACTIVITY_GAP_SECONDS};
+use wakaclock_core::heartbeat::{ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS};
 
 /// One raw interval recovered from a heartbeat. The fallback interval for a legacy
 /// heartbeat is deliberately capped at the strict 120-second window; old payloads that
@@ -21,6 +21,11 @@ pub struct ActivityInterval {
     pub start: f64,
     pub end: f64,
     pub source: String,
+    /// Canonical actor identity carried through canonicalization. `source` is retained
+    /// as the coarse legacy duration bucket, while this field keeps verified and inferred
+    /// AI distinct for attribution-aware surfaces.
+    pub actor_type: ActorType,
+    pub actor_confidence: f32,
     pub entity: String,
     pub project: Option<String>,
     /// Stable project identity, so a project breakdown groups the way the project
@@ -44,6 +49,8 @@ pub struct CanonicalInterval {
     pub start: f64,
     pub end: f64,
     pub source: String,
+    pub actor_type: ActorType,
+    pub actor_confidence: f32,
     pub entity: String,
     pub project: Option<String>,
     /// Stable project identity, so a project breakdown groups the way the project
@@ -67,12 +74,13 @@ struct RawActivityRow {
     branch: Option<String>,
     language: Option<String>,
     category: String,
-    is_ai_generated: bool,
     heartbeat_id: Option<String>,
     active_seconds: Option<f64>,
     activity_segments: String,
     editor: String,
     operating_system: String,
+    actor_type: String,
+    actor_confidence: f32,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -91,6 +99,8 @@ struct ProjectedActivityRow {
     category: String,
     editor: String,
     operating_system: String,
+    actor_type: String,
+    actor_confidence: f32,
 }
 
 /// How long a pause may be and still count as working time — one timeout per stream.
@@ -169,7 +179,7 @@ impl ActivityTimelineService {
             .get_client()
             .query(
                 "SELECT segment_id, heartbeat_id, `start`, `end`, source, entity, project, project_id, branch, language,
-                        category, editor, operating_system
+                        category, editor, operating_system, actor_type, actor_confidence
                  FROM wakaclock.activity_intervals FINAL
                  WHERE user_id = ? AND `end` > ? AND `start` < ?
                  ORDER BY `start` ASC, heartbeat_id ASC",
@@ -198,7 +208,9 @@ impl ActivityTimelineService {
                 heartbeat_id: row.heartbeat_id,
                 start: start_value,
                 end: end_value,
-                source: normalized_source(Some(&row.source), false),
+                source: normalized_source(Some(&row.source), &row.actor_type),
+                actor_type: row.actor_type.parse().unwrap_or_default(),
+                actor_confidence: row.actor_confidence,
                 entity: row.entity,
                 project: row.project,
                 project_id: row.project_id,
@@ -213,8 +225,9 @@ impl ActivityTimelineService {
             .clickhouse
             .get_client()
             .query(
-                "SELECT entity, time, project, project_id, branch, language, category, is_ai_generated,
-                        heartbeat_id, active_seconds, activity_segments, editor, operating_system
+                "SELECT entity, time, project, project_id, branch, language, category,
+                        heartbeat_id, active_seconds, activity_segments, editor, operating_system,
+                        actor_type, actor_confidence
                  FROM wakaclock.heartbeats
                  -- A legacy heartbeat stores only its end timestamp plus
                  -- `active_seconds`. Include one strict window on either side so an
@@ -263,7 +276,9 @@ impl ActivityTimelineService {
                         heartbeat_id: heartbeat_id.clone(),
                         start: row.time,
                         end: row.time,
-                        source: normalized_source(None, row.is_ai_generated),
+                        source: normalized_source(None, &row.actor_type),
+                        actor_type: row.actor_type.parse().unwrap_or_default(),
+                        actor_confidence: row.actor_confidence,
                         entity: row.entity.clone(),
                         project: row.project.clone(),
                         project_id: row.project_id,
@@ -334,7 +349,9 @@ impl ActivityTimelineService {
                     heartbeat_id: heartbeat_id.clone(),
                     start: segment_start,
                     end: segment_end,
-                    source: normalized_source(segment.source.as_deref(), row.is_ai_generated),
+                    source: normalized_source(segment.source.as_deref(), &row.actor_type),
+                    actor_type: row.actor_type.parse().unwrap_or_default(),
+                    actor_confidence: row.actor_confidence,
                     entity: row.entity.clone(),
                     project: row.project.clone(),
                     project_id: row.project_id,
@@ -362,14 +379,13 @@ impl ActivityTimelineService {
     }
 }
 
-pub fn normalized_source(source: Option<&str>, is_ai_generated: bool) -> String {
-    let source = source.unwrap_or(if is_ai_generated { "ai" } else { "editor" });
-    if source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor") {
-        "editor".to_string()
-    } else if source.eq_ignore_ascii_case("ai") || source.to_ascii_lowercase().contains("agent") {
-        "ai".to_string()
-    } else {
-        "other".to_string()
+pub fn normalized_source(_source: Option<&str>, actor_type: &str) -> String {
+    // The canonical actor owns the classification. In particular, an old or malformed
+    // segment carrying `source=editor` must not turn an `unknown` heartbeat into Human.
+    match actor_type {
+        "human" => "editor".to_string(),
+        "ai_verified" | "ai_inferred" => "ai".to_string(),
+        _ => "other".to_string(),
     }
 }
 
@@ -467,6 +483,8 @@ fn canonicalize_component(intervals: &[ActivityInterval]) -> Vec<CanonicalInterv
             start,
             end,
             source: owner.source.clone(),
+            actor_type: owner.actor_type,
+            actor_confidence: owner.actor_confidence,
             entity: owner.entity.clone(),
             project: owner.project.clone(),
             project_id: owner.project_id,
@@ -540,6 +558,8 @@ pub fn bridge_idle_gaps_with_anchors(
                     start: anchor.start,
                     end: anchor.start,
                     source: anchor.source.clone(),
+                    actor_type: anchor.actor_type,
+                    actor_confidence: anchor.actor_confidence,
                     entity: anchor.entity.clone(),
                     project: anchor.project.clone(),
                     project_id: anchor.project_id,
@@ -684,6 +704,7 @@ fn bridge_by_attendance(
             Event::Anchor(anchor) => (anchor.start, anchor, true),
         };
         let mut timeout = idle_timeout_seconds;
+        let mut inserted_handover = false;
         if let Some(previous) = result.last() {
             let previous_source = previous_source.as_deref().unwrap_or(&previous.source);
             let gap = at - previous.end;
@@ -710,11 +731,14 @@ fn bridge_by_attendance(
                     // dimensions so every breakdown still sums to the total.
                     let bridged = CanonicalInterval {
                         source: "other".to_string(),
+                        actor_type: ActorType::Unknown,
+                        actor_confidence: 0.0,
                         start: previous.end,
                         end: at,
                         ..previous.clone()
                     };
                     result.push(bridged);
+                    inserted_handover = true;
                 }
             }
         }
@@ -735,7 +759,7 @@ fn bridge_by_attendance(
                 // `canonicalize` already resolved ownership; never double-count.
                 previous.end = candidate.start;
             }
-            if is_anchor && at - previous.end <= timeout {
+            if is_anchor && !inserted_handover && at - previous.end <= timeout {
                 // The anchor has done its job by extending the run above. It still opens a
                 // run of its own when it was out of bridging reach, which is what lets a
                 // session resume after a break.
@@ -761,6 +785,8 @@ fn anchor_interval(anchor: &ActivityInterval) -> CanonicalInterval {
         start: anchor.start,
         end: anchor.start,
         source: anchor.source.clone(),
+        actor_type: anchor.actor_type,
+        actor_confidence: anchor.actor_confidence,
         entity: anchor.entity.clone(),
         project: anchor.project.clone(),
         project_id: anchor.project_id,
@@ -958,12 +984,19 @@ mod tests {
     }
 
     fn interval(id: &str, source: &str, start: f64, end: f64) -> ActivityInterval {
+        let actor_type = match source {
+            "editor" => ActorType::Human,
+            "ai" => ActorType::AiVerified,
+            _ => ActorType::Unknown,
+        };
         ActivityInterval {
             segment_id: id.to_string(),
             heartbeat_id: id.to_string(),
             start,
             end,
             source: source.to_string(),
+            actor_type,
+            actor_confidence: actor_type.default_confidence(None, None),
             entity: "file".to_string(),
             project: None,
             project_id: None,

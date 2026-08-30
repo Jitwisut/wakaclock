@@ -12,6 +12,8 @@ pub enum AiEventSource {
     Transcript,
     AgentHook,
     IdeTelemetry,
+    /// Structured metadata emitted by an MCP/tool bridge such as ChatGPT -> Tan.
+    Mcp,
 }
 
 impl AiEventSource {
@@ -23,6 +25,7 @@ impl AiEventSource {
             Self::Transcript => "transcript",
             Self::AgentHook => "agent_hook",
             Self::IdeTelemetry => "ide_telemetry",
+            Self::Mcp => "mcp",
         }
     }
 }
@@ -100,6 +103,7 @@ mod tests {
     fn as_str_matches_the_cli_wire_values() {
         assert_eq!(AiEventSource::Transcript.as_str(), "transcript");
         assert_eq!(AiEventSource::AgentHook.as_str(), "agent_hook");
+        assert_eq!(AiEventSource::Mcp.as_str(), "mcp");
         assert_eq!(AiConfidence::Verified.as_str(), "verified");
     }
 

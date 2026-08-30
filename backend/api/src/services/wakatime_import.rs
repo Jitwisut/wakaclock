@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::model::heartbeat::HeartbeatRow;
 use crate::model::wakatime_import::{WakaTimeDump, WakaTimeHeartbeat};
 use crate::repository::heartbeat::HeartbeatRepository;
+use wakaclock_core::heartbeat::{resolve_attribution, AttributionInput};
 
 pub struct WakaTimeImportResult {
     pub imported_heartbeats: usize,
@@ -128,13 +129,30 @@ fn map_heartbeat(
     let date = (heartbeat.time as i64 / 86400).max(0) as u16;
     let created_at = parse_created_at(heartbeat.created_at.as_deref(), day_date);
     let category = normalize_category(heartbeat.category.as_deref());
-    let is_ai_generated = is_ai_generated(&heartbeat);
-    let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
+    let legacy_ai_generated = is_ai_generated(&heartbeat);
     let ai_event_id = heartbeat.ai_session.clone();
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
     let human_lines_added = to_positive_u32(heartbeat.human_line_changes);
     let human_lines_deleted = to_negative_u32(heartbeat.human_line_changes);
+    let attribution = resolve_attribution(AttributionInput {
+        legacy_is_ai_generated: Some(legacy_ai_generated),
+        ai_agent: legacy_ai_generated.then_some("wakatime"),
+        ai_source: legacy_ai_generated.then_some("wakatime_import"),
+        ai_confidence: legacy_ai_generated.then_some("verified"),
+        ai_event_id: heartbeat.ai_session.as_deref(),
+        ai_lines_added,
+        ai_lines_deleted,
+        human_lines_added,
+        human_lines_deleted,
+        chars_added: human_lines_added,
+        chars_deleted: human_lines_deleted,
+        positive_editor_evidence: heartbeat.is_write,
+        ..Default::default()
+    })
+    .ok()?;
+    let is_ai_generated = attribution.actor_type.is_ai();
+    let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
 
     Some(HeartbeatRow {
         user_id,
@@ -202,6 +220,8 @@ fn map_heartbeat(
         unattributed_lines_added: Some(0),
         unattributed_lines_deleted: Some(0),
         created_at,
+        actor_type: attribution.actor_type.to_string(),
+        actor_confidence: attribution.confidence,
     })
 }
 

@@ -163,7 +163,7 @@ impl HeartbeatService {
                     end: segment.end,
                     source: normalize_interval_source(
                         segment.source.as_deref(),
-                        hb.is_ai_generated,
+                        hb.actor_type.as_str(),
                     ),
                     entity: hb.entity.clone(),
                     project: hb.project.clone(),
@@ -173,6 +173,8 @@ impl HeartbeatService {
                     category: format!("{:?}", hb.category).to_lowercase(),
                     editor: hb.editor.clone(),
                     operating_system: hb.operating_system.clone(),
+                    actor_type: hb.actor_type.as_str().to_string(),
+                    actor_confidence: hb.actor_confidence,
                     created_at,
                 });
             }
@@ -184,7 +186,7 @@ impl HeartbeatService {
                 human_lines_deleted,
                 unattributed_lines_added,
                 unattributed_lines_deleted,
-            ) = if hb.is_ai_generated
+            ) = if hb.actor_type.is_ai()
                 && hb.ai_lines_added.unwrap_or(0) == 0
                 && hb.ai_lines_deleted.unwrap_or(0) == 0
                 && (hb.human_lines_added.unwrap_or(0) > 0
@@ -269,6 +271,8 @@ impl HeartbeatService {
                 unattributed_lines_added,
                 unattributed_lines_deleted,
                 created_at,
+                actor_type: hb.actor_type.as_str().to_string(),
+                actor_confidence: hb.actor_confidence,
             };
 
             rows.push(row);
@@ -310,14 +314,12 @@ fn parse_created_at(created_at: &str) -> u32 {
         .unwrap_or_else(|_| Utc::now().timestamp().max(0) as u32)
 }
 
-pub(crate) fn normalize_interval_source(source: Option<&str>, is_ai_generated: bool) -> String {
-    let source = source.unwrap_or(if is_ai_generated { "ai" } else { "editor" });
-    if source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor") {
-        "editor".to_string()
-    } else if source.eq_ignore_ascii_case("ai") || source.to_ascii_lowercase().contains("agent") {
-        "ai".to_string()
-    } else {
-        "other".to_string()
+pub(crate) fn normalize_interval_source(source: Option<&str>, actor_type: &str) -> String {
+    let _ = source;
+    match actor_type {
+        "human" => "editor".to_string(),
+        "ai_verified" | "ai_inferred" => "ai".to_string(),
+        _ => "other".to_string(),
     }
 }
 
@@ -325,7 +327,7 @@ pub(crate) fn normalize_interval_source(source: Option<&str>, is_ai_generated: b
 /// derived metadata (not a patch or source body) and uses a five-second bucket matching
 /// the editor correlation window. The file path is included only as a one-way hash input.
 fn ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
-    if !heartbeat.is_ai_generated {
+    if !heartbeat.actor_type.is_ai() {
         return None;
     }
     let bucket = (heartbeat.time / 5.0).floor() as i64;
@@ -454,7 +456,7 @@ pub fn clamp_to_evidence_window(
 mod tests {
     use super::{ai_event_fingerprint, clamp_to_evidence_window, comparable_entity_key};
     use wakaclock_core::heartbeat::{
-        ActivitySegment, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
+        ActivitySegment, ActorType, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
     };
 
     #[test]
@@ -466,6 +468,8 @@ mod tests {
             "test".to_string(),
         );
         heartbeat.time = 100.1;
+        heartbeat.actor_type = ActorType::AiVerified;
+        heartbeat.actor_confidence = 1.0;
         heartbeat.is_ai_generated = true;
         heartbeat.ai_lines_added = Some(3);
         assert_eq!(

@@ -12,6 +12,9 @@ pub struct KeystrokeStatsService {
     clickhouse: Arc<ClickHouseClient>,
 }
 
+// Read from raw heartbeats with the canonical actor filter. The legacy keystroke
+// aggregate has no actor dimension and must not turn Unknown into Human.
+
 impl KeystrokeStatsService {
     pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
         Self { clickhouse }
@@ -75,8 +78,9 @@ impl KeystrokeStatsService {
                     coalesce(sum(chars_added), 0) AS total_chars_added,
                     coalesce(sum(chars_deleted), 0) AS total_chars_deleted,
                     count(DISTINCT date) AS days_with_activity
-                FROM wakaclock.keystroke_daily
+                FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                  AND actor_type = 'human'
                 ",
             )
             .bind(user_id)
@@ -104,8 +108,9 @@ impl KeystrokeStatsService {
                     sum(keystrokes) AS keystrokes,
                     sum(chars_added) AS chars_added,
                     sum(chars_deleted) AS chars_deleted
-                FROM wakaclock.keystroke_daily
+                FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                  AND actor_type = 'human'
                 GROUP BY name
                 ORDER BY keystrokes DESC, name ASC
                 ",
@@ -135,8 +140,9 @@ impl KeystrokeStatsService {
                     sum(keystrokes) AS keystrokes,
                     sum(chars_added) AS chars_added,
                     sum(chars_deleted) AS chars_deleted
-                FROM wakaclock.keystroke_daily
+                FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                  AND actor_type = 'human'
                 GROUP BY day
                 ORDER BY day ASC
                 ",

@@ -50,8 +50,12 @@ function ProjectCard({ project }: { project: ProjectAnalyticsCard }) {
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3 text-sm">
           <div>
-            <p className="text-muted-foreground">AI changes</p>
-            <p className="font-medium">{project.ai.changes.toLocaleString()} lines</p>
+            <p className="text-muted-foreground">AI verified changes</p>
+            <p className="font-medium">{project.ai_verified.changes.toLocaleString()} lines</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">AI inferred changes</p>
+            <p className="font-medium">{project.ai_inferred.changes.toLocaleString()} lines</p>
           </div>
           <div>
             <p className="text-muted-foreground">Human changes</p>
@@ -62,9 +66,9 @@ function ProjectCard({ project }: { project: ProjectAnalyticsCard }) {
             <p className="font-medium">{nullablePercent(project.ai.percentage)}</p>
           </div>
           <div>
-            <p className="text-muted-foreground">Unattributed</p>
+            <p className="text-muted-foreground">Unknown</p>
             <p className="font-medium">
-              {project.unattributed.changes.toLocaleString()} lines
+              {project.unknown.changes.toLocaleString()} lines
             </p>
           </div>
           <div>

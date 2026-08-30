@@ -275,6 +275,14 @@ impl ProjectAnalyticsService {
             .as_ref()
             .map(|row| row.ai_added + row.ai_deleted)
             .unwrap_or(0);
+        let ai_verified_lines = aggregate
+            .as_ref()
+            .map(|row| row.ai_verified_added + row.ai_verified_deleted)
+            .unwrap_or(0);
+        let ai_inferred_lines = aggregate
+            .as_ref()
+            .map(|row| row.ai_inferred_added + row.ai_inferred_deleted)
+            .unwrap_or(0);
         let human_lines = aggregate
             .as_ref()
             .map(|row| row.human_added + row.human_deleted)
@@ -319,12 +327,14 @@ impl ProjectAnalyticsService {
         Ok(ProjectAnalyticsDetailResponse {
             ai: ProjectAiSummary {
                 ai_lines,
+                ai_inferred_lines,
                 ai_percentage,
                 attribution_coverage_percent: attribution_known
                     .then(|| coverage_for(ai_lines + human_lines, observed_lines))
                     .flatten(),
                 estimated_spend: usage_spend.unwrap_or_else(unknown_spend),
                 human_lines,
+                ai_verified_lines,
                 prompts: usage.map(|row| row.prompts),
                 prompts_per_session: usage.and_then(|row| {
                     (row.sessions > 0).then(|| row.prompts as f64 / row.sessions as f64)
@@ -346,16 +356,21 @@ impl ProjectAnalyticsService {
                 } else {
                     unknown_tokens()
                 },
+                unknown_lines: attribution_known.then_some(unattributed_lines),
                 unattributed_lines: attribution_known.then_some(unattributed_lines),
             },
             branches: branches
                 .into_iter()
                 .map(|row| ProjectBranchItem {
                     ai_changes: row.ai_changes,
+                    ai_inferred_changes: row.ai_inferred_changes,
+                    ai_verified_changes: row.ai_verified_changes,
                     branch: row.branch,
                     heartbeat_count: row.heartbeat_count,
                     human_changes: row.human_changes,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_changes: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_changes),
                     unattributed_changes: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_changes),
                 })
@@ -365,10 +380,18 @@ impl ProjectAnalyticsService {
                 .map(|row| ProjectDailyItem {
                     ai_added: row.ai_added,
                     ai_deleted: row.ai_deleted,
+                    ai_inferred_added: row.ai_inferred_added,
+                    ai_inferred_deleted: row.ai_inferred_deleted,
+                    ai_verified_added: row.ai_verified_added,
+                    ai_verified_deleted: row.ai_verified_deleted,
                     date: row.date,
                     human_added: row.human_added,
                     human_deleted: row.human_deleted,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_added: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_added),
+                    unknown_deleted: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_deleted),
                     unattributed_added: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_added),
                     unattributed_deleted: (row.unattributed_unknown == 0)
@@ -538,10 +561,14 @@ impl ProjectAnalyticsService {
                 .take(page_size)
                 .map(|row| ProjectBranchItem {
                     ai_changes: row.ai_changes,
+                    ai_inferred_changes: row.ai_inferred_changes,
+                    ai_verified_changes: row.ai_verified_changes,
                     branch: row.branch,
                     heartbeat_count: row.heartbeat_count,
                     human_changes: row.human_changes,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_changes: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_changes),
                     unattributed_changes: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_changes),
                 })
@@ -584,10 +611,18 @@ impl ProjectAnalyticsService {
                 .map(|row| ProjectDailyItem {
                     ai_added: row.ai_added,
                     ai_deleted: row.ai_deleted,
+                    ai_inferred_added: row.ai_inferred_added,
+                    ai_inferred_deleted: row.ai_inferred_deleted,
+                    ai_verified_added: row.ai_verified_added,
+                    ai_verified_deleted: row.ai_verified_deleted,
                     date: row.date,
                     human_added: row.human_added,
                     human_deleted: row.human_deleted,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_added: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_added),
+                    unknown_deleted: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_deleted),
                     unattributed_added: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_added),
                     unattributed_deleted: (row.unattributed_unknown == 0)
@@ -848,6 +883,8 @@ fn canonical_breakdown(
 
 fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
     let ai_changes = row.ai_added + row.ai_deleted;
+    let ai_verified_changes = row.ai_verified_added + row.ai_verified_deleted;
+    let ai_inferred_changes = row.ai_inferred_added + row.ai_inferred_deleted;
     let human_changes = row.human_added + row.human_deleted;
     let unattributed_changes = row.unattributed_added + row.unattributed_deleted;
     let observed = ai_changes + human_changes + unattributed_changes;
@@ -868,6 +905,14 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
     } else {
         unknown_spend()
     };
+    let unknown = UnattributedTotals {
+        changes: unattributed_changes,
+        lines_added: row.unattributed_added,
+        lines_deleted: row.unattributed_deleted,
+        percentage_of_observed: (row.unattributed_unknown == 0)
+            .then(|| percentage(unattributed_changes, observed))
+            .flatten(),
+    };
     ProjectAnalyticsCard {
         ai: AttributionTotals {
             changes: ai_changes,
@@ -875,6 +920,22 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
             lines_deleted: row.ai_deleted,
             percentage: (row.unattributed_unknown == 0)
                 .then(|| percentage(ai_changes, observed))
+                .flatten(),
+        },
+        ai_inferred: AttributionTotals {
+            changes: ai_inferred_changes,
+            lines_added: row.ai_inferred_added,
+            lines_deleted: row.ai_inferred_deleted,
+            percentage: (row.unattributed_unknown == 0)
+                .then(|| percentage(ai_inferred_changes, observed))
+                .flatten(),
+        },
+        ai_verified: AttributionTotals {
+            changes: ai_verified_changes,
+            lines_added: row.ai_verified_added,
+            lines_deleted: row.ai_verified_deleted,
+            percentage: (row.unattributed_unknown == 0)
+                .then(|| percentage(ai_verified_changes, observed))
                 .flatten(),
         },
         attribution_coverage_percent: (row.unattributed_unknown == 0)
@@ -908,14 +969,8 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
             unknown_tokens()
         },
         total_seconds: rounded_seconds(row.total_seconds),
-        unattributed: UnattributedTotals {
-            changes: unattributed_changes,
-            lines_added: row.unattributed_added,
-            lines_deleted: row.unattributed_deleted,
-            percentage_of_observed: (row.unattributed_unknown == 0)
-                .then(|| percentage(unattributed_changes, observed))
-                .flatten(),
-        },
+        unknown: unknown.clone(),
+        unattributed: unknown,
     }
 }
 
@@ -982,6 +1037,8 @@ fn file_items(
             let display_name = path.rsplit('/').next().unwrap_or(&path).to_string();
             ProjectFileItem {
                 ai_changes: row.ai_changes,
+                ai_inferred_changes: row.ai_inferred_changes,
+                ai_verified_changes: row.ai_verified_changes,
                 display_name,
                 entity_key: row.entity_key,
                 human_changes: row.human_changes,
@@ -993,6 +1050,8 @@ fn file_items(
                 )
                 .unwrap_or(0.0),
                 total_seconds: rounded_seconds(row.total_seconds),
+                unknown_changes: (row.unattributed_unknown == 0)
+                    .then_some(row.unattributed_changes),
                 unattributed_changes: (row.unattributed_unknown == 0)
                     .then_some(row.unattributed_changes),
             }
@@ -1135,6 +1194,10 @@ fn zero_fill_daily(
                 crate::repository::project_analytics::ProjectDailyRow {
                     date: date.to_string(),
                     total_seconds: 0.0,
+                    ai_verified_added: 0,
+                    ai_verified_deleted: 0,
+                    ai_inferred_added: 0,
+                    ai_inferred_deleted: 0,
                     ai_added: 0,
                     ai_deleted: 0,
                     human_added: 0,

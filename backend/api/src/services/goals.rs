@@ -9,6 +9,7 @@ use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::goal::{CreateGoalRequest, Goal, GoalProgress, UpdateGoalRequest};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
+use wakaclock_core::heartbeat::ActorType;
 
 pub struct GoalService {
     postgres: Option<Arc<PostgresClient>>,
@@ -336,7 +337,7 @@ fn goal_period_bounds(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Resul
 
 /// Does this interval count towards the goal?
 ///
-/// `ai_time` and `manual_time` split on the interval's own source, which is the same
+/// `ai_time` and `manual_time` split on the interval's canonical actor type, which is the same
 /// attribution the evidence split reports — a goal and the dashboard can no longer
 /// disagree about which seconds were the developer's.
 fn goal_matches(
@@ -344,8 +345,8 @@ fn goal_matches(
     interval: &crate::services::activity_timeline::CanonicalInterval,
 ) -> bool {
     let metric_ok = match goal.metric.as_str() {
-        "ai_time" => interval.source == "ai",
-        "manual_time" => interval.source == "editor",
+        "ai_time" => interval.actor_type.is_ai(),
+        "manual_time" => interval.actor_type == ActorType::Human,
         _ => true,
     };
     if !metric_ok {
@@ -370,8 +371,10 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
     let filter = goal.filter_value.clone();
     let value_expression = match goal.metric.as_str() {
         "heartbeats" => "count()",
-        "ai_time" => "sumIf(ifNull(active_seconds, 0.0), is_ai_generated)",
-        "manual_time" => "sumIf(ifNull(active_seconds, 0.0), NOT is_ai_generated)",
+        "ai_time" => {
+            "sumIf(ifNull(active_seconds, 0.0), actor_type IN ('ai_verified', 'ai_inferred'))"
+        }
+        "manual_time" => "sumIf(ifNull(active_seconds, 0.0), actor_type = 'human')",
         _ => "sum(ifNull(active_seconds, 0.0))",
     };
     if goal.filter_kind == "all" {

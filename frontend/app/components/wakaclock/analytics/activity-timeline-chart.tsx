@@ -15,9 +15,10 @@ import type { AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 
 const chartConfig = {
-  ai_seconds: { color: 'var(--chart-1)', label: 'AI' },
   human_seconds: { color: 'var(--chart-2)', label: 'Human' },
-  other_seconds: { color: 'var(--chart-4)', label: 'Other / handover' },
+  ai_verified_seconds: { color: 'var(--chart-1)', label: 'AI verified' },
+  ai_inferred_seconds: { color: 'var(--chart-3)', label: 'AI inferred' },
+  unknown_seconds: { color: 'var(--chart-4)', label: 'Unknown' },
 } satisfies ChartConfig;
 
 function granularityLabel(bucketSeconds: number) {
@@ -34,8 +35,8 @@ export function ActivityTimelineChart({ data }: { data: AnalyticsExplorerRespons
       <CardHeader>
         <CardTitle>Activity timeline</CardTitle>
         <CardDescription>
-          Canonical attended time split into {granularity} buckets. Human wins overlapping AI
-          evidence.
+          Canonical time split into {granularity} buckets by Human, verified AI, inferred AI and
+          Unknown attribution.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -65,19 +66,27 @@ export function ActivityTimelineChart({ data }: { data: AnalyticsExplorerRespons
               type="monotone"
             />
             <Area
-              dataKey="ai_seconds"
-              fill="var(--color-ai_seconds)"
+              dataKey="ai_verified_seconds"
+              fill="var(--color-ai_verified_seconds)"
               fillOpacity={0.35}
               stackId="duration"
-              stroke="var(--color-ai_seconds)"
+              stroke="var(--color-ai_verified_seconds)"
               type="monotone"
             />
             <Area
-              dataKey="other_seconds"
-              fill="var(--color-other_seconds)"
+              dataKey="ai_inferred_seconds"
+              fill="var(--color-ai_inferred_seconds)"
+              fillOpacity={0.35}
+              stackId="duration"
+              stroke="var(--color-ai_inferred_seconds)"
+              type="monotone"
+            />
+            <Area
+              dataKey="unknown_seconds"
+              fill="var(--color-unknown_seconds)"
               fillOpacity={0.3}
               stackId="duration"
-              stroke="var(--color-other_seconds)"
+              stroke="var(--color-unknown_seconds)"
               type="monotone"
             />
           </AreaChart>

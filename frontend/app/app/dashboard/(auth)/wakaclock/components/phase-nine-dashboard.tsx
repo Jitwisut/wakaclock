@@ -18,6 +18,11 @@ import type { ChartConfig } from '@/components/ui/chart';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
+import {
+  presentAttributionDataCoverage,
+  presentCodeAttribution,
+  presentPeriodComparison,
+} from '@/lib/wakaclock/dashboard-analytics-presenters';
 import { getDashboardAnalytics } from '@/lib/wakaclock/endpoints';
 import {
   formatDurationShort,
@@ -30,20 +35,19 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 /**
  * Colour means attribution class; position means direction.
  *
- * This used to be two stacks of three bars sharing three colours, so `ai_added` and
- * `ai_deleted` rendered identically and the legend listed six entries in three colours
- * with no way to tell the stacks apart. Deletions now sit below the zero line — the usual
- * shape for code churn — so direction no longer has to compete with colour for meaning.
- * The deleted series keep their class colour at a lighter fill and stay out of the legend,
- * which leaves three legend entries for three colours.
+ * Colour means actor class; position means direction. Deletions sit below the zero line,
+ * while verified AI, inferred AI and Unknown remain separate series so a boolean cannot
+ * collapse materially different evidence classes into one dashboard number.
  */
 const chartConfig = {
-  ai_added: { color: 'var(--chart-1)', label: 'AI' },
-  ai_deleted: { color: 'var(--chart-1)', label: 'AI deleted' },
+  ai_verified_added: { color: 'var(--chart-1)', label: 'AI verified' },
+  ai_verified_deleted: { color: 'var(--chart-1)', label: 'AI verified deleted' },
+  ai_inferred_added: { color: 'var(--chart-3)', label: 'AI inferred' },
+  ai_inferred_deleted: { color: 'var(--chart-3)', label: 'AI inferred deleted' },
   human_added: { color: 'var(--chart-2)', label: 'Human' },
   human_deleted: { color: 'var(--chart-2)', label: 'Human deleted' },
-  unattributed_added: { color: 'var(--chart-4)', label: 'Unattributed' },
-  unattributed_deleted: { color: 'var(--chart-4)', label: 'Unattributed deleted' },
+  unknown_added: { color: 'var(--chart-4)', label: 'Unknown' },
+  unknown_deleted: { color: 'var(--chart-4)', label: 'Unknown deleted' },
 } satisfies ChartConfig;
 
 function percent(value: null | number) {
@@ -58,12 +62,21 @@ function spend(value: null | number) {
   return value === null ? 'Unavailable' : `$${(value / 1_000_000).toFixed(2)}`;
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  subtext,
+  value,
+}: {
+  label: string;
+  subtext?: string;
+  value: string;
+}) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-2xl">{value}</CardTitle>
+        {subtext && <p className="text-muted-foreground text-xs leading-relaxed">{subtext}</p>}
       </CardHeader>
     </Card>
   );
@@ -120,16 +133,24 @@ export function PhaseNineDashboard() {
   const divergingSeries = React.useMemo(
     () =>
       (data?.daily_attribution ?? []).map((row) => ({
-        ai_added: row.ai_added,
-        ai_deleted: toDivergingNegative(row.ai_deleted),
+        ai_verified_added: row.ai_verified_added ?? 0,
+        ai_verified_deleted: toDivergingNegative(row.ai_verified_deleted ?? 0),
+        ai_inferred_added: row.ai_inferred_added ?? 0,
+        ai_inferred_deleted: toDivergingNegative(row.ai_inferred_deleted ?? 0),
         date: row.date,
         human_added: row.human_added,
         human_deleted: toDivergingNegative(row.human_deleted),
-        unattributed_added: row.unattributed_added,
-        unattributed_deleted: toDivergingNegative(row.unattributed_deleted),
+        unknown_added: row.unknown_added ?? row.unattributed_added ?? 0,
+        unknown_deleted: toDivergingNegative(row.unknown_deleted ?? row.unattributed_deleted ?? 0),
       })),
     [data]
   );
+
+  const periodComparison = data
+    ? presentPeriodComparison(data.summary.previous_period, data.range.days_included)
+    : null;
+  const codeAttribution = data ? presentCodeAttribution(data.coverage) : null;
+  const attributionDataCoverage = data ? presentAttributionDataCoverage(data.coverage) : null;
 
   return (
     <Card>
@@ -168,17 +189,30 @@ export function PhaseNineDashboard() {
                     label="Best day"
                     value={data.summary.most_active_day?.text ?? 'No activity'}
                   />
-                  <MetricCard
-                    label="Previous period"
-                    value={`${data.summary.previous_period.percent?.toFixed(1) ?? '—'}% ${data.summary.previous_period.direction}`}
-                  />
+                  {periodComparison && (
+                    <MetricCard
+                      label={periodComparison.label}
+                      subtext={periodComparison.subtext}
+                      value={periodComparison.value}
+                    />
+                  )}
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-3">
-                  <MetricCard
-                    label="Attribution coverage"
-                    value={percent(data.coverage.attribution_percent)}
-                  />
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {codeAttribution && (
+                    <MetricCard
+                      label={codeAttribution.label}
+                      subtext={codeAttribution.subtext}
+                      value={codeAttribution.value}
+                    />
+                  )}
+                  {attributionDataCoverage && (
+                    <MetricCard
+                      label={attributionDataCoverage.label}
+                      subtext={attributionDataCoverage.subtext}
+                      value={attributionDataCoverage.value}
+                    />
+                  )}
                   <MetricCard label="Token coverage" value={percent(data.coverage.token_percent)} />
                   <MetricCard label="Cost coverage" value={percent(data.coverage.cost_percent)} />
                 </div>
@@ -199,8 +233,8 @@ export function PhaseNineDashboard() {
                   <CardHeader>
                     <CardTitle className="text-base">Daily code-change attribution</CardTitle>
                     <CardDescription>
-                      Additions above the axis, deletions below. Unknown provenance remains
-                      Unattributed.
+                      Additions above the axis, deletions below. Human, verified AI, inferred AI
+                      and Unknown remain separate actor classes.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -214,20 +248,32 @@ export function PhaseNineDashboard() {
                           content={<ChartTooltipContent formatter={(value) => formatMagnitude(value)} />}
                         />
                         <ChartLegend content={<ChartLegendContent />} />
-                        <Bar dataKey="ai_added" fill="var(--color-ai_added)" stackId="churn" />
+                        <Bar
+                          dataKey="ai_verified_added"
+                          fill="var(--color-ai_verified_added)"
+                          stackId="churn"
+                        />
+                        <Bar
+                          dataKey="ai_inferred_added"
+                          fill="var(--color-ai_inferred_added)"
+                          stackId="churn"
+                        />
                         <Bar
                           dataKey="human_added"
                           fill="var(--color-human_added)"
                           stackId="churn"
                         />
+                        <Bar dataKey="unknown_added" fill="var(--color-unknown_added)" stackId="churn" />
                         <Bar
-                          dataKey="unattributed_added"
-                          fill="var(--color-unattributed_added)"
+                          dataKey="ai_verified_deleted"
+                          fill="var(--color-ai_verified_deleted)"
+                          fillOpacity={0.55}
+                          legendType="none"
                           stackId="churn"
                         />
                         <Bar
-                          dataKey="ai_deleted"
-                          fill="var(--color-ai_deleted)"
+                          dataKey="ai_inferred_deleted"
+                          fill="var(--color-ai_inferred_deleted)"
                           fillOpacity={0.55}
                           legendType="none"
                           stackId="churn"
@@ -240,8 +286,8 @@ export function PhaseNineDashboard() {
                           stackId="churn"
                         />
                         <Bar
-                          dataKey="unattributed_deleted"
-                          fill="var(--color-unattributed_deleted)"
+                          dataKey="unknown_deleted"
+                          fill="var(--color-unknown_deleted)"
                           fillOpacity={0.55}
                           legendType="none"
                           stackId="churn"

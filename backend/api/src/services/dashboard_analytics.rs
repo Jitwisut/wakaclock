@@ -14,10 +14,10 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::dashboard_analytics::{
-    DailyAttribution, DailyAttributionRow, DailyTotalRow, DashboardAnalyticsResponse,
-    DashboardBreakdowns, DashboardCoverage, DashboardEstimatedSpend, DashboardSummary,
-    DashboardTokenTotals, DashboardUsageSummary, MostActiveDay, NamedTotalRow, UsageSummaryRow,
-    DASHBOARD_SCHEMA_VERSION,
+    AttributionCoverageStatus, DailyAttribution, DailyAttributionRow, DailyTotalRow,
+    DashboardAnalyticsResponse, DashboardBreakdowns, DashboardCoverage, DashboardEstimatedSpend,
+    DashboardSummary, DashboardTokenTotals, DashboardUsageSummary, MostActiveDay, NamedTotalRow,
+    UsageSummaryRow, DASHBOARD_SCHEMA_VERSION,
 };
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
@@ -98,6 +98,8 @@ impl DashboardAnalyticsService {
             self.duration_breakdown(user_id, range, "machine").await?,
         );
 
+        let attribution = attribution_coverage(&daily_attribution);
+
         Ok(DashboardAnalyticsResponse {
             // Reads directly from authoritative raw facts while rebuilds are asynchronous;
             // no snapshot version has been selected for this response.
@@ -107,13 +109,19 @@ impl DashboardAnalyticsService {
                 .map(|row| DailyAttribution {
                     ai_added: row.ai_added,
                     ai_deleted: row.ai_deleted,
+                    ai_verified_added: row.ai_verified_added,
+                    ai_verified_deleted: row.ai_verified_deleted,
+                    ai_inferred_added: row.ai_inferred_added,
+                    ai_inferred_deleted: row.ai_inferred_deleted,
                     date: row.day.clone(),
                     human_added: row.human_added,
                     human_deleted: row.human_deleted,
+                    unknown_added: row.unknown_added,
+                    unknown_deleted: row.unknown_deleted,
                     unattributed_added: (row.unknown_attribution_rows == 0)
-                        .then_some(row.unattributed_added),
+                        .then_some(row.unknown_added),
                     unattributed_deleted: (row.unknown_attribution_rows == 0)
-                        .then_some(row.unattributed_deleted),
+                        .then_some(row.unknown_deleted),
                     unit: "lines",
                 })
                 .collect(),
@@ -136,7 +144,13 @@ impl DashboardAnalyticsService {
                 weekdays: weekday_breakdown(&daily),
             },
             coverage: DashboardCoverage {
-                attribution_percent: attribution_coverage(&daily_attribution),
+                attribution_percent: attribution.percent,
+                attribution_status: attribution.status,
+                attribution_data_coverage_percent: attribution.data_coverage_percent,
+                attributed_changes: attribution.attributed_changes,
+                unattributed_changes: attribution.unattributed_changes,
+                attribution_relevant_rows: attribution.relevant_rows,
+                incomplete_attribution_rows: attribution.incomplete_rows,
                 cost_percent: usage.as_ref().and_then(|row| {
                     (row.usage_events > 0)
                         .then(|| row.priced_events as f64 * 100.0 / row.usage_events as f64)
@@ -187,13 +201,42 @@ impl DashboardAnalyticsService {
             .get_client()
             .query(
                 "SELECT toString(toDate(toDateTime(toUInt32(time), ?))) AS day,
-                        sum(toUInt64(ifNull(ai_lines_added, 0))) AS ai_added,
-                        sum(toUInt64(ifNull(ai_lines_deleted, 0))) AS ai_deleted,
-                        sum(toUInt64(ifNull(human_lines_added, 0))) AS human_added,
-                        sum(toUInt64(ifNull(human_lines_deleted, 0))) AS human_deleted,
-                        sum(toUInt64(ifNull(unattributed_lines_added, 0))) AS unattributed_added,
-                        sum(toUInt64(ifNull(unattributed_lines_deleted, 0))) AS unattributed_deleted,
-                        countIf(isNull(unattributed_lines_added) OR isNull(unattributed_lines_deleted)) AS unknown_attribution_rows
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_added,
+                        sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_deleted,
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type = 'ai_verified') AS ai_verified_added,
+                        sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type = 'ai_verified') AS ai_verified_deleted,
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type = 'ai_inferred') AS ai_inferred_added,
+                        sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type = 'ai_inferred') AS ai_inferred_deleted,
+                        sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_added,
+                        sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_deleted,
+                        sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                            + sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(human_lines_added, 0)), actor_type = 'unknown') AS unknown_added,
+                        sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                            + sumIf(toUInt64(ifNull(ai_lines_deleted, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_deleted,
+                        countIf(
+                            actor_type = 'unknown'
+                            AND (
+                                ifNull(ai_lines_added, 0) > 0 OR ifNull(ai_lines_deleted, 0) > 0
+                                OR ifNull(human_lines_added, 0) > 0 OR ifNull(human_lines_deleted, 0) > 0
+                                OR ifNull(unattributed_lines_added, 0) > 0
+                                OR ifNull(unattributed_lines_deleted, 0) > 0
+                            )
+                        ) AS unknown_attribution_rows,
+                        countIf(
+                            ifNull(ai_lines_added, 0) > 0 OR ifNull(ai_lines_deleted, 0) > 0
+                            OR ifNull(human_lines_added, 0) > 0 OR ifNull(human_lines_deleted, 0) > 0
+                            OR ifNull(unattributed_lines_added, 0) > 0
+                            OR ifNull(unattributed_lines_deleted, 0) > 0
+                        ) AS attribution_relevant_rows,
+                        countIf(
+                            (
+                                ifNull(ai_lines_added, 0) > 0 OR ifNull(ai_lines_deleted, 0) > 0
+                                OR ifNull(human_lines_added, 0) > 0 OR ifNull(human_lines_deleted, 0) > 0
+                                OR ifNull(unattributed_lines_added, 0) > 0
+                                OR ifNull(unattributed_lines_deleted, 0) > 0
+                            )
+                            AND actor_type != 'unknown'
+                        ) AS complete_attribution_rows
                  FROM wakaclock.heartbeats
                  WHERE user_id = ? AND time >= ? AND time < ?
                  GROUP BY day ORDER BY day ASC",
@@ -301,7 +344,8 @@ impl DashboardAnalyticsService {
                 SELECT {name_expression} AS name,
                        toInt64(sum(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0))) AS total
                 FROM wakaclock.heartbeats
-                WHERE user_id = ? AND time >= ? AND time < ? AND is_ai_generated
+                WHERE user_id = ? AND time >= ? AND time < ?
+                  AND actor_type IN ('ai_verified', 'ai_inferred')
                 GROUP BY name
                 HAVING total > 0
                 ORDER BY total DESC, name ASC
@@ -361,20 +405,52 @@ fn weekday_breakdown(daily: &[DailyTotalRow]) -> Breakdown {
     )
 }
 
-fn attribution_coverage(rows: &[DailyAttributionRow]) -> Option<f64> {
-    if rows.iter().any(|row| row.unknown_attribution_rows > 0) {
-        return None;
-    }
-    let observed: u64 = rows
+#[derive(Debug, Clone, Copy)]
+struct AttributionCoverage {
+    percent: Option<f64>,
+    data_coverage_percent: Option<f64>,
+    status: AttributionCoverageStatus,
+    attributed_changes: u64,
+    unattributed_changes: u64,
+    relevant_rows: u64,
+    incomplete_rows: u64,
+}
+
+fn attribution_coverage(rows: &[DailyAttributionRow]) -> AttributionCoverage {
+    let attributed_changes: u64 = rows
         .iter()
         .map(|row| row.ai_added + row.ai_deleted + row.human_added + row.human_deleted)
         .sum();
-    let unattributed: u64 = rows
+    let unattributed_changes: u64 = rows
         .iter()
-        .map(|row| row.unattributed_added + row.unattributed_deleted)
+        .map(|row| row.unknown_added + row.unknown_deleted)
         .sum();
-    ((observed + unattributed) > 0)
-        .then(|| observed as f64 * 100.0 / (observed + unattributed) as f64)
+    let relevant_rows: u64 = rows.iter().map(|row| row.attribution_relevant_rows).sum();
+    let complete_rows: u64 = rows.iter().map(|row| row.complete_attribution_rows).sum();
+    let incomplete_rows = relevant_rows.saturating_sub(complete_rows);
+    let known_changes = attributed_changes.saturating_add(unattributed_changes);
+
+    let percent =
+        (known_changes > 0).then(|| attributed_changes as f64 * 100.0 / known_changes as f64);
+    let data_coverage_percent =
+        (relevant_rows > 0).then(|| complete_rows as f64 * 100.0 / relevant_rows as f64);
+    let status = if relevant_rows == 0 {
+        AttributionCoverageStatus::NoActivity
+    } else if incomplete_rows > 0 {
+        AttributionCoverageStatus::Partial
+    } else {
+        AttributionCoverageStatus::Complete
+    };
+
+    AttributionCoverage {
+        percent,
+        data_coverage_percent,
+        status,
+        attributed_changes,
+        unattributed_changes,
+        relevant_rows,
+        incomplete_rows,
+    }
 }
 
 fn empty_usage() -> DashboardUsageSummary {
@@ -463,11 +539,17 @@ fn zero_fill_attribution(
                 day: day.to_string(),
                 ai_added: 0,
                 ai_deleted: 0,
+                ai_verified_added: 0,
+                ai_verified_deleted: 0,
+                ai_inferred_added: 0,
+                ai_inferred_deleted: 0,
                 human_added: 0,
                 human_deleted: 0,
-                unattributed_added: 0,
-                unattributed_deleted: 0,
+                unknown_added: 0,
+                unknown_deleted: 0,
                 unknown_attribution_rows: 0,
+                attribution_relevant_rows: 0,
+                complete_attribution_rows: 0,
             })
         })
         .collect()
@@ -524,6 +606,62 @@ mod tests {
         let breakdown = weekday_breakdown(&[day("not-a-date", 999), day("2026-08-13", 10)]);
         assert_eq!(breakdown.items.len(), 7);
         assert_eq!(breakdown.total, 10);
+    }
+
+    fn attribution_row(
+        attributed: u64,
+        unattributed: u64,
+        relevant_rows: u64,
+        complete_rows: u64,
+    ) -> DailyAttributionRow {
+        DailyAttributionRow {
+            day: "2026-08-28".to_string(),
+            ai_added: attributed,
+            ai_deleted: 0,
+            ai_verified_added: attributed,
+            ai_verified_deleted: 0,
+            ai_inferred_added: 0,
+            ai_inferred_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
+            unknown_added: unattributed,
+            unknown_deleted: 0,
+            unknown_attribution_rows: relevant_rows.saturating_sub(complete_rows),
+            attribution_relevant_rows: relevant_rows,
+            complete_attribution_rows: complete_rows,
+        }
+    }
+
+    #[test]
+    fn attribution_coverage_reports_complete_measured_changes() {
+        let coverage = attribution_coverage(&[attribution_row(90, 10, 2, 2)]);
+
+        assert_eq!(coverage.status, AttributionCoverageStatus::Complete);
+        assert_eq!(coverage.attributed_changes, 90);
+        assert_eq!(coverage.unattributed_changes, 10);
+        assert!((coverage.percent.unwrap() - 90.0).abs() < f64::EPSILON);
+        assert!((coverage.data_coverage_percent.unwrap() - 100.0).abs() < f64::EPSILON);
+        assert_eq!(coverage.incomplete_rows, 0);
+    }
+
+    #[test]
+    fn attribution_coverage_keeps_partial_measurement_and_discloses_metadata_gap() {
+        let coverage = attribution_coverage(&[attribution_row(90, 10, 2, 1)]);
+
+        assert_eq!(coverage.status, AttributionCoverageStatus::Partial);
+        assert!((coverage.percent.unwrap() - 90.0).abs() < f64::EPSILON);
+        assert!((coverage.data_coverage_percent.unwrap() - 50.0).abs() < f64::EPSILON);
+        assert_eq!(coverage.incomplete_rows, 1);
+    }
+
+    #[test]
+    fn attribution_coverage_reports_no_activity_without_nan_or_fake_zero_percent() {
+        let coverage = attribution_coverage(&[]);
+
+        assert_eq!(coverage.status, AttributionCoverageStatus::NoActivity);
+        assert_eq!(coverage.percent, None);
+        assert_eq!(coverage.data_coverage_percent, None);
+        assert_eq!(coverage.relevant_rows, 0);
     }
 
     #[tokio::test]

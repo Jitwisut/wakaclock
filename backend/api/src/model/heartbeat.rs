@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// ClickHouse Row Type สำหรับ heartbeat
-#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[derive(Clone, Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct HeartbeatRow {
     #[serde(with = "clickhouse::serde::uuid")]
     pub user_id: Uuid,
@@ -76,6 +76,10 @@ pub struct HeartbeatRow {
     pub unattributed_lines_added: Option<u32>,
     pub unattributed_lines_deleted: Option<u32>,
     pub created_at: u32,
+    /// Canonical attribution state. Kept at the end so the additive ClickHouse
+    /// migration remains compatible with the existing column order.
+    pub actor_type: String,
+    pub actor_confidence: f32,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat
@@ -104,4 +108,8 @@ pub struct ActivityIntervalRow {
     pub editor: String,
     pub operating_system: String,
     pub created_at: u32,
+    /// Canonical actor state for the projected interval. `source` remains a legacy
+    /// duration dimension and is derived from this value on new writes.
+    pub actor_type: String,
+    pub actor_confidence: f32,
 }

@@ -17,7 +17,9 @@ export default function ActivityTimelinePage() {
           <SourceSummary
             data={data}
             onSelect={(source) => setFilter('source', source)}
+            onSelectActor={(actorType) => setFilter('actor_type', actorType)}
             selected={filters.source}
+            selectedActor={filters.actorType}
           />
           {data.summary.total_seconds === 0 ? (
             <Card>

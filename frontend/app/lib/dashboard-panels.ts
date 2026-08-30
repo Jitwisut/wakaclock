@@ -62,7 +62,7 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     page: OVERVIEW,
     parent: ANALYTICS_CARD,
     label: 'Daily attribution chart',
-    description: 'Stacked bars of AI, human and unattributed line changes per day.',
+    description: 'Stacked bars of AI verified, AI inferred, human and unknown line changes per day.',
   },
   {
     id: 'overview.analytics-breakdowns',

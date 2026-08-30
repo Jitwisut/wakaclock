@@ -32,7 +32,7 @@ use wakaclock_ast::detect;
 use wakaclock_core::api_client::ApiClient;
 use wakaclock_core::config::Config;
 use wakaclock_core::git;
-use wakaclock_core::heartbeat::{Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{ActorType, Category, EntityType, Heartbeat};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -121,6 +121,12 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     heartbeat.project = git_info.as_ref().map(|g| g.project.clone());
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
+    // Zed is an editor producer, so its ordinary open/change/save telemetry is
+    // positive Human evidence. Agent-owned edits arrive through the agent hook
+    // producer and are normalized separately on the server.
+    heartbeat.actor_type = ActorType::Human;
+    heartbeat.actor_confidence = 1.0;
+    heartbeat.is_ai_generated = false;
     heartbeat.category = Category::Coding;
     heartbeat.operating_system = std::env::consts::OS.to_string();
     heartbeat.machine = hostname::get()
@@ -348,6 +354,8 @@ mod tests {
         assert_eq!(heartbeat.category, Category::Coding);
         assert_eq!(heartbeat.editor, "Zed");
         assert!(!heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
         assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
     }
 
@@ -359,6 +367,8 @@ mod tests {
         let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
 
         assert!(heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
     }
 
     #[test]

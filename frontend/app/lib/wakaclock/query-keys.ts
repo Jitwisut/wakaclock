@@ -36,7 +36,8 @@ export const wakaclockKeys = {
     editor?: string,
     category?: string,
     source?: string,
-    operatingSystem?: string
+    operatingSystem?: string,
+    actorType?: string
   ) =>
     [
       ...wakaclockKeys.all,
@@ -51,6 +52,7 @@ export const wakaclockKeys = {
       category,
       source,
       operatingSystem,
+      actorType,
     ] as const,
   currentUser: (userId: string) => [...wakaclockKeys.all, 'user', userId] as const,
   heartbeats: (userId: string, date: string, timezone?: string) =>

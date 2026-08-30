@@ -62,7 +62,42 @@ impl HeartbeatRepository {
                     human_lines_deleted Nullable(UInt32),
                     unattributed_lines_added Nullable(UInt32),
                     unattributed_lines_deleted Nullable(UInt32),
-                    created_at UInt32
+                    created_at UInt32,
+                    actor_type LowCardinality(String) DEFAULT multiIf(
+                        (
+                            is_ai_generated = 1
+                            OR ifNull(ai_agent, '') != ''
+                            OR ifNull(ai_event_id, '') != ''
+                            OR coalesce(ai_lines_added, 0) > 0
+                            OR coalesce(ai_lines_deleted, 0) > 0
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                        ) AND (
+                            lower(ifNull(ai_confidence, '')) = 'verified'
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                        ), 'ai_verified',
+                        is_ai_generated = 1
+                            OR ifNull(ai_agent, '') != ''
+                            OR ifNull(ai_event_id, '') != ''
+                            OR coalesce(ai_lines_added, 0) > 0
+                            OR coalesce(ai_lines_deleted, 0) > 0
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                        coalesce(human_lines_added, 0) > 0
+                            OR coalesce(human_lines_deleted, 0) > 0
+                            OR coalesce(keystrokes, 0) > 0
+                            OR coalesce(chars_added, 0) > 0
+                            OR coalesce(chars_deleted, 0) > 0, 'human',
+                        'unknown'
+                    ),
+                    actor_confidence Float32 DEFAULT multiIf(
+                        actor_type = 'human', 1.0,
+                        actor_type = 'ai_verified'
+                            AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                        actor_type = 'ai_verified', 1.0,
+                        actor_type = 'ai_inferred'
+                            AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                        actor_type = 'ai_inferred', 0.6,
+                        0.0
+                    )
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -125,6 +160,41 @@ impl HeartbeatRepository {
             "token_source Nullable(String)",
             "attribution_source Nullable(String)",
             "attribution_confidence Nullable(Float32)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                (
+                    is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ) AND (
+                    lower(ifNull(ai_confidence, '')) = 'verified'
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ), 'ai_verified',
+                is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                coalesce(human_lines_added, 0) > 0
+                    OR coalesce(human_lines_deleted, 0) > 0
+                    OR coalesce(keystrokes, 0) > 0
+                    OR coalesce(chars_added, 0) > 0
+                    OR coalesce(chars_deleted, 0) > 0, 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified'
+                    AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred'
+                    AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -159,7 +229,19 @@ impl HeartbeatRepository {
                     category String,
                     editor String DEFAULT '',
                     operating_system String DEFAULT '',
-                    created_at UInt32
+                    created_at UInt32,
+                    actor_type LowCardinality(String) DEFAULT multiIf(
+                        source = 'ai', 'ai_inferred',
+                        source = 'editor', 'human',
+                        'unknown'
+                    ),
+                    actor_confidence Float32 DEFAULT multiIf(
+                        actor_type = 'human', 1.0,
+                        actor_type = 'ai_verified' AND source = 'mcp', 0.95,
+                        actor_type = 'ai_verified', 1.0,
+                        actor_type = 'ai_inferred', 0.6,
+                        0.0
+                    )
                  ) ENGINE = ReplacingMergeTree(created_at)
                  ORDER BY (user_id, segment_id)",
             )
@@ -177,6 +259,18 @@ impl HeartbeatRepository {
             // the timeline has to carry it to be able to serve them.
             "project_id Nullable(UUID)",
             "branch Nullable(String)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                source = 'ai', 'ai_inferred',
+                source = 'editor', 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified' AND source = 'mcp', 0.95,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.activity_intervals ADD COLUMN IF NOT EXISTS {column}"
@@ -243,6 +337,41 @@ impl HeartbeatRepository {
             "token_source Nullable(String)",
             "attribution_source Nullable(String)",
             "attribution_confidence Nullable(Float32)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                (
+                    is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ) AND (
+                    lower(ifNull(ai_confidence, '')) = 'verified'
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ), 'ai_verified',
+                is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                coalesce(human_lines_added, 0) > 0
+                    OR coalesce(human_lines_deleted, 0) > 0
+                    OR coalesce(keystrokes, 0) > 0
+                    OR coalesce(chars_added, 0) > 0
+                    OR coalesce(chars_deleted, 0) > 0, 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified'
+                    AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred'
+                    AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -459,7 +588,7 @@ impl HeartbeatRepository {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at
+                    created_at, actor_type, actor_confidence
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND time >= ? AND time < ?
                 ORDER BY time ASC",

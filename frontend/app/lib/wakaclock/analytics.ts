@@ -1,6 +1,10 @@
+import type { ActorType } from './types';
+
 export type AnalyticsSourceFilter = 'ai' | 'human' | 'other';
+export type AnalyticsActorTypeFilter = ActorType;
 
 export interface AnalyticsExplorerParams {
+  actor_type?: AnalyticsActorTypeFilter;
   category?: string;
   editor?: string;
   end: string;
@@ -13,10 +17,13 @@ export interface AnalyticsExplorerParams {
 }
 
 export interface AnalyticsDurationSplit {
+  ai_inferred_seconds?: number;
   ai_seconds: number;
+  ai_verified_seconds?: number;
   human_seconds: number;
   other_seconds: number;
   total_seconds: number;
+  unknown_seconds?: number;
 }
 
 export interface AnalyticsFilterOption {
@@ -26,6 +33,7 @@ export interface AnalyticsFilterOption {
 }
 
 export interface AnalyticsFilterOptions {
+  actor_types?: AnalyticsFilterOption[];
   categories: AnalyticsFilterOption[];
   editors: AnalyticsFilterOption[];
   languages: AnalyticsFilterOption[];
@@ -35,6 +43,7 @@ export interface AnalyticsFilterOptions {
 
 export interface AnalyticsExplorerResponse {
   applied_filters: {
+    actor_type?: null | string;
     category: null | string;
     editor: null | string;
     language: null | string;
@@ -71,6 +80,7 @@ export const analyticsFilterParamNames = [
   'editor',
   'category',
   'source',
+  'actor_type',
   'operating_system',
 ] as const;
 

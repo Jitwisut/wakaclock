@@ -20,9 +20,16 @@ pub async fn clickhouse_client() -> Arc<ClickHouseClient> {
             .unwrap_or_else(|_| "default".to_string()),
     };
 
-    Arc::new(
+    let client = Arc::new(
         ClickHouseClient::new(&config)
             .await
             .expect("connect to the isolated ClickHouse test instance"),
-    )
+    );
+    client
+        .get_client()
+        .query("CREATE DATABASE IF NOT EXISTS wakaclock")
+        .execute()
+        .await
+        .expect("create wakaclock database in isolated ClickHouse test instance");
+    client
 }

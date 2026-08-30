@@ -14,6 +14,8 @@ export type Category =
   | 'meeting'
   | 'modeling';
 
+export type ActorType = 'ai_inferred' | 'ai_verified' | 'human' | 'unknown';
+
 export type StatsRange = 'all_time' | 'last_30_days' | 'last_7_days' | 'today';
 
 export const STATS_RANGES: StatsRange[] = ['today', 'last_7_days', 'last_30_days', 'all_time'];
@@ -221,6 +223,7 @@ export interface InsightsResponse {
 // GET /users/current/ai_stats
 // ---------------------------------------------------------------------------
 export interface AiAgentItem {
+  actor_type: ActorType;
   agent: string;
   ai_lines_added: number;
   ai_lines_deleted: number;
@@ -229,30 +232,55 @@ export interface AiAgentItem {
   human_lines_deleted: number;
   model?: null | string;
   provider?: null | string;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
 }
 
 export interface AiDailyItem {
+  ai_inferred_lines_added: number;
+  ai_inferred_lines_deleted: number;
   ai_lines_added: number;
   ai_lines_deleted: number;
+  ai_verified_lines_added: number;
+  ai_verified_lines_deleted: number;
   date: string;
   heartbeat_count: number;
   human_chars_added: number;
   human_keystrokes: number;
   human_lines_added: number;
   human_lines_deleted: number;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
 }
 
 export interface AiStatsData {
   agents: AiAgentItem[];
   ai_heartbeat_percentage: number;
+  ai_inferred_heartbeat_percentage: number;
+  ai_verified_heartbeat_percentage: number;
   daily: AiDailyItem[];
+  human_heartbeat_percentage: number;
+  total_ai_inferred_lines_added: number;
+  total_ai_inferred_lines_deleted: number;
   total_ai_lines_added: number;
   total_ai_lines_deleted: number;
+  total_ai_verified_lines_added: number;
+  total_ai_verified_lines_deleted: number;
   total_heartbeats: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
   total_human_lines_added: number;
   total_human_lines_deleted: number;
+  total_unattributed_lines_added: number;
+  total_unattributed_lines_deleted: number;
+  total_unknown_lines_added: number;
+  total_unknown_lines_deleted: number;
+  unattributed_heartbeat_percentage: number;
+  unknown_heartbeat_percentage: number;
 }
 
 export interface AiStatsResponse {
@@ -388,19 +416,31 @@ export interface DashboardAnalyticsResponse {
     weekdays: Breakdown;
   };
   coverage: {
+    attributed_changes: number;
+    attribution_data_coverage_percent: null | number;
     attribution_percent: null | number;
+    attribution_relevant_rows: number;
+    attribution_status: 'complete' | 'no_activity' | 'partial';
     cost_percent: null | number;
+    incomplete_attribution_rows: number;
     token_percent: null | number;
+    unattributed_changes: number;
   };
   daily_attribution: Array<{
     ai_added: number;
     ai_deleted: number;
+    ai_inferred_added?: number;
+    ai_inferred_deleted?: number;
+    ai_verified_added?: number;
+    ai_verified_deleted?: number;
     date: string;
     human_added: number;
     human_deleted: number;
     unattributed_added: null | number;
     unattributed_deleted: null | number;
     unit: 'lines';
+    unknown_added?: number;
+    unknown_deleted?: number;
   }>;
   data_version: number;
   generated_at: string;
@@ -445,6 +485,8 @@ export interface ProjectAnalyticsCard {
     lines_deleted: number;
     percentage: null | number;
   };
+  ai_inferred: ProjectAnalyticsCard['ai'];
+  ai_verified: ProjectAnalyticsCard['ai'];
   attribution_coverage_percent: null | number;
   estimated_spend: {
     amount_microusd: null | number;
@@ -478,6 +520,7 @@ export interface ProjectAnalyticsCard {
     lines_deleted: number;
     percentage_of_observed: null | number;
   };
+  unknown: ProjectAnalyticsCard['unattributed'];
 }
 
 export interface ProjectAnalyticsListResponse {
@@ -492,8 +535,10 @@ export interface ProjectAnalyticsListResponse {
 
 export interface ProjectAnalyticsDetailResponse {
   ai: {
+    ai_inferred_lines: number;
     ai_lines: number;
     ai_percentage: null | number;
+    ai_verified_lines: number;
     attribution_coverage_percent: null | number;
     estimated_spend: ProjectAnalyticsCard['estimated_spend'];
     human_lines: number;
@@ -502,24 +547,34 @@ export interface ProjectAnalyticsDetailResponse {
     sessions: null | number;
     tokens: ProjectAnalyticsCard['tokens'];
     unattributed_lines: null | number;
+    unknown_lines: null | number;
   };
   branches: Array<{
     ai_changes: number;
+    ai_inferred_changes: number;
+    ai_verified_changes: number;
     branch: string;
     heartbeat_count: number;
     human_changes: number;
     total_seconds: number;
     unattributed_changes: null | number;
+    unknown_changes: null | number;
   }>;
   daily_activity: Array<{
     ai_added: number;
     ai_deleted: number;
+    ai_inferred_added: number;
+    ai_inferred_deleted: number;
+    ai_verified_added: number;
+    ai_verified_deleted: number;
     date: string;
     human_added: number;
     human_deleted: number;
     total_seconds: number;
     unattributed_added: null | number;
     unattributed_deleted: null | number;
+    unknown_added: null | number;
+    unknown_deleted: null | number;
   }>;
   data_version: number;
   editors: Array<{ name: string; percentage: number; total_seconds: number }>;
@@ -539,6 +594,8 @@ export interface ProjectAnalyticsDetailResponse {
 
 export interface ProjectFileItem {
   ai_changes: number;
+  ai_inferred_changes: number;
+  ai_verified_changes: number;
   display_name: string;
   entity_key: string;
   human_changes: number;
@@ -547,6 +604,7 @@ export interface ProjectFileItem {
   percentage_of_project: number;
   total_seconds: number;
   unattributed_changes: null | number;
+  unknown_changes: null | number;
 }
 
 export interface ProjectFilesResponse {
@@ -613,6 +671,8 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  actor_confidence: number;
+  actor_type: ActorType;
   ai_agent?: null | string;
   ai_confidence?: null | string;
   ai_event_fingerprint?: null | string;
@@ -633,6 +693,8 @@ export interface HeartbeatItem {
   entity_type: string;
   human_lines_added?: null | number;
   human_lines_deleted?: null | number;
+  /** Deprecated compatibility flag; derive state from actor_type instead. */
+  is_ai_generated?: boolean;
   is_write: boolean;
   language: null | string;
   line_number: null | number;
@@ -653,6 +715,8 @@ export interface HeartbeatListResponse {
 
 export interface HeartbeatPayload {
   active_seconds?: number;
+  actor_confidence?: number;
+  actor_type?: ActorType;
   ai_agent?: string;
   ai_confidence?: string;
   ai_event_id?: string;

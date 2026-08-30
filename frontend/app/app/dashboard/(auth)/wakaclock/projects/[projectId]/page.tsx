@@ -27,13 +27,15 @@ import type { ProjectBranchesResponse, ProjectFilesResponse } from '@/lib/wakacl
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 const chartConfig = {
-  ai_added: { color: 'var(--chart-1)', label: 'AI additions' },
-  ai_deleted: { color: 'var(--chart-1)', label: 'AI deletions' },
+  ai_inferred_added: { color: 'var(--chart-3)', label: 'AI inferred additions' },
+  ai_inferred_deleted: { color: 'var(--chart-3)', label: 'AI inferred deletions' },
+  ai_verified_added: { color: 'var(--chart-1)', label: 'AI verified additions' },
+  ai_verified_deleted: { color: 'var(--chart-1)', label: 'AI verified deletions' },
   human_added: { color: 'var(--chart-2)', label: 'Human additions' },
   human_deleted: { color: 'var(--chart-2)', label: 'Human deletions' },
   total_seconds: { color: 'var(--chart-1)', label: 'Active time' },
-  unattributed_added: { color: 'var(--chart-4)', label: 'Unattributed additions' },
-  unattributed_deleted: { color: 'var(--chart-4)', label: 'Unattributed deletions' },
+  unknown_added: { color: 'var(--chart-4)', label: 'Unknown additions' },
+  unknown_deleted: { color: 'var(--chart-4)', label: 'Unknown deletions' },
 } satisfies ChartConfig;
 
 function percentage(value: null | number) {
@@ -163,6 +165,12 @@ function DetailPanel() {
                 value={formatDurationShort(detail.summary.project_seconds)}
               />
               <Metric label="AI attribution" value={percentage(detail.ai.ai_percentage)} />
+              <Metric label="AI verified lines" value={detail.ai.ai_verified_lines.toLocaleString()} />
+              <Metric label="AI inferred lines" value={detail.ai.ai_inferred_lines.toLocaleString()} />
+              <Metric
+                label="Unknown lines"
+                value={(detail.ai.unknown_lines ?? 0).toLocaleString()}
+              />
               <Metric
                 label="Attribution coverage"
                 value={percentage(detail.ai.attribution_coverage_percent)}
@@ -187,22 +195,40 @@ function DetailPanel() {
                     <XAxis dataKey="date" tickLine={false} tickMargin={8} />
                     <YAxis tickFormatter={formatDurationShort} tickLine={false} tickMargin={8} />
                     <Tooltip formatter={(value) => formatDurationShort(Number(value))} />
-                    <Bar dataKey="ai_added" fill="var(--color-ai_added)" stackId="changes" />
-                    <Bar dataKey="human_added" fill="var(--color-human_added)" stackId="changes" />
                     <Bar
-                      dataKey="unattributed_added"
-                      fill="var(--color-unattributed_added)"
+                      dataKey="ai_verified_added"
+                      fill="var(--color-ai_verified_added)"
                       stackId="changes"
                     />
-                    <Bar dataKey="ai_deleted" fill="var(--color-ai_deleted)" stackId="deletions" />
+                    <Bar
+                      dataKey="ai_inferred_added"
+                      fill="var(--color-ai_inferred_added)"
+                      stackId="changes"
+                    />
+                    <Bar dataKey="human_added" fill="var(--color-human_added)" stackId="changes" />
+                    <Bar
+                      dataKey="unknown_added"
+                      fill="var(--color-unknown_added)"
+                      stackId="changes"
+                    />
+                    <Bar
+                      dataKey="ai_verified_deleted"
+                      fill="var(--color-ai_verified_deleted)"
+                      stackId="deletions"
+                    />
+                    <Bar
+                      dataKey="ai_inferred_deleted"
+                      fill="var(--color-ai_inferred_deleted)"
+                      stackId="deletions"
+                    />
                     <Bar
                       dataKey="human_deleted"
                       fill="var(--color-human_deleted)"
                       stackId="deletions"
                     />
                     <Bar
-                      dataKey="unattributed_deleted"
-                      fill="var(--color-unattributed_deleted)"
+                      dataKey="unknown_deleted"
+                      fill="var(--color-unknown_deleted)"
                       stackId="deletions"
                     />
                   </BarChart>

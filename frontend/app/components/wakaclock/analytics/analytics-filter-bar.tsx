@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import type {
+  AnalyticsActorTypeFilter,
   AnalyticsFilterOption,
   AnalyticsFilterOptions,
   AnalyticsSourceFilter,
@@ -11,6 +12,7 @@ import type {
 
 interface AnalyticsFilterBarProps {
   filters: {
+    actorType?: AnalyticsActorTypeFilter;
     category?: string;
     editor?: string;
     end: string;
@@ -23,7 +25,14 @@ interface AnalyticsFilterBarProps {
   lockedProjectId?: string;
   onReset: () => void;
   onSetFilter: (
-    name: 'category' | 'editor' | 'language' | 'operating_system' | 'project_id' | 'source',
+    name:
+      | 'actor_type'
+      | 'category'
+      | 'editor'
+      | 'language'
+      | 'operating_system'
+      | 'project_id'
+      | 'source',
     value?: string
   ) => void;
   onSetRange: (range: { end: string; start: string }) => void;
@@ -127,6 +136,12 @@ export function AnalyticsFilterBar({
             <option value="other">Other / handover</option>
           </select>
         </label>
+        <FilterSelect
+          label="Actor type"
+          onChange={(value) => onSetFilter('actor_type', value)}
+          options={options.actor_types ?? []}
+          value={filters.actorType}
+        />
         <FilterSelect
           label="Operating system"
           onChange={(value) => onSetFilter('operating_system', value)}

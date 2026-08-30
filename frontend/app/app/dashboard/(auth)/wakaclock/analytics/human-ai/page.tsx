@@ -28,7 +28,7 @@ function ShareRow({ label, seconds, total }: { label: string; seconds: number; t
 export default function HumanAiPage() {
   return (
     <AnalyticsFrame
-      description="Compare attended human, AI-agent and handover time using the same canonical duration model as the rest of AtoAxis."
+      description="Compare Human, verified AI, inferred AI and Unknown time using the same canonical duration model as the rest of AtoAxis."
       title="Human vs AI"
     >
       {({ data, filters, setFilter }) => (
@@ -36,7 +36,9 @@ export default function HumanAiPage() {
           <SourceSummary
             data={data}
             onSelect={(source) => setFilter('source', source)}
+            onSelectActor={(actorType) => setFilter('actor_type', actorType)}
             selected={filters.source}
+            selectedActor={filters.actorType}
           />
           {data.summary.total_seconds === 0 && (
             <AnalyticsEmptyState message="No attributed activity matches the current filters." />
@@ -46,8 +48,8 @@ export default function HumanAiPage() {
               <CardHeader>
                 <CardTitle>Duration attribution</CardTitle>
                 <CardDescription>
-                  Source attribution is measured duration. Other includes handover or sources that
-                  cannot safely be claimed as human or AI.
+                  Actor attribution is measured duration. Unknown includes activity that cannot
+                  safely be claimed as Human or AI; handover remains outside both actors.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -57,8 +59,18 @@ export default function HumanAiPage() {
                   total={data.summary.total_seconds}
                 />
                 <ShareRow
-                  label="AI agent"
-                  seconds={data.summary.ai_seconds}
+                  label="AI verified"
+                  seconds={data.summary.ai_verified_seconds ?? 0}
+                  total={data.summary.total_seconds}
+                />
+                <ShareRow
+                  label="AI inferred"
+                  seconds={data.summary.ai_inferred_seconds ?? 0}
+                  total={data.summary.total_seconds}
+                />
+                <ShareRow
+                  label="Unknown"
+                  seconds={data.summary.unknown_seconds ?? 0}
                   total={data.summary.total_seconds}
                 />
                 <ShareRow

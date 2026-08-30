@@ -12,6 +12,7 @@ use crate::middleware::auth;
 use crate::model::analytics_explorer::AnalyticsExplorerResponse;
 use crate::model::date_range::ResolvedRange;
 use crate::services::analytics_explorer::{build_explorer_response, ExplorerFilters};
+use wakaclock_core::heartbeat::ActorType;
 
 #[derive(Debug, Deserialize)]
 pub struct ExplorerQuery {
@@ -22,6 +23,7 @@ pub struct ExplorerQuery {
     pub operating_system: Option<String>,
     pub project_id: Option<Uuid>,
     pub source: Option<String>,
+    pub actor_type: Option<String>,
     pub start: String,
     pub timezone: Option<String>,
 }
@@ -42,6 +44,7 @@ pub async fn get(
         operating_system: clean_filter(query.operating_system, "operating_system")?,
         project_id: query.project_id,
         source: parse_source(query.source)?,
+        actor_type: parse_actor_type(query.actor_type)?,
     };
     let (start, end) = range.unix_bounds();
     let intervals = state
@@ -84,6 +87,20 @@ fn parse_source(
         None => Ok(None),
         Some("human" | "editor" | "ai" | "other") => Ok(value),
         Some(_) => Err(bad_request("source must be human, ai, other, or all")),
+    }
+}
+
+fn parse_actor_type(
+    value: Option<String>,
+) -> Result<Option<ActorType>, (StatusCode, Json<serde_json::Value>)> {
+    let value = value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "all");
+    match value {
+        None => Ok(None),
+        Some(value) => value.parse::<ActorType>().map(Some).map_err(|_| {
+            bad_request("actor_type must be human, ai_verified, ai_inferred, unknown, or all")
+        }),
     }
 }
 

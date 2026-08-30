@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::infrastructure::database::ClickHouseClient;
@@ -27,8 +28,128 @@ impl AnalyticsRepository {
                 })?;
         }
 
+        self.backfill_actor_daily_v2().await?;
+
         Ok(())
     }
+
+    /// Build the actor-aware rollup once from raw heartbeats. The marker makes the
+    /// migration repeatable on every boot; the raw/table totals are checked before the
+    /// marker is written so a partial backfill cannot be silently accepted. The old
+    /// `ai_daily` table and its views remain untouched for compatibility.
+    async fn backfill_actor_daily_v2(&self) -> Result<()> {
+        let client = self.client.get_client();
+        let completed: u64 = client
+            .query(
+                "SELECT count()
+                 FROM wakaclock.actor_daily_v2_backfill_state
+                 WHERE migration = 'initial'",
+            )
+            .fetch_one()
+            .await
+            .context("Failed to read actor rollup backfill state")?;
+        if completed > 0 {
+            return Ok(());
+        }
+
+        // actor_daily_v2 is a derived table. Clearing it before an unmarked rebuild
+        // makes the backfill recoverable if the process dies after INSERT but before
+        // the completion marker, and avoids double-counting rows emitted by the
+        // materialized view while this migration is running. Raw heartbeats remain
+        // untouched and are the source of truth.
+        client
+            .query("TRUNCATE TABLE wakaclock.actor_daily_v2")
+            .execute()
+            .await
+            .context("Failed to reset incomplete actor-aware daily rollup")?;
+
+        client
+            .query(
+                "INSERT INTO wakaclock.actor_daily_v2
+                 SELECT
+                    user_id,
+                    date,
+                    actor_type,
+                    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_agent, ''), '') AS ai_agent,
+                    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_provider, ''), '') AS ai_provider,
+                    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_model, ''), '') AS ai_model,
+                    sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+                    sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+                    sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+                    sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+                    sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+                    sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+                    sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
+                    sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
+                    count() AS heartbeat_count
+                 FROM wakaclock.heartbeats AS h
+                 GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model",
+            )
+            .execute()
+            .await
+            .context("Failed to backfill actor-aware daily rollup")?;
+
+        let source = client
+            .query(
+                "SELECT
+                    sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+                    sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+                    sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+                    sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+                    sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+                    sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+                    count() AS heartbeat_count
+                 FROM wakaclock.heartbeats AS h",
+            )
+            .fetch_one::<ActorRollupTotalsRow>()
+            .await
+            .context("Failed to read actor rollup source totals")?;
+        let projected = client
+            .query(
+                "SELECT
+                    sum(ai_lines_added) AS ai_lines_added,
+                    sum(ai_lines_deleted) AS ai_lines_deleted,
+                    sum(human_lines_added) AS human_lines_added,
+                    sum(human_lines_deleted) AS human_lines_deleted,
+                    sum(unknown_lines_added) AS unknown_lines_added,
+                    sum(unknown_lines_deleted) AS unknown_lines_deleted,
+                    sum(heartbeat_count) AS heartbeat_count
+                 FROM wakaclock.actor_daily_v2",
+            )
+            .fetch_one::<ActorRollupTotalsRow>()
+            .await
+            .context("Failed to read actor rollup totals")?;
+        if source != projected {
+            anyhow::bail!(
+                "actor rollup backfill reconciliation failed: source={source:?}, projected={projected:?}"
+            );
+        }
+
+        client
+            .query(
+                "INSERT INTO wakaclock.actor_daily_v2_backfill_state
+                 SELECT 'initial' AS migration, now64(3) AS completed_at",
+            )
+            .execute()
+            .await
+            .context("Failed to publish actor rollup backfill marker")?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq, clickhouse::Row)]
+struct ActorRollupTotalsRow {
+    ai_lines_added: u64,
+    ai_lines_deleted: u64,
+    human_lines_added: u64,
+    human_lines_deleted: u64,
+    unknown_lines_added: u64,
+    unknown_lines_deleted: u64,
+    heartbeat_count: u64,
 }
 
 const STATEMENTS: &[&str] = &[
@@ -158,6 +279,35 @@ const STATEMENTS: &[&str] = &[
     ALTER TABLE wakaclock.ai_daily ADD COLUMN IF NOT EXISTS human_lines_deleted UInt64
     "#,
     r#"
+    CREATE TABLE IF NOT EXISTS wakaclock.actor_daily_v2
+    (
+        user_id             UUID,
+        date                Date,
+        actor_type          LowCardinality(String),
+        ai_agent            String,
+        ai_provider         String,
+        ai_model            String,
+        ai_lines_added      UInt64,
+        ai_lines_deleted    UInt64,
+        human_lines_added   UInt64,
+        human_lines_deleted UInt64,
+        unknown_lines_added UInt64,
+        unknown_lines_deleted UInt64,
+        human_keystrokes    UInt64,
+        human_chars_added   UInt64,
+        heartbeat_count     UInt64
+    ) ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_lines_added, human_lines_deleted, unknown_lines_added, unknown_lines_deleted, human_keystrokes, human_chars_added, heartbeat_count))
+    ORDER BY (user_id, date, actor_type, ai_agent, ai_provider, ai_model)
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS wakaclock.actor_daily_v2_backfill_state
+    (
+        migration   String,
+        completed_at DateTime64(3)
+    ) ENGINE = ReplacingMergeTree(completed_at)
+    ORDER BY migration
+    "#,
+    r#"
     CREATE TABLE IF NOT EXISTS wakaclock.keystroke_daily
     (
         user_id         UUID,
@@ -241,15 +391,21 @@ const STATEMENTS: &[&str] = &[
         date Date,
         provider String,
         model String,
+        ai_events UInt64,
+        ai_lines_added UInt64,
+        ai_lines_deleted UInt64,
+        prompts UInt64,
+        sessions UInt64,
         input_tokens UInt64,
         output_tokens UInt64,
         cache_read_tokens UInt64,
         cache_write_tokens UInt64,
         estimated_cost_microusd Nullable(UInt64),
-        ai_lines_added UInt64,
-        ai_lines_deleted UInt64
-    ) ENGINE = SummingMergeTree((input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, ai_lines_added, ai_lines_deleted))
-    ORDER BY (user_id, date, provider, model)
+        priced_tokens UInt64,
+        total_reported_tokens UInt64,
+        data_version UInt64
+    ) ENGINE = MergeTree()
+    ORDER BY (user_id, date, provider, model, data_version)
     "#,
     r#"
     CREATE TABLE IF NOT EXISTS wakaclock.ai_effectiveness_daily
@@ -409,15 +565,42 @@ const STATEMENTS: &[&str] = &[
         user_id,
         date,
         coalesce(ai_agent, 'human') AS ai_agent,
-        sum(coalesce(ai_lines_added, 0))  AS ai_lines_added,
-        sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
-        sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-        sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
-        sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
-        sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+        sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+        sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+        sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
+        sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human') AS human_lines_deleted,
+        sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS human_keystrokes,
+        sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats
     GROUP BY user_id, date, ai_agent
+    "#,
+    // Actor-aware replacement for the boolean-keyed AI rollup. It is additive so old
+    // readers and historical tables remain available while new reads use raw facts or
+    // this explicitly partitioned table.
+    r#"
+    CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_actor_summary_v2
+    TO wakaclock.actor_daily_v2 AS
+    SELECT
+        user_id,
+        date,
+        actor_type,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_agent, ''), '') AS ai_agent,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_provider, ''), '') AS ai_provider,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_model, ''), '') AS ai_model,
+        sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+        sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+        sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+        sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+        sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+            + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+        sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+            + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+        sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
+        sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
+        count() AS heartbeat_count
+    FROM wakaclock.heartbeats AS h
+    GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_keystroke_summary
@@ -426,9 +609,9 @@ const STATEMENTS: &[&str] = &[
         user_id,
         date,
         coalesce(project, 'Unknown') AS project,
-        sum(coalesce(keystrokes, 0))    AS keystrokes,
-        sum(coalesce(chars_added, 0))   AS chars_added,
-        sum(coalesce(chars_deleted, 0)) AS chars_deleted,
+        sumIf(coalesce(keystrokes, 0), actor_type = 'human')    AS keystrokes,
+        sumIf(coalesce(chars_added, 0), actor_type = 'human')   AS chars_added,
+        sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats
     GROUP BY user_id, date, project
@@ -481,23 +664,160 @@ const STATEMENTS: &[&str] = &[
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_ai_summary
     TO wakaclock.ai_daily AS
     SELECT user_id, date, coalesce(ai_agent, 'human') AS ai_agent,
-           sum(coalesce(ai_lines_added, 0)) AS ai_lines_added,
-           sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
-           sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-           sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
-           sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
-           sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+           sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+           sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+           sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
+           sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human') AS human_lines_deleted,
+           sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS human_keystrokes,
+           sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
            count() AS heartbeat_count
     FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, ai_agent
+    "#,
+    r#"
+    CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_actor_summary_v2
+    TO wakaclock.actor_daily_v2 AS
+    SELECT
+        user_id,
+        date,
+        actor_type,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_agent, ''), '') AS ai_agent,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_provider, ''), '') AS ai_provider,
+        if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_model, ''), '') AS ai_model,
+        sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+        sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+        sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+        sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+        sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+            + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+        sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+            + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+        sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
+        sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
+        count() AS heartbeat_count
+    FROM wakaclock.heartbeats_incoming AS h
+    GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_keystroke_summary
     TO wakaclock.keystroke_daily AS
     SELECT user_id, date, coalesce(project, 'Unknown') AS project,
-           sum(coalesce(keystrokes, 0)) AS keystrokes,
-           sum(coalesce(chars_added, 0)) AS chars_added,
-           sum(coalesce(chars_deleted, 0)) AS chars_deleted,
+           sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS keystrokes,
+           sumIf(coalesce(chars_added, 0), actor_type = 'human') AS chars_added,
+           sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
            count() AS heartbeat_count
     FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, project
     "#,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::AnalyticsRepository;
+    use crate::repository::heartbeat::HeartbeatRepository;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn actor_backfill_reconciles_legacy_attribution_into_v2_rollup() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        let repository = AnalyticsRepository::new(clickhouse.clone());
+        repository.migrate().await.unwrap();
+
+        let client = clickhouse.get_client();
+        client
+            .query("TRUNCATE TABLE wakaclock.actor_daily_v2")
+            .execute()
+            .await
+            .unwrap();
+        client
+            .query("TRUNCATE TABLE wakaclock.actor_daily_v2_backfill_state")
+            .execute()
+            .await
+            .unwrap();
+
+        let user_id = Uuid::new_v4();
+        let insert = format!(
+            r#"INSERT INTO wakaclock.heartbeats
+                (user_id, entity, entity_type, time, dependencies, is_write, category,
+                 editor, operating_system, machine, user_agent, is_ai_generated,
+                 ai_agent, ai_source, ai_confidence, ai_lines_added, human_lines_added,
+                 unattributed_lines_added, created_at)
+               VALUES
+                ('{user_id}', 'phase1-human.rs', 'file', 1788048000, [], 1, 'coding',
+                 'vscode', 'test', 'test', 'phase1-test', 0,
+                 NULL, NULL, NULL, NULL, 3, NULL, 1),
+                ('{user_id}', 'phase1-verified.rs', 'file', 1788048060, [], 0, 'coding',
+                 'agent', 'test', 'test', 'phase1-test', 1,
+                 'claude-code', 'agent_hook', 'verified', 5, NULL, NULL, 2),
+                ('{user_id}', 'phase1-inferred.rs', 'file', 1788048120, [], 0, 'coding',
+                 'agent', 'test', 'test', 'phase1-test', 1,
+                 'legacy-agent', 'transcript', 'correlated', 2, NULL, NULL, 3),
+                ('{user_id}', 'phase1-unknown.rs', 'file', 1788048180, [], 0, 'coding',
+                 '', 'test', 'test', 'phase1-test', 0,
+                 NULL, NULL, NULL, NULL, NULL, 4, 4)"#
+        );
+        client.query(&insert).execute().await.unwrap();
+
+        // The materialized view may have observed the insert already. Removing the
+        // marker forces migrate() to truncate that derived state and rebuild it solely
+        // from raw heartbeats, which is the historical upgrade path Phase 1 relies on.
+        repository.migrate().await.unwrap();
+
+        for actor in ["human", "ai_verified", "ai_inferred", "unknown"] {
+            let raw: u64 = client
+                .query(&format!(
+                    "SELECT count() FROM wakaclock.heartbeats WHERE user_id = '{user_id}' AND actor_type = '{actor}'"
+                ))
+                .fetch_one()
+                .await
+                .unwrap();
+            assert_eq!(raw, 1, "unexpected raw actor count for {actor}");
+
+            let rolled_up: u64 = client
+                .query(&format!(
+                    "SELECT sum(heartbeat_count) FROM wakaclock.actor_daily_v2 WHERE user_id = '{user_id}' AND actor_type = '{actor}'"
+                ))
+                .fetch_one()
+                .await
+                .unwrap();
+            assert_eq!(rolled_up, 1, "unexpected rollup actor count for {actor}");
+        }
+
+        let human_lines: u64 = client
+            .query(&format!(
+                "SELECT sum(human_lines_added) FROM wakaclock.actor_daily_v2 WHERE user_id = '{user_id}'"
+            ))
+            .fetch_one()
+            .await
+            .unwrap();
+        let ai_lines: u64 = client
+            .query(&format!(
+                "SELECT sum(ai_lines_added) FROM wakaclock.actor_daily_v2 WHERE user_id = '{user_id}'"
+            ))
+            .fetch_one()
+            .await
+            .unwrap();
+        let unknown_lines: u64 = client
+            .query(&format!(
+                "SELECT sum(unknown_lines_added) FROM wakaclock.actor_daily_v2 WHERE user_id = '{user_id}'"
+            ))
+            .fetch_one()
+            .await
+            .unwrap();
+        assert_eq!(human_lines, 3);
+        assert_eq!(ai_lines, 7);
+        assert_eq!(unknown_lines, 4);
+
+        let marker_count: u64 = client
+            .query(
+                "SELECT count() FROM wakaclock.actor_daily_v2_backfill_state WHERE migration = 'initial'",
+            )
+            .fetch_one()
+            .await
+            .unwrap();
+        assert_eq!(marker_count, 1);
+    }
+}

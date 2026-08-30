@@ -9,6 +9,7 @@ use crate::model::analytics_explorer::{
 };
 use crate::model::date_range::ResolvedRange;
 use crate::services::activity_timeline::CanonicalInterval;
+use wakaclock_core::heartbeat::ActorType;
 
 const WEEKDAYS: [&str; 7] = [
     "Monday",
@@ -28,12 +29,16 @@ pub struct ExplorerFilters {
     pub operating_system: Option<String>,
     pub project_id: Option<Uuid>,
     pub source: Option<String>,
+    pub actor_type: Option<ActorType>,
 }
 
 impl ExplorerFilters {
     fn matches(&self, interval: &CanonicalInterval) -> bool {
         self.project_id
             .is_none_or(|project_id| interval.project_id == Some(project_id))
+            && self
+                .actor_type
+                .is_none_or(|actor_type| interval.actor_type == actor_type)
             && matches_text(self.language.as_deref(), interval.language.as_deref())
             && matches_text(self.editor.as_deref(), Some(&interval.editor))
             && matches_text(self.category.as_deref(), Some(&interval.category))
@@ -57,6 +62,7 @@ impl ExplorerFilters {
             operating_system: self.operating_system.clone(),
             project_id: self.project_id.map(|value| value.to_string()),
             source: self.source.clone(),
+            actor_type: self.actor_type.map(|value| value.to_string()),
         }
     }
 }
@@ -119,13 +125,14 @@ fn split_duration<'a>(
 ) -> ExplorerDurationSplit {
     let mut split = ExplorerDurationSplit::default();
     for interval in intervals {
-        split.add(&interval.source, seconds(interval));
+        split.add_actor(&interval.actor_type, seconds(interval));
     }
     split
 }
 
 fn build_filter_options(intervals: &[CanonicalInterval]) -> ExplorerFilterOptions {
     ExplorerFilterOptions {
+        actor_types: actor_type_options(intervals.iter()),
         projects: project_options(intervals.iter()),
         languages: dimension_options(intervals.iter(), |interval| {
             interval.language.as_deref().unwrap_or("Unknown")
@@ -140,6 +147,7 @@ fn build_filter_options(intervals: &[CanonicalInterval]) -> ExplorerFilterOption
 
 fn build_breakdowns(intervals: &[&CanonicalInterval]) -> ExplorerBreakdowns {
     ExplorerBreakdowns {
+        actor_types: actor_type_options(intervals.iter().copied()),
         projects: project_options(intervals.iter().copied()),
         languages: dimension_options(intervals.iter().copied(), |interval| {
             interval.language.as_deref().unwrap_or("Unknown")
@@ -200,6 +208,16 @@ fn project_options<'a>(
     options
 }
 
+fn actor_type_options<'a>(
+    intervals: impl IntoIterator<Item = &'a CanonicalInterval>,
+) -> Vec<ExplorerFilterOption> {
+    let mut totals = BTreeMap::<String, f64>::new();
+    for interval in intervals {
+        *totals.entry(interval.actor_type.to_string()).or_default() += seconds(interval);
+    }
+    sorted_options(totals)
+}
+
 fn sorted_options(totals: BTreeMap<String, f64>) -> Vec<ExplorerFilterOption> {
     let mut options = totals
         .into_iter()
@@ -258,7 +276,7 @@ fn build_timeline(
                 break;
             }
             let boundary = (range_start + (index + 1) as f64 * bucket_width).min(end);
-            totals[index].add(&interval.source, boundary - cursor);
+            totals[index].add_actor(&interval.actor_type, boundary - cursor);
             cursor = boundary;
         }
     }
@@ -304,7 +322,7 @@ fn build_calendar_heatmap(
             totals
                 .entry(date)
                 .or_default()
-                .add(&interval.source, slice_seconds);
+                .add_actor(&interval.actor_type, slice_seconds);
         });
     }
     totals
@@ -322,7 +340,7 @@ fn build_time_heatmap(
         for_minute_slice(interval, range, |timestamp, slice_seconds| {
             let weekday = timestamp.weekday().num_days_from_monday() as usize;
             let hour = timestamp.hour() as usize;
-            totals[weekday * 24 + hour].add(&interval.source, slice_seconds);
+            totals[weekday * 24 + hour].add_actor(&interval.actor_type, slice_seconds);
         });
     }
 
@@ -392,6 +410,12 @@ mod tests {
             start,
             end,
             source: source.to_string(),
+            actor_type: match source {
+                "editor" => wakaclock_core::heartbeat::ActorType::Human,
+                "ai" => wakaclock_core::heartbeat::ActorType::AiVerified,
+                _ => wakaclock_core::heartbeat::ActorType::Unknown,
+            },
+            actor_confidence: if source == "other" { 0.0 } else { 1.0 },
             entity: format!("{id}.rs"),
             project: Some("AtoAxis".to_string()),
             project_id: Some(project_id),

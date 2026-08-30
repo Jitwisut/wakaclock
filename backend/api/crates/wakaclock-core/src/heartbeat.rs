@@ -3,6 +3,245 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+/// Canonical owner of a heartbeat or file mutation.
+///
+/// `unknown` is intentional: absence of AI metadata is not positive evidence that a
+/// person made the change. The legacy `is_ai_generated` flag remains available on the
+/// wire, but this enum is the source of truth for new code.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorType {
+    Human,
+    AiVerified,
+    AiInferred,
+    #[default]
+    Unknown,
+}
+
+impl ActorType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::AiVerified => "ai_verified",
+            Self::AiInferred => "ai_inferred",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn is_ai(self) -> bool {
+        matches!(self, Self::AiVerified | Self::AiInferred)
+    }
+
+    pub fn default_confidence(self, ai_source: Option<&str>, ai_confidence: Option<&str>) -> f32 {
+        match self {
+            Self::Human => 1.0,
+            Self::AiVerified => {
+                if ai_source.is_some_and(|source| source.eq_ignore_ascii_case("mcp")) {
+                    0.95
+                } else {
+                    1.0
+                }
+            }
+            Self::AiInferred => {
+                if ai_confidence
+                    .is_some_and(|confidence| confidence.eq_ignore_ascii_case("correlated"))
+                {
+                    0.8
+                } else {
+                    0.6
+                }
+            }
+            Self::Unknown => 0.0,
+        }
+    }
+}
+
+impl fmt::Display for ActorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ActorType {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "human" => Ok(Self::Human),
+            "ai_verified" | "verified" => Ok(Self::AiVerified),
+            "ai_inferred" | "inferred" | "correlated" => Ok(Self::AiInferred),
+            "unknown" | "unattributed" => Ok(Self::Unknown),
+            other => Err(format!("unsupported actor_type: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttributionResolution {
+    pub actor_type: ActorType,
+    pub confidence: f32,
+}
+
+/// Inputs used to normalize both new enum payloads and legacy boolean payloads.
+/// References are borrowed so this helper can be used before a heartbeat payload is moved.
+#[derive(Debug, Default)]
+pub struct AttributionInput<'a> {
+    pub explicit_actor_type: Option<ActorType>,
+    pub explicit_confidence: Option<f32>,
+    pub legacy_is_ai_generated: Option<bool>,
+    pub ai_agent: Option<&'a str>,
+    pub ai_source: Option<&'a str>,
+    pub ai_confidence: Option<&'a str>,
+    pub ai_event_id: Option<&'a str>,
+    pub ai_lines_added: Option<u32>,
+    pub ai_lines_deleted: Option<u32>,
+    pub human_lines_added: Option<u32>,
+    pub human_lines_deleted: Option<u32>,
+    pub unattributed_lines_added: Option<u32>,
+    pub unattributed_lines_deleted: Option<u32>,
+    pub keystrokes: Option<u32>,
+    pub chars_added: Option<u32>,
+    pub chars_deleted: Option<u32>,
+    /// True only when an editor has supplied a positive activity signal. A missing AI
+    /// sidecar is not enough to set this value.
+    pub positive_editor_evidence: bool,
+}
+
+impl<'a> AttributionInput<'a> {
+    fn has_ai_evidence(&self) -> bool {
+        self.legacy_is_ai_generated == Some(true)
+            || self.ai_agent.is_some_and(|value| !value.trim().is_empty())
+            || self
+                .ai_event_id
+                .is_some_and(|value| !value.trim().is_empty())
+            || self.ai_source.is_some_and(|source| {
+                source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
+            })
+            || self.ai_lines_added.is_some_and(|value| value > 0)
+            || self.ai_lines_deleted.is_some_and(|value| value > 0)
+    }
+
+    fn has_positive_human_evidence(&self) -> bool {
+        self.positive_editor_evidence
+            || self.human_lines_added.is_some_and(|value| value > 0)
+            || self.human_lines_deleted.is_some_and(|value| value > 0)
+            || self.keystrokes.is_some_and(|value| value > 0)
+            || self.chars_added.is_some_and(|value| value > 0)
+            || self.chars_deleted.is_some_and(|value| value > 0)
+    }
+
+    fn has_attribution_lines(&self) -> bool {
+        self.ai_lines_added.is_some_and(|value| value > 0)
+            || self.ai_lines_deleted.is_some_and(|value| value > 0)
+            || self.human_lines_added.is_some_and(|value| value > 0)
+            || self.human_lines_deleted.is_some_and(|value| value > 0)
+            || self.unattributed_lines_added.is_some_and(|value| value > 0)
+            || self
+                .unattributed_lines_deleted
+                .is_some_and(|value| value > 0)
+    }
+}
+
+/// Resolve the canonical actor state. Explicit enum values are authoritative, but
+/// contradictory legacy metadata is rejected so one edit cannot be reported as both AI
+/// and Human by different consumers.
+pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionResolution, String> {
+    if let Some(confidence) = input.explicit_confidence {
+        if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+            return Err("actor_confidence must be between 0.0 and 1.0".to_string());
+        }
+    }
+
+    let ai_evidence = input.has_ai_evidence();
+    let human_evidence = input.has_positive_human_evidence();
+    let ambiguous_lines = input
+        .unattributed_lines_added
+        .is_some_and(|value| value > 0)
+        || input
+            .unattributed_lines_deleted
+            .is_some_and(|value| value > 0);
+    if ai_evidence && human_evidence && input.explicit_actor_type.is_none() {
+        return Err("heartbeat contains conflicting AI and Human attribution evidence".to_string());
+    }
+
+    let actor_type = if let Some(explicit) = input.explicit_actor_type {
+        if explicit.is_ai() && input.legacy_is_ai_generated == Some(false) {
+            return Err(format!(
+                "actor_type={} conflicts with supplied attribution evidence",
+                explicit.as_str()
+            ));
+        }
+        if !explicit.is_ai() && input.legacy_is_ai_generated == Some(true) {
+            return Err(format!(
+                "actor_type={} conflicts with supplied attribution evidence",
+                explicit.as_str()
+            ));
+        }
+        if !explicit.is_ai() && ai_evidence && !(explicit == ActorType::Unknown && ambiguous_lines)
+        {
+            return Err(format!(
+                "actor_type={} conflicts with supplied attribution evidence",
+                explicit.as_str()
+            ));
+        }
+        if explicit.is_ai() && human_evidence {
+            return Err(format!(
+                "actor_type={} conflicts with positive Human evidence",
+                explicit.as_str()
+            ));
+        }
+        if explicit == ActorType::Human && input.has_attribution_lines() && ai_evidence {
+            return Err("human actor_type cannot contain AI attribution lines".to_string());
+        }
+        if explicit == ActorType::Human && ambiguous_lines {
+            return Err("human actor_type cannot contain ambiguous line counters".to_string());
+        }
+        if explicit != ActorType::Human
+            && explicit != ActorType::Unknown
+            && (input.human_lines_added.is_some_and(|value| value > 0)
+                || input.human_lines_deleted.is_some_and(|value| value > 0))
+        {
+            return Err("AI actor_type cannot contain positive Human line counters".to_string());
+        }
+        // An editor can report keystrokes/character activity while the line delta is
+        // ambiguous with a nearby agent event. In that specific case Unknown is the
+        // canonical answer; those counters are retained for observability and are
+        // partitioned into Unknown by the analytics rollups. Without ambiguous counters,
+        // an explicit Unknown plus positive Human evidence is contradictory.
+        if explicit == ActorType::Unknown && (ai_evidence || human_evidence) && !ambiguous_lines {
+            return Err("unknown actor_type cannot contain positive actor evidence".to_string());
+        }
+        explicit
+    } else if ai_evidence {
+        let verified = input
+            .ai_confidence
+            .is_some_and(|confidence| confidence.eq_ignore_ascii_case("verified"))
+            || input.ai_source.is_some_and(|source| {
+                source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
+            });
+        if verified {
+            ActorType::AiVerified
+        } else {
+            ActorType::AiInferred
+        }
+    } else if ambiguous_lines {
+        ActorType::Unknown
+    } else if human_evidence {
+        ActorType::Human
+    } else {
+        ActorType::Unknown
+    };
+
+    let confidence = input
+        .explicit_confidence
+        .unwrap_or_else(|| actor_type.default_confidence(input.ai_source, input.ai_confidence));
+
+    Ok(AttributionResolution {
+        actor_type,
+        confidence,
+    })
+}
+
 /// How close in time two heartbeats for the same file must be before the later one is
 /// considered a duplicate. Ported from WakaTime's same-file rule, which its editor
 /// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
@@ -193,6 +432,12 @@ pub struct Heartbeat {
     /// for backwards compatibility with older clients and imported WakaTime payloads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity_segments: Vec<ActivitySegment>,
+    /// Canonical attribution state. `is_ai_generated` below is retained only for legacy
+    /// clients and must always equal `actor_type.is_ai()` on normalized heartbeats.
+    #[serde(default)]
+    pub actor_type: ActorType,
+    #[serde(default)]
+    pub actor_confidence: f32,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
     /// Provider that emitted the attribution event (for example `openai` or `anthropic`).
@@ -284,6 +529,8 @@ impl Heartbeat {
             chars_deleted: None,
             active_seconds: None,
             activity_segments: vec![],
+            actor_type: ActorType::Unknown,
+            actor_confidence: 0.0,
             is_ai_generated: false,
             ai_agent: None,
             ai_provider: None,
@@ -333,6 +580,12 @@ impl Heartbeat {
             if !active_seconds.is_finite() || active_seconds < 0.0 {
                 return Err("active_seconds must be a non-negative finite number".to_string());
             }
+        }
+        if !self.actor_confidence.is_finite() || !(0.0..=1.0).contains(&self.actor_confidence) {
+            return Err("actor_confidence must be between 0.0 and 1.0".to_string());
+        }
+        if self.is_ai_generated != self.actor_type.is_ai() {
+            return Err("is_ai_generated must match actor_type".to_string());
         }
         if let Some(heartbeat_id) = self.heartbeat_id.as_deref() {
             if heartbeat_id.trim().is_empty() {
@@ -411,6 +664,160 @@ impl Heartbeat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actor_type_serializes_with_canonical_wire_values() {
+        assert_eq!(
+            serde_json::to_string(&ActorType::AiVerified).unwrap(),
+            "\"ai_verified\""
+        );
+        assert_eq!(
+            "ai_inferred".parse::<ActorType>().unwrap(),
+            ActorType::AiInferred
+        );
+        assert_eq!(
+            "unattributed".parse::<ActorType>().unwrap(),
+            ActorType::Unknown
+        );
+    }
+
+    #[test]
+    fn attribution_defaults_to_unknown_without_positive_evidence() {
+        let resolved = resolve_attribution(AttributionInput::default()).unwrap();
+        assert_eq!(resolved.actor_type, ActorType::Unknown);
+        assert_eq!(resolved.confidence, 0.0);
+    }
+
+    #[test]
+    fn attribution_maps_verified_mcp_and_correlated_ai() {
+        let verified = resolve_attribution(AttributionInput {
+            ai_agent: Some("chatgpt-mcp"),
+            ai_source: Some("mcp"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(verified.actor_type, ActorType::AiVerified);
+        assert_eq!(verified.confidence, 0.95);
+
+        let native = resolve_attribution(AttributionInput {
+            ai_agent: Some("claude-code"),
+            ai_source: Some("agent_hook"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(native.actor_type, ActorType::AiVerified);
+        assert_eq!(native.confidence, 1.0);
+
+        let inferred = resolve_attribution(AttributionInput {
+            ai_agent: Some("agent"),
+            ai_confidence: Some("correlated"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(inferred.actor_type, ActorType::AiInferred);
+        assert_eq!(inferred.confidence, 0.8);
+
+        let legacy = resolve_attribution(AttributionInput {
+            legacy_is_ai_generated: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(legacy.actor_type, ActorType::AiInferred);
+        assert_eq!(legacy.confidence, 0.6);
+    }
+
+    #[test]
+    fn attribution_requires_positive_human_evidence() {
+        let human = resolve_attribution(AttributionInput {
+            keystrokes: Some(3),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(human.actor_type, ActorType::Human);
+        assert_eq!(human.confidence, 1.0);
+
+        let unknown = resolve_attribution(AttributionInput {
+            unattributed_lines_added: Some(3),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(unknown.actor_type, ActorType::Unknown);
+        assert_eq!(unknown.confidence, 0.0);
+
+        let ambiguous_editor = resolve_attribution(AttributionInput {
+            explicit_actor_type: Some(ActorType::Unknown),
+            unattributed_lines_added: Some(1),
+            keystrokes: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(ambiguous_editor.actor_type, ActorType::Unknown);
+        assert_eq!(ambiguous_editor.confidence, 0.0);
+    }
+
+    #[test]
+    fn attribution_rejects_conflicting_ai_and_human_evidence() {
+        let error = resolve_attribution(AttributionInput {
+            ai_agent: Some("codex"),
+            human_lines_added: Some(1),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.contains("conflicting"));
+
+        let error = resolve_attribution(AttributionInput {
+            explicit_actor_type: Some(ActorType::Human),
+            legacy_is_ai_generated: Some(true),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.contains("conflicts"));
+
+        let error = resolve_attribution(AttributionInput {
+            explicit_actor_type: Some(ActorType::Unknown),
+            legacy_is_ai_generated: Some(true),
+            unattributed_lines_added: Some(2),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.contains("conflicts"));
+
+        let ambiguous = resolve_attribution(AttributionInput {
+            explicit_actor_type: Some(ActorType::Unknown),
+            ai_agent: Some("codex"),
+            unattributed_lines_added: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(ambiguous.actor_type, ActorType::Unknown);
+        assert_eq!(ambiguous.confidence, 0.0);
+    }
+
+    #[test]
+    fn explicit_confidence_is_bounded() {
+        let error = resolve_attribution(AttributionInput {
+            explicit_actor_type: Some(ActorType::Human),
+            explicit_confidence: Some(1.1),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.contains("actor_confidence"));
+    }
+
+    #[test]
+    fn heartbeat_validation_keeps_legacy_boolean_derived_from_enum() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        heartbeat.actor_type = ActorType::AiInferred;
+        heartbeat.actor_confidence = 0.6;
+        assert!(heartbeat.validate().is_err());
+        heartbeat.is_ai_generated = true;
+        assert!(heartbeat.validate().is_ok());
+    }
 
     #[test]
     fn test_new_heartbeat() {

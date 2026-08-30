@@ -69,6 +69,7 @@ function card(overrides: Partial<ProjectAnalyticsCard> = {}): ProjectAnalyticsCa
       total: 150,
     },
     total_seconds: 7200,
+    unknown: { changes: 0, lines_added: 0, lines_deleted: 0, percentage_of_observed: 0 },
     unattributed: { changes: 0, lines_added: 0, lines_deleted: 0, percentage_of_observed: 0 },
     ...overrides,
   } as ProjectAnalyticsCard;

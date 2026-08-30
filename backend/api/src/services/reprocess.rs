@@ -26,6 +26,7 @@ const AGGREGATE_TABLES: &[&str] = &[
     "os_daily",
     "insights_agg",
     "ai_daily",
+    "actor_daily_v2",
     "keystroke_daily",
 ];
 
@@ -293,7 +294,7 @@ impl ReprocessService {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at
+                    created_at, actor_type, actor_confidence
                 FROM wakaclock.heartbeats AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC
@@ -447,7 +448,7 @@ fn rebuild_activity_intervals(rows: &[HeartbeatRow]) -> Vec<ActivityIntervalRow>
                 heartbeat_id: heartbeat_id.clone(),
                 start: segment.start,
                 end: segment.end,
-                source: normalize_interval_source(segment.source.as_deref(), row.is_ai_generated),
+                source: normalize_interval_source(segment.source.as_deref(), &row.actor_type),
                 entity: row.entity.clone(),
                 project: row.project.clone(),
                 project_id: row.project_id,
@@ -456,6 +457,8 @@ fn rebuild_activity_intervals(rows: &[HeartbeatRow]) -> Vec<ActivityIntervalRow>
                 category: row.category.clone(),
                 editor: row.editor.clone(),
                 operating_system: row.operating_system.clone(),
+                actor_type: row.actor_type.clone(),
+                actor_confidence: row.actor_confidence,
                 created_at: projection_created_at,
             });
         }

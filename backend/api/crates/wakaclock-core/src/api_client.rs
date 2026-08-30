@@ -129,7 +129,6 @@ impl ApiClient {
                 heartbeat.heartbeat_id = Some(uuid::Uuid::new_v4().to_string());
             }
         }
-        let queue = Queue::open()?;
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 
@@ -138,7 +137,7 @@ impl ApiClient {
             // the server was unreachable. The local cache can call the retry a
             // duplicate, but that must not prevent the durable queue from being
             // drained (otherwise it waits for an unrelated heartbeat).
-            let flush = match self.flush_queue_inner(&queue).await {
+            let flush = match self.flush_queue_inner().await {
                 Ok(flush) => flush,
                 Err(error) => FlushReport {
                     flushed: 0,
@@ -179,7 +178,7 @@ impl ApiClient {
                     .store_last_heartbeats(&last_by_entity)
                     .err()
                     .map(|error| format!("could not persist local dedup cache: {error}"));
-                let flush = match self.flush_queue_inner(&queue).await {
+                let flush = match self.flush_queue_inner().await {
                     Ok(flush) => flush,
                     Err(error) => FlushReport {
                         flushed: 0,
@@ -203,6 +202,7 @@ impl ApiClient {
             }
             Err(error) => {
                 self.record_delivery_failure(&error.to_string());
+                let queue = Queue::open()?;
                 for payload in &payloads {
                     queue.push(payload)?;
                 }
@@ -220,8 +220,7 @@ impl ApiClient {
     }
 
     pub async fn flush_queue(&self) -> AppResult<FlushReport> {
-        let queue = Queue::open()?;
-        self.flush_queue_inner(&queue).await
+        self.flush_queue_inner().await
     }
 
     pub async fn today(&self) -> AppResult<StatusBarSnapshot> {
@@ -332,8 +331,8 @@ impl ApiClient {
         })
     }
 
-    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
-        let pending = queue.pop_all()?;
+    async fn flush_queue_inner(&self) -> AppResult<FlushReport> {
+        let pending = Queue::open()?.pop_all()?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
@@ -345,13 +344,13 @@ impl ApiClient {
                     // refusal here would keep the warning up after recovery, which trains
                     // the developer to ignore it — the opposite of the point.
                     self.clear_delivery_failure();
-                    queue.remove(id)?;
+                    Queue::open()?.remove(id)?;
                     flushed += 1;
                 }
                 Err(error) => {
                     self.record_delivery_failure(&error.to_string());
                     stopped_because = Some(error.to_string());
-                    queue.mark_retry(id)?;
+                    Queue::open()?.mark_retry(id)?;
                     break;
                 }
             }

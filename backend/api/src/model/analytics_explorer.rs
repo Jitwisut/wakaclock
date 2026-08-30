@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::model::date_range::RangeInfo;
+use wakaclock_core::heartbeat::ActorType;
 
 pub const ANALYTICS_EXPLORER_SCHEMA_VERSION: u32 = 1;
 
@@ -12,6 +13,7 @@ pub struct ExplorerAppliedFilters {
     pub operating_system: Option<String>,
     pub project_id: Option<String>,
     pub source: Option<String>,
+    pub actor_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +30,7 @@ pub struct ExplorerFilterOptions {
     pub languages: Vec<ExplorerFilterOption>,
     pub operating_systems: Vec<ExplorerFilterOption>,
     pub projects: Vec<ExplorerFilterOption>,
+    pub actor_types: Vec<ExplorerFilterOption>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -37,26 +40,40 @@ pub struct ExplorerBreakdowns {
     pub languages: Vec<ExplorerFilterOption>,
     pub operating_systems: Vec<ExplorerFilterOption>,
     pub projects: Vec<ExplorerFilterOption>,
+    pub actor_types: Vec<ExplorerFilterOption>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ExplorerDurationSplit {
     pub ai_seconds: f64,
+    pub ai_verified_seconds: f64,
+    pub ai_inferred_seconds: f64,
     pub human_seconds: f64,
     pub other_seconds: f64,
+    pub unknown_seconds: f64,
     pub total_seconds: f64,
 }
 
 impl ExplorerDurationSplit {
-    pub fn add(&mut self, source: &str, seconds: f64) {
+    pub fn add_actor(&mut self, actor_type: &ActorType, seconds: f64) {
         if !seconds.is_finite() || seconds <= 0.0 {
             return;
         }
         self.total_seconds += seconds;
-        match source {
-            "editor" | "human" => self.human_seconds += seconds,
-            "ai" => self.ai_seconds += seconds,
-            _ => self.other_seconds += seconds,
+        match actor_type {
+            ActorType::Human => self.human_seconds += seconds,
+            ActorType::AiVerified => {
+                self.ai_seconds += seconds;
+                self.ai_verified_seconds += seconds;
+            }
+            ActorType::AiInferred => {
+                self.ai_seconds += seconds;
+                self.ai_inferred_seconds += seconds;
+            }
+            ActorType::Unknown => {
+                self.other_seconds += seconds;
+                self.unknown_seconds += seconds;
+            }
         }
     }
 }

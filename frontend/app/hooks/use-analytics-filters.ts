@@ -5,15 +5,24 @@ import * as React from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import type {
+  AnalyticsActorTypeFilter,
   AnalyticsExplorerParams,
   AnalyticsFilterParamName,
   AnalyticsSourceFilter,
 } from '@/lib/wakaclock/analytics';
 import { daysAgoDateString, todayDateString } from '@/lib/wakaclock/format';
+import type { ActorType } from '@/lib/wakaclock/types';
 
 const SOURCE_VALUES = new Set<AnalyticsSourceFilter>(['human', 'ai', 'other']);
+const ACTOR_TYPE_VALUES = new Set<ActorType>([
+  'human',
+  'ai_verified',
+  'ai_inferred',
+  'unknown',
+]);
 
 export interface AnalyticsUrlFilters {
+  actorType?: AnalyticsActorTypeFilter;
   category?: string;
   editor?: string;
   end: string;
@@ -42,8 +51,14 @@ export function useAnalyticsFilters(defaultDays = 30) {
     (SOURCE_VALUES.has(sourceValue as AnalyticsSourceFilter) &&
       (sourceValue as AnalyticsSourceFilter)) ||
     undefined;
+  const actorTypeValue = valueOrUndefined(searchParams.get('actor_type'));
+  const actorType =
+    (ACTOR_TYPE_VALUES.has(actorTypeValue as ActorType) &&
+      (actorTypeValue as AnalyticsActorTypeFilter)) ||
+    undefined;
   const filters = React.useMemo<AnalyticsUrlFilters>(
     () => ({
+      actorType,
       category: valueOrUndefined(searchParams.get('category')),
       editor: valueOrUndefined(searchParams.get('editor')),
       end: valueOrUndefined(searchParams.get('end')) ?? defaults.end,
@@ -53,7 +68,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
       source,
       start: valueOrUndefined(searchParams.get('start')) ?? defaults.start,
     }),
-    [defaults.end, defaults.start, searchParams, source]
+    [actorType, defaults.end, defaults.start, searchParams, source]
   );
 
   const replaceParams = React.useCallback(
@@ -96,6 +111,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
         'editor',
         'category',
         'source',
+        'actor_type',
         'operating_system',
       ]) {
         params.delete(key);
@@ -114,6 +130,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
       if (next.editor) params.set('editor', next.editor);
       if (next.category) params.set('category', next.category);
       if (next.source) params.set('source', next.source);
+      if (next.actorType) params.set('actor_type', next.actorType);
       if (next.operatingSystem) params.set('operating_system', next.operatingSystem);
       return `${targetPath}?${params.toString()}`;
     },
@@ -123,6 +140,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
   const toRequest = React.useCallback(
     (timezone: string, fixedProjectId?: string): AnalyticsExplorerParams => ({
       category: filters.category,
+      actor_type: filters.actorType,
       editor: filters.editor,
       end: filters.end,
       language: filters.language,

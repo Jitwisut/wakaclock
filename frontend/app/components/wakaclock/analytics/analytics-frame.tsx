@@ -61,7 +61,8 @@ export function AnalyticsFrame({
         request.editor,
         request.category,
         request.source,
-        request.operating_system
+        request.operating_system,
+        request.actor_type
       ),
       request,
     ] as const,
