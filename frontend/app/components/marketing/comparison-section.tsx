@@ -66,7 +66,7 @@ const ROWS: ComparisonRow[] = [
     label: 'Team and organisation dashboards',
     atoaxis: { kind: 'no' },
     wakatime: { kind: 'yes' },
-    note: 'Full team and org dashboards are in development. A presence prototype exists where the server enables it.',
+    note: 'Full team and org dashboards are in development. Opt-in leaderboards and a presence prototype exist where the server runs PostgreSQL.',
   },
   {
     label: 'Free tier',
@@ -109,7 +109,7 @@ const THAI_NOTES: readonly (string | undefined)[] = [
   'Editor อื่นเชื่อมผ่าน WakaTime protocol ไม่ใช่ plugin ที่เราดูแลเอง',
   'AtoAxis มี bundled hook สำหรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
   'แสดงเมื่อมี provider usage และราคาที่มีผลใช้งานชัดเจน มิฉะนั้น coverage เป็น unknown',
-  'team และ org dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา มี presence prototype เมื่อ server เปิดใช้',
+  'team และ org dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา มี leaderboard แบบ opt-in และ presence prototype เมื่อ server รัน PostgreSQL',
   undefined,
 ];
 

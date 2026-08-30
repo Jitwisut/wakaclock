@@ -102,7 +102,9 @@ export const EN_HOME = {
   useCases: [
     'See coding hours today, this week or across a custom range',
     'Break time down by project, language, editor and branch',
+    'Filter to one project or language and drill a timeline, heatmap and file list from a link',
     'Compare AI-attributed lines with human keystrokes and characters',
+    'Set a daily or weekly coding-time goal and track it against the same timeline',
     'Group several checkouts with project rules and merges',
     'Import a WakaTime export into the same dashboard',
   ],
@@ -112,7 +114,7 @@ export const EN_HOME = {
     'AI hooks cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need adapters',
     'Tokens and costs require provider usage plus a known price; unavailable coverage is not shown as zero',
     'Nothing outside a connected editor or the AI transcript agent is captured; there is no desktop or browser client',
-    'Analytics are single-account; a presence prototype is available where the server enables it, but full team and organisation dashboards remain in development',
+    'Analytics are single-account; goals, leaderboards and a presence prototype are available where the server runs PostgreSQL, but full team and organisation dashboards remain in development',
     'The planned hosted product has no free tier',
   ],
   faq: [
@@ -177,7 +179,9 @@ export const TH_HOME = {
   useCases: [
     'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง',
     'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch',
+    'กรองเฉพาะโปรเจกต์หรือภาษาเดียว แล้ว drill timeline, heatmap และรายชื่อไฟล์จากลิงก์เดียว',
     'เปรียบเทียบ AI-attributed lines กับ human keystrokes และ characters',
+    'ตั้งเป้าเวลาเขียนโค้ดรายวันหรือรายสัปดาห์ แล้ววัดเทียบกับ timeline เดียวกัน',
     'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge',
     'นำเข้า WakaTime export เพื่อดู history เดิมใน dashboard เดียวกัน',
   ],
@@ -187,7 +191,7 @@ export const TH_HOME = {
     'AI hooks รองรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
     'token และ cost แสดงเฉพาะเมื่อมี provider usage และราคาที่ตรวจสอบได้ ข้อมูลที่ไม่ครบจะแสดงว่าไม่พร้อมใช้งาน',
     'ไม่มีการเก็บกิจกรรมนอก editor ที่เชื่อมต่อหรือนอก AI transcript agent และยังไม่มี desktop หรือ browser client',
-    'analytics อยู่ในขอบเขตบัญชีเดียว มี presence prototype ใช้ได้เมื่อ server เปิดใช้ แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
+    'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
   ],
   faq: [
@@ -463,7 +467,7 @@ const developerAnalytics = local(
       { name: 'Developer analytics', path: '/developer-analytics' },
     ],
     title: 'Developer analytics',
-    lead: `${SITE_NAME} turns editor heartbeats into total time, daily averages and breakdowns by project, language, editor, operating system and branch. It also reports keystrokes, characters and AI-attributed lines.`,
+    lead: `${SITE_NAME} turns editor heartbeats into total time, daily averages and breakdowns by project, language, editor, operating system and branch. Every view can be filtered and drilled into, and it also reports keystrokes, characters and AI-attributed lines.`,
     sections: [
       section('Metrics available', 'metrics', [
         sub('Time'),
@@ -491,6 +495,18 @@ const developerAnalytics = local(
           'An explicit start and end date for anything else',
           'All time is bounded by your first recorded heartbeat, not by a retention window',
           'Ranges apply to breakdowns and daily series alike, so totals and charts always agree',
+        ]),
+      ]),
+      section('Explore and drill in', 'explore', [
+        p(
+          'The numbers above are not a fixed report. One filter bar drives every view: narrow to a project, a language, a branch or an editor and the timeline, the breakdowns and the AI-versus-human split all recompute against the same range. The filter state lives in the URL, so a particular slice is a link you can bookmark or send.'
+        ),
+        bullets([
+          'Activity timeline: when the work happened across the range, as blocks rather than one daily bar',
+          'Human vs AI: the daily split between AI-attributed and hand-typed work, under any filter',
+          'Projects: every project ranked for the current filter, each expandable to its files',
+          'Activity heatmap: the day-of-week and hour-of-day pattern behind "when do I actually code"',
+          'One duration model behind all four, so switching view never changes the total',
         ]),
       ]),
       section('How the numbers are produced', 'how', [
@@ -534,13 +550,22 @@ const developerAnalytics = local(
           'The raw heartbeat stream is browsable directly, so any figure can be traced back to the events under it',
         ]),
       ]),
-      section('What is not measured', 'not-measured', [
+      section('Goals and leaderboards', 'goals', [
         p(
-          'No productivity score or quality estimate is produced, and the analytics rank nothing. The streak and level display on the overview is a cosmetic layer that feeds back into no metric. Work outside a connected editor or the AI transcript agent is not inferred.'
+          'Two optional layers sit on top of the analytics, and both need the server to run PostgreSQL. Neither changes how coding time is measured.'
         ),
         bullets([
-          'No single number is presented as a verdict on how productive a day was',
-          'No comparison against other developers or accounts',
+          'Goals: a daily, weekly or monthly target for coding time, optionally scoped to one project or language, tracked against the same canonical timeline. A goal can be an upper bound as easily as a lower one.',
+          'Leaderboards: opt-in boards for coding time, hand-typed time, AI-attributed time or estimated AI spend, weekly or monthly. A board ranks only the people who joined it; nothing is compared automatically.',
+        ]),
+      ]),
+      section('What is not measured', 'not-measured', [
+        p(
+          'The analytics here produce no productivity score and no quality estimate, and nothing in them ranks you automatically. Two opt-in extras sit alongside: leaderboards, which compare only the people who joined the same board, and a streak-and-level display on the overview. Work outside a connected editor or the AI transcript agent is not inferred.'
+        ),
+        bullets([
+          'No single analytics number is presented as a verdict on a day',
+          'No automatic comparison between accounts; leaderboards rank only opted-in members and require PostgreSQL on the server',
           'The streak, level and quest widgets on the overview are cosmetic and feed back into no metric',
           'No judgement of the code itself: lines changed is a volume, not a quality signal',
           'Nothing is inferred from typing speed or code shape to fill a gap in attribution',
@@ -599,7 +624,7 @@ const developerAnalytics = local(
       { name: 'Developer analytics', path: '/developer-analytics' },
     ],
     title: 'Developer analytics',
-    lead: `${SITE_NAME} เปลี่ยน editor heartbeat เป็นเวลารวม ค่าเฉลี่ยต่อวัน และ breakdown ตาม project, language, editor, operating system และ branch พร้อม keystrokes, characters และ AI-attributed lines`,
+    lead: `${SITE_NAME} เปลี่ยน editor heartbeat เป็นเวลารวม ค่าเฉลี่ยต่อวัน และ breakdown ตาม project, language, editor, operating system และ branch ทุกมุมมองกรองและ drill down ต่อได้ พร้อม keystrokes, characters และ AI-attributed lines`,
     sections: [
       section('Metrics ที่มีให้ดู', 'metrics', [
         sub('เวลา'),
@@ -627,6 +652,18 @@ const developerAnalytics = local(
           'กำหนดวันเริ่มและวันสิ้นสุดเองสำหรับกรณีอื่น',
           'all_time นับจาก heartbeat แรกของคุณ ไม่ได้ถูกตัดด้วย retention window',
           'ช่วงเวลาเดียวกันใช้กับทั้ง breakdown และ daily series ยอดรวมกับกราฟจึงตรงกันเสมอ',
+        ]),
+      ]),
+      section('สำรวจและ drill down', 'explore', [
+        p(
+          'ตัวเลขข้างบนไม่ใช่รายงานตายตัว filter bar ชุดเดียวขับทุกมุมมอง เลือกเจาะเฉพาะโปรเจกต์ ภาษา branch หรือ editor แล้ว timeline, breakdown และสัดส่วน AI เทียบ human จะคำนวณใหม่บนช่วงเดียวกัน สถานะ filter อยู่ใน URL การเจาะแบบหนึ่ง ๆ จึงเป็นลิงก์ที่ bookmark หรือส่งต่อได้'
+        ),
+        bullets([
+          'Activity timeline: งานเกิดขึ้นตอนไหนตลอดช่วง แสดงเป็น block ไม่ใช่แท่งรายวันแท่งเดียว',
+          'Human vs AI: สัดส่วนรายวันระหว่างงานที่ AI ทำกับที่พิมพ์เอง ภายใต้ filter ใดก็ได้',
+          'Projects: ทุกโปรเจกต์เรียงตาม filter ปัจจุบัน กดขยายดูไฟล์ในแต่ละโปรเจกต์ได้',
+          'Activity heatmap: รูปแบบตามวันในสัปดาห์และชั่วโมงในวัน เบื้องหลังคำถาม "จริง ๆ แล้วเขียนโค้ดตอนไหน"',
+          'ทั้งสี่มุมมองใช้ duration model เดียวกัน สลับมุมมองแล้วยอดรวมไม่เปลี่ยน',
         ]),
       ]),
       section('ตัวเลขถูกสร้างขึ้นอย่างไร', 'how', [
@@ -670,13 +707,22 @@ const developerAnalytics = local(
           'เปิดดู stream ของ heartbeat ดิบได้โดยตรง ทุกตัวเลขจึงย้อนกลับไปหาเหตุการณ์ที่อยู่เบื้องหลังได้',
         ]),
       ]),
-      section('สิ่งที่ระบบไม่ได้วัด', 'not-measured', [
+      section('Goals และ leaderboards', 'goals', [
         p(
-          'ไม่มี productivity score หรือการประเมินคุณภาพ และ analytics ไม่จัดอันดับอะไร การแสดง streak กับ level บนหน้า overview เป็นชั้นของประดับที่ไม่ป้อนกลับไปที่ metric ใด งานที่อยู่นอก editor ที่เชื่อมต่อหรือนอก AI transcript agent จะไม่ถูกอนุมาน'
+          'มีสองชั้นเสริมแบบเลือกใช้อยู่บน analytics ทั้งคู่ต้องให้ server รัน PostgreSQL และไม่มีชั้นไหนเปลี่ยนวิธีวัด coding time'
         ),
         bullets([
-          'ไม่มีตัวเลขเดียวที่ถูกนำเสนอเป็นคำตัดสินว่าทั้งวัน productive แค่ไหน',
-          'ไม่มีการเปรียบเทียบกับนักพัฒนาคนอื่นหรือบัญชีอื่น',
+          'Goals: ตั้งเป้าเวลาเขียนโค้ดรายวัน รายสัปดาห์ หรือรายเดือน จะเจาะเฉพาะโปรเจกต์หรือภาษาเดียวก็ได้ วัดเทียบกับ canonical timeline ชุดเดียวกัน และเป้าจะเป็นขอบบน (ไม่เกิน) ก็ได้เหมือนขอบล่าง',
+          'Leaderboards: บอร์ดแบบ opt-in สำหรับเวลาเขียนโค้ดรวม เวลาที่พิมพ์เอง เวลาที่ AI ทำ หรือค่าใช้จ่าย AI โดยประมาณ รายสัปดาห์หรือรายเดือน บอร์ดจัดอันดับเฉพาะคนที่เข้าร่วม ไม่มีการเทียบอัตโนมัติ',
+        ]),
+      ]),
+      section('สิ่งที่ระบบไม่ได้วัด', 'not-measured', [
+        p(
+          'หน้า analytics ไม่สร้าง productivity score และไม่ประเมินคุณภาพ และไม่มีอะไรในนั้นจัดอันดับคุณโดยอัตโนมัติ มีส่วนเสริมแบบ opt-in สองอย่างอยู่ข้าง ๆ คือ leaderboard ที่เทียบเฉพาะคนที่เข้าร่วมบอร์ดเดียวกัน และการแสดง streak กับ level บนหน้า overview ส่วนงานที่อยู่นอก editor ที่เชื่อมต่อหรือนอก AI transcript agent จะไม่ถูกอนุมาน'
+        ),
+        bullets([
+          'ไม่มีตัวเลข analytics ตัวเดียวที่ถูกนำเสนอเป็นคำตัดสินของทั้งวัน',
+          'ไม่มีการเปรียบเทียบระหว่างบัญชีโดยอัตโนมัติ leaderboard จัดอันดับเฉพาะสมาชิกที่ opt-in และต้องมี PostgreSQL บน server',
           'widget streak, level และ quest บนหน้า overview เป็นของประดับ ไม่ป้อนกลับไปที่ metric ใด',
           'ไม่ตัดสินคุณภาพของโค้ด จำนวนบรรทัดคือปริมาณ ไม่ใช่สัญญาณคุณภาพ',
           'ไม่เดาจากความเร็วการพิมพ์หรือรูปแบบโค้ดเพื่อเติมช่องว่างของ attribution',
@@ -1287,6 +1333,10 @@ emptyPagePair(
         p(
           'The setup flow can configure Claude Code, Codex CLI and Gemini CLI hooks without sending prompt or response content.'
         ),
+        sub('Device authorization'),
+        p(
+          'A CLI or third-party integration can be authorized with a short code you approve in the dashboard, so it never has to be handed your API key. Approval grants only the scopes the integration asked for.'
+        ),
       ]),
       section('WakaTime protocol', 'protocol', [
         p(
@@ -1370,6 +1420,10 @@ emptyPagePair(
         sub('AI hooks'),
         p(
           'ขั้นตอนตั้งค่าสามารถติดตั้ง hook ของ Claude Code, Codex CLI และ Gemini CLI โดยไม่ส่ง prompt หรือ response'
+        ),
+        sub('Device authorization'),
+        p(
+          'CLI หรือ integration ของบุคคลที่สามขออนุญาตได้ด้วยรหัสสั้น ๆ ที่คุณกดอนุมัติใน dashboard จึงไม่ต้องมอบ API key ให้ การอนุมัติให้เฉพาะ scope ที่ integration ร้องขอเท่านั้น'
         ),
       ]),
       section('WakaTime protocol', 'protocol', [
@@ -1836,15 +1890,15 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'Working: heartbeat ingestion, duration blocks, project, language, editor and branch analytics',
               'Working: AI attribution with hooks for Claude Code, Codex CLI and Gemini CLI',
               'Working: a first-party VS Code extension, and WakaTime-protocol compatibility for other editors',
-              'Working: a presence prototype with live rooms and recorded co-working sessions',
-              'Not yet: billing and checkout, assigned team and organisation seats, a dashboard for goals and leaderboards, adapters for Cursor and Copilot',
+              'Working where the server runs PostgreSQL: goals, leaderboards, and a presence prototype with recorded co-working sessions',
+              'Not yet: billing and checkout, assigned team and organisation seats, adapters for Cursor and Copilot',
             ]
           : [
               'ใช้งานได้แล้ว: การรับ heartbeat, duration block และ analytics ของ project, language, editor และ branch',
               'ใช้งานได้แล้ว: AI attribution พร้อม hook สำหรับ Claude Code, Codex CLI และ Gemini CLI',
               'ใช้งานได้แล้ว: extension สำหรับ VS Code ที่เราดูแลเอง และความเข้ากันได้กับ WakaTime protocol สำหรับ editor อื่น',
-              'ใช้งานได้แล้ว: presence prototype ที่มีห้องสดและ co-working session บันทึกไว้',
-              'ยังไม่มี: ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้, หน้า dashboard สำหรับ goals และ leaderboards, adapter สำหรับ Cursor และ Copilot',
+              'ใช้งานได้เมื่อ server รัน PostgreSQL: goals, leaderboards และ presence prototype ที่มี co-working session บันทึกไว้',
+              'ยังไม่มี: ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
             ]
       ),
     ],
@@ -2143,14 +2197,18 @@ const genericBlocks = (
           ? [
               'Unlimited projects and heartbeats',
               'Complete coding history',
+              'Filterable analytics with timeline, heatmap, projects and drilldown views',
               'AI versus human attribution fields',
               'Project rules, merges and WakaTime import',
+              'Goals and opt-in leaderboards where the server runs PostgreSQL',
             ]
           : [
               'โปรเจกต์และ heartbeat ไม่จำกัด',
               'coding history ครบถ้วน',
+              'analytics ที่กรองได้ พร้อมมุมมอง timeline, heatmap, projects และ drilldown',
               'AI เทียบ human attribution fields',
               'project rules, merge และ WakaTime import',
+              'Goals และ leaderboards แบบ opt-in เมื่อ server รัน PostgreSQL',
             ]
       ),
     ];
