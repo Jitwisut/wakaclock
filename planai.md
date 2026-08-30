@@ -1104,11 +1104,15 @@ AI_VERIFIED
 
 ## Phase 0/1 closeout checklist
 
-- [ ] Phase 0 — baseline machine-readable ผ่าน และมี live-data certification ล่าสุด
-- [ ] Phase 1 — actor enum migration ผ่าน full acceptance suite และไม่เหลือ production
+- [x] Phase 0 — baseline machine-readable ผ่าน และมี live-data certification ล่าสุด
+- [x] Phase 1 — actor enum migration ผ่าน full acceptance suite และไม่เหลือ production
   logic ที่ใช้ `NOT is_ai_generated` เพื่อตัดสิน Human
 
-ให้ติ๊กสองรายการนี้หลังรัน full gates และ release certification เท่านั้น
+รับรองเมื่อ 2026-08-30T19:01:30Z บน candidate
+`5d310ae5f2b76452c166d560e0412e0f282a4683`; deterministic baseline และ full CI
+ผ่านแล้ว โดยผล live ล่าสุดอยู่ที่
+`scripts/duration-audit/certifications/latest.json` (ช่วงข้อมูล
+2026-08-12..2026-08-29, Total Error 0.4305%, Max Daily Error 2.8595%).
 
 ## Milestone 1 — Correctness
 
@@ -1117,7 +1121,7 @@ AI_VERIFIED
 - [x] เพิ่ม duration port regression สำหรับ projected/raw anchors, handover, long absence และ WakaTime parity
 - [x] เพิ่ม committed metadata-only Golden Dataset และ expected manifest; ตัวเลขทดลองเก่าเก็บเป็น historical finding
 - [x] เพิ่ม `verify_port.py` → `golden.py` เป็น CI gate พร้อม total/daily tolerance และ breakdown invariants
-- [ ] รัน live API comparison และบันทึก sanitized certification สำหรับ release ล่าสุด
+- [x] รัน live API comparison และบันทึก sanitized certification สำหรับ release ล่าสุด
 - [x] API/Frontend แยก AI, Human และ Unknown metrics (คง `unattributed` เป็น legacy alias)
 - [x] เพิ่ม `human`, `ai_verified`, `ai_inferred`, `unknown` actor enum/confidence พร้อม legacy boolean adapter
 - [x] VS Code เก็บ ambiguous nearby AI edit เป็น Unknown แทนการเหมารวม Human
@@ -1162,15 +1166,30 @@ AI_VERIFIED
   fallback, status bar และ `AtoAxis: Repair AI Integrations`
 - [x] เพิ่ม Rust/HTTP/VS Code tests และเอกสาร `docs/ai-activity-broker.md`
 
-### Acceptance gates — ยังไม่ติ๊กปิดจนกว่าจะมีหลักฐานล่าสุด
+### Acceptance gates — ปิดแล้วบน candidate `5d310ae`
 
-- [ ] Phase 0 และ Phase 1 closeout checklist ผ่านอย่างเป็นทางการก่อน
-- [ ] Golden Dataset + `verify_port.py` + Rust/VS Code/frontend/full integration gates ผ่าน
-- [ ] reliability matrix ผ่าน: offline backend, broker restart/lease recovery, concurrent
+- [x] Phase 0 และ Phase 1 closeout checklist ผ่านอย่างเป็นทางการก่อน
+- [x] Golden Dataset + `verify_port.py` + Rust/VS Code/frontend/full integration gates ผ่าน
+- [x] reliability matrix ผ่าน: offline backend, broker restart/lease recovery, concurrent
   duplicate, atomic 500-event batch และ stable logical heartbeat ID
-- [ ] live API comparison certification ล่าสุดบันทึกเฉพาะ totals, วันที่ตรวจ, commit SHA
+- [x] live API comparison certification ล่าสุดบันทึกเฉพาะ totals, วันที่ตรวจ, commit SHA
   และ error metrics โดยไม่เก็บ path/user/source content
-- [ ] ตรวจ production code แล้ว boolean `is_ai_generated` เหลือเฉพาะ compatibility adapter
+- [x] ตรวจ production code แล้ว boolean `is_ai_generated` เหลือเฉพาะ compatibility adapter
+
+## Phase 0–2 closeout — 2026-08-30
+
+- [x] Phase 0 — Golden Dataset, `verify_port.py` → `golden.py` และ live
+  certification ผ่าน Total Error ≤1%, Daily Error ≤3% และ Unknown ไม่ถูกนับเป็น Human
+- [x] Phase 1 — actor enum/API/storage/frontend gates และ migration verifier ผ่าน;
+  actor breakdown รวมกลับเป็น total และไม่มี boolean-derived Human logic ใน production
+- [x] Phase 2 — broker HTTP/durable inbox, producer migration, restart/lease/dedup,
+  offline reliability และ lifecycle gates ผ่าน
+- [x] Candidate CI ผ่านครบใน
+  [run 33329796266](https://github.com/Jitwisut/wakaclock/actions/runs/33329796266)
+  บน SHA `5d310ae5f2b76452c166d560e0412e0f282a4683`; PR อยู่ที่
+  [#4](https://github.com/Jitwisut/wakaclock/pull/4) และยังไม่ merge
+- [x] `latest.json` เป็น sanitized certification ล่าสุดและเป็น source of truth เดียว;
+  ไม่มี API key, user ID, path, project/entity, source content หรือ heartbeat รายรายการ
 
 Phase 2 จะปิดได้เมื่อรายการ acceptance ด้านบนครบเท่านั้น งาน Universal Filesystem/Process
 Observer, native Tan/MCP middleware และ full evidence/canonical dedup engine ยังคงเป็น

@@ -29,6 +29,23 @@ prompts, diffs, or source content. That file is the single current acceptance
 baseline. The historical measurements below explain prior findings and are not
 acceptance criteria.
 
+## Latest release certification — Phase 0–2 closeout
+
+The latest production-like certification passed on candidate
+`5d310ae5f2b76452c166d560e0412e0f282a4683`, checked at
+`2026-08-30T19:01:30Z`, for the closed data range `2026-08-12..2026-08-29`.
+Total Error was **0.4305%** and the maximum eligible Daily Error was
+**2.8595%**. Actor filter error, actor partition error, and duration surface
+error were all **0**; `unknown_counted_as_human` was **false**.
+
+The sanitized artifact at
+[`scripts/duration-audit/certifications/latest.json`](../scripts/duration-audit/certifications/latest.json)
+is the sole latest source of truth for this certification. It contains only
+aggregate totals, limits, dates, status, commit SHA, and error metrics; it does
+not contain API keys, user IDs, paths, projects, source content, prompts,
+responses, or per-heartbeat records. Measurements elsewhere in this document
+remain historical findings and are not acceptance baselines.
+
 ## Headline
 
 | | |
