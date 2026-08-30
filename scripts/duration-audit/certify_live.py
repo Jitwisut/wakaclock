@@ -72,7 +72,10 @@ def fetch_json(request: urllib.request.Request) -> dict:
 
 
 def explorer_duration(payload: dict) -> dict[str, float]:
-    duration = payload.get("summary", {}).get("duration", {})
+    summary = payload.get("summary", {})
+    # The public explorer response exposes duration fields directly on summary;
+    # accept the nested shape used by older local fixtures as well.
+    duration = summary.get("duration", summary)
     return {
         "human": float(duration.get("human_seconds", 0.0)),
         "ai_verified": float(duration.get("ai_verified_seconds", 0.0)),
