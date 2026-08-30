@@ -15,7 +15,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -29,8 +31,7 @@ def fetch(base: str, key: str, start: str, end: str) -> dict:
         f"{base.rstrip('/')}/api/v1/users/current/summaries?start={start}&end={end}",
         headers={"Authorization": f"Basic {token}"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    return fetch_json(request)
 
 
 def fetch_explorer(
@@ -43,8 +44,7 @@ def fetch_explorer(
         f"{base.rstrip('/')}{path}",
         headers={"Authorization": "Basic " + base64.b64encode(key.encode()).decode()},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    return fetch_json(request)
 
 
 def relative_error(actual: float, reference: float) -> float:
@@ -52,6 +52,23 @@ def relative_error(actual: float, reference: float) -> float:
 
 
 ACTOR_TYPES = ("human", "ai_verified", "ai_inferred", "unknown")
+
+
+def fetch_json(request: urllib.request.Request) -> dict:
+    for attempt in range(8):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except HTTPError as error:
+            if error.code != 429 or attempt == 7:
+                raise
+            retry_after = error.headers.get("Retry-After")
+            try:
+                delay = max(float(retry_after or "2.1"), 2.1)
+            except ValueError:
+                delay = 2.1
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def explorer_duration(payload: dict) -> dict[str, float]:
