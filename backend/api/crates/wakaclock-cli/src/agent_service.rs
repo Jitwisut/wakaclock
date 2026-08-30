@@ -13,6 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
 const SERVICE_LABEL: &str = "com.atoaxis.wakaclock.agent";
 #[cfg(target_os = "windows")]
 const TASK_NAME: &str = "AtoAxis\\WakaclockAgent";
@@ -410,6 +411,7 @@ fn platform_name() -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn uid() -> String {
     std::env::var("UID").unwrap_or_else(|_| {
         Command::new("id")
@@ -459,6 +461,7 @@ fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
