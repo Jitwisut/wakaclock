@@ -9,6 +9,26 @@ WakaTime's duration builder.
 Reproduce: `scripts/duration-audit/` (timeline.py, verify_port.py, ladder.py,
 decompose.py, sensitivity.py).
 
+## Phase 0 baseline — single source of truth
+
+The committed acceptance baseline is the synthetic, metadata-only fixture at
+[`scripts/duration-audit/golden.jsonl`](../scripts/duration-audit/golden.jsonl)
+and its expected-result manifest at
+[`scripts/duration-audit/golden.expected.json`](../scripts/duration-audit/golden.expected.json).
+Run `verify_port.py` first and then `golden.py`; CI runs the same order. The
+runner enforces total error ≤1%, daily error ≤3% for days with at least 60
+seconds, partitioning of total/project/actor breakdowns, and exact actor type /
+confidence expectations. It also asserts that Unknown evidence cannot enter the
+Human bucket.
+
+`hb.jsonl` and `ai.jsonl` remain ignored live exports. Before a release, run the
+live comparison against a selected account and record only an aggregate result,
+check date, tested commit SHA, actor totals, and errors in
+`scripts/duration-audit/certifications/latest.json`; never commit paths, user IDs,
+prompts, diffs, or source content. That file is the single current acceptance
+baseline. The historical measurements below explain prior findings and are not
+acceptance criteria.
+
 ## Headline
 
 | | |
@@ -490,22 +510,36 @@ bypass-permissions mode is active, so in exactly those sessions AI attribution r
 nothing, silently. Anything the developer happened to have open in VS Code was still
 caught by the editor extension; anything else was lost.
 
-**Fix.** A second `PostToolUse` entry matching `Bash` runs `heartbeat-sweep.sh`, which
-does not try to parse the command — a shell command cannot be reliably read for the file
-it touched. It asks git what changed since the previous sweep, which is correct regardless
-of how the edit was made:
+**Fix.** Shell/MCP hooks now bracket the tool with `wakaclock ai tool-before` and
+`wakaclock ai tool-after` instead of parsing command text or relying on a post-only mtime
+sweep. `tool-before` writes a metadata-only workspace fingerprint into the existing local
+AI-attribution SQLite database; `tool-after` loads that exact snapshot after a restart if
+necessary, compares the resulting workspace, and emits only changes that happened during
+that tool call. No prompt, response, shell command, patch body or source text is persisted.
 
-- `git status --porcelain` from the payload's `cwd`, so `.gitignore` already excludes
-  generated trees;
-- filtered to paths whose mtime is newer than a per-repository stamp file;
-- capped at 20 files per sweep, so one `git checkout` cannot become hundreds of rows;
-- silent on its first run in a repository, so a dirty tree does not flood on the first
-  Bash call;
-- `--ai-confidence inferred` rather than `verified` — git proves the file changed during
-  the tool call, not that this particular command changed it. The path-carrying hook keeps
-  `verified`.
+The snapshot engine is deliberately conservative:
 
-Measured cost: 0.27s per Bash call on this repository, against a 10s hook timeout.
+- clean tracked Git files reuse their index blob IDs, while dirty/untracked files are
+  content-hashed; ignored files remain excluded by Git;
+- non-Git workspaces are supported with filesystem SHA-256 snapshots and dependency/build
+  directory exclusions;
+- create, modify, delete and one-to-one pure rename are detected from before/after content
+  identity, including files that were already dirty before the AI tool started;
+- exact line deltas are emitted only when they can be proven. A clean tracked Git file can
+  use `git diff --numstat`, while a pre-existing dirty file remains `unknown` rather than
+  inheriting the developer's earlier changes;
+- every file event from one tool call shares `ai_change_id = tool_event_id`, and only the
+  first deterministic heartbeat carries the tool-call activity interval. A codemod touching
+  100 files therefore does not multiply duration by 100;
+- an exact stronger native-hook fingerprint suppresses the weaker inferred shell event;
+- missing BeforeTool evidence never becomes guessed AI attribution. Abandoned snapshots are
+  retained for retry across process/editor restarts and pruned after 24 hours.
+
+On the current dirty WakaClock worktree (1,967 candidate files), the optimized snapshot
+measured about 1.05s for BeforeTool and 0.10s for a no-change AfterTool, both comfortably
+inside the 10-second hook budget. Clean release worktrees avoid hashing dirty candidates
+and are expected to be cheaper. The legacy post-only `heartbeat-sweep.sh` remains only for
+previously installed plugin compatibility.
 
 ### Second cause, same silence — a 402 nobody saw
 

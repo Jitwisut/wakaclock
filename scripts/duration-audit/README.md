@@ -7,7 +7,12 @@ be compared on identical input. Findings live in
 
 ```bash
 python3 verify_port.py            # prove the Python port matches activity_timeline.rs's unit tests
-./export.sh <user-uuid>           # dump that user's heartbeats from ClickHouse
+python3 golden.py                 # Phase 0: replay the committed fixture and enforce the manifest
+python3 golden.py --print-expected # regenerate a candidate manifest after an intentional rule change
+./export.sh <user-uuid> && WAKACLOCK_API_KEY=... python3 certify_live.py
+                                   # release-only sanitized real-data certification
+python3 verify_actor_migration.py  # reject new production uses of the legacy boolean
+python3 verify_certification.py    # validate a committed sanitized release record
 python3 ladder.py                 # per-day: raw_sum / segments / canonical / bridged / wakatime
 python3 decompose.py              # where the reported seconds come from, and who emits them
 python3 sensitivity.py            # idle-timeout sweep, human-only vs agent-only
@@ -20,3 +25,17 @@ Rust changes and the port does not, `verify_port.py` fails and everything
 downstream is untrustworthy.
 
 `hb.jsonl` / `ai.jsonl` are exported user data and are not committed.
+
+`certify_live.py` queries both `/api/v1/users/current/summaries` and
+`/api/v1/dashboard/explorer`. It writes the sanitized release record atomically to
+`certifications/latest.json` by default. The record contains only aggregate totals,
+dates, the tested commit SHA, actor buckets, and error metrics; it never contains
+paths, user identifiers, prompts, patches, or source content. The actor check fails
+if the four actor buckets do not partition the API total or if an actor-filtered
+Human/Unknown result disagrees with the unfiltered breakdown.
+
+`golden.jsonl` is synthetic metadata-only input. `golden.expected.json` is the
+machine-readable acceptance manifest; it is the only baseline used for Phase 0.
+The runner fails when total error exceeds 1%, an active day (at least 60 seconds)
+exceeds 3%, a duration/actor/project breakdown no longer partitions its total, or
+any expected actor type/confidence changes.

@@ -18,7 +18,11 @@ CH_PASS="${CLICKHOUSE_PASSWORD:-$(grep -m1 '^CLICKHOUSE_PASSWORD=' "$ENV_FILE" |
 run() { printf '%s' "$1" | curl -sS --fail --user "${CH_USER}:${CH_PASS}" "${CH_URL}/" --data-binary @-; }
 
 run "SELECT entity, time, project, language, category, is_ai_generated, heartbeat_id,
-            active_seconds, activity_segments, editor, ai_agent
+            active_seconds, activity_segments, editor, ai_agent, ai_provider, ai_model,
+            ai_source, ai_confidence, ai_event_id, ai_lines_added, ai_lines_deleted,
+            human_lines_added, human_lines_deleted, unattributed_lines_added,
+            unattributed_lines_deleted, keystrokes, chars_added, chars_deleted,
+            actor_type, actor_confidence
      FROM wakaclock.heartbeats WHERE user_id='${USER_ID}' ORDER BY time
      FORMAT JSONEachRow" > "${HERE}/hb.jsonl"
 

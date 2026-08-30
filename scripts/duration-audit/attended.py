@@ -13,6 +13,7 @@ sys.path.insert(0, SP)
 from timeline import (build_intervals, canonicalize, canonicalize_bridged,
                       bridge_idle_gaps_with_anchors, total_seconds, union_seconds,
                       wakatime_durations, MAX_ACTIVITY_GAP_SECONDS)
+from golden import resolve_attribution
 
 TZ = zoneinfo.ZoneInfo("Asia/Bangkok")
 hb  = [json.loads(l) for l in open(f"{SP}/hb.jsonl")]
@@ -20,6 +21,9 @@ proj = [json.loads(l) for l in open(f"{SP}/ai.jsonl")]
 
 def hms(s):
     s = int(round(s)); return f"{s//3600}h{(s%3600)//60:02d}m"
+
+def actor_type(row):
+    return resolve_attribution(row)["actor_type"]
 
 def attended_bridged(ivs, human_timeout=900.0, agent_timeout=MAX_ACTIVITY_GAP_SECONDS):
     canonical = canonicalize(ivs)
@@ -47,7 +51,7 @@ for d in days:
     human, agent = attended_bridged(ivs)
     proposed = union_seconds(human + agent)
     # What WakaTime itself would report if only the editor plugin were installed.
-    editor_hb = [h for h in day_hb if not h.get("is_ai_generated") and h.get("editor") == "vscode"]
+    editor_hb = [h for h in day_hb if actor_type(h) == "human" and h.get("editor") == "vscode"]
     wt_human, _ = wakatime_durations(editor_hb, 900.0)
     row = (shipped, wt, proposed, total_seconds(human), total_seconds(agent), wt_human)
     tot = [t + r for t, r in zip(tot, row)]

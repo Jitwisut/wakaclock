@@ -1,6 +1,7 @@
 .env
 target/
 scripts/duration-audit/*.jsonl
+!scripts/duration-audit/golden.jsonl
 .worktrees/
 node_modules/
 dist/

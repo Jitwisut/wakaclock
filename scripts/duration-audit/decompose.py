@@ -3,6 +3,7 @@ SP = str(__import__("pathlib").Path(__file__).resolve().parent)
 sys.path.insert(0, SP)
 from timeline import (build_intervals, canonicalize_bridged, total_seconds,
                       canonicalize, union_seconds, MAX_ACTIVITY_GAP_SECONDS)
+from golden import resolve_attribution
 
 TZ = zoneinfo.ZoneInfo("Asia/Bangkok")
 hb   = [json.loads(l) for l in open(f"{SP}/hb.jsonl")]
@@ -60,7 +61,7 @@ print("=== emitters ===")
 c = collections.Counter()
 anch = collections.Counter()
 for h in hb:
-    key = f"{h['editor']}{' (ai)' if h['is_ai_generated'] else ''}"
+    key = f"{h['editor']} ({resolve_attribution(h)['actor_type']})"
     c[key]+=1
     if not (h.get("active_seconds") or 0) > 0 and h["activity_segments"] in ("","[]"):
         anch[key]+=1
