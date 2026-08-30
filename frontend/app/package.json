@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack",
     "dev:webpack": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/indexnow-submit.mjs || true",
     "build:analyze": "cross-env ANALYZE=true next build",
     "start": "next start",
     "lint": "eslint .",
