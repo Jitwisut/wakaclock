@@ -111,8 +111,8 @@ export const EN_HOME = {
     'Only the VS Code plugin is first-party; other editors use the WakaTime protocol',
     'AI hooks cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need adapters',
     'Tokens and costs require provider usage plus a known price; unavailable coverage is not shown as zero',
-    'No desktop or browser client captures activity outside a connected editor',
-    'Analytics are scoped to one account; team dashboards remain in development',
+    'Nothing outside a connected editor or the AI transcript agent is captured; there is no desktop or browser client',
+    'Analytics are single-account; a presence prototype is available where the server enables it, but full team and organisation dashboards remain in development',
     'The planned hosted product has no free tier',
   ],
   faq: [
@@ -186,8 +186,8 @@ export const TH_HOME = {
     'มี first-party plugin สำหรับ VS Code เท่านั้น editor อื่นเชื่อมต่อผ่าน WakaTime protocol',
     'AI hooks รองรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
     'token และ cost แสดงเฉพาะเมื่อมี provider usage และราคาที่ตรวจสอบได้ ข้อมูลที่ไม่ครบจะแสดงว่าไม่พร้อมใช้งาน',
-    'ยังไม่มี desktop หรือ browser client สำหรับ activity นอก editor',
-    'analytics อยู่ในขอบเขตบัญชีเดียว ส่วน team dashboard ยังอยู่ระหว่างพัฒนา',
+    'ไม่มีการเก็บกิจกรรมนอก editor ที่เชื่อมต่อหรือนอก AI transcript agent และยังไม่มี desktop หรือ browser client',
+    'analytics อยู่ในขอบเขตบัญชีเดียว มี presence prototype ใช้ได้เมื่อ server เปิดใช้ แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
   ],
   faq: [
@@ -244,14 +244,14 @@ const teams = local(
   {
     metadataTitle: 'Team Coding Presence in Early Access',
     description:
-      'AtoAxis team coding presence is an Early Access concept based on editor activity for remote teams.',
+      'AtoAxis coding presence is an Early Access prototype: live rooms and recorded co-working sessions from editor activity, with assigned team and organisation seats still to come.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'Teams', path: '/teams' },
     ],
     title: 'Coding presence for remote teams',
-    badge: 'In development, not available yet',
-    lead: 'This describes something AtoAxis is building, not something you can use today: a live room showing teammates who are actually coding, with avatars that can start a shared working session.',
+    badge: 'Prototype: live rooms work, team and org seats do not',
+    lead: 'A live room that shows teammates who are actually coding, with avatars you can drag together to start a recorded co-working session. The room, invite links and sessions work today as a prototype wherever the server enables it. What is missing is the layer above them: organisations, assigned team seats and billing.',
     sections: [
       section('The problem', 'problem', [
         p(
@@ -264,12 +264,18 @@ const teams = local(
         ),
         p('A chat status reflects an open window. This reflects work.'),
       ]),
-      section('How presence will work', 'design', [
-        sub('Sub-teams'),
-        p('An organisation will divide seats into smaller working groups, each with its own room.'),
-        sub('Dragging avatars together'),
+      section('How presence works', 'design', [
+        sub('Rooms and invites, today'),
         p(
-          'Dragging two avatars together will start a recorded co-working session with duration and participants in both histories.'
+          'You create a room, share an invite link, and everyone who joins appears as an avatar with a working, idle or offline state derived from their own editor heartbeats.'
+        ),
+        sub('Dragging avatars together, today'),
+        p(
+          'Dragging two avatars together starts a recorded co-working session; its duration and participants land in both histories.'
+        ),
+        sub('Sub-teams, later'),
+        p(
+          'An organisation will divide assigned seats into smaller working groups, each with its own standing room. That layer is not built yet.'
         ),
       ]),
       section('What this will not be', 'principles', [
@@ -286,7 +292,7 @@ const teams = local(
       ]),
       section('What you can use today', 'today', [
         p(
-          'Individual tracking works today: coding time by project, language, branch and editor, keystroke and character counts, and complete history.'
+          'Individual tracking works today: coding time by project, language, branch and editor, keystroke and character counts, and complete history. The presence prototype above is also usable now wherever the server enables it, for ad-hoc rooms and invite links rather than standing team seats.'
         ),
       ]),
     ],
@@ -312,7 +318,7 @@ const teams = local(
     faq: faq('Team presence FAQ', [
       {
         question: `Can I use team features in ${SITE_NAME} today?`,
-        answer: `No. Team presence, sub-teams and co-working sessions are in development. ${SITE_NAME} today is a single-account product.`,
+        answer: `Partly. A presence prototype with live rooms, invite links and recorded co-working sessions is usable now wherever the server enables it. Assigned team seats, sub-teams and organisation billing are still in development.`,
       },
       {
         question: 'What is coding presence?',
@@ -334,8 +340,9 @@ const teams = local(
         answer: 'It records a co-working session with its duration and participants.',
       },
       {
-        question: 'When is it available?',
-        answer: 'There is no committed date; organisation and team support must land first.',
+        question: 'When is the full team version available?',
+        answer:
+          'There is no committed date. The presence prototype is usable now wherever it is enabled; organisation and assigned-seat support must land before it is a team product.',
       },
     ]),
     form: 'teams',
@@ -343,14 +350,14 @@ const teams = local(
   {
     metadataTitle: 'Coding Presence สำหรับทีมในช่วง Early Access',
     description:
-      'แนวคิด coding presence ของ AtoAxis สำหรับทีม remote ใช้ activity จาก editor เพื่อแสดงสถานะการทำงานและกำลังเปิดรับผู้สนใจ Early Access',
+      'presence ของ AtoAxis เป็น prototype ในช่วง Early Access: ห้องสดและ co-working session ที่บันทึกจาก activity ใน editor ส่วน team และ organisation seat ยังตามมาทีหลัง',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Teams', path: '/teams' },
     ],
     title: 'Coding presence สำหรับทีม remote',
-    badge: 'อยู่ระหว่างพัฒนา ยังไม่เปิดใช้งาน',
-    lead: 'หน้านี้อธิบายสิ่งที่ AtoAxis กำลังสร้าง ไม่ใช่ฟีเจอร์ที่เปิดใช้วันนี้ แนวคิดคือห้องทำงานสดที่แสดงว่าเพื่อนร่วมทีมกำลังเขียนโค้ดจริงผ่าน avatar และเริ่ม co-working session ได้',
+    badge: 'Prototype: ห้องสดใช้ได้ แต่ team และ org seat ยังไม่มี',
+    lead: 'ห้องสดที่แสดงว่าเพื่อนร่วมทีมกำลังเขียนโค้ดจริงผ่าน avatar และลาก avatar มารวมกันเพื่อเริ่ม co-working session ที่บันทึกไว้ได้ ตัวห้อง ลิงก์เชิญ และ session ใช้งานได้แล้ววันนี้ในรูปแบบ prototype บน server ที่เปิดใช้ ส่วนที่ยังขาดคือชั้นบนของมัน คือ organisation, team seat ที่กำหนดให้ และระบบเรียกเก็บเงิน',
     sections: [
       section('ปัญหาที่ต้องการแก้', 'problem', [
         p(
@@ -363,11 +370,19 @@ const teams = local(
         ),
         p('สถานะใน chat สะท้อนหน้าต่างที่เปิดอยู่ แต่ presence นี้สะท้อนงานจริง'),
       ]),
-      section('Presence จะทำงานอย่างไร', 'design', [
-        sub('Sub-teams'),
-        p('องค์กรจะแบ่ง seat เป็นกลุ่มย่อยและให้แต่ละกลุ่มมีห้องของตัวเอง'),
-        sub('ลาก avatar มารวมกัน'),
-        p('ลาก avatar สองคนเพื่อเริ่ม co-working session ที่บันทึกระยะเวลาและสมาชิกไว้ใน history'),
+      section('Presence ทำงานอย่างไร', 'design', [
+        sub('ห้องและลิงก์เชิญ ใช้ได้แล้ววันนี้'),
+        p(
+          'คุณสร้างห้อง แชร์ลิงก์เชิญ และทุกคนที่เข้าร่วมจะปรากฏเป็น avatar พร้อมสถานะ working, idle หรือ offline จาก editor heartbeat ของตัวเอง'
+        ),
+        sub('ลาก avatar มารวมกัน ใช้ได้แล้ววันนี้'),
+        p(
+          'ลาก avatar สองคนเข้าหากันเพื่อเริ่ม co-working session ที่บันทึกไว้ ระยะเวลาและสมาชิกจะเข้าไปอยู่ใน history ของทั้งสองฝ่าย'
+        ),
+        sub('Sub-teams ทีหลัง'),
+        p(
+          'องค์กรจะแบ่ง seat ที่กำหนดให้เป็นกลุ่มย่อย แต่ละกลุ่มมีห้องประจำของตัวเอง ชั้นนี้ยังไม่ได้สร้าง'
+        ),
       ]),
       section('สิ่งที่ฟีเจอร์นี้จะไม่เป็น', 'principles', [
         p('เราแยก presence จาก surveillance ด้วย design ที่ชัดเจน:'),
@@ -383,7 +398,7 @@ const teams = local(
       ]),
       section('สิ่งที่ใช้ได้ในวันนี้', 'today', [
         p(
-          'ตอนนี้ใช้ individual tracking ได้: เวลาตาม project, language, branch และ editor รวมถึง keystroke, character count และ history ครบถ้วน'
+          'ตอนนี้ใช้ individual tracking ได้: เวลาตาม project, language, branch และ editor รวมถึง keystroke, character count และ history ครบถ้วน และ presence prototype ด้านบนก็ใช้ได้แล้วบน server ที่เปิดใช้ สำหรับห้องแบบเฉพาะกิจและลิงก์เชิญ ยังไม่ใช่ team seat ประจำ'
         ),
       ]),
     ],
@@ -409,7 +424,7 @@ const teams = local(
     faq: faq('คำถามที่พบบ่อยเรื่อง team presence', [
       {
         question: `วันนี้ใช้ฟีเจอร์ทีมของ ${SITE_NAME} ได้หรือยัง?`,
-        answer: `ยังไม่ได้ team presence, sub-teams และ co-working sessions อยู่ระหว่างพัฒนา ${SITE_NAME} ตอนนี้เป็นผลิตภัณฑ์สำหรับบัญชีเดียว`,
+        answer: `ได้บางส่วน presence prototype ที่มีห้องสด ลิงก์เชิญ และ co-working session ที่บันทึกไว้ ใช้งานได้แล้วบน server ที่เปิดใช้ ส่วน team seat ที่กำหนดให้ sub-teams และการเรียกเก็บเงินระดับองค์กรยังอยู่ระหว่างพัฒนา`,
       },
       {
         question: 'coding presence คืออะไร?',
@@ -429,8 +444,9 @@ const teams = local(
         answer: 'เริ่ม co-working session และบันทึกระยะเวลาและสมาชิก',
       },
       {
-        question: 'เปิดใช้เมื่อไร?',
-        answer: 'ยังไม่มีวันที่ยืนยัน ต้องทำ organisation และ team support ก่อน',
+        question: 'เวอร์ชันทีมเต็มรูปแบบเปิดใช้เมื่อไร?',
+        answer:
+          'ยังไม่มีวันที่ยืนยัน presence prototype ใช้ได้แล้วบน server ที่เปิดใช้ แต่ต้องมี organisation และ assigned seat ก่อนจึงจะเป็นผลิตภัณฑ์สำหรับทีม',
       },
     ]),
     form: 'teams',
@@ -457,7 +473,10 @@ const developerAnalytics = local(
           'Today’s running total and duration blocks',
         ]),
         sub('Breakdowns'),
-        bullets(['Project, programming language, editor, operating system and branch']),
+        bullets([
+          'Project, programming language, editor, operating system and branch',
+          'Each item also shows how many distinct days you touched it, not just its total',
+        ]),
         sub('Activity volume'),
         bullets(['Keystrokes, characters added/deleted, active days and raw heartbeat counts']),
         sub('AI attribution'),
@@ -512,15 +531,17 @@ const developerAnalytics = local(
           'A day can be reprocessed from raw history without deleting anything',
           'A reconciliation that fails leaves the previous version readable instead of publishing a broken one',
           'Responses report the data version they were produced from, so a stale read is detectable',
+          'The raw heartbeat stream is browsable directly, so any figure can be traced back to the events under it',
         ]),
       ]),
       section('What is not measured', 'not-measured', [
         p(
-          'No productivity score, ranking or quality estimate is produced. There is no team rollup and activity outside a connected editor is not inferred.'
+          'No productivity score or quality estimate is produced, and the analytics rank nothing. The streak and level display on the overview is a cosmetic layer that feeds back into no metric. Work outside a connected editor or the AI transcript agent is not inferred.'
         ),
         bullets([
-          'No single number claims to represent how productive a day was',
+          'No single number is presented as a verdict on how productive a day was',
           'No comparison against other developers or accounts',
+          'The streak, level and quest widgets on the overview are cosmetic and feed back into no metric',
           'No judgement of the code itself: lines changed is a volume, not a quality signal',
           'Nothing is inferred from typing speed or code shape to fill a gap in attribution',
         ]),
@@ -588,7 +609,10 @@ const developerAnalytics = local(
           'เวลาปัจจุบันและ duration blocks',
         ]),
         sub('Breakdown'),
-        bullets(['Project, programming language, editor, operating system และ branch']),
+        bullets([
+          'Project, programming language, editor, operating system และ branch',
+          'แต่ละรายการบอกด้วยว่าคุณแตะมันกี่วันไม่ซ้ำกัน ไม่ใช่แค่ยอดรวม',
+        ]),
         sub('ปริมาณ activity'),
         bullets(['Keystrokes, characters เพิ่ม/ลบ, active days และ heartbeat count']),
         sub('AI attribution'),
@@ -643,15 +667,17 @@ const developerAnalytics = local(
           'ประมวลผลข้อมูลของวันหนึ่งใหม่จาก history ดิบได้โดยไม่ต้องลบอะไร',
           'ถ้ากระทบยอดไม่ผ่าน ระบบจะคงเวอร์ชันเดิมที่อ่านได้ไว้ แทนที่จะเผยแพร่ตัวที่ผิด',
           'response บอก data version ที่ใช้สร้าง ทำให้รู้ได้ว่ากำลังอ่านข้อมูลเก่าอยู่หรือไม่',
+          'เปิดดู stream ของ heartbeat ดิบได้โดยตรง ทุกตัวเลขจึงย้อนกลับไปหาเหตุการณ์ที่อยู่เบื้องหลังได้',
         ]),
       ]),
       section('สิ่งที่ระบบไม่ได้วัด', 'not-measured', [
         p(
-          'ไม่มี productivity score, ranking หรือการประเมินคุณภาพ ไม่มี team rollup และไม่อนุมาน activity นอก editor'
+          'ไม่มี productivity score หรือการประเมินคุณภาพ และ analytics ไม่จัดอันดับอะไร การแสดง streak กับ level บนหน้า overview เป็นชั้นของประดับที่ไม่ป้อนกลับไปที่ metric ใด งานที่อยู่นอก editor ที่เชื่อมต่อหรือนอก AI transcript agent จะไม่ถูกอนุมาน'
         ),
         bullets([
-          'ไม่มีตัวเลขเดียวที่อ้างว่าแทนความ productive ของทั้งวัน',
+          'ไม่มีตัวเลขเดียวที่ถูกนำเสนอเป็นคำตัดสินว่าทั้งวัน productive แค่ไหน',
           'ไม่มีการเปรียบเทียบกับนักพัฒนาคนอื่นหรือบัญชีอื่น',
+          'widget streak, level และ quest บนหน้า overview เป็นของประดับ ไม่ป้อนกลับไปที่ metric ใด',
           'ไม่ตัดสินคุณภาพของโค้ด จำนวนบรรทัดคือปริมาณ ไม่ใช่สัญญาณคุณภาพ',
           'ไม่เดาจากความเร็วการพิมพ์หรือรูปแบบโค้ดเพื่อเติมช่องว่างของ attribution',
         ]),
@@ -737,7 +763,7 @@ page(
         bullets([
           'You need the widest official editor plugin coverage',
           'You need automatic Cursor or Copilot integrations today',
-          'You need team dashboards or a free tier today',
+          'You need assigned team seats, an organisation rollup or a free tier today',
           'You need token and cost reports that your provider already exposes',
         ]),
       ]),
@@ -758,7 +784,7 @@ page(
       ]),
       section('Who it is for', 'who-for', [
         p(
-          'Individual developers who want complete history and explainable project analytics during Early Access. Team-wide reporting is still in development.'
+          'Individual developers who want complete history and explainable project analytics during Early Access. Assigned team seats and organisation-wide reporting are still in development.'
         ),
       ]),
       section('Getting started', 'getting-started', [
@@ -838,7 +864,7 @@ page(
         bullets([
           'ต้องการ editor plugin ทางการจำนวนมาก',
           'ต้องการ Cursor หรือ Copilot อัตโนมัติในวันนี้',
-          'ต้องการ team dashboard หรือ free tier ทันที',
+          'ต้องการ team seat ที่กำหนดให้ organisation rollup หรือ free tier ทันที',
           'ต้องการ token และ cost ที่ provider รายงานอยู่แล้ว',
         ]),
       ]),
@@ -857,7 +883,7 @@ page(
       ]),
       section('เหมาะกับใคร', 'who-for', [
         p(
-          'นักพัฒนารายบุคคลที่ต้องการ history ครบและ analytics ที่อธิบายได้ ส่วนรายงานระดับทีมยังอยู่ระหว่างพัฒนา'
+          'นักพัฒนารายบุคคลที่ต้องการ history ครบและ analytics ที่อธิบายได้ในช่วง Early Access ส่วน team seat ที่กำหนดให้และรายงานระดับองค์กรยังอยู่ระหว่างพัฒนา'
         ),
       ]),
       section('เริ่มต้นใช้งาน', 'getting-started', [
@@ -1801,8 +1827,8 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     (en) => [
       p(
         en
-          ? 'Early Access, and the boundary is worth stating plainly: the ingestion and analytics path is built and running, while billing and team features are not. Nothing on this site describes a feature that does not exist yet in the present tense.'
-          : 'ตอนนี้อยู่ในช่วง Early Access และควรบอกขอบเขตให้ชัด ส่วนของการรับข้อมูลและ analytics สร้างเสร็จและทำงานอยู่จริง ส่วนระบบเรียกเก็บเงินและฟีเจอร์สำหรับทีมยังไม่เสร็จ ไม่มีข้อความไหนบนเว็บนี้ที่พูดถึงฟีเจอร์ที่ยังไม่มีอยู่ในรูปปัจจุบันกาล'
+          ? 'Early Access, and the boundary is worth stating plainly: the ingestion and analytics path is built and running, while billing and full team seats are not. Nothing on this site describes a feature that does not exist yet in the present tense.'
+          : 'ตอนนี้อยู่ในช่วง Early Access และควรบอกขอบเขตให้ชัด ส่วนของการรับข้อมูลและ analytics สร้างเสร็จและทำงานอยู่จริง ส่วนระบบเรียกเก็บเงินและ team seat เต็มรูปแบบยังไม่เสร็จ ไม่มีข้อความไหนบนเว็บนี้ที่พูดถึงฟีเจอร์ที่ยังไม่มีอยู่ในรูปปัจจุบันกาล'
       ),
       bullets(
         en
@@ -1810,13 +1836,15 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'Working: heartbeat ingestion, duration blocks, project, language, editor and branch analytics',
               'Working: AI attribution with hooks for Claude Code, Codex CLI and Gemini CLI',
               'Working: a first-party VS Code extension, and WakaTime-protocol compatibility for other editors',
-              'Not yet: billing and checkout, team and organisation dashboards, adapters for Cursor and Copilot',
+              'Working: a presence prototype with live rooms and recorded co-working sessions',
+              'Not yet: billing and checkout, assigned team and organisation seats, a dashboard for goals and leaderboards, adapters for Cursor and Copilot',
             ]
           : [
               'ใช้งานได้แล้ว: การรับ heartbeat, duration block และ analytics ของ project, language, editor และ branch',
               'ใช้งานได้แล้ว: AI attribution พร้อม hook สำหรับ Claude Code, Codex CLI และ Gemini CLI',
               'ใช้งานได้แล้ว: extension สำหรับ VS Code ที่เราดูแลเอง และความเข้ากันได้กับ WakaTime protocol สำหรับ editor อื่น',
-              'ยังไม่มี: ระบบเรียกเก็บเงินและ checkout, dashboard สำหรับทีมและองค์กร, adapter สำหรับ Cursor และ Copilot',
+              'ใช้งานได้แล้ว: presence prototype ที่มีห้องสดและ co-working session บันทึกไว้',
+              'ยังไม่มี: ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้, หน้า dashboard สำหรับ goals และ leaderboards, adapter สำหรับ Cursor และ Copilot',
             ]
       ),
     ],
