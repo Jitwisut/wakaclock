@@ -11,6 +11,8 @@ import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
  * unattended.
  */
 const AGENT_HEAVY_DAY = {
+  ai_coding_seconds: 5300,
+  ai_session_seconds: 7000,
   agent_seconds: 8353,
   attended_seconds: 2118,
   inferred_seconds: 4267,
@@ -24,6 +26,8 @@ describe('EvidenceSplitPanel', () => {
 
     expect(screen.getByText('Measured')).toBeInTheDocument();
     expect(screen.getByText('Inferred from pauses')).toBeInTheDocument();
+    expect(screen.getByText('AI coding')).toBeInTheDocument();
+    expect(screen.getByText('AI session')).toBeInTheDocument();
     // 6203s of 10470s total.
     expect(screen.getByText('59%')).toBeInTheDocument();
   });
@@ -52,6 +56,9 @@ describe('EvidenceSplitPanel', () => {
 
     // Evidence rows sum to 100; attribution rows sum to 100 against the same denominator.
     expect(percentages[0] + percentages[1]).toBe(100);
+    // The fixture has no non-zero handover row, so attribution has two rows. The
+    // two additive AI metrics below use a different denominator and are not a
+    // partition of the total.
     expect(percentages[2] + percentages[3]).toBe(100);
   });
 
@@ -70,6 +77,8 @@ describe('EvidenceSplitPanel', () => {
     render(
       <EvidenceSplitPanel
         evidence={{
+          ai_coding_seconds: 2500,
+          ai_session_seconds: 4000,
           agent_seconds: 3000,
           attended_seconds: 5000,
           inferred_seconds: 6000,
@@ -88,6 +97,8 @@ describe('EvidenceSplitPanel', () => {
     render(
       <EvidenceSplitPanel
         evidence={{
+          ai_coding_seconds: 0,
+          ai_session_seconds: 0,
           agent_seconds: 0,
           attended_seconds: 0,
           inferred_seconds: 0,

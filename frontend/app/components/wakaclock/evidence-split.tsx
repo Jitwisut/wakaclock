@@ -16,7 +16,8 @@ import type { EvidenceSplit as EvidenceSplitData } from '@/lib/wakaclock/types';
  * to "why did my time jump" is on the same screen as the number that jumped.
  *
  * Both partitions sum to the same `total_seconds`; they are two views of one total, not
- * four separate figures to be added together.
+ * four separate figures to be added together. The AI coding/session rows are additive
+ * diagnostics with their own union semantics, not a third partition of that total.
  */
 
 interface Row {
@@ -83,6 +84,10 @@ function Meter({ rows, total, title, caption }: {
 
 export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }) {
   const total = evidence.proven_seconds + evidence.inferred_seconds;
+  // AI session time is an independent union and may legitimately exceed the
+  // WakaTime-compatible total. Scale that diagnostic meter to its largest value
+  // instead of letting a long session overflow the card.
+  const aiScale = Math.max(total, evidence.ai_coding_seconds, evidence.ai_session_seconds);
 
   const measurement: Row[] = [
     {
@@ -117,8 +122,8 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
     {
       hint:
         'Activity reported by an AI agent hook. The agent was editing files; you may or ' +
-        'may not have been watching. Agent pauses are bridged on a much shorter timeout ' +
-        'than yours so an unattended run cannot bill as continuous work.',
+        'may not have been watching. Agent pauses follow the configured idle policy; the ' +
+        'default preserves measured AI coding rather than guessing through an unattended gap.',
       key: 'agent',
       label: 'AI agent',
       seconds: evidence.agent_seconds,
@@ -137,6 +142,25 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
     },
   ].filter((row) => row.key !== 'other' || row.seconds > 0);
 
+  const ai: Row[] = [
+    {
+      hint:
+        'Measured editor or agent intervals attributed to an AI actor. Idle bridge time is excluded.',
+      key: 'ai-coding',
+      label: 'AI coding',
+      seconds: evidence.ai_coding_seconds,
+      tone: 'bg-chart-2',
+    },
+    {
+      hint:
+        'The union of AI session intervals. This can be longer than measured AI coding when a session spans pauses, but it never changes total time.',
+      key: 'ai-session',
+      label: 'AI session',
+      seconds: evidence.ai_session_seconds,
+      tone: 'bg-chart-4',
+    },
+  ];
+
   return (
     <Card>
       <CardHeader>
@@ -150,6 +174,12 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
           total={total}
         />
         <Meter caption="" rows={attribution} title="Attribution" total={total} />
+        <Meter
+          caption="AI coding is measured; AI session is session span"
+          rows={ai}
+          title="AI time"
+          total={aiScale}
+        />
       </CardContent>
     </Card>
   );

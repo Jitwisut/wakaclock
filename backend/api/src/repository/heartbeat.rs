@@ -237,7 +237,6 @@ impl HeartbeatRepository {
                     ),
                     actor_confidence Float32 DEFAULT multiIf(
                         actor_type = 'human', 1.0,
-                        actor_type = 'ai_verified' AND source = 'mcp', 0.95,
                         actor_type = 'ai_verified', 1.0,
                         actor_type = 'ai_inferred', 0.6,
                         0.0
@@ -266,7 +265,6 @@ impl HeartbeatRepository {
             )",
             "actor_confidence Float32 DEFAULT multiIf(
                 actor_type = 'human', 1.0,
-                actor_type = 'ai_verified' AND source = 'mcp', 0.95,
                 actor_type = 'ai_verified', 1.0,
                 actor_type = 'ai_inferred', 0.6,
                 0.0
@@ -281,6 +279,22 @@ impl HeartbeatRepository {
                 .await
                 .with_context(|| format!("Failed to add activity_intervals column: {column}"))?;
         }
+
+        // Keep existing installations on the same actor default as the checked-in
+        // migration. This changes only the default for future rows; it does not rewrite
+        // historical intervals.
+        ch_client
+            .query(
+                "ALTER TABLE wakaclock.activity_intervals
+                 MODIFY COLUMN actor_type LowCardinality(String) DEFAULT multiIf(
+                     source = 'ai', 'ai_inferred',
+                     source = 'editor', 'human',
+                     'unknown'
+                 )",
+            )
+            .execute()
+            .await
+            .context("Failed to align activity_intervals.actor_type default")?;
 
         ch_client
             .query(

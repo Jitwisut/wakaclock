@@ -2,7 +2,7 @@
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
-use crate::services::activity_timeline::total_seconds;
+use crate::services::activity_timeline::{total_seconds, union_ranges};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -81,6 +81,14 @@ pub async fn today(
         .activity_timeline_service
         .intervals(user_id, start, end)
         .await;
+    let ai_session_ranges = state
+        .activity_timeline_service
+        .ai_session_intervals(user_id, start, end)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, %user_id, "AI session duration unavailable for status bar");
+            Vec::new()
+        });
     let result = state
         .clickhouse
         .get_client()
@@ -109,7 +117,9 @@ pub async fn today(
                 &raw_intervals,
                 state.activity_timeline_service.bridge_config(),
             );
-            let evidence = timeline.evidence();
+            let evidence = timeline
+                .evidence()
+                .with_ai_session_seconds(union_ranges(&ai_session_ranges));
             let canonical = timeline.bridged;
             let total = total_seconds(&canonical);
             let covered_intervals = canonical

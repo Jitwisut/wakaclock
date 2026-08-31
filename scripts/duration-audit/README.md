@@ -13,6 +13,9 @@ python3 golden.py --print-expected # regenerate a candidate manifest after an in
                                    # release-only sanitized real-data certification
 python3 verify_actor_migration.py  # reject new production uses of the legacy boolean
 python3 verify_certification.py    # validate a committed sanitized release record
+WAKATIME_COMPARE_START=YYYY-MM-DD WAKATIME_COMPARE_END=YYYY-MM-DD \
+  WAKATIME_API_KEY=... WAKACLOCK_API_KEY=... python3 compare_wakatime.py
+                                   # advisory external-oracle comparison; env-only credentials
 python3 ladder.py                 # per-day: raw_sum / segments / canonical / bridged / wakatime
 python3 decompose.py              # where the reported seconds come from, and who emits them
 python3 sensitivity.py            # idle-timeout sweep, human-only vs agent-only
@@ -33,6 +36,18 @@ dates, the tested commit SHA, actor buckets, and error metrics; it never contain
 paths, user identifiers, prompts, patches, or source content. The actor check fails
 if the four actor buckets do not partition the API total or if an actor-filtered
 Human/Unknown result disagrees with the unfiltered breakdown.
+
+`compare_wakatime.py` is intentionally not a CI gate. Run it only during a controlled
+observation window where WakaTime and Wakaclock are both active on the same machine, with
+the same date range and IANA timezone. It reads `WAKATIME_API_KEY`, `WAKACLOCK_API_KEY`,
+`WAKATIME_COMPARE_START`, `WAKATIME_COMPARE_END`, and `WAKATIME_TIMEZONE` from the
+environment, and writes only aggregate totals, dates, timezone, commit SHA, and error
+metrics to `certifications/wakatime-parity.json`.
+
+The CI certification gate also rejects a malformed or stale `latest.json`; the
+sanitized record must have a timezone-aware `checked_at_utc` no more than 30 days
+old. This keeps a passing historical measurement from silently becoming the active
+release baseline.
 
 `golden.jsonl` is synthetic metadata-only input. `golden.expected.json` is the
 machine-readable acceptance manifest; it is the only baseline used for Phase 0.

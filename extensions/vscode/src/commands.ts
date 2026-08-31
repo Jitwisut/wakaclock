@@ -12,6 +12,7 @@ import {
   setStoredApiKey,
 } from "./secrets";
 import type { StatusBarController } from "./statusBar";
+import { localTimezone } from "./utils";
 
 export interface AiIntegrationController {
   getStatus(): Promise<AiAgentStatus[]>;
@@ -62,7 +63,10 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.showToday", async () => {
       try {
-        const today = await cliService.getToday();
+        // Must match the timezone the status bar passes, or the popup and the
+        // status bar describe two different 24-hour windows — which is how the
+        // bar could read "0s" while this popup read "11m 46s".
+        const today = await cliService.getToday(localTimezone());
         await vscode.window.showInformationMessage(
           `Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`
         );

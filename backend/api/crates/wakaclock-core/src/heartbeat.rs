@@ -56,6 +56,30 @@ impl ActorType {
     }
 }
 
+/// Canonical coarse source used by every duration projection. The actor enum is the
+/// source of truth; legacy/source text is accepted only for API compatibility and
+/// cannot promote an unknown row to Human.
+pub fn normalize_activity_source(_source: Option<&str>, actor_type: &str) -> &'static str {
+    match actor_type.trim().to_ascii_lowercase().as_str() {
+        "human" => "editor",
+        "ai_verified" | "ai_inferred" | "verified" | "inferred" | "correlated" => "ai",
+        _ => "other",
+    }
+}
+
+/// Match the public source filter names to the canonical source stored on an
+/// activity interval. Keeping this reverse mapping beside normalization prevents
+/// explorer/reporting code from drifting to a second interpretation of `human`,
+/// `ai`, or `other`.
+pub fn activity_source_matches_filter(source: &str, filter: &str) -> bool {
+    match filter.trim().to_ascii_lowercase().as_str() {
+        "human" | "editor" => source == "editor",
+        "ai" => source == "ai",
+        "other" => source != "editor" && source != "ai",
+        _ => true,
+    }
+}
+
 impl fmt::Display for ActorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -679,6 +703,35 @@ mod tests {
             "unattributed".parse::<ActorType>().unwrap(),
             ActorType::Unknown
         );
+    }
+
+    #[test]
+    fn normalized_activity_source_is_owned_by_actor_type() {
+        assert_eq!(normalize_activity_source(Some("editor"), "human"), "editor");
+        assert_eq!(
+            normalize_activity_source(Some("editor"), "ai_inferred"),
+            "ai"
+        );
+        assert_eq!(normalize_activity_source(Some("ai"), "unknown"), "other");
+    }
+
+    #[test]
+    fn activity_source_filter_mapping_is_exhaustive_and_symmetric() {
+        let canonical = [
+            ("human", "editor"),
+            ("editor", "editor"),
+            ("ai", "ai"),
+            ("other", "other"),
+        ];
+        for (filter, expected_source) in canonical {
+            assert!(activity_source_matches_filter(expected_source, filter));
+            for source in ["editor", "ai", "other"] {
+                if source != expected_source {
+                    assert!(!activity_source_matches_filter(source, filter));
+                }
+            }
+        }
+        assert!(activity_source_matches_filter("future", "unrecognized"));
     }
 
     #[test]

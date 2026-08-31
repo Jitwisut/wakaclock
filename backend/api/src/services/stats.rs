@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::stats::{AllTimeRangeRow, BestDay, StatsBreakdownItem, StatsData, StatsResponse};
 use crate::services::activity_timeline::{
-    totals_by, ActivityTimelineService, BridgeConfig, CanonicalInterval, Dimension, Timeline,
+    totals_by, union_ranges, ActivityTimelineService, BridgeConfig, CanonicalInterval, Dimension,
+    Timeline,
 };
 
 pub struct StatsService {
@@ -43,8 +44,17 @@ impl StatsService {
                 utc_midnight(end_date.succ_opt().context("end date has no successor")?),
             )
             .await?;
+        let ai_session_ranges = timeline
+            .ai_session_intervals(
+                user_id,
+                utc_midnight(start_date),
+                utc_midnight(end_date.succ_opt().context("end date has no successor")?),
+            )
+            .await?;
         let timeline = Timeline::build(&raw, self.bridge);
-        let evidence = timeline.evidence();
+        let evidence = timeline
+            .evidence()
+            .with_ai_session_seconds(union_ranges(&ai_session_ranges));
         let canonical = timeline.bridged;
 
         let total_seconds: f64 = canonical

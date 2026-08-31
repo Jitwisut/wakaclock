@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# SCAFFOLD — see ../README.md before trusting this against a real Cursor install.
+#
+# AtoAxis heartbeat hook for Cursor's `afterFileEdit` event. Unlike every other
+# agent's hook in this directory, Cursor's documented payload hands the edit's own
+# before/after text directly (`edits[].old_string`/`new_string`) rather than requiring
+# a filesystem snapshot diff — so this script does NOT call `wakaclock ai tool-before`/
+# `tool-after`; it emits straight to `wakaclock ai emit`, mirroring how the Claude Code
+# plugin's heartbeat.sh handles Edit/MultiEdit.
+#
+# `old_string`/`new_string` are read only to count lines in memory (`count_lines`
+# below) and are never written to disk, logged, or included in the emitted event —
+# same metadata-only contract as every other adapter here.
+set -euo pipefail
+
+INPUT="$(cat)"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "atoaxis-heartbeat (cursor): jq is required but not found on PATH — skipping" >&2
+  exit 0
+fi
+
+WAKACLOCK_BIN="${WAKACLOCK_CLI_PATH:-}"
+if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
+  WAKACLOCK_BIN="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
+fi
+WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
+if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
+  echo "atoaxis-heartbeat (cursor): '$WAKACLOCK_BIN' not found on PATH — install the wakaclock binary or set WAKACLOCK_CLI_PATH" >&2
+  exit 0
+fi
+
+FILE_PATH="$(jq -r '.file_path // empty' <<<"$INPUT")"
+WORKSPACE_ROOT="$(jq -r '.workspace_roots[0] // empty' <<<"$INPUT" 2>/dev/null || true)"
+SESSION_ID="$(jq -r '.conversation_id // empty' <<<"$INPUT" 2>/dev/null || true)"
+CALL_ID="$(jq -r '.generation_id // empty' <<<"$INPUT" 2>/dev/null || true)"
+
+if [ -z "$FILE_PATH" ]; then
+  exit 0
+fi
+if [[ "$FILE_PATH" != /* ]]; then
+  FILE_PATH="${WORKSPACE_ROOT:-$PWD}/${FILE_PATH}"
+fi
+
+# Same "rough line count, not a real diff" rule as every other adapter's count_lines —
+# see ../../plugins/atoaxis-heartbeat/scripts/heartbeat.sh's own comment on this.
+count_lines() {
+  if [ -z "$1" ]; then
+    printf '0\n'
+    return
+  fi
+  printf '%s' "$1" | awk 'END { print NR }'
+}
+
+LINES_ADDED=0
+LINES_DELETED=0
+while IFS= read -r edit; do
+  OLD="$(jq -r '.old_string // empty' <<<"$edit")"
+  NEW="$(jq -r '.new_string // empty' <<<"$edit")"
+  LINES_ADDED=$((LINES_ADDED + $(count_lines "$NEW")))
+  LINES_DELETED=$((LINES_DELETED + $(count_lines "$OLD")))
+done < <(jq -c '.edits[]? // empty' <<<"$INPUT")
+
+# No edits[] parsed at all (either the field name is wrong or this call touched
+# nothing) — nothing to report rather than guessing.
+if [ "$LINES_ADDED" -eq 0 ] && [ "$LINES_DELETED" -eq 0 ]; then
+  exit 0
+fi
+
+EVENT_ID="cursor-$(printf '%s|%s|%s' "$SESSION_ID" "${CALL_ID:-afterFileEdit}" "$FILE_PATH" | shasum -a 256 | cut -c1-40)"
+OCCURRED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+jq -cn \
+  --arg event_id "$EVENT_ID" \
+  --arg occurred_at "$OCCURRED_AT" \
+  --arg entity "$FILE_PATH" \
+  --arg session_id "$SESSION_ID" \
+  --arg project_root "$WORKSPACE_ROOT" \
+  --arg agent "cursor" \
+  --arg provider "anysphere" \
+  --argjson lines_added "$LINES_ADDED" \
+  --argjson lines_deleted "$LINES_DELETED" \
+  '{schema_version:1,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:"modify",agent:$agent,provider:$provider,model:null,session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"shell_hook",tool:"afterFileEdit",tool_event_id:$event_id}' \
+  | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+
+exit 0

@@ -1,0 +1,11 @@
+{
+  "type": "response_item",
+  "timestamp": "2026-08-14T09:19:42.000Z",
+  "payload": {
+    "type": "custom_tool_call",
+    "status": "completed",
+    "call_id": "call_example0000000000000000000000",
+    "name": "apply_patch",
+    "input": "*** Begin Patch\n*** Update File: src/greeting.rs\n@@\n-fn greet() {}\n+fn greet() {\n+    println!(\"hi\");\n+}\n*** Add File: src/new_module.rs\n+pub fn helper() {}\n+pub fn other() {}\n+pub fn third() {}\n*** End Patch\n"
+  }
+}

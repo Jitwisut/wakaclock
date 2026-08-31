@@ -51,6 +51,9 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-scalar = "0.2"
 toml = "0.8"
 dirs = "5.0"
+sysinfo = "0.39"
+notify = "9.0.0-rc.5"
+fs2 = "0.4"
 
 
 [features]

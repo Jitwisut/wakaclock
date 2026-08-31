@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 use wakaclock_core::heartbeat::{
-    union_activity_seconds, ActivitySegment, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
+    normalize_activity_source, union_activity_seconds, ActivitySegment, Heartbeat,
+    MAX_ACTIVITY_GAP_SECONDS,
 };
 
 use crate::model::date_range::ResolvedRange;
@@ -161,10 +162,11 @@ impl HeartbeatService {
                     heartbeat_id: interval_heartbeat_id.clone(),
                     start: segment.start,
                     end: segment.end,
-                    source: normalize_interval_source(
+                    source: normalize_activity_source(
                         segment.source.as_deref(),
                         hb.actor_type.as_str(),
-                    ),
+                    )
+                    .to_string(),
                     entity: hb.entity.clone(),
                     project: hb.project.clone(),
                     project_id: hb.project_id,
@@ -312,15 +314,6 @@ fn parse_created_at(created_at: &str) -> u32 {
     chrono::DateTime::parse_from_rfc3339(created_at)
         .map(|dt| dt.timestamp().max(0) as u32)
         .unwrap_or_else(|_| Utc::now().timestamp().max(0) as u32)
-}
-
-pub(crate) fn normalize_interval_source(source: Option<&str>, actor_type: &str) -> String {
-    let _ = source;
-    match actor_type {
-        "human" => "editor".to_string(),
-        "ai_verified" | "ai_inferred" => "ai".to_string(),
-        _ => "other".to_string(),
-    }
 }
 
 /// Stable privacy-safe bridge between hook and transcript transports. It contains only
@@ -475,6 +468,46 @@ mod tests {
         assert_eq!(
             ai_event_fingerprint(&heartbeat),
             ai_event_fingerprint(&heartbeat)
+        );
+    }
+
+    #[test]
+    fn hook_and_transcript_payloads_share_one_cross_transport_fingerprint() {
+        // Hook producers report an absolute path and their own event id; transcript
+        // replay commonly reports a workspace-relative path and a different id. The
+        // privacy-safe fingerprint deliberately ignores those transport details while
+        // retaining the entity tail, project/branch, five-second bucket and line delta.
+        let mut hook = Heartbeat::new(
+            uuid::Uuid::nil(),
+            "/workspace/src/main.rs".to_string(),
+            EntityType::File,
+            "agent-hook".to_string(),
+        );
+        hook.time = 102.1;
+        hook.project = Some("wakaclock".to_string());
+        hook.branch = Some("main".to_string());
+        hook.actor_type = ActorType::AiVerified;
+        hook.actor_confidence = 1.0;
+        hook.is_ai_generated = true;
+        hook.ai_agent = Some("claude-code".to_string());
+        hook.ai_provider = Some("anthropic".to_string());
+        hook.ai_model = Some("claude-sonnet".to_string());
+        hook.ai_source = Some("agent_hook".to_string());
+        hook.ai_event_id = Some("hook-event".to_string());
+        hook.ai_lines_added = Some(3);
+        hook.ai_lines_deleted = Some(1);
+
+        let mut transcript = hook.clone();
+        transcript.entity = "src/main.rs".to_string();
+        transcript.user_agent = "transcript".to_string();
+        transcript.time = 104.8;
+        transcript.ai_source = Some("transcript".to_string());
+        transcript.ai_event_id = Some("transcript-event".to_string());
+
+        assert_eq!(
+            ai_event_fingerprint(&hook),
+            ai_event_fingerprint(&transcript),
+            "the same edit observed by two transports must be one canonical activity"
         );
     }
 

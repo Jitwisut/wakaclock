@@ -48,7 +48,7 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         const activeSelection = vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
             ? vscode.window.activeTextEditor.selection
             : undefined;
-        void bufferManager.recordTextChange(event.document, event.contentChanges, activeSelection, Date.now(), workspaceProject(event.document));
+        void bufferManager.recordTextChange(event.document, event.contentChanges, activeSelection, Date.now(), workspaceProject(event.document), event.reason);
     }), vscode.workspace.onDidSaveTextDocument((document) => {
         void bufferManager.recordSave(document, Date.now(), workspaceProject(document));
     }), vscode.window.onDidChangeActiveTextEditor((editor) => {

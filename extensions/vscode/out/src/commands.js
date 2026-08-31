@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
 const secrets_1 = require("./secrets");
+const utils_1 = require("./utils");
 function registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations, onVerifiedApiKey) {
     function workspaceProject(editor) {
         if (!editor) {
@@ -55,7 +56,10 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await vscode.window.showInformationMessage("Wakaclock CLI path updated.");
     }), vscode.commands.registerCommand("wakaclock.showToday", async () => {
         try {
-            const today = await cliService.getToday();
+            // Must match the timezone the status bar passes, or the popup and the
+            // status bar describe two different 24-hour windows — which is how the
+            // bar could read "0s" while this popup read "11m 46s".
+            const today = await cliService.getToday((0, utils_1.localTimezone)());
             await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`);
         }
         catch (error) {

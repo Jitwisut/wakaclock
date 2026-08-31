@@ -1,0 +1,9 @@
+{
+  "type": "response_item",
+  "timestamp": "2026-08-14T09:19:42.500Z",
+  "payload": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_example0000000000000000000000",
+    "output": "Success. Updated the following files:\nM src/greeting.rs\nA src/new_module.rs\n"
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "checked_at_utc": "2026-08-31T04:56:08+00:00",
+  "errors": [],
+  "max_daily_relative_error": 1.0,
+  "observations": [
+    {
+      "absolute_error_seconds": 12547.073000167846,
+      "date": "2026-08-12",
+      "relative_error": 0.7376867238544196,
+      "wakaclock_seconds": 4461.600999832153,
+      "wakatime_seconds": 17008.674
+    },
+    {
+      "absolute_error_seconds": 16340.219000240326,
+      "date": "2026-08-13",
+      "relative_error": 0.7180637096010126,
+      "wakaclock_seconds": 6415.726999759674,
+      "wakatime_seconds": 22755.946
+    },
+    {
+      "absolute_error_seconds": 4031.0180000896453,
+      "date": "2026-08-14",
+      "relative_error": 0.33821342389092085,
+      "wakaclock_seconds": 15949.581000089645,
+      "wakatime_seconds": 11918.563
+    },
+    {
+      "absolute_error_seconds": 33886.48400017166,
+      "date": "2026-08-15",
+      "relative_error": 0.9862250318292601,
+      "wakaclock_seconds": 473.3049998283386,
+      "wakatime_seconds": 34359.789
+    },
+    {
+      "absolute_error_seconds": 99.19799973487852,
+      "date": "2026-08-16",
+      "relative_error": 0.257643758077187,
+      "wakaclock_seconds": 285.82200026512146,
+      "wakatime_seconds": 385.02
+    },
+    {
+      "absolute_error_seconds": 10632.145,
+      "date": "2026-08-17",
+      "relative_error": 1.0,
+      "wakaclock_seconds": 0.0,
+      "wakatime_seconds": 10632.145
+    },
+    {
+      "absolute_error_seconds": 9067.823000080109,
+      "date": "2026-08-18",
+      "relative_error": 0.9992937143418978,
+      "wakaclock_seconds": 6.408999919891357,
+      "wakatime_seconds": 9074.232
+    },
+    {
+      "absolute_error_seconds": 12924.336999835969,
+      "date": "2026-08-19",
+      "relative_error": 0.9981192691952597,
+      "wakaclock_seconds": 24.353000164031982,
+      "wakatime_seconds": 12948.69
+    },
+    {
+      "absolute_error_seconds": 20374.394,
+      "date": "2026-08-20",
+      "relative_error": 1.0,
+      "wakaclock_seconds": 0.0,
+      "wakatime_seconds": 20374.394
+    },
+    {
+      "absolute_error_seconds": 129.7810000019074,
+      "date": "2026-08-21",
+      "relative_error": 0.06813963635089142,
+      "wakaclock_seconds": 1774.8519999980927,
+      "wakatime_seconds": 1904.633
+    },
+    {
+      "absolute_error_seconds": 2889.0999996299743,
+      "date": "2026-08-22",
+      "relative_error": 0.3810628978177385,
+      "wakaclock_seconds": 10470.787999629974,
+      "wakatime_seconds": 7581.688
+    },
+    {
+      "absolute_error_seconds": 23437.033999752046,
+      "date": "2026-08-23",
+      "relative_error": 0.8871985315063682,
+      "wakaclock_seconds": 2979.8650002479553,
+      "wakatime_seconds": 26416.899
+    },
+    {
+      "absolute_error_seconds": 22415.466000034332,
+      "date": "2026-08-24",
+      "relative_error": 0.8753886445623554,
+      "wakaclock_seconds": 3190.8359999656677,
+      "wakatime_seconds": 25606.302
+    },
+    {
+      "absolute_error_seconds": 16548.083,
+      "date": "2026-08-25",
+      "relative_error": 1.0,
+      "wakaclock_seconds": 0.0,
+      "wakatime_seconds": 16548.083
+    },
+    {
+      "absolute_error_seconds": 9307.92400010109,
+      "date": "2026-08-26",
+      "relative_error": 0.7402469206575025,
+      "wakaclock_seconds": 3266.1559998989105,
+      "wakatime_seconds": 12574.08
+    },
+    {
+      "absolute_error_seconds": 30573.059000040055,
+      "date": "2026-08-27",
+      "relative_error": 0.9999708248384402,
+      "wakaclock_seconds": 0.8919999599456787,
+      "wakatime_seconds": 30573.951
+    },
+    {
+      "absolute_error_seconds": 10862.81799971199,
+      "date": "2026-08-28",
+      "relative_error": 0.7486156442900365,
+      "wakaclock_seconds": 3647.7230002880096,
+      "wakatime_seconds": 14510.541
+    },
+    {
+      "absolute_error_seconds": 12550.025999895095,
+      "date": "2026-08-29",
+      "relative_error": 0.9035106607842194,
+      "wakaclock_seconds": 1340.2650001049042,
+      "wakatime_seconds": 13890.291
+    },
+    {
+      "absolute_error_seconds": 2088.111000362396,
+      "date": "2026-08-30",
+      "relative_error": 0.23174862918343653,
+      "wakaclock_seconds": 6922.129999637604,
+      "wakatime_seconds": 9010.241
+    }
+  ],
+  "range": {
+    "end": "2026-08-30",
+    "start": "2026-08-12"
+  },
+  "schema_version": 1,
+  "status": "advisory",
+  "tested_commit_sha": "c7b5be8ea50cea9035c37a362a9ceb202020f226",
+  "timezone": "Asia/Bangkok",
+  "total": {
+    "absolute_error_seconds": 236863.8570004101,
+    "relative_error": 0.7946473971816789,
+    "wakaclock_seconds": 61210.30499958992,
+    "wakatime_seconds": 298074.162
+  }
+}

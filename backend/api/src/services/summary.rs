@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::summary::{SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem};
 use crate::services::activity_timeline::{
-    heartbeat_count, totals_by, ActivityTimelineService, BridgeConfig, CanonicalInterval,
-    Dimension, EvidenceSplit, Timeline,
+    heartbeat_count, measured_ai_seconds, totals_by, union_ranges, ActivityTimelineService,
+    BridgeConfig, CanonicalInterval, Dimension, EvidenceSplit, Timeline,
 };
 
 pub struct SummaryService {
@@ -45,8 +45,12 @@ impl SummaryService {
         let (start_epoch, end_epoch) = utc_bounds(start, end)?;
         let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
         let raw = timeline.intervals(user_id, start_epoch, end_epoch).await?;
+        let ai_session_ranges = timeline
+            .ai_session_intervals(user_id, start_epoch, end_epoch)
+            .await?;
 
         let timeline = Timeline::build(&raw, self.bridge);
+        let measured = timeline.measured.clone();
 
         // A day owns an interval if the interval starts in it, matching how the daily
         // totals have always been bucketed. An interval that runs past midnight is not
@@ -72,6 +76,12 @@ impl SummaryService {
         let days = bridged_by_day
             .into_iter()
             .map(|(date, intervals)| {
+                // The response owns each measured interval's seconds by the day in
+                // which the work started, but the additive AI metric is explicitly
+                // range-clipped. Clip before taking its union so a segment crossing
+                // midnight cannot leak seconds into a neighbouring day.
+                let (day_start, day_end) =
+                    utc_bounds(&date, &date).expect("summary dates are validated ISO dates");
                 let total: f64 = intervals
                     .iter()
                     .map(|interval| interval.end - interval.start)
@@ -87,7 +97,33 @@ impl SummaryService {
                         hours: total / 3600.0,
                         text: format_duration(total),
                         heartbeats: heartbeat_count(&intervals),
-                        evidence: EvidenceSplit::new(proven, &intervals),
+                        evidence: EvidenceSplit::new(proven, &intervals)
+                            .with_ai_coding_seconds(measured_ai_seconds(
+                                &measured
+                                    .iter()
+                                    .filter_map(|interval| {
+                                        let clipped_start = interval.start.max(day_start);
+                                        let clipped_end = interval.end.min(day_end);
+                                        (clipped_end > clipped_start).then(|| {
+                                            let mut clipped = interval.clone();
+                                            clipped.start = clipped_start;
+                                            clipped.end = clipped_end;
+                                            clipped
+                                        })
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ))
+                            .with_ai_session_seconds(union_ranges(
+                                &ai_session_ranges
+                                    .iter()
+                                    .filter_map(|(session_start, session_end)| {
+                                        let clipped_start = (*session_start).max(day_start);
+                                        let clipped_end = (*session_end).min(day_end);
+                                        (clipped_end > clipped_start)
+                                            .then_some((clipped_start, clipped_end))
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )),
                     },
                     languages: summary_items(&intervals, Dimension::Language),
                     projects: summary_items(&intervals, Dimension::Project),

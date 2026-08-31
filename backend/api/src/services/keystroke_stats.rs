@@ -104,10 +104,10 @@ impl KeystrokeStatsService {
             .query(
                 "
                 SELECT
-                    if(empty(project), 'Unknown', project) AS name,
-                    sum(keystrokes) AS keystrokes,
-                    sum(chars_added) AS chars_added,
-                    sum(chars_deleted) AS chars_deleted
+                    coalesce(nullIf(project, ''), 'Unknown') AS name,
+                    coalesce(sum(keystrokes), 0) AS keystrokes,
+                    coalesce(sum(chars_added), 0) AS chars_added,
+                    coalesce(sum(chars_deleted), 0) AS chars_deleted
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
                   AND actor_type = 'human'
@@ -137,9 +137,9 @@ impl KeystrokeStatsService {
                 "
                 SELECT
                     toString(date) AS day,
-                    sum(keystrokes) AS keystrokes,
-                    sum(chars_added) AS chars_added,
-                    sum(chars_deleted) AS chars_deleted
+                    coalesce(sum(keystrokes), 0) AS keystrokes,
+                    coalesce(sum(chars_added), 0) AS chars_added,
+                    coalesce(sum(chars_deleted), 0) AS chars_deleted
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
                   AND actor_type = 'human'
@@ -162,4 +162,96 @@ fn validate_date(date: &str) -> Result<()> {
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .context("Invalid date format, expected YYYY-MM-DD")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeystrokeStatsService;
+    use crate::repository::heartbeat::HeartbeatRepository;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn range_deserializes_nullable_aggregates_as_non_nullable_values() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+
+        let user_id = Uuid::new_v4();
+        // The legacy AI boolean column is intentionally omitted here: it defaults false
+        // in the schema, and scripts/duration-audit/verify_actor_migration.py forbids new
+        // production/test references to it outside its allowlist. This fixture only needs
+        // actor_type, which every query under test filters on.
+        let insert = format!(
+            r#"INSERT INTO wakaclock.heartbeats
+                (user_id, entity, entity_type, time, date, project,
+                 keystrokes, chars_added, chars_deleted, is_write, category,
+                 editor, operating_system, machine, user_agent,
+                 actor_type, created_at)
+               VALUES
+                ('{user_id}', 'null-only.rs', 'file', 1787952000, '2026-08-29', 'null-only',
+                 NULL, NULL, NULL, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 1),
+                ('{user_id}', 'alpha.rs', 'file', 1788038400, '2026-08-30', 'alpha',
+                 5, 4, 1, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 2),
+                ('{user_id}', 'unknown-null.rs', 'file', 1788038460, '2026-08-30', NULL,
+                 2, NULL, 1, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 3),
+                ('{user_id}', 'unknown-empty.rs', 'file', 1788038520, '2026-08-30', '',
+                 3, 2, NULL, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 4),
+                ('{user_id}', 'null-metrics.rs', 'file', 1788038580, '2026-08-30', 'null-metrics',
+                 NULL, NULL, NULL, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 5),
+                ('{user_id}', 'beta.rs', 'file', 1788124800, '2026-08-31', 'beta',
+                 4, 3, 0, 1, 'coding', 'test', 'test', 'test', 'test', 'human', 6),
+                ('{user_id}', 'ai.rs', 'file', 1788038640, '2026-08-30', 'ai-only',
+                 100, 100, 100, 1, 'coding', 'test', 'test', 'test', 'test', 'ai_inferred', 7)"#
+        );
+        clickhouse
+            .get_client()
+            .query(&insert)
+            .execute()
+            .await
+            .unwrap();
+
+        let response = KeystrokeStatsService::new(clickhouse)
+            .get_range(user_id, "2026-08-29", "2026-08-31")
+            .await
+            .unwrap();
+        let data = response.data;
+
+        assert_eq!(data.total_keystrokes, 14);
+        assert_eq!(data.total_chars_added, 9);
+        assert_eq!(data.total_chars_deleted, 2);
+        assert_eq!(data.days_with_activity, 3);
+        assert_eq!(data.projects.len(), 5);
+        assert_eq!(data.daily.len(), 3);
+
+        let project = |name: &str| {
+            data.projects
+                .iter()
+                .find(|item| item.name == name)
+                .unwrap_or_else(|| panic!("missing project {name:?}"))
+        };
+        let unknown = project("Unknown");
+        assert_eq!(unknown.keystrokes, 5);
+        assert_eq!(unknown.chars_added, 2);
+        assert_eq!(unknown.chars_deleted, 1);
+        assert_eq!(project("alpha").chars_added, 4);
+        assert_eq!(project("beta").keystrokes, 4);
+        assert_eq!(project("null-metrics").keystrokes, 0);
+        assert_eq!(project("null-only").chars_deleted, 0);
+        assert!(!data.projects.iter().any(|item| item.name == "ai-only"));
+
+        let daily = |date: &str| {
+            data.daily
+                .iter()
+                .find(|item| item.date == date)
+                .unwrap_or_else(|| panic!("missing day {date:?}"))
+        };
+        assert_eq!(daily("2026-08-29").keystrokes, 0);
+        assert_eq!(daily("2026-08-30").keystrokes, 10);
+        assert_eq!(daily("2026-08-30").chars_added, 6);
+        assert_eq!(daily("2026-08-30").chars_deleted, 2);
+        assert_eq!(daily("2026-08-31").keystrokes, 4);
+    }
 }

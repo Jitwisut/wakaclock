@@ -9,7 +9,7 @@ use crate::model::analytics_explorer::{
 };
 use crate::model::date_range::ResolvedRange;
 use crate::services::activity_timeline::CanonicalInterval;
-use wakaclock_core::heartbeat::ActorType;
+use wakaclock_core::heartbeat::{activity_source_matches_filter, ActorType};
 
 const WEEKDAYS: [&str; 7] = [
     "Monday",
@@ -46,12 +46,10 @@ impl ExplorerFilters {
                 self.operating_system.as_deref(),
                 Some(&interval.operating_system),
             )
-            && self.source.as_deref().is_none_or(|source| match source {
-                "human" | "editor" => interval.source == "editor",
-                "ai" => interval.source == "ai",
-                "other" => interval.source != "editor" && interval.source != "ai",
-                _ => true,
-            })
+            && self
+                .source
+                .as_deref()
+                .is_none_or(|source| activity_source_matches_filter(&interval.source, source))
     }
 
     fn applied(&self) -> ExplorerAppliedFilters {

@@ -1055,6 +1055,28 @@ mod tests {
     }
 
     #[test]
+    fn an_ai_edit_touching_fifty_files_is_captured_once_per_file() {
+        let path = temp_db("fifty-files");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let events = (0..50)
+            .map(|index| {
+                let mut event = sample_event(&format!("fifty-{index}"));
+                event.entity = format!("/workspace/src/file-{index}.rs");
+                event
+            })
+            .collect::<Vec<_>>();
+        let outcomes = store.ingest_batch(&events).unwrap();
+        assert_eq!(outcomes.len(), 50);
+        assert!(outcomes
+            .iter()
+            .all(|outcome| *outcome == BrokerIngestOutcome::Accepted));
+        assert_eq!(store.stats().unwrap().pending, 50);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("db-wal"));
+        let _ = fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
     fn conflicting_duplicate_inside_batch_rolls_back_atomically() {
         let path = temp_db("batch-conflict");
         let mut store = BrokerStore::open_at(&path).unwrap();

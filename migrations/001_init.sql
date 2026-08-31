@@ -144,7 +144,11 @@ CREATE TABLE IF NOT EXISTS wakaclock.activity_intervals
     editor           String DEFAULT '',
     operating_system String DEFAULT '',
     created_at       UInt32,
-    actor_type       LowCardinality(String) DEFAULT 'unknown',
+    actor_type       LowCardinality(String) DEFAULT multiIf(
+        source = 'ai', 'ai_inferred',
+        source = 'editor', 'human',
+        'unknown'
+    ),
     actor_confidence Float32 DEFAULT 0.0
 )
 ENGINE = ReplacingMergeTree(created_at)

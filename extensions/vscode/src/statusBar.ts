@@ -8,16 +8,9 @@ import type {
 } from "./types";
 import type { ActivitySegment } from "./types";
 import { unionSeconds } from "./activity";
+import { localTimezone } from "./utils";
 
 const STATUS_REFRESH_MS = 15_000;
-
-function localTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
 
 function formatLiveDuration(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
@@ -221,17 +214,19 @@ export class StatusBarController implements vscode.Disposable {
   }
 
   private render(snapshot: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>): void {
+    // Keep the number shown in the status bar on the same contract as the
+    // `Show Today` command and the dashboard: `snapshot.totalSeconds` is the
+    // CLI's authoritative total for this timezone/day. Local editor activity
+    // has not been accepted by the CLI yet, so it belongs in the tooltip as a
+    // pending amount rather than silently changing the meaning of "Today".
     const bufferedSeconds = Math.max(
       this.getBufferedSeconds(),
+      unionSeconds(this.getBufferedSegments()),
       snapshot.bufferedSeconds ?? 0
     );
     const queued = snapshot.queuedSeconds ?? 0;
     const confirmed = snapshot.confirmedSeconds ?? Math.max(0, snapshot.totalSeconds - queued);
-    const bufferedSegments = this.getBufferedSegments();
-    const serverIntervals = snapshot.coveredIntervals ?? [];
-    const totalSeconds = serverIntervals.length > 0
-      ? unionSeconds([...serverIntervals, ...bufferedSegments])
-      : confirmed + queued + bufferedSeconds;
+    const totalSeconds = Math.max(0, snapshot.totalSeconds ?? 0);
     const humanReadable = formatLiveDuration(totalSeconds);
     const agentState =
       snapshot.agentHealth &&
@@ -260,7 +255,7 @@ export class StatusBarController implements vscode.Disposable {
       `Today: ${humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}` +
       `\nConfirmed: ${formatLiveDuration(confirmed)}` +
       `\nOffline queued: ${formatLiveDuration(queued)}` +
-      `\nLocal buffer: ${formatLiveDuration(bufferedSeconds)}` +
+      `\nLocal pending: ${formatLiveDuration(bufferedSeconds)}` +
       (snapshot.lastIncrementSeconds === undefined
         ? ""
         : `\nLast increment: ${formatLiveDuration(snapshot.lastIncrementSeconds)}${snapshot.lastIncrementSource ? ` (${snapshot.lastIncrementSource})` : ""}`) +

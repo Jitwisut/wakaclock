@@ -346,6 +346,7 @@ impl AiUsageService {
                 // A session has no end until the agent reports one; the last event's time is not
                 // an end, only the latest thing seen so far.
                 ended_at: None,
+                last_event_at: rollup.last_event_at,
                 ai_agent: rollup.ai_agent,
                 ai_provider: primary_value(rollup.distinct_providers, rollup.latest_provider),
                 primary_model: primary_model(rollup.distinct_models, rollup.latest_model),

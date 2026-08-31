@@ -12,10 +12,9 @@ use std::path::{Path, PathBuf};
 /// `wakaclock ai sync` against the same transcript never re-attributes the same edit
 /// twice (plan.md 8.0's required outcome: "exactly one AI edit event for that patch").
 ///
-/// Not yet implemented: the cross-process `ai-sync.lock` plan.md 8.6 also calls for.
-/// A single local SQLite writer already serializes concurrent opens at the OS/SQLite
-/// level, so two overlapping `wakaclock ai sync` invocations won't corrupt state —
-/// they just aren't coordinated to skip redundant work, which the lock exists for.
+/// The CLI takes the companion cross-process `~/.wakaclock/ai-sync.lock` before it
+/// scans, delivers, and commits state. SQLite still protects this database if another
+/// integration writes directly, while the CLI lock prevents duplicate sync work.
 pub struct AiAttributionState {
     conn: Connection,
 }

@@ -40,6 +40,22 @@ export interface BufferedFileState {
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
+    /**
+     * Set only when the pending edit was matched against a broker sidecar event
+     * (`AiAttributionStore.classify`). Its presence, not `write`, is what should decide
+     * whether the next payload reports AI or Human attribution — a save immediately
+     * after an agent-owned edit must not fall back to Human just because `write` is true.
+     */
+    aiEventId?: string;
+    aiAgent?: string;
+    aiProvider?: string;
+    aiModel?: string;
+    aiSource?: string;
+    aiConfidence?: string;
+    aiActorType?: ActorType;
+    aiActorConfidence?: number;
+    aiLinesAdded?: number;
+    aiLinesDeleted?: number;
 }
 
 export interface ExtraHeartbeatPayload {

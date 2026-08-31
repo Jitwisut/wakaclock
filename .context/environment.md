@@ -22,6 +22,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `SERVER_HOST`, `SERVER_PORT` | no | Default `0.0.0.0`, see `config/mod.rs`. |
 | `INTERNAL_API_SECRET` | no | Unset ⇒ `POST /api/v1/internal/subscription` returns 404 rather than being reachable uncredentialed. |
 | `IDLE_TIMEOUT_MINUTES` | no | Max pause between proven activity intervals. `0` disables idle bridging. |
+| `AGENT_IDLE_TIMEOUT_MINUTES` | no | Agent-only bridge allowance. Keep the default for WakaTime-compatible `total_seconds`; set `0` when consumers should rely on measured `ai_coding_seconds` instead of bridging agent pauses. |
 | `ATOAXIS_EVENT_BUS_URL` | no | Kafka-compatible telemetry bootstrap for workers. |
 | `ATOAXIS_JOB_QUEUE_URL` | no | RabbitMQ-compatible job queue URL used by worker binaries. |
 | `ATOAXIS_REDIS_URL` | no | Redis-compatible cache/lock provider. |

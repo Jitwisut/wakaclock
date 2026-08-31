@@ -40,7 +40,8 @@ export function registerEventSubscriptions(
         event.contentChanges,
         activeSelection,
         Date.now(),
-        workspaceProject(event.document)
+        workspaceProject(event.document),
+        event.reason
       );
     }),
     vscode.workspace.onDidSaveTextDocument((document) => {

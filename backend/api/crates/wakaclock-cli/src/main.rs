@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use fs2::FileExt;
 use serde::Deserialize;
 use std::{
     collections::HashSet,
@@ -18,9 +19,10 @@ use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
         normalize_agent_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent, AiEventSource,
-        ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult, DiscoveryState,
-        GeminiCliParser, ParseContext, ParserCursor,
+        scan_ai_processes, AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent,
+        AiEventSource, ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult,
+        DiscoveryState, FileChangeKind, GeminiCliParser, ParseContext, ParserCursor,
+        WorkspaceWatcher,
     },
     api_client::ApiClient,
     broker::BrokerEventV1,
@@ -39,6 +41,38 @@ use wakaclock_core::{
 /// between nearby events, not remain permanently at zero seconds.
 const AI_ACTIVITY_TIMEOUT_SECONDS: f64 = MAX_ACTIVITY_GAP_SECONDS;
 const AI_ACTIVITY_STREAM: &str = "ai";
+
+/// Process-wide lease for transcript sync. SQLite serializes writes, but without a
+/// separate lock two CLI processes can both parse and submit the same new event before
+/// either marks it delivered. Holding this OS lock across parsing, delivery and state
+/// updates makes the operation one-writer-at-a-time.
+struct AiSyncLock {
+    _file: fs::File,
+}
+
+impl AiSyncLock {
+    fn acquire() -> Result<Option<Self>, Box<dyn Error>> {
+        let home = dirs::home_dir().ok_or("cannot resolve home directory for ai-sync.lock")?;
+        Self::try_acquire_at(&home.join(".wakaclock").join("ai-sync.lock"))
+    }
+
+    fn try_acquire_at(path: &Path) -> Result<Option<Self>, Box<dyn Error>> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(Box::new(error)),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "wakaclock", version, about = "Wakaclock CLI Hub")]
@@ -196,6 +230,25 @@ enum Commands {
         #[command(subcommand)]
         action: RepairAction,
     },
+    /// planai2.md Phase 0: one command that reports where the AI-detection pipeline
+    /// is actually broken — CLI identity, broker health, transcript scan lag, and
+    /// the last delivery failure — instead of needing several debug logs and manual
+    /// checks to find the same thing (the 2026-08-31 audit that motivated this
+    /// command found a stale binary, a stopped service, and a lagging scanner this
+    /// way, by hand).
+    Doctor {
+        #[command(subcommand)]
+        target: DoctorTarget,
+    },
+}
+
+#[derive(Subcommand)]
+enum DoctorTarget {
+    /// AI-detection pipeline health: CLI identity, broker, transcripts, delivery.
+    Ai {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -292,6 +345,28 @@ enum AiAction {
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
     Status,
+    /// Phase A of the Universal Detector Core (planai.md Phase 4): scan the local
+    /// process table for known AI coding tools currently running and report what was
+    /// found — presence only, never an attribution decision. Reads no file contents;
+    /// nothing is sent anywhere.
+    ProcessScan {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Phase B of the Universal Detector Core (planai.md Phase 3): watch a workspace
+    /// root and print each `FILE_CHANGED` event as it happens — evidence only, never
+    /// an attribution decision. Runs until `--seconds` elapses or Ctrl-C. No file
+    /// content is ever read; nothing is sent anywhere.
+    Watch {
+        /// Directory to watch recursively. Defaults to the current directory.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Stop after this many seconds instead of running until interrupted.
+        #[arg(long)]
+        seconds: Option<u64>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Ingest one privacy-safe AI file-mutation event from stdin as JSON. This is the
     /// universal adapter surface for MCP/tool bridges (for example ChatGPT -> Tan) and
     /// agents that do not expose a transcript format WakaClock can parse itself.
@@ -1133,6 +1208,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::Ai { action } => match action {
             AiAction::Status => print_ai_status()?,
+            AiAction::ProcessScan { json } => print_ai_process_scan(json),
+            AiAction::Watch {
+                path,
+                seconds,
+                json,
+            } => run_ai_watch(path, seconds, json)?,
             AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
             AiAction::ToolBefore { json } => run_ai_tool_before(json)?,
             AiAction::ToolAfter { json } => run_ai_tool_after(&config, &api_client, json).await?,
@@ -1296,6 +1377,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
         },
+        Commands::Doctor { target } => match target {
+            DoctorTarget::Ai { json } => print_ai_doctor_report(&config, json)?,
+        },
     }
 
     Ok(())
@@ -1400,6 +1484,359 @@ pub(crate) fn queue_count() -> usize {
     Queue::open().and_then(|queue| queue.len()).unwrap_or(0)
 }
 
+/// `wakaclock ai process-scan`: prints what `scan_ai_processes()` (wakaclock-core's
+/// Phase A process observer) found right now. Presence only — this never decides that
+/// a file change belongs to whichever agent is running; that correlation is planai.md
+/// Phase 8's job, not yet built.
+fn print_ai_process_scan(json: bool) {
+    let detected = scan_ai_processes();
+    if json {
+        let rows: Vec<serde_json::Value> = detected
+            .iter()
+            .map(|process| {
+                serde_json::json!({
+                    "agent": process.agent,
+                    "pid": process.pid,
+                    "cwd": process.cwd,
+                    "started_at_epoch_seconds": process.started_at_epoch_seconds,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "detected": rows, "count": detected.len() })
+        );
+        return;
+    }
+    if detected.is_empty() {
+        println!("No known AI tool process detected.");
+        return;
+    }
+    for process in &detected {
+        match &process.cwd {
+            Some(cwd) => println!(
+                "{} (pid {}): cwd={}",
+                process.agent,
+                process.pid,
+                cwd.display()
+            ),
+            None => println!("{} (pid {}): cwd unavailable", process.agent, process.pid),
+        }
+    }
+}
+
+/// `wakaclock ai watch`: prints every in-scope `FILE_CHANGED` event
+/// `WorkspaceWatcher` (wakaclock-core's Phase B filesystem observer) reports, until
+/// `--seconds` elapses or the process is interrupted. Presence-only, same as
+/// `process-scan` above — this never decides an event is AI-caused.
+fn run_ai_watch(
+    path: Option<PathBuf>,
+    seconds: Option<u64>,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let root = path.unwrap_or_else(|| PathBuf::from("."));
+    let watcher = WorkspaceWatcher::watch(&root)?;
+    let deadline = seconds.map(|secs| std::time::Instant::now() + Duration::from_secs(secs));
+
+    if !json {
+        println!("Watching {} (Ctrl-C to stop)", root.display());
+    }
+
+    loop {
+        if let Some(deadline) = deadline {
+            if std::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+        }
+        // Poll in short slices so the `--seconds` deadline is honored promptly
+        // instead of blocking for the full remaining window on one recv call.
+        let Some(event) = watcher.next_event(Duration::from_millis(500)) else {
+            continue;
+        };
+        let kind = match event.kind {
+            FileChangeKind::Created => "created",
+            FileChangeKind::Modified => "modified",
+            FileChangeKind::Removed => "removed",
+        };
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "path": event.path,
+                    "kind": kind,
+                    "observed_at": event.observed_at.to_rfc3339(),
+                })
+            );
+        } else {
+            println!("{kind}: {}", event.path.display());
+        }
+    }
+}
+
+/// Which `wakaclock` binary a bare `wakaclock` invocation on `PATH` would resolve to
+/// right now — the same lookup a shell hook script does when `WAKACLOCK_CLI_PATH` and
+/// `~/.wakaclock/cli-path` are both unset. `None` if nothing on `PATH` is executable.
+fn resolve_on_path() -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let exe_name = if cfg!(windows) {
+        "wakaclock.exe"
+    } else {
+        "wakaclock"
+    };
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(exe_name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// True when the binary currently running this process is not the same file a shell
+/// hook would resolve to (`hook_would_resolve_to` — the `cli-path` override if set,
+/// else whatever `resolve_on_path()` found). Compares canonicalized paths so a
+/// symlink or a relative-vs-absolute spelling of the same file does not read as a
+/// mismatch. `false` (not "unknown") when either side is unavailable — a doctor
+/// report should not accuse a hook of drift it cannot actually observe.
+fn cli_identity_mismatch(current_exe: Option<&Path>, hook_would_resolve_to: Option<&Path>) -> bool {
+    match (current_exe, hook_would_resolve_to) {
+        (Some(current), Some(resolved)) => {
+            fs::canonicalize(current).ok() != fs::canonicalize(resolved).ok()
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod ai_doctor_tests {
+    use super::*;
+
+    #[test]
+    fn no_mismatch_when_both_paths_are_the_same_real_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-doctor-test-same-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("wakaclock");
+        fs::write(&binary, b"fake").unwrap();
+
+        assert!(!cli_identity_mismatch(Some(&binary), Some(&binary)));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mismatch_when_the_hook_would_resolve_to_a_different_real_file() {
+        // The exact scenario this check exists for: a stale binary sitting on PATH
+        // (or, here, at a different path standing in for one) that differs from the
+        // binary actually running right now — found for real on this machine's own
+        // `~/.cargo/bin/wakaclock` (8 days stale, no `broker` subcommand at all) on
+        // 2026-08-31.
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-doctor-test-diff-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("current-wakaclock");
+        let stale = dir.join("stale-wakaclock");
+        fs::write(&current, b"current build").unwrap();
+        fs::write(&stale, b"stale build").unwrap();
+
+        assert!(cli_identity_mismatch(Some(&current), Some(&stale)));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_mismatch_reported_when_either_side_is_unknown() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-doctor-test-unknown-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("wakaclock");
+        fs::write(&binary, b"fake").unwrap();
+
+        assert!(!cli_identity_mismatch(None, Some(&binary)));
+        assert!(!cli_identity_mismatch(Some(&binary), None));
+        assert!(!cli_identity_mismatch(None, None));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_on_path_finds_a_real_executable_placed_first_on_a_synthetic_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-doctor-test-path-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let exe_name = if cfg!(windows) {
+            "wakaclock.exe"
+        } else {
+            "wakaclock"
+        };
+        let planted = dir.join(exe_name);
+        fs::write(&planted, b"fake").unwrap();
+
+        let previous_path = std::env::var_os("PATH");
+        let new_path = match &previous_path {
+            Some(existing) => {
+                let mut paths = vec![dir.clone()];
+                paths.extend(std::env::split_paths(existing));
+                std::env::join_paths(paths).unwrap()
+            }
+            None => dir.clone().into_os_string(),
+        };
+        // SAFETY: this test does not run concurrently with another test that reads
+        // PATH for a resolution decision — every other test in this module works
+        // against explicit paths, not PATH lookup.
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
+        let found = resolve_on_path();
+        unsafe {
+            match &previous_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(found, Some(planted));
+    }
+}
+
+/// planai2.md Phase 0.5: `wakaclock doctor ai`. Reuses the broker/queue/service
+/// status this crate's own `wakaclock broker status` already computes
+/// (`broker_status_json`) rather than re-deriving it, and adds the two checks that
+/// status alone does not cover: whether the binary a bare `wakaclock` on `PATH`
+/// would actually run is the same one currently running this command, and — per
+/// agent — how far each transcript's own modification time has drifted ahead of
+/// this agent's saved parser cursor. Both were real, confirmed findings on the
+/// development machine on 2026-08-31: a `PATH` binary 8 days stale with no `broker`
+/// subcommand at all, and a Codex transcript with backlog the running service's own
+/// aggregate `last_scan_at` could not localize to one agent.
+fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Error>> {
+    let current_exe = std::env::current_exe().ok();
+    let on_path = resolve_on_path();
+    let cli_path_override = fs::read_to_string(
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".wakaclock")
+            .join("cli-path"),
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
+    // A hook with neither override set falls back to whatever `wakaclock` resolves
+    // to on PATH — matching every shell script in extensions/ai-agents/*/scripts/.
+    let hook_would_resolve_to = cli_path_override
+        .clone()
+        .map(PathBuf::from)
+        .or_else(|| on_path.clone());
+    let cli_identity_mismatch =
+        cli_identity_mismatch(current_exe.as_deref(), hook_would_resolve_to.as_deref());
+
+    let broker = broker_status_json().unwrap_or_else(
+        |error| serde_json::json!({ "error": format!("broker status unavailable: {error}") }),
+    );
+
+    let context = ai_discovery_context()?;
+    let state = AiAttributionState::open().ok();
+    let mut agents = Vec::new();
+    for (id, parser) in supported_ai_parsers() {
+        let discovery = parser.discover(&context);
+        let installed = !matches!(discovery.state, DiscoveryState::NotInstalled);
+        let (transcript_path, transcript_modified_at) = match discovery.state {
+            DiscoveryState::TranscriptFound { path } => {
+                let modified = fs::metadata(&path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs());
+                (Some(path), modified)
+            }
+            _ => (None, None),
+        };
+        let cursor_last_record_at = transcript_path.as_ref().and_then(|path| {
+            let cursor_key = format!("{id}:{}", path.to_string_lossy());
+            state
+                .as_ref()
+                .and_then(|state| state.load_cursor(&cursor_key).ok().flatten())
+                .and_then(|cursor| cursor.last_record_time)
+                .map(|time| time.timestamp().max(0) as u64)
+        });
+        let lag_seconds = match (transcript_modified_at, cursor_last_record_at) {
+            (Some(modified), Some(scanned)) => Some(modified.saturating_sub(scanned)),
+            (Some(_), None) => None, // transcript exists, never scanned — reported separately
+            _ => None,
+        };
+        agents.push(serde_json::json!({
+            "agent": id,
+            "installed": installed,
+            "transcript_found": transcript_path.is_some(),
+            "ever_scanned": cursor_last_record_at.is_some(),
+            "lag_seconds": lag_seconds,
+        }));
+    }
+
+    let last_delivery_failure = dirs::home_dir()
+        .map(|home| home.join(".wakaclock").join("last-delivery-failure.json"))
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+
+    let report = serde_json::json!({
+        "cli_identity": {
+            "running_binary": current_exe,
+            "path_resolved_binary": on_path,
+            "cli_path_override": cli_path_override,
+            "hook_would_use": hook_would_resolve_to,
+            "mismatch": cli_identity_mismatch,
+        },
+        "broker": broker,
+        "agents": agents,
+        "outbound_queue_depth": queue_count(),
+        "last_delivery_failure": last_delivery_failure,
+        "configured_server_url": config.server_url,
+    });
+
+    if json {
+        println!("{report}");
+        return Ok(());
+    }
+
+    println!("== CLI identity ==");
+    if cli_identity_mismatch {
+        println!(
+            "  MISMATCH: this process is running {}, but a shell hook would use {}",
+            current_exe
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+            hook_would_resolve_to
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none found>".to_string())
+        );
+    } else {
+        println!("  ok — hooks resolve to the same binary this command is running");
+    }
+    println!("== Broker ==");
+    println!("  {broker}");
+    println!("== Agents ==");
+    for agent in &agents {
+        println!("  {agent}");
+    }
+    println!("Outbound queue depth: {}", queue_count());
+    match &last_delivery_failure {
+        Some(failure) => println!("Last delivery failure: {failure}"),
+        None => println!("Last delivery failure: none recorded"),
+    }
+    Ok(())
+}
+
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
     vec![
         ("claude-code", Box::new(ClaudeCodeParser::new())),
@@ -1476,6 +1913,17 @@ async fn run_ai_sync(
     from_start: bool,
     transcript_override: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
+    let _sync_lock = if dry_run {
+        None
+    } else {
+        match AiSyncLock::acquire()? {
+            Some(lock) => Some(lock),
+            None => {
+                eprintln!("AI sync already running (AlreadyRunning); skipping this invocation");
+                return Ok(());
+            }
+        }
+    };
     let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
     let mut first_delivery_error: Option<AppError> = None;
@@ -2108,10 +2556,22 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         .to_ascii_lowercase()
         .as_str()
     {
-        "create" => wakaclock_core::broker::BrokerChangeKind::Create,
-        "modify" | "write" | "update" => wakaclock_core::broker::BrokerChangeKind::Modify,
-        "rename" | "move" => wakaclock_core::broker::BrokerChangeKind::Rename,
-        "delete" | "remove" => wakaclock_core::broker::BrokerChangeKind::Delete,
+        // Both the verb ("modify", used by the wire/API vocabulary this function's
+        // own caller — `tool_change_input` — is supposed to speak) and the adjective
+        // ("modified", what `WorkspaceChangeKind::as_str()` actually emits) are
+        // accepted here: this struct also deserializes directly from external `ai
+        // emit` stdin JSON, where either spelling is a reasonable thing for a caller
+        // to send. Before this, every real shell-mutation tool call (`ai tool-before`
+        // / `ai tool-after` around `sed`, a Python codemod, or any other in-place
+        // edit of an existing file — the single most common case) failed at this
+        // match with "unsupported broker change_kind: modified" and never reached
+        // the server at all.
+        "create" | "created" => wakaclock_core::broker::BrokerChangeKind::Create,
+        "modify" | "modified" | "write" | "update" => {
+            wakaclock_core::broker::BrokerChangeKind::Modify
+        }
+        "rename" | "renamed" | "move" => wakaclock_core::broker::BrokerChangeKind::Rename,
+        "delete" | "deleted" | "remove" => wakaclock_core::broker::BrokerChangeKind::Delete,
         other => return Err(format!("unsupported broker change_kind: {other}").into()),
     };
     let previous_entity = input
@@ -2835,6 +3295,28 @@ mod generic_ai_ingress_tests {
     }
 
     #[test]
+    fn broker_event_from_generic_accepts_the_change_kind_the_shell_hook_engine_sends() {
+        // Regression test: `tool_change_input` (the shell/MCP tool-before/tool-after
+        // engine every agent's shell hook shares — see tool_snapshot.rs) builds
+        // `change_kind` from `WorkspaceChangeKind::as_str()`, which returns the
+        // adjective form ("created"/"modified"/"deleted"/"renamed"). This function's
+        // match previously only accepted the verb form ("create"/"modify"/...), so
+        // every real shell mutation of an *existing* file — sed, a Python codemod,
+        // any agent's Bash tool — failed here with "unsupported broker change_kind:
+        // modified" and the heartbeat never reached the server. Found by
+        // scripts/ai-attribution-integration.py running the real CLI against a real
+        // shell mutation, not by any in-process fixture.
+        for kind in [
+            "modify", "modified", "create", "created", "delete", "deleted", "rename", "renamed",
+        ] {
+            let mut input = sample_input();
+            input.change_kind = Some(kind.to_string());
+            broker_event_from_generic(&input)
+                .unwrap_or_else(|error| panic!("change_kind {kind:?} should be accepted: {error}"));
+        }
+    }
+
+    #[test]
     fn generic_ingress_protocol_rejects_raw_prompt_or_content_fields() {
         let json = serde_json::json!({
             "event_id": "evt-1",
@@ -2889,5 +3371,28 @@ mod generic_ai_ingress_tests {
         let event = generic_ai_edit_event(&input).expect("event normalizes");
         assert_eq!(event.source, AiEventSource::AgentHook);
         assert_eq!(event.confidence, AiConfidence::Correlated);
+    }
+
+    #[test]
+    fn ai_sync_lock_allows_one_process_and_releases_after_drop() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-ai-sync-lock-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let first = AiSyncLock::try_acquire_at(&path)
+            .expect("first lock attempt should succeed")
+            .expect("first process should acquire the lock");
+        assert!(
+            AiSyncLock::try_acquire_at(&path)
+                .expect("second lock attempt should be handled")
+                .is_none(),
+            "a second process must observe the active lease"
+        );
+        drop(first);
+        assert!(AiSyncLock::try_acquire_at(&path)
+            .expect("lock should be reacquirable")
+            .is_some());
+        let _ = fs::remove_file(path);
     }
 }

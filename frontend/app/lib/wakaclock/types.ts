@@ -43,6 +43,8 @@ export const INSIGHT_TYPES: InsightType[] = [
  */
 export interface EvidenceSplit {
   agent_seconds: number;
+  ai_coding_seconds: number;
+  ai_session_seconds: number;
   attended_seconds: number;
   inferred_seconds: number;
   other_seconds: number;

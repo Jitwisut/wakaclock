@@ -61,6 +61,71 @@ pub fn count_unified_diff_lines(diff_text: &str) -> LineDelta {
     delta
 }
 
+/// One file's line delta from an OpenAI `apply_patch` DSL blob — Codex's actual
+/// real-world tool-call format (`response_item` → `custom_tool_call` with
+/// `name: "apply_patch"`), not the `event_msg`/`patch_apply_end` shape this parser
+/// was originally written against. Confirmed against 156 real local Codex session
+/// files on 2026-08-31: every one of them uses this format; none used
+/// `patch_apply_end`. Ported from the shell hook's awk implementation
+/// (`extensions/ai-agents/codex/heartbeat-hook.sh`) so the transcript parser and the
+/// shell hook agree on one parsing rule instead of drifting independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyPatchFileChange {
+    pub path: String,
+    /// Set only when a `*** Move to:` marker renames the file this section started
+    /// with `*** Update File:`.
+    pub previous_path: Option<String>,
+    pub delta: LineDelta,
+}
+
+/// Parses `*** Begin Patch` / `*** Update File: <path>` / `*** Add File: <path>` /
+/// `*** Delete File: <path>` / `*** Move to: <path>` / `*** End Patch` markers, with
+/// `+`/`-`-prefixed body lines counted per file section — one call can touch several
+/// files, each reported separately rather than pooling all counts under the first
+/// path (the bug the shell hook's own doc comment records fixing with `head -n1`).
+pub fn parse_apply_patch(text: &str) -> Vec<ApplyPatchFileChange> {
+    let mut out = Vec::new();
+    let mut current: Option<ApplyPatchFileChange> = None;
+
+    for line in text.lines() {
+        if let Some(path) = line
+            .strip_prefix("*** Update File: ")
+            .or_else(|| line.strip_prefix("*** Add File: "))
+            .or_else(|| line.strip_prefix("*** Delete File: "))
+        {
+            if let Some(change) = current.take() {
+                out.push(change);
+            }
+            current = Some(ApplyPatchFileChange {
+                path: path.to_string(),
+                previous_path: None,
+                delta: LineDelta::default(),
+            });
+            continue;
+        }
+        if let Some(new_path) = line.strip_prefix("*** Move to: ") {
+            if let Some(change) = current.as_mut() {
+                change.previous_path =
+                    Some(std::mem::replace(&mut change.path, new_path.to_string()));
+            }
+            continue;
+        }
+        if line.starts_with("*** End Patch") {
+            if let Some(change) = current.take() {
+                out.push(change);
+            }
+            continue;
+        }
+        if let Some(change) = current.as_mut() {
+            change.delta.add_line(line);
+        }
+    }
+    if let Some(change) = current {
+        out.push(change);
+    }
+    out
+}
+
 /// Count lines in a whole-file content blob as a pure addition — Claude Code's
 /// `Write` result for a brand-new file carries an empty `structuredPatch` (there is
 /// nothing to diff against) and puts the full text in `content` instead. Mirrors the
@@ -165,5 +230,76 @@ mod tests {
             .as_object()
             .expect("changes map");
         assert_eq!(changes.len(), 2, "one apply_patch call touching two files");
+    }
+
+    #[test]
+    fn apply_patch_splits_a_multi_file_call_into_one_change_per_file() {
+        // Regression test for the shell hook's own documented `head -n1` bug
+        // (`extensions/ai-agents/codex/heartbeat-hook.sh`): a single apply_patch call
+        // touching several files must report each file separately, not pool every
+        // count under the first path.
+        let patch = "*** Begin Patch\n\
+*** Update File: src/a.py\n\
+@@\n\
+-old_a\n\
++new_a\n\
++extra_a\n\
+*** Add File: src/b.py\n\
++line_one\n\
++line_two\n\
+*** Delete File: src/c.py\n\
+-gone_one\n\
+-gone_two\n\
+-gone_three\n\
+*** End Patch\n";
+        let changes = parse_apply_patch(patch);
+        assert_eq!(changes.len(), 3);
+
+        assert_eq!(changes[0].path, "src/a.py");
+        assert_eq!(changes[0].previous_path, None);
+        assert_eq!(changes[0].delta.added, 2);
+        assert_eq!(changes[0].delta.deleted, 1);
+
+        assert_eq!(changes[1].path, "src/b.py");
+        assert_eq!(changes[1].delta.added, 2);
+        assert_eq!(changes[1].delta.deleted, 0);
+
+        assert_eq!(changes[2].path, "src/c.py");
+        assert_eq!(changes[2].delta.added, 0);
+        assert_eq!(changes[2].delta.deleted, 3);
+    }
+
+    #[test]
+    fn apply_patch_move_to_renames_and_keeps_the_body_deltas() {
+        let patch = "*** Begin Patch\n\
+*** Update File: old/name.py\n\
+*** Move to: new/name.py\n\
+-old_line\n\
++new_line\n\
+*** End Patch\n";
+        let changes = parse_apply_patch(patch);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "new/name.py");
+        assert_eq!(changes[0].previous_path.as_deref(), Some("old/name.py"));
+        assert_eq!(changes[0].delta.added, 1);
+        assert_eq!(changes[0].delta.deleted, 1);
+    }
+
+    #[test]
+    fn apply_patch_ignores_stray_lines_before_the_first_file_marker() {
+        let patch = "*** Begin Patch\nsome preamble that is not a file marker\n*** Update File: x.py\n+added\n*** End Patch\n";
+        let changes = parse_apply_patch(patch);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "x.py");
+        assert_eq!(changes[0].delta.added, 1);
+    }
+
+    #[test]
+    fn apply_patch_on_empty_or_malformed_text_yields_no_changes() {
+        assert_eq!(parse_apply_patch(""), Vec::new());
+        assert_eq!(
+            parse_apply_patch("not a patch at all\njust text\n"),
+            Vec::new()
+        );
     }
 }

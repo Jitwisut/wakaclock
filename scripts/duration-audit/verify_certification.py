@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import re
 import sys
 from pathlib import Path
 
 ACTORS = ("human", "ai_verified", "ai_inferred", "unknown")
+MAX_CERTIFICATION_AGE = dt.timedelta(days=30)
+MAX_FUTURE_SKEW = dt.timedelta(minutes=5)
 REQUIRED = {
     "schema_version",
     "status",
@@ -76,6 +79,29 @@ def main() -> int:
             errors.append("schema_version must be 2")
         if report.get("status") != "pass":
             errors.append("status must be pass")
+        checked_at = report.get("checked_at_utc")
+        if not isinstance(checked_at, str):
+            errors.append("checked_at_utc must be an ISO-8601 timestamp")
+        else:
+            try:
+                parsed_checked_at = dt.datetime.fromisoformat(
+                    checked_at.replace("Z", "+00:00")
+                )
+                if parsed_checked_at.tzinfo is None:
+                    errors.append("checked_at_utc must include a timezone")
+                else:
+                    age = dt.datetime.now(dt.timezone.utc) - parsed_checked_at.astimezone(
+                        dt.timezone.utc
+                    )
+                    if age > MAX_CERTIFICATION_AGE:
+                        errors.append(
+                            "certification is older than "
+                            f"{MAX_CERTIFICATION_AGE.days} days"
+                        )
+                    elif age < -MAX_FUTURE_SKEW:
+                        errors.append("checked_at_utc is too far in the future")
+            except ValueError:
+                errors.append("checked_at_utc must be an ISO-8601 timestamp")
         sha = report.get("tested_commit_sha")
         if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
             errors.append("tested_commit_sha must be a full Git SHA")

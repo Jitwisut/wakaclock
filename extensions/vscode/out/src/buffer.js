@@ -7,6 +7,15 @@ const node_crypto_1 = require("node:crypto");
 const utils_1 = require("./utils");
 /** Float timestamps survive a JSON round trip; compare interval edges with slack. */
 const SEGMENT_MATCH_EPSILON_SECONDS = 0.001;
+/**
+ * Mirror `vscode.TextDocumentChangeReason`'s numeric values without importing the
+ * real enum: this file only takes `vscode` types, not runtime values, so it stays
+ * testable without a VS Code host. `events.ts` passes the real
+ * `TextDocumentChangeEvent.reason` straight through — a numeric enum member is
+ * structurally a `number`, so no cast is needed at that call site.
+ */
+const TEXT_DOCUMENT_CHANGE_REASON_UNDO = 1;
+const TEXT_DOCUMENT_CHANGE_REASON_REDO = 2;
 class HeartbeatBufferManager {
     getConfig;
     cli;
@@ -34,7 +43,7 @@ class HeartbeatBufferManager {
         this.aiAttributionStore = aiAttributionStore;
         this.onActivity = onActivity;
     }
-    async recordTextChange(document, changes, selection, now = Date.now(), project) {
+    async recordTextChange(document, changes, selection, now = Date.now(), project, changeReason) {
         if (!(0, utils_1.isFileDocument)(document) || changes.length === 0) {
             return;
         }
@@ -53,11 +62,24 @@ class HeartbeatBufferManager {
         // otherwise a nearby AI sidecar event can fall outside the correlation window.
         state.lastEditAt = now;
         state.lastEditIntervalStartAt = intervalStartAt;
+        // Undo/redo replays content already counted once before, and it is specifically
+        // the *line* delta that gets compared against nearby AI sidecar evidence
+        // (classifyPendingAttribution → AiAttributionStore.classify): a large undo could
+        // otherwise manufacture a coincidental line-count match against unrelated AI
+        // activity, or double-count a human's own earlier edit as new lines written.
+        // Keystrokes/chars still accumulate regardless — they carry no line-match risk,
+        // and withholding them here would make an undo-only edit indistinguishable from
+        // no activity at all (`hasPendingActivity` would see nothing to report), silently
+        // dropping the heartbeat whose timestamp anchor the idle bridge relies on to
+        // resume the clock after a break (see docs/duration-accuracy-audit.md Finding 0).
         state.keystrokes += summary.keystrokes;
         state.charsAdded += summary.charsAdded;
         state.charsDeleted += summary.charsDeleted;
-        state.humanLinesAdded += summary.linesAdded;
-        state.humanLinesDeleted += summary.linesDeleted;
+        if (changeReason !== TEXT_DOCUMENT_CHANGE_REASON_UNDO &&
+            changeReason !== TEXT_DOCUMENT_CHANGE_REASON_REDO) {
+            state.humanLinesAdded += summary.linesAdded;
+            state.humanLinesDeleted += summary.linesDeleted;
+        }
         this.updateSelectionState(state, selection);
         this.onActivity?.();
         // WakaTime sends the first file-change heartbeat immediately. Subsequent
@@ -266,6 +288,29 @@ class HeartbeatBufferManager {
             state.charsAdded > 0 ||
             state.charsDeleted > 0 ||
             state.activitySegments.length > 0;
+        // `state.aiEventId` is set only when this flush is reporting an edit the broker
+        // sidecar already matched to an agent (see classifyPendingAttribution). That takes
+        // priority over `write`: a save that immediately follows an agent-owned edit must
+        // not fall back to Human just because a save happened, since every human-side
+        // counter was already zeroed for this exact edit.
+        const aiAttribution = state.aiEventId
+            ? {
+                actor_type: (state.aiActorType ??
+                    (state.aiConfidence === "verified" ? "ai_verified" : "ai_inferred")),
+                actor_confidence: state.aiActorConfidence ?? (state.aiConfidence === "verified" ? 1 : 0.6),
+                ai_agent: state.aiAgent,
+                ai_provider: state.aiProvider,
+                ai_model: state.aiModel,
+                ai_source: state.aiSource,
+                ai_confidence: state.aiConfidence,
+                ai_event_id: state.aiEventId,
+                ai_lines_added: state.aiLinesAdded,
+                ai_lines_deleted: state.aiLinesDeleted
+            }
+            : {
+                actor_type: (hasAmbiguousLines ? "unknown" : hasHumanEvidence ? "human" : "unknown"),
+                actor_confidence: hasAmbiguousLines ? 0 : hasHumanEvidence ? 1 : 0
+            };
         return {
             entity: state.entity,
             entity_type: "file",
@@ -284,15 +329,14 @@ class HeartbeatBufferManager {
             active_seconds: (0, activity_1.unionSeconds)(state.activitySegments),
             heartbeat_id: state.heartbeatId,
             activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined,
-            actor_type: hasAmbiguousLines ? "unknown" : hasHumanEvidence ? "human" : "unknown",
-            actor_confidence: hasAmbiguousLines ? 0 : hasHumanEvidence ? 1 : 0
+            ...aiAttribution
         };
     }
     async classifyPendingAttribution(state, now) {
         if (state.humanLinesAdded === 0 && state.humanLinesDeleted === 0) {
             return;
         }
-        const attribution = await this.aiAttributionStore.classifyRecentEdit(state.entity, state.lastEditAt ?? state.lastActivityAt ?? now, state.humanLinesAdded, state.humanLinesDeleted);
+        const { attribution, event } = await this.aiAttributionStore.classify(state.entity, state.lastEditAt ?? state.lastActivityAt ?? now, state.humanLinesAdded, state.humanLinesDeleted);
         if (attribution === "human") {
             return;
         }
@@ -338,6 +382,25 @@ class HeartbeatBufferManager {
             return [{ ...segment, end: boundary }];
         });
         state.activeSeconds = (0, activity_1.unionSeconds)(state.activitySegments);
+        // Only carry the matched event's provenance onto the payload when nothing
+        // developer-earned survived the truncation above. If a segment remains, the
+        // developer's own time is still in this flush and the payload must report Human
+        // for it — the agent's own attribution already reaches the server independently,
+        // through the CLI/broker path that classified this edit in the first place.
+        // Reporting `ai_verified` here on top of a surviving human segment would relabel
+        // the developer's own earned seconds as AI activity server-side.
+        if (state.activitySegments.length === 0) {
+            state.aiEventId = event?.event_id;
+            state.aiAgent = event?.agent;
+            state.aiProvider = event?.provider;
+            state.aiModel = event?.model;
+            state.aiSource = event?.source;
+            state.aiConfidence = event?.confidence;
+            state.aiActorType = event?.actor_type;
+            state.aiActorConfidence = event?.actor_confidence;
+            state.aiLinesAdded = event?.lines_added ?? undefined;
+            state.aiLinesDeleted = event?.lines_deleted ?? undefined;
+        }
     }
     observeActivity(state, now) {
         const previous = this.lastObservedActivityAt;
@@ -388,6 +451,16 @@ class HeartbeatBufferManager {
         state.lastEditIntervalStartAt = undefined;
         state.lastActivityAt = undefined;
         state.pendingWrite = false;
+        state.aiEventId = undefined;
+        state.aiAgent = undefined;
+        state.aiProvider = undefined;
+        state.aiModel = undefined;
+        state.aiSource = undefined;
+        state.aiConfidence = undefined;
+        state.aiActorType = undefined;
+        state.aiActorConfidence = undefined;
+        state.aiLinesAdded = undefined;
+        state.aiLinesDeleted = undefined;
     }
     captureSnapshot(state, category, write) {
         state.heartbeatId ||= (0, node_crypto_1.randomUUID)();
@@ -410,33 +483,6 @@ class HeartbeatBufferManager {
         };
         this.clearMeasurements(state);
         return snapshot;
-    }
-    restoreSnapshot(entity, snapshot) {
-        const state = this.states.get(entity);
-        if (!state) {
-            return;
-        }
-        state.activeSeconds += snapshot.activeSeconds;
-        const existingSegments = state.activitySegments;
-        state.activitySegments = [...snapshot.activitySegments, ...existingSegments];
-        state.activeSeconds = (0, activity_1.unionSeconds)(state.activitySegments);
-        state.heartbeatId ||= snapshot.payload.heartbeat_id;
-        state.keystrokes += snapshot.keystrokes;
-        state.charsAdded += snapshot.charsAdded;
-        state.charsDeleted += snapshot.charsDeleted;
-        state.humanLinesAdded += snapshot.humanLinesAdded;
-        state.humanLinesDeleted += snapshot.humanLinesDeleted;
-        state.unattributedLinesAdded += snapshot.unattributedLinesAdded;
-        state.unattributedLinesDeleted += snapshot.unattributedLinesDeleted;
-        state.pendingWrite ||= snapshot.pendingWrite;
-        state.lastEditAt = Math.min(state.lastEditAt ?? Number.POSITIVE_INFINITY, snapshot.lastEditAt ?? Number.POSITIVE_INFINITY);
-        if (state.lastEditAt === Number.POSITIVE_INFINITY) {
-            state.lastEditAt = undefined;
-        }
-        state.lastActivityAt = Math.max(state.lastActivityAt ?? Number.NEGATIVE_INFINITY, snapshot.lastActivityAt ?? Number.NEGATIVE_INFINITY);
-        if (state.lastActivityAt === Number.NEGATIVE_INFINITY) {
-            state.lastActivityAt = undefined;
-        }
     }
     commitSnapshot(entity, now, _snapshot) {
         const state = this.states.get(entity);

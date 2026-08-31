@@ -13,7 +13,7 @@ use crate::model::heartbeat::{ActivityIntervalRow, HeartbeatRow};
 use crate::model::project_rule::ProjectRuleRow;
 use crate::model::reprocess::ReprocessData;
 use crate::services::account_analytics::AccountAnalyticsService;
-use crate::services::heartbeat::{clamp_to_evidence_window, normalize_interval_source};
+use crate::services::heartbeat::clamp_to_evidence_window;
 use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_rule::ProjectRuleService;
 use wakaclock_core::heartbeat::ActivitySegment;
@@ -448,7 +448,11 @@ fn rebuild_activity_intervals(rows: &[HeartbeatRow]) -> Vec<ActivityIntervalRow>
                 heartbeat_id: heartbeat_id.clone(),
                 start: segment.start,
                 end: segment.end,
-                source: normalize_interval_source(segment.source.as_deref(), &row.actor_type),
+                source: wakaclock_core::heartbeat::normalize_activity_source(
+                    segment.source.as_deref(),
+                    &row.actor_type,
+                )
+                .to_string(),
                 entity: row.entity.clone(),
                 project: row.project.clone(),
                 project_id: row.project_id,

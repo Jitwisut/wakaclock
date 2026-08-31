@@ -9,7 +9,9 @@ use std::{
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
-use wakaclock_core::heartbeat::{ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS};
+use wakaclock_core::heartbeat::{
+    normalize_activity_source, ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS,
+};
 
 /// One raw interval recovered from a heartbeat. The fallback interval for a legacy
 /// heartbeat is deliberately capped at the strict 120-second window; old payloads that
@@ -165,6 +167,54 @@ impl ActivityTimelineService {
         self.bridge
     }
 
+    /// Returns bounded AI-session intervals for a user and range. Closed sessions use
+    /// their explicit end; open sessions stop at their last observed event. The latter
+    /// is deliberately not `now` or `updated_at`, so a stale projection cannot turn an
+    /// old agent session into unbounded working time.
+    pub async fn ai_session_intervals(
+        &self,
+        user_id: Uuid,
+        start: f64,
+        end: f64,
+    ) -> Result<Vec<(f64, f64)>> {
+        #[derive(Debug, clickhouse::Row, Deserialize)]
+        struct AiSessionIntervalRow {
+            started_at: u32,
+            ended_at: Option<u32>,
+            last_event_at: u32,
+        }
+
+        let rows = self
+            .clickhouse
+            .get_client()
+            .query(
+                "SELECT started_at, ended_at, last_event_at
+                 FROM wakaclock.ai_sessions FINAL
+                 WHERE user_id = ?
+                   AND started_at < toUInt32(?)
+                   AND coalesce(ended_at, last_event_at) > toUInt32(?)",
+            )
+            .bind(user_id)
+            .bind(end.max(0.0) as u32)
+            .bind(start.max(0.0) as u32)
+            .fetch_all::<AiSessionIntervalRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse AI session query error: {error}"))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                clipped_session_interval(
+                    row.started_at,
+                    row.ended_at,
+                    row.last_event_at,
+                    start,
+                    end,
+                )
+            })
+            .collect())
+    }
+
     pub async fn intervals(
         &self,
         user_id: Uuid,
@@ -174,7 +224,7 @@ impl ActivityTimelineService {
         // New clients are projected into a deduplicated interval table at ingest. Read it
         // first; the raw-heartbeat path below is a compatibility fallback for old rows
         // and for deployments that have not run the additive migration yet.
-        let projected = self
+        let projected = match self
             .clickhouse
             .get_client()
             .query(
@@ -189,7 +239,19 @@ impl ActivityTimelineService {
             .bind(end)
             .fetch_all::<ProjectedActivityRow>()
             .await
-            .unwrap_or_default();
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %user_id,
+                    start,
+                    end,
+                    "activity_intervals query failed; falling back to raw heartbeats"
+                );
+                Vec::new()
+            }
+        };
         let mut seen_heartbeats = HashSet::new();
         let mut seen_segments = HashSet::new();
         let mut intervals = Vec::new();
@@ -208,7 +270,7 @@ impl ActivityTimelineService {
                 heartbeat_id: row.heartbeat_id,
                 start: start_value,
                 end: end_value,
-                source: normalized_source(Some(&row.source), &row.actor_type),
+                source: normalize_activity_source(Some(&row.source), &row.actor_type).to_string(),
                 actor_type: row.actor_type.parse().unwrap_or_default(),
                 actor_confidence: row.actor_confidence,
                 entity: row.entity,
@@ -276,7 +338,7 @@ impl ActivityTimelineService {
                         heartbeat_id: heartbeat_id.clone(),
                         start: row.time,
                         end: row.time,
-                        source: normalized_source(None, &row.actor_type),
+                        source: normalize_activity_source(None, &row.actor_type).to_string(),
                         actor_type: row.actor_type.parse().unwrap_or_default(),
                         actor_confidence: row.actor_confidence,
                         entity: row.entity.clone(),
@@ -349,7 +411,8 @@ impl ActivityTimelineService {
                     heartbeat_id: heartbeat_id.clone(),
                     start: segment_start,
                     end: segment_end,
-                    source: normalized_source(segment.source.as_deref(), &row.actor_type),
+                    source: normalize_activity_source(segment.source.as_deref(), &row.actor_type)
+                        .to_string(),
                     actor_type: row.actor_type.parse().unwrap_or_default(),
                     actor_confidence: row.actor_confidence,
                     entity: row.entity.clone(),
@@ -376,16 +439,6 @@ impl ActivityTimelineService {
             &self.intervals(user_id, start, end).await?,
             self.bridge,
         ))
-    }
-}
-
-pub fn normalized_source(_source: Option<&str>, actor_type: &str) -> String {
-    // The canonical actor owns the classification. In particular, an old or malformed
-    // segment carrying `source=editor` must not turn an `unknown` heartbeat into Human.
-    match actor_type {
-        "human" => "editor".to_string(),
-        "ai_verified" | "ai_inferred" => "ai".to_string(),
-        _ => "other".to_string(),
     }
 }
 
@@ -798,8 +851,9 @@ fn anchor_interval(anchor: &ActivityInterval) -> CanonicalInterval {
     }
 }
 
-/// Only human editor activity proves the developer was at the keyboard. `normalized_source`
-/// has already folded every emitter into `editor` / `ai` / `other`.
+/// Only human editor activity proves the developer was at the keyboard. The canonical
+/// source normalization in `wakaclock_core::heartbeat::normalize_activity_source` has
+/// already folded every emitter into `editor` / `ai` / `other`.
 fn is_attended(source: &str) -> bool {
     source == "editor"
 }
@@ -814,6 +868,9 @@ fn is_attended(source: &str) -> bool {
 pub struct Timeline {
     /// Seconds a client actually measured: the overlap-free union, no bridging.
     pub proven_seconds: f64,
+    /// Measured canonical intervals retained so attribution-specific metrics can be
+    /// derived without treating idle bridge time as AI coding.
+    pub measured: Vec<CanonicalInterval>,
     pub bridged: Vec<CanonicalInterval>,
 }
 
@@ -827,6 +884,7 @@ impl Timeline {
             .collect();
         let canonical = canonicalize(intervals);
         let proven_seconds = total_seconds(&canonical);
+        let measured = canonical.clone();
         let bridged = match bridge.agent_idle_timeout_seconds {
             Some(agent_idle_timeout_seconds) => bridge_by_attendance(
                 canonical,
@@ -838,12 +896,14 @@ impl Timeline {
         };
         Self {
             proven_seconds,
+            measured,
             bridged,
         }
     }
 
     pub fn evidence(&self) -> EvidenceSplit {
         EvidenceSplit::new(self.proven_seconds, &self.bridged)
+            .with_ai_coding_seconds(measured_ai_seconds(&self.measured))
     }
 }
 
@@ -936,6 +996,10 @@ pub struct EvidenceSplit {
     /// Time whose owning interval came from an AI agent hook or transcript sync.
     pub agent_seconds: f64,
     pub other_seconds: f64,
+    /// Measured (non-bridged) time owned by an AI actor.
+    pub ai_coding_seconds: f64,
+    /// Union of AI session intervals, independent from the WakaTime-compatible total.
+    pub ai_session_seconds: f64,
 }
 
 impl EvidenceSplit {
@@ -958,6 +1022,82 @@ impl EvidenceSplit {
         }
         split
     }
+
+    pub fn with_ai_coding_seconds(mut self, seconds: f64) -> Self {
+        self.ai_coding_seconds = seconds.max(0.0);
+        self
+    }
+
+    pub fn with_ai_session_seconds(mut self, seconds: f64) -> Self {
+        self.ai_session_seconds = seconds.max(0.0);
+        self
+    }
+}
+
+/// Union measured canonical intervals whose actor is explicitly AI. Bridged intervals
+/// are intentionally excluded: their inferred gaps belong to `total_seconds`, not to
+/// the measured AI coding metric.
+pub fn measured_ai_seconds(intervals: &[CanonicalInterval]) -> f64 {
+    let mut ai = intervals
+        .iter()
+        .filter(|interval| interval.actor_type.is_ai() && interval.end > interval.start)
+        .map(|interval| (interval.start, interval.end))
+        .collect::<Vec<_>>();
+    ai.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.total_cmp(&right.1))
+    });
+    union_ranges(&ai)
+}
+
+/// Union and clip arbitrary ranges. Session intervals may overlap when an agent uses
+/// more than one logical session, and summing rows would double-count their overlap.
+pub fn union_ranges(ranges: &[(f64, f64)]) -> f64 {
+    let mut ranges = ranges.to_vec();
+    ranges.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.total_cmp(&right.1))
+    });
+    let mut total = 0.0;
+    let mut current: Option<(f64, f64)> = None;
+    for (start, end) in ranges {
+        if !start.is_finite() || !end.is_finite() || end <= start {
+            continue;
+        }
+        match current.as_mut() {
+            Some((current_start, current_end)) if start <= *current_end => {
+                *current_end = (*current_end).max(end);
+            }
+            Some((current_start, current_end)) => {
+                total += *current_end - *current_start;
+                *current_start = start;
+                *current_end = end;
+            }
+            None => current = Some((start, end)),
+        }
+    }
+    if let Some((start, end)) = current {
+        total += end - start;
+    }
+    total
+}
+
+/// Select the safe end of one AI session and clip it to a requested range. A closed
+/// session owns its explicit `ended_at`; an open session is bounded by its last event,
+/// never by `now` or the projection's `updated_at`. A single-event session therefore
+/// has no measurable duration and is omitted.
+pub fn clipped_session_interval(
+    started_at: u32,
+    ended_at: Option<u32>,
+    last_event_at: u32,
+    range_start: f64,
+    range_end: f64,
+) -> Option<(f64, f64)> {
+    let session_start = f64::from(started_at).max(range_start);
+    let session_end = f64::from(ended_at.unwrap_or(last_event_at)).min(range_end);
+    (session_end > session_start).then_some((session_start, session_end))
 }
 
 /// Distinct heartbeats behind a set of intervals. `canonicalize` splits one heartbeat
@@ -1358,9 +1498,10 @@ mod tests {
         assert_eq!(unknown_languages, 1);
     }
 
-    /// `attended + agent + other` is a second partition of the same total, and
-    /// `proven + inferred` is a third. Both are reported next to `total_seconds`, so a
-    /// drift in either is a visible contradiction in the payload.
+    /// `attended + agent + other` is a second partition of the same total, alongside
+    /// `proven + inferred`. Both are reported next to `total_seconds`, so a drift in
+    /// either is a visible contradiction in the payload. AI coding/session metrics are
+    /// additive diagnostics and intentionally are not part of either partition.
     #[test]
     fn the_evidence_split_partitions_the_total_twice() {
         let intervals = vec![
@@ -1381,6 +1522,49 @@ mod tests {
         // 180s measured, the rest bridged.
         assert_eq!(split.proven_seconds, 180.0);
         assert_eq!(split.inferred_seconds, total - 180.0);
+    }
+
+    #[test]
+    fn measured_ai_seconds_excludes_bridged_gaps_and_unions_overlap() {
+        let intervals = vec![
+            interval("ai-1", "ai", 0.0, 60.0),
+            interval("ai-2", "ai", 30.0, 90.0),
+            interval("human", "editor", 90.0, 120.0),
+        ];
+        let timeline = Timeline::build(&intervals, BridgeConfig::split(900.0, 120.0));
+
+        assert_eq!(measured_ai_seconds(&timeline.measured), 90.0);
+        assert_eq!(timeline.evidence().ai_coding_seconds, 90.0);
+        assert_eq!(timeline.evidence().ai_session_seconds, 0.0);
+    }
+
+    #[test]
+    fn union_ranges_sorts_and_ignores_invalid_ranges() {
+        assert_eq!(
+            union_ranges(&[(10.0, 20.0), (0.0, 15.0), (30.0, 30.0), (40.0, 35.0)]),
+            20.0
+        );
+    }
+
+    #[test]
+    fn closed_session_uses_ended_at_and_open_session_uses_last_event() {
+        assert_eq!(
+            clipped_session_interval(100, Some(160), 130, 0.0, 1_000.0),
+            Some((100.0, 160.0))
+        );
+        assert_eq!(
+            clipped_session_interval(100, None, 130, 0.0, 1_000.0),
+            Some((100.0, 130.0))
+        );
+    }
+
+    #[test]
+    fn singleton_session_has_zero_duration_and_range_edges_are_clipped() {
+        assert_eq!(clipped_session_interval(100, None, 100, 0.0, 1_000.0), None);
+        assert_eq!(
+            clipped_session_interval(100, Some(200), 150, 125.0, 175.0),
+            Some((125.0, 175.0))
+        );
     }
 
     /// WakaTime's duration builder, implemented straight from its definition so the
