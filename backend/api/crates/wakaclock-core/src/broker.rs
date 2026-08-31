@@ -269,6 +269,55 @@ pub struct BrokerEventV1 {
     pub tool_event_id: Option<String>,
 }
 
+/// planai2.md Phase 2 (p2.1): producer priority. When several broker events are
+/// believed to describe the **same** logical file change — the caller establishes
+/// that from normalized entity + change kind within a bounded window — this decides
+/// which one's evidence is canonical. Strongest first:
+///
+/// 1. transport class — native hook/plugin > structured MCP > completed transcript
+///    tool call > before/after snapshot > filesystem / session inference
+///    (`TransportKind::priority`)
+/// 2. event source — `AgentHook` > `Mcp` > `Transcript` > `IdeTelemetry`
+/// 3. self-asserted confidence — `Verified` > `Correlated` > `Inferred` > `Unknown`
+/// 4. most recent `occurred_at`
+///
+/// It only *chooses among* evidence that was already captured — it never invents.
+fn evidence_rank(event: &BrokerEventV1) -> (u8, u8, u8, i64) {
+    let source = match event.source {
+        AiEventSource::AgentHook => 0,
+        AiEventSource::Mcp => 1,
+        AiEventSource::Transcript => 2,
+        AiEventSource::IdeTelemetry => 3,
+    };
+    let confidence = match event.confidence {
+        AiConfidence::Verified => 0,
+        AiConfidence::Correlated => 1,
+        AiConfidence::Inferred => 2,
+        AiConfidence::Unknown => 3,
+    };
+    (
+        event.transport_kind().priority(),
+        source,
+        confidence,
+        // Negated so a *newer* event compares as smaller (= stronger) on the final tie.
+        -event.occurred_at.timestamp_millis(),
+    )
+}
+
+/// True when `candidate`'s evidence is strictly stronger than `incumbent`'s, i.e.
+/// it should supersede it for the same logical change.
+pub fn evidence_supersedes(candidate: &BrokerEventV1, incumbent: &BrokerEventV1) -> bool {
+    evidence_rank(candidate) < evidence_rank(incumbent)
+}
+
+/// The single strongest event among ones describing the same change, or `None` for
+/// an empty slice.
+pub fn strongest_evidence(events: &[BrokerEventV1]) -> Option<&BrokerEventV1> {
+    events
+        .iter()
+        .min_by(|a, b| evidence_rank(a).cmp(&evidence_rank(b)))
+}
+
 impl BrokerEventV1 {
     /// The ranked producer class of this event's `transport` string (p1.0 / D3).
     pub fn transport_kind(&self) -> TransportKind {
@@ -1259,6 +1308,124 @@ mod tests {
             sample_event("t").transport_kind(),
             TransportKind::NativePlugin // sample uses "shell_hook"
         );
+    }
+
+    fn evidence(
+        id: &str,
+        transport: &str,
+        source: AiEventSource,
+        confidence: AiConfidence,
+        at: DateTime<Utc>,
+    ) -> BrokerEventV1 {
+        BrokerEventV1 {
+            transport: Some(transport.to_string()),
+            source,
+            confidence,
+            occurred_at: at,
+            ..sample_event(id)
+        }
+    }
+
+    #[test]
+    fn strongest_evidence_follows_the_producer_priority_order() {
+        // planai2.md p2.1: native hook > MCP > transcript > snapshot > filesystem.
+        let now = Utc::now();
+        let hook = evidence(
+            "hook",
+            "native_plugin",
+            AiEventSource::AgentHook,
+            AiConfidence::Verified,
+            now,
+        );
+        let mcp = evidence(
+            "mcp",
+            "mcp",
+            AiEventSource::Mcp,
+            AiConfidence::Verified,
+            now,
+        );
+        let transcript = evidence(
+            "transcript",
+            "transcript",
+            AiEventSource::Transcript,
+            AiConfidence::Verified,
+            now,
+        );
+        let snapshot = evidence(
+            "snap",
+            "tool_snapshot",
+            AiEventSource::Transcript,
+            AiConfidence::Inferred,
+            now,
+        );
+        let fs = evidence(
+            "fs",
+            "filesystem",
+            AiEventSource::IdeTelemetry,
+            AiConfidence::Unknown,
+            now,
+        );
+
+        // Any mix — the highest-priority producer always wins.
+        assert_eq!(
+            strongest_evidence(&[
+                fs.clone(),
+                transcript.clone(),
+                hook.clone(),
+                snapshot.clone()
+            ])
+            .unwrap()
+            .event_id,
+            "hook"
+        );
+        assert_eq!(
+            strongest_evidence(&[
+                fs.clone(),
+                snapshot.clone(),
+                transcript.clone(),
+                mcp.clone()
+            ])
+            .unwrap()
+            .event_id,
+            "mcp"
+        );
+        assert_eq!(
+            strongest_evidence(&[fs.clone(), snapshot.clone()])
+                .unwrap()
+                .event_id,
+            "snap"
+        );
+        assert_eq!(strongest_evidence(&[]), None);
+
+        // Supersession is the pairwise form of the same rule.
+        assert!(evidence_supersedes(&hook, &transcript));
+        assert!(evidence_supersedes(&transcript, &fs));
+        assert!(!evidence_supersedes(&fs, &hook));
+    }
+
+    #[test]
+    fn evidence_ties_break_toward_the_more_recent_event() {
+        let older = evidence(
+            "old",
+            "native_plugin",
+            AiEventSource::AgentHook,
+            AiConfidence::Verified,
+            Utc::now() - Duration::seconds(30),
+        );
+        let newer = evidence(
+            "new",
+            "native_plugin",
+            AiEventSource::AgentHook,
+            AiConfidence::Verified,
+            Utc::now(),
+        );
+        assert_eq!(
+            strongest_evidence(&[older.clone(), newer.clone()])
+                .unwrap()
+                .event_id,
+            "new"
+        );
+        assert!(evidence_supersedes(&newer, &older));
     }
 
     #[test]

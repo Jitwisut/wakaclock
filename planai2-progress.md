@@ -125,13 +125,15 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**PHASE 1 COMPLETE** (p1.0–p1.5 + p1.A1–p1.A4 all `[x]`). **Phase 2 next** —
-starts at p2.1 (producer priority). Phase 2 has no `DECISION` item, so the loop
-picks p2.1 directly. p2.1 enforces native hook > MCP > transcript > snapshot >
-filesystem/session ordering; `TransportKind::priority()` (p1.1) already ranks
-transports — p2.1 wires it into "higher-priority evidence for the same change
-supersedes lower". Read `.context/backend/crates.md` +
-`backend/api/crates/wakaclock-core/src/ai/correlation.rs` before starting.
+**Phase 2 — item p2.2** (generic MCP / tool ingress). p2.1 done (`strongest_evidence`
+/ `evidence_supersedes` in `wakaclock_core::broker`). p2.2: keep `wakaclock ai
+emit --json` / `ai tool-before` / `ai tool-after` (audit they still work); add an
+HTTP/SDK helper that reads broker discovery + token safely (never logs the
+token); operations write/apply-patch/create/move/rename/delete/replace/
+multi-edit/shell-mutation each map to a `change_kind`; **one tool call touching N
+files = one duration interval + N file-evidence records**. Then p2.3 (adapter
+rollout — scaffold Cursor/Antigravity/Copilot/Windsurf/Cline/Roo/OpenCode as
+`unverified`), then p2.A1–p2.A4.
 
 ---
 
@@ -203,8 +205,9 @@ Goal: new agents connect through one contract; no attribution logic scattered ac
 
 Goal: raise recall through trustworthy evidence before any universal inference.
 
-- [ ] **p2.1 Producer priority.** Enforce the ordering in code: native hooks/plugins > structured MCP events > completed transcript tool calls > before/after tool snapshot > filesystem/session inference. Higher-priority evidence for the same change supersedes lower.
+- [x] **p2.1 Producer priority.** Enforce the ordering in code: native hooks/plugins > structured MCP events > completed transcript tool calls > before/after tool snapshot > filesystem/session inference. Higher-priority evidence for the same change supersedes lower.
   - Tests: given two evidence records for one change, the resolved producer is the higher-priority one; ordering table test.
+  - → committed | `wakaclock_core::broker`: `evidence_rank(&BrokerEventV1) -> (transport_priority, source_rank, confidence_rank, -recency_ms)` (lower = stronger) built on `TransportKind::priority()` (p1.1) with tie-breaks source `AgentHook>Mcp>Transcript>IdeTelemetry`, confidence `Verified>Correlated>Inferred>Unknown`, then newest `occurred_at`. `strongest_evidence(&[BrokerEventV1]) -> Option<&_>` picks the canonical record; `evidence_supersedes(candidate, incumbent) -> bool` is the pairwise form. Caller decides "same logical change" (entity+kind+window); this only chooses among captured evidence, never invents. tests: `strongest_evidence_follows_the_producer_priority_order` (hook beats mcp beats transcript beats snapshot beats fs in every mix; `[]`→None; supersession pairwise), `evidence_ties_break_toward_the_more_recent_event`. broker tests 20→22. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p2.2 Generic MCP / tool ingress.** Keep `wakaclock ai emit --json`, `ai tool-before`, `ai tool-after`. Add an HTTP/SDK helper that reads broker discovery + token safely. Support operations: write, apply patch, create, move, rename, delete, replace, multi-edit, shell mutation. **One tool call touching N files = one duration interval + N file-evidence records.**
   - Tests: a 3-file `apply_patch` → 1 interval, 3 evidence records; each operation kind maps to a `change_kind`; discovery/token read never logs the token.
 - [ ] **p2.3 Adapter rollout.** Per planai2.md order. Codex Desktop/CLI + Claude Code: keep/verify. Gemini CLI, Cursor, Antigravity, Copilot CLI/IDE, Windsurf, Cline/Roo, OpenCode, Generic MCP producer SDK: **not installed on this machine → scaffold + `unverified` + VERIFICATION.md note.** Cursor stays `scaffold` until a real payload is seen.
@@ -401,4 +404,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.3 — done. New `ai/adapter.rs`: `AdapterManifest` + `InstallStrategy`/`NativeHookCapabilities`/`HealthProbe`/`Verification`/`VerificationStatus`. `Verified` can't exist without `live_checked_at` (smart ctor + `validate()` + `effective_status()` degrade). 4 new tests. Gates + duration-audit green. Committed `eeb622a`.
 - 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed `aafff8c`.
 - 2026-08-31 — p1.5 — done. CLI `wakaclock adapter list [--json]` exposes the registry; `agentSetup.ts` reads it (`parseAdapterList`/`pluginInstallCommand`/`fetchAdapterRegistry`, graceful fallback), merges `verificationStatus` onto agent status, takes plugin install args from the manifest. 2 new vitest cases (72→74). Backend + vscode gates green, `out/` recompiled. Committed `2f09e8c`.
-- 2026-08-31 — p1.A1–A4 — Phase 1 acceptance. p1.A1/p1.A3 cited to existing tests (p1.4 end-to-end / p1.2 quarantine). 2 new: `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`, `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape` (adapter 8→10). **Phase 1 done.** Gates + duration-audit green. Committed.
+- 2026-08-31 — p1.A1–A4 — Phase 1 acceptance. p1.A1/p1.A3 cited to existing tests (p1.4 end-to-end / p1.2 quarantine). 2 new: `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`, `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape` (adapter 8→10). **Phase 1 done.** Gates + duration-audit green. Committed `a8a63cd`.
+- 2026-08-31 — p2.1 — done. `evidence_rank` + `strongest_evidence` + `evidence_supersedes` in `wakaclock_core::broker` — transport priority (p1.1) then source then confidence then recency. 2 new tests (broker 20→22). Gates + duration-audit green. Committed.
