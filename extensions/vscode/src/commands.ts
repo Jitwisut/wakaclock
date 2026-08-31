@@ -19,6 +19,67 @@ export interface AiIntegrationController {
   setup(selectedIds?: AiAgentId[]): Promise<AiAgentSetupResult>;
 }
 
+/**
+ * planai2.md Phase 0.2b: install the per-user OS service, then confirm it is
+ * *actually* running before trusting it. `broker install` can exit 0 while
+ * launchd / systemd / Task Scheduler silently declines to keep the process up
+ * (sandboxed hosts, a disabled user manager, a denied Task Scheduler policy) —
+ * previously only a thrown `installAgent()` triggered the Extension-Host-owned
+ * fallback, and only on remote or Linux. This checks `broker status` on every
+ * platform and falls back whenever the service is not up.
+ */
+export interface BrokerEnsureDeps {
+  installAgent(): Promise<unknown>;
+  getBrokerStatus(): Promise<{ running?: boolean }>;
+  startExtensionOwnedAgent(): Promise<{ dispose(): void }>;
+}
+
+export interface BrokerEnsureOutcome {
+  /** A watcher is up — either the OS service or the extension-owned child. */
+  running: boolean;
+  /** The extension-owned child is what is keeping it up. */
+  viaFallback: boolean;
+  /** Present only when `viaFallback` — push onto `context.subscriptions`. */
+  disposable?: { dispose(): void };
+  /** Why the OS service was not usable, when a fallback was needed or failed. */
+  error?: string;
+}
+
+export async function ensureBrokerRunning(
+  deps: BrokerEnsureDeps,
+): Promise<BrokerEnsureOutcome> {
+  let installError: string | undefined;
+  try {
+    await deps.installAgent();
+  } catch (error) {
+    installError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (!installError) {
+    try {
+      const status = await deps.getBrokerStatus();
+      if (status.running === true) {
+        return { running: true, viaFallback: false };
+      }
+    } catch {
+      // Status unreadable — treat exactly like "not running" and fall back.
+    }
+  }
+
+  try {
+    const disposable = await deps.startExtensionOwnedAgent();
+    return { running: true, viaFallback: true, disposable, error: installError };
+  } catch (fallbackError) {
+    const fallbackMessage =
+      fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+    return {
+      running: false,
+      viaFallback: false,
+      error: [installError, fallbackMessage].filter(Boolean).join("; "),
+    };
+  }
+}
+
 export function registerCommands(
   context: vscode.ExtensionContext,
   configService: WakaclockConfigService,
@@ -240,6 +301,7 @@ async function setupAiTracking(
     | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
+    | "getBrokerStatus"
   >,
   context: vscode.ExtensionContext,
   repairing = false
@@ -268,40 +330,26 @@ async function setupAiTracking(
     const failed = result.failed.length;
     const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
     if (configured > 0) {
-      let serviceInstalled = true;
-      try {
-        const key = await getStoredApiKey(context.secrets);
-        if (key) {
-          await cliService.persistApiKey(key);
-        }
-        await cliService.installAgent();
-      } catch (error) {
-        serviceInstalled = false;
-        if (vscode.env.remoteName || process.platform === "linux") {
-          try {
-            const owned = await cliService.startExtensionOwnedAgent();
-            context.subscriptions.push(owned);
-            serviceInstalled = true;
-          } catch (fallbackError) {
-            await vscode.window.showWarningMessage(
-              `AtoAxis could not install a service or start the remote watcher: ${
-                fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-              }`,
-            );
-          }
-        }
-        if (serviceInstalled) {
-          await vscode.window.showInformationMessage(
-            `${prefix}; the Extension Host will keep the transcript watcher running while this remote workspace is open.`,
-          );
-        }
-        if (!serviceInstalled) {
-          await vscode.window.showWarningMessage(
-            `${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+      const key = await getStoredApiKey(context.secrets);
+      if (key) {
+        await cliService.persistApiKey(key).catch(() => undefined);
+      }
+      const broker = await ensureBrokerRunning(cliService);
+      const serviceInstalled = broker.running;
+      if (broker.disposable) {
+        context.subscriptions.push(broker.disposable);
+      }
+      if (broker.running && broker.viaFallback) {
+        await vscode.window.showInformationMessage(
+          `${prefix}; the Extension Host will keep the transcript watcher running while this workspace is open.`,
+        );
+      }
+      if (!broker.running) {
+        await vscode.window.showWarningMessage(
+          `${prefix}, but the always-on transcript agent could not be started. Upgrade wakaclock-cli if this persists: ${
+            broker.error ?? "unknown error"
+          }`,
+        );
       }
       if (failed > 0) {
         await vscode.window.showWarningMessage(
