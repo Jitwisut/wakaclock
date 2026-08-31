@@ -125,12 +125,14 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 1 — item p1.2** (field-allow-list quarantine wrapper, D2). p1.0 (decision)
-+ p1.1 (envelope + `TransportKind`) done. p1.3 = adapter manifest type. p1.4 =
-registry. p1.5 = migrate the VS Code installer to the registry. Note: broker.rs
-already has `rejects_unknown_fields_at_the_wire_boundary` — p1.2 adds the
-*quarantine + sanitized diagnostic* path around a failed strict parse (record
-offending field names only, drop the event, no 500).
+**Phase 1 — item p1.3** (declarative adapter manifest type, D6). p1.0, p1.1, p1.2
+done. p1.4 = registry (enumerate manifests, drive install + health, atomic +
+idempotent + preserve user config). p1.5 = migrate `extensions/vscode/src/agentSetup.ts`
+installation logic to consume the registry. Then p1.A1–p1.A4 acceptance tests.
+Manifest fields (planai2.md §"Adapter manifest"): id, provider, executable
+detection, install strategy, native hook capabilities, transcript roots, payload
+schema versions, supported tool/change kinds, `verification_status`
+(`verified`|`scaffold`|`unverified`, defaults `unverified`), health probe.
 
 ---
 
@@ -176,8 +178,9 @@ Goal: new agents connect through one contract; no attribution logic scattered ac
 - [x] **p1.1 Implement the envelope.** Extend the broker event / evidence type with the agreed fields. Backward-compatible: old envelopes still deserialize.
   - Tests: round-trip serde of a full envelope; an old-shape envelope still parses; `schema_version` gate.
   - → committed | Per D1 no fields were added — `BrokerEventV1` was already complete. Added `TransportKind` enum (`NativePlugin`/`Mcp`/`Transcript`/`ToolSnapshot`/`Filesystem`/`Editor`/`Cli`/`Other`, `Ord`) + `TransportKind::classify(Option<&str>)` (free-text → ranked, unknown⇒`Other`, never panics) + `priority()` (lower = stronger, matches planai2 §2 producer order) + `BrokerEventV1::transport_kind()`. tests: `full_envelope_round_trips_through_json` (round trip + all 17 plan fields present on the wire), `a_minimal_old_shape_envelope_still_parses` (required-only JSON → optionals default to None → normalize ok), `a_wrong_schema_version_is_rejected_by_normalize`, `transport_kind_ranks_producers_by_evidence_strength`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit verify_port/golden/verify_actor_migration all green.
-- [ ] **p1.2 Field allow-list enforcement.** Unknown fields and forbidden content (prompt/response/patch/clipboard/terminal/command args) are rejected or quarantined with a sanitized diagnostic that contains none of the offending content.
+- [x] **p1.2 Field allow-list enforcement.** Unknown fields and forbidden content (prompt/response/patch/clipboard/terminal/command args) are rejected or quarantined with a sanitized diagnostic that contains none of the offending content.
   - Tests: envelope with a `prompt` field → quarantined, diagnostic has no prompt text; unknown field → rejected.
+  - → committed | `ALLOWED_EVENT_FIELDS` (kept in sync with the struct via `allow_list_matches_the_struct_fields` test) + `FORBIDDEN_EVENT_FIELDS` (prompt/response/patch/diff/content/clipboard/terminal/stdout/args/command/env/secret/token/api_key…) + `QuarantineDiagnostic::inspect(&[u8])` → `{unknown_fields, forbidden_fields, message}` reporting **field names only, never values**. Wired into the CLI broker's `event_handler` and `batch_handler`: on a strict-parse failure they no longer echo `serde_error.to_string()` (which can quote a rejected value) — they emit the sanitized diagnostic as the 422 body + an `eprintln!` quarantine log line. tests: `allow_list_matches_the_struct_fields`, `quarantine_diagnostic_names_a_prompt_field_but_never_its_value` (asserts the prompt text and the word "exfiltrate" appear nowhere in the message or serialized diagnostic), `quarantine_diagnostic_flags_every_forbidden_field_and_plain_unknowns_separately`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p1.3 Declarative adapter manifest type.** One manifest per agent: `id`, `provider`, executable detection, install strategy, native hook capabilities, transcript roots, payload schema versions, supported tool/change kinds, `verification_status` (`verified` | `scaffold` | `unverified`), health probe.
   - Tests: manifest serde; `verification_status` defaults to `unverified`; a manifest with no live verification cannot report `verified`.
 - [ ] **p1.4 Adapter registry.** Enumerates manifests, drives install + health probe. Installer is atomic, idempotent, and preserves user configuration.
@@ -391,4 +394,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p0.5 — done. `classify_delivery_failure()` + `DeliveryFailureKind` (401/402/network/validation/other) in core; `doctor ai` gains `last_delivery_failure.category`, `broker_installed`/`broker_running`, `latest_native_hook_event_at` (sidecar); report assembly → `build_ai_doctor_report()` + `ai_doctor_report_keys()` presence guard. 2 new tests. Per-adapter enabled/trusted left for a later pass (not machine-readable). Gates green. Committed `f3ea9de`.
 - 2026-08-31 — p0.A1–A4 — Phase 0 acceptance. 3 new external-process tests in `tests/broker_process.rs` (exactly-once dedup, offline-402 keeps capture + queues + records failure + no dead-letter, `doctor ai --json` surfaces legacy-alias + payment_402); p0.A2 mapped to the existing restart test. `broker_process` 2→5. fmt/clippy/`cargo test --workspace` green. **Phase 0 done** (p0.3 `[~]`). Committed `5eb7d5d`.
 - 2026-08-31 — p1.0 — DECISION resolved (docs only). `BrokerEventV1` already carries every planai2 evidence field → additive-only/no schema bump, `deny_unknown_fields` backstop kept, `TransportKind` classifier instead of a wire change, envelope `confidence` = producer self-assertion, `event_id` producer-opaque, manifest is non-wire. See Decisions log D1–D6. Committed `3c7c337`.
-- 2026-08-31 — p1.1 — done. No fields added (D1 — envelope already complete). Added `TransportKind` enum + `classify()`/`priority()`/`BrokerEventV1::transport_kind()` for the Phase 2 producer ordering. 4 new tests (round-trip, old-shape parse, schema-version gate, transport ranking). Gates + duration-audit green. Committed.
+- 2026-08-31 — p1.1 — done. No fields added (D1 — envelope already complete). Added `TransportKind` enum + `classify()`/`priority()`/`BrokerEventV1::transport_kind()` for the Phase 2 producer ordering. 4 new tests (round-trip, old-shape parse, schema-version gate, transport ranking). Gates + duration-audit green. Committed `3d15d1d`.
+- 2026-08-31 — p1.2 — done. `ALLOWED_EVENT_FIELDS` + `FORBIDDEN_EVENT_FIELDS` + `QuarantineDiagnostic::inspect()` (field names only, never values); CLI broker `event_handler`/`batch_handler` now emit the sanitized diagnostic + a quarantine log line instead of echoing the raw serde error. 3 new tests. Gates + duration-audit green. Committed.

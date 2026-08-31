@@ -106,6 +106,126 @@ impl TransportKind {
     }
 }
 
+/// Every top-level key `BrokerEventV1` accepts. The single source of truth for the
+/// quarantine allow-list (kept in sync with the struct by
+/// `allow_list_matches_the_struct_fields` in tests).
+pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
+    "schema_version",
+    "event_type",
+    "event_id",
+    "occurred_at",
+    "entity",
+    "project_root",
+    "change_kind",
+    "previous_entity",
+    "agent",
+    "provider",
+    "model",
+    "session_id",
+    "source",
+    "confidence",
+    "actor_type",
+    "actor_confidence",
+    "lines_added",
+    "lines_deleted",
+    "active_seconds",
+    "transport",
+    "tool",
+    "tool_event_id",
+];
+
+/// Field names that carry model or user content and must never reach the broker.
+/// Presence of any of these in a rejected payload is reported as a distinct,
+/// louder diagnostic than a plain typo'd key.
+pub const FORBIDDEN_EVENT_FIELDS: &[&str] = &[
+    "prompt",
+    "prompts",
+    "response",
+    "responses",
+    "completion",
+    "message",
+    "messages",
+    "patch",
+    "diff",
+    "content",
+    "text",
+    "body",
+    "source_code",
+    "code",
+    "clipboard",
+    "terminal",
+    "stdout",
+    "stderr",
+    "output",
+    "args",
+    "argv",
+    "arguments",
+    "command",
+    "cmd",
+    "env",
+    "environment",
+    "secret",
+    "token",
+    "api_key",
+];
+
+/// planai2.md Phase 1 (decision p1.0 / D2): a metadata-only diagnostic for a
+/// payload that failed the strict `BrokerEventV1` parse. It reports **field names
+/// only** — never a field value — so a leaked prompt, patch or secret cannot ride
+/// out inside an error string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QuarantineDiagnostic {
+    /// Top-level keys present in the payload that are not in the envelope allow-list.
+    pub unknown_fields: Vec<String>,
+    /// The subset of `unknown_fields` whose name matches known content-bearing data.
+    pub forbidden_fields: Vec<String>,
+    /// A human-readable summary, guaranteed to contain no field values.
+    pub message: String,
+}
+
+impl QuarantineDiagnostic {
+    pub fn inspect(raw: &[u8]) -> Self {
+        let mut unknown = Vec::new();
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_slice::<serde_json::Value>(raw)
+        {
+            for key in map.keys() {
+                if !ALLOWED_EVENT_FIELDS.contains(&key.as_str()) {
+                    unknown.push(key.clone());
+                }
+            }
+        }
+        unknown.sort();
+        unknown.dedup();
+        let forbidden: Vec<String> = unknown
+            .iter()
+            .filter(|key| FORBIDDEN_EVENT_FIELDS.contains(&key.to_ascii_lowercase().as_str()))
+            .cloned()
+            .collect();
+        let message = if !forbidden.is_empty() {
+            format!(
+                "broker event carries content-bearing field(s) that must never be sent: {}",
+                forbidden.join(", ")
+            )
+        } else if !unknown.is_empty() {
+            format!(
+                "broker event has field(s) outside the metadata contract: {}",
+                unknown.join(", ")
+            )
+        } else {
+            "broker event failed strict metadata validation".to_string()
+        };
+        Self {
+            unknown_fields: unknown,
+            forbidden_fields: forbidden,
+            message,
+        }
+    }
+
+    pub fn carries_forbidden_content(&self) -> bool {
+        !self.forbidden_fields.is_empty()
+    }
+}
+
 /// Stable metadata-only ingress envelope.  The `deny_unknown_fields` contract is
 /// intentional: prompts, responses, patch bodies and tool arguments must not become
 /// an accidental part of the local or uploaded activity record.
@@ -1139,6 +1259,86 @@ mod tests {
             sample_event("t").transport_kind(),
             TransportKind::NativePlugin // sample uses "shell_hook"
         );
+    }
+
+    #[test]
+    fn allow_list_matches_the_struct_fields() {
+        // If a field is added to BrokerEventV1, ALLOWED_EVENT_FIELDS must gain it
+        // too or the quarantine diagnostic will wrongly flag it as unknown.
+        let value = serde_json::to_value(sample_event("x")).unwrap();
+        let keys: std::collections::BTreeSet<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let allowed: std::collections::BTreeSet<&str> =
+            ALLOWED_EVENT_FIELDS.iter().copied().collect();
+        assert_eq!(
+            keys, allowed,
+            "ALLOWED_EVENT_FIELDS is out of sync with BrokerEventV1"
+        );
+    }
+
+    #[test]
+    fn quarantine_diagnostic_names_a_prompt_field_but_never_its_value() {
+        // planai2.md p1.2: a payload smuggling a prompt is quarantined, and the
+        // diagnostic contains the field NAME but none of the prompt TEXT.
+        let secret = "how do I exfiltrate the database";
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "event_type": "file_change",
+            "event_id": "e",
+            "occurred_at": "2026-08-31T00:00:00Z",
+            "entity": "/w/x.rs",
+            "change_kind": "modify",
+            "agent": "codex",
+            "source": "agent_hook",
+            "confidence": "verified",
+            "prompt": secret,
+        });
+        let raw = serde_json::to_vec(&raw).unwrap();
+
+        assert!(serde_json::from_slice::<BrokerEventV1>(&raw).is_err());
+        let diag = QuarantineDiagnostic::inspect(&raw);
+        assert_eq!(diag.forbidden_fields, vec!["prompt"]);
+        assert!(diag.carries_forbidden_content());
+        assert!(diag.message.contains("prompt"));
+        assert!(
+            !diag.message.contains(secret) && !diag.message.contains("exfiltrate"),
+            "diagnostic leaked the field value: {}",
+            diag.message
+        );
+        // The serialized diagnostic as a whole is value-free.
+        let serialized = serde_json::to_string(&diag).unwrap();
+        assert!(!serialized.contains("exfiltrate"));
+    }
+
+    #[test]
+    fn quarantine_diagnostic_flags_every_forbidden_field_and_plain_unknowns_separately() {
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "event_type": "file_change",
+            "event_id": "e",
+            "occurred_at": "2026-08-31T00:00:00Z",
+            "entity": "/w/x.rs",
+            "change_kind": "modify",
+            "agent": "codex",
+            "source": "agent_hook",
+            "confidence": "verified",
+            "patch": "--- a\n+++ b\n",
+            "stdout": "secret build output",
+            "some_typo_field": 1,
+        }))
+        .unwrap();
+        let diag = QuarantineDiagnostic::inspect(&raw);
+        assert_eq!(diag.forbidden_fields, vec!["patch", "stdout"]);
+        assert_eq!(
+            diag.unknown_fields,
+            vec!["patch", "some_typo_field", "stdout"]
+        );
+        assert!(diag.message.contains("must never be sent"));
+        assert!(!diag.message.contains("secret build output"));
     }
 
     #[test]

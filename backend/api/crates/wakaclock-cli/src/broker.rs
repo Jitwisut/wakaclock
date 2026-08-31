@@ -30,8 +30,8 @@ use wakaclock_core::{
     broker::{
         broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
         BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck, BrokerEventStatus,
-        BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, BROKER_SCHEMA_VERSION,
-        MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
+        BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, QuarantineDiagnostic,
+        BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
@@ -654,7 +654,13 @@ async fn event_handler(
     }
     let event = match serde_json::from_slice::<BrokerEventV1>(&body) {
         Ok(event) => event,
-        Err(error) => return error_response(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+        Err(_) => {
+            // planai2.md Phase 1 (D2): never echo the raw serde error (it can quote a
+            // rejected field's value). Report field names only.
+            let diagnostic = QuarantineDiagnostic::inspect(&body);
+            eprintln!("broker quarantined an event: {}", diagnostic.message);
+            return error_response(StatusCode::UNPROCESSABLE_ENTITY, &diagnostic.message);
+        }
     };
     let event = match event.normalize() {
         Ok(event) => event,
@@ -702,7 +708,38 @@ async fn batch_handler(
     }
     let events = match serde_json::from_slice::<Vec<BrokerEventV1>>(&body) {
         Ok(events) => events,
-        Err(error) => return error_response(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+        Err(_) => {
+            // planai2.md Phase 1 (D2): inspect each element for forbidden/unknown
+            // field names without echoing any value from the raw error.
+            let mut fields: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            let mut forbidden = false;
+            if let Ok(serde_json::Value::Array(items)) =
+                serde_json::from_slice::<serde_json::Value>(&body)
+            {
+                for item in &items {
+                    let diagnostic = QuarantineDiagnostic::inspect(
+                        &serde_json::to_vec(item).unwrap_or_default(),
+                    );
+                    forbidden |= diagnostic.carries_forbidden_content();
+                    fields.extend(diagnostic.unknown_fields);
+                }
+            }
+            let message = if forbidden {
+                format!(
+                    "broker batch carries content-bearing field(s) that must never be sent: {}",
+                    fields.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            } else if !fields.is_empty() {
+                format!(
+                    "broker batch has field(s) outside the metadata contract: {}",
+                    fields.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            } else {
+                "broker batch failed strict metadata validation".to_string()
+            };
+            eprintln!("broker quarantined a batch: {message}");
+            return error_response(StatusCode::UNPROCESSABLE_ENTITY, &message);
+        }
     };
     if events.is_empty() || events.len() > MAX_BATCH_EVENTS {
         return error_response(
