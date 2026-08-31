@@ -7,6 +7,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    process::Command,
     str::FromStr,
     time::Duration,
 };
@@ -199,7 +200,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    Status,
+    Status {
+        /// Emit a machine-readable snapshot (build identity, CLI-path resolution,
+        /// key check, queue depth) instead of the text summary.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     Today {
         /// IANA timezone used for the user's calendar day (defaults to UTC).
         #[arg(long)]
@@ -998,29 +1004,79 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("API key cleared from {}", Config::config_path().display());
             }
         },
-        Commands::Status => {
+        Commands::Status { json } => {
             let queue = Queue::open()?;
-            println!("Config path: {}", Config::config_path().display());
-            println!("Server URL: {}", config.server_url);
-            println!("{}", identity_line(&config));
-            println!("Queued heartbeats: {}", queue.len()?);
+            let queued = queue.len()?;
+            let identity = build_identity();
+            let cli_paths = cli_path_report();
+            let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
 
             // The point of `status` is answering "why is nothing being recorded", and the
             // on-disk view above cannot answer it — so ask the server. `today` is the same
             // authenticated call the VS Code extension verifies a key with, and its 401 is
             // already translated into an actionable message by `reject_unauthorized`.
-            match api_client.today().await {
-                Ok(_) => println!("Key check: verified — the server accepted this API key"),
-                Err(AppError::Auth(message)) => println!("Key check: rejected — {message}"),
-                Err(error) => {
-                    println!("Key check: could not reach {} — {error}", config.server_url)
-                }
-            }
+            let (key_check, key_check_detail) = match api_client.today().await {
+                Ok(_) => ("verified", None),
+                Err(AppError::Auth(message)) => ("rejected", Some(message)),
+                Err(error) => ("unreachable", Some(error.to_string())),
+            };
 
             let flush = api_client.flush_queue().await?;
-            println!("Flushed now: {}", flush.flushed);
-            if let Some(reason) = flush.stopped_because {
-                println!("Flush stopped: {reason}");
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "version": identity.version,
+                        "git_sha": identity.git_sha,
+                        "build_time": identity.build_time,
+                        "config_path": Config::config_path().display().to_string(),
+                        "server_url": config.server_url,
+                        "identity": identity_line(&config),
+                        "queued_heartbeats": queued,
+                        "key_check": key_check,
+                        "key_check_detail": key_check_detail,
+                        "flushed_now": flush.flushed,
+                        "flush_stopped_because": flush.stopped_because,
+                        "cli_path": cli_paths.to_json(),
+                        "legacy_service_alias": legacy_service_alias,
+                    })
+                );
+            } else {
+                println!("Config path: {}", Config::config_path().display());
+                println!("Server URL: {}", config.server_url);
+                println!(
+                    "CLI build: {} ({}, built {})",
+                    identity.version, identity.git_sha, identity.build_time
+                );
+                println!("{}", identity_line(&config));
+                println!("Queued heartbeats: {queued}");
+                match key_check {
+                    "verified" => {
+                        println!("Key check: verified — the server accepted this API key")
+                    }
+                    "rejected" => println!(
+                        "Key check: rejected — {}",
+                        key_check_detail.as_deref().unwrap_or("")
+                    ),
+                    _ => println!(
+                        "Key check: could not reach {} — {}",
+                        config.server_url,
+                        key_check_detail.as_deref().unwrap_or("")
+                    ),
+                }
+                println!("Flushed now: {}", flush.flushed);
+                if let Some(reason) = &flush.stopped_because {
+                    println!("Flush stopped: {reason}");
+                }
+                for warning in cli_paths.warnings() {
+                    println!("warning: {warning}");
+                }
+                if legacy_service_alias {
+                    println!(
+                        "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it to `broker run`"
+                    );
+                }
             }
         }
         Commands::Today { timezone, json } => {
@@ -1253,6 +1309,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Start { json } => {
+                if agent_service::migrate_legacy_service_manifest().map_err(io::Error::other)? {
+                    eprintln!(
+                        "migrated service manifest from the legacy `agent run` alias to `broker run`"
+                    );
+                }
                 let report = agent_service::start().map_err(io::Error::other)?;
                 print_broker_report(&report, json, broker_status_json()?);
             }
@@ -1573,6 +1634,129 @@ fn run_ai_watch(
     }
 }
 
+/// Build identity of the binary running this process (planai2.md Phase 0.1). The
+/// git SHA and build time are baked in by `build.rs`; `version` is the crate
+/// version. `git_sha` / `build_time` are the literal string `"unknown"` when the
+/// binary was built outside a git checkout.
+struct BuildIdentity {
+    version: &'static str,
+    git_sha: &'static str,
+    build_time: &'static str,
+}
+
+fn build_identity() -> BuildIdentity {
+    BuildIdentity {
+        version: env!("CARGO_PKG_VERSION"),
+        git_sha: env!("WAKACLOCK_GIT_SHA"),
+        build_time: env!("WAKACLOCK_BUILD_TIME"),
+    }
+}
+
+/// Ask another `wakaclock` binary on disk which version it is, by running it with
+/// `--version` (clap prints `wakaclock <version>`). `None` when the binary cannot
+/// be executed or its output cannot be parsed — a missing answer is not a mismatch.
+fn binary_version(path: &Path) -> Option<String> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace().last().map(str::to_string)
+}
+
+/// Where a bare `wakaclock` would resolve for this process versus for a shell hook,
+/// and whether those disagree — by path and, when both can be run, by version.
+struct CliPathReport {
+    current_exe: Option<PathBuf>,
+    on_path: Option<PathBuf>,
+    cli_path_override: Option<PathBuf>,
+    hook_would_resolve_to: Option<PathBuf>,
+    path_mismatch: bool,
+    running_version: String,
+    hook_version: Option<String>,
+}
+
+impl CliPathReport {
+    fn version_mismatch(&self) -> bool {
+        self.hook_version
+            .as_deref()
+            .is_some_and(|hook| hook != self.running_version)
+    }
+
+    fn warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.path_mismatch {
+            out.push(format!(
+                "a shell hook would run {}, not the binary running now ({}) — reinstall so every entry point shares one build",
+                self.hook_would_resolve_to
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                self.current_exe
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            ));
+        }
+        if self.version_mismatch() {
+            out.push(format!(
+                "CLI version drift: this build is {}, the binary on PATH/override is {} — heartbeats and hooks may disagree until both are updated",
+                self.running_version,
+                self.hook_version.as_deref().unwrap_or("unknown"),
+            ));
+        }
+        out
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "current_exe": self.current_exe.as_deref().map(|p| p.display().to_string()),
+            "on_path": self.on_path.as_deref().map(|p| p.display().to_string()),
+            "cli_path_override": self.cli_path_override.as_deref().map(|p| p.display().to_string()),
+            "hook_would_resolve_to": self.hook_would_resolve_to.as_deref().map(|p| p.display().to_string()),
+            "path_mismatch": self.path_mismatch,
+            "running_version": self.running_version,
+            "hook_version": self.hook_version,
+            "version_mismatch": self.version_mismatch(),
+        })
+    }
+}
+
+fn cli_path_report() -> CliPathReport {
+    let current_exe = std::env::current_exe().ok();
+    let on_path = resolve_on_path();
+    let cli_path_override = fs::read_to_string(
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".wakaclock")
+            .join("cli-path"),
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from);
+    let hook_would_resolve_to = cli_path_override.clone().or_else(|| on_path.clone());
+    let path_mismatch =
+        cli_identity_mismatch(current_exe.as_deref(), hook_would_resolve_to.as_deref());
+    let running_version = env!("CARGO_PKG_VERSION").to_string();
+    // Only pay for a subprocess when the paths already disagree — if the hook would
+    // run the very same file, its version is ours by definition.
+    let hook_version = if path_mismatch {
+        hook_would_resolve_to.as_deref().and_then(binary_version)
+    } else {
+        None
+    };
+    CliPathReport {
+        current_exe,
+        on_path,
+        cli_path_override,
+        hook_would_resolve_to,
+        path_mismatch,
+        running_version,
+        hook_version,
+    }
+}
+
 /// Which `wakaclock` binary a bare `wakaclock` invocation on `PATH` would resolve to
 /// right now — the same lookup a shell hook script does when `WAKACLOCK_CLI_PATH` and
 /// `~/.wakaclock/cli-path` are both unset. `None` if nothing on `PATH` is executable.
@@ -1662,6 +1846,50 @@ mod ai_doctor_tests {
         assert!(!cli_identity_mismatch(None, None));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_identity_is_always_populated() {
+        // planai2.md p0.1: `status --json` must carry a build identity. `build.rs`
+        // guarantees non-empty values (a real SHA, or the literal "unknown").
+        let id = build_identity();
+        assert!(!id.version.is_empty());
+        assert!(!id.git_sha.is_empty());
+        assert!(!id.build_time.is_empty());
+    }
+
+    fn cli_path_report_fixture(path_mismatch: bool, hook_version: Option<&str>) -> CliPathReport {
+        CliPathReport {
+            current_exe: Some(PathBuf::from("/opt/new/wakaclock")),
+            on_path: Some(PathBuf::from("/opt/old/wakaclock")),
+            cli_path_override: None,
+            hook_would_resolve_to: Some(PathBuf::from("/opt/old/wakaclock")),
+            path_mismatch,
+            running_version: "0.1.0".to_string(),
+            hook_version: hook_version.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn cli_path_report_warns_on_path_and_version_drift_only() {
+        // No drift → no warning.
+        assert!(cli_path_report_fixture(false, None).warnings().is_empty());
+
+        // Different resolved path → one warning.
+        let path_only = cli_path_report_fixture(true, None);
+        assert_eq!(path_only.warnings().len(), 1);
+        assert!(path_only.warnings()[0].contains("shell hook would run"));
+
+        // Different path AND a readable older version → two distinct warnings.
+        let both = cli_path_report_fixture(true, Some("0.0.9"));
+        assert!(both.version_mismatch());
+        assert_eq!(both.warnings().len(), 2);
+        assert!(both.warnings().iter().any(|w| w.contains("version drift")));
+
+        // Same version reported back → no version warning.
+        let matched = cli_path_report_fixture(true, Some("0.1.0"));
+        assert!(!matched.version_mismatch());
+        assert_eq!(matched.warnings().len(), 1);
     }
 
     #[test]
@@ -1787,14 +2015,29 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
 
+    let identity = build_identity();
+    let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
+    let hook_version = if cli_identity_mismatch {
+        hook_would_resolve_to.as_deref().and_then(binary_version)
+    } else {
+        None
+    };
     let report = serde_json::json!({
         "cli_identity": {
             "running_binary": current_exe,
+            "running_version": identity.version,
+            "git_sha": identity.git_sha,
+            "build_time": identity.build_time,
             "path_resolved_binary": on_path,
             "cli_path_override": cli_path_override,
             "hook_would_use": hook_would_resolve_to,
+            "hook_version": hook_version,
             "mismatch": cli_identity_mismatch,
+            "version_mismatch": hook_version
+                .as_deref()
+                .is_some_and(|v| v != identity.version),
         },
+        "legacy_service_alias": legacy_service_alias,
         "broker": broker,
         "agents": agents,
         "outbound_queue_depth": queue_count(),
@@ -1808,9 +2051,13 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     }
 
     println!("== CLI identity ==");
+    println!(
+        "  build: {} ({}, built {})",
+        identity.version, identity.git_sha, identity.build_time
+    );
     if cli_identity_mismatch {
         println!(
-            "  MISMATCH: this process is running {}, but a shell hook would use {}",
+            "  MISMATCH: this process is running {}, but a shell hook would use {}{}",
             current_exe
                 .as_ref()
                 .map(|p| p.display().to_string())
@@ -1818,10 +2065,19 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
             hook_would_resolve_to
                 .as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "<none found>".to_string())
+                .unwrap_or_else(|| "<none found>".to_string()),
+            hook_version
+                .as_deref()
+                .map(|v| format!(" (version {v})"))
+                .unwrap_or_default(),
         );
     } else {
         println!("  ok — hooks resolve to the same binary this command is running");
+    }
+    if legacy_service_alias {
+        println!(
+            "  MISMATCH: the installed service manifest runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it"
+        );
     }
     println!("== Broker ==");
     println!("  {broker}");

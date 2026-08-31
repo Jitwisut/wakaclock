@@ -220,6 +220,40 @@ pub fn install() -> Result<AgentServiceReport, String> {
     Err("unsupported operating system".to_string())
 }
 
+/// planai2.md Phase 0.1: an older CLI wrote this service manifest to invoke the
+/// `agent` subcommand alias (`wakaclock agent run`). The current binary's broker
+/// lives at `wakaclock broker run`; a manifest still pointing at the old alias
+/// keeps launchd / systemd / Task Scheduler restarting a code path that no longer
+/// exists. Detection is pure text — the generated manifests carry no user
+/// configuration, on any platform.
+fn content_uses_legacy_alias(content: &str) -> bool {
+    let has_broker_run =
+        content.contains("broker</string><string>run") || content.contains("broker run");
+    let mentions_agent_run =
+        content.contains("agent</string><string>run") || content.contains("agent run");
+    mentions_agent_run && !has_broker_run
+}
+
+/// True when the installed service manifest still invokes the legacy `agent run`
+/// alias instead of `broker run`. `false` when the manifest is current or absent.
+pub fn manifest_uses_legacy_alias() -> bool {
+    fs::read_to_string(manifest_path())
+        .map(|content| content_uses_legacy_alias(&content))
+        .unwrap_or(false)
+}
+
+/// Rewrite a legacy-alias service manifest to the current `broker run` form and
+/// re-register it with the OS. Returns `Ok(false)` (a no-op) when the manifest is
+/// already current or absent. Non-destructive: the generated manifest has no user
+/// configuration to preserve, so this is a plain `install()`.
+pub fn migrate_legacy_service_manifest() -> Result<bool, String> {
+    if !manifest_uses_legacy_alias() {
+        return Ok(false);
+    }
+    install()?;
+    Ok(true)
+}
+
 pub fn uninstall() -> Result<AgentServiceReport, String> {
     let manifest = manifest_path();
     #[cfg(target_os = "macos")]
@@ -480,5 +514,37 @@ fn shell_escape(value: &str) -> String {
         value.to_string()
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_uses_legacy_alias;
+
+    // Exact shape an old CLI wrote, per platform.
+    const LEGACY_PLIST: &str = "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>agent</string><string>run</string></array>\n</dict></plist>\n";
+    const LEGACY_SYSTEMD: &str =
+        "[Service]\nType=simple\nExecStart=/usr/local/bin/wakaclock agent run\nRestart=always\n";
+    const LEGACY_WINDOWS: &str = "\"C:\\bin\\wakaclock.exe\" agent run\r\n";
+
+    // Exact shape the current `install()` writes.
+    const CURRENT_PLIST: &str = "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>broker</string><string>run</string></array>\n</dict></plist>\n";
+    const CURRENT_SYSTEMD: &str =
+        "[Service]\nType=simple\nExecStart=/usr/local/bin/wakaclock broker run\nRestart=always\n";
+    const CURRENT_WINDOWS: &str = "\"C:\\bin\\wakaclock.exe\" broker run\r\n";
+
+    #[test]
+    fn detects_the_legacy_agent_run_alias_on_every_platform() {
+        assert!(content_uses_legacy_alias(LEGACY_PLIST));
+        assert!(content_uses_legacy_alias(LEGACY_SYSTEMD));
+        assert!(content_uses_legacy_alias(LEGACY_WINDOWS));
+    }
+
+    #[test]
+    fn a_current_broker_run_manifest_is_not_flagged() {
+        assert!(!content_uses_legacy_alias(CURRENT_PLIST));
+        assert!(!content_uses_legacy_alias(CURRENT_SYSTEMD));
+        assert!(!content_uses_legacy_alias(CURRENT_WINDOWS));
+        assert!(!content_uses_legacy_alias(""));
     }
 }
