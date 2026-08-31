@@ -125,12 +125,12 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 1 — item p1.1** (implement the envelope). p1.0 DECISION resolved (D1–D6
-in Decisions log): the envelope already has every planai2 field, so p1.1 is
-narrow — confirm/round-trip-test the full envelope, ensure an old-shape payload
-still parses, add the `TransportKind` classifier (D3). p1.2 = field-allow-list
-quarantine wrapper (D2). p1.3 = adapter manifest type. p1.4 = registry. p1.5 =
-migrate the VS Code installer to the registry.
+**Phase 1 — item p1.2** (field-allow-list quarantine wrapper, D2). p1.0 (decision)
++ p1.1 (envelope + `TransportKind`) done. p1.3 = adapter manifest type. p1.4 =
+registry. p1.5 = migrate the VS Code installer to the registry. Note: broker.rs
+already has `rejects_unknown_fields_at_the_wire_boundary` — p1.2 adds the
+*quarantine + sanitized diagnostic* path around a failed strict parse (record
+offending field names only, drop the event, no 500).
 
 ---
 
@@ -173,8 +173,9 @@ Goal: make existing capability actually work and be inspectable before any infer
 Goal: new agents connect through one contract; no attribution logic scattered across shell scripts or editor extensions.
 
 - [x] **p1.0 DECISION: evidence-metadata envelope shape.** → resolved in Decisions log (D1–D6): `BrokerEventV1` already has every planai2 field; additive-only, no schema bump; `deny_unknown_fields` is the forbidden-content backstop; `transport` gets a code-side `TransportKind` classifier (no wire change); envelope `confidence` is the producer's self-assertion (correlation may only downgrade); `event_id` stays producer-supplied/opaque; adapter manifest is a separate non-wire type. Committed `docs(planai2-p1.0)`.
-- [ ] **p1.1 Implement the envelope.** Extend the broker event / evidence type with the agreed fields. Backward-compatible: old envelopes still deserialize.
+- [x] **p1.1 Implement the envelope.** Extend the broker event / evidence type with the agreed fields. Backward-compatible: old envelopes still deserialize.
   - Tests: round-trip serde of a full envelope; an old-shape envelope still parses; `schema_version` gate.
+  - → committed | Per D1 no fields were added — `BrokerEventV1` was already complete. Added `TransportKind` enum (`NativePlugin`/`Mcp`/`Transcript`/`ToolSnapshot`/`Filesystem`/`Editor`/`Cli`/`Other`, `Ord`) + `TransportKind::classify(Option<&str>)` (free-text → ranked, unknown⇒`Other`, never panics) + `priority()` (lower = stronger, matches planai2 §2 producer order) + `BrokerEventV1::transport_kind()`. tests: `full_envelope_round_trips_through_json` (round trip + all 17 plan fields present on the wire), `a_minimal_old_shape_envelope_still_parses` (required-only JSON → optionals default to None → normalize ok), `a_wrong_schema_version_is_rejected_by_normalize`, `transport_kind_ranks_producers_by_evidence_strength`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit verify_port/golden/verify_actor_migration all green.
 - [ ] **p1.2 Field allow-list enforcement.** Unknown fields and forbidden content (prompt/response/patch/clipboard/terminal/command args) are rejected or quarantined with a sanitized diagnostic that contains none of the offending content.
   - Tests: envelope with a `prompt` field → quarantined, diagnostic has no prompt text; unknown field → rejected.
 - [ ] **p1.3 Declarative adapter manifest type.** One manifest per agent: `id`, `provider`, executable detection, install strategy, native hook capabilities, transcript roots, payload schema versions, supported tool/change kinds, `verification_status` (`verified` | `scaffold` | `unverified`), health probe.
@@ -389,4 +390,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p0.4 — done. `TranscriptLag::measure()` byte-lag helper (core) wired into `doctor ai` (`file_size`/`cursor_offset`/`lag_bytes`/`last_event_at` + explicit `diagnostic` for unsupported/permission states); `run_ai_sync` per-agent parse error now `break`s (skip agent) instead of `?` (abort run), usage-parse errors drop token counts only. 2 new tests. fmt/clippy/`cargo test --workspace` green. Committed `907c642`.
 - 2026-08-31 — p0.5 — done. `classify_delivery_failure()` + `DeliveryFailureKind` (401/402/network/validation/other) in core; `doctor ai` gains `last_delivery_failure.category`, `broker_installed`/`broker_running`, `latest_native_hook_event_at` (sidecar); report assembly → `build_ai_doctor_report()` + `ai_doctor_report_keys()` presence guard. 2 new tests. Per-adapter enabled/trusted left for a later pass (not machine-readable). Gates green. Committed `f3ea9de`.
 - 2026-08-31 — p0.A1–A4 — Phase 0 acceptance. 3 new external-process tests in `tests/broker_process.rs` (exactly-once dedup, offline-402 keeps capture + queues + records failure + no dead-letter, `doctor ai --json` surfaces legacy-alias + payment_402); p0.A2 mapped to the existing restart test. `broker_process` 2→5. fmt/clippy/`cargo test --workspace` green. **Phase 0 done** (p0.3 `[~]`). Committed `5eb7d5d`.
-- 2026-08-31 — p1.0 — DECISION resolved (docs only). `BrokerEventV1` already carries every planai2 evidence field → additive-only/no schema bump, `deny_unknown_fields` backstop kept, `TransportKind` classifier instead of a wire change, envelope `confidence` = producer self-assertion, `event_id` producer-opaque, manifest is non-wire. See Decisions log D1–D6. Committed.
+- 2026-08-31 — p1.0 — DECISION resolved (docs only). `BrokerEventV1` already carries every planai2 evidence field → additive-only/no schema bump, `deny_unknown_fields` backstop kept, `TransportKind` classifier instead of a wire change, envelope `confidence` = producer self-assertion, `event_id` producer-opaque, manifest is non-wire. See Decisions log D1–D6. Committed `3c7c337`.
+- 2026-08-31 — p1.1 — done. No fields added (D1 — envelope already complete). Added `TransportKind` enum + `classify()`/`priority()`/`BrokerEventV1::transport_kind()` for the Phase 2 producer ordering. 4 new tests (round-trip, old-shape parse, schema-version gate, transport ranking). Gates + duration-audit green. Committed.

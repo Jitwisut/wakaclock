@@ -55,6 +55,57 @@ impl BrokerChangeKind {
     }
 }
 
+/// planai2.md Phase 1 (decision p1.0 / D3): `BrokerEventV1.transport` stays a free
+/// `Option<String>` on the wire so no existing producer breaks, but the Phase 2
+/// producer-priority ordering needs a typed, ranked view of it. `priority()` is
+/// lower = stronger evidence, matching planai2.md §2 "Producer priority":
+/// native hook > structured MCP > completed transcript tool call > before/after
+/// snapshot > filesystem/session inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TransportKind {
+    NativePlugin,
+    Mcp,
+    Transcript,
+    ToolSnapshot,
+    Filesystem,
+    Editor,
+    Cli,
+    Other,
+}
+
+impl TransportKind {
+    /// Map the free-text `transport` string a producer sent. Unknown / absent ⇒
+    /// `Other` (weakest), never a panic.
+    pub fn classify(transport: Option<&str>) -> Self {
+        match transport.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "native_plugin" | "native-plugin" | "plugin" | "agent_hook" | "shell_hook" | "hook" => {
+                Self::NativePlugin
+            }
+            "mcp" | "mcp_bridge" | "tool_bridge" => Self::Mcp,
+            "transcript" | "session_log" | "jsonl" => Self::Transcript,
+            "tool_snapshot" | "snapshot" | "before_after" | "git_sweep" => Self::ToolSnapshot,
+            "filesystem" | "fs" | "notify" | "fs_observer" => Self::Filesystem,
+            "editor" | "vscode" | "ide" | "sidecar" => Self::Editor,
+            "cli" | "wakaclock-cli" | "manual" => Self::Cli,
+            _ => Self::Other,
+        }
+    }
+
+    /// Lower = stronger evidence.
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::NativePlugin => 0,
+            Self::Mcp => 1,
+            Self::Transcript => 2,
+            Self::ToolSnapshot => 3,
+            Self::Filesystem => 4,
+            Self::Editor => 4,
+            Self::Cli => 5,
+            Self::Other => 6,
+        }
+    }
+}
+
 /// Stable metadata-only ingress envelope.  The `deny_unknown_fields` contract is
 /// intentional: prompts, responses, patch bodies and tool arguments must not become
 /// an accidental part of the local or uploaded activity record.
@@ -99,6 +150,11 @@ pub struct BrokerEventV1 {
 }
 
 impl BrokerEventV1 {
+    /// The ranked producer class of this event's `transport` string (p1.0 / D3).
+    pub fn transport_kind(&self) -> TransportKind {
+        TransportKind::classify(self.transport.as_deref())
+    }
+
     /// Validate and fill canonical fields before the event reaches the inbox.
     pub fn normalize(mut self) -> Result<Self, AppError> {
         if self.schema_version != BROKER_SCHEMA_VERSION {
@@ -995,6 +1051,94 @@ mod tests {
         assert_eq!(event.actor_type, Some(ActorType::AiVerified));
         assert_eq!(event.actor_confidence, Some(1.0));
         assert!(event.entity.starts_with('/'));
+    }
+
+    #[test]
+    fn full_envelope_round_trips_through_json() {
+        // planai2.md p1.1: every field the plan's target evidence JSON names must
+        // survive a serialize → deserialize round trip unchanged.
+        let event = sample_event("round-trip");
+        let json = serde_json::to_string(&event).unwrap();
+        let back: BrokerEventV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+        // The plan's named fields are all present on the wire.
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for key in [
+            "schema_version",
+            "event_type",
+            "event_id",
+            "occurred_at",
+            "entity",
+            "project_root",
+            "change_kind",
+            "agent",
+            "provider",
+            "model",
+            "session_id",
+            "tool_event_id",
+            "source",
+            "transport",
+            "confidence",
+            "lines_added",
+            "lines_deleted",
+        ] {
+            assert!(value.get(key).is_some(), "missing envelope key {key}");
+        }
+    }
+
+    #[test]
+    fn a_minimal_old_shape_envelope_still_parses() {
+        // An older producer that predates the optional fields sends only the
+        // required ones; `#[serde(default)]` must fill the rest.
+        let value = serde_json::json!({
+            "schema_version": 1,
+            "event_type": "file_change",
+            "event_id": "old-shape",
+            "occurred_at": Utc::now(),
+            "entity": "/workspace/src/lib.rs",
+            "change_kind": "modify",
+            "agent": "codex",
+            "source": "agent_hook",
+            "confidence": "verified"
+        });
+        let event: BrokerEventV1 = serde_json::from_value(value).unwrap();
+        assert_eq!(event.project_root, None);
+        assert_eq!(event.transport, None);
+        assert_eq!(event.tool_event_id, None);
+        assert_eq!(event.lines_added, None);
+        assert!(event.normalize().is_ok());
+    }
+
+    #[test]
+    fn a_wrong_schema_version_is_rejected_by_normalize() {
+        let mut event = sample_event("bad-version");
+        event.schema_version = BROKER_SCHEMA_VERSION + 1;
+        assert!(event.normalize().is_err());
+    }
+
+    #[test]
+    fn transport_kind_ranks_producers_by_evidence_strength() {
+        assert_eq!(
+            TransportKind::classify(Some("native_plugin")),
+            TransportKind::NativePlugin
+        );
+        assert_eq!(TransportKind::classify(Some("MCP")), TransportKind::Mcp);
+        assert_eq!(
+            TransportKind::classify(Some("fs_observer")),
+            TransportKind::Filesystem
+        );
+        assert_eq!(TransportKind::classify(None), TransportKind::Other);
+        assert_eq!(
+            TransportKind::classify(Some("something-new")),
+            TransportKind::Other
+        );
+        // A native hook outranks (lower priority number than) a filesystem event.
+        assert!(TransportKind::NativePlugin.priority() < TransportKind::Filesystem.priority());
+        assert!(TransportKind::Mcp.priority() < TransportKind::Transcript.priority());
+        assert_eq!(
+            sample_event("t").transport_kind(),
+            TransportKind::NativePlugin // sample uses "shell_hook"
+        );
     }
 
     #[test]
