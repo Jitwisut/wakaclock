@@ -18,6 +18,7 @@
 //! and state commit so overlapping sync processes exit as a nonfatal `AlreadyRunning`
 //! result.
 
+pub mod adapter;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -34,6 +35,10 @@ pub mod sidecar;
 pub mod state;
 pub mod usage;
 
+pub use adapter::{
+    AdapterManifest, ExecutableDetection, HealthProbe, InstallStrategy, NativeHookCapabilities,
+    Verification, VerificationStatus,
+};
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
