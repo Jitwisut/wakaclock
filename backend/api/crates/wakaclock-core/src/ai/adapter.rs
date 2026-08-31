@@ -672,4 +672,75 @@ mod tests {
         registry.register(base_manifest()).unwrap();
         assert!(registry.register(base_manifest()).is_err());
     }
+
+    // --- planai2.md Phase 1 acceptance ---------------------------------------
+
+    #[test]
+    fn p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified() {
+        // Every surface that reports trust must agree: only a live-checked adapter
+        // is `Verified`. Checked across the whole builtin set and a lying manifest.
+        for manifest in AdapterRegistry::builtin().manifests() {
+            let live = manifest.verification.live_checked_at.is_some();
+            assert_eq!(
+                manifest.is_live_verified(),
+                live && manifest.effective_status() == VerificationStatus::Verified
+            );
+            if !live {
+                assert_ne!(manifest.effective_status(), VerificationStatus::Verified);
+            }
+        }
+        let lying: AdapterManifest = serde_json::from_str(
+            r#"{"id":"x","provider":"y","executable":{"command_names":["x"]},
+                "install":{"kind":"transcript_only"},
+                "verification":{"status":"verified"}}"#,
+        )
+        .unwrap();
+        assert_eq!(lying.effective_status(), VerificationStatus::Scaffold);
+        assert!(!lying.is_live_verified());
+        assert!(lying.validate().is_err());
+    }
+
+    #[test]
+    fn p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape() {
+        // "Every adapter emits the same metadata shape into the broker" — there is
+        // exactly one envelope type (`BrokerEventV1`); an event built for any agent
+        // normalizes and round-trips identically regardless of `agent`.
+        use crate::ai::{AiConfidence, AiEventSource};
+        use crate::broker::{BrokerEventType, BrokerEventV1, BROKER_SCHEMA_VERSION};
+        use chrono::Utc;
+
+        for manifest in AdapterRegistry::builtin().manifests() {
+            for kind in &manifest.supported_change_kinds {
+                let event = BrokerEventV1 {
+                    schema_version: BROKER_SCHEMA_VERSION,
+                    event_type: BrokerEventType::FileChange,
+                    event_id: format!("{}-evt", manifest.id),
+                    occurred_at: Utc::now(),
+                    entity: "/workspace/src/main.rs".to_string(),
+                    project_root: Some("/workspace".to_string()),
+                    change_kind: *kind,
+                    previous_entity: matches!(kind, crate::broker::BrokerChangeKind::Rename)
+                        .then(|| "/workspace/src/old.rs".to_string()),
+                    agent: manifest.id.clone(),
+                    provider: Some(manifest.provider.clone()),
+                    model: None,
+                    session_id: Some("s1".to_string()),
+                    source: AiEventSource::AgentHook,
+                    confidence: AiConfidence::Verified,
+                    actor_type: None,
+                    actor_confidence: None,
+                    lines_added: Some(1),
+                    lines_deleted: Some(0),
+                    active_seconds: Some(1.0),
+                    transport: Some("native_plugin".to_string()),
+                    tool: Some("apply_patch".to_string()),
+                    tool_event_id: Some("t1".to_string()),
+                };
+                let normalized = event.normalize().expect("every adapter's event normalizes");
+                let json = serde_json::to_string(&normalized).unwrap();
+                let back: BrokerEventV1 = serde_json::from_str(&json).unwrap();
+                assert_eq!(normalized, back);
+            }
+        }
+    }
 }

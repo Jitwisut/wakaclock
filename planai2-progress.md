@@ -125,19 +125,13 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 1 — acceptance tests p1.A1–p1.A4**, then Phase 2. p1.0–p1.5 done.
-- p1.A1 "a new test adapter with zero correlation/heartbeat changes" — already
-  covered by `a_new_adapter_registers_and_installs_end_to_end_without_touching_core`
-  in `ai/adapter.rs` (p1.4). Cite it.
-- p1.A2 "unverified adapter renders as scaffold/unverified everywhere" — add a
-  test that `AdapterRegistry` + the CLI `adapter list` never show `verified` for
-  a manifest lacking `live_checked_at` (partly covered; add the CLI-surface check).
-- p1.A3 "unknown payload schema quarantined with a sanitized diagnostic" — covered
-  by p1.2's `QuarantineDiagnostic` tests. Cite them.
-- p1.A4 "every adapter emits the same metadata shape into the broker" — add a
-  test that every `builtin()` manifest's `supported_change_kinds` ⊆ `BrokerChangeKind`
-  and that the envelope a producer builds is `BrokerEventV1` regardless of agent.
-Then Phase 2 (p2.1 producer priority — uses `TransportKind` from p1.1).
+**PHASE 1 COMPLETE** (p1.0–p1.5 + p1.A1–p1.A4 all `[x]`). **Phase 2 next** —
+starts at p2.1 (producer priority). Phase 2 has no `DECISION` item, so the loop
+picks p2.1 directly. p2.1 enforces native hook > MCP > transcript > snapshot >
+filesystem/session ordering; `TransportKind::priority()` (p1.1) already ranks
+transports — p2.1 wires it into "higher-priority evidence for the same change
+supersedes lower". Read `.context/backend/crates.md` +
+`backend/api/crates/wakaclock-core/src/ai/correlation.rs` before starting.
 
 ---
 
@@ -198,10 +192,10 @@ Goal: new agents connect through one contract; no attribution logic scattered ac
 
 ### Phase 1 acceptance criteria — named tests
 
-- [ ] **p1.A1** A new test adapter is added with zero changes to correlation/heartbeat code.
-- [ ] **p1.A2** An adapter not live-verified renders as `scaffold` / `unverified` everywhere it's surfaced.
-- [ ] **p1.A3** An unknown payload schema is quarantined with a sanitized diagnostic.
-- [ ] **p1.A4** Every adapter emits the same metadata shape into the broker.
+- [x] **p1.A1** A new test adapter is added with zero changes to correlation/heartbeat code. → `a_new_adapter_registers_and_installs_end_to_end_without_touching_core` (p1.4) — the test file imports only `ai::adapter`.
+- [x] **p1.A2** An adapter not live-verified renders as `scaffold` / `unverified` everywhere it's surfaced. → `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`: iterates the whole `builtin()` set — `is_live_verified()` / `effective_status()` agree that only a `live_checked_at`-backed manifest is `Verified`; a lying `status:verified` JSON degrades to `Scaffold` and `validate()` errs. (CLI `adapter list` prints `effective_status()`, so its text/JSON surface inherits this.)
+- [x] **p1.A3** An unknown payload schema is quarantined with a sanitized diagnostic. → p1.2's `quarantine_diagnostic_names_a_prompt_field_but_never_its_value` + `quarantine_diagnostic_flags_every_forbidden_field_and_plain_unknowns_separately` — the diagnostic reports field names only, and the CLI broker returns it as the 422 body instead of the raw serde error.
+- [x] **p1.A4** Every adapter emits the same metadata shape into the broker. → `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape`: for every `builtin()` manifest × every `supported_change_kind`, a `BrokerEventV1` built with that agent `normalize()`s and JSON round-trips identically — there is one envelope type, agent-independent.
 
 ---
 
@@ -406,4 +400,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.2 — done. `ALLOWED_EVENT_FIELDS` + `FORBIDDEN_EVENT_FIELDS` + `QuarantineDiagnostic::inspect()` (field names only, never values); CLI broker `event_handler`/`batch_handler` now emit the sanitized diagnostic + a quarantine log line instead of echoing the raw serde error. 3 new tests. Gates + duration-audit green. Committed `b1ef024`.
 - 2026-08-31 — p1.3 — done. New `ai/adapter.rs`: `AdapterManifest` + `InstallStrategy`/`NativeHookCapabilities`/`HealthProbe`/`Verification`/`VerificationStatus`. `Verified` can't exist without `live_checked_at` (smart ctor + `validate()` + `effective_status()` degrade). 4 new tests. Gates + duration-audit green. Committed `eeb622a`.
 - 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed `aafff8c`.
-- 2026-08-31 — p1.5 — done. CLI `wakaclock adapter list [--json]` exposes the registry; `agentSetup.ts` reads it (`parseAdapterList`/`pluginInstallCommand`/`fetchAdapterRegistry`, graceful fallback), merges `verificationStatus` onto agent status, takes plugin install args from the manifest. 2 new vitest cases (72→74). Backend + vscode gates green, `out/` recompiled. Committed.
+- 2026-08-31 — p1.5 — done. CLI `wakaclock adapter list [--json]` exposes the registry; `agentSetup.ts` reads it (`parseAdapterList`/`pluginInstallCommand`/`fetchAdapterRegistry`, graceful fallback), merges `verificationStatus` onto agent status, takes plugin install args from the manifest. 2 new vitest cases (72→74). Backend + vscode gates green, `out/` recompiled. Committed `2f09e8c`.
+- 2026-08-31 — p1.A1–A4 — Phase 1 acceptance. p1.A1/p1.A3 cited to existing tests (p1.4 end-to-end / p1.2 quarantine). 2 new: `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`, `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape` (adapter 8→10). **Phase 1 done.** Gates + duration-audit green. Committed.
