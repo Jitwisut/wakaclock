@@ -92,6 +92,27 @@ Re-running the same dry-run after the fix against the same 156 real sessions: **
 events found** (up from 0), of which 649 came from the new `response_item` path this
 fix added. No content was sent anywhere — `--dry-run` only.
 
+## planai2.md Phase 0.3 — Codex integration (partial, 2026-08-31)
+
+Done and tested: the VS Code installer now (a) repoints a stale `command = "…"`
+line inside an AtoAxis-managed block in `~/.codex/config.toml` when a plugin
+upgrade moves the bundled scripts to a new version-stamped directory, touching
+nothing outside the managed markers (`refreshManagedCodexHookCommands`), and
+(b) refuses to register a hook path outside `~/.wakaclock/agent-plugins/`
+(`assertStableManagedHookPath`) so a VSIX-unpack or dev-worktree path can never
+be written into a user's config. `ensureCodexHook` / `ensureCodexHooksFeature`
+were already idempotent and already migrated the deprecated `codex_hooks`
+feature name.
+
+**Not done — native Codex plugin packaging.** planai2.md §0.3 also asks for an
+"AtoAxis Codex plugin package in the current native plugin layout" to replace
+the direct-TOML hook block. This machine has no Codex build exposing a
+documented plugin/extension install API (unlike `claude plugin marketplace add`
+/ `gemini extensions install`), so there is no real target to package against
+and no way to live-verify one. The shipped, working mechanism remains the
+direct managed-TOML block. This sub-item is deferred, not certified — revisit on
+a machine with a Codex release that documents a plugin manifest format.
+
 ## Still not verified against a live system
 
 - Codex live delivery and cross-transport dedup: the "Phase 8 Codex verification"

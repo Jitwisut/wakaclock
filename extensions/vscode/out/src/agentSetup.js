@@ -36,7 +36,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.syncAgentPluginsToStableDir = syncAgentPluginsToStableDir;
 exports.detectAiAgents = detectAiAgents;
 exports.setupDetectedAiAgents = setupDetectedAiAgents;
+exports.assertStableManagedHookPath = assertStableManagedHookPath;
 exports.ensureCodexHooksFeature = ensureCodexHooksFeature;
+exports.refreshManagedCodexHookCommands = refreshManagedCodexHookCommands;
 exports.ensureCodexHook = ensureCodexHook;
 const fs = __importStar(require("node:fs/promises"));
 const node_child_process_1 = require("node:child_process");
@@ -207,9 +209,27 @@ async function setupCodex(stableDir, homeDir, logger) {
     const existing = await readTextIfExists(configPath);
     const withFeature = ensureCodexHooksFeature(existing ?? "");
     const hookPath = path.join(stableDir, "codex", "heartbeat-hook.sh");
+    // planai2.md Phase 0.3: the hook path written into ~/.codex/config.toml must be a
+    // stable managed location, never the extension's own version-stamped install dir
+    // or a dev worktree — those vanish on the next upgrade and leave Codex invoking a
+    // missing script.
+    assertStableManagedHookPath(hookPath, homeDir);
     const withHook = ensureCodexHook(withFeature, hookPath);
     await writeTextAtomically(configPath, withHook);
     logger.debug("agentSetup: configured Codex hook", { configPath });
+}
+/**
+ * planai2.md Phase 0.3: throws when a hook path is not under the stable managed
+ * plugin root (`~/.wakaclock/agent-plugins/`). Guards against a caller passing the
+ * extension's version-stamped install directory (replaced wholesale on upgrade) or
+ * a dev worktree / temp path.
+ */
+function assertStableManagedHookPath(hookPath, homeDir) {
+    const managedRoot = path.join(homeDir, ".wakaclock", "agent-plugins") + path.sep;
+    const resolved = path.resolve(hookPath);
+    if (!resolved.startsWith(managedRoot)) {
+        throw new Error(`refusing to register a Codex hook outside the managed plugin directory: ${resolved}`);
+    }
 }
 function ensureCodexHooksFeature(config) {
     if (/^\s*hooks\s*=\s*true\s*$/m.test(config)) {
@@ -228,10 +248,82 @@ function ensureCodexHooksFeature(config) {
     }
     return `${config.trimEnd()}\n\n[features]\nhooks = true\n`;
 }
+/**
+ * planai2.md Phase 0.2b/0.3: a VS Code upgrade moves the bundled hook scripts to a
+ * new version-stamped directory under `~/.wakaclock/agent-plugins/<version>/`, but
+ * `ensureCodexHook` short-circuits once its markers are present and never touched a
+ * `command = "…"` line that still points at the *previous* version's directory (or,
+ * worse, a temporary VSIX/worktree path from a dev build). This repoints every
+ * `command` line that sits inside an AtoAxis-managed block to the current script of
+ * the same basename, and leaves every byte outside those blocks untouched — user
+ * hooks, comments and unrelated tables are never rewritten.
+ */
+function refreshManagedCodexHookCommands(config, paths) {
+    const managedMarkers = [
+        "# AtoAxis managed AI attribution hook",
+        "# AtoAxis managed AI shell sweep hooks",
+    ];
+    const byBasename = {
+        "heartbeat-hook.sh": paths.heartbeat,
+        "git-sweep-before.sh": paths.before,
+        "git-sweep-after.sh": paths.after,
+    };
+    const lines = config.split("\n");
+    let inManagedBlock = false;
+    let blankRun = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+        const trimmed = lines[i].trim();
+        if (managedMarkers.some((marker) => trimmed.startsWith(marker))) {
+            inManagedBlock = true;
+            blankRun = 0;
+            continue;
+        }
+        if (!inManagedBlock) {
+            continue;
+        }
+        // The AtoAxis blocks contain single blank lines between their sub-tables, so a
+        // lone blank does not end the block — but two in a row, EOF, or an unmanaged
+        // `[table]` / `[[table]]` that is not one of ours does.
+        if (trimmed === "") {
+            blankRun += 1;
+            if (blankRun >= 2) {
+                inManagedBlock = false;
+            }
+            continue;
+        }
+        blankRun = 0;
+        // Our generated blocks contain no comments after the opening marker and no
+        // tables other than `[[hooks.*]]`, so either one means user content has begun.
+        if (trimmed.startsWith("#")) {
+            inManagedBlock = false;
+            continue;
+        }
+        if (/^\[\[?/.test(trimmed) && !/^\[\[?hooks\./.test(trimmed)) {
+            inManagedBlock = false;
+            continue;
+        }
+        const match = /^([ \t]*command[ \t]*=[ \t]*)"(.*)"([ \t]*)$/.exec(lines[i]);
+        if (!match) {
+            continue;
+        }
+        const currentValue = match[2].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        const basename = currentValue.split("/").pop() ?? "";
+        const wanted = byBasename[basename];
+        if (wanted && wanted !== currentValue) {
+            lines[i] = `${match[1]}${tomlString(wanted)}${match[3]}`;
+        }
+    }
+    return lines.join("\n");
+}
 function ensureCodexHook(config, hookPath) {
     const attributionMarker = "# AtoAxis managed AI attribution hook";
     const sweepMarker = "# AtoAxis managed AI shell sweep hooks";
-    let updated = config;
+    const hookDir = path.dirname(hookPath);
+    let updated = refreshManagedCodexHookCommands(config, {
+        heartbeat: hookPath,
+        before: path.join(hookDir, "git-sweep-before.sh"),
+        after: path.join(hookDir, "git-sweep-after.sh"),
+    });
     if (!updated.includes(attributionMarker)) {
         const block = [
             "",
@@ -251,7 +343,6 @@ function ensureCodexHook(config, hookPath) {
     // only for files that changed during that call. Keep this in a separate managed
     // marker so existing installations get upgraded instead of returning early.
     if (!updated.includes(sweepMarker)) {
-        const hookDir = path.dirname(hookPath);
         const beforePath = path.join(hookDir, "git-sweep-before.sh");
         const afterPath = path.join(hookDir, "git-sweep-after.sh");
         const matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*";

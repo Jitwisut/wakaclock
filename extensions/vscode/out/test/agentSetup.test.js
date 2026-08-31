@@ -184,6 +184,56 @@ async function runHook(script, input, env) {
         const updated = (0, agentSetup_1.ensureCodexHook)(legacy, "/tmp/Ato Axis/heartbeat-hook.sh");
         (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell sweep hooks");
     });
+    (0, vitest_1.it)("repoints a stale managed hook path from an old plugin version, preserving user config", () => {
+        const oldRoot = "/home/u/.wakaclock/agent-plugins/1.0.0/codex";
+        const newRoot = "/home/u/.wakaclock/agent-plugins/2.0.0/codex";
+        const withOld = (0, agentSetup_1.ensureCodexHook)((0, agentSetup_1.ensureCodexHooksFeature)(""), `${oldRoot}/heartbeat-hook.sh`);
+        // A user's own unrelated hook and table must survive verbatim.
+        const userTail = [
+            "",
+            "# my own hook",
+            "[[hooks.PostToolUse]]",
+            'matcher = "my_tool"',
+            "[[hooks.PostToolUse.hooks]]",
+            'type = "command"',
+            'command = "/opt/me/notify.sh"',
+            "timeout = 5",
+            "",
+            "[history]",
+            "persistence = \"save-all\"",
+            ""
+        ].join("\n");
+        const before = `${withOld}${userTail}`;
+        const after = (0, agentSetup_1.ensureCodexHook)(before, `${newRoot}/heartbeat-hook.sh`);
+        (0, vitest_1.expect)(after).toContain(`command = "${newRoot}/heartbeat-hook.sh"`);
+        (0, vitest_1.expect)(after).toContain(`command = "${newRoot}/git-sweep-before.sh"`);
+        (0, vitest_1.expect)(after).toContain(`command = "${newRoot}/git-sweep-after.sh"`);
+        (0, vitest_1.expect)(after).not.toContain("1.0.0");
+        // Untouched user content.
+        (0, vitest_1.expect)(after).toContain('command = "/opt/me/notify.sh"');
+        (0, vitest_1.expect)(after).toContain('persistence = "save-all"');
+        // Idempotent once repointed.
+        (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHook)(after, `${newRoot}/heartbeat-hook.sh`)).toBe(after);
+    });
+    (0, vitest_1.it)("refreshManagedCodexHookCommands leaves an unmanaged command line alone", () => {
+        const config = [
+            "# not ours",
+            "[[hooks.PostToolUse]]",
+            'command = "/opt/me/heartbeat-hook.sh"',
+            ""
+        ].join("\n");
+        (0, vitest_1.expect)((0, agentSetup_1.refreshManagedCodexHookCommands)(config, {
+            heartbeat: "/x/heartbeat-hook.sh",
+            before: "/x/git-sweep-before.sh",
+            after: "/x/git-sweep-after.sh"
+        })).toBe(config);
+    });
+    (0, vitest_1.it)("assertStableManagedHookPath rejects a worktree/VSIX path and accepts the managed dir", () => {
+        const home = "/home/u";
+        (0, vitest_1.expect)(() => (0, agentSetup_1.assertStableManagedHookPath)(`${home}/.wakaclock/agent-plugins/3.1.0/codex/heartbeat-hook.sh`, home)).not.toThrow();
+        (0, vitest_1.expect)(() => (0, agentSetup_1.assertStableManagedHookPath)("/private/var/folders/x/T/vsix-unpack/codex/heartbeat-hook.sh", home)).toThrow(/managed plugin directory/);
+        (0, vitest_1.expect)(() => (0, agentSetup_1.assertStableManagedHookPath)(`${home}/dev/atoaxis/extensions/ai-agents/codex/heartbeat-hook.sh`, home)).toThrow(/managed plugin directory/);
+    });
 });
 (0, vitest_1.describe)("AI shell snapshot adapters", () => {
     (0, vitest_1.it)("forwards stable matching Before/After tool metadata to the CLI engine", async () => {
