@@ -125,15 +125,19 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 1 — item p1.5** (migrate the VS Code installer to the registry). p1.0–p1.4
-done. p1.5: point `extensions/vscode/src/agentSetup.ts` installation logic at
-`AdapterRegistry` — but the registry lives in `wakaclock-core` (Rust), not TS.
-Realistic scope: expose the registry through the CLI (`wakaclock adapter list
---json` / `wakaclock adapter install <id> --json`) so the extension calls the
-CLI instead of hard-coding `claude plugin install` / `gemini extensions install`
-/ the Codex TOML block. Then p1.A1–p1.A4 acceptance tests. If the full TS
-migration is too large for one iteration, ship the CLI surface + a thin
-`agentSetup.ts` call and note any remainder.
+**Phase 1 — acceptance tests p1.A1–p1.A4**, then Phase 2. p1.0–p1.5 done.
+- p1.A1 "a new test adapter with zero correlation/heartbeat changes" — already
+  covered by `a_new_adapter_registers_and_installs_end_to_end_without_touching_core`
+  in `ai/adapter.rs` (p1.4). Cite it.
+- p1.A2 "unverified adapter renders as scaffold/unverified everywhere" — add a
+  test that `AdapterRegistry` + the CLI `adapter list` never show `verified` for
+  a manifest lacking `live_checked_at` (partly covered; add the CLI-surface check).
+- p1.A3 "unknown payload schema quarantined with a sanitized diagnostic" — covered
+  by p1.2's `QuarantineDiagnostic` tests. Cite them.
+- p1.A4 "every adapter emits the same metadata shape into the broker" — add a
+  test that every `builtin()` manifest's `supported_change_kinds` ⊆ `BrokerChangeKind`
+  and that the envelope a producer builds is `BrokerEventV1` regardless of agent.
+Then Phase 2 (p2.1 producer priority — uses `TransportKind` from p1.1).
 
 ---
 
@@ -188,8 +192,9 @@ Goal: new agents connect through one contract; no attribution logic scattered ac
 - [x] **p1.4 Adapter registry.** Enumerates manifests, drives install + health probe. Installer is atomic, idempotent, and preserves user configuration.
   - Tests: register a fake test adapter and drive it end to end **without editing correlation or heartbeat code** (this is acceptance p1.A1); install twice = idempotent; install preserves a pre-existing unrelated config key.
   - → committed | `AdapterRegistry` in `ai/adapter.rs`: `from_manifests`/`builtin`/`register` (validates each, rejects duplicate ids), `get`/`ids`/`manifests`, `install(id, &InstallContext) -> InstallOutcome`. `ConfigHookBlock` strategy: marker-guarded, writes the managed block once via temp-file + `rename` (atomic), preserves every existing byte; a 2nd call is a no-op `AlreadyInstalled`. `NativePlugin`/`Manual`/`TranscriptOnly` return a *plan* (`RequiresExternalCommand`/`ManualStep`/`NothingToInstall`) — the registry never shells out, stays pure + correlation-free. `builtin()` seeds real manifests: claude-code `Verified` (VERIFICATION.md 2026-08-14 live sync), codex `Scaffold` (real-transcript dry-run only, live delivery open), gemini-cli `Unverified` (no CLI anywhere). tests: `builtin_registry_loads_and_validates_every_manifest`, `a_new_adapter_registers_and_installs_end_to_end_without_touching_core` (p1.A1 — asserts user key `name = "keep me"` survives + 2nd install byte-identical), `install_returns_a_plan_for_native_plugin_and_manual_strategies`, `duplicate_ids_are_rejected`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p1.5 Migrate VS Code installer.** Move installation logic from `extensions/vscode/src/agentSetup.ts` to consume the registry. No behavior regression.
+- [x] **p1.5 Migrate VS Code installer.** Move installation logic from `extensions/vscode/src/agentSetup.ts` to consume the registry. No behavior regression.
   - Tests: `extensions/vscode` test that setup still installs the Claude + Codex adapters; VS Code `npm test` green.
+  - → committed | CLI: new `wakaclock adapter list [--json]` (`AdapterAction::List`) serializing `AdapterRegistry::builtin().manifests()` — text mode prints id/provider/install-kind/status. `agentSetup.ts`: `parseAdapterList()` + `pluginInstallCommand()` (pure, exported) + `fetchAdapterRegistry(cliPath)` (calls the CLI, empty map on any failure → falls back to built-in defaults, never a failed setup). `detectAiAgents({cliPath})` now merges `verificationStatus` onto each `AiAgentStatus` from the registry; `setupClaudeCode`/`setupGeminiCli` take the manifest and take the plugin id/args from `install.install_args` (the literal `atoaxis-heartbeat@atoaxis-plugins` is no longer duplicated in TS) with the old literals as fallback; Codex stays on the `config_hook_block` path (`ensureCodexHook`). tests: `parseAdapterList reads the CLI output and tolerates garbage`, `pluginInstallCommand splits the manifest args and skips non-plugin strategies` (vscode 72→74). Gates: backend fmt/clippy/`cargo test --workspace` + vscode tsc/`npm test` green, `out/` recompiled.
 
 ### Phase 1 acceptance criteria — named tests
 
@@ -400,4 +405,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.1 — done. No fields added (D1 — envelope already complete). Added `TransportKind` enum + `classify()`/`priority()`/`BrokerEventV1::transport_kind()` for the Phase 2 producer ordering. 4 new tests (round-trip, old-shape parse, schema-version gate, transport ranking). Gates + duration-audit green. Committed `3d15d1d`.
 - 2026-08-31 — p1.2 — done. `ALLOWED_EVENT_FIELDS` + `FORBIDDEN_EVENT_FIELDS` + `QuarantineDiagnostic::inspect()` (field names only, never values); CLI broker `event_handler`/`batch_handler` now emit the sanitized diagnostic + a quarantine log line instead of echoing the raw serde error. 3 new tests. Gates + duration-audit green. Committed `b1ef024`.
 - 2026-08-31 — p1.3 — done. New `ai/adapter.rs`: `AdapterManifest` + `InstallStrategy`/`NativeHookCapabilities`/`HealthProbe`/`Verification`/`VerificationStatus`. `Verified` can't exist without `live_checked_at` (smart ctor + `validate()` + `effective_status()` degrade). 4 new tests. Gates + duration-audit green. Committed `eeb622a`.
-- 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed.
+- 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed `aafff8c`.
+- 2026-08-31 — p1.5 — done. CLI `wakaclock adapter list [--json]` exposes the registry; `agentSetup.ts` reads it (`parseAdapterList`/`pluginInstallCommand`/`fetchAdapterRegistry`, graceful fallback), merges `verificationStatus` onto agent status, takes plugin install args from the manifest. 2 new vitest cases (72→74). Backend + vscode gates green, `out/` recompiled. Committed.

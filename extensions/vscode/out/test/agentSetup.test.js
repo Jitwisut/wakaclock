@@ -235,6 +235,56 @@ async function runHook(script, input, env) {
         (0, vitest_1.expect)(() => (0, agentSetup_1.assertStableManagedHookPath)(`${home}/dev/atoaxis/extensions/ai-agents/codex/heartbeat-hook.sh`, home)).toThrow(/managed plugin directory/);
     });
 });
+(0, vitest_1.describe)("adapter registry consumption (planai2 p1.5)", () => {
+    const listJson = JSON.stringify([
+        {
+            id: "claude-code",
+            provider: "anthropic",
+            install: {
+                kind: "native_plugin",
+                install_args: ["claude", "plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"]
+            },
+            verification: { status: "verified" }
+        },
+        {
+            id: "codex",
+            provider: "openai",
+            install: {
+                kind: "config_hook_block",
+                config_path_from_home: ".codex/config.toml",
+                marker: "# AtoAxis managed AI attribution hook"
+            },
+            verification: { status: "scaffold" }
+        },
+        {
+            id: "gemini-cli",
+            provider: "google",
+            install: { kind: "native_plugin", install_args: ["gemini", "extensions", "install"] },
+            verification: { status: "unverified" }
+        }
+    ]);
+    (0, vitest_1.it)("parseAdapterList reads the CLI output and tolerates garbage", () => {
+        const parsed = (0, agentSetup_1.parseAdapterList)(listJson);
+        (0, vitest_1.expect)(parsed.map((m) => m.id)).toEqual(["claude-code", "codex", "gemini-cli"]);
+        (0, vitest_1.expect)((0, agentSetup_1.parseAdapterList)("not json")).toEqual([]);
+        (0, vitest_1.expect)((0, agentSetup_1.parseAdapterList)("{}")).toEqual([]);
+    });
+    (0, vitest_1.it)("pluginInstallCommand splits the manifest args and skips non-plugin strategies", () => {
+        const [claude, codex, gemini] = (0, agentSetup_1.parseAdapterList)(listJson);
+        (0, vitest_1.expect)((0, agentSetup_1.pluginInstallCommand)(claude)).toEqual({
+            program: "claude",
+            args: ["plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"]
+        });
+        // gemini's manifest carries no trailing path — the installer appends it.
+        (0, vitest_1.expect)((0, agentSetup_1.pluginInstallCommand)(gemini)).toEqual({
+            program: "gemini",
+            args: ["extensions", "install"]
+        });
+        // codex installs via a config hook block, not a plugin command.
+        (0, vitest_1.expect)((0, agentSetup_1.pluginInstallCommand)(codex)).toBeUndefined();
+        (0, vitest_1.expect)((0, agentSetup_1.pluginInstallCommand)(undefined)).toBeUndefined();
+    });
+});
 (0, vitest_1.describe)("AI shell snapshot adapters", () => {
     (0, vitest_1.it)("forwards stable matching Before/After tool metadata to the CLI engine", async () => {
         const homeDir = path.join(workDir, "home");

@@ -7,6 +7,8 @@ import {
   assertStableManagedHookPath,
   ensureCodexHook,
   ensureCodexHooksFeature,
+  parseAdapterList,
+  pluginInstallCommand,
   refreshManagedCodexHookCommands,
   syncAgentPluginsToStableDir
 } from "../src/agentSetup";
@@ -243,6 +245,59 @@ describe("Codex hook config helpers", () => {
     expect(() =>
       assertStableManagedHookPath(`${home}/dev/atoaxis/extensions/ai-agents/codex/heartbeat-hook.sh`, home)
     ).toThrow(/managed plugin directory/);
+  });
+});
+
+describe("adapter registry consumption (planai2 p1.5)", () => {
+  const listJson = JSON.stringify([
+    {
+      id: "claude-code",
+      provider: "anthropic",
+      install: {
+        kind: "native_plugin",
+        install_args: ["claude", "plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"]
+      },
+      verification: { status: "verified" }
+    },
+    {
+      id: "codex",
+      provider: "openai",
+      install: {
+        kind: "config_hook_block",
+        config_path_from_home: ".codex/config.toml",
+        marker: "# AtoAxis managed AI attribution hook"
+      },
+      verification: { status: "scaffold" }
+    },
+    {
+      id: "gemini-cli",
+      provider: "google",
+      install: { kind: "native_plugin", install_args: ["gemini", "extensions", "install"] },
+      verification: { status: "unverified" }
+    }
+  ]);
+
+  it("parseAdapterList reads the CLI output and tolerates garbage", () => {
+    const parsed = parseAdapterList(listJson);
+    expect(parsed.map((m) => m.id)).toEqual(["claude-code", "codex", "gemini-cli"]);
+    expect(parseAdapterList("not json")).toEqual([]);
+    expect(parseAdapterList("{}")).toEqual([]);
+  });
+
+  it("pluginInstallCommand splits the manifest args and skips non-plugin strategies", () => {
+    const [claude, codex, gemini] = parseAdapterList(listJson);
+    expect(pluginInstallCommand(claude)).toEqual({
+      program: "claude",
+      args: ["plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"]
+    });
+    // gemini's manifest carries no trailing path — the installer appends it.
+    expect(pluginInstallCommand(gemini)).toEqual({
+      program: "gemini",
+      args: ["extensions", "install"]
+    });
+    // codex installs via a config hook block, not a plugin command.
+    expect(pluginInstallCommand(codex)).toBeUndefined();
+    expect(pluginInstallCommand(undefined)).toBeUndefined();
   });
 });
 

@@ -21,6 +21,8 @@ export interface AgentPluginsSyncOptions {
 
 export type AiAgentId = "claude-code" | "codex" | "gemini-cli";
 
+export type AdapterVerificationStatus = "verified" | "scaffold" | "unverified";
+
 export interface AiAgentStatus {
   id: AiAgentId;
   label: string;
@@ -29,6 +31,65 @@ export interface AiAgentStatus {
   enabled: boolean;
   executable?: string;
   reason?: string;
+  /** From the CLI adapter registry (`wakaclock adapter list --json`), when reachable. */
+  verificationStatus?: AdapterVerificationStatus;
+}
+
+/** The slice of a `wakaclock adapter list --json` manifest the installer needs. */
+export interface AdapterManifestLite {
+  id: string;
+  provider: string;
+  install:
+    | { kind: "native_plugin"; install_args: string[] }
+    | { kind: "config_hook_block"; config_path_from_home: string; marker: string }
+    | { kind: "transcript_only" }
+    | { kind: "manual"; instruction: string };
+  verification?: { status?: AdapterVerificationStatus };
+  transcript_roots?: string[];
+}
+
+/**
+ * planai2.md Phase 1 (p1.5): the VS Code installer reads the agent set, its
+ * install plan and its verification status from the Rust adapter registry via
+ * `wakaclock adapter list --json`, instead of hard-coding them here. A parse
+ * failure or an older CLI without the subcommand yields an empty map and the
+ * installer falls back to its built-in defaults — never a failed setup.
+ */
+export function parseAdapterList(stdout: string): AdapterManifestLite[] {
+  try {
+    const parsed = JSON.parse(stdout);
+    return Array.isArray(parsed) ? (parsed as AdapterManifestLite[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** `[program, ...args]` for a `native_plugin` manifest, or undefined. */
+export function pluginInstallCommand(
+  manifest: AdapterManifestLite | undefined
+): { program: string; args: string[] } | undefined {
+  if (!manifest || manifest.install.kind !== "native_plugin") {
+    return undefined;
+  }
+  const [program, ...args] = manifest.install.install_args;
+  return program ? { program, args } : undefined;
+}
+
+async function fetchAdapterRegistry(
+  cliPath: string | undefined
+): Promise<Map<string, AdapterManifestLite>> {
+  const map = new Map<string, AdapterManifestLite>();
+  try {
+    const { stdout } = await execFileAsync(cliPath || "wakaclock", ["adapter", "list", "--json"], {
+      timeout: 10_000
+    });
+    for (const manifest of parseAdapterList(stdout)) {
+      map.set(manifest.id, manifest);
+    }
+  } catch {
+    // Older CLI without the subcommand, or not on PATH — fall back to defaults.
+  }
+  return map;
 }
 
 export interface AiAgentSetupOptions {
@@ -109,10 +170,12 @@ export async function syncAgentPluginsToStableDir(
  */
 export async function detectAiAgents(options: {
   homeDir?: string;
+  cliPath?: string;
 } = {}): Promise<AiAgentStatus[]> {
   const homeDir = options.homeDir ?? os.homedir();
   const state = await readSetupState(homeDir);
   const codexConfigured = await codexHookIsConfigured(homeDir);
+  const registry = await fetchAdapterRegistry(options.cliPath);
 
   const [claude, codex, gemini] = await Promise.all([
     detectExecutable("claude"),
@@ -120,8 +183,15 @@ export async function detectAiAgents(options: {
     detectExecutable("gemini")
   ]);
 
+  const withRegistry = (status: AiAgentStatus): AiAgentStatus => {
+    const manifest = registry.get(status.id);
+    return manifest?.verification?.status
+      ? { ...status, verificationStatus: manifest.verification.status }
+      : status;
+  };
+
   return [
-    {
+    withRegistry({
       id: "claude-code",
       label: "Claude Code",
       provider: "anthropic",
@@ -129,8 +199,8 @@ export async function detectAiAgents(options: {
       enabled: Boolean(state["claude-code"]),
       executable: claude.path,
       reason: claude.reason
-    },
-    {
+    }),
+    withRegistry({
       id: "codex",
       label: "Codex CLI",
       provider: "openai",
@@ -138,8 +208,8 @@ export async function detectAiAgents(options: {
       enabled: codexConfigured,
       executable: codex.path,
       reason: codex.reason
-    },
-    {
+    }),
+    withRegistry({
       id: "gemini-cli",
       label: "Gemini CLI",
       provider: "google",
@@ -147,7 +217,7 @@ export async function detectAiAgents(options: {
       enabled: Boolean(state["gemini-cli"]),
       executable: gemini.path,
       reason: gemini.reason
-    }
+    })
   ];
 }
 
@@ -157,7 +227,8 @@ export async function setupDetectedAiAgents(
 ): Promise<AiAgentSetupResult> {
   const homeDir = options.homeDir ?? os.homedir();
   await writeCliPath(homeDir, options.cliPath);
-  const statuses = await detectAiAgents({ homeDir });
+  const statuses = await detectAiAgents({ homeDir, cliPath: options.cliPath });
+  const registry = await fetchAdapterRegistry(options.cliPath);
   const configured: AiAgentId[] = [];
   const failed: Array<{ id: AiAgentId; error: string }> = [];
 
@@ -169,9 +240,9 @@ export async function setupDetectedAiAgents(
   )) {
     try {
       if (status.id === "claude-code") {
-        await setupClaudeCode(options.stableDir, options.logger);
+        await setupClaudeCode(options.stableDir, options.logger, registry.get("claude-code"));
       } else if (status.id === "gemini-cli") {
-        await setupGeminiCli(options.stableDir, options.logger);
+        await setupGeminiCli(options.stableDir, options.logger, registry.get("gemini-cli"));
       } else {
         await setupCodex(options.stableDir, homeDir, options.logger);
       }
@@ -191,7 +262,11 @@ export async function setupDetectedAiAgents(
   return { statuses: refreshed, configured, failed };
 }
 
-async function setupClaudeCode(stableDir: string, logger: Logger): Promise<void> {
+async function setupClaudeCode(
+  stableDir: string,
+  logger: Logger,
+  manifest?: AdapterManifestLite
+): Promise<void> {
   if (process.platform === "win32") {
     // Windows uses the transcript watcher baseline; shell hooks are an optional
     // fast path and must not turn a successful consent into a failed setup.
@@ -203,21 +278,30 @@ async function setupClaudeCode(stableDir: string, logger: Logger): Promise<void>
     ["plugin", "marketplace", "add", stableDir],
     logger
   );
+  // The plugin id comes from the adapter registry (planai2.md p1.5); the literal
+  // fallback keeps an older CLI without `adapter list` working.
+  const plan = pluginInstallCommand(manifest);
   await runCommandAllowAlreadyConfigured(
-    "claude",
-    ["plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"],
+    plan?.program ?? "claude",
+    plan?.args ?? ["plugin", "install", "atoaxis-heartbeat@atoaxis-plugins"],
     logger
   );
 }
 
-async function setupGeminiCli(stableDir: string, logger: Logger): Promise<void> {
+async function setupGeminiCli(
+  stableDir: string,
+  logger: Logger,
+  manifest?: AdapterManifestLite
+): Promise<void> {
   if (process.platform === "win32") {
     logger.debug("agentSetup: Gemini CLI configured in transcript-only mode on Windows");
     return;
   }
+  const extensionPath = path.join(stableDir, "gemini-cli");
+  const plan = pluginInstallCommand(manifest);
   await runCommandAllowAlreadyConfigured(
-    "gemini",
-    ["extensions", "install", path.join(stableDir, "gemini-cli")],
+    plan?.program ?? "gemini",
+    plan ? [...plan.args, extensionPath] : ["extensions", "install", extensionPath],
     logger
   );
 }

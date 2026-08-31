@@ -246,6 +246,22 @@ enum Commands {
         #[command(subcommand)]
         target: DoctorTarget,
     },
+    /// planai2.md Phase 1: the declarative AI-agent adapter registry — the single
+    /// source of truth for which agents exist, how they install, and how far each
+    /// is verified. Editor/CLI installers read this instead of hard-coding it.
+    Adapter {
+        #[command(subcommand)]
+        action: AdapterAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdapterAction {
+    /// List every registered adapter manifest.
+    List {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1448,9 +1464,37 @@ async fn run() -> Result<(), Box<dyn Error>> {
         Commands::Doctor { target } => match target {
             DoctorTarget::Ai { json } => print_ai_doctor_report(&config, json)?,
         },
+        Commands::Adapter { action } => match action {
+            AdapterAction::List { json } => {
+                let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+                if json {
+                    println!("{}", serde_json::to_string(registry.manifests())?);
+                } else {
+                    for manifest in registry.manifests() {
+                        println!(
+                            "{:<12} provider={:<10} install={:<18} status={}",
+                            manifest.id,
+                            manifest.provider,
+                            adapter_install_kind(manifest),
+                            format!("{:?}", manifest.effective_status()).to_lowercase(),
+                        );
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
+}
+
+/// A short label for an adapter's install strategy, for the text listing.
+fn adapter_install_kind(manifest: &wakaclock_core::ai::AdapterManifest) -> &'static str {
+    match manifest.install {
+        wakaclock_core::ai::InstallStrategy::NativePlugin { .. } => "native_plugin",
+        wakaclock_core::ai::InstallStrategy::ConfigHookBlock { .. } => "config_hook_block",
+        wakaclock_core::ai::InstallStrategy::TranscriptOnly => "transcript_only",
+        wakaclock_core::ai::InstallStrategy::Manual { .. } => "manual",
+    }
 }
 
 /// The on-disk identity, when it differs from the one the agent is currently using.
