@@ -125,16 +125,14 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**PHASE 2 COMPLETE** (p2.1–p2.3 + p2.A1[~]/p2.A2/p2.A3/p2.A4). **Phase 3 next** —
-Workspace Registry + Universal Filesystem Observer. No `DECISION` item; loop
-picks **p3.1** (workspace lease registry). p3.1: a lease store —
-`workspace_id`, `canonical_root`, `producer_id`, `pid`/`session_id`,
-`registered_at`, `last_seen_at`, `expires_at`, exclude rules; refresh keeps a
-lease alive; when every lease for a workspace expires, watching stops; the
-broker never watches all of `$HOME`. Build in `wakaclock-core` (new
-`ai/workspace.rs` or extend `filesystem_observer.rs`). `filesystem_observer.rs`
-already exists (from the baseline, uses `notify`) — p3.2 wires it to this
-registry. Read `.context/backend/crates.md` first.
+**Phase 3 — item p3.2** (wire the filesystem observer to the lease registry).
+p3.1 done (`wakaclock_core::ai::workspace::WorkspaceRegistry`). p3.2: the
+`filesystem_observer.rs` `WorkspaceWatcher` should watch only roots that
+`WorkspaceRegistry::watched_roots(now)` returns — add a driver that starts a
+`WorkspaceWatcher` per live-leased root and drops it when the workspace's last
+lease expires (or is released). Tests: a change under an unregistered path
+yields no event; under a registered path yields one. Then p3.3 (observer
+semantics), p3.4 (backpressure), p3.A1–p3.A5.
 
 ---
 
@@ -227,8 +225,9 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 
 # Phase 3 — Workspace Registry and Universal Filesystem Observer
 
-- [ ] **p3.1 Workspace lease registry.** Producers register a lease: `workspace_id`, `canonical_root`, `producer_id`, `pid`/`session_id`, `registered_at`, `last_seen_at`, `expires_at`, exclude rules. VS Code, agent sessions, and the CLI refresh their lease periodically. When every lease for a workspace expires, watching that workspace stops. The broker **never** watches the whole home directory.
+- [x] **p3.1 Workspace lease registry.** Producers register a lease: `workspace_id`, `canonical_root`, `producer_id`, `pid`/`session_id`, `registered_at`, `last_seen_at`, `expires_at`, exclude rules. VS Code, agent sessions, and the CLI refresh their lease periodically. When every lease for a workspace expires, watching that workspace stops. The broker **never** watches the whole home directory.
   - Tests: register → lease present; no refresh → expires → workspace no longer watched; refresh keeps it alive; two producers, one leaves, watch continues.
+  - → committed | New pure in-memory `wakaclock_core::ai::workspace`: `WorkspaceLease { workspace_id, canonical_root, producer_id, pid, session_id, registered_at, last_seen_at, expires_at, exclude_rules }`, `workspace_id_for(&Path)` = URL-namespaced v5 UUID (same derivation style as `broker::payload_hash`), `WorkspaceRegistry::new(ttl, home_dir)` with `register` / `refresh` (returns false if lease not held) / `release` / `prune_expired` / `watched_roots(now)` / `is_watched` / `leases_for` / `exclude_rules_for` (union). `register` returns `LeaseError::RootTooBroad` when the root is `$HOME`, an ancestor of `$HOME`, or `/` (the "never watch the whole home dir" guard), and `LeaseError::NotAbsolute` for a relative path. pid/session_id are metadata only — liveness is Phase 4. tests: `register_then_the_workspace_is_watched`, `a_lease_expires_and_the_workspace_stops_being_watched`, `refresh_keeps_a_lease_alive`, `two_producers_one_leaves_and_the_watch_continues`, `the_broker_never_leases_the_whole_home_directory`, `exclude_rules_from_every_live_lease_are_merged` (core 164→170). Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p3.2 Wire the filesystem observer to the registry.** `filesystem_observer.rs` watches only registered workspace roots.
   - Tests: a change under an unregistered path yields no event; under a registered path yields one.
 - [ ] **p3.3 Observer semantics.** create / modify / rename / delete. Coalesce duplicate/atomic-save events into one logical change. Canonicalize paths; block symlink escape. Respect `.gitignore`, user excludes, generated/build/vendor dirs. Fingerprint only files that had an event (reuse the git blob/content hashing in `wakaclock-cli/src/tool_snapshot.rs`) — never scan/hash the whole repo per tick. Never read or persist source content.
@@ -411,4 +410,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p2.1 — done. `evidence_rank` + `strongest_evidence` + `evidence_supersedes` in `wakaclock_core::broker` — transport priority (p1.1) then source then confidence then recency. 2 new tests (broker 20→22). Gates + duration-audit green. Committed `52133ef`.
 - 2026-08-31 — p2.2 — done. `BrokerChangeKind::from_tool_operation()` canonical op→change-kind map (full plan vocabulary); `broker_event_from_generic` delegates to it; `Debug for BrokerClient` redacts the token; `spread_single_tool_interval()` extracted (one call/N files/one interval). 4 new tests (core 22→24, cli 38→39). Gates + duration-audit green. Committed `77bd8b1`.
 - 2026-08-31 — p2.3 — done. `rollout_scaffold_manifests()` — 8 manifests (cursor + generic-mcp Scaffold, antigravity/copilot/windsurf/cline/roo-code/opencode Unverified), data-only, no parser. VERIFICATION.md p2.3 table + promotion recipe. 1 new test + 1 updated (adapter 10→11). Gates green. Committed `753969b`.
-- 2026-08-31 — p2.A1–A4 — Phase 2 acceptance. p2.A1 `[~]` (fixture recall 100% via existing per-fixture parser tests; live ≥99% gate reserved). p2.A2/p2.A3 cited to existing server + parser tests. 1 new: `p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back` (all 11 manifests). **Phase 2 done.** Gates green. Committed.
+- 2026-08-31 — p2.A1–A4 — Phase 2 acceptance. p2.A1 `[~]` (fixture recall 100% via existing per-fixture parser tests; live ≥99% gate reserved). p2.A2/p2.A3 cited to existing server + parser tests. 1 new: `p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back` (all 11 manifests). **Phase 2 done.** Gates green. Committed `ec58587`.
+- 2026-09-01 — p3.1 — done. New pure `wakaclock_core::ai::workspace` — `WorkspaceRegistry` (register/refresh/release/prune_expired/watched_roots/is_watched/exclude_rules_for) + `WorkspaceLease` + `LeaseError` (RootTooBroad guards $HOME/ancestors/`/`). 6 new tests (core 164→170). Gates + duration-audit green. Committed.

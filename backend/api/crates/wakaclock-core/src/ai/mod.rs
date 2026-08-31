@@ -34,6 +34,7 @@ pub mod process_observer;
 pub mod sidecar;
 pub mod state;
 pub mod usage;
+pub mod workspace;
 
 pub use adapter::{
     AdapterManifest, AdapterRegistry, ExecutableDetection, HealthProbe, InstallContext,
@@ -70,3 +71,4 @@ pub use usage::{
     parse_claude_usage, parse_claude_usage_str, parse_codex_usage, parse_codex_usage_str,
     parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageRecord, TokenSource,
 };
+pub use workspace::{workspace_id_for, LeaseError, WorkspaceLease, WorkspaceRegistry};
