@@ -1856,6 +1856,34 @@ mod ai_doctor_tests {
     }
 
     #[test]
+    fn doctor_report_carries_every_required_key() {
+        // planai2.md Phase 0.5: a field-presence guard so a pipeline concern can
+        // never silently drop out of `doctor ai --json`.
+        let report = build_ai_doctor_report(AiDoctorReportParts {
+            cli_identity: serde_json::json!({}),
+            legacy_service_alias: false,
+            stale_service_binary: false,
+            broker_installed: true,
+            broker_running: false,
+            latest_native_hook_event_at: None,
+            broker: serde_json::json!({}),
+            agents: serde_json::json!([]),
+            outbound_queue_depth: 0,
+            last_delivery_failure: Some(serde_json::json!({
+                "at": 1.0, "message": "HTTP status 402", "category": "payment_402"
+            })),
+            configured_server_url: "http://localhost".to_string(),
+        });
+        for key in ai_doctor_report_keys() {
+            assert!(report.get(key).is_some(), "missing doctor key: {key}");
+        }
+        assert_eq!(
+            report["last_delivery_failure"]["category"],
+            serde_json::json!("payment_402")
+        );
+    }
+
+    #[test]
     fn build_identity_is_always_populated() {
         // planai2.md p0.1: `status --json` must carry a build identity. `build.rs`
         // guarantees non-empty values (a real SHA, or the literal "unknown").
@@ -2133,12 +2161,21 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         }));
     }
 
-    let last_delivery_failure = dirs::home_dir()
-        .map(|home| home.join(".wakaclock").join("last-delivery-failure.json"))
-        .and_then(|path| fs::read_to_string(path).ok())
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
+    // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
+    // network failure without eyeballing the raw message.
+    let last_delivery_failure =
+        wakaclock_core::api_client::ApiClient::last_delivery_failure().map(|failure| {
+            serde_json::json!({
+                "at": failure.at,
+                "message": failure.message,
+                "category": failure.kind().as_str(),
+            })
+        });
+    let latest_native_hook_event_at = latest_sidecar_event_time();
 
     let identity = build_identity();
+    let service = agent_service::status();
     let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
     let stale_service_binary = agent_service::manifest_points_at_stale_binary();
     let hook_version = if cli_identity_mismatch {
@@ -2146,8 +2183,8 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     } else {
         None
     };
-    let report = serde_json::json!({
-        "cli_identity": {
+    let report = build_ai_doctor_report(AiDoctorReportParts {
+        cli_identity: serde_json::json!({
             "running_binary": current_exe,
             "running_version": identity.version,
             "git_sha": identity.git_sha,
@@ -2160,15 +2197,28 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
             "version_mismatch": hook_version
                 .as_deref()
                 .is_some_and(|v| v != identity.version),
-        },
-        "legacy_service_alias": legacy_service_alias,
-        "stale_service_binary": stale_service_binary,
-        "broker": broker,
-        "agents": agents,
-        "outbound_queue_depth": queue_count(),
-        "last_delivery_failure": last_delivery_failure,
-        "configured_server_url": config.server_url,
+        }),
+        legacy_service_alias,
+        stale_service_binary,
+        broker_installed: service.installed,
+        broker_running: service.running,
+        latest_native_hook_event_at: latest_native_hook_event_at.clone(),
+        broker: broker.clone(),
+        agents: serde_json::Value::Array(agents.clone()),
+        outbound_queue_depth: queue_count(),
+        last_delivery_failure: last_delivery_failure.clone(),
+        configured_server_url: config.server_url.clone(),
     });
+    // planai2.md Phase 0.5: the report must always carry every pipeline-stage key so
+    // a reader never has to guess whether a missing field means "healthy" or "not
+    // checked". `ai_doctor_report_keys()` is the single source of truth the
+    // field-presence test also asserts against.
+    debug_assert!(
+        ai_doctor_report_keys()
+            .iter()
+            .all(|key| report.get(key).is_some()),
+        "doctor ai report is missing a required key"
+    );
 
     if json {
         println!("{report}");
@@ -2210,7 +2260,15 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         );
     }
     println!("== Broker ==");
+    println!(
+        "  installed={} running={}",
+        service.installed, service.running
+    );
     println!("  {broker}");
+    println!(
+        "  latest native-hook event: {}",
+        latest_native_hook_event_at.as_deref().unwrap_or("none")
+    );
     println!("== Agents ==");
     for agent in &agents {
         println!("  {agent}");
@@ -2221,6 +2279,68 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         None => println!("Last delivery failure: none recorded"),
     }
     Ok(())
+}
+
+/// The top-level keys `wakaclock doctor ai --json` always emits, one per pipeline
+/// concern from planai2.md §0.5. The single source of truth for the field-presence
+/// invariant (`debug_assert!` in the builder, and the unit test).
+fn ai_doctor_report_keys() -> &'static [&'static str] {
+    &[
+        "cli_identity",
+        "legacy_service_alias",
+        "stale_service_binary",
+        "broker_installed",
+        "broker_running",
+        "latest_native_hook_event_at",
+        "broker",
+        "agents",
+        "outbound_queue_depth",
+        "last_delivery_failure",
+        "configured_server_url",
+    ]
+}
+
+struct AiDoctorReportParts {
+    cli_identity: serde_json::Value,
+    legacy_service_alias: bool,
+    stale_service_binary: bool,
+    broker_installed: bool,
+    broker_running: bool,
+    latest_native_hook_event_at: Option<String>,
+    broker: serde_json::Value,
+    agents: serde_json::Value,
+    outbound_queue_depth: usize,
+    last_delivery_failure: Option<serde_json::Value>,
+    configured_server_url: String,
+}
+
+fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
+    serde_json::json!({
+        "cli_identity": parts.cli_identity,
+        "legacy_service_alias": parts.legacy_service_alias,
+        "stale_service_binary": parts.stale_service_binary,
+        "broker_installed": parts.broker_installed,
+        "broker_running": parts.broker_running,
+        "latest_native_hook_event_at": parts.latest_native_hook_event_at,
+        "broker": parts.broker,
+        "agents": parts.agents,
+        "outbound_queue_depth": parts.outbound_queue_depth,
+        "last_delivery_failure": parts.last_delivery_failure,
+        "configured_server_url": parts.configured_server_url,
+    })
+}
+
+/// planai2.md Phase 0.5: the timestamp of the most recent native-hook event the
+/// broker recorded in its metadata-only sidecar (`~/.wakaclock/ai-events.jsonl`,
+/// written by `append_broker_sidecar`). `None` when the sidecar is missing, empty
+/// or unparseable — a best-effort local file, never an error.
+fn latest_sidecar_event_time() -> Option<String> {
+    let path = dirs::home_dir()?.join(".wakaclock").join("ai-events.jsonl");
+    let content = fs::read_to_string(path).ok()?;
+    let last = content.lines().rev().find(|line| !line.trim().is_empty())?;
+    let value: serde_json::Value = serde_json::from_str(last).ok()?;
+    let seconds = value.get("time").and_then(serde_json::Value::as_f64)?;
+    chrono::DateTime::from_timestamp(seconds as i64, 0).map(|dt| dt.to_rfc3339())
 }
 
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {

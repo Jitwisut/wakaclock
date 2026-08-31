@@ -46,6 +46,76 @@ pub struct DeliveryFailure {
     pub message: String,
 }
 
+/// planai2.md Phase 0.5: `wakaclock doctor ai` must report a delivery refusal split
+/// into `401` (bad/expired credential), `402` (entitlement — trial or subscription
+/// lapsed, *not* a detection failure), a network/transport problem, and a request
+/// the server rejected as malformed. Collapsing these hides the one case — 402 —
+/// where local capture is working perfectly and only billing is wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryFailureKind {
+    Auth401,
+    Payment402,
+    Network,
+    Validation,
+    Other,
+}
+
+impl DeliveryFailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auth401 => "auth_401",
+            Self::Payment402 => "payment_402",
+            Self::Network => "network",
+            Self::Validation => "validation",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Classify a recorded refusal message. The messages come from `AppError`'s
+/// `Display` (`"HTTP status <code>: <body>"`) and from `reqwest` transport errors,
+/// so this matches on the shapes those produce rather than parsing structured data.
+pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("402")
+        || lower.contains("trial expired")
+        || lower.contains("subscription inactive")
+    {
+        DeliveryFailureKind::Payment402
+    } else if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+    {
+        DeliveryFailureKind::Auth401
+    } else if lower.contains("400")
+        || lower.contains("422")
+        || lower.contains("validation")
+        || lower.contains("malformed")
+        || lower.contains("invalid heartbeat")
+    {
+        DeliveryFailureKind::Validation
+    } else if lower.contains("dns")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection")
+        || lower.contains("connect")
+        || lower.contains("network")
+        || lower.contains("unreachable")
+        || lower.contains("could not reach")
+    {
+        DeliveryFailureKind::Network
+    } else {
+        DeliveryFailureKind::Other
+    }
+}
+
+impl DeliveryFailure {
+    pub fn kind(&self) -> DeliveryFailureKind {
+        classify_delivery_failure(&self.message)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SendReport {
     pub sent: usize,
@@ -557,6 +627,52 @@ mod tests {
     use super::*;
     use crate::heartbeat::EntityType;
     use uuid::Uuid;
+
+    #[test]
+    fn delivery_failure_402_is_distinct_from_401_and_network() {
+        // planai2.md Phase 0.5: 402 (billing) must never be conflated with 401
+        // (bad credential) or a transport failure — 402 is the case where local
+        // capture is fine and only the subscription lapsed.
+        assert_eq!(
+            classify_delivery_failure(
+                "HTTP status 402: {\"error\":\"trial expired or subscription inactive\"}"
+            ),
+            DeliveryFailureKind::Payment402
+        );
+        assert_eq!(
+            classify_delivery_failure("HTTP status 401: {\"error\":\"invalid api key\"}"),
+            DeliveryFailureKind::Auth401
+        );
+        assert_eq!(
+            classify_delivery_failure(
+                "error sending request for url (https://api): connection refused"
+            ),
+            DeliveryFailureKind::Network
+        );
+        assert_eq!(
+            classify_delivery_failure("HTTP status 422: validation failed for field time"),
+            DeliveryFailureKind::Validation
+        );
+        assert_eq!(
+            classify_delivery_failure("something else entirely"),
+            DeliveryFailureKind::Other
+        );
+        // The three kinds the doctor most needs to keep apart are pairwise distinct.
+        for (a, b) in [
+            (
+                DeliveryFailureKind::Payment402,
+                DeliveryFailureKind::Auth401,
+            ),
+            (
+                DeliveryFailureKind::Payment402,
+                DeliveryFailureKind::Network,
+            ),
+            (DeliveryFailureKind::Auth401, DeliveryFailureKind::Network),
+        ] {
+            assert_ne!(a, b);
+            assert_ne!(a.as_str(), b.as_str());
+        }
+    }
 
     fn heartbeat(entity: &str, time: f64) -> Heartbeat {
         let mut hb = Heartbeat::new(
