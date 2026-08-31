@@ -125,15 +125,13 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 2 — item p2.2** (generic MCP / tool ingress). p2.1 done (`strongest_evidence`
-/ `evidence_supersedes` in `wakaclock_core::broker`). p2.2: keep `wakaclock ai
-emit --json` / `ai tool-before` / `ai tool-after` (audit they still work); add an
-HTTP/SDK helper that reads broker discovery + token safely (never logs the
-token); operations write/apply-patch/create/move/rename/delete/replace/
-multi-edit/shell-mutation each map to a `change_kind`; **one tool call touching N
-files = one duration interval + N file-evidence records**. Then p2.3 (adapter
-rollout — scaffold Cursor/Antigravity/Copilot/Windsurf/Cline/Roo/OpenCode as
-`unverified`), then p2.A1–p2.A4.
+**Phase 2 — item p2.3** (adapter rollout). p2.1 + p2.2 done. p2.3: per planai2.md
+order — Codex/Claude keep; Gemini/Cursor/Antigravity/Copilot/Windsurf/Cline/Roo/
+OpenCode/generic-MCP-SDK are **not installed here → add each as an `AdapterManifest`
+in `AdapterRegistry::builtin()` with `verification: Unverified` (or `Scaffold`
+where a documented payload shape exists, e.g. Cursor) + a fixture-shaped parse
+test explicitly labelled "fixture only, not live" + a VERIFICATION.md note**.
+Then p2.A1–p2.A4 acceptance tests.
 
 ---
 
@@ -208,8 +206,9 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 - [x] **p2.1 Producer priority.** Enforce the ordering in code: native hooks/plugins > structured MCP events > completed transcript tool calls > before/after tool snapshot > filesystem/session inference. Higher-priority evidence for the same change supersedes lower.
   - Tests: given two evidence records for one change, the resolved producer is the higher-priority one; ordering table test.
   - → committed | `wakaclock_core::broker`: `evidence_rank(&BrokerEventV1) -> (transport_priority, source_rank, confidence_rank, -recency_ms)` (lower = stronger) built on `TransportKind::priority()` (p1.1) with tie-breaks source `AgentHook>Mcp>Transcript>IdeTelemetry`, confidence `Verified>Correlated>Inferred>Unknown`, then newest `occurred_at`. `strongest_evidence(&[BrokerEventV1]) -> Option<&_>` picks the canonical record; `evidence_supersedes(candidate, incumbent) -> bool` is the pairwise form. Caller decides "same logical change" (entity+kind+window); this only chooses among captured evidence, never invents. tests: `strongest_evidence_follows_the_producer_priority_order` (hook beats mcp beats transcript beats snapshot beats fs in every mix; `[]`→None; supersession pairwise), `evidence_ties_break_toward_the_more_recent_event`. broker tests 20→22. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p2.2 Generic MCP / tool ingress.** Keep `wakaclock ai emit --json`, `ai tool-before`, `ai tool-after`. Add an HTTP/SDK helper that reads broker discovery + token safely. Support operations: write, apply patch, create, move, rename, delete, replace, multi-edit, shell mutation. **One tool call touching N files = one duration interval + N file-evidence records.**
+- [x] **p2.2 Generic MCP / tool ingress.** Keep `wakaclock ai emit --json`, `ai tool-before`, `ai tool-after`. Add an HTTP/SDK helper that reads broker discovery + token safely. Support operations: write, apply patch, create, move, rename, delete, replace, multi-edit, shell mutation. **One tool call touching N files = one duration interval + N file-evidence records.**
   - Tests: a 3-file `apply_patch` → 1 interval, 3 evidence records; each operation kind maps to a `change_kind`; discovery/token read never logs the token.
+  - → committed | Audit: `ai emit`/`ai tool-before`/`ai tool-after` all still present + tested; `BrokerClient::discover()` (the "read broker discovery + token" helper) already file-based and non-logging. **Added:** `BrokerChangeKind::from_tool_operation(&str) -> Option<Self>` in `wakaclock-core::broker` — one canonical map of the full plan vocabulary (write/apply_patch/create/move/rename/delete/replace/multi_edit/shell_mutation + adjective spellings, space/hyphen→`_`), `None` for unknown. `broker_event_from_generic` now delegates to it (previously an inline match missing `replace`/`multi_edit`/`shell_mutation`/`apply_patch`). Manual `Debug for BrokerClient` that redacts `token` → `{:?}` can never print it. Extracted `spread_single_tool_interval(&mut [GenericAiEventInput], total)` from `run_ai_tool_after` — first record gets the whole interval, rest `0.0` (the "one call, N files, one interval" invariant, now unit-testable). tests: `from_tool_operation_covers_the_full_ingress_vocabulary`, `broker_client_debug_redacts_the_token` (core 22→24); `broker_event_from_generic_accepts_...` extended with the new ops + a rejected `"teleport"`, `spread_single_tool_interval_gives_one_interval_across_n_files` (cli 38→39). Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p2.3 Adapter rollout.** Per planai2.md order. Codex Desktop/CLI + Claude Code: keep/verify. Gemini CLI, Cursor, Antigravity, Copilot CLI/IDE, Windsurf, Cline/Roo, OpenCode, Generic MCP producer SDK: **not installed on this machine → scaffold + `unverified` + VERIFICATION.md note.** Cursor stays `scaffold` until a real payload is seen.
   - Tests: each scaffolded adapter has a manifest with `verification_status: unverified` and a fixture-shaped parse test that is explicitly labelled "fixture only, not live".
 
@@ -405,4 +404,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed `aafff8c`.
 - 2026-08-31 — p1.5 — done. CLI `wakaclock adapter list [--json]` exposes the registry; `agentSetup.ts` reads it (`parseAdapterList`/`pluginInstallCommand`/`fetchAdapterRegistry`, graceful fallback), merges `verificationStatus` onto agent status, takes plugin install args from the manifest. 2 new vitest cases (72→74). Backend + vscode gates green, `out/` recompiled. Committed `2f09e8c`.
 - 2026-08-31 — p1.A1–A4 — Phase 1 acceptance. p1.A1/p1.A3 cited to existing tests (p1.4 end-to-end / p1.2 quarantine). 2 new: `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`, `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape` (adapter 8→10). **Phase 1 done.** Gates + duration-audit green. Committed `a8a63cd`.
-- 2026-08-31 — p2.1 — done. `evidence_rank` + `strongest_evidence` + `evidence_supersedes` in `wakaclock_core::broker` — transport priority (p1.1) then source then confidence then recency. 2 new tests (broker 20→22). Gates + duration-audit green. Committed.
+- 2026-08-31 — p2.1 — done. `evidence_rank` + `strongest_evidence` + `evidence_supersedes` in `wakaclock_core::broker` — transport priority (p1.1) then source then confidence then recency. 2 new tests (broker 20→22). Gates + duration-audit green. Committed `52133ef`.
+- 2026-08-31 — p2.2 — done. `BrokerChangeKind::from_tool_operation()` canonical op→change-kind map (full plan vocabulary); `broker_event_from_generic` delegates to it; `Debug for BrokerClient` redacts the token; `spread_single_tool_interval()` extracted (one call/N files/one interval). 4 new tests (core 22→24, cli 38→39). Gates + duration-audit green. Committed.

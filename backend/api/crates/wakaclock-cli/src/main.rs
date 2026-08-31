@@ -3008,14 +3008,16 @@ async fn run_ai_tool_after(
         return Ok(());
     }
 
-    // One tool call owns one duration interval, regardless of how many files it touched.
-    // Only the first deterministic file heartbeat carries that interval; the rest are
-    // zero-duration attribution evidence linked by ai_change_id/tool_event_id.
-    let mut broker_events = Vec::with_capacity(pending.len());
-    for (index, (_, event_input)) in pending.iter().enumerate() {
-        let mut event_input = (*event_input).clone();
-        event_input.active_seconds = Some(if index == 0 { tool_active_seconds } else { 0.0 });
-        broker_events.push(broker_event_from_generic(&event_input)?);
+    // planai2.md Phase 2 (p2.2): one tool call owns one duration interval, no matter
+    // how many files it touched. `spread_single_tool_interval` puts the whole
+    // interval on the first file-evidence record and zero on the rest — they stay
+    // linked by tool_event_id / ai_change_id.
+    let mut inputs: Vec<GenericAiEventInput> =
+        pending.iter().map(|(_, input)| (*input).clone()).collect();
+    spread_single_tool_interval(&mut inputs, tool_active_seconds);
+    let mut broker_events = Vec::with_capacity(inputs.len());
+    for event_input in &inputs {
+        broker_events.push(broker_event_from_generic(event_input)?);
     }
     let report = broker::submit_events_chunked(config, api_client, &broker_events).await?;
 
@@ -3114,34 +3116,27 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
     })
 }
 
+/// planai2.md Phase 2 (p2.2): a single tool call touching N files produces N
+/// file-evidence records but **one** duration interval — the first record carries
+/// the whole `total_seconds`, the rest carry `0.0`. Keeps multi-file edits from
+/// multiplying `total_seconds` by the file count.
+fn spread_single_tool_interval(inputs: &mut [GenericAiEventInput], total_seconds: f64) {
+    for (index, input) in inputs.iter_mut().enumerate() {
+        input.active_seconds = Some(if index == 0 { total_seconds } else { 0.0 });
+    }
+}
+
 fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV1, Box<dyn Error>> {
     let event = generic_ai_edit_event(input)?;
-    let change_kind = match input
-        .change_kind
-        .as_deref()
-        .unwrap_or("modify")
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        // Both the verb ("modify", used by the wire/API vocabulary this function's
-        // own caller — `tool_change_input` — is supposed to speak) and the adjective
-        // ("modified", what `WorkspaceChangeKind::as_str()` actually emits) are
-        // accepted here: this struct also deserializes directly from external `ai
-        // emit` stdin JSON, where either spelling is a reasonable thing for a caller
-        // to send. Before this, every real shell-mutation tool call (`ai tool-before`
-        // / `ai tool-after` around `sed`, a Python codemod, or any other in-place
-        // edit of an existing file — the single most common case) failed at this
-        // match with "unsupported broker change_kind: modified" and never reached
-        // the server at all.
-        "create" | "created" => wakaclock_core::broker::BrokerChangeKind::Create,
-        "modify" | "modified" | "write" | "update" => {
-            wakaclock_core::broker::BrokerChangeKind::Modify
-        }
-        "rename" | "renamed" | "move" => wakaclock_core::broker::BrokerChangeKind::Rename,
-        "delete" | "deleted" | "remove" => wakaclock_core::broker::BrokerChangeKind::Delete,
-        other => return Err(format!("unsupported broker change_kind: {other}").into()),
-    };
+    // planai2.md Phase 2 (p2.2): the full generic-ingress operation vocabulary
+    // (write, apply patch, create, move, rename, delete, replace, multi-edit,
+    // shell mutation) plus the adjective spellings `WorkspaceChangeKind::as_str`
+    // emits — all resolved through one canonical map in `wakaclock-core::broker`,
+    // not a match that has historically missed cases (e.g. "modified", then
+    // "replace"/"multi_edit"/"shell_mutation").
+    let raw_kind = input.change_kind.as_deref().unwrap_or("modify");
+    let change_kind = wakaclock_core::broker::BrokerChangeKind::from_tool_operation(raw_kind)
+        .ok_or_else(|| format!("unsupported broker change_kind/operation: {raw_kind}"))?;
     let previous_entity = input
         .previous_entity
         .as_ref()
@@ -3875,13 +3870,60 @@ mod generic_ai_ingress_tests {
         // scripts/ai-attribution-integration.py running the real CLI against a real
         // shell mutation, not by any in-process fixture.
         for kind in [
-            "modify", "modified", "create", "created", "delete", "deleted", "rename", "renamed",
+            "modify",
+            "modified",
+            "create",
+            "created",
+            "delete",
+            "deleted",
+            "rename",
+            "renamed",
+            // planai2.md p2.2: the rest of the generic-ingress operation vocabulary.
+            "write",
+            "apply_patch",
+            "apply patch",
+            "replace",
+            "multi_edit",
+            "multi-edit",
+            "shell_mutation",
+            "str_replace",
         ] {
             let mut input = sample_input();
             input.change_kind = Some(kind.to_string());
             broker_event_from_generic(&input)
                 .unwrap_or_else(|error| panic!("change_kind {kind:?} should be accepted: {error}"));
         }
+        // A genuinely unknown operation is still rejected, not silently mapped.
+        let mut bogus = sample_input();
+        bogus.change_kind = Some("teleport".to_string());
+        assert!(broker_event_from_generic(&bogus).is_err());
+    }
+
+    #[test]
+    fn spread_single_tool_interval_gives_one_interval_across_n_files() {
+        // planai2.md p2.2: one tool call touching 3 files → 3 evidence records,
+        // 1 duration interval (first record only).
+        let mut inputs: Vec<GenericAiEventInput> = (0..3)
+            .map(|i| {
+                let mut input = sample_input();
+                input.event_id = format!("multi-{i}");
+                input.active_seconds = Some(99.0); // pre-existing value must be overwritten
+                input
+            })
+            .collect();
+        spread_single_tool_interval(&mut inputs, 42.0);
+        assert_eq!(
+            inputs.iter().map(|i| i.active_seconds).collect::<Vec<_>>(),
+            vec![Some(42.0), Some(0.0), Some(0.0)]
+        );
+        let total: f64 = inputs.iter().filter_map(|i| i.active_seconds).sum();
+        assert_eq!(total, 42.0);
+        assert_eq!(inputs.len(), 3);
+
+        // A single-file call keeps the whole interval.
+        let mut one = vec![sample_input()];
+        spread_single_tool_interval(&mut one, 7.5);
+        assert_eq!(one[0].active_seconds, Some(7.5));
     }
 
     #[test]

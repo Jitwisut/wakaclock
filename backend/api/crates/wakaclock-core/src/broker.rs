@@ -53,6 +53,30 @@ impl BrokerChangeKind {
             Self::Delete => "delete",
         }
     }
+
+    /// planai2.md Phase 2 (p2.2): map a producer's *operation* name — the tool it
+    /// used, not necessarily a change-kind noun — onto one of the four canonical
+    /// change kinds. Covers the full generic-ingress vocabulary the plan lists
+    /// (write, apply patch, create, move, rename, delete, replace, multi-edit,
+    /// shell mutation) plus the adjective spellings `WorkspaceChangeKind::as_str`
+    /// emits. Spaces and hyphens are normalised to `_`. `None` for an operation
+    /// this broker does not model — the caller decides whether that is an error.
+    pub fn from_tool_operation(operation: &str) -> Option<Self> {
+        let normalized = operation
+            .trim()
+            .to_ascii_lowercase()
+            .replace([' ', '-'], "_");
+        match normalized.as_str() {
+            "create" | "created" | "add" | "added" | "new_file" | "new" => Some(Self::Create),
+            "delete" | "deleted" | "remove" | "removed" | "rm" | "unlink" => Some(Self::Delete),
+            "move" | "moved" | "rename" | "renamed" | "mv" => Some(Self::Rename),
+            "write" | "wrote" | "modify" | "modified" | "update" | "updated" | "edit"
+            | "edited" | "replace" | "replaced" | "str_replace" | "multi_edit" | "multiedit"
+            | "apply_patch" | "applypatch" | "patch" | "patched" | "shell_mutation" | "shell"
+            | "exec" | "run" => Some(Self::Modify),
+            _ => None,
+        }
+    }
 }
 
 /// planai2.md Phase 1 (decision p1.0 / D3): `BrokerEventV1.transport` stays a free
@@ -509,6 +533,18 @@ pub struct BrokerClient {
     endpoint: String,
     token: String,
     client: reqwest::Client,
+}
+
+/// planai2.md Phase 2 (p2.2): the broker token must never be logged. A manual
+/// `Debug` that redacts it makes that guarantee explicit — `{:?}` on a
+/// `BrokerClient` (or anything containing one) cannot print the token.
+impl std::fmt::Debug for BrokerClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrokerClient")
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl BrokerClient {
@@ -1401,6 +1437,53 @@ mod tests {
         assert!(evidence_supersedes(&hook, &transcript));
         assert!(evidence_supersedes(&transcript, &fs));
         assert!(!evidence_supersedes(&fs, &hook));
+    }
+
+    #[test]
+    fn from_tool_operation_covers_the_full_ingress_vocabulary() {
+        use BrokerChangeKind::*;
+        let cases = [
+            ("write", Modify),
+            ("apply patch", Modify),
+            ("apply_patch", Modify),
+            ("replace", Modify),
+            ("multi-edit", Modify),
+            ("multi_edit", Modify),
+            ("shell mutation", Modify),
+            ("str_replace", Modify),
+            ("modified", Modify),
+            ("create", Create),
+            ("created", Create),
+            ("add", Create),
+            ("move", Rename),
+            ("rename", Rename),
+            ("renamed", Rename),
+            ("delete", Delete),
+            ("removed", Delete),
+        ];
+        for (operation, expected) in cases {
+            assert_eq!(
+                BrokerChangeKind::from_tool_operation(operation),
+                Some(expected),
+                "operation {operation:?}"
+            );
+        }
+        assert_eq!(BrokerChangeKind::from_tool_operation("teleport"), None);
+    }
+
+    #[test]
+    fn broker_client_debug_redacts_the_token() {
+        let client = BrokerClient::new(
+            "http://127.0.0.1:9/".to_string(),
+            "super-secret-broker-token".to_string(),
+        )
+        .unwrap();
+        let rendered = format!("{client:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(
+            !rendered.contains("super-secret-broker-token"),
+            "Debug leaked the broker token: {rendered}"
+        );
     }
 
     #[test]
