@@ -125,16 +125,12 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 0 — acceptance tests p0.A1–p0.A4**, then Phase 1 (starts with the
-`p1.0 DECISION` on the `BrokerEventV1` evidence envelope). p0.1, p0.2, p0.2b,
-p0.4, p0.5 done; p0.3 partial (`[~]`). Baseline `d95bb00` already contains
-substantial prior Phase 0 work — each p0 item is **audit + finish + test**.
-
-Note on p0.A1–p0.A4: these want external-process / broker-restart / offline-402
-integration tests. `backend/api/crates/wakaclock-cli/tests/broker_process.rs`
-already exists (2 tests) — extend it there. If a given p0.A needs a running
-server it cannot get in this environment, mark it `[~]` with the manual check
-recorded, per the Run DoD.
+**Phase 0 COMPLETE** (p0.3 stays `[~]` — native Codex plugin packaging deferred
+to VERIFICATION.md, everything else `[x]` incl. p0.A1–p0.A4). **Phase 1 next**,
+starting with `p1.0 DECISION` — the `BrokerEventV1` evidence-metadata envelope
+shape. Read `.context/backend/crates.md` + `backend/api/crates/wakaclock-core/src/broker.rs`
++ `src/ai/event.rs` before deciding; write the decision + rationale into the
+Decisions log and commit `docs(planai2-p1.0)`, then continue to p1.1.
 
 ---
 
@@ -165,10 +161,10 @@ Goal: make existing capability actually work and be inspectable before any infer
 
 ### Phase 0 acceptance criteria — encode as named tests
 
-- [ ] **p0.A1** One Codex Desktop `apply_patch` reaches the local broker **exactly once** (external-process test).
-- [ ] **p0.A2** Broker stop → restart loses no event (broker restart/replay test).
-- [ ] **p0.A3** Backend offline / HTTP 402 → event still shows `captured locally` and sits in the queue; detection/local-capture is not marked failed.
-- [ ] **p0.A4** `doctor ai` alone identifies each pipeline gap (missing broker / stale hook / parser lag / delivery 402) without opening other logs.
+- [x] **p0.A1** One Codex Desktop `apply_patch` reaches the local broker **exactly once** (external-process test). → `p0_a1_one_apply_patch_event_is_captured_exactly_once` in `tests/broker_process.rs`: spawns the real `wakaclock broker run`, posts the same `event_id` twice, asserts `total_rows == 1`.
+- [x] **p0.A2** Broker stop → restart loses no event (broker restart/replay test). → covered by the pre-existing `broker_restart_reclaims_processing_lease_without_duplicate_inbox_row` (kills broker mid-processing, restarts, asserts total inbox rows stay `== 1`, no duplicate).
+- [x] **p0.A3** Backend offline / HTTP 402 → event still shows `captured locally` and sits in the queue; detection/local-capture is not marked failed. → `p0_a3_offline_402_keeps_the_event_captured_locally`: `status_server("402")`, asserts `last-delivery-failure.json` written and names 402, `ai-events.jsonl` sidecar written, `queue.db` exists (heartbeat durably queued), `dead_letter == 0`, `total_rows == 1`.
+- [x] **p0.A4** `doctor ai` alone identifies each pipeline gap (missing broker / stale hook / parser lag / delivery 402) without opening other logs. → `p0_a4_doctor_ai_identifies_pipeline_gaps`: crafts an isolated `HOME` with a legacy-alias plist + a 402 `last-delivery-failure.json`, runs `wakaclock doctor ai --json` as a subprocess, asserts `legacy_service_alias == true`, `last_delivery_failure.category == "payment_402"`, and every required key present.
 
 ---
 
@@ -349,4 +345,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p0.2b — done. `ensureBrokerRunning()` verifies `broker status` running and falls back to the extension-owned broker on any platform (removed the remote/linux-only gate). 5 new vitest cases (vscode 64→69), tsc clean, `out/` recompiled. Committed `c1baf5e`.
 - 2026-08-31 — p0.3 — partial (`[~]`). `refreshManagedCodexHookCommands()` repoints stale in-block hook paths on upgrade without touching user config; `assertStableManagedHookPath()` rejects VSIX/worktree paths. 3 new vitest cases (vscode 69→72), tsc clean, `out/` recompiled. Native Codex plugin packaging deferred (no real Codex plugin API on this machine) — recorded in VERIFICATION.md. Backend gates green. Committed `e9f5867`.
 - 2026-08-31 — p0.4 — done. `TranscriptLag::measure()` byte-lag helper (core) wired into `doctor ai` (`file_size`/`cursor_offset`/`lag_bytes`/`last_event_at` + explicit `diagnostic` for unsupported/permission states); `run_ai_sync` per-agent parse error now `break`s (skip agent) instead of `?` (abort run), usage-parse errors drop token counts only. 2 new tests. fmt/clippy/`cargo test --workspace` green. Committed `907c642`.
-- 2026-08-31 — p0.5 — done. `classify_delivery_failure()` + `DeliveryFailureKind` (401/402/network/validation/other) in core; `doctor ai` gains `last_delivery_failure.category`, `broker_installed`/`broker_running`, `latest_native_hook_event_at` (sidecar); report assembly → `build_ai_doctor_report()` + `ai_doctor_report_keys()` presence guard. 2 new tests. Per-adapter enabled/trusted left for a later pass (not machine-readable). Gates green. Committed.
+- 2026-08-31 — p0.5 — done. `classify_delivery_failure()` + `DeliveryFailureKind` (401/402/network/validation/other) in core; `doctor ai` gains `last_delivery_failure.category`, `broker_installed`/`broker_running`, `latest_native_hook_event_at` (sidecar); report assembly → `build_ai_doctor_report()` + `ai_doctor_report_keys()` presence guard. 2 new tests. Per-adapter enabled/trusted left for a later pass (not machine-readable). Gates green. Committed `f3ea9de`.
+- 2026-08-31 — p0.A1–A4 — Phase 0 acceptance. 3 new external-process tests in `tests/broker_process.rs` (exactly-once dedup, offline-402 keeps capture + queues + records failure + no dead-letter, `doctor ai --json` surfaces legacy-alias + payment_402); p0.A2 mapped to the existing restart test. `broker_process` 2→5. fmt/clippy/`cargo test --workspace` green. **Phase 0 done** (p0.3 `[~]`). Committed.

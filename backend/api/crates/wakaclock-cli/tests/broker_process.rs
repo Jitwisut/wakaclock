@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     task::JoinHandle,
     time::{sleep, timeout},
@@ -269,5 +269,203 @@ async fn broker_process_exits_cleanly_when_stopped_and_removes_owned_discovery()
 
     server_task.abort();
     let _ = server_task.await;
+    let _ = fs::remove_dir_all(&home);
+}
+
+// ---------------------------------------------------------------------------
+// planai2.md Phase 0 acceptance (p0.A1, p0.A3, p0.A4)
+// ---------------------------------------------------------------------------
+
+/// A server that reads the request and always replies with a fixed status line.
+/// Used to drive the broker's delivery path through a real non-2xx (e.g. 402).
+async fn status_server(status_line: &'static str) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                let body = "{\"error\":\"trial expired or subscription inactive\"}";
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+            });
+        }
+    });
+    (format!("http://{address}"), task)
+}
+
+fn total_rows(db: &Path) -> u64 {
+    let stats = BrokerStore::open_at(db).unwrap().stats().unwrap();
+    stats.pending + stats.processing + stats.processed + stats.retry + stats.dead_letter
+}
+
+/// Post to the broker's own HTTP endpoint, tolerating the dedup responses (200 for
+/// a duplicate, 409 for a same-id/different-payload conflict) as well as 202.
+async fn post_event_lenient(discovery: &BrokerDiscovery, event: &BrokerEventV1, home: &Path) {
+    let token = fs::read_to_string(home.join(".wakaclock/broker.token")).unwrap();
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/events", discovery.endpoint))
+        .bearer_auth(token.trim())
+        .json(event)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            response.status(),
+            StatusCode::ACCEPTED | StatusCode::OK | StatusCode::CONFLICT
+        ),
+        "unexpected broker ingest status: {}",
+        response.status()
+    );
+}
+
+/// p0.A1 — one Codex-style `apply_patch` event reaches the local broker exactly
+/// once, and re-posting the same `event_id` does not create a second inbox row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_a1_one_apply_patch_event_is_captured_exactly_once() {
+    let home = temp_home("p0a1");
+    let db = home.join(".wakaclock/broker.db");
+    let (server_url, server_task) = holding_server().await;
+    let mut broker = spawn_broker(&home, &server_url);
+    let discovery = wait_for_discovery(&home).await;
+
+    let input = event("codex-apply-patch-1");
+    post_event_lenient(&discovery, &input, &home).await;
+    post_event_lenient(&discovery, &input, &home).await; // duplicate delivery from the hook
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if total_rows(&db) >= 1 {
+                return;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("event never landed in the broker inbox");
+
+    // A moment for a (wrongly) duplicated row to show up, if it were going to.
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        total_rows(&db),
+        1,
+        "duplicate event_id created a second inbox row"
+    );
+
+    broker.kill();
+    server_task.abort();
+    let _ = server_task.await;
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// p0.A3 — with the backend returning HTTP 402, local capture is unaffected: the
+/// correlation sidecar is written, the heartbeat is durably queued for later
+/// delivery, the refusal is recorded (so it reads as an entitlement problem, not
+/// a detection failure), and nothing is dead-lettered or lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
+    let home = temp_home("p0a3");
+    let db = home.join(".wakaclock/broker.db");
+    let (server_url, server_task) = status_server("402 Payment Required").await;
+    let mut broker = spawn_broker(&home, &server_url);
+    let discovery = wait_for_discovery(&home).await;
+
+    let input = event("codex-402");
+    post_event_lenient(&discovery, &input, &home).await;
+
+    let failure_file = home.join(".wakaclock/last-delivery-failure.json");
+    timeout(Duration::from_secs(8), async {
+        loop {
+            // The broker claimed and processed the event, and the client recorded
+            // the 402 rather than dropping the work.
+            if failure_file.exists() {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("402 was not recorded as a delivery failure");
+
+    let recorded = fs::read_to_string(&failure_file).unwrap();
+    assert!(
+        recorded.contains("402"),
+        "recorded failure should name the 402"
+    );
+    assert!(
+        home.join(".wakaclock/ai-events.jsonl").exists(),
+        "correlation sidecar is written even when delivery fails"
+    );
+    assert!(
+        home.join(".wakaclock/queue.db").exists(),
+        "the heartbeat is durably queued for later delivery"
+    );
+
+    let stats = BrokerStore::open_at(&db).unwrap().stats().unwrap();
+    assert_eq!(stats.dead_letter, 0, "a 402 must not dead-letter the event");
+    assert_eq!(total_rows(&db), 1, "the event is still tracked, not lost");
+
+    broker.kill();
+    server_task.abort();
+    let _ = server_task.await;
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// p0.A4 — `wakaclock doctor ai --json` alone surfaces each pipeline gap: a
+/// service manifest on the legacy alias, and a recorded 402 classified as
+/// `payment_402` rather than an auth or network failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
+    let home = temp_home("p0a4");
+    let launch_agents = home.join("Library/LaunchAgents");
+    fs::create_dir_all(&launch_agents).unwrap();
+    // A legacy-alias manifest (the shape an old CLI wrote).
+    fs::write(
+        launch_agents.join("com.atoaxis.wakaclock.agent.plist"),
+        "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>agent</string><string>run</string></array>\n</dict></plist>\n",
+    )
+    .unwrap();
+    fs::create_dir_all(home.join(".wakaclock")).unwrap();
+    fs::write(
+        home.join(".wakaclock/last-delivery-failure.json"),
+        "{\"at\":1788000000.0,\"message\":\"HTTP status 402: {\\\"error\\\":\\\"trial expired\\\"}\"}",
+    )
+    .unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_wakaclock");
+    let output = Command::new(binary)
+        .args(["doctor", "ai", "--json"])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output()
+        .expect("run doctor ai");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor ai emitted valid json");
+
+    assert_eq!(report["legacy_service_alias"], serde_json::json!(true));
+    assert_eq!(
+        report["last_delivery_failure"]["category"],
+        serde_json::json!("payment_402")
+    );
+    // The doctor still reports every required key with this partial environment.
+    for key in [
+        "cli_identity",
+        "broker",
+        "agents",
+        "outbound_queue_depth",
+        "broker_installed",
+    ] {
+        assert!(report.get(key).is_some(), "doctor ai missing key {key}");
+    }
+
     let _ = fs::remove_dir_all(&home);
 }
