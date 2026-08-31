@@ -125,12 +125,12 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 0 COMPLETE** (p0.3 stays `[~]` — native Codex plugin packaging deferred
-to VERIFICATION.md, everything else `[x]` incl. p0.A1–p0.A4). **Phase 1 next**,
-starting with `p1.0 DECISION` — the `BrokerEventV1` evidence-metadata envelope
-shape. Read `.context/backend/crates.md` + `backend/api/crates/wakaclock-core/src/broker.rs`
-+ `src/ai/event.rs` before deciding; write the decision + rationale into the
-Decisions log and commit `docs(planai2-p1.0)`, then continue to p1.1.
+**Phase 1 — item p1.1** (implement the envelope). p1.0 DECISION resolved (D1–D6
+in Decisions log): the envelope already has every planai2 field, so p1.1 is
+narrow — confirm/round-trip-test the full envelope, ensure an old-shape payload
+still parses, add the `TransportKind` classifier (D3). p1.2 = field-allow-list
+quarantine wrapper (D2). p1.3 = adapter manifest type. p1.4 = registry. p1.5 =
+migrate the VS Code installer to the registry.
 
 ---
 
@@ -172,7 +172,7 @@ Goal: make existing capability actually work and be inspectable before any infer
 
 Goal: new agents connect through one contract; no attribution logic scattered across shell scripts or editor extensions.
 
-- [ ] **p1.0 DECISION: evidence-metadata envelope shape.** Decide the exact extension of `BrokerEventV1` (see `backend/api/crates/wakaclock-core/src/broker.rs` + `src/ai/event.rs`). Target fields from planai2.md: `schema_version`, `event_type`, `event_id`, `occurred_at`, `entity`, `project_root`, `change_kind`, `agent`, `provider`, `model`, `session_id`, `tool_event_id`, `source`, `transport`, `confidence`, `lines_added`, `lines_deleted`. Decide: additive vs new version; which fields are optional; how `confidence` enum relates to the existing `AiConfidence`. Write decision + rationale in **Decisions log**, then commit `docs(planai2-p1.0)`.
+- [x] **p1.0 DECISION: evidence-metadata envelope shape.** → resolved in Decisions log (D1–D6): `BrokerEventV1` already has every planai2 field; additive-only, no schema bump; `deny_unknown_fields` is the forbidden-content backstop; `transport` gets a code-side `TransportKind` classifier (no wire change); envelope `confidence` is the producer's self-assertion (correlation may only downgrade); `event_id` stays producer-supplied/opaque; adapter manifest is a separate non-wire type. Committed `docs(planai2-p1.0)`.
 - [ ] **p1.1 Implement the envelope.** Extend the broker event / evidence type with the agreed fields. Backward-compatible: old envelopes still deserialize.
   - Tests: round-trip serde of a full envelope; an old-shape envelope still parses; `schema_version` gate.
 - [ ] **p1.2 Field allow-list enforcement.** Unknown fields and forbidden content (prompt/response/patch/clipboard/terminal/command args) are rejected or quarantined with a sanitized diagnostic that contains none of the offending content.
@@ -331,7 +331,49 @@ Duration-gated **and** frontend-gated where it touches `frontend/app/`.
 
 _(Append here as `DECISION:` items are resolved. Newest last. Each entry: date, id, decision, rationale, files touched, commit SHA.)_
 
-- _none yet_
+### 2026-08-31 — p1.0 — `BrokerEventV1` evidence-metadata envelope
+
+Read: `backend/api/crates/wakaclock-core/src/broker.rs` (the struct + `normalize`),
+`src/ai/event.rs` (`AiEventSource` = Transcript|AgentHook|IdeTelemetry|Mcp;
+`AiConfidence` = Unknown|Inferred|Correlated|Verified), `src/heartbeat.rs`
+(`ActorType` = Human|AiVerified|AiInferred|Unknown).
+
+**Finding: `BrokerEventV1` already carries every field in planai2.md's target
+evidence JSON** — `schema_version, event_type, event_id, occurred_at, entity,
+project_root, change_kind, agent, provider, model, session_id, tool_event_id,
+source, transport, confidence, lines_added, lines_deleted` — plus
+`previous_entity, actor_type, actor_confidence, active_seconds, tool`. Phase 1
+is therefore *contract hardening + a registry*, not "add fields".
+
+- **D1 — Additive, no schema bump.** `BROKER_SCHEMA_VERSION` stays `1`. Any future
+  field lands as `#[serde(default)] Option<T>` so an older producer still
+  validates. A bump is reserved for a *breaking* change (removing or retyping a
+  field), never for an addition.
+- **D2 — `#[serde(deny_unknown_fields)]` is the forbidden-content backstop and
+  stays.** A payload with `prompt`/`response`/`patch`/`diff`/`content`/`clipboard`/
+  `terminal`/`args`/any unlisted key fails deserialization. p1.2 wraps ingest so a
+  strict-parse failure records a **sanitized** diagnostic (offending *field names*
+  only, never values) and drops the event, instead of a 500.
+- **D3 — `transport` stays `Option<String>` on the wire; add a `TransportKind`
+  classifier in code** (`native_plugin | mcp | transcript | tool_snapshot |
+  filesystem | editor | cli | other`) for the Phase 2 producer-priority ordering.
+  No wire-type change ⇒ no existing producer or fixture breaks.
+- **D4 — envelope `confidence` is the producer's self-assertion, not the verdict.**
+  Native hook / structured MCP ⇒ `verified`; tool-snapshot / filesystem ⇒
+  `inferred` or `unknown`. The Phase 5 correlation engine may **downgrade** on
+  conflicting evidence but never **upgrades** past the envelope value.
+  `actor_type` / `actor_confidence` are left `None` by producers and are filled
+  only by correlation.
+- **D5 — `event_id` is producer-supplied, opaque, required stable + non-empty**
+  (already enforced by `clean_required`). Per-file uniqueness inside a multi-file
+  tool call is the producer's job (`hash(call_id, file_path)` for Codex,
+  `tool_use.id` for Claude — already shipped). The broker never synthesizes or
+  mutates it.
+- **D6 — the adapter manifest (p1.3) is a separate Rust type, never part of the
+  wire envelope.** It describes detect / install / health-probe / verification
+  status; it does not travel with an event.
+
+Commit: `docs(planai2-p1.0)` (this file only).
 
 ---
 
@@ -346,4 +388,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p0.3 — partial (`[~]`). `refreshManagedCodexHookCommands()` repoints stale in-block hook paths on upgrade without touching user config; `assertStableManagedHookPath()` rejects VSIX/worktree paths. 3 new vitest cases (vscode 69→72), tsc clean, `out/` recompiled. Native Codex plugin packaging deferred (no real Codex plugin API on this machine) — recorded in VERIFICATION.md. Backend gates green. Committed `e9f5867`.
 - 2026-08-31 — p0.4 — done. `TranscriptLag::measure()` byte-lag helper (core) wired into `doctor ai` (`file_size`/`cursor_offset`/`lag_bytes`/`last_event_at` + explicit `diagnostic` for unsupported/permission states); `run_ai_sync` per-agent parse error now `break`s (skip agent) instead of `?` (abort run), usage-parse errors drop token counts only. 2 new tests. fmt/clippy/`cargo test --workspace` green. Committed `907c642`.
 - 2026-08-31 — p0.5 — done. `classify_delivery_failure()` + `DeliveryFailureKind` (401/402/network/validation/other) in core; `doctor ai` gains `last_delivery_failure.category`, `broker_installed`/`broker_running`, `latest_native_hook_event_at` (sidecar); report assembly → `build_ai_doctor_report()` + `ai_doctor_report_keys()` presence guard. 2 new tests. Per-adapter enabled/trusted left for a later pass (not machine-readable). Gates green. Committed `f3ea9de`.
-- 2026-08-31 — p0.A1–A4 — Phase 0 acceptance. 3 new external-process tests in `tests/broker_process.rs` (exactly-once dedup, offline-402 keeps capture + queues + records failure + no dead-letter, `doctor ai --json` surfaces legacy-alias + payment_402); p0.A2 mapped to the existing restart test. `broker_process` 2→5. fmt/clippy/`cargo test --workspace` green. **Phase 0 done** (p0.3 `[~]`). Committed.
+- 2026-08-31 — p0.A1–A4 — Phase 0 acceptance. 3 new external-process tests in `tests/broker_process.rs` (exactly-once dedup, offline-402 keeps capture + queues + records failure + no dead-letter, `doctor ai --json` surfaces legacy-alias + payment_402); p0.A2 mapped to the existing restart test. `broker_process` 2→5. fmt/clippy/`cargo test --workspace` green. **Phase 0 done** (p0.3 `[~]`). Committed `5eb7d5d`.
+- 2026-08-31 — p1.0 — DECISION resolved (docs only). `BrokerEventV1` already carries every planai2 evidence field → additive-only/no schema bump, `deny_unknown_fields` backstop kept, `TransportKind` classifier instead of a wire change, envelope `confidence` = producer self-assertion, `event_id` producer-opaque, manifest is non-wire. See Decisions log D1–D6. Committed.
