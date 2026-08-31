@@ -125,19 +125,16 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 2 — acceptance tests p2.A1–p2.A4**, then Phase 3. p2.1–p2.3 done.
-- p2.A1 "known native-adapter recall ≥ 99% measured against the fixture corpus" —
-  measure claude/codex fixture parse-hit rate; if a real corpus isn't wired,
-  record the fixture count that IS parsed and mark the % `[~]` (fixture, not the
-  live-recall claim the plan reserves).
-- p2.A2 "hook + transcript event for the same edit collapse to one canonical
-  event" — covered by the server cross-transport fingerprint dedup + p2.1
-  `strongest_evidence`; add/cite a test.
-- p2.A3 "a failed tool call never produces a verified edit" — `ai tool-after`
-  with no workspace change → no event; check existing coverage / add.
-- p2.A4 "real-payload verification status recorded in VERIFICATION.md / capability
-  matrix for every adapter" — done for all via VERIFICATION.md (p0.3, p2.3) +
-  the registry `verification` field; cite.
+**PHASE 2 COMPLETE** (p2.1–p2.3 + p2.A1[~]/p2.A2/p2.A3/p2.A4). **Phase 3 next** —
+Workspace Registry + Universal Filesystem Observer. No `DECISION` item; loop
+picks **p3.1** (workspace lease registry). p3.1: a lease store —
+`workspace_id`, `canonical_root`, `producer_id`, `pid`/`session_id`,
+`registered_at`, `last_seen_at`, `expires_at`, exclude rules; refresh keeps a
+lease alive; when every lease for a workspace expires, watching stops; the
+broker never watches all of `$HOME`. Build in `wakaclock-core` (new
+`ai/workspace.rs` or extend `filesystem_observer.rs`). `filesystem_observer.rs`
+already exists (from the baseline, uses `notify`) — p3.2 wires it to this
+registry. Read `.context/backend/crates.md` first.
 
 ---
 
@@ -221,10 +218,10 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 
 ### Phase 2 acceptance criteria — named tests
 
-- [ ] **p2.A1** Known native-adapter recall ≥ 99% measured against the fixture corpus (record the number).
-- [ ] **p2.A2** A hook event and a transcript event for the same edit collapse to one canonical event.
-- [ ] **p2.A3** A failed tool call never produces a `verified` edit.
-- [ ] **p2.A4** Real-payload verification status is recorded in `VERIFICATION.md` / the capability matrix for every adapter (verified or "blocked, no local tool").
+- [~] **p2.A1** Known native-adapter recall ≥ 99% measured against the fixture corpus (record the number). → **fixture recall = 100%** on the committed corpus: every Claude fixture (`edit_tool_result.json`, `write_tool_result.json`) and every Codex fixture (`patch_apply_end.json`, `custom_tool_call.json`+`custom_tool_call_output.json`, multi-file split) yields exactly its expected event(s) — `claude.rs::parse_since_extracts_edit_...` / `parse_since_treats_new_file_write_as_pure_addition`, `codex.rs::parse_since_splits_multi_file_patch_into_one_event_per_file` / `parse_since_reads_the_real_response_item_apply_patch_shape`. `[~]` because the plan reserves the ≥99% **recall gate** for a real labelled corpus + live run (line 604); the fixture set is small and hand-authored. VERIFICATION.md's 2026-08-31 Codex run (2,642 events from 156 real sessions, up from 0) is the closest real-data recall evidence.
+- [x] **p2.A2** A hook event and a transcript event for the same edit collapse to one canonical event. → server `services::heartbeat::tests::hook_and_transcript_payloads_share_one_cross_transport_fingerprint` (normalized path + project/branch + 5s bucket + line deltas → one fingerprint) and `wakaclock_core::broker::strongest_evidence_follows_the_producer_priority_order` (hook supersedes transcript, one record kept).
+- [x] **p2.A3** A failed tool call never produces a `verified` edit. → `claude.rs::parse_since_skips_failed_tool_results` (a failed `Edit`/`Write` result yields no event); `codex.rs::parse_since_ignores_a_custom_tool_call_output_with_no_matching_call` (an output with no completed call → nothing). No verified edit is ever synthesized from an incomplete/failed call.
+- [x] **p2.A4** Real-payload verification status is recorded in `VERIFICATION.md` / the capability matrix for every adapter (verified or "blocked, no local tool"). → VERIFICATION.md carries a status line for every adapter (Claude live 2026-08-14; Codex dry-run + "live delivery open"; Gemini "entirely unverified"; p0.3 Codex-plugin deferral; p2.3 rollout table). New test `p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back`: across all 11 registry manifests, `Verified` ⇒ `live_checked_at` + `tool_version` present, else `!is_live_verified()`.
 
 ---
 
@@ -413,4 +410,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.A1–A4 — Phase 1 acceptance. p1.A1/p1.A3 cited to existing tests (p1.4 end-to-end / p1.2 quarantine). 2 new: `p1_a2_a_scaffold_or_unverified_adapter_is_never_shown_as_verified`, `p1_a4_every_builtin_adapter_produces_the_same_broker_envelope_shape` (adapter 8→10). **Phase 1 done.** Gates + duration-audit green. Committed `a8a63cd`.
 - 2026-08-31 — p2.1 — done. `evidence_rank` + `strongest_evidence` + `evidence_supersedes` in `wakaclock_core::broker` — transport priority (p1.1) then source then confidence then recency. 2 new tests (broker 20→22). Gates + duration-audit green. Committed `52133ef`.
 - 2026-08-31 — p2.2 — done. `BrokerChangeKind::from_tool_operation()` canonical op→change-kind map (full plan vocabulary); `broker_event_from_generic` delegates to it; `Debug for BrokerClient` redacts the token; `spread_single_tool_interval()` extracted (one call/N files/one interval). 4 new tests (core 22→24, cli 38→39). Gates + duration-audit green. Committed `77bd8b1`.
-- 2026-08-31 — p2.3 — done. `rollout_scaffold_manifests()` — 8 manifests (cursor + generic-mcp Scaffold, antigravity/copilot/windsurf/cline/roo-code/opencode Unverified), data-only, no parser. VERIFICATION.md p2.3 table + promotion recipe. 1 new test + 1 updated (adapter 10→11). Gates green. Committed.
+- 2026-08-31 — p2.3 — done. `rollout_scaffold_manifests()` — 8 manifests (cursor + generic-mcp Scaffold, antigravity/copilot/windsurf/cline/roo-code/opencode Unverified), data-only, no parser. VERIFICATION.md p2.3 table + promotion recipe. 1 new test + 1 updated (adapter 10→11). Gates green. Committed `753969b`.
+- 2026-08-31 — p2.A1–A4 — Phase 2 acceptance. p2.A1 `[~]` (fixture recall 100% via existing per-fixture parser tests; live ≥99% gate reserved). p2.A2/p2.A3 cited to existing server + parser tests. 1 new: `p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back` (all 11 manifests). **Phase 2 done.** Gates green. Committed.

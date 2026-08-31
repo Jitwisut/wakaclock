@@ -775,6 +775,30 @@ mod tests {
     }
 
     #[test]
+    fn p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back() {
+        // planai2.md p2.A4: every adapter's verification status is recorded and
+        // honest — `Verified` only ever appears alongside its evidence
+        // (`live_checked_at` + `tool_version`); everything else is Scaffold /
+        // Unverified. The human-readable record lives in VERIFICATION.md.
+        for manifest in AdapterRegistry::builtin().manifests() {
+            manifest.validate().unwrap();
+            match manifest.effective_status() {
+                VerificationStatus::Verified => {
+                    assert!(
+                        manifest.verification.live_checked_at.is_some()
+                            && manifest.verification.tool_version.is_some(),
+                        "{} claims Verified without evidence",
+                        manifest.id
+                    );
+                }
+                VerificationStatus::Scaffold | VerificationStatus::Unverified => {
+                    assert!(!manifest.is_live_verified());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn p2_3_rollout_adapters_are_registered_and_never_claim_verified() {
         // planai2.md p2.3: every rollout scaffold is known to the registry, and
         // NONE is live-verified — Cursor / generic-MCP are `Scaffold` (a
