@@ -125,12 +125,15 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 1 — item p1.4** (adapter registry). p1.0–p1.3 done. p1.4: a registry that
-enumerates `AdapterManifest`s, `validate()`s each on load, drives install + the
-health probe; installer must be atomic + idempotent + preserve user config.
-Build in `wakaclock-core::ai::adapter` (or a sibling `registry.rs`). Seed it with
-the real manifests for codex / claude-code / gemini-cli. p1.5 then points the VS
-Code installer (`extensions/vscode/src/agentSetup.ts`) at it. Then p1.A1–p1.A4.
+**Phase 1 — item p1.5** (migrate the VS Code installer to the registry). p1.0–p1.4
+done. p1.5: point `extensions/vscode/src/agentSetup.ts` installation logic at
+`AdapterRegistry` — but the registry lives in `wakaclock-core` (Rust), not TS.
+Realistic scope: expose the registry through the CLI (`wakaclock adapter list
+--json` / `wakaclock adapter install <id> --json`) so the extension calls the
+CLI instead of hard-coding `claude plugin install` / `gemini extensions install`
+/ the Codex TOML block. Then p1.A1–p1.A4 acceptance tests. If the full TS
+migration is too large for one iteration, ship the CLI surface + a thin
+`agentSetup.ts` call and note any remainder.
 
 ---
 
@@ -182,8 +185,9 @@ Goal: new agents connect through one contract; no attribution logic scattered ac
 - [x] **p1.3 Declarative adapter manifest type.** One manifest per agent: `id`, `provider`, executable detection, install strategy, native hook capabilities, transcript roots, payload schema versions, supported tool/change kinds, `verification_status` (`verified` | `scaffold` | `unverified`), health probe.
   - Tests: manifest serde; `verification_status` defaults to `unverified`; a manifest with no live verification cannot report `verified`.
   - → committed | New `backend/api/crates/wakaclock-core/src/ai/adapter.rs`: `AdapterManifest { id, provider, executable: ExecutableDetection, install: InstallStrategy (NativePlugin|ConfigHookBlock|TranscriptOnly|Manual), native_hooks: NativeHookCapabilities (all default false → under-claim), transcript_roots, payload_schema_versions, supported_change_kinds: Vec<BrokerChangeKind>, verification: Verification, health_probe: HealthProbe (TranscriptFreshness|HookEventRecency|None) }`. `Verification` fields serde-deserializable but `verified()` is the only constructor that mints `Verified` and it *demands* `live_checked_at` + `tool_version`; `effective_status()` degrades a lying `verified`-without-evidence to `scaffold`; `validate()` rejects it outright (planai2 line 604). `VerificationStatus` `#[derive(Default)]` = `Unverified`. Exported from `ai/mod.rs`. tests: `manifest_round_trips_through_json`, `verification_status_defaults_to_unverified`, `a_manifest_cannot_claim_verified_without_a_live_check`, `validate_rejects_an_empty_id_or_provider`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p1.4 Adapter registry.** Enumerates manifests, drives install + health probe. Installer is atomic, idempotent, and preserves user configuration.
+- [x] **p1.4 Adapter registry.** Enumerates manifests, drives install + health probe. Installer is atomic, idempotent, and preserves user configuration.
   - Tests: register a fake test adapter and drive it end to end **without editing correlation or heartbeat code** (this is acceptance p1.A1); install twice = idempotent; install preserves a pre-existing unrelated config key.
+  - → committed | `AdapterRegistry` in `ai/adapter.rs`: `from_manifests`/`builtin`/`register` (validates each, rejects duplicate ids), `get`/`ids`/`manifests`, `install(id, &InstallContext) -> InstallOutcome`. `ConfigHookBlock` strategy: marker-guarded, writes the managed block once via temp-file + `rename` (atomic), preserves every existing byte; a 2nd call is a no-op `AlreadyInstalled`. `NativePlugin`/`Manual`/`TranscriptOnly` return a *plan* (`RequiresExternalCommand`/`ManualStep`/`NothingToInstall`) — the registry never shells out, stays pure + correlation-free. `builtin()` seeds real manifests: claude-code `Verified` (VERIFICATION.md 2026-08-14 live sync), codex `Scaffold` (real-transcript dry-run only, live delivery open), gemini-cli `Unverified` (no CLI anywhere). tests: `builtin_registry_loads_and_validates_every_manifest`, `a_new_adapter_registers_and_installs_end_to_end_without_touching_core` (p1.A1 — asserts user key `name = "keep me"` survives + 2nd install byte-identical), `install_returns_a_plan_for_native_plugin_and_manual_strategies`, `duplicate_ids_are_rejected`. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p1.5 Migrate VS Code installer.** Move installation logic from `extensions/vscode/src/agentSetup.ts` to consume the registry. No behavior regression.
   - Tests: `extensions/vscode` test that setup still installs the Claude + Codex adapters; VS Code `npm test` green.
 
@@ -395,4 +399,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p1.0 — DECISION resolved (docs only). `BrokerEventV1` already carries every planai2 evidence field → additive-only/no schema bump, `deny_unknown_fields` backstop kept, `TransportKind` classifier instead of a wire change, envelope `confidence` = producer self-assertion, `event_id` producer-opaque, manifest is non-wire. See Decisions log D1–D6. Committed `3c7c337`.
 - 2026-08-31 — p1.1 — done. No fields added (D1 — envelope already complete). Added `TransportKind` enum + `classify()`/`priority()`/`BrokerEventV1::transport_kind()` for the Phase 2 producer ordering. 4 new tests (round-trip, old-shape parse, schema-version gate, transport ranking). Gates + duration-audit green. Committed `3d15d1d`.
 - 2026-08-31 — p1.2 — done. `ALLOWED_EVENT_FIELDS` + `FORBIDDEN_EVENT_FIELDS` + `QuarantineDiagnostic::inspect()` (field names only, never values); CLI broker `event_handler`/`batch_handler` now emit the sanitized diagnostic + a quarantine log line instead of echoing the raw serde error. 3 new tests. Gates + duration-audit green. Committed `b1ef024`.
-- 2026-08-31 — p1.3 — done. New `ai/adapter.rs`: `AdapterManifest` + `InstallStrategy`/`NativeHookCapabilities`/`HealthProbe`/`Verification`/`VerificationStatus`. `Verified` can't exist without `live_checked_at` (smart ctor + `validate()` + `effective_status()` degrade). 4 new tests. Gates + duration-audit green. Committed.
+- 2026-08-31 — p1.3 — done. New `ai/adapter.rs`: `AdapterManifest` + `InstallStrategy`/`NativeHookCapabilities`/`HealthProbe`/`Verification`/`VerificationStatus`. `Verified` can't exist without `live_checked_at` (smart ctor + `validate()` + `effective_status()` degrade). 4 new tests. Gates + duration-audit green. Committed `eeb622a`.
+- 2026-08-31 — p1.4 — done. `AdapterRegistry` (enumerate/validate/register, reject dup ids) + `install()` → `ConfigHookBlock` writes once atomically (temp+rename) preserving user config, other strategies return a plan. `builtin()` seeds claude-code (Verified) / codex (Scaffold) / gemini-cli (Unverified). 4 new tests incl. p1.A1 end-to-end. Gates + duration-audit green. Committed.

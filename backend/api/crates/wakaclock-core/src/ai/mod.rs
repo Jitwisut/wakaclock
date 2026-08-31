@@ -36,8 +36,8 @@ pub mod state;
 pub mod usage;
 
 pub use adapter::{
-    AdapterManifest, ExecutableDetection, HealthProbe, InstallStrategy, NativeHookCapabilities,
-    Verification, VerificationStatus,
+    AdapterManifest, AdapterRegistry, ExecutableDetection, HealthProbe, InstallContext,
+    InstallOutcome, InstallStrategy, NativeHookCapabilities, Verification, VerificationStatus,
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;

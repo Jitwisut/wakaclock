@@ -7,6 +7,9 @@
 //! p1.A1). The manifest is **not** part of the `BrokerEventV1` wire envelope — it
 //! never travels with an event.
 
+use std::io;
+use std::path::{Path, PathBuf};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -211,6 +214,257 @@ impl AdapterManifest {
     }
 }
 
+// ---------------------------------------------------------------------------
+// planai2.md Phase 1 — p1.4 adapter registry
+// ---------------------------------------------------------------------------
+
+/// What `AdapterRegistry::install` did or wants the caller to do. The registry
+/// itself only ever touches a config *file* (the `ConfigHookBlock` strategy);
+/// anything that needs a subprocess (`claude plugin install`, …) or a human is
+/// returned as a plan so the registry stays pure, testable and correlation-free
+/// (planai2.md acceptance p1.A1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallOutcome {
+    /// A managed block was written into the agent's config file just now.
+    ConfigBlockWritten { config_path: PathBuf },
+    /// The managed block (identified by its marker) was already present — no write.
+    AlreadyInstalled,
+    /// The caller must run this external command to finish install.
+    RequiresExternalCommand { program: String, args: Vec<String> },
+    /// The platform forces a manual step; surface this text to the user.
+    ManualStep { instruction: String },
+    /// Passive transcript-only adapter — nothing to install.
+    NothingToInstall,
+}
+
+/// Inputs an install needs that the manifest itself does not carry.
+pub struct InstallContext {
+    pub home_dir: PathBuf,
+    /// The exact managed-block text to write for a `ConfigHookBlock` strategy.
+    /// Ignored by the other strategies.
+    pub config_block_body: Option<String>,
+}
+
+/// An ordered set of `AdapterManifest`s, validated on load, with no two sharing an
+/// `id`. Adding an agent is `register()` + a manifest — correlation and heartbeat
+/// code never change (planai2.md acceptance p1.A1).
+#[derive(Debug, Clone, Default)]
+pub struct AdapterRegistry {
+    manifests: Vec<AdapterManifest>,
+}
+
+impl AdapterRegistry {
+    pub fn from_manifests(manifests: Vec<AdapterManifest>) -> Result<Self, String> {
+        let mut registry = Self::default();
+        for manifest in manifests {
+            registry.register(manifest)?;
+        }
+        Ok(registry)
+    }
+
+    /// The manifests for the agents this build actually has a parser for.
+    pub fn builtin() -> Self {
+        Self::from_manifests(vec![
+            claude_code_manifest(),
+            codex_manifest(),
+            gemini_cli_manifest(),
+        ])
+        .expect("builtin manifests are valid")
+    }
+
+    pub fn register(&mut self, manifest: AdapterManifest) -> Result<(), String> {
+        manifest.validate()?;
+        if self
+            .manifests
+            .iter()
+            .any(|existing| existing.id == manifest.id)
+        {
+            return Err(format!("adapter '{}' is already registered", manifest.id));
+        }
+        self.manifests.push(manifest);
+        Ok(())
+    }
+
+    pub fn get(&self, id: &str) -> Option<&AdapterManifest> {
+        self.manifests.iter().find(|manifest| manifest.id == id)
+    }
+
+    pub fn ids(&self) -> Vec<&str> {
+        self.manifests.iter().map(|m| m.id.as_str()).collect()
+    }
+
+    pub fn manifests(&self) -> &[AdapterManifest] {
+        &self.manifests
+    }
+
+    /// Idempotent, atomic where it writes. `ConfigHookBlock`: writes the managed
+    /// block once (marker-guarded), preserving every existing byte of the file;
+    /// a second call is a no-op `AlreadyInstalled`. Other strategies return a plan.
+    pub fn install(&self, id: &str, ctx: &InstallContext) -> Result<InstallOutcome, String> {
+        let manifest = self
+            .get(id)
+            .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
+        match &manifest.install {
+            InstallStrategy::ConfigHookBlock {
+                config_path_from_home,
+                marker,
+            } => {
+                let body = ctx.config_block_body.as_deref().ok_or_else(|| {
+                    format!("adapter '{id}' needs a config_block_body to install")
+                })?;
+                let path = ctx.home_dir.join(config_path_from_home);
+                install_config_hook_block(&path, marker, body)
+                    .map_err(|error| format!("adapter '{id}': {error}"))
+            }
+            InstallStrategy::NativePlugin { install_args } => {
+                let (program, args) = install_args
+                    .split_first()
+                    .ok_or_else(|| format!("adapter '{id}' NativePlugin has no install command"))?;
+                Ok(InstallOutcome::RequiresExternalCommand {
+                    program: program.clone(),
+                    args: args.to_vec(),
+                })
+            }
+            InstallStrategy::Manual { instruction } => Ok(InstallOutcome::ManualStep {
+                instruction: instruction.clone(),
+            }),
+            InstallStrategy::TranscriptOnly => Ok(InstallOutcome::NothingToInstall),
+        }
+    }
+}
+
+/// Write a marker-bounded managed block into a config file exactly once.
+/// - Already contains `marker` ⇒ `AlreadyInstalled`, no write (idempotent).
+/// - Otherwise: append `\n{body}\n` to the current contents and replace the file
+///   via a temp-file rename (atomic), preserving everything already there.
+fn install_config_hook_block(path: &Path, marker: &str, body: &str) -> io::Result<InstallOutcome> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    if existing.contains(marker) {
+        return Ok(InstallOutcome::AlreadyInstalled);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut next = existing;
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push('\n');
+    next.push_str(body.trim_end_matches('\n'));
+    next.push('\n');
+
+    let staging = path.with_extension(format!("atoaxis-staging-{}", std::process::id()));
+    std::fs::write(&staging, next.as_bytes())?;
+    std::fs::rename(&staging, path)?;
+    Ok(InstallOutcome::ConfigBlockWritten {
+        config_path: path.to_path_buf(),
+    })
+}
+
+fn claude_code_manifest() -> AdapterManifest {
+    AdapterManifest {
+        id: "claude-code".to_string(),
+        provider: "anthropic".to_string(),
+        executable: ExecutableDetection {
+            command_names: vec!["claude".to_string()],
+            version_arg: Some("--version".to_string()),
+        },
+        install: InstallStrategy::NativePlugin {
+            install_args: vec![
+                "claude".to_string(),
+                "plugin".to_string(),
+                "install".to_string(),
+                "atoaxis-heartbeat@atoaxis-plugins".to_string(),
+            ],
+        },
+        native_hooks: NativeHookCapabilities {
+            pre_tool_use: true,
+            post_tool_use: true,
+            session_lifecycle: true,
+            apply_patch: true,
+            shell_mutation: true,
+        },
+        transcript_roots: vec![".claude/projects".to_string()],
+        payload_schema_versions: vec!["jsonl-v1".to_string()],
+        supported_change_kinds: vec![BrokerChangeKind::Create, BrokerChangeKind::Modify],
+        // VERIFICATION.md documents a real live end-to-end sync (2026-08-14).
+        verification: Verification::verified(
+            DateTime::parse_from_rfc3339("2026-08-14T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            "claude-code (2026-08-14 live sync)",
+        ),
+        health_probe: HealthProbe::TranscriptFreshness {
+            max_lag_seconds: 300,
+        },
+    }
+}
+
+fn codex_manifest() -> AdapterManifest {
+    AdapterManifest {
+        id: "codex".to_string(),
+        provider: "openai".to_string(),
+        executable: ExecutableDetection {
+            command_names: vec!["codex".to_string()],
+            version_arg: Some("--version".to_string()),
+        },
+        install: InstallStrategy::ConfigHookBlock {
+            config_path_from_home: ".codex/config.toml".to_string(),
+            marker: "# AtoAxis managed AI attribution hook".to_string(),
+        },
+        native_hooks: NativeHookCapabilities {
+            pre_tool_use: true,
+            post_tool_use: true,
+            apply_patch: true,
+            shell_mutation: true,
+            ..Default::default()
+        },
+        transcript_roots: vec![".codex/sessions".to_string()],
+        payload_schema_versions: vec!["response_item".to_string(), "event_msg".to_string()],
+        supported_change_kinds: vec![
+            BrokerChangeKind::Create,
+            BrokerChangeKind::Modify,
+            BrokerChangeKind::Delete,
+            BrokerChangeKind::Rename,
+        ],
+        // Real transcripts parsed (dry-run only); live delivery/dedup still open
+        // per VERIFICATION.md — not full live verification.
+        verification: Verification::scaffold(
+            "codex.rs verified against 156 real local sessions by dry-run; live delivery open",
+        ),
+        health_probe: HealthProbe::TranscriptFreshness {
+            max_lag_seconds: 300,
+        },
+    }
+}
+
+fn gemini_cli_manifest() -> AdapterManifest {
+    AdapterManifest {
+        id: "gemini-cli".to_string(),
+        provider: "google".to_string(),
+        executable: ExecutableDetection {
+            command_names: vec!["gemini".to_string()],
+            version_arg: Some("--version".to_string()),
+        },
+        install: InstallStrategy::NativePlugin {
+            install_args: vec![
+                "gemini".to_string(),
+                "extensions".to_string(),
+                "install".to_string(),
+            ],
+        },
+        native_hooks: NativeHookCapabilities::default(),
+        transcript_roots: vec![".gemini/tmp".to_string()],
+        payload_schema_versions: vec!["jsonl-edit-result".to_string()],
+        supported_change_kinds: vec![BrokerChangeKind::Create, BrokerChangeKind::Modify],
+        // No Gemini CLI on any inspection machine — entirely unverified.
+        verification: Verification::unverified(),
+        health_probe: HealthProbe::TranscriptFreshness {
+            max_lag_seconds: 600,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +560,116 @@ mod tests {
         let mut m = base_manifest();
         m.provider = String::new();
         assert!(m.validate().is_err());
+    }
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-registry-{tag}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn builtin_registry_loads_and_validates_every_manifest() {
+        let registry = AdapterRegistry::builtin();
+        assert_eq!(registry.ids(), vec!["claude-code", "codex", "gemini-cli"]);
+        for manifest in registry.manifests() {
+            manifest.validate().unwrap();
+        }
+        // Trust is graded honestly.
+        assert!(registry.get("claude-code").unwrap().is_live_verified());
+        assert_eq!(
+            registry.get("codex").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
+        assert_eq!(
+            registry.get("gemini-cli").unwrap().effective_status(),
+            VerificationStatus::Unverified
+        );
+    }
+
+    #[test]
+    fn a_new_adapter_registers_and_installs_end_to_end_without_touching_core() {
+        // planai2.md acceptance p1.A1 — a brand-new agent is a manifest + register(),
+        // nothing else. This test imports only the adapter module.
+        let mut registry = AdapterRegistry::default();
+        registry
+            .register(AdapterManifest {
+                id: "acme-agent".to_string(),
+                provider: "acme".to_string(),
+                executable: ExecutableDetection {
+                    command_names: vec!["acme".to_string()],
+                    version_arg: None,
+                },
+                install: InstallStrategy::ConfigHookBlock {
+                    config_path_from_home: ".acme/config.toml".to_string(),
+                    marker: "# AtoAxis managed acme hook".to_string(),
+                },
+                native_hooks: NativeHookCapabilities::default(),
+                transcript_roots: vec![],
+                payload_schema_versions: vec![],
+                supported_change_kinds: vec![BrokerChangeKind::Modify],
+                verification: Verification::unverified(),
+                health_probe: HealthProbe::None,
+            })
+            .unwrap();
+
+        let home = temp_home("acme");
+        // A config file the user already had, with an unrelated key.
+        std::fs::create_dir_all(home.join(".acme")).unwrap();
+        std::fs::write(
+            home.join(".acme/config.toml"),
+            "[user]\nname = \"keep me\"\n",
+        )
+        .unwrap();
+
+        let ctx = InstallContext {
+            home_dir: home.clone(),
+            config_block_body: Some(
+                "# AtoAxis managed acme hook\n[hooks]\nenabled = true".to_string(),
+            ),
+        };
+
+        // First install writes the block.
+        let first = registry.install("acme-agent", &ctx).unwrap();
+        assert!(matches!(first, InstallOutcome::ConfigBlockWritten { .. }));
+        let after_first = std::fs::read_to_string(home.join(".acme/config.toml")).unwrap();
+        assert!(after_first.contains("name = \"keep me\"")); // user config preserved
+        assert!(after_first.contains("# AtoAxis managed acme hook"));
+
+        // Second install is a no-op — idempotent, file byte-identical.
+        let second = registry.install("acme-agent", &ctx).unwrap();
+        assert_eq!(second, InstallOutcome::AlreadyInstalled);
+        let after_second = std::fs::read_to_string(home.join(".acme/config.toml")).unwrap();
+        assert_eq!(after_first, after_second);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn install_returns_a_plan_for_native_plugin_and_manual_strategies() {
+        let registry = AdapterRegistry::builtin();
+        let ctx = InstallContext {
+            home_dir: temp_home("plan"),
+            config_block_body: None,
+        };
+        match registry.install("claude-code", &ctx).unwrap() {
+            InstallOutcome::RequiresExternalCommand { program, args } => {
+                assert_eq!(program, "claude");
+                assert!(args.contains(&"install".to_string()));
+            }
+            other => panic!("expected an external-command plan, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&ctx.home_dir);
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected() {
+        let mut registry = AdapterRegistry::default();
+        registry.register(base_manifest()).unwrap();
+        assert!(registry.register(base_manifest()).is_err());
     }
 }
