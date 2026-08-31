@@ -73,6 +73,36 @@ pub struct ParseWarning {
     pub message: String,
 }
 
+/// planai2.md Phase 0.4: byte-level scanner health for one transcript, so
+/// `wakaclock doctor ai` can say *how far behind* a scanner is — not just whether
+/// it has ever run. `lag_bytes` is what a growing-file follower still owes;
+/// `ever_scanned` distinguishes "cursor at 0 because brand new" from "cursor at 0
+/// because the scanner never ran".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TranscriptLag {
+    pub file_size: u64,
+    pub cursor_offset: u64,
+    pub lag_bytes: u64,
+    pub ever_scanned: bool,
+    pub last_event_at: Option<DateTime<Utc>>,
+}
+
+impl TranscriptLag {
+    /// `file_size` is the transcript's current length; `cursor` is the saved parser
+    /// cursor for it, if any. A cursor whose offset runs past the file (rotation,
+    /// truncation) reports zero lag rather than a nonsensical negative.
+    pub fn measure(file_size: u64, cursor: Option<&ParserCursor>) -> Self {
+        let cursor_offset = cursor.map(|c| c.byte_offset).unwrap_or(0);
+        Self {
+            file_size,
+            cursor_offset,
+            lag_bytes: file_size.saturating_sub(cursor_offset),
+            ever_scanned: cursor.is_some(),
+            last_event_at: cursor.and_then(|c| c.last_record_time),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseBatch {
     pub events: Vec<AiEditEvent>,
@@ -154,5 +184,32 @@ mod tests {
         let context = ParseContext::default();
         assert!(context.max_record_bytes > 0);
         assert!(context.max_batch_records > 0);
+    }
+
+    #[test]
+    fn transcript_lag_reports_bytes_owed_and_scan_history() {
+        // Never scanned: cursor absent → full file is lag, ever_scanned false.
+        let fresh = TranscriptLag::measure(4096, None);
+        assert_eq!(fresh.lag_bytes, 4096);
+        assert_eq!(fresh.cursor_offset, 0);
+        assert!(!fresh.ever_scanned);
+        assert!(fresh.last_event_at.is_none());
+
+        // Partially scanned: lag is the unread tail.
+        let cursor = ParserCursor {
+            source_path: "/x.jsonl".to_string(),
+            file_identity: None,
+            byte_offset: 3000,
+            last_record_id: Some("r1".to_string()),
+            last_record_time: Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap()),
+        };
+        let behind = TranscriptLag::measure(4096, Some(&cursor));
+        assert_eq!(behind.lag_bytes, 1096);
+        assert!(behind.ever_scanned);
+        assert!(behind.last_event_at.is_some());
+
+        // Rotation/truncation: cursor past EOF → zero lag, not a wraparound.
+        let rotated = TranscriptLag::measure(10, Some(&cursor));
+        assert_eq!(rotated.lag_bytes, 0);
     }
 }

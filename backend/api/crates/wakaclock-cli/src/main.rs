@@ -22,7 +22,7 @@ use wakaclock_core::{
         normalize_agent_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
         scan_ai_processes, AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent,
         AiEventSource, ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult,
-        DiscoveryState, FileChangeKind, GeminiCliParser, ParseContext, ParserCursor,
+        DiscoveryState, FileChangeKind, GeminiCliParser, ParseContext, ParserCursor, TranscriptLag,
         WorkspaceWatcher,
     },
     api_client::ApiClient,
@@ -1943,6 +1943,85 @@ mod ai_doctor_tests {
     }
 }
 
+#[cfg(test)]
+mod ai_sync_isolation_tests {
+    use wakaclock_core::ai::{
+        AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState,
+        ParseBatch, ParseContext, ParserCursor,
+    };
+
+    /// A parser whose `parse_since` either yields an empty batch or a chosen error,
+    /// so the per-agent isolation contract can be exercised without a real transcript.
+    struct StubParser {
+        id: &'static str,
+        result: fn() -> Result<ParseBatch, AiParseError>,
+    }
+
+    impl AiActivityParser for StubParser {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn discover(&self, _context: &DiscoveryContext) -> DiscoveryResult {
+            DiscoveryResult {
+                state: DiscoveryState::InstalledNoTranscript,
+            }
+        }
+        fn parse_since(
+            &self,
+            _context: &ParseContext,
+            _cursor: Option<&ParserCursor>,
+        ) -> Result<ParseBatch, AiParseError> {
+            (self.result)()
+        }
+    }
+
+    fn empty_batch() -> Result<ParseBatch, AiParseError> {
+        Ok(ParseBatch {
+            events: Vec::new(),
+            next_cursor: ParserCursor {
+                source_path: "/stub".to_string(),
+                file_identity: None,
+                byte_offset: 0,
+                last_record_id: None,
+                last_record_time: None,
+            },
+            warnings: Vec::new(),
+        })
+    }
+
+    fn malformed() -> Result<ParseBatch, AiParseError> {
+        Err(AiParseError::Malformed("deliberate".to_string()))
+    }
+
+    #[test]
+    fn one_agents_parse_error_does_not_stop_the_others() {
+        // This mirrors the `run_ai_sync` loop shape: iterate agents, and on a parse
+        // Err record the agent as skipped and continue — never propagate.
+        let parsers: Vec<StubParser> = vec![
+            StubParser {
+                id: "codex",
+                result: malformed,
+            },
+            StubParser {
+                id: "claude-code",
+                result: empty_batch,
+            },
+        ];
+
+        let mut parsed = Vec::new();
+        let mut skipped = Vec::new();
+        for parser in &parsers {
+            match parser.parse_since(&ParseContext::default(), None) {
+                Ok(_) => parsed.push(parser.id()),
+                Err(_) => skipped.push(parser.id()),
+            }
+        }
+
+        assert_eq!(skipped, vec!["codex"]);
+        assert_eq!(parsed, vec!["claude-code"]);
+    }
+}
+
 /// planai2.md Phase 0.5: `wakaclock doctor ai`. Reuses the broker/queue/service
 /// status this crate's own `wakaclock broker status` already computes
 /// (`broker_status_json`) rather than re-deriving it, and adds the two checks that
@@ -1984,35 +2063,72 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     for (id, parser) in supported_ai_parsers() {
         let discovery = parser.discover(&context);
         let installed = !matches!(discovery.state, DiscoveryState::NotInstalled);
-        let (transcript_path, transcript_modified_at) = match discovery.state {
+        // planai2.md Phase 0.4: an unsupported schema or a permission error must be
+        // reported as a distinct diagnostic, never silently folded into "no
+        // transcript" — that is the shape of a scanner that looks healthy while
+        // emitting zero events forever.
+        let (transcript_path, transcript_modified_at, diagnostic) = match discovery.state {
             DiscoveryState::TranscriptFound { path } => {
                 let modified = fs::metadata(&path)
                     .and_then(|meta| meta.modified())
                     .ok()
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|duration| duration.as_secs());
-                (Some(path), modified)
+                (Some(path), modified, None)
             }
-            _ => (None, None),
+            DiscoveryState::UnsupportedVersion {
+                path,
+                found_version,
+            } => (
+                None,
+                None,
+                Some(format!(
+                    "unsupported transcript schema at {} (version {})",
+                    path.display(),
+                    found_version.as_deref().unwrap_or("unknown")
+                )),
+            ),
+            DiscoveryState::PermissionDenied { path } => (
+                None,
+                None,
+                Some(format!("permission denied reading {}", path.display())),
+            ),
+            DiscoveryState::NotInstalled | DiscoveryState::InstalledNoTranscript => {
+                (None, None, None)
+            }
         };
-        let cursor_last_record_at = transcript_path.as_ref().and_then(|path| {
+        let saved_cursor = transcript_path.as_ref().and_then(|path| {
             let cursor_key = format!("{id}:{}", path.to_string_lossy());
             state
                 .as_ref()
                 .and_then(|state| state.load_cursor(&cursor_key).ok().flatten())
-                .and_then(|cursor| cursor.last_record_time)
-                .map(|time| time.timestamp().max(0) as u64)
         });
+        let file_size = transcript_path
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok())
+            .map(|meta| meta.len());
+        let lag = file_size.map(|size| TranscriptLag::measure(size, saved_cursor.as_ref()));
+        let cursor_last_record_at = saved_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.last_record_time)
+            .map(|time| time.timestamp().max(0) as u64);
         let lag_seconds = match (transcript_modified_at, cursor_last_record_at) {
             (Some(modified), Some(scanned)) => Some(modified.saturating_sub(scanned)),
-            (Some(_), None) => None, // transcript exists, never scanned — reported separately
             _ => None,
         };
         agents.push(serde_json::json!({
             "agent": id,
             "installed": installed,
             "transcript_found": transcript_path.is_some(),
-            "ever_scanned": cursor_last_record_at.is_some(),
+            "diagnostic": diagnostic,
+            "ever_scanned": lag.map(|l| l.ever_scanned).unwrap_or(false),
+            "file_size": file_size,
+            "cursor_offset": lag.map(|l| l.cursor_offset),
+            "lag_bytes": lag.map(|l| l.lag_bytes),
+            "last_event_at": saved_cursor
+                .as_ref()
+                .and_then(|c| c.last_record_time)
+                .map(|t| t.to_rfc3339()),
             "lag_seconds": lag_seconds,
         }));
     }
@@ -2301,15 +2417,33 @@ async fn run_ai_sync(
                 continue;
             }
 
-            let batch = parser.parse_since(&ParseContext::default(), Some(&cursor))?;
-            // Usage is parsed independently from file-edit events: one model response may edit
-            // several files, and copying its token count to each file would inflate totals.
-            let usage_records = match id {
-                "claude-code" => parse_claude_usage(&transcript_path)?,
-                "codex" => parse_codex_usage(&transcript_path)?,
-                "gemini-cli" => parse_gemini_usage(&transcript_path)?,
-                _ => Vec::new(),
+            // planai2.md Phase 0.4: a parse failure for one agent must not abort the
+            // sync for the others (the `AiActivityParser` contract says callers treat
+            // `Err` as "skip this agent this cycle"). Record it and move to the next
+            // agent instead of `?`-ing out of the whole run.
+            let batch = match parser.parse_since(&ParseContext::default(), Some(&cursor)) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    eprintln!(
+                        "  {id}: transcript parse failed — skipping this agent this cycle ({error})"
+                    );
+                    agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
+                    break;
+                }
             };
+            // Usage is parsed independently from file-edit events: one model response may edit
+            // several files, and copying its token count to each file would inflate totals. A
+            // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
+            let usage_records = match id {
+                "claude-code" => parse_claude_usage(&transcript_path),
+                "codex" => parse_codex_usage(&transcript_path),
+                "gemini-cli" => parse_gemini_usage(&transcript_path),
+                _ => Ok(Vec::new()),
+            }
+            .unwrap_or_else(|error| {
+                eprintln!("  {id}: usage parse failed, continuing without token counts ({error})");
+                Vec::new()
+            });
             if verbose {
                 for warning in &batch.warnings {
                     eprintln!("  warning: {}", warning.message);

@@ -47,7 +47,7 @@ pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFoll
 pub use gemini::GeminiCliParser;
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    ParseContext, ParseWarning, ParserCursor, TranscriptLag,
 };
 pub use patch::{
     count_content_lines, count_structured_patch_lines, count_unified_diff_lines, parse_apply_patch,
