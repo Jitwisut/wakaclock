@@ -37,7 +37,14 @@ pub struct AgentLock {
 
 impl AgentLock {
     pub fn acquire() -> Result<Self, String> {
-        let path = lock_path();
+        Self::acquire_at(lock_path())
+    }
+
+    /// planai2.md Phase 0.2: the singleton-lock body, parameterised on the lock
+    /// path so the "a second broker cannot start while the first holds the lock,
+    /// and a crashed broker's stale lock is reclaimed" invariant is unit-testable
+    /// against a temp path instead of the real `~/.wakaclock/agent.lock`.
+    pub fn acquire_at(path: PathBuf) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -143,22 +150,52 @@ pub fn record_heartbeat() {
     let _ = fs::write(path, state.to_string());
 }
 
+/// planai2.md Phase 0.2: the exact bytes of the per-user service manifest, as a
+/// pure function of the target executable (and, on macOS, the log path). Kept
+/// separate from `install()` so the idempotence invariant — "installing twice
+/// writes one identical service definition" — is unit-testable without shelling
+/// out to launchctl / systemctl / schtasks. There is exactly one `broker run`
+/// invocation in every platform's output.
+#[cfg(target_os = "macos")]
+fn manifest_content(executable: &str, log_path: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>broker</string><string>run</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
+        xml_escape(executable),
+        xml_escape(log_path),
+        xml_escape(log_path),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn manifest_content(executable: &str, _log_path: &str) -> String {
+    format!(
+        "[Unit]\nDescription=Wakaclock AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        shell_escape(executable)
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn manifest_content(executable: &str, _log_path: &str) -> String {
+    format!("{executable} broker run\r\n")
+}
+
+// A stub so the pure test below still compiles on unsupported targets.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn manifest_content(executable: &str, _log_path: &str) -> String {
+    format!("{executable} broker run\n")
+}
+
 pub fn install() -> Result<AgentServiceReport, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let manifest = manifest_path();
     if let Some(parent) = manifest.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
+    let content = manifest_content(&executable.to_string_lossy(), &log_path().to_string_lossy());
 
     #[cfg(target_os = "macos")]
     {
-        let content = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>broker</string><string>run</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
-            xml_escape(&executable.to_string_lossy()),
-            xml_escape(&log_path().to_string_lossy()),
-            xml_escape(&log_path().to_string_lossy()),
-        );
-        fs::write(&manifest, content).map_err(|error| error.to_string())?;
+        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
         let domain = format!("gui/{}", uid());
         // Idempotent reinstall: an absent prior service is normal. Capture bootout's
         // stderr so macOS does not print the misleading "Boot-out failed: 5" warning
@@ -181,11 +218,7 @@ pub fn install() -> Result<AgentServiceReport, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let content = format!(
-            "[Unit]\nDescription=Wakaclock AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
-            shell_escape(&executable.to_string_lossy())
-        );
-        fs::write(&manifest, content).map_err(|error| error.to_string())?;
+        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
         run_command("systemctl", &["--user", "daemon-reload"])?;
         run_command(
             "systemctl",
@@ -201,8 +234,7 @@ pub fn install() -> Result<AgentServiceReport, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let content = format!("{} broker run\r\n", executable.display());
-        fs::write(&manifest, content).map_err(|error| error.to_string())?;
+        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
         let command = format!("\"{}\" broker run", executable.display());
         run_command(
             "schtasks",
@@ -216,6 +248,8 @@ pub fn install() -> Result<AgentServiceReport, String> {
         return Ok(report("Windows", manifest, true, true, None));
     }
 
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let _ = (&content, &manifest);
     #[allow(unreachable_code)]
     Err("unsupported operating system".to_string())
 }
@@ -247,11 +281,66 @@ pub fn manifest_uses_legacy_alias() -> bool {
 /// already current or absent. Non-destructive: the generated manifest has no user
 /// configuration to preserve, so this is a plain `install()`.
 pub fn migrate_legacy_service_manifest() -> Result<bool, String> {
-    if !manifest_uses_legacy_alias() {
+    if !manifest_uses_legacy_alias() && !manifest_points_at_stale_binary() {
         return Ok(false);
     }
     install()?;
     Ok(true)
+}
+
+/// planai2.md Phase 0.2: the executable path baked into a service manifest, so a
+/// caller can tell whether launchd / systemd / Task Scheduler is still pointed at
+/// a binary that a CLI upgrade has since moved or replaced. Pure text extraction —
+/// the manifest layouts are fixed by `manifest_content`.
+fn executable_in_manifest(content: &str) -> Option<String> {
+    // macOS plist: first <string> inside <array>, before the <string>broker</string>.
+    if let Some(rest) = content.split("<array><string>").nth(1) {
+        if let Some(path) = rest.split("</string>").next() {
+            return Some(
+                path.replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"")
+                    .replace("&apos;", "'"),
+            );
+        }
+    }
+    // systemd: `ExecStart=<path> broker run`
+    if let Some(rest) = content.split("ExecStart=").nth(1) {
+        let line = rest.lines().next().unwrap_or_default();
+        if let Some(path) = line.strip_suffix(" broker run") {
+            return Some(path.trim().trim_matches('\'').to_string());
+        }
+    }
+    // Windows: `"<path>" broker run` or `<path> broker run`
+    if let Some(path) = content.trim().strip_suffix(" broker run") {
+        return Some(path.trim().trim_matches('"').to_string());
+    }
+    None
+}
+
+/// True when the installed service manifest names an executable path that is not
+/// the binary running this process (compared canonically, so a symlink or a
+/// relative spelling of the same file is not a mismatch). `false` when the
+/// manifest is absent, unparseable, or already current — a missing answer is not
+/// a mismatch.
+pub fn manifest_points_at_stale_binary() -> bool {
+    let Ok(content) = fs::read_to_string(manifest_path()) else {
+        return false;
+    };
+    let Some(manifest_exe) = executable_in_manifest(&content) else {
+        return false;
+    };
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    let canon = |p: &std::path::Path| fs::canonicalize(p).ok();
+    match (canon(std::path::Path::new(&manifest_exe)), canon(&current)) {
+        (Some(a), Some(b)) => a != b,
+        // The manifest path no longer resolves to a real file → definitely stale.
+        (None, Some(_)) => true,
+        _ => false,
+    }
 }
 
 pub fn uninstall() -> Result<AgentServiceReport, String> {
@@ -519,7 +608,8 @@ fn shell_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::content_uses_legacy_alias;
+    use super::{content_uses_legacy_alias, executable_in_manifest, manifest_content, AgentLock};
+    use std::fs;
 
     // Exact shape an old CLI wrote, per platform.
     const LEGACY_PLIST: &str = "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>agent</string><string>run</string></array>\n</dict></plist>\n";
@@ -546,5 +636,72 @@ mod tests {
         assert!(!content_uses_legacy_alias(CURRENT_SYSTEMD));
         assert!(!content_uses_legacy_alias(CURRENT_WINDOWS));
         assert!(!content_uses_legacy_alias(""));
+    }
+
+    #[test]
+    fn install_manifest_is_deterministic_and_has_exactly_one_broker_run() {
+        // planai2.md p0.2: installing twice must write one identical service
+        // definition, so the pure content function must be a deterministic
+        // function of its inputs with a single `broker run` invocation.
+        let a = manifest_content("/opt/atoaxis/wakaclock", "/home/u/.wakaclock/agent.log");
+        let b = manifest_content("/opt/atoaxis/wakaclock", "/home/u/.wakaclock/agent.log");
+        assert_eq!(a, b);
+        assert_eq!(
+            a.matches("broker run").count() + a.matches("broker</string>").count(),
+            1
+        );
+        assert!(a.contains("/opt/atoaxis/wakaclock"));
+
+        let other = manifest_content("/opt/atoaxis/wakaclock-new", "/home/u/.wakaclock/agent.log");
+        assert_ne!(a, other);
+    }
+
+    #[test]
+    fn executable_path_round_trips_out_of_every_manifest_shape() {
+        assert_eq!(
+            executable_in_manifest(CURRENT_PLIST).as_deref(),
+            Some("/usr/local/bin/wakaclock")
+        );
+        assert_eq!(
+            executable_in_manifest(CURRENT_SYSTEMD).as_deref(),
+            Some("/usr/local/bin/wakaclock")
+        );
+        assert_eq!(
+            executable_in_manifest(CURRENT_WINDOWS).as_deref(),
+            Some("C:\\bin\\wakaclock.exe")
+        );
+        assert_eq!(executable_in_manifest(""), None);
+    }
+
+    #[test]
+    fn singleton_lock_rejects_a_second_broker_and_reclaims_a_dead_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-agentlock-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("agent.lock");
+
+        let held = AgentLock::acquire_at(lock.clone()).expect("first broker takes the lock");
+        assert!(
+            AgentLock::acquire_at(lock.clone()).is_err(),
+            "a second broker must not start while the first holds the lock"
+        );
+
+        drop(held);
+        // Clean release → the next broker can start.
+        let after = AgentLock::acquire_at(lock.clone());
+        assert!(after.is_ok(), "the lock is free once the holder drops it");
+        drop(after);
+
+        // A crashed broker leaves a stale lock naming a PID that is not alive.
+        fs::write(&lock, "0\n").unwrap();
+        assert!(
+            AgentLock::acquire_at(lock.clone()).is_ok(),
+            "a stale lock from a dead PID is reclaimed, not a permanent block"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

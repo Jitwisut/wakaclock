@@ -1010,6 +1010,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let identity = build_identity();
             let cli_paths = cli_path_report();
             let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
+            let stale_service_binary = agent_service::manifest_points_at_stale_binary();
 
             // The point of `status` is answering "why is nothing being recorded", and the
             // on-disk view above cannot answer it — so ask the server. `today` is the same
@@ -1040,6 +1041,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "flush_stopped_because": flush.stopped_because,
                         "cli_path": cli_paths.to_json(),
                         "legacy_service_alias": legacy_service_alias,
+                        "stale_service_binary": stale_service_binary,
                     })
                 );
             } else {
@@ -1075,6 +1077,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 if legacy_service_alias {
                     println!(
                         "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it to `broker run`"
+                    );
+                }
+                if stale_service_binary {
+                    println!(
+                        "warning: the installed service manifest points at a different `wakaclock` binary than this one — run `wakaclock broker install` to repoint it"
                     );
                 }
             }
@@ -2017,6 +2024,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
 
     let identity = build_identity();
     let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
+    let stale_service_binary = agent_service::manifest_points_at_stale_binary();
     let hook_version = if cli_identity_mismatch {
         hook_would_resolve_to.as_deref().and_then(binary_version)
     } else {
@@ -2038,6 +2046,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
                 .is_some_and(|v| v != identity.version),
         },
         "legacy_service_alias": legacy_service_alias,
+        "stale_service_binary": stale_service_binary,
         "broker": broker,
         "agents": agents,
         "outbound_queue_depth": queue_count(),
@@ -2077,6 +2086,11 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     if legacy_service_alias {
         println!(
             "  MISMATCH: the installed service manifest runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it"
+        );
+    }
+    if stale_service_binary {
+        println!(
+            "  MISMATCH: the installed service manifest points at a different `wakaclock` binary — run `wakaclock broker install` to repoint it"
         );
     }
     println!("== Broker ==");

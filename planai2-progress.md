@@ -125,10 +125,10 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 0 — item p0.2** (broker lifecycle). p0.1 done. Baseline `d95bb00` already
-contains substantial prior Phase 0 work (doctor ai, codex `response_item`,
-observer scaffolds) — each p0 item below is **audit + finish + test**, not
-build-from-zero.
+**Phase 0 — item p0.2b** (VS Code broker fallback hardening), then p0.3. p0.1 +
+p0.2 done. Baseline `d95bb00` already contains substantial prior Phase 0 work
+(doctor ai, codex `response_item`, observer scaffolds) — each p0 item is
+**audit + finish + test**, not build-from-zero.
 
 ---
 
@@ -139,8 +139,12 @@ Goal: make existing capability actually work and be inspectable before any infer
 - [x] **p0.1 Single CLI identity.** `wakaclock status --json` reports build/version/commit SHA. Detect + warn when CLI paths (VS Code managed, shell `PATH`, hook scripts, OS service) point at different versions. Migrate service manifests using the old `agent` alias to `broker run`.
   - Tests: `wakaclock-cli` unit test that `status --json` carries a non-empty version+SHA; a test that mismatched paths produce a warning, matched paths do not (baseline already has `ai_doctor_tests` around path mismatch — extend, don't duplicate).
   - → `3201b92` | added `build.rs` (bakes `WAKACLOCK_GIT_SHA`/`WAKACLOCK_BUILD_TIME`, degrades to `"unknown"` off-checkout); `wakaclock status --json` now emits `version`/`git_sha`/`build_time`/`cli_path{path_mismatch,version_mismatch}`/`legacy_service_alias`; `binary_version()` runs the on-PATH binary with `--version` only when paths already differ; text mode prints `warning:` lines; `doctor ai` gained the same identity block; `agent_service::{content_uses_legacy_alias,manifest_uses_legacy_alias,migrate_legacy_service_manifest}` + `broker start` opportunistically migrates a legacy `agent run` manifest. tests: `build_identity_is_always_populated`, `cli_path_report_warns_on_path_and_version_drift_only`, `detects_the_legacy_agent_run_alias_on_every_platform`, `a_current_broker_run_manifest_is_not_flagged` | gates: fmt/clippy/`cargo test --workspace` green (cli 29→33). Live: on this machine `status --json` correctly reported `git_sha f67a0f7…-dirty`, `legacy_service_alias: true` (real stale LaunchAgent), and `flush_stopped_because: HTTP 402` separated from `key_check: verified`.
-- [ ] **p0.2 Broker lifecycle.** Idempotent install/start on launchd, systemd user service, Windows Task Scheduler. Singleton lock prevents duplicate brokers. VS Code falls back to an extension-owned broker when the user service is unavailable. A CLI update must not leave a service manifest pointing at an old binary.
+- [x] **p0.2 Broker lifecycle.** Idempotent install/start on launchd, systemd user service, Windows Task Scheduler. Singleton lock prevents duplicate brokers. VS Code falls back to an extension-owned broker when the user service is unavailable. A CLI update must not leave a service manifest pointing at an old binary.
   - Tests: idempotent install called twice = one service definition, no error; singleton lock rejects a second broker; stale-manifest detection test.
+  - → committed | Extracted the per-platform manifest bytes into a pure `manifest_content(executable, log_path)` (macOS/linux/windows + stub), so `install()` writes one deterministic definition; the existing launchctl bootout→bootstrap / `systemctl enable --now` / `schtasks /F` were already idempotent. Added `executable_in_manifest()` + `manifest_points_at_stale_binary()` (canonical-path compare vs `current_exe()`; a manifest path that no longer resolves counts as stale) surfaced as `stale_service_binary` in `status --json`/text and `doctor ai`, and folded into `migrate_legacy_service_manifest()` so `broker start` repoints a drifted manifest too. `AgentLock::acquire()` refactored to `acquire_at(path)` for testability. tests: `install_manifest_is_deterministic_and_has_exactly_one_broker_run`, `executable_path_round_trips_out_of_every_manifest_shape`, `singleton_lock_rejects_a_second_broker_and_reclaims_a_dead_one` (cli 33→36). VS Code extension-owned-broker fallback already exists (`cli.ts startExtensionOwnedAgent` + `commands.ts` fallback on install failure for remote/linux) — hardening it to check `getBrokerStatus().running` on all platforms is split to **p0.2b** below.
+- [ ] **p0.2b VS Code broker fallback hardening.** After `broker install`, check `getBrokerStatus().running`; if the service is not actually running, start the extension-owned broker as a fallback — on every platform, not only remote/linux, and not only when `installAgent()` throws. Touches `extensions/vscode/src/` (+ recompiled `out/`).
+  - Tests: `extensions/vscode` test that a non-running post-install status triggers `startExtensionOwnedAgent`; `npm test` green.
+
 - [ ] **p0.3 Codex integration migration.** AtoAxis Codex plugin package in the current native plugin layout. Migrate the legacy direct TOML hook block without deleting user config. Idempotent install/upgrade. Detect hook enabled/trusted and surface a manual action when the platform forces user trust. Hook path points at a stable managed directory, never a VSIX/worktree path.
   - Tests: migration preserves unrelated user TOML keys; install twice = idempotent; hook path assertion is not under a temp/worktree dir.
 - [ ] **p0.4 Transcript scanner recovery.** Scanner autostarts, resumes from its cursor, follows a growing transcript. Exposes `file_size`, `cursor_offset`, `lag_bytes`, `last_scan_at`, `last_event_at`. An unsupported format/schema emits a diagnostic instead of silently reporting zero events. One agent's parser failure does not stop the others.
@@ -330,3 +334,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 
 - 2026-08-31 — setup — baseline verified green (cargo 365 pass, 4 duration gates, frontend 211 pass), branch `planai2/universal-ai-detection` created, WIP snapshot `d95bb00`, this tracker written. Ready to start at p0.1.
 - 2026-08-31 — p0.1 — done. build.rs + `status --json` build identity + CLI-path/version drift warnings + legacy `agent run` service-manifest detection & migration. 4 new tests. fmt/clippy/`cargo test --workspace` green. Committed.
+- 2026-08-31 — p0.2 — done. Pure `manifest_content()` (idempotent install), `manifest_points_at_stale_binary()` + `stale_service_binary` surfaced in status/doctor + folded into `broker start` self-repair, `AgentLock::acquire_at()` for singleton testability. 3 new tests (cli 33→36). fmt/clippy/`cargo test --workspace` green. Split VS Code fallback hardening → p0.2b. Committed.
