@@ -113,6 +113,23 @@ and no way to live-verify one. The shipped, working mechanism remains the
 direct managed-TOML block. This sub-item is deferred, not certified — revisit on
 a machine with a Codex release that documents a plugin manifest format.
 
+## planai2.md Phase 2 — adapter rollout (p2.3, 2026-08-31)
+
+`AdapterRegistry::builtin()` now also carries manifests for the rollout-order 4–10
+agents so the pipeline *knows about* them and shows them honestly, rather than
+silently having no entry. **None is live-verified. None has a parser.** They are
+data only:
+
+| id | status | why |
+|---|---|---|
+| `cursor` | `scaffold` | hook payload shape (`afterFileEdit`, `.cursor/hooks.json`) is from Cursor's public docs + `extensions/ai-agents/cursor/` — never run against a real Cursor, never inspected a real `stdin.json` |
+| `generic-mcp` | `scaffold` | the `wakaclock ai emit --json` / `ai tool-before` / `ai tool-after` ingress path itself is real and tested (p2.2); no specific external MCP producer is verified |
+| `antigravity`, `copilot`, `windsurf`, `cline`, `roo-code`, `opencode` | `unverified` | no tool on any inspection machine, no documented AtoAxis integration point inspected yet |
+
+To promote any of these: install the real tool, capture a real payload, write the
+parser, run it end to end, then set `Verification::verified(<when>, <tool version>)`
+and record the run here. A fixture is not enough (planai2.md line 604).
+
 ## Still not verified against a live system
 
 - Codex live delivery and cross-transport dedup: the "Phase 8 Codex verification"

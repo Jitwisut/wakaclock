@@ -264,12 +264,17 @@ impl AdapterRegistry {
 
     /// The manifests for the agents this build actually has a parser for.
     pub fn builtin() -> Self {
-        Self::from_manifests(vec![
+        let mut manifests = vec![
             claude_code_manifest(),
             codex_manifest(),
             gemini_cli_manifest(),
-        ])
-        .expect("builtin manifests are valid")
+        ];
+        // planai2.md Phase 2 (p2.3): rollout order 4-10. None of these tools is
+        // installed on any inspection machine, so every manifest here is
+        // `Scaffold` (a documented payload shape exists) or `Unverified` (nothing
+        // to go on yet) — never `Verified`. See VERIFICATION.md.
+        manifests.extend(rollout_scaffold_manifests());
+        Self::from_manifests(manifests).expect("builtin manifests are valid")
     }
 
     pub fn register(&mut self, manifest: AdapterManifest) -> Result<(), String> {
@@ -465,6 +470,180 @@ fn gemini_cli_manifest() -> AdapterManifest {
     }
 }
 
+/// A minimal all-`false` capability set for a rollout scaffold whose real hook
+/// surface has not been inspected.
+fn no_hooks() -> NativeHookCapabilities {
+    NativeHookCapabilities::default()
+}
+
+/// planai2.md Phase 2 (p2.3), rollout order 4-10. Every entry is a manifest only —
+/// no parser, no verified capability — recorded so the pipeline *knows about* the
+/// agent and can show it as `scaffold` / `unverified` rather than pretending it
+/// does not exist. Cursor is `Scaffold` because a documented hook payload shape
+/// exists (`extensions/ai-agents/cursor/`); the rest are `Unverified`.
+fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
+    let file_kinds = vec![BrokerChangeKind::Create, BrokerChangeKind::Modify];
+    vec![
+        AdapterManifest {
+            id: "cursor".to_string(),
+            provider: "anysphere".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["cursor".to_string()],
+                version_arg: None,
+            },
+            install: InstallStrategy::ConfigHookBlock {
+                config_path_from_home: ".cursor/hooks.json".to_string(),
+                marker: "atoaxis".to_string(),
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                apply_patch: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![],
+            payload_schema_versions: vec!["afterFileEdit-v1".to_string()],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::scaffold(
+                "hook payload shape from Cursor public docs only; extensions/ai-agents/cursor/ is a scaffold, not run against a real Cursor",
+            ),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "antigravity".to_string(),
+            provider: "google".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["antigravity".to_string()],
+                version_arg: None,
+            },
+            install: InstallStrategy::Manual {
+                instruction: "no documented AtoAxis integration point yet".to_string(),
+            },
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "copilot".to_string(),
+            provider: "github".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["copilot".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::Manual {
+                instruction: "Copilot CLI/IDE hook surface not yet inspected".to_string(),
+            },
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "windsurf".to_string(),
+            provider: "codeium".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["windsurf".to_string()],
+                version_arg: None,
+            },
+            install: InstallStrategy::Manual {
+                instruction: "Windsurf hook surface not yet inspected".to_string(),
+            },
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "cline".to_string(),
+            provider: "cline".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // A pure VS Code extension — no separate process, no CLI. Only a
+            // transcript/log scan could ever apply.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "roo-code".to_string(),
+            provider: "roo-code".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "opencode".to_string(),
+            provider: "opencode".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["opencode".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "generic-mcp".to_string(),
+            provider: "generic".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // The generic ingress *is* `wakaclock ai emit --json` / `ai tool-before`
+            // / `ai tool-after` — that path is real and tested (p2.2), hence
+            // `Scaffold` not `Unverified`, but no specific producer is verified.
+            install: InstallStrategy::Manual {
+                instruction: "emit metadata-only events via `wakaclock ai emit --json`".to_string(),
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                apply_patch: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![],
+            payload_schema_versions: vec!["ai-emit-v1".to_string()],
+            supported_change_kinds: vec![
+                BrokerChangeKind::Create,
+                BrokerChangeKind::Modify,
+                BrokerChangeKind::Rename,
+                BrokerChangeKind::Delete,
+            ],
+            verification: Verification::scaffold(
+                "the `wakaclock ai emit` ingress path is tested; no specific external MCP producer is live-verified",
+            ),
+            health_probe: HealthProbe::None,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,7 +754,11 @@ mod tests {
     #[test]
     fn builtin_registry_loads_and_validates_every_manifest() {
         let registry = AdapterRegistry::builtin();
-        assert_eq!(registry.ids(), vec!["claude-code", "codex", "gemini-cli"]);
+        // The three with a real parser, followed by the p2.3 rollout scaffolds.
+        assert_eq!(
+            &registry.ids()[..3],
+            &["claude-code", "codex", "gemini-cli"]
+        );
         for manifest in registry.manifests() {
             manifest.validate().unwrap();
         }
@@ -589,6 +772,53 @@ mod tests {
             registry.get("gemini-cli").unwrap().effective_status(),
             VerificationStatus::Unverified
         );
+    }
+
+    #[test]
+    fn p2_3_rollout_adapters_are_registered_and_never_claim_verified() {
+        // planai2.md p2.3: every rollout scaffold is known to the registry, and
+        // NONE is live-verified — Cursor / generic-MCP are `Scaffold` (a
+        // documented / tested shape exists), the rest `Unverified`.
+        let registry = AdapterRegistry::builtin();
+        for id in [
+            "cursor",
+            "antigravity",
+            "copilot",
+            "windsurf",
+            "cline",
+            "roo-code",
+            "opencode",
+            "generic-mcp",
+        ] {
+            let manifest = registry
+                .get(id)
+                .unwrap_or_else(|| panic!("rollout adapter {id} not registered"));
+            manifest.validate().unwrap();
+            assert!(
+                !manifest.is_live_verified(),
+                "rollout scaffold {id} must not claim verified"
+            );
+            assert!(matches!(
+                manifest.effective_status(),
+                VerificationStatus::Scaffold | VerificationStatus::Unverified
+            ));
+        }
+        assert_eq!(
+            registry.get("cursor").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
+        assert_eq!(
+            registry.get("windsurf").unwrap().effective_status(),
+            VerificationStatus::Unverified
+        );
+        // Not a single builtin adapter is verified except claude-code.
+        let verified: Vec<&str> = registry
+            .manifests()
+            .iter()
+            .filter(|m| m.is_live_verified())
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(verified, vec!["claude-code"]);
     }
 
     #[test]
