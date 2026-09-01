@@ -44,7 +44,8 @@ pub use adapter::{
     InstallOutcome, InstallStrategy, NativeHookCapabilities, Verification, VerificationStatus,
 };
 pub use canonical::{
-    CanonicalFingerprint, CanonicalIdentity, FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
+    CanonicalActivity, CanonicalFingerprint, CanonicalIdentity, ChildEvidence,
+    FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
