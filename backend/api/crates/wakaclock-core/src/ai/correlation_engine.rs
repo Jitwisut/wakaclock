@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::event::AiConfidence;
 use crate::ai::path::normalize_lexical;
+use crate::ai::session::EvidenceStrength;
 use crate::broker::BrokerChangeKind;
 
 /// planai2.md p5.0: one named, individually-reasoned window per evidence pair —
@@ -183,6 +184,12 @@ pub struct CorrelationInput {
     /// "the same bytes again" vs "a real edit" — never the bytes themselves.
     #[serde(default)]
     pub fingerprint: Option<String>,
+    /// For a `SessionProcessObserver` / `ToolSnapshot` input: the ladder rank of
+    /// the underlying evidence, so the engine — not the producer — decides
+    /// whether it is `is_strong_enough_to_infer()` (planai2.md §5: "process name
+    /// alone is not enough for `ai_inferred`").
+    #[serde(default)]
+    pub evidence_strength: Option<EvidenceStrength>,
 }
 
 fn unknown_confidence() -> AiConfidence {
@@ -210,6 +217,7 @@ impl CorrelationInput {
             session_id: None,
             tool_event_id: None,
             fingerprint: None,
+            evidence_strength: None,
         }
     }
 
@@ -240,6 +248,35 @@ impl CorrelationInput {
     pub fn with_fingerprint(mut self, fp: impl Into<String>) -> Self {
         self.fingerprint = Some(fp.into());
         self
+    }
+    pub fn with_evidence_strength(mut self, strength: EvidenceStrength) -> Self {
+        self.evidence_strength = Some(strength);
+        self
+    }
+
+    /// True when this input, on its own, establishes an AI *authorship* of its
+    /// file (planai2.md §5 `ai_verified`: native hook / structured MCP write /
+    /// completed structured tool call).
+    fn is_verified_ai(&self) -> bool {
+        self.kind.is_verified_ai_edit()
+    }
+
+    /// True when this input is "a recent agent tool or session" strong enough to
+    /// support `ai_inferred` (planai2.md §5). A completed/structured tool call
+    /// always qualifies; a session/process observation qualifies only if its
+    /// `EvidenceStrength` clears the p4 bar — a bare process-name match does not.
+    fn is_inferring_agent_activity(&self) -> bool {
+        match self.kind {
+            EvidenceKind::NativeHook
+            | EvidenceKind::StructuredMcp
+            | EvidenceKind::CompletedTranscriptToolCall
+            | EvidenceKind::ToolSnapshot => true,
+            EvidenceKind::SessionProcessObserver => self
+                .evidence_strength
+                .map(EvidenceStrength::is_strong_enough_to_infer)
+                .unwrap_or(false),
+            EvidenceKind::FilesystemObserver | EvidenceKind::EditorInput => false,
+        }
     }
 }
 
@@ -299,6 +336,261 @@ impl CorrelationEngine {
         seen.sort();
         seen.dedup();
         seen
+    }
+
+    /// planai2.md §5: decide the verdict for **one change** to `entity` observed
+    /// at `at`, over the inputs already ingested for that entity.
+    ///
+    /// §5 lists the four predicates (`ai_verified`, `ai_inferred`, `human`,
+    /// `unknown`) as independent boolean formulas with **no stated precedence**.
+    /// The order below is the p5.2 DECISION (tracker Decisions log,
+    /// 2026-09-01 — p5.2), pinned by the §5 acceptance criteria: absence of AI
+    /// evidence must not manufacture `human`, and a simultaneous human/AI
+    /// conflict must not auto-resolve to `human`.
+    ///
+    /// 1. two+ distinct agents with **verified** evidence → `unknown` (competing)
+    /// 2. one **verified** producer for the file             → `ai_verified`
+    /// 3. positive editor input **and** AI activity inside the
+    ///    `editor_to_ai_edit` conflict window                → `unknown` (conflict)
+    /// 4. two+ distinct agents with **inferring** activity   → `unknown` (competing)
+    /// 5. file changed + exactly one agent's inferring activity + the pair's
+    ///    time window matches + fingerprint/shape matches + no editor input
+    ///    close enough to explain the change                 → `ai_inferred`
+    /// 6. positive editor input, correlation window closed   → `human`
+    ///    (still open → `unknown`, an AI edit could still land)
+    /// 7. file changed, none of the above                    → `unknown`
+    /// 8. nothing relevant in-window                         → `unknown`
+    pub fn verdict_for(&self, entity: &std::path::Path, at: DateTime<Utc>) -> Verdict {
+        let w = &self.windows;
+        let all: Vec<&CorrelationInput> = self.for_entity(entity).collect();
+        if all.is_empty() {
+            return Verdict::unknown(VerdictReason::NoEvidence, Vec::new());
+        }
+
+        // TimeWindowMatches: anchor on "a change was observed at `at`"
+        // (`FilesystemObserver`) and take each candidate's window from the
+        // per-evidence-pair table, never one shared constant.
+        let window_for = |k: EvidenceKind| {
+            w.between(EvidenceKind::FilesystemObserver, k)
+                .unwrap_or(w.filesystem_to_agent_activity)
+        };
+        let relevant: Vec<&CorrelationInput> = all
+            .iter()
+            .copied()
+            .filter(|i| within(i.occurred_at, at, window_for(i.kind)))
+            .collect();
+        if relevant.is_empty() {
+            return Verdict::unknown(VerdictReason::NoEvidence, Vec::new());
+        }
+
+        let file_changed = relevant
+            .iter()
+            .any(|i| i.kind == EvidenceKind::FilesystemObserver);
+        let editor: Vec<&CorrelationInput> = relevant
+            .iter()
+            .copied()
+            .filter(|i| i.kind == EvidenceKind::EditorInput)
+            .collect();
+        let verified: Vec<&CorrelationInput> = relevant
+            .iter()
+            .copied()
+            .filter(|i| i.is_verified_ai())
+            .collect();
+        let inferring: Vec<&CorrelationInput> = relevant
+            .iter()
+            .copied()
+            .filter(|i| i.is_inferring_agent_activity())
+            .collect();
+
+        // 1. Competing verified agents.
+        if distinct_agents(&verified) >= 2 {
+            return Verdict::unknown(
+                VerdictReason::MultipleCompetingAiSessions,
+                lineage(&verified),
+            );
+        }
+
+        // 2. A verified producer for this exact file. §5 `ai_verified` is the
+        //    strongest tier; it outranks concurrent editor input (the conflict
+        //    rule applies to inferred-strength AI evidence).
+        if !verified.is_empty() {
+            return Verdict {
+                verdict: AiVerdict::AiVerified,
+                reason: VerdictReason::DirectAiProducer,
+                supporting_lineage: lineage(&verified),
+            };
+        }
+
+        // 3. Human/AI conflict: editor input with AI activity inside the
+        //    `editor_to_ai_edit` window. Never auto-resolves to `human`.
+        let conflicting_ai: Vec<&CorrelationInput> = inferring
+            .iter()
+            .copied()
+            .filter(|ai| {
+                editor
+                    .iter()
+                    .any(|e| within(ai.occurred_at, e.occurred_at, w.editor_to_ai_edit))
+            })
+            .collect();
+        if !editor.is_empty() && !conflicting_ai.is_empty() {
+            let mut ids = lineage(&editor);
+            ids.extend(lineage(&conflicting_ai));
+            return Verdict::unknown(VerdictReason::ConflictingHumanAndAiEvidence, ids);
+        }
+
+        // 4. Competing inferring agents (each already past the p4 strength bar).
+        if distinct_agents(&inferring) >= 2 {
+            return Verdict::unknown(
+                VerdictReason::MultipleCompetingAiSessions,
+                lineage(&inferring),
+            );
+        }
+
+        // 5. AI inferred.
+        let editor_explains_change = editor
+            .iter()
+            .any(|e| within(e.occurred_at, at, w.filesystem_to_editor_input));
+        if file_changed && !inferring.is_empty() && !editor_explains_change {
+            let fs: Vec<&CorrelationInput> = relevant
+                .iter()
+                .copied()
+                .filter(|i| i.kind == EvidenceKind::FilesystemObserver)
+                .collect();
+            let shape_ok = inferring
+                .iter()
+                .all(|ai| fs.iter().any(|f| fingerprint_or_shape_matches(f, ai)));
+            if shape_ok {
+                let mut ids = lineage(&fs);
+                ids.extend(lineage(&inferring));
+                return Verdict {
+                    verdict: AiVerdict::AiInferred,
+                    reason: VerdictReason::InferredFromAgentActivity,
+                    supporting_lineage: ids,
+                };
+            }
+        }
+
+        // 6. Human (or "window still open").
+        if let Some(latest_editor) = editor.iter().map(|e| e.occurred_at).max() {
+            if at >= latest_editor + w.editor_to_ai_edit {
+                return Verdict {
+                    verdict: AiVerdict::Human,
+                    reason: VerdictReason::PositiveEditorInput,
+                    supporting_lineage: lineage(&editor),
+                };
+            }
+            return Verdict::unknown(VerdictReason::CorrelationWindowStillOpen, lineage(&editor));
+        }
+
+        // 7. A change with no sufficient provenance.
+        if file_changed {
+            let fs: Vec<&CorrelationInput> = relevant
+                .iter()
+                .copied()
+                .filter(|i| i.kind == EvidenceKind::FilesystemObserver)
+                .collect();
+            return Verdict::unknown(
+                VerdictReason::FileChangedWithoutSufficientProvenance,
+                lineage(&fs),
+            );
+        }
+
+        // 8. Nothing that attributes a change.
+        Verdict::unknown(VerdictReason::NoEvidence, Vec::new())
+    }
+}
+
+/// `|a - b| <= window`, in whole seconds.
+fn within(a: DateTime<Utc>, b: DateTime<Utc>, window: Duration) -> bool {
+    (a - b).num_seconds().abs() <= window.num_seconds()
+}
+
+/// planai2.md §5 `FingerprintOrChangeShapeMatches`: prefer an exact fingerprint
+/// match, fall back to the change-kind shape; if neither is available on both
+/// sides it cannot be disproved, so it does not veto (the other conjuncts gate).
+fn fingerprint_or_shape_matches(a: &CorrelationInput, b: &CorrelationInput) -> bool {
+    if let (Some(fa), Some(fb)) = (&a.fingerprint, &b.fingerprint) {
+        return fa == fb;
+    }
+    if let (Some(ka), Some(kb)) = (a.change_kind, b.change_kind) {
+        return ka == kb;
+    }
+    true
+}
+
+/// Count of distinct non-empty `agent` labels across the inputs.
+fn distinct_agents(inputs: &[&CorrelationInput]) -> usize {
+    let mut agents: Vec<&str> = inputs.iter().filter_map(|i| i.agent.as_deref()).collect();
+    agents.sort_unstable();
+    agents.dedup();
+    agents.len()
+}
+
+/// `lineage_id`s of the given inputs, in the order given.
+fn lineage(inputs: &[&CorrelationInput]) -> Vec<String> {
+    inputs.iter().map(|i| i.lineage_id.clone()).collect()
+}
+
+/// The four outcomes of planai2.md §5. `system` is deliberately **not** one of
+/// them — a system actor (formatter / build / `git checkout` / `git merge` /
+/// codegen, p5.4) resolves to [`AiVerdict::Unknown`] with a system
+/// [`VerdictReason`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiVerdict {
+    AiVerified,
+    AiInferred,
+    Human,
+    Unknown,
+}
+
+/// Which §5 clause produced the [`AiVerdict`]. Retained so a result can be
+/// explained after the fact (planai2.md §5 "evidence lineage") — it names the
+/// rule, never any source content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictReason {
+    /// `ai_verified`: a native hook / structured MCP write / completed tool call
+    /// for this exact file.
+    DirectAiProducer,
+    /// `ai_inferred`: file changed + one agent's recent tool/session, in-window,
+    /// fingerprint/shape consistent, no competitor, no human save to explain it.
+    InferredFromAgentActivity,
+    /// `human`: positive editor input, correlation window closed, no conflicting
+    /// AI evidence.
+    PositiveEditorInput,
+    /// `unknown`: a file change with no sufficient provenance.
+    FileChangedWithoutSufficientProvenance,
+    /// `unknown`: positive editor input **and** AI evidence inside the conflict
+    /// window — never auto-resolved to `human`.
+    ConflictingHumanAndAiEvidence,
+    /// `unknown`: two or more distinct agents have competing evidence in-window.
+    MultipleCompetingAiSessions,
+    /// `unknown`: editor input seen but the correlation window has not closed —
+    /// an AI edit could still land.
+    CorrelationWindowStillOpen,
+    /// `unknown`: nothing relevant was ingested for this entity/time.
+    NoEvidence,
+}
+
+/// A §5 decision plus the lineage that backs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verdict {
+    pub verdict: AiVerdict,
+    pub reason: VerdictReason,
+    /// `lineage_id`s of every input that supports this verdict, in the order the
+    /// engine considered them. Kept verbatim; the observations' content is never
+    /// stored.
+    pub supporting_lineage: Vec<String>,
+}
+
+impl Verdict {
+    fn unknown(reason: VerdictReason, lineage: impl Into<Vec<String>>) -> Self {
+        Self {
+            verdict: AiVerdict::Unknown,
+            reason,
+            supporting_lineage: lineage.into(),
+        }
     }
 }
 
@@ -494,5 +786,275 @@ mod tests {
         assert!(!EvidenceKind::FilesystemObserver.is_verified_ai_edit());
         assert!(!EvidenceKind::SessionProcessObserver.is_verified_ai_edit());
         assert!(!EvidenceKind::EditorInput.is_verified_ai_edit());
+    }
+
+    // ---- p5.2: §5 decision rules -------------------------------------------
+
+    const FILE: &str = "/w/src/main.rs";
+
+    fn at(base: DateTime<Utc>, secs: i64) -> DateTime<Utc> {
+        base + Duration::seconds(secs)
+    }
+
+    fn ci(id: &str, kind: EvidenceKind, when: DateTime<Utc>) -> CorrelationInput {
+        CorrelationInput::new(id, kind, FILE, when).with_workspace("/w")
+    }
+
+    fn verdict(engine: &CorrelationEngine, when: DateTime<Utc>) -> Verdict {
+        engine.verdict_for(std::path::Path::new(FILE), when)
+    }
+
+    #[test]
+    fn a_native_hook_for_the_file_is_ai_verified() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("hook-1", EvidenceKind::NativeHook, t0).with_agent("claude-code"));
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::AiVerified);
+        assert_eq!(v.reason, VerdictReason::DirectAiProducer);
+        assert_eq!(v.supporting_lineage, vec!["hook-1"]);
+    }
+
+    #[test]
+    fn two_agents_both_verified_for_one_file_is_unknown_competing() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("mcp-a", EvidenceKind::StructuredMcp, t0).with_agent("claude-code"));
+        e.ingest(
+            ci(
+                "tool-b",
+                EvidenceKind::CompletedTranscriptToolCall,
+                at(t0, 2),
+            )
+            .with_agent("codex"),
+        );
+        let v = verdict(&e, at(t0, 1));
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::MultipleCompetingAiSessions);
+    }
+
+    #[test]
+    fn p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(
+            ci("fs-1", EvidenceKind::FilesystemObserver, t0)
+                .with_change_kind(BrokerChangeKind::Modify),
+        );
+        e.ingest(
+            ci("sess-1", EvidenceKind::SessionProcessObserver, at(t0, -5))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::AiInferred);
+        assert_eq!(v.reason, VerdictReason::InferredFromAgentActivity);
+        assert!(v.supporting_lineage.contains(&"fs-1".to_string()));
+        assert!(v.supporting_lineage.contains(&"sess-1".to_string()));
+    }
+
+    #[test]
+    fn p4_a3_process_name_only_sessions_cannot_infer_and_stay_unknown() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0));
+        for (i, agent) in ["codex", "claude-code", "gemini-cli"]
+            .into_iter()
+            .enumerate()
+        {
+            e.ingest(
+                ci(
+                    &format!("name-{i}"),
+                    EvidenceKind::SessionProcessObserver,
+                    at(t0, -3),
+                )
+                .with_agent(agent)
+                .with_evidence_strength(EvidenceStrength::ProcessNameOnly),
+            );
+        }
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(
+            v.reason,
+            VerdictReason::FileChangedWithoutSufficientProvenance
+        );
+    }
+
+    #[test]
+    fn p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0));
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(
+            v.reason,
+            VerdictReason::FileChangedWithoutSufficientProvenance
+        );
+    }
+
+    #[test]
+    fn p4_a1_a_session_with_no_change_produces_no_attribution() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(
+            ci("sess-1", EvidenceKind::SessionProcessObserver, t0)
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ChildOfToolCall),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::NoEvidence);
+    }
+
+    #[test]
+    fn positive_editor_input_after_the_window_closes_is_human() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("edit-1", EvidenceKind::EditorInput, t0));
+        e.ingest(
+            ci("fs-1", EvidenceKind::FilesystemObserver, at(t0, 1))
+                .with_change_kind(BrokerChangeKind::Modify),
+        );
+        // 5 s (editor_to_ai_edit) later, nothing from an agent showed up.
+        let v = verdict(&e, at(t0, 6));
+        assert_eq!(v.verdict, AiVerdict::Human);
+        assert_eq!(v.reason, VerdictReason::PositiveEditorInput);
+        assert_eq!(v.supporting_lineage, vec!["edit-1"]);
+    }
+
+    #[test]
+    fn editor_input_while_the_window_is_still_open_is_unknown_not_yet_human() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("edit-1", EvidenceKind::EditorInput, t0));
+        let v = verdict(&e, at(t0, 2)); // < 5 s
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::CorrelationWindowStillOpen);
+    }
+
+    #[test]
+    fn p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("edit-1", EvidenceKind::EditorInput, t0));
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, at(t0, 1)));
+        e.ingest(
+            ci("sess-1", EvidenceKind::SessionProcessObserver, at(t0, 2))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        let v = verdict(&e, at(t0, 10));
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::ConflictingHumanAndAiEvidence);
+    }
+
+    #[test]
+    fn p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        // Human types at t0; the correlation window closes with no agent nearby.
+        e.ingest(ci("edit-1", EvidenceKind::EditorInput, t0));
+        // A separate AI edit 40 s later.
+        e.ingest(ci("fs-2", EvidenceKind::FilesystemObserver, at(t0, 40)));
+        e.ingest(
+            ci("sess-2", EvidenceKind::SessionProcessObserver, at(t0, 38))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ChildOfToolCall),
+        );
+
+        // The human's change, evaluated at its own time, stays Human.
+        let human = verdict(&e, at(t0, 6));
+        assert_eq!(human.verdict, AiVerdict::Human);
+
+        // The later AI change, evaluated at its time, is the agent's — the human
+        // input is long out of window and does not swallow it, nor vice versa.
+        let ai = verdict(&e, at(t0, 40));
+        assert_eq!(ai.verdict, AiVerdict::AiInferred);
+    }
+
+    #[test]
+    fn two_strong_agent_sessions_competing_is_unknown() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0));
+        e.ingest(
+            ci("sess-a", EvidenceKind::SessionProcessObserver, at(t0, -2))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        e.ingest(
+            ci("sess-b", EvidenceKind::SessionProcessObserver, at(t0, -3))
+                .with_agent("claude-code")
+                .with_evidence_strength(EvidenceStrength::ChildOfToolCall),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::MultipleCompetingAiSessions);
+    }
+
+    #[test]
+    fn a_fingerprint_mismatch_blocks_ai_inferred() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0).with_fingerprint("blob:aaaa"));
+        e.ingest(
+            ci("snap-1", EvidenceKind::ToolSnapshot, at(t0, -2))
+                .with_agent("codex")
+                .with_fingerprint("blob:bbbb"),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(
+            v.reason,
+            VerdictReason::FileChangedWithoutSufficientProvenance
+        );
+    }
+
+    #[test]
+    fn a_change_outside_every_window_is_unknown_no_evidence() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-old", EvidenceKind::FilesystemObserver, t0));
+        // 10 minutes later — well past filesystem_to_agent_activity (60 s).
+        let v = verdict(&e, at(t0, 600));
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::NoEvidence);
+    }
+
+    #[test]
+    fn confidence_comes_from_the_evidence_combination_not_the_agent_name() {
+        let t0 = Utc::now();
+        let shape = |agent: &str| {
+            let mut e = CorrelationEngine::with_default_windows();
+            e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0));
+            e.ingest(
+                ci("sess-1", EvidenceKind::SessionProcessObserver, at(t0, -4))
+                    .with_agent(agent)
+                    .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+            );
+            verdict(&e, t0).verdict
+        };
+        assert_eq!(shape("codex"), AiVerdict::AiInferred);
+        assert_eq!(shape("some-unknown-agent"), AiVerdict::AiInferred);
+        assert_eq!(shape("claude-code"), AiVerdict::AiInferred);
+    }
+
+    #[test]
+    fn the_verdict_carries_the_lineage_that_backed_it_and_no_content() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("fs-1", EvidenceKind::FilesystemObserver, t0));
+        e.ingest(
+            ci("sess-1", EvidenceKind::SessionProcessObserver, at(t0, -4))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.supporting_lineage, vec!["fs-1", "sess-1"]);
+        let json = serde_json::to_string(&v).unwrap();
+        for forbidden in ["\"content", "\"diff", "\"patch", "\"prompt", "\"source"] {
+            assert!(!json.contains(forbidden), "verdict leaked content: {json}");
+        }
     }
 }

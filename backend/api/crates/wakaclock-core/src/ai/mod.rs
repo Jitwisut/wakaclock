@@ -48,7 +48,8 @@ pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
 pub use correlation_engine::{
-    CorrelationEngine, CorrelationInput, CorrelationWindows, EvidenceKind,
+    AiVerdict, CorrelationEngine, CorrelationInput, CorrelationWindows, EvidenceKind, Verdict,
+    VerdictReason,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{
