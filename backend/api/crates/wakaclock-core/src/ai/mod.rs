@@ -33,6 +33,7 @@ mod jsonl;
 pub mod parser;
 pub mod patch;
 pub mod path;
+pub mod pipeline;
 pub mod process_observer;
 pub mod session;
 pub mod sidecar;
@@ -76,6 +77,9 @@ pub use patch::{
 };
 pub use path::{
     normalize_lexical, resolve_within_workspace, to_comparable_string, PathResolveError,
+};
+pub use pipeline::{
+    AgentPipelineState, PipelineStage, PipelineTracker, StageEntry, StageRegression,
 };
 pub use process_observer::{
     match_agent as match_ai_process_agent, scan as scan_ai_processes, DetectedAiProcess,
