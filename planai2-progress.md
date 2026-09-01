@@ -125,18 +125,20 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 5 — item p5.1** (unified evidence intake). p5.0 decided (Decisions log:
-`CorrelationWindows` type + per-pair windows). p5.1: **build a new
-`ai/correlation_engine.rs`** — a `CorrelationInput` enum with one variant per
-producer (native hook, structured MCP, completed transcript tool call,
-before/after snapshot, filesystem observer, session/process observer, editor
-input), each carrying a lineage id + normalized entity + workspace + timestamp;
-and a `CorrelationEngine` that accepts any of them via `ingest(input)` and
-preserves lineage. Also implement the `CorrelationWindows` type (fields per the
-p5.0 table, each with its reason as a doc comment). Existing `correlation.rs`
-stays (editor↔AI-event line-level attribution) — the new engine is the universal
-layer above it. Tests: each producer type ingests; intake preserves lineage IDs.
-Then p5.2 (decision rules) … p5.5, then p5.A1–p5.A5. Multi-iteration.
+**Phase 5 — item p5.2** (decision rules). p5.0 (windows) and p5.1 (intake:
+`ai/correlation_engine.rs`, `CorrelationInput`/`EvidenceKind`/`CorrelationEngine`/
+`CorrelationWindows`) are done. p5.2: implement the verdict pass **exactly as
+planai2.md §5 states it** — a function over the ingested `CorrelationInput`s for
+one entity in a time window that returns `ai_verified` / `ai_inferred` / `human`
+/ `unknown`:
+- `ai_verified` ⇐ NativeHook | StructuredMcp | CompletedTranscriptToolCall present for the entity (i.e. an `EvidenceKind::is_verified_ai_edit`).
+- `ai_inferred` ⇐ FilesystemObserver change AND (a recent agent tool call OR a live session — `is_strong_enough_to_infer`) in the same workspace AND `windows.filesystem_to_agent_activity` matches AND fingerprint-or-change-shape consistent AND **no competing agent evidence**. Process name alone is insufficient.
+- `human` ⇐ positive EditorInput evidence AND the editor↔AI-edit window has closed with no conflicting AI evidence.
+- `unknown` ⇐ FilesystemObserver change without sufficient provenance, OR conflicting human+AI evidence, OR multiple competing AI sessions.
+New type e.g. `AiVerdict` + `CorrelationEngine::verdict_for(entity, at, &windows)`.
+Tests: one named test per rule + the three `unknown` branches (these also
+discharge the `[~]` on p3.A5 / p4.A1 / p4.A3). Then p5.3 … p5.5, then
+p5.A1–p5.A5. Multi-iteration.
 
 ---
 
@@ -280,8 +282,8 @@ Session/process is corroborating evidence, never a verdict that AI edited a file
 The core that planai.md left "not built".
 
 - [x] **p5.0 DECISION: named correlation windows.** → resolved in Decisions log: a `CorrelationWindows` value type, one named+reasoned field per evidence pair (`hook_to_transcript` 10s, `editor_to_ai_edit` 5s, `filesystem_to_agent_activity` 60s, `snapshot_to_hook` 30s, `filesystem_to_editor_input` 15s, `session_liveness_grace` 120s), the engine takes `&CorrelationWindows`, day/session clip is a separate hard clip. Committed `docs(planai2-p5.0)`.
-- [ ] **p5.1 Unified evidence intake.** One correlation input stream fed by every producer: native hook, structured MCP, completed transcript tool call, before/after snapshot, filesystem observer, session/process observer, editor input. (Extends `correlation.rs`, which today only matches AI events to editor buffers.)
-  - Tests: each producer type can be pushed into the engine; intake preserves lineage IDs.
+- [x] **p5.1 Unified evidence intake.** New `ai/correlation_engine.rs`: `CorrelationInput` (one metadata-only record per producer — `EvidenceKind` ∈ {NativeHook, StructuredMcp, CompletedTranscriptToolCall, ToolSnapshot, FilesystemObserver, SessionProcessObserver, EditorInput}) with a verbatim `lineage_id`, and `CorrelationEngine::ingest` preserving lineage + insertion order. Landed `CorrelationWindows` (p5.0 table, six doc-commented fields, `DEFAULT`) with `between(a,b)` mapping a pair → its window order-independently. `correlation.rs` untouched; engine sits above it. Re-exported from `ai/mod.rs`. Commit `9f081ac`.
+  - Tests: `every_producer_kind_can_be_ingested_and_keeps_its_lineage_id`, `entity_is_normalised_on_intake_and_grouping_uses_the_normal_form`, `correlation_windows_are_distinct_and_round_trip`, `between_maps_evidence_pairs_to_the_right_window_order_independently`, `a_correlation_input_carries_no_content_field`, `is_verified_ai_edit_only_for_the_direct_producers`. Gates: fmt/clippy/test --workspace green (207 core); duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
 - [ ] **p5.2 Decision rules — exactly as planai2.md §5 states them.**
   - `ai_verified` ⇐ `NativeHook(file)` OR `StructuredMcpWrite(file)` OR `CompletedStructuredToolCall(file)`.
   - `ai_inferred` ⇐ `FileChanged(file)` AND `RecentAgentToolOrSession(workspace)` AND `TimeWindowMatches` AND `FingerprintOrChangeShapeMatches` AND `NoCompetingAgentEvidence`. **Process name alone is insufficient.**
@@ -459,3 +461,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p4.3 — done. `SessionEvidenceLedger` — `observe()` (insert/refresh by pid) + `reap(&running_pids)` closes gone processes at `last_activity_at` (never `now`) and returns them. 3 new tests. core +3. Gates + duration-audit green. Committed `330ca78`.
 - 2026-09-01 — p4.A1–A4 — Phase 4 acceptance. p4.A2/p4.A4 cited to p4.2/p4.3 tests. 2 new: `p4_a1_...has_no_path_to_a_heartbeat_on_its_own` (structural), `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`. p4.A1/A3 `[~]` — runtime verdicts are Phase 5. **Phase 4 done.** core +2. Gates green. Committed `300648d`.
 - 2026-09-01 — p5.0 — DECISION resolved (docs only). `CorrelationWindows` type, one named+reasoned window per evidence pair (10s hook↔transcript, 5s editor↔AI-edit, 60s fs↔agent-activity, 30s snapshot↔hook, 15s fs↔editor, 120s session-liveness grace), engine takes `&CorrelationWindows`, day/session clip separate. See Decisions log. Committed.
+- 2026-09-01 — p5.1 — done. New `ai/correlation_engine.rs`: `EvidenceKind` (7 producers, strongest-first `Ord`), `CorrelationInput` (verbatim `lineage_id` + normalized entity + optional workspace/agent/change_kind/confidence/session/tool-event/fingerprint — **no content field**), `CorrelationEngine::ingest` (preserves lineage + order) + `for_entity`/`entities`. `CorrelationWindows` (p5.0 six fields + `DEFAULT` + `between(a,b)` order-independent). Re-exported from `ai/mod.rs`. 6 new tests (core 201→207). Fixed one self-bug: `between` match arms must be in sorted `EvidenceKind` order. Gates + duration-audit(total_error 0.0) green. Committed `9f081ac`.
