@@ -125,65 +125,65 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 7 — item p7.2c** next (the only remaining `[ ]` in Phase 7; deferred
-sub-project). **p7.1, p7.2, p7.3, p7.4, p7.A1–p7.A4 done.** core 291. p7.A
-`d5dfd86` — added `ObserverConfig.rollout_agents`/`rollout_platforms:
-RolloutScope{All|Only}` + `agent_in_rollout()`/`platform_in_rollout()` for
-p7.A3; 4 acceptance tests, shared "no production call site" caveat recorded at
-the Phase 7 acceptance heading for A1/A2/A4.
+**RUN COMPLETE — every planai2 Phase 0–7 item is `[x]` or a documented `[~]`.**
+Final feat commits: p7.2c backend `20f39df`, p7.2c frontend `b350496`.
+core 295 / server 167 / frontend 42 files 223 tests / vscode 94.
 
-Next: **p7.2c — Local AI diagnostics telemetry channel.** This is the deferred
-sub-project (broker-health panel + parser-lag / stale-adapter warnings from
-p7.2's original text). It needs: (1) a client→server push of sanitized
-broker/parser/adapter-freshness metadata (new wire type + producer in
-`wakaclock-cli` / `wakaclock-core`), (2) a server read model + `GET` endpoint
-(read `.context/workflows/adding-endpoint.md` + `.context/backend/overview.md`
-+ `.context/data/migrations.md` + `.context/dead-code.md` first;
-handler→service→repository; likely a new ClickHouse table or a Postgres row —
-migration ordering is load-bearing), (3) a dashboard panel + `userId`-keyed
-TanStack query + render test (`.context/workflows/adding-dashboard-panel.md` +
-`.context/frontend/data-layer.md`). **If step 1+2 is large, land the backend as
-`feat(planai2-p7.2c-backend)` first, then the panel as `feat(planai2-p7.2c)`.**
-Watch concurrent churn in `src/handlers/v1/status_bar.rs`, `broker.rs`,
-`wakaclock-cli/src/main.rs`. When p7.2c is `[x]`, **check the Run Definition of
-Done** — Phases 0–7 would then all be complete; if the DoD is met, stop the
-loop (`ScheduleWakeup stop:true`).
+### Run Definition of Done — assessment (2026-09-02)
 
-**p7.2c added** (`[ ]`, blocks Run DoD): the broker-health panel + parser-lag /
-stale-adapter warnings from p7.2's original text were split out — they need
-broker inbox counters and transcript-parser lag that live only in
-`wakaclock doctor ai` on the client and never reach the hosted API, plus a
-client→server telemetry push + server read model that do not exist. **Not
-`[~]`** (no missing tool — unbuilt infrastructure). Decision logged 2026-09-02.
-When the loop reaches p7.2c: read `.context/workflows/adding-endpoint.md` +
-`.context/backend/overview.md` + `.context/data/migrations.md` +
-`.context/workflows/adding-dashboard-panel.md` + `.context/frontend/data-layer.md`
-first; if it is a large sub-project, surface that rather than half-building it.
+1. **Every non-blocked item `[x]` with its named test passing** — MET. Phases
+   0–7 complete; two items are `[~]` (clause 2).
+2. **Live-blocked items `[~]`, scaffolded, in `VERIFICATION.md`** — MET.
+   - **p0.3** Codex *native plugin packaging* — VERIFICATION.md "Phase 0.3 —
+     Codex integration (partial)": the TOML-hook migration ships and is tested;
+     the plugin-manifest packaging is blocked on a Codex release documenting a
+     plugin manifest format, absent on this machine.
+   - **p2.A1** native-adapter recall >= 99% — fixture recall = 100% on the
+     committed corpus; the >=99% *gate* is reserved (plan line 604) for a real
+     labelled corpus + live run. VERIFICATION.md "Phase 2 — adapter rollout" +
+     "Still not verified against a live system".
+3. **Full gate suite green at the final commit** — planai2-owned gates MET; one
+   workspace gate red on concurrent code.
+   - MET: `cargo fmt --all -- --check`; `cargo clippy -p wakaclock-core -p
+     wakaclock-server --all-targets -- -D warnings`; `cargo test --workspace`
+     (core 295 / server 167 / 0 failed); duration-audit verify_port + golden
+     (**total_error 0.0**) + verify_actor_migration + verify_certification;
+     `frontend/app` `npm run validate` (42/223); `extensions/vscode` `npm test`
+     (94).
+   - RED, not this run: `cargo clippy --workspace --all-targets -- -D warnings`
+     fails only in concurrent **uncommitted** `wakaclock-cli/src/agent_service.rs`
+     (a mid-refactor `AgentLock` rewrite adding `fs2` file locking —
+     `suspicious_open_options` :58, `incompatible_msrv` :96). In the
+     do-not-touch concurrent set. Workspace clippy was green at `d5dfd86`
+     (p7.A); the concurrent edit landed after. No planai2 commit regresses
+     clippy.
 
-Next: **p7.3** (shadow mode `observer.attribution_mode = observe_only | infer`,
-per-workspace + per-source kill switch), then p7.4 (precision/recall report),
-then p7.A1–p7.A4, then p7.2c.
+### Module-contract caveats (tracked in each item's evidence, not end-to-end)
 
-**Concurrency note (2026-09-02):** a large concurrent feature landed in the tree
-while paused — new `ai/producer.rs` (+ `ai/mod.rs` re-exports), plus
-`wakaclock-cli` / `adapter.rs` / `event.rs` / `broker.rs` / vscode / ai-agents
-shell adapters, and `plans/planplugin/`, `planplugin.md`. **Not mine** — never
-staged/reverted. `ai/mod.rs` now carries both my `canonical` lines and their
-`producer` lines; p6.1's commit staged only my 2 hunks (save/restore dance).
-Full gate suite is green *with* the concurrent code, so no blockage. Watch for
-`ai/producer.rs` overlapping p6.2/p6.3 (it builds file-change events + event
-ids) — reuse its `file_event_id` / `ProducerFileChange` if they fit rather than
-duplicating.
+- **p7.3 / p7.A1 / p7.A2 / p7.A4** — `CorrelationEngine` has **no production
+  call site**, so "observe-only changes nothing", "a real precision number",
+  and "rollback deletes no analytics data" are verified against the module
+  contract. End-to-end assertions owed at a future engine-wiring item.
+- **p7.2c** — the server diagnostics store is **process-local** (lost on
+  restart, wrong across instances; adding a repository is additive), and the
+  **client transport call is owed** (`build_report` ships tested; `wakaclock-cli`
+  does not yet POST it — its `main.rs` is concurrently churned).
 
-p6.2: a **canonical activity** record that aggregates the child evidence IDs
-behind one logical edit — native hook / transcript / filesystem / editor — keyed
-by the p6.1 `CanonicalFingerprint`. Likely `CanonicalActivity { fingerprint,
-verdict: Option<Verdict>, child_evidence: Vec<(EvidenceKind, lineage_id)> }` (or
-similar) with a builder that folds `CorrelationInput`s sharing a fingerprint into
-one, preserving every child `lineage_id`, no content. Test:
-`a_canonical_activity_built_from_three_evidence_sources_lists_all_three_child_ids`.
-Then p6.3 (dedup rules — one named test per rule; multi-file case asserts
-duration unchanged), p6.A1–p6.A5.
+### Owed follow-ups (out of this run's scope)
+
+1. Wire `CorrelationEngine` verdicts into the heartbeat/actor-attribution path,
+   then convert the four p7 module-contract caveats to end-to-end tests.
+2. `wakaclock-cli`: call `build_ai_diagnostics_report(...)` and POST it to
+   `/api/v1/ai/diagnostics` (blocked on concurrent `main.rs` churn settling).
+3. p7.2c server store → a repository + `migrate()` if diagnostics must survive
+   restart / span instances.
+4. p0.3 Codex plugin-manifest packaging; p2.A1 >=99% recall — both need a live
+   run recorded in `VERIFICATION.md`.
+5. Concurrent `wakaclock-cli/src/agent_service.rs` clippy breakage — owned by
+   the concurrent feature, not this run.
+
+**Loop stopped** (`ScheduleWakeup stop:true`). Re-run `/loop` to pick up any
+owed follow-up once its blocker clears.
 
 ---
 
@@ -384,8 +384,11 @@ Duration-gated **and** frontend-gated where it touches `frontend/app/`.
   - **VS Code half done** (`1de00d0`): `AtoAxis: Repair AI Integrations` + `AtoAxis: Show AI Broker Status` already existed; added `AtoAxis: Test AI Detection` → new `src/aiDetectionSelfTest.ts` (`runAiDetectionSelfTest(deps)` composes broker + adapter status into an `ok`/`degraded`/`failing` verdict with per-check severity: broker reachable/running, inbox draining, last-delivery error, 24h evidence freshness, agent detected/enabled; `formatAiDetectionReport`). Registered in `commands.ts`, contributed in `package.json`. 12 vitest cases (9 verdict logic + 3 registration). `npm run lint` clean, `npm test` 94 pass. `out/src/commands.js` regen owed (can't split from concurrent refactor's edits to the same generated file). Rust gates unchanged (no Rust touched).
   - **Frontend half done** (`40fba12`): new `components/wakaclock/ai-attribution-legend.tsx` — `AiAttributionLegend` states the §5 decision rule per class (verified = native hook/MCP named itself; inferred = agent activity in the correlation window, no competing editor input; human = positive editor keystroke/save, no agent in window; unknown = unproven or conflicting, never AI). Rendered on `ai/page.tsx` from the existing `wakaclockKeys.aiStats(userId, …)` query — no new endpoint. Metadata only: privacy test asserts none of `diff/patch/prompt/clipboard/content/source code` render. `test/wakaclock-ai-attribution-legend.test.tsx` (4 cases). `npm run validate` green (41 files, 217 tests, up from 40/213).
   - → `40fba12` | tests: `AiAttributionLegend` ×4 (class+rule render, per-class heartbeat share, privacy-vocabulary absence, userId-scoped key) | gates: `npm run validate` green
-- [ ] **p7.2c Local AI diagnostics telemetry channel.** *(Deferred to the end of Phase 7 per Current position — the `/loop` args sequence p7.3 → p7.4 → p7.A1–A4 → p7.2c because this item is a sub-project. A cold-context agent applying loop-protocol step 3 literally would pick this next; the user's explicit ordering overrides.)* The broker-health panel (inbox pending/retry/dead-letter, running state) and parser-lag / stale-adapter warnings from p7.2's original text need broker inbox state and transcript-parser lag that live only on the client (`wakaclock doctor ai`) and never reach the hosted API. Requires: a client→server push of sanitized broker/parser/adapter-freshness metadata, a server read model + `GET` endpoint (handler→service→repository), then the dashboard panel + `userId`-keyed query + render test. **Not `[~]`** — no missing tool, this is unbuilt infrastructure. Blocks Run DoD until built or explicitly descoped by the user.
-  - Tests: server round-trip over a fixture diagnostics payload asserting metadata-only (no prompt/diff/patch/source/argv/clipboard keys); frontend panel render test with a `userId`-scoped query key; `npm run validate` + backend gate suite green.
+- [x] **p7.2c Local AI diagnostics telemetry channel.** *(Deferred to the end of Phase 7 per Current position — the `/loop` args sequenced p7.3 → p7.4 → p7.A1–A4 → p7.2c because this item is a sub-project.)* **Backend `20f39df`:** `wakaclock-core/src/ai/diagnostics.rs` — `AiDiagnosticsReport { schema_version, captured_at, broker: BrokerHealth (inbox counts + short error *code*, never a message), parser: ParserLagSummary (aggregate lag), adapters: Vec<AdapterFreshness> }`, sanitized/metadata-only by construction; `build_report()` client-side producer aggregating per-transcript `TranscriptLag`. Server: `POST /api/v1/ai/diagnostics` (ingest, `resolve_user_id` + `write_logged_time` scope, validates schema / adapter-id-not-a-path / error-code-not-a-message) + `GET /api/v1/users/current/ai_diagnostics`. `AiDiagnosticsService` = in-memory `RwLock<HashMap<Uuid, report>>` **latest snapshot per user only** — mirrors `infrastructure::presence_store`'s prototype pattern (advisor: no new ClickHouse table / `migrate()` / `main.rs` ordering edit — only "latest" is read, persistence is an additive cache). **Frontend `b350496`:** `AiDiagnosticsPanel` on `ai/page.tsx` behind `wakaclockKeys.aiDiagnostics(userId)` + `getAiDiagnostics(userId)`.
+  - **Caveats:** (1) the store is **process-local** — diagnostics are lost on restart and wrong behind multiple server instances; adding a repository later is purely additive (new repo + `migrate()` at the end of the sequence, wire type + endpoints unchanged). (2) The **client transport call is owed** — `wakaclock-cli` does not yet POST `build_report()` output; `wakaclock-cli/src/main.rs` is heavily churned by concurrent work, so `build_report` ships tested and the CLI wiring is a follow-up.
+  - → backend `20f39df` | tests (12): core 291→295 (`a_diagnostics_report_round_trips_and_is_metadata_only`, `an_unknown_schema_version_is_not_supported`, `build_report_aggregates_parser_lag_across_transcripts`, `build_report_reports_zero_lag_when_nothing_is_behind`); server +8 (`services::ai_diagnostics::{record_then_latest_round_trips_the_report, record_is_last_write_wins, snapshots_are_scoped_per_user}`, `handlers::v1::ai_diagnostics::{a_well_formed_report_validates, an_unknown_schema_version_is_rejected, a_path_like_agent_id_is_rejected, an_error_message_masquerading_as_a_code_is_rejected, too_many_adapters_is_rejected}`)
+  - → frontend `b350496` | tests: `AiDiagnosticsPanel` ×6 (health render, stopped-broker/dead-letter/error-code, parser-lag flag, empty state, privacy-vocabulary absence, `userId`-scoped key) | `npm run validate` green (41/217 → 42/223)
+  - gates: fmt clean; **clippy** clean for `wakaclock-core` + `wakaclock-server` (`cargo clippy -p wakaclock-core -p wakaclock-server --all-targets -- -D warnings`); **workspace `cargo clippy --all-targets -- -D warnings` currently fails ONLY in concurrent uncommitted `wakaclock-cli/src/agent_service.rs`** (`suspicious_open_options` at :58, `incompatible_msrv` at :96 — a clippy-version/toolchain effect on concurrent code, not this run's); `cargo test --workspace` green (core 295, server 167); duration-audit verify_port / golden (**total_error 0.0**) / verify_actor_migration / verify_certification green.
 - [x] **p7.3 Shadow mode.** New `ai/shadow.rs`. `ObserverConfig { enabled, attribution_mode: AttributionMode::{ObserveOnly (Default / rollout-start) | Infer}, disabled_workspaces: BTreeSet<PathBuf>, disabled_sources: BTreeSet<EvidenceKind> }` — the two kill switches are plain set edits (no migration, symmetric to undo → satisfies p7.A4 "rollback ไม่ต้อง migrate หรือลบข้อมูล"). `observe(config, entity, workspace, proposed, oracle, at) -> ObserverOutcome { production: Option<Verdict>, record: Option<ShadowRecord> }`: `production` is `Some` **only** in `enabled` + `Infer` on a live workspace; every other state (incl. `enabled` + `observe_only`) → `None` = "leave existing attribution untouched". `ShadowRecord` = sanitized proposed-vs-native-hook-oracle row for the p7.4 report — keeps the p6.1 canonical fingerprint (opaque join key; explicitly allowed here, unlike p5.5's `Verdict`) + p5.5 lineage ids, no diff/prompt/argv/clipboard/file text. `ShadowLog::agreement_counts() -> (match, mismatch, no_oracle)`. **Not wired into the heartbeat path** (`CorrelationEngine` still has no production call site) so "byte-identical analytics" is trivially true today — the switch is what p7.3 pins; real end-to-end assertion lands at a future wiring item. `ai/mod.rs` staged via save/restore dance. Commit `d03596a`.
   - → `d03596a` | tests (8, core 273→281): `observer_config_round_trips_and_defaults_to_off_and_observe_only`, `the_rollout_start_config_records_but_does_not_feed_production`, `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` (renamed from the tracker's "byte-identical" wording + doc comment explaining why that claim is trivial today — advisor), `flipping_to_infer_is_the_only_switch_that_changes_production_output`, `a_per_source_kill_switch_disables_exactly_that_source`, `a_per_workspace_kill_switch_removes_only_that_workspace`, `a_shadow_record_is_metadata_only`, `oracle_agreement_is_match_mismatch_or_no_oracle` | gates: fmt/clippy/test --workspace green; duration-audit verify_port / golden (**total_error 0.0**) / verify_actor_migration / verify_certification green.
 - [x] **p7.4 Precision/recall report.** New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with two ratio accessors from **different relations** over the log, never merged: `native_adapter_recall()` (label→oracle: of corpus-labelled-AI changes, the fraction a native adapter directly reported; ignores `proposed`) and `universal_inference_precision()` (proposal→label: of `ai_inferred` proposals carrying a label, the fraction the label confirms as AI; ignores `oracle`, ignores every `ai_verified` proposal). Both `Option<f64>` (`None` on empty denominator). **No `combined()`/`accuracy()`** — planai2.md Release Gates forbid one blended verified/inferred number. Raw counts (incl. `unscored_inferences`) stay on the struct so a ratio is never read without its base. Needed a third axis: new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>` — an **independent** dataset label (not derived from proposal or oracle). DECISION logged (advisor): without it, `proposed == AiInferred && oracle.is_some()` is empty by construction (§5 rule 2 vs rule 6 mutually exclusive per entity), so precision would be structurally unmeasurable. `ai/mod.rs` via save/restore dance. Commit `16f211b`.
@@ -679,3 +682,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-02 — p7.3 — done. New `ai/shadow.rs`: `ObserverConfig` (`enabled` + `AttributionMode` observe_only|infer + `disabled_workspaces`/`disabled_sources` kill switches, all plain set edits → p7.A4 rollback-without-migration). `observe()` → `ObserverOutcome { production: Option<Verdict>, record: Option<ShadowRecord> }`; `production` is `Some` only in `enabled`+`Infer` on a live workspace, `None` everywhere else. `ShadowRecord`/`ShadowLog` = the sanitized proposed-vs-oracle dataset p7.4 consumes (p6.1 fingerprint join key + p5.5 lineage, no content). Engine still has no production call site so "byte-identical analytics" is trivially true today — renamed that test to `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` with a doc comment saying so (advisor); the real assertion is owed at a future wiring item. 8 tests, core 273→281. `ai/mod.rs` via save/restore dance (concurrent `producer` hunks kept out; combined restored, builds). Gates + duration-audit (total_error 0.0) green. Committed `d03596a` (+ tracker). Took p7.3 before p7.2c per the `/loop` Current position ordering (p7.2c is a sub-project, deferred to end of Phase 7) — noted at the p7.2c item so a cold-context agent sees the deliberate step-3 skip.
 - 2026-09-02 — p7.4 — done. New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with `native_adapter_recall()` (label→oracle) and `universal_inference_precision()` (proposal→label) — two `Option<f64>` from different relations over the log, **no merged accessor** (planai2.md Release Gates: "ห้ามนำ verified/inferred มารวมเป็นตัวเลขเดียว"). Raw counts incl. `unscored_inferences` on the struct. Advisor call surfaced that precision is empty by construction without an independent label (§5 rule 2 vs 6 mutually exclusive) → new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>`; DECISION logged. 6 tests, core 281→287. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `16f211b` (+ tracker).
 - 2026-09-02 — p7.A1–p7.A4 — done. p7.A3 needed code (no enable/disable on `AdapterRegistry`): `ObserverConfig.rollout_agents`/`rollout_platforms: RolloutScope { All | Only(BTreeSet<String>) }` + `agent_in_rollout()`/`platform_in_rollout()` ingest predicates; empty `Only` fails closed; ids normalised. p7.A1/A2/A4 discharged at module-contract level with a shared "no production call site / no labelled corpus yet" caveat written once at the Phase 7 acceptance heading (advisor — so a skim doesn't read three independent verifications). 4 tests (`p7_a1_..`, `p7_a2_..` in `shadow_report.rs`, `p7_a3_..`, `p7_a4_..`), core 287→291. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `d5dfd86` (+ tracker). **Phase 7 code complete; only p7.2c (`[ ]`, deferred sub-project) remains before Run DoD.**
+- 2026-09-02 — p7.2c — done (backend + frontend). Advisor scoped it **down** from a full ClickHouse table: `status_bar` (the closest per-user "current state" read) has no repo/table, and nothing needs yesterday's diagnostics — so the server store is an in-memory `AiDiagnosticsService` (latest snapshot per user, mirrors `presence_store`), **no `migrate()` / no `main.rs` ordering edit**. Backend `20f39df`: `wakaclock-core/src/ai/diagnostics.rs` (`AiDiagnosticsReport` + `build_report` producer, metadata-only round-trip test) + `POST /ai/diagnostics` + `GET /users/current/ai_diagnostics` + service/handler/model/`AppState` wiring. Frontend `b350496`: `AiDiagnosticsPanel` on `ai/page.tsx`, `wakaclockKeys.aiDiagnostics(userId)` + `getAiDiagnostics`, 6 render tests. core 291→295, server 159→167, frontend 41/217→42/223. Gates: fmt clean; clippy clean for wakaclock-core + wakaclock-server; `test --workspace` green; duration-audit (total_error 0.0) green; `npm run validate` green. **Workspace `cargo clippy -D warnings` is red only in concurrent uncommitted `wakaclock-cli/src/agent_service.rs`** (`AgentLock` `fs2` rewrite — `suspicious_open_options` :58 / `incompatible_msrv` :96) — not this run; noted, not fixed. Caveats: server store is process-local; the `wakaclock-cli` transport POST is owed (its `main.rs` is concurrently churned). **RUN COMPLETE — see Current position for the full Run DoD assessment.**
