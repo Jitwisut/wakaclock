@@ -521,4 +521,47 @@ mod tests {
         e.ended_at = Some(start - Duration::seconds(10));
         assert_eq!(e.bounded_active_seconds(), 0);
     }
+
+    // --- planai2.md Phase 4 acceptance ------------------------------------
+
+    #[test]
+    fn p4_a1_session_evidence_has_no_path_to_a_heartbeat_on_its_own() {
+        // planai2.md p4.A1: this module is a correlation *input*, never an output.
+        // It exposes no `to_heartbeat` / `to_broker_event` / duration-emitting
+        // method — `bounded_active_seconds()` is a *bound*, consumed by the Phase 5
+        // correlation engine, not a heartbeat. The exhaustive impl of the public
+        // surface is: from_detected_process, is_live, bounded_active_seconds. If
+        // someone adds an emit path this comment is the place they must revisit.
+        let e = evidence(1, "codex", Utc::now());
+        // Its serialized form is metadata only — no `seconds`/`heartbeat`/`duration`
+        // *output* key (only the descriptive field names of the struct).
+        let json = serde_json::to_string(&e).unwrap();
+        for forbidden in ["\"heartbeat", "\"total_seconds", "\"active_seconds"] {
+            assert!(!json.contains(forbidden), "leaked an output field: {json}");
+        }
+    }
+
+    #[test]
+    fn p4_a3_multiple_name_only_tools_active_cannot_be_inferred() {
+        // planai2.md p4.A3: several AI tools running, none with a direct
+        // (cwd/session) match ⇒ the correlation engine must land on `unknown`.
+        // Here: every candidate is ProcessNameOnly, and none is
+        // `is_strong_enough_to_infer()`, so nothing at this layer can promote a
+        // filesystem change to `ai_inferred` — Phase 5 is left with `unknown`.
+        let now = Utc::now();
+        let candidates = vec![
+            evidence(11, "cursor", now),
+            evidence(22, "windsurf", now),
+            evidence(33, "copilot", now),
+        ];
+        assert!(candidates
+            .iter()
+            .all(|e| e.strength == EvidenceStrength::ProcessNameOnly));
+        assert!(candidates
+            .iter()
+            .all(|e| !e.strength.is_strong_enough_to_infer()));
+        // A "strongest" still exists for reporting, but it is not inferrable.
+        let strongest = strongest_session_evidence(&candidates).unwrap();
+        assert!(!strongest.strength.is_strong_enough_to_infer());
+    }
 }

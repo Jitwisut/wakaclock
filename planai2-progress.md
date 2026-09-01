@@ -125,17 +125,18 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 4 — acceptance tests p4.A1–p4.A4**, then Phase 5. p4.1–p4.3 done.
-- p4.A1 (process/session evidence never produces a heartbeat on its own) →
-  structural: `SessionProcessEvidence` has no heartbeat/duration output path; it
-  is a correlation *input*. Assert + note it's fully enforced by Phase 5.
-- p4.A2 (exact workspace/session match scores higher than a process-name match)
-  → cite `p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match`.
-- p4.A3 (multiple AI tools active + no direct match → `unknown`) → the correlation
-  engine's call (Phase 5 p5.2); here assert `strongest_session_evidence` of two
-  `ProcessNameOnly` entries is still `!is_strong_enough_to_infer()`. `[~]`.
-- p4.A4 (process exit/crash closes the session cleanly) → cite
-  `p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now`.
+**PHASE 4 COMPLETE** (p4.1–p4.3 + p4.A2/p4.A4; p4.A1/p4.A3 `[~]` — the runtime
+"never a heartbeat alone" / "→ unknown" verdicts are Phase 5's). **Phase 5 next**
+— **Universal Correlation Engine**, the largest remaining piece.
+
+**p5.0 is a `DECISION` item** → the loop must resolve it first: named correlation
+windows per evidence type (hook↔transcript, editor↔AI-edit, filesystem↔session,
+snapshot↔hook, …), each with a stated reason, **no single shared constant**.
+Read `.context/backend/crates.md` + `backend/api/crates/wakaclock-core/src/ai/correlation.rs`
+(has `EXACT_MATCH_WINDOW = 5s` for editor↔AI-event already) before deciding.
+Write the window table + rationale into **Decisions log**, commit `docs(planai2-p5.0)`,
+end the iteration. Then p5.1 (unified evidence intake) … p5.5, then p5.A1–p5.A5.
+Phase 5 is multi-iteration — expect several commits.
 
 ---
 
@@ -267,10 +268,10 @@ Session/process is corroborating evidence, never a verdict that AI edited a file
 
 ### Phase 4 acceptance criteria — named tests
 
-- [ ] **p4.A1** Process/session evidence never produces a heartbeat on its own.
-- [ ] **p4.A2** An exact workspace/session match scores higher than a process-name match.
-- [ ] **p4.A3** Multiple AI tools active + no direct match → `unknown`.
-- [ ] **p4.A4** Process exit/crash closes the session cleanly (no unbounded duration).
+- [~] **p4.A1** Process/session evidence never produces a heartbeat on its own. → `p4_a1_session_evidence_has_no_path_to_a_heartbeat_on_its_own`: `SessionProcessEvidence` exposes no `to_heartbeat`/`to_broker_event`/duration-emitting method (`bounded_active_seconds()` is a *bound* consumed by correlation, not an output), and its JSON has no `heartbeat`/`total_seconds`/`active_seconds` output key. `[~]` — the runtime guarantee that this never *reaches* a heartbeat without correlation is Phase 5's (p5.1 intake + p5.2 rules).
+- [x] **p4.A2** An exact workspace/session match scores higher than a process-name match. → `p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match` (p4.2) — cwd-in-registered-root ⇒ `ProcessTreeCwdMatch` (`rank 3`, inferrable), bare name ⇒ `ProcessNameOnly` (`rank 4`, not).
+- [~] **p4.A3** Multiple AI tools active + no direct match → `unknown`. → `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`: 3 concurrent `ProcessNameOnly` candidates, every one `!is_strong_enough_to_infer()`, so nothing at this layer can promote a change to `ai_inferred`. `[~]` — the actual `unknown` verdict is emitted by the Phase 5 engine (p5.2 `MultipleCompetingAiSessions` rule).
+- [x] **p4.A4** Process exit/crash closes the session cleanly (no unbounded duration). → `p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now` (p4.3) — reaped 3h after last activity ⇒ `ended_at == last_activity_at`, `bounded_active_seconds() == 90` not ~10800.
 
 ---
 
@@ -428,4 +429,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p3.A1–A5 — Phase 3 acceptance. p3.A1/A2/A4 cited to p3.1–p3.4 tests. 2 new: `p3_a3_rename_is_normalized_...` (Removed+Created, never Modify), `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural). p3.A5 `[~]` — full lone-fs-event⇒`unknown` guarantee is Phase 5. **Phase 3 done.** core +2. Gates green. Committed `7f4b90e`.
 - 2026-09-01 — p4.1 — done. New `ai::session` — `SessionProcessEvidence` (12 fields, **no argv/env**, structural + JSON guards) + `EvidenceStrength` (5-tier ladder, `is_strong_enough_to_infer` = name-only can't infer) + `from_detected_process()` + `bounded_active_seconds()` (never wall-clock now). 5 new tests (core +5). Gates + duration-audit green. Committed `faad03d`.
 - 2026-09-01 — p4.2 — done. `evidence_from_scan()` (cwd in a registered root ⇒ `ProcessTreeCwdMatch`, else `ProcessNameOnly`; never returns the hook/transcript-only tiers) + `strongest_session_evidence()` (rank then recency, skips ended). 2 new tests (core +2). Gates + duration-audit green. Committed `62795bb`.
-- 2026-09-01 — p4.3 — done. `SessionEvidenceLedger` — `observe()` (insert/refresh by pid) + `reap(&running_pids)` closes gone processes at `last_activity_at` (never `now`) and returns them. 3 new tests. core +3. Gates + duration-audit green. Committed.
+- 2026-09-01 — p4.3 — done. `SessionEvidenceLedger` — `observe()` (insert/refresh by pid) + `reap(&running_pids)` closes gone processes at `last_activity_at` (never `now`) and returns them. 3 new tests. core +3. Gates + duration-audit green. Committed `330ca78`.
+- 2026-09-01 — p4.A1–A4 — Phase 4 acceptance. p4.A2/p4.A4 cited to p4.2/p4.3 tests. 2 new: `p4_a1_...has_no_path_to_a_heartbeat_on_its_own` (structural), `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`. p4.A1/A3 `[~]` — runtime verdicts are Phase 5. **Phase 4 done.** core +2. Gates green. Committed.
