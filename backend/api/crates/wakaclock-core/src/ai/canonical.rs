@@ -132,6 +132,11 @@ pub struct ChildEvidence {
 pub struct CanonicalActivity {
     fingerprint: CanonicalFingerprint,
     children: Vec<ChildEvidence>,
+    /// The child whose producer evidence ranks strongest (p6.3: verified
+    /// supersedes inferred). Set by [`crate::ai::dedup::dedup`]; `None` for a
+    /// hand-assembled activity that has not been ranked.
+    #[serde(default)]
+    strongest_evidence: Option<ChildEvidence>,
 }
 
 impl CanonicalActivity {
@@ -139,6 +144,7 @@ impl CanonicalActivity {
         Self {
             fingerprint,
             children: Vec::new(),
+            strongest_evidence: None,
         }
     }
 
@@ -169,6 +175,21 @@ impl CanonicalActivity {
 
     pub fn children(&self) -> &[ChildEvidence] {
         &self.children
+    }
+
+    /// The strongest-ranked child, once [`crate::ai::dedup::dedup`] has set it.
+    pub fn strongest_evidence(&self) -> Option<&ChildEvidence> {
+        self.strongest_evidence.as_ref()
+    }
+
+    /// Record which child carries the strongest producer evidence. `child` must
+    /// already be one of this activity's children.
+    pub fn set_strongest_evidence(&mut self, child: ChildEvidence) {
+        debug_assert!(
+            self.children.contains(&child),
+            "strongest_evidence must be one of the activity's children",
+        );
+        self.strongest_evidence = Some(child);
     }
 
     /// Child `lineage_id`s in fold order.

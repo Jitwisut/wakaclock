@@ -307,24 +307,42 @@ pub struct BrokerEventV1 {
 ///
 /// It only *chooses among* evidence that was already captured — it never invents.
 fn evidence_rank(event: &BrokerEventV1) -> (u8, u8, u8, i64) {
-    let source = match event.source {
+    evidence_rank_key(
+        event.transport.as_deref(),
+        &event.source,
+        &event.confidence,
+        event.occurred_at,
+    )
+}
+
+/// The producer-priority rank key (planai2.md p2.1) computed from the four axes
+/// directly, so a downstream layer (p6.3 dedup / canonical activity) ranks
+/// evidence **the same way** instead of re-deriving the ladder. Lower tuple =
+/// stronger evidence.
+pub fn evidence_rank_key(
+    transport: Option<&str>,
+    source: &AiEventSource,
+    confidence: &AiConfidence,
+    occurred_at: DateTime<Utc>,
+) -> (u8, u8, u8, i64) {
+    let source_rank = match source {
         AiEventSource::AgentHook => 0,
         AiEventSource::Mcp => 1,
         AiEventSource::Transcript => 2,
         AiEventSource::IdeTelemetry => 3,
     };
-    let confidence = match event.confidence {
+    let confidence_rank = match confidence {
         AiConfidence::Verified => 0,
         AiConfidence::Correlated => 1,
         AiConfidence::Inferred => 2,
         AiConfidence::Unknown => 3,
     };
     (
-        event.transport_kind().priority(),
-        source,
-        confidence,
+        TransportKind::classify(transport).priority(),
+        source_rank,
+        confidence_rank,
         // Negated so a *newer* event compares as smaller (= stronger) on the final tie.
-        -event.occurred_at.timestamp_millis(),
+        -occurred_at.timestamp_millis(),
     )
 }
 
