@@ -37,6 +37,7 @@ pub mod pipeline;
 pub mod process_observer;
 pub mod session;
 pub mod shadow;
+pub mod shadow_report;
 pub mod sidecar;
 pub mod state;
 pub mod usage;
@@ -90,9 +91,10 @@ pub use session::{
     SessionProcessEvidence,
 };
 pub use shadow::{
-    observe as observe_shadow, AttributionMode, ObserverConfig, ObserverOutcome, OracleAgreement,
-    ShadowLog, ShadowRecord,
+    observe as observe_shadow, AttributionMode, LabeledActor, ObserverConfig, ObserverOutcome,
+    OracleAgreement, ShadowLog, ShadowRecord,
 };
+pub use shadow_report::{compare_to_oracle, ShadowComparisonReport};
 pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};
 pub use state::AiAttributionState;
 pub use usage::{

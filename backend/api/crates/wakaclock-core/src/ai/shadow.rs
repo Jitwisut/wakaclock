@@ -118,6 +118,18 @@ impl ObserverConfig {
     }
 }
 
+/// What a change actually was, per an **independent** dataset label — a tool
+/// call's file manifest ⇒ [`LabeledActor::Ai`], a keystroke-logged session ⇒
+/// [`LabeledActor::Human`]. Never derived from the engine's `proposed` grade or
+/// the adapter's `oracle`; it is the third, independent axis the Phase 7.4
+/// precision/recall report scores against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabeledActor {
+    Ai,
+    Human,
+}
+
 /// How a proposed verdict lined up with the native-hook oracle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,6 +167,10 @@ pub struct ShadowRecord {
     /// The native-hook oracle's grade, when one fired for this change.
     #[serde(default)]
     pub oracle: Option<AiVerdict>,
+    /// Independent dataset label for this change, when the shadow corpus has
+    /// one. Scored against by the Phase 7.4 report; not set in live capture.
+    #[serde(default)]
+    pub ground_truth: Option<LabeledActor>,
     /// Producer `lineage_id`s behind the proposal, verbatim (p5.5).
     pub supporting_lineage: Vec<String>,
     pub observed_at: DateTime<Utc>,
@@ -170,6 +186,7 @@ impl ShadowRecord {
             proposed: proposed.verdict,
             proposed_reason: proposed.reason,
             oracle: None,
+            ground_truth: None,
             supporting_lineage: proposed.supporting_lineage.clone(),
             observed_at,
         }
@@ -187,6 +204,11 @@ impl ShadowRecord {
 
     pub fn with_oracle(mut self, oracle: AiVerdict) -> Self {
         self.oracle = Some(oracle);
+        self
+    }
+
+    pub fn with_ground_truth(mut self, actor: LabeledActor) -> Self {
+        self.ground_truth = Some(actor);
         self
     }
 
