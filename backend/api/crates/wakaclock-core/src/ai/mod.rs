@@ -36,6 +36,7 @@ pub mod path;
 pub mod pipeline;
 pub mod process_observer;
 pub mod session;
+pub mod shadow;
 pub mod sidecar;
 pub mod state;
 pub mod usage;
@@ -87,6 +88,10 @@ pub use process_observer::{
 pub use session::{
     evidence_from_scan, strongest_session_evidence, EvidenceStrength, SessionEvidenceLedger,
     SessionProcessEvidence,
+};
+pub use shadow::{
+    observe as observe_shadow, AttributionMode, ObserverConfig, ObserverOutcome, OracleAgreement,
+    ShadowLog, ShadowRecord,
 };
 pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};
 pub use state::AiAttributionState;
