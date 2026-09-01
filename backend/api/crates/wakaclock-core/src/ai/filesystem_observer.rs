@@ -15,7 +15,7 @@
 //! No file content is ever read here — only paths, event kinds and timestamps cross
 //! this module's boundary, matching every other producer's metadata-only contract.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -774,5 +774,193 @@ mod observer_semantics_tests {
             kind: _,
             observed_at: _,
         } = e;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// planai2.md Phase 3 (p3.4) — backpressure: a fixed-capacity buffer for a storm
+// ---------------------------------------------------------------------------
+
+/// A fixed-capacity ring buffer for raw filesystem events. This is the observer's
+/// backpressure: a storm — `git checkout`/`git rebase` rewriting tens of thousands
+/// of files, a `cargo build` touching a whole `target/`, a codegen sweep — can
+/// arrive far faster than the correlation engine drains it, so rather than let a
+/// `Vec` grow without bound, the buffer holds at most `capacity` events and, when
+/// full, **drops the oldest** and counts the loss in [`dropped`](Self::dropped).
+///
+/// Memory budget: `capacity * size_of::<FileChangedEvent>()` for the ring, plus
+/// the heap of at most `capacity` path strings. At the default capacity that is
+/// on the order of a few hundred kilobytes regardless of how large the storm is.
+/// Losing the oldest raw events during a storm is acceptable — a `git checkout`
+/// is not a coding session, and [`coalesce_burst`] collapses what survives anyway.
+#[derive(Debug)]
+pub struct BoundedEventBuffer {
+    capacity: usize,
+    events: VecDeque<FileChangedEvent>,
+    dropped: u64,
+}
+
+impl BoundedEventBuffer {
+    /// ~4k events. `size_of::<FileChangedEvent>()` is ~56 bytes, so the ring is
+    /// ~224 KB before path-string heap.
+    pub const DEFAULT_CAPACITY: usize = 4096;
+
+    pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            capacity,
+            events: VecDeque::with_capacity(capacity),
+            dropped: 0,
+        }
+    }
+
+    pub fn with_default_capacity() -> Self {
+        Self::new(Self::DEFAULT_CAPACITY)
+    }
+
+    /// Append one event. When the buffer is full the oldest event is evicted and
+    /// `dropped` is incremented — the newest `capacity` events are always kept.
+    pub fn push(&mut self, event: FileChangedEvent) {
+        if self.events.len() == self.capacity {
+            self.events.pop_front();
+            self.dropped += 1;
+        }
+        self.events.push_back(event);
+    }
+
+    /// Take everything currently buffered, leaving it empty. `dropped` is *not*
+    /// reset — the caller reads it to know the drain is lossy.
+    pub fn drain(&mut self) -> Vec<FileChangedEvent> {
+        self.events.drain(..).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// How many events have been dropped for backpressure since construction.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+}
+
+impl Default for BoundedEventBuffer {
+    fn default() -> Self {
+        Self::with_default_capacity()
+    }
+}
+
+impl ObserverPool {
+    /// Drain every watcher into `buffer` (applying its capacity limit), waiting up
+    /// to `timeout` for the first event on each watcher then pulling whatever else
+    /// is already queued. Out-of-scope events are dropped before they reach the
+    /// buffer. This is the storm-safe form of [`poll`](Self::poll): a burst of
+    /// 50k events costs `buffer.capacity()`, not 50k allocations.
+    pub fn poll_into(&self, timeout: Duration, buffer: &mut BoundedEventBuffer) {
+        for watcher in self.watchers.values() {
+            let Some(first) = watcher.next_event(timeout) else {
+                continue;
+            };
+            if self.is_within_watched(&first.path) {
+                buffer.push(first);
+            }
+            while let Some(more) = watcher.next_event(Duration::from_millis(50)) {
+                if self.is_within_watched(&more.path) {
+                    buffer.push(more);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+
+    fn ev(n: usize) -> FileChangedEvent {
+        FileChangedEvent {
+            path: PathBuf::from(format!("/w/src/file_{n}.rs")),
+            kind: FileChangeKind::Modified,
+            observed_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_ten_thousand_event_storm_stays_bounded_and_keeps_the_newest() {
+        let cap = BoundedEventBuffer::DEFAULT_CAPACITY;
+        let mut buffer = BoundedEventBuffer::new(cap);
+
+        for n in 0..10_000 {
+            buffer.push(ev(n));
+        }
+
+        // Memory is bounded: never more than `capacity` events retained.
+        assert_eq!(buffer.len(), cap);
+        assert_eq!(buffer.dropped(), 10_000 - cap as u64);
+
+        // The retained window is the *newest* events (oldest were shed).
+        let drained = buffer.drain();
+        assert_eq!(drained.len(), cap);
+        assert_eq!(drained.first().unwrap().path, ev(10_000 - cap).path);
+        assert_eq!(drained.last().unwrap().path, ev(9_999).path);
+
+        // drain() leaves it empty but the drop counter persists.
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.dropped(), 10_000 - cap as u64);
+    }
+
+    #[test]
+    fn a_tiny_buffer_still_never_grows_past_its_capacity() {
+        let mut buffer = BoundedEventBuffer::new(4);
+        for n in 0..1_000 {
+            buffer.push(ev(n));
+            assert!(buffer.len() <= 4, "buffer grew past capacity at push {n}");
+        }
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.dropped(), 996);
+    }
+
+    #[test]
+    fn capacity_is_clamped_to_at_least_one() {
+        let mut buffer = BoundedEventBuffer::new(0);
+        assert_eq!(buffer.capacity(), 1);
+        buffer.push(ev(1));
+        buffer.push(ev(2));
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.drain()[0].path, ev(2).path);
+    }
+
+    #[test]
+    fn an_idle_watcher_returns_none_within_the_timeout_and_does_not_spin() {
+        // `next_event` blocks on `recv_timeout` — the thread parks, it does not
+        // busy-poll. Proven here by: with no filesystem activity the call returns
+        // `None` and comes back close to the requested timeout, not far past it
+        // (a spin loop would still eventually return, so we bound the overshoot).
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-idle-watcher-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let watcher = WorkspaceWatcher::watch(&dir).unwrap();
+
+        let start = Instant::now();
+        let got = watcher.next_event(Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(got.is_none());
+        assert!(
+            elapsed >= Duration::from_millis(190) && elapsed < Duration::from_millis(600),
+            "idle wait took {elapsed:?} — expected ~200ms of parked waiting"
+        );
     }
 }

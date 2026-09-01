@@ -125,14 +125,17 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 3 — item p3.4** (backpressure). p3.1–p3.3 done. p3.4: an event storm has
-bounded memory + applies backpressure; idle CPU/memory within a stated budget.
-The `WorkspaceWatcher` uses an `mpsc::channel` (unbounded) — p3.4 adds a bounded
-drain / cap so a `git checkout` of 50k files can't grow an unbounded `Vec`, plus
-a coalescing debounce window. Write the budget numbers into the test. Then
-p3.A1–p3.A5 (mostly cite p3.1–p3.4 + add "a filesystem event alone stays
-`unknown`" — needs the Phase 5 correlation engine, so p3.A5 may be `[~]` until
-Phase 5).
+**Phase 3 — acceptance tests p3.A1–p3.A5**, then Phase 4. p3.1–p3.4 done.
+- p3.A1 (watcher only for registered workspaces) → cite p3.2's
+  `a_change_under_an_unregistered_path_yields_no_event` + p3.1's lease-expiry test.
+- p3.A2 (atomic save → single logical change) → cite p3.3's
+  `atomic_save_burst_collapses_to_one_modify_of_the_real_file`.
+- p3.A3 (rename/delete/create normalized) → `translate_event_kind` +
+  `coalesce_burst` tests; add a small rename-normalization test if a gap.
+- p3.A4 (event storm bounded / backpressure) → cite p3.4's storm test.
+- p3.A5 **"a filesystem event alone stays `unknown`"** — the observer only emits
+  `FileChangedEvent` (no actor field at all); assert that structurally, and mark
+  `[~]` for the full correlation-side guarantee (needs Phase 5).
 
 ---
 
@@ -234,8 +237,9 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 - [x] **p3.3 Observer semantics.** create / modify / rename / delete. Coalesce duplicate/atomic-save events into one logical change. Canonicalize paths; block symlink escape. Respect `.gitignore`, user excludes, generated/build/vendor dirs. Fingerprint only files that had an event (reuse the git blob/content hashing in `wakaclock-cli/src/tool_snapshot.rs`) — never scan/hash the whole repo per tick. Never read or persist source content.
   - Tests: editor atomic save (write temp + rename) → **one** logical change; rename normalized to a rename not delete+create; a `.gitignore`d path produces nothing; symlink pointing outside the workspace is rejected; assert no file *content* is ever held in a struct field.
   - → committed | Added to `filesystem_observer.rs`: `coalesce_burst(Vec<FileChangedEvent>) -> Vec<_>` (drops editor scratch names `~`/`.tmp`/`.swp`/`.#`/hex-suffix; a Created-then-Removed temp in one burst vanishes; repeated events keep the last kind), `canonicalize_within_root(root, path)` (symlink-aware via `fs::canonicalize` + containment; lexical fallback for not-yet-existing delete/rename targets), `WorkspaceIgnore` (`.gitignore` + lease `exclude_rules`; literal / leading-or-trailing `*` / trailing-`/` dir match — **not** a full engine: no `**`, no negation, no nested `.gitignore`, noted in the doc comment), `fingerprint_changed_file(path)` (reads bytes → `Uuid::v5` hash → drops the buffer; `>4 MiB` uses `size:mtime`; `None` if unreadable — never returns content). tests: 9 new incl. `atomic_save_burst_collapses_to_one_modify_of_the_real_file`, `canonicalize_within_root_rejects_a_symlink_that_escapes_the_workspace`, `gitignored_and_excluded_paths_produce_nothing`, `fingerprint_reads_and_discards_content_and_never_returns_it` (asserts `hunter2`/`password` appear nowhere), `file_changed_event_carries_no_content_field` (destructuring guard). core +9. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p3.4 Backpressure.** An event storm has bounded memory and applies backpressure. Idle CPU and memory stay within a stated budget (write the budget into the test).
+- [x] **p3.4 Backpressure.** An event storm has bounded memory and applies backpressure. Idle CPU and memory stay within a stated budget (write the budget into the test).
   - Tests: 10k synthetic events → bounded channel, no unbounded `Vec` growth; idle loop does no work.
+  - → committed | `BoundedEventBuffer` in `filesystem_observer.rs`: fixed-capacity `VecDeque` ring; `push` evicts the oldest when full and bumps `dropped()`; `drain()` / `len()` / `capacity()` / `dropped()`. `DEFAULT_CAPACITY = 4096` (~224 KB ring + ≤4096 path strings — bounded regardless of storm size). `ObserverPool::poll_into(timeout, &mut buffer)` is the storm-safe form of `poll`. tests: `a_ten_thousand_event_storm_stays_bounded_and_keeps_the_newest` (10k pushes → `len == 4096`, `dropped == 5904`, retained window is the *newest* events), `a_tiny_buffer_still_never_grows_past_its_capacity` (asserts `len() <= 4` on every one of 1000 pushes), `capacity_is_clamped_to_at_least_one`, `an_idle_watcher_returns_none_within_the_timeout_and_does_not_spin` (`recv_timeout` parks the thread — verified by bounded overshoot ~200ms, not far past). core +4. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 
 ### Phase 3 acceptance criteria — named tests
 
@@ -416,4 +420,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p3.1 — done. New pure `wakaclock_core::ai::workspace` — `WorkspaceRegistry` (register/refresh/release/prune_expired/watched_roots/is_watched/exclude_rules_for) + `WorkspaceLease` + `LeaseError` (RootTooBroad guards $HOME/ancestors/`/`). 6 new tests (core 164→170). Gates + duration-audit green. Committed `261fb21`.
 - 2026-09-01 — (interruption) concurrent "clipboard tracking / input-activity" feature (~1,780 lines, 48 files) appeared in the working tree during the loop. Verified the whole mixed tree green (backend + vscode 81 + frontend 213) and committed it on its own as `b40b4f4 feat(input-activity): …` so the planai2 history stays clean, then resumed.
 - 2026-09-01 — p3.2 — done. `ObserverPool` in `filesystem_observer.rs` — `sync(&[roots])` reconciles the live `WorkspaceWatcher` set (returns `SyncOutcome{started,stopped}`, idempotent), `poll()` drains + drops out-of-scope events, `is_within_watched()`. Fed by `WorkspaceRegistry::watched_roots(now)`. 3 new tests (core +3). Gates + duration-audit green. Committed `83a16ac`.
-- 2026-09-01 — p3.3 — done. `coalesce_burst()` (atomic-save + dedup), `canonicalize_within_root()` (symlink-escape guard), `WorkspaceIgnore` (.gitignore + lease excludes, simple matcher), `fingerprint_changed_file()` (uuid-v5 hash, discards bytes, size-capped). 9 new tests (core +9). Gates + duration-audit green. Committed.
+- 2026-09-01 — p3.3 — done. `coalesce_burst()` (atomic-save + dedup), `canonicalize_within_root()` (symlink-escape guard), `WorkspaceIgnore` (.gitignore + lease excludes, simple matcher), `fingerprint_changed_file()` (uuid-v5 hash, discards bytes, size-capped). 9 new tests (core +9). Gates + duration-audit green. Committed `306e08f`.
+- 2026-09-01 — p3.4 — done. `BoundedEventBuffer` (fixed-cap VecDeque ring, evict-oldest + `dropped()` counter, `DEFAULT_CAPACITY=4096`) + `ObserverPool::poll_into()`. 4 new tests incl. 10k-storm-stays-bounded + idle-watcher-doesn't-spin. core +4. Gates + duration-audit green. Committed.
