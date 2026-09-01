@@ -15,6 +15,7 @@
 //! No file content is ever read here — only paths, event kinds and timestamps cross
 //! this module's boundary, matching every other producer's metadata-only contract.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -222,5 +223,180 @@ mod tests {
             event.kind
         );
         assert_eq!(event.path.file_name(), target.file_name());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// planai2.md Phase 3 (p3.2) — bind the observer to the workspace lease registry
+// ---------------------------------------------------------------------------
+
+/// What one `ObserverPool::sync` call changed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub started: Vec<PathBuf>,
+    pub stopped: Vec<PathBuf>,
+}
+
+/// Holds a live [`WorkspaceWatcher`] for exactly the roots the caller asks for —
+/// which in production is `WorkspaceRegistry::watched_roots(now)` (planai2.md
+/// p3.2: the observer watches only registered workspaces, never all of `$HOME`).
+///
+/// Call [`sync`](Self::sync) on a timer or right after any lease
+/// register/refresh/release: it starts watchers for newly-desired roots and drops
+/// watchers (releasing the OS handle) for roots no longer desired.
+#[derive(Default)]
+pub struct ObserverPool {
+    watchers: HashMap<PathBuf, WorkspaceWatcher>,
+}
+
+impl ObserverPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Reconcile the live watcher set to `desired_roots`. Idempotent: calling it
+    /// again with the same roots is a no-op.
+    pub fn sync(&mut self, desired_roots: &[PathBuf]) -> notify::Result<SyncOutcome> {
+        let desired: std::collections::HashSet<&PathBuf> = desired_roots.iter().collect();
+        let mut outcome = SyncOutcome::default();
+
+        // Drop watchers for roots that are no longer desired.
+        let stale: Vec<PathBuf> = self
+            .watchers
+            .keys()
+            .filter(|root| !desired.contains(root))
+            .cloned()
+            .collect();
+        for root in stale {
+            self.watchers.remove(&root);
+            outcome.stopped.push(root);
+        }
+
+        // Start watchers for newly-desired roots.
+        for root in desired_roots {
+            if self.watchers.contains_key(root) {
+                continue;
+            }
+            let watcher = WorkspaceWatcher::watch(root)?;
+            self.watchers.insert(root.clone(), watcher);
+            outcome.started.push(root.clone());
+        }
+
+        outcome.started.sort();
+        outcome.stopped.sort();
+        Ok(outcome)
+    }
+
+    pub fn watched_roots(&self) -> Vec<&Path> {
+        let mut roots: Vec<&Path> = self.watchers.keys().map(PathBuf::as_path).collect();
+        roots.sort();
+        roots
+    }
+
+    /// True when `path` is inside a currently-watched root — a defence-in-depth
+    /// filter so an event notify reports for a sibling directory is dropped.
+    pub fn is_within_watched(&self, path: &Path) -> bool {
+        self.watchers.keys().any(|root| path.starts_with(root))
+    }
+
+    /// Drain every watcher: wait up to `timeout` for the first event on each, then
+    /// quickly pull whatever else is already buffered. Events for paths outside a
+    /// watched root (notify's guarantees vary by backend) are dropped.
+    pub fn poll(&self, timeout: Duration) -> Vec<FileChangedEvent> {
+        let mut events = Vec::new();
+        for watcher in self.watchers.values() {
+            let Some(first) = watcher.next_event(timeout) else {
+                continue;
+            };
+            if self.is_within_watched(&first.path) {
+                events.push(first);
+            }
+            while let Some(more) = watcher.next_event(Duration::from_millis(50)) {
+                if self.is_within_watched(&more.path) {
+                    events.push(more);
+                }
+            }
+        }
+        events
+    }
+}
+
+#[cfg(test)]
+mod observer_pool_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-observer-pool-{tag}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sync_starts_and_stops_watchers_to_match_the_desired_root_set() {
+        let a = temp_dir("a");
+        let b = temp_dir("b");
+        let mut pool = ObserverPool::new();
+
+        let out = pool.sync(std::slice::from_ref(&a)).unwrap();
+        assert_eq!(out.started, vec![a.clone()]);
+        assert!(out.stopped.is_empty());
+        assert_eq!(pool.watched_roots(), vec![a.as_path()]);
+
+        // Idempotent.
+        assert_eq!(
+            pool.sync(std::slice::from_ref(&a)).unwrap(),
+            SyncOutcome::default()
+        );
+
+        // Swap a -> b.
+        let out = pool.sync(std::slice::from_ref(&b)).unwrap();
+        assert_eq!(out.started, vec![b.clone()]);
+        assert_eq!(out.stopped, vec![a.clone()]);
+        assert_eq!(pool.watched_roots(), vec![b.as_path()]);
+
+        let _ = fs::remove_dir_all(&a);
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn a_change_under_an_unregistered_path_yields_no_event() {
+        let watched = temp_dir("watched");
+        let unwatched = temp_dir("unwatched");
+        let mut pool = ObserverPool::new();
+        pool.sync(std::slice::from_ref(&watched)).unwrap();
+
+        fs::write(unwatched.join("stray.rs"), "x\n").unwrap();
+        // Give the OS a beat; a correctly-scoped watcher reports nothing.
+        let events = pool.poll(Duration::from_millis(400));
+        assert!(
+            events.is_empty(),
+            "a write outside every watched root must not surface, got {events:?}"
+        );
+
+        let _ = fs::remove_dir_all(&watched);
+        let _ = fs::remove_dir_all(&unwatched);
+    }
+
+    #[test]
+    fn a_change_under_a_registered_path_yields_an_event() {
+        let watched = temp_dir("real");
+        let mut pool = ObserverPool::new();
+        pool.sync(std::slice::from_ref(&watched)).unwrap();
+
+        fs::write(watched.join("app.py"), "value = 1\n").unwrap();
+        let events = pool.poll(Duration::from_secs(10));
+
+        let _ = fs::remove_dir_all(&watched);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.path.file_name().unwrap() == "app.py"),
+            "expected an event for the file written under the watched root, got {events:?}"
+        );
     }
 }

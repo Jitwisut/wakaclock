@@ -47,7 +47,7 @@ pub use correlation::{
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{
-    is_excluded_path, FileChangeKind, FileChangedEvent, WorkspaceWatcher,
+    is_excluded_path, FileChangeKind, FileChangedEvent, ObserverPool, SyncOutcome, WorkspaceWatcher,
 };
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
