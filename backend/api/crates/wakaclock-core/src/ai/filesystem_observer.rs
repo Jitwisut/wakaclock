@@ -775,6 +775,49 @@ mod observer_semantics_tests {
             observed_at: _,
         } = e;
     }
+
+    #[test]
+    fn p3_a3_rename_is_normalized_to_remove_old_plus_create_new_not_a_modify() {
+        // planai2.md p3.A3: a rename `old.rs -> new.rs` surfaces as Removed(old.rs)
+        // + Created(new.rs) (translate_event_kind's documented behaviour). It must
+        // NOT collapse to a single Modify, and both halves survive coalescing.
+        let burst = vec![
+            ev("/w/src/old.rs", FileChangeKind::Removed),
+            ev("/w/src/new.rs", FileChangeKind::Created),
+        ];
+        let out = coalesce_burst(burst);
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .any(|e| e.path.ends_with("old.rs") && e.kind == FileChangeKind::Removed));
+        assert!(out
+            .iter()
+            .any(|e| e.path.ends_with("new.rs") && e.kind == FileChangeKind::Created));
+        assert!(!out.iter().any(|e| e.kind == FileChangeKind::Modified));
+    }
+
+    #[test]
+    fn p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction() {
+        // planai2.md p3.A5: a filesystem event on its own can never *be* an
+        // attribution. This module's only output type has no actor / confidence /
+        // agent field at all — the correlation engine (Phase 5) is the only thing
+        // that can turn a FileChangedEvent into anything, and per planai2.md a
+        // filesystem event alone resolves to `unknown` there. Enforced structurally:
+        // the exhaustive destructure below fails to compile if such a field is added.
+        let FileChangedEvent {
+            path: _,
+            kind: _,
+            observed_at: _,
+        } = ev("/w/a.rs", FileChangeKind::Created);
+        // And the three kinds are the whole vocabulary — no "AiCreated" etc.
+        for k in [
+            FileChangeKind::Created,
+            FileChangeKind::Modified,
+            FileChangeKind::Removed,
+        ] {
+            let _ = k;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

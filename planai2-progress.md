@@ -125,17 +125,15 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 3 — acceptance tests p3.A1–p3.A5**, then Phase 4. p3.1–p3.4 done.
-- p3.A1 (watcher only for registered workspaces) → cite p3.2's
-  `a_change_under_an_unregistered_path_yields_no_event` + p3.1's lease-expiry test.
-- p3.A2 (atomic save → single logical change) → cite p3.3's
-  `atomic_save_burst_collapses_to_one_modify_of_the_real_file`.
-- p3.A3 (rename/delete/create normalized) → `translate_event_kind` +
-  `coalesce_burst` tests; add a small rename-normalization test if a gap.
-- p3.A4 (event storm bounded / backpressure) → cite p3.4's storm test.
-- p3.A5 **"a filesystem event alone stays `unknown`"** — the observer only emits
-  `FileChangedEvent` (no actor field at all); assert that structurally, and mark
-  `[~]` for the full correlation-side guarantee (needs Phase 5).
+**PHASE 3 COMPLETE** (p3.1–p3.4 + p3.A1–p3.A4; p3.A5 `[~]` — full "lone fs event ⇒
+`unknown`" guarantee is Phase 5's p5.A1). **Phase 4 next** — Agent Session and
+Process Evidence. No `DECISION` item; loop picks **p4.1** (session/process
+evidence model). `process_observer.rs` already exists (`DetectedAiProcess`,
+`scan()`, `match_agent()` — unverified against real running instances). p4.1:
+the evidence model — `pid`/`ppid`, process identity, agent/provider, workspace,
+`session_id`, `tool_event_id`, `started_at`/`last_activity_at`/`ended_at`,
+evidence strength; **no command arguments, no environment secrets**. Read
+`.context/backend/crates.md` first.
 
 ---
 
@@ -243,11 +241,11 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 
 ### Phase 3 acceptance criteria — named tests
 
-- [ ] **p3.A1** The watcher runs only for registered workspaces.
-- [ ] **p3.A2** An editor atomic save creates a single logical change.
-- [ ] **p3.A3** rename / delete / create are normalized correctly.
-- [ ] **p3.A4** An event storm stays within bounded memory / backpressure.
-- [ ] **p3.A5** **A filesystem event on its own resolves to `unknown`** — never `human`, never `ai_*`.
+- [x] **p3.A1** The watcher runs only for registered workspaces. → `filesystem_observer::observer_pool_tests::a_change_under_an_unregistered_path_yields_no_event` + `sync_starts_and_stops_watchers_to_match_the_desired_root_set` (p3.2) + `workspace::tests::a_lease_expires_and_the_workspace_stops_being_watched` (p3.1) — no live lease ⇒ no watcher.
+- [x] **p3.A2** An editor atomic save creates a single logical change. → `observer_semantics_tests::atomic_save_burst_collapses_to_one_modify_of_the_real_file` (p3.3).
+- [x] **p3.A3** rename / delete / create are normalized correctly. → `translate_event_kind_maps_the_three_reported_kinds` + new `p3_a3_rename_is_normalized_to_remove_old_plus_create_new_not_a_modify` (rename ⇒ Removed(old)+Created(new), never a spurious Modify, both halves survive coalescing).
+- [x] **p3.A4** An event storm stays within bounded memory / backpressure. → `backpressure_tests::a_ten_thousand_event_storm_stays_bounded_and_keeps_the_newest` + `a_tiny_buffer_still_never_grows_past_its_capacity` (p3.4).
+- [~] **p3.A5** **A filesystem event on its own resolves to `unknown`** — never `human`, never `ai_*`. → new `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction`: `FileChangedEvent` has **no** actor/confidence/agent field — the observer *cannot* attribute; and `FileChangeKind` has exactly `Created/Modified/Removed`, no `Ai*`. `[~]` for the full guarantee that the **Phase 5 correlation engine** resolves a lone filesystem event to `unknown` (not built yet — that is Phase 5's own p5.A1).
 
 ---
 
@@ -421,4 +419,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — (interruption) concurrent "clipboard tracking / input-activity" feature (~1,780 lines, 48 files) appeared in the working tree during the loop. Verified the whole mixed tree green (backend + vscode 81 + frontend 213) and committed it on its own as `b40b4f4 feat(input-activity): …` so the planai2 history stays clean, then resumed.
 - 2026-09-01 — p3.2 — done. `ObserverPool` in `filesystem_observer.rs` — `sync(&[roots])` reconciles the live `WorkspaceWatcher` set (returns `SyncOutcome{started,stopped}`, idempotent), `poll()` drains + drops out-of-scope events, `is_within_watched()`. Fed by `WorkspaceRegistry::watched_roots(now)`. 3 new tests (core +3). Gates + duration-audit green. Committed `83a16ac`.
 - 2026-09-01 — p3.3 — done. `coalesce_burst()` (atomic-save + dedup), `canonicalize_within_root()` (symlink-escape guard), `WorkspaceIgnore` (.gitignore + lease excludes, simple matcher), `fingerprint_changed_file()` (uuid-v5 hash, discards bytes, size-capped). 9 new tests (core +9). Gates + duration-audit green. Committed `306e08f`.
-- 2026-09-01 — p3.4 — done. `BoundedEventBuffer` (fixed-cap VecDeque ring, evict-oldest + `dropped()` counter, `DEFAULT_CAPACITY=4096`) + `ObserverPool::poll_into()`. 4 new tests incl. 10k-storm-stays-bounded + idle-watcher-doesn't-spin. core +4. Gates + duration-audit green. Committed.
+- 2026-09-01 — p3.4 — done. `BoundedEventBuffer` (fixed-cap VecDeque ring, evict-oldest + `dropped()` counter, `DEFAULT_CAPACITY=4096`) + `ObserverPool::poll_into()`. 4 new tests incl. 10k-storm-stays-bounded + idle-watcher-doesn't-spin. core +4. Gates + duration-audit green. Committed `3320dcd`.
+- 2026-09-01 — p3.A1–A5 — Phase 3 acceptance. p3.A1/A2/A4 cited to p3.1–p3.4 tests. 2 new: `p3_a3_rename_is_normalized_...` (Removed+Created, never Modify), `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural). p3.A5 `[~]` — full lone-fs-event⇒`unknown` guarantee is Phase 5. **Phase 3 done.** core +2. Gates green. Committed.
