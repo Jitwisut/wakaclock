@@ -92,7 +92,7 @@ pub use session::{
 };
 pub use shadow::{
     observe as observe_shadow, AttributionMode, LabeledActor, ObserverConfig, ObserverOutcome,
-    OracleAgreement, ShadowLog, ShadowRecord,
+    OracleAgreement, RolloutScope, ShadowLog, ShadowRecord,
 };
 pub use shadow_report::{compare_to_oracle, ShadowComparisonReport};
 pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};

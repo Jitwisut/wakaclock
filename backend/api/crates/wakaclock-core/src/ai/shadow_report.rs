@@ -245,4 +245,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn p7_a2_a_precision_recall_report_exists_and_separates_the_two() {
+        // planai2.md p7.A2. Module-contract level: a real precision figure needs
+        // a labelled shadow corpus (see the Phase 7 acceptance heading in
+        // planai2-progress.md and the p7.4 Decisions-log entry). What is checked
+        // here is that the report yields *two* numbers from disjoint relations
+        // and never merges them.
+        let mut log = ShadowLog::default();
+        for _ in 0..2 {
+            log.record(
+                record(AiVerdict::AiVerified)
+                    .with_ground_truth(LabeledActor::Ai)
+                    .with_oracle(AiVerdict::AiVerified),
+            );
+        }
+        log.record(record(AiVerdict::AiInferred).with_ground_truth(LabeledActor::Ai));
+        log.record(record(AiVerdict::AiInferred).with_ground_truth(LabeledActor::Human));
+
+        let report = compare_to_oracle(&log);
+        let recall = report.native_adapter_recall().expect("recall is reported");
+        let precision = report
+            .universal_inference_precision()
+            .expect("precision is reported");
+
+        assert_eq!(recall, 2.0 / 3.0); // 2 of 3 labelled-AI changes a native adapter reported
+        assert_eq!(precision, 0.5); // 1 of 2 inferred proposals the label confirms
+        assert_ne!(recall, precision); // two distinct numbers, never one blended figure
+
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(!json.contains("accuracy") && !json.contains("combined"));
+    }
 }

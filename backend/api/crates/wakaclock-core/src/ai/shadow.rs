@@ -26,7 +26,68 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::correlation_engine::{AiVerdict, EvidenceKind, Verdict, VerdictReason};
+use crate::ai::event::normalize_agent_id;
 use crate::ai::path::normalize_lexical;
+
+/// Platform-id normalisation — the analogue of [`normalize_agent_id`] for the
+/// editor/CLI surface an evidence source came from. Lower-cases and strips
+/// whitespace, so `"VS Code"`, `"vs code"` and `"vscode"` are one id.
+fn normalize_platform_id(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Which agents (or platforms) a staged rollout covers — planai2.md Phase 7,
+/// "rollout เปิดแบบ per-agent/per-platform ได้".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RolloutScope {
+    /// Every id — the terminal rollout state.
+    #[default]
+    All,
+    /// Only these ids. An empty set covers **nothing**, so a half-configured
+    /// rollout fails closed instead of silently going global.
+    Only(BTreeSet<String>),
+}
+
+impl RolloutScope {
+    /// A staged rollout over exactly these agent ids (each is run through
+    /// [`normalize_agent_id`], so `"Claude Code"` and `"claude-code"` match).
+    pub fn agents<I, S>(ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::Only(
+            ids.into_iter()
+                .map(|id| normalize_agent_id(id.as_ref()))
+                .collect(),
+        )
+    }
+
+    /// A staged rollout over exactly these platform ids (lower-cased).
+    pub fn platforms<I, S>(ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::Only(
+            ids.into_iter()
+                .map(|id| normalize_platform_id(id.as_ref()))
+                .collect(),
+        )
+    }
+
+    /// `id` must already be normalised by the caller.
+    fn covers(&self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(ids) => ids.contains(id),
+        }
+    }
+}
 
 /// Whether the universal observer's verdicts change production attribution.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +125,14 @@ pub struct ObserverConfig {
     /// the engine while the observer is running.
     #[serde(default)]
     pub disabled_sources: BTreeSet<EvidenceKind>,
+    /// Staged rollout over agents. `All` (the default) is every agent; a
+    /// staged rollout narrows it to a named set.
+    #[serde(default)]
+    pub rollout_agents: RolloutScope,
+    /// Staged rollout over platforms (the editor / CLI surface). `All` by
+    /// default.
+    #[serde(default)]
+    pub rollout_platforms: RolloutScope,
 }
 
 impl ObserverConfig {
@@ -108,6 +177,20 @@ impl ObserverConfig {
     /// Is `root` live for the observer right now?
     pub fn workspace_live(&self, root: &Path) -> bool {
         self.enabled && !self.disabled_workspaces.contains(&normalize_lexical(root))
+    }
+
+    /// Is `agent` inside the current staged rollout? Ingest-path predicate,
+    /// alongside [`Self::source_live`] and [`Self::workspace_live`].
+    pub fn agent_in_rollout(&self, agent: &str) -> bool {
+        self.enabled && self.rollout_agents.covers(&normalize_agent_id(agent))
+    }
+
+    /// Is `platform` inside the current staged rollout?
+    pub fn platform_in_rollout(&self, platform: &str) -> bool {
+        self.enabled
+            && self
+                .rollout_platforms
+                .covers(&normalize_platform_id(platform))
     }
 
     /// Whether the observer is allowed to change production attribution at all.
@@ -549,5 +632,119 @@ mod tests {
         log.record(base.with_oracle(AiVerdict::Human));
         assert_eq!(log.agreement_counts(), (1, 1, 1));
         assert_eq!(log.len(), 3);
+    }
+
+    // ---- planai2.md Phase 7 acceptance criteria ------------------------------
+    //
+    // p7.A1 and p7.A4's "does not change / deletes no data" clauses are checked
+    // at the module-contract level. The full end-to-end claim (no diff in
+    // heartbeat / analytics output) holds today only because `CorrelationEngine`
+    // has no production call site — see the Phase 7 acceptance heading in
+    // planai2-progress.md and the p7.3 / p7.4 Decisions-log entries. The
+    // wiring item owes the end-to-end assertion.
+
+    #[test]
+    fn p7_a1_observe_only_mode_does_not_change_current_output() {
+        let proposals = [
+            inferred(),
+            verdict(AiVerdict::AiVerified, VerdictReason::DirectAiProducer),
+            verdict(AiVerdict::Human, VerdictReason::PositiveEditorInput),
+        ];
+        let off = ObserverConfig::default();
+        let observe_only = ObserverConfig::observe_only_rollout_start();
+
+        for proposed in &proposals {
+            let with_observer = observe(
+                &observe_only,
+                Path::new(FILE),
+                Some(Path::new(WS)),
+                proposed,
+                None,
+                Utc::now(),
+            );
+            let without = observe(
+                &off,
+                Path::new(FILE),
+                Some(Path::new(WS)),
+                proposed,
+                None,
+                Utc::now(),
+            );
+            // Same production-facing result — nothing — as the observer being
+            // off, for every grade.
+            assert_eq!(with_observer.production, None);
+            assert_eq!(without.production, None);
+        }
+    }
+
+    #[test]
+    fn p7_a3_rollout_is_enabled_per_agent_and_per_platform() {
+        let mut staged = ObserverConfig::observe_only_rollout_start();
+        staged.rollout_agents = RolloutScope::agents(["Claude Code"]);
+        staged.rollout_platforms = RolloutScope::platforms(["VS Code"]);
+
+        // Per-agent: only the named agent is in the rollout, normalisation and
+        // all.
+        assert!(staged.agent_in_rollout("claude-code"));
+        assert!(staged.agent_in_rollout("claude")); // normalises to claude-code
+        assert!(!staged.agent_in_rollout("cursor"));
+
+        // Per-platform: independent of the agent scope.
+        assert!(staged.platform_in_rollout("vscode"));
+        assert!(staged.platform_in_rollout("VS Code"));
+        assert!(!staged.platform_in_rollout("jetbrains"));
+
+        // `All` (the default / terminal state) covers everyone.
+        let wide = ObserverConfig::observe_only_rollout_start();
+        assert!(wide.agent_in_rollout("anything"));
+        assert!(wide.platform_in_rollout("anything"));
+
+        // An empty `Only` fails closed, and a disabled observer is in no
+        // rollout at all.
+        let mut closed = ObserverConfig::observe_only_rollout_start();
+        closed.rollout_agents = RolloutScope::Only(BTreeSet::new());
+        assert!(!closed.agent_in_rollout("claude-code"));
+        let mut disabled = staged.clone();
+        disabled.enabled = false;
+        assert!(!disabled.agent_in_rollout("claude-code"));
+    }
+
+    #[test]
+    fn p7_a4_rollback_needs_no_migration_and_deletes_no_data() {
+        // (a) No migration: a pre-rollout config JSON — none of the rollout /
+        // kill-switch fields — still deserializes, defaulting to "wide open".
+        let legacy = r#"{"enabled":true,"attribution_mode":"infer"}"#;
+        let cfg: ObserverConfig = serde_json::from_str(legacy).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.rollout_agents, RolloutScope::All);
+        assert_eq!(cfg.rollout_platforms, RolloutScope::All);
+        assert!(cfg.disabled_workspaces.is_empty());
+        assert!(cfg.disabled_sources.is_empty());
+
+        // (b) Turning the observer off is a single in-place field flip that
+        // loses nothing: re-enabling restores the exact same config.
+        let mut full = ObserverConfig::observe_only_rollout_start();
+        full.attribution_mode = AttributionMode::Infer;
+        full.disable_source(EvidenceKind::NativeHook);
+        full.disable_workspace(Path::new("/ws/a"));
+        full.rollout_agents = RolloutScope::agents(["claude-code"]);
+
+        let mut rolled_back = full.clone();
+        rolled_back.enabled = false;
+        let round_tripped: ObserverConfig =
+            serde_json::from_str(&serde_json::to_string(&rolled_back).unwrap()).unwrap();
+        let mut restored = round_tripped;
+        restored.enabled = true;
+        assert_eq!(restored, full, "rollback + re-enable is lossless");
+
+        // (c) The shadow log is append-only — `record` only grows it and there
+        // is no clear / drain / remove. A rollback stops appending; it deletes
+        // nothing already captured.
+        let mut log = ShadowLog::default();
+        assert_eq!(log.len(), 0);
+        log.record(ShadowRecord::new(Path::new(FILE), &inferred(), Utc::now()));
+        log.record(ShadowRecord::new(Path::new(FILE), &inferred(), Utc::now()));
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.records().len(), 2);
     }
 }
