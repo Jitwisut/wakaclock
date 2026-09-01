@@ -662,7 +662,12 @@ pub enum VerdictReason {
     NoEvidence,
 }
 
-/// A §5 decision plus the lineage that backs it.
+/// planai2.md §5's **evidence-lineage record**: the graded outcome, the exact
+/// §5 clause that produced it, and the producer `lineage_id`s it rests on —
+/// enough to explain the result after the fact, with **no** source content,
+/// diff, prompt, or file text. The confidence *is* [`AiVerdict`] (verified >
+/// inferred > unknown), and it comes from the *evidence combination* the ladder
+/// walked — never from which agent's name appeared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Verdict {
     pub verdict: AiVerdict,
@@ -1430,5 +1435,85 @@ mod tests {
             serde_json::to_string(&SystemActorKind::VersionControl).unwrap(),
             "\"version_control\""
         );
+    }
+
+    // ---- p5.5: confidence from the evidence combination + lineage ---------
+
+    #[test]
+    fn same_agent_different_evidence_sets_yield_different_verdicts() {
+        let t0 = Utc::now();
+        let agent = "codex";
+
+        // Set A: a native hook for the file.
+        let mut a = CorrelationEngine::with_default_windows();
+        a.ingest(ci("hook", EvidenceKind::NativeHook, t0).with_agent(agent));
+        assert_eq!(verdict(&a, t0).verdict, AiVerdict::AiVerified);
+
+        // Set B: no hook — a filesystem change plus a strong live session.
+        let mut b = CorrelationEngine::with_default_windows();
+        b.ingest(ci("fs", EvidenceKind::FilesystemObserver, t0));
+        b.ingest(
+            ci("sess", EvidenceKind::SessionProcessObserver, at(t0, -3))
+                .with_agent(agent)
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        assert_eq!(verdict(&b, t0).verdict, AiVerdict::AiInferred);
+
+        // Set C: the same change, but the only agent evidence is a name-only
+        // process sighting — not strong enough to infer.
+        let mut c = CorrelationEngine::with_default_windows();
+        c.ingest(ci("fs", EvidenceKind::FilesystemObserver, t0));
+        c.ingest(
+            ci("sess", EvidenceKind::SessionProcessObserver, at(t0, -3))
+                .with_agent(agent)
+                .with_evidence_strength(EvidenceStrength::ProcessNameOnly),
+        );
+        assert_eq!(verdict(&c, t0).verdict, AiVerdict::Unknown);
+    }
+
+    #[test]
+    fn a_lineage_record_is_ids_plus_a_reason_and_never_file_content() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(
+            ci("fs-evt-42", EvidenceKind::FilesystemObserver, t0)
+                .with_fingerprint("blob:cafe")
+                .with_change_kind(BrokerChangeKind::Modify),
+        );
+        e.ingest(
+            ci(
+                "sess-evt-7",
+                EvidenceKind::SessionProcessObserver,
+                at(t0, -2),
+            )
+            .with_agent("codex")
+            .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        let v = verdict(&e, t0);
+
+        // The record is exactly the producer ids the engine walked, plus a
+        // machine-readable reason — nothing reconstructs the change itself.
+        assert_eq!(v.supporting_lineage, vec!["fs-evt-42", "sess-evt-7"]);
+        assert_eq!(v.reason, VerdictReason::InferredFromAgentActivity);
+        let json = serde_json::to_string(&v).unwrap();
+        for forbidden in [
+            "\"content",
+            "\"diff",
+            "\"patch",
+            "\"prompt",
+            "\"source",
+            "\"text",
+            "\"body",
+            "blob:cafe",
+            "main.rs",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "lineage record leaked {forbidden}: {json}"
+            );
+        }
+        // Round-trips as a plain record.
+        let back: Verdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
     }
 }
