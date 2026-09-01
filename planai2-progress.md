@@ -125,10 +125,19 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 6 — item p6.2** (canonical activity aggregates child evidence IDs).
-**Phase 5 complete**; p6.1 done (`ai/canonical.rs`, `CanonicalFingerprint::v1`,
-7 tests). Every Phase 6 item is **duration-gated** — run all three
-`duration-audit` scripts, and `golden.py` must stay `total_error: 0.0`.
+**Phase 6 — item p6.A1** (Phase 6 acceptance). **p6.1–p6.3 done**
+(`ai/canonical.rs` fingerprint + activity, `ai/dedup.rs` ruleset). Every Phase 6
+item is **duration-gated** — run all three `duration-audit` scripts, and
+`golden.py` must stay `total_error: 0.0`.
+
+Phase 6 acceptance (p6.A1–p6.A5): mostly expressible as tests over `dedup` +
+`CanonicalActivity` + a small synthetic corpus.
+- **p6.A1** duplicate canonical-activity rate < 0.1% over a test corpus, and the rate is *recorded*. Build a fixture corpus (a `Vec<DedupObservation>` mixing genuine distinct edits + realistic redeliveries/replays), run `dedup`, assert `duplicates_dropped / total < 0.001` after the intended dedup, and surface the measured rate (return it / assert on it). Likely `dedup.rs` gains a `DedupOutcome::duplicate_rate()` helper.
+- **p6.A2** VS Code + hook + transcript + filesystem evidence for one edit → exactly one activity (four `DedupObservation`s, four `EvidenceKind`s, one shared `CanonicalFingerprint` ⇒ `activities.len() == 1`, 4 children).
+- **p6.A3** restart / replay adds no duration — re-run the whole corpus twice through `dedup`, assert `total_active_seconds` unchanged and `duplicates_dropped` == corpus size. (Overlaps `rule6_...` — extend to the full corpus.)
+- **p6.A4** an evidence conflict is stored as a diagnostic, not silently overwritten — assert `conflicts` is populated and the kept activity still reflects the first payload (overlaps `rule2_...`).
+- **p6.A5** `golden.py` still `total_error: 0.0`; `verify_port.py` still green — this is the gate, just record it in the tick line.
+One commit `feat(planai2-p6.A): …` covering the new acceptance tests, then **Phase 6 done → Phase 7** (p7.1 pipeline stage model; Phase 7 is duration- **and** frontend-gated where it touches `frontend/app/`).
 
 **Concurrency note (2026-09-02):** a large concurrent feature landed in the tree
 while paused — new `ai/producer.rs` (+ `ai/mod.rs` re-exports), plus
@@ -323,11 +332,11 @@ The core that planai.md left "not built".
 **Every item here is duration-gated** (run the four `duration-audit` scripts).
 
 - [x] **p6.1 Versioned canonical fingerprint.** New `ai/canonical.rs`: `CanonicalIdentity<'a>` {workspace, entity, change kind, `occurred_at_unix`, `content_fingerprint` OR `line_delta`, `session_or_tool_id`} + `CanonicalFingerprint::v1(&identity)` — UUIDv5 (broker.rs convention) over `scheme | workspace | normalized entity | change kind | time-bucket | (cf: else ld:) | id:`. **Transport-independent by construction**: `CanonicalIdentity` has no `EvidenceKind`/producer field, and the timestamp is bucketed to `FINGERPRINT_TIME_BUCKET_SECONDS` (10 s), so a hook + its transcript line hash identically. Scheme prefix explicit in the value (`caf1:<uuid>`, `FINGERPRINT_SCHEME_V1`, `.scheme()`) — a bump is a visible prefix change. Re-exported from `ai/mod.rs`. Commit `93d7b83`.
-  - Tests (7): `same_logical_edit_from_two_transports_yields_one_fingerprint`, `a_fingerprint_scheme_version_is_explicit_in_the_value`, `timestamps_crossing_a_bucket_boundary_produce_a_different_fingerprint`, `entity_change_kind_workspace_and_identity_each_change_the_fingerprint`, `a_line_delta_is_used_only_when_no_content_fingerprint_is_present`, `entity_path_is_normalised_before_hashing`. Gates: fmt/clippy/test --workspace green (250 core); duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
-- [ ] **p6.2 Canonical activity aggregates child evidence IDs.** `canonical_event` holds child IDs: native hook / transcript / filesystem / editor.
-  - Tests: a canonical activity built from 3 evidence sources lists all 3 child IDs.
-- [ ] **p6.3 Dedup rules.** Same `event_id` + same payload → duplicate success (drop). Same `event_id` + different payload → conflict, kept as a diagnostic, **never a silent overwrite**. Different `event_id` + same fingerprint → merge. Weaker inferred evidence is superseded by verified. A multi-file event does not multiply duration by file count. The final heartbeat is generated from a single canonical-activity point.
-  - Tests: one per rule; the multi-file case asserts duration is unchanged vs a single-file event of the same interval.
+  - Tests (6): `same_logical_edit_from_two_transports_yields_one_fingerprint`, `a_fingerprint_scheme_version_is_explicit_in_the_value`, `timestamps_crossing_a_bucket_boundary_produce_a_different_fingerprint`, `entity_change_kind_workspace_and_identity_each_change_the_fingerprint`, `a_line_delta_is_used_only_when_no_content_fingerprint_is_present`, `entity_path_is_normalised_before_hashing`. Gates: fmt/clippy/test --workspace green (250 core); duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
+- [x] **p6.2 Canonical activity aggregates child evidence IDs.** `CanonicalActivity` in `ai/canonical.rs` — keyed by the p6.1 `CanonicalFingerprint`, holds `Vec<ChildEvidence { kind: EvidenceKind, lineage_id }>`. `add_child`/`with_child` idempotent per `(kind, lineage_id)`; `merge(&other)` unions two same-fingerprint activities (§6 "different event_id + same fingerprint → merge") and **panics** on a fingerprint mismatch. `child_lineage_ids()` / `evidence_kinds()` expose the aggregate. Ids + kinds only, no content/timestamps. `CanonicalFingerprint` gains `serde(transparent)`. Re-exported (`CanonicalActivity`, `ChildEvidence`). Commit `419e198`.
+  - Tests (5): `a_canonical_activity_built_from_three_evidence_sources_lists_all_three_child_ids`, `folding_the_same_child_twice_is_idempotent`, `merging_two_activities_for_one_fingerprint_unions_their_children`, `merging_activities_with_different_fingerprints_panics`, `a_canonical_activity_serializes_to_ids_and_kinds_only`. Gates: fmt/clippy/test --workspace green (255 core); duration-audit (total_error 0.0) ok.
+- [x] **p6.3 Dedup rules.** New `ai/dedup.rs`: `dedup(Vec<DedupObservation>) -> DedupOutcome { activities, total_active_seconds, conflicts, duplicates_dropped }`. Rule 1 same id+payload → counted duplicate, dropped. Rule 2 same id+diff payload → `DedupConflict{event_id, kept_payload_hash, rejected_payload_hash}`, first-seen stands (mirrors broker `ON CONFLICT … DO NOTHING`), no overwrite, no fresh activity. Rule 3 diff id + same `CanonicalFingerprint` → one merged activity, both events' children aggregated. Rule 4 `strongest_evidence` = `min_by(broker::evidence_rank_key)` — new `pub fn broker::evidence_rank_key(transport,&source,&confidence,occurred_at)`, private `evidence_rank(&BrokerEventV1)` now delegates to it (behaviour-preserving, broker tests untouched); **one ladder, reused**. Rules 5/6 duration = strongest source obs's `active_seconds` summed over activities (never over raw obs); with the ingress `spread_single_tool_interval`, 3-file and 1-file events of one interval both total T and a full replay still totals T. `DedupObservation` is a lean projection, **not** `BrokerEventV1` (DECISION: broker.rs concurrent-churned, no crate-public builder). `CanonicalActivity` gains `#[serde(default)] strongest_evidence: Option<ChildEvidence>`. Commit `9756d8a`.
+  - Tests (7): `rule1_same_event_id_same_payload_is_a_silent_duplicate`, `rule2_same_event_id_different_payload_is_a_kept_conflict_not_an_overwrite`, `rule3_different_event_ids_same_fingerprint_merge_into_one_activity`, `rule4_verified_evidence_supersedes_inferred_for_the_strongest_pointer`, `rule5_a_multi_file_event_does_not_multiply_duration_by_file_count`, `rule6_replaying_the_same_multi_file_event_adds_no_duration`, `two_verified_events_for_one_fingerprint_still_yield_one_duration_point`. Gates: fmt/clippy/test --workspace green (262 core); duration-audit verify_port/golden(**total_error 0.0**)/verify_actor_migration ok.
 
 ### Phase 6 acceptance criteria — named tests
 
@@ -478,6 +487,39 @@ Commit: `feat(planai2-p5.2)` (code) + this file.
 
 ---
 
+### 2026-09-02 — p6.3 — dedup layer shape and conflict semantics
+
+Read: `broker.rs` inbox ingest (`ON CONFLICT(event_id) DO NOTHING` →
+`BrokerIngestOutcome::{Accepted,Duplicate,Conflict}`; a differing payload on a
+seen `event_id` is **rejected, the first row kept**), `evidence_rank` /
+`evidence_supersedes` / `strongest_evidence` (the p2.1 4-tuple ladder), and
+`wakaclock-cli::spread_single_tool_interval` (p2.2 — a multi-file tool call's
+interval is already put entirely on the first record at *ingress*).
+
+**Decisions:**
+
+1. **Lean `DedupObservation` input, not `BrokerEventV1`.** `broker.rs` is in the
+   concurrent change set and `BrokerEventV1` is a 24-field struct with no
+   crate-public test builder; coupling p6.3 to it would make every dedup test a
+   24-field literal against a moving target. `DedupObservation` carries only what
+   the six rules need: `event_id`, `payload_hash`, `CanonicalFingerprint`,
+   `kind: EvidenceKind`, `lineage_id`, `active_seconds`, and the four ladder
+   inputs (`transport`, `source`, `confidence`, `occurred_at`). Caller maps its
+   events in.
+2. **One ladder — reuse `broker`'s.** Add `pub fn broker::evidence_rank_key(transport, source, confidence, occurred_at) -> (u8,u8,u8,i64)`; the existing private `evidence_rank(&BrokerEventV1)` becomes a one-line delegate. p6.3 ranks with `evidence_rank_key`, never a second ladder (behaviour-preserving refactor; broker tests untouched).
+3. **Conflict = first-seen stands, new payload recorded and dropped** — mirrors the broker's `DO NOTHING`. A conflicted `event_id` does **not** overwrite or replace anything and does **not** contribute a fresh canonical activity; it yields a `DedupConflict { event_id, kept_payload_hash, rejected_payload_hash }` diagnostic. (p5.2/advisor: "picking a winner and proceeding is still an overwrite".)
+4. **Duration counted once per canonical activity** = the *strongest* source observation's `active_seconds`, summed over activities — never summed over raw observations. Combined with the ingress spread, a multi-file event (3 fingerprints, seconds `[T,0,0]`) and a single-file event (`[T]`) both total `T`; a replay (duplicate `event_id`s) drops the dups and still totals `T`.
+
+New module `ai/dedup.rs` (keeps the `ai/mod.rs` staging dance to one `pub mod` +
+one `pub use`). `CanonicalActivity` gains an `#[serde(default)]
+strongest_evidence: Option<ChildEvidence>` (set by `dedup`, `null` for a
+hand-built activity — p6.2 round-trip test still green).
+
+Commit: `feat(planai2-p6.3)` (code: `ai/dedup.rs`, `ai/canonical.rs`,
+`broker.rs` rank shim, `ai/mod.rs` my hunks) + this file.
+
+---
+
 ## Iteration log
 
 _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest last.)_
@@ -518,3 +560,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.4 — done. `SystemActorKind` (Formatter/Build/VersionControl/Codegen) + optional `CorrelationInput.system_actor`; `verdict_for` rule 3 (below `ai_verified`, above conflict/inferred/human): `system_actor` set on any relevant input ⇒ `Unknown`/`SystemActor`. Per-entity so it can't suppress a real edit on another file. **Closes p5.A5; all p5.A1–A5 now discharged.** 5 new tests (core 226→231). One clippy fixup (renumbered the doc-comment rule ladder — `doc_list_item` rejects `2b.`). Gates + duration-audit(total_error 0.0) green. Committed `aae2f6e` (+ tracker).
 - 2026-09-01 — p5.5 — done. `Verdict` reframed as §5's evidence-lineage record (grade `AiVerdict` = confidence, `VerdictReason` = clause, `supporting_lineage` = producer ids, no content); doc comment updated. 2 new tests (core 231→233): same agent + 3 evidence sets ⇒ 3 different verdicts; lineage record is ids + reason only, no content/fingerprint/path leak, round-trips. **Phase 5 (Universal Correlation Engine) complete — p5.0–p5.5 + p5.A1–p5.A5.** Gates + duration-audit(total_error 0.0) green. Committed `08208a0` (+ tracker).
 - 2026-09-02 — p6.1 — done. New `ai/canonical.rs`: `CanonicalIdentity` + `CanonicalFingerprint::v1` (UUIDv5 over workspace|normalized-entity|change-kind|10s-time-bucket|content-fp-or-line-delta|session/tool-id). Transport-independent by construction (no `EvidenceKind` field); explicit `caf1:` scheme prefix. 7 tests. core 233→250 (incl. concurrent `producer.rs` tests). Committed `93d7b83` (+ tracker). NOTE: concurrent feature (`ai/producer.rs` et al.) landed in-tree while paused — not staged/reverted; full gate suite green with it.
+- 2026-09-02 — p6.3 — done. `ai/dedup.rs`: `dedup()` applies §6's 6 rules → `DedupOutcome{activities, total_active_seconds, conflicts, duplicates_dropped}`. Conflict = first-seen stands + diagnostic (mirrors broker `DO NOTHING`). Rule 4 reuses `broker::evidence_rank_key` (new pub fn; private `evidence_rank` delegates — behaviour-preserving). Duration = strongest obs's seconds per activity, summed over activities. `DedupObservation` lean (not `BrokerEventV1` — DECISION logged). `CanonicalActivity` += `strongest_evidence: Option<ChildEvidence>`. 7 tests. core 255→262. broker.rs + ai/mod.rs staged via save/restore dance (concurrent hunks kept out). Committed `9756d8a` (+ tracker).
