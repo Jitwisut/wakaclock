@@ -125,24 +125,26 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 5 — item p5.3** (boundary clipping). p5.0 (windows), p5.1 (intake), p5.2
-(`verdict_for` + `AiVerdict`/`VerdictReason`/`Verdict`, precedence DECISION
-logged, p3.A5/p4.A1/p4.A3/p5.A1–A4 discharged) are done. **p5.5 note:** confidence
-already derives from the evidence combination not the agent name
-(`confidence_comes_from_the_evidence_combination_not_the_agent_name`) and the
-`Verdict` carries `supporting_lineage` with no content — p5.5 is largely covered,
-revisit for an explicit "different evidence sets → different confidence *grade*"
-if p5.4 adds a graded confidence.
+**Phase 5 — item p5.4** (system actors). p5.0–p5.3 done (windows / intake /
+`verdict_for` + precedence DECISION / `ClipBounds` hard-clip). **p5.5 note:**
+confidence already derives from the evidence combination not the agent name
+(`confidence_comes_from_the_evidence_combination_not_the_agent_name`) and
+`Verdict.supporting_lineage` carries ids only, no content — p5.5 is largely
+covered; revisit only for an explicit "different evidence sets → different
+confidence *grade*" if p5.4 introduces a graded confidence.
 
-p5.3: clip evidence to the query **day / session boundary** — a hard clip, not a
-window (Decisions log p5.0). Add e.g. `CorrelationEngine::verdict_for_clipped(entity, at, day_bounds)` /
-a `clip_to(range)` that drops inputs outside `[day_start, day_end)` (and/or the
-session interval) **before** `verdict_for` runs, so an edit spanning midnight is
-attributed to each day separately and a prior day's session cannot reach into
-today. Test: an edit/among evidence spanning midnight is clipped to each day;
-evidence before `session.started_at` is excluded. Then p5.4 (system actors:
-formatter / `git checkout|merge` / build / codegen → `system`/`unknown`, closes
-p5.A5), then p5.5 if needed, then the remaining p5.A / done.
+p5.4: formatter / build / `git checkout` / `git merge` / codegen must get a
+**`system`/`unknown`** treatment, never `ai_*` (closes p5.A5). Add a
+`SystemActor` classification — likely a new `EvidenceKind::SystemActor` (or a
+`CorrelationInput` flag) that a producer sets for a change it recognises as a
+formatter/build/VCS/codegen sweep — and a `VerdictReason::SystemActor` so
+`verdict_for` returns `AiVerdict::Unknown` with that reason (NOT `ai_inferred`)
+whenever the change is dominated by system-actor evidence, even if an agent
+session happens to be live. `system` stays a *reason under `Unknown`*, not a 5th
+`AiVerdict` variant (p5.2 DECISION). Tests: a `prettier --write` burst → not
+`ai_inferred`; a `git merge` touching 40 files → not AI; a real agent edit in the
+same window is still `ai_inferred` (system evidence for a *different* file/change
+doesn't suppress it). Then p5.5 if needed, then remaining p5.A / done.
 
 ---
 
@@ -294,8 +296,8 @@ The core that planai.md left "not built".
   - `human` ⇐ `PositiveEditorInput(file)` AND `CorrelationWindowClosed` AND `NoConflictingAiEvidence`.
   - `unknown` ⇐ `FileChangedWithoutSufficientProvenance` OR `ConflictingHumanAndAiEvidence` OR `MultipleCompetingAiSessions`.
   - Tests (15 new, core 207→222): `a_native_hook_for_the_file_is_ai_verified`, `two_agents_both_verified_for_one_file_is_unknown_competing`, `p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred`, `p4_a3_process_name_only_sessions_cannot_infer_and_stay_unknown`, `p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai`, `p4_a1_a_session_with_no_change_produces_no_attribution`, `positive_editor_input_after_the_window_closes_is_human`, `editor_input_while_the_window_is_still_open_is_unknown_not_yet_human`, `p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human`, `p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict`, `two_strong_agent_sessions_competing_is_unknown`, `a_fingerprint_mismatch_blocks_ai_inferred`, `a_change_outside_every_window_is_unknown_no_evidence`, `confidence_comes_from_the_evidence_combination_not_the_agent_name`, `the_verdict_carries_the_lineage_that_backed_it_and_no_content`. Gates: fmt/clippy/test --workspace green; duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
-- [ ] **p5.3 Boundary clipping.** Evidence is clipped to the query day / session boundary.
-  - Tests: an edit spanning midnight is clipped to each day.
+- [x] **p5.3 Boundary clipping.** `ClipBounds` (half-open `[start, end)` instant range) + `utc_day()` / `session(started_at, until)` / `contains` / `intersect`; `CorrelationEngine::verdict_for_within(entity, at, bounds)` runs the §5 ladder after **hard-dropping** every input outside `bounds` (not a `CorrelationWindows` tolerance — a real clip), `inputs_for_within()` exposes the survivors. `verdict_for` now delegates to a shared private `decide()`; un-clipped path unchanged. Commit `bd93fa5`.
+  - Tests (4, core 222→226): `clip_bounds_utc_day_is_midnight_to_midnight_and_half_open`, `an_edit_spanning_midnight_is_attributed_to_each_day_separately` (day-1 clip ⇒ `AiInferred` from day-1 evidence only; day-2 clip ⇒ `Human` from the day-2 save only), `evidence_from_before_a_session_started_is_clipped_out` (pre-`started_at` change + sighting dropped ⇒ `Unknown`/`NoEvidence`), `clip_bounds_intersect_is_the_overlap_or_none`. Gates + duration-audit(total_error 0.0) green.
 - [ ] **p5.4 System actors.** Formatter, build, `git checkout` / `git merge`, codegen get a `system`/`unknown` treatment, not `ai_*`.
   - Tests: a `prettier --write` burst → not `ai_inferred`; a `git merge` touching 40 files → not AI.
 - [ ] **p5.5 Confidence + lineage.** Confidence derives from the *evidence combination*, never the agent name. Evidence lineage is retained so a result can be explained after the fact — **without** storing source content.
@@ -507,3 +509,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.0 — DECISION resolved (docs only). `CorrelationWindows` type, one named+reasoned window per evidence pair (10s hook↔transcript, 5s editor↔AI-edit, 60s fs↔agent-activity, 30s snapshot↔hook, 15s fs↔editor, 120s session-liveness grace), engine takes `&CorrelationWindows`, day/session clip separate. See Decisions log. Committed.
 - 2026-09-01 — p5.1 — done. New `ai/correlation_engine.rs`: `EvidenceKind` (7 producers, strongest-first `Ord`), `CorrelationInput` (verbatim `lineage_id` + normalized entity + optional workspace/agent/change_kind/confidence/session/tool-event/fingerprint — **no content field**), `CorrelationEngine::ingest` (preserves lineage + order) + `for_entity`/`entities`. `CorrelationWindows` (p5.0 six fields + `DEFAULT` + `between(a,b)` order-independent). Re-exported from `ai/mod.rs`. 6 new tests (core 201→207). Fixed one self-bug: `between` match arms must be in sorted `EvidenceKind` order. Gates + duration-audit(total_error 0.0) green. Committed `9f081ac`.
 - 2026-09-01 — p5.2 — done. §5 verdict pass: `AiVerdict` (4 outcomes, no `system`), `VerdictReason` (8 clauses), `Verdict {verdict, reason, supporting_lineage}`, `CorrelationEngine::verdict_for(entity, at)`. §5 has no stated precedence → 8-step fixed order recorded as a DECISION (Decisions log), constrained by the §5 ACs. `between()` drives `TimeWindowMatches`; new optional `CorrelationInput.evidence_strength` lets the engine (not the producer) apply `is_strong_enough_to_infer()`. 15 new tests (core 207→222). **Discharged** `[~]` p3.A5 / p4.A1 / p4.A3 (added runtime engine tests alongside the structural ones) and p5.A1–p5.A4; p5.A5 `[~]` → p5.4 (system actors). Gates + duration-audit(total_error 0.0) green. Committed `c45beca` (+ this tracker `<next>`).
+- 2026-09-01 — p5.3 — done. `ClipBounds` half-open `[start,end)` + `utc_day`/`session`/`contains`/`intersect`; `verdict_for_within(entity, at, bounds)` hard-drops out-of-range inputs before the §5 ladder, `inputs_for_within` exposes survivors. `verdict_for` → shared private `decide()`. 4 new tests (core 222→226). Gates + duration-audit(total_error 0.0) green. Committed `bd93fa5` (+ tracker).
