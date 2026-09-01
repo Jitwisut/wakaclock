@@ -42,6 +42,7 @@
     "onCommand:wakaclock.showAiTrackingStatus",
     "onCommand:wakaclock.showBrokerStatus",
     "onCommand:wakaclock.repairAiIntegrations",
+    "onCommand:wakaclock.testAiDetection",
     "workspaceContains:**/*"
   ],
   "contributes": {
@@ -85,6 +86,10 @@
       {
         "command": "wakaclock.repairAiIntegrations",
         "title": "AtoAxis: Repair AI Integrations"
+      },
+      {
+        "command": "wakaclock.testAiDetection",
+        "title": "AtoAxis: Test AI Detection"
       }
     ],
     "configuration": {

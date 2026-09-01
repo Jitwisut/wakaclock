@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { AiAgentId, AiAgentSetupResult, AiAgentStatus } from "./agentSetup";
+import { formatAiDetectionReport, runAiDetectionSelfTest } from "./aiDetectionSelfTest";
 import type { HeartbeatBufferManager } from "./buffer";
 import type { WakaclockCliService } from "./cli";
 import type { WakaclockConfigService } from "./config";
@@ -288,6 +289,24 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
       return setupAiTracking(aiIntegrations, cliService, context, true);
+    }),
+    vscode.commands.registerCommand("wakaclock.testAiDetection", async () => {
+      try {
+        const report = await runAiDetectionSelfTest({
+          getBrokerStatus: () => cliService.getBrokerStatus(),
+          getAiAgentStatuses: () => aiIntegrations.getStatus(),
+        });
+        const body = formatAiDetectionReport(report);
+        if (report.verdict === "ok") {
+          await vscode.window.showInformationMessage(body, { modal: false });
+        } else {
+          await vscode.window.showWarningMessage(body, { modal: false });
+        }
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : "Unable to run the AI detection self-test."
+        );
+      }
     })
   );
 }
