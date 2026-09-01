@@ -68,7 +68,9 @@ pub use path::{
 pub use process_observer::{
     match_agent as match_ai_process_agent, scan as scan_ai_processes, DetectedAiProcess,
 };
-pub use session::{EvidenceStrength, SessionProcessEvidence};
+pub use session::{
+    evidence_from_scan, strongest_session_evidence, EvidenceStrength, SessionProcessEvidence,
+};
 pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};
 pub use state::AiAttributionState;
 pub use usage::{

@@ -127,6 +127,54 @@ impl SessionProcessEvidence {
     }
 }
 
+/// planai2.md Phase 4 (p4.2): turn a process-table scan into session/process
+/// evidence, assigning strength from what could actually be confirmed:
+///
+/// - the process's cwd is inside a **registered** workspace root ⇒
+///   `ProcessTreeCwdMatch` (an exact place match — the tool is demonstrably
+///   working *here*);
+/// - otherwise a bare name match with no confirmable workspace ⇒
+///   `ProcessNameOnly` (telemetry: the tool is running *somewhere*).
+///
+/// The stronger tiers (`NativeLifecycle`, `AppendingTranscript`, `ChildOfToolCall`)
+/// come from the native-hook and transcript producers, not from a process scan,
+/// so this function never returns them.
+pub fn evidence_from_scan(
+    detected: &[DetectedAiProcess],
+    registered_workspace_roots: &[std::path::PathBuf],
+) -> Vec<SessionProcessEvidence> {
+    detected
+        .iter()
+        .map(|process| {
+            let mut evidence = SessionProcessEvidence::from_detected_process(process);
+            if let Some(cwd) = &process.cwd {
+                let inside_a_registered_root = registered_workspace_roots
+                    .iter()
+                    .any(|root| cwd == root || cwd.starts_with(root));
+                if inside_a_registered_root {
+                    evidence.workspace = Some(cwd.clone());
+                    evidence.strength = EvidenceStrength::ProcessTreeCwdMatch;
+                }
+            }
+            evidence
+        })
+        .collect()
+}
+
+/// The single strongest live piece of session/process evidence — by
+/// `strength.rank()`, then most-recent `last_activity_at`. `None` for an empty
+/// slice or when every entry has ended.
+pub fn strongest_session_evidence(
+    evidence: &[SessionProcessEvidence],
+) -> Option<&SessionProcessEvidence> {
+    evidence.iter().filter(|e| e.is_live()).min_by(|a, b| {
+        a.strength
+            .rank()
+            .cmp(&b.strength.rank())
+            .then(b.last_activity_at.cmp(&a.last_activity_at))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +264,92 @@ mod tests {
         assert_eq!(e.last_activity_at, e.started_at);
         assert!(e.is_live());
         assert!(!e.strength.is_strong_enough_to_infer());
+    }
+
+    #[test]
+    fn p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match() {
+        let here = PathBuf::from("/home/dev/project");
+        let scan = vec![
+            DetectedAiProcess {
+                agent: "codex".to_string(),
+                pid: 100,
+                cwd: Some(here.join("crates/core")),
+                started_at_epoch_seconds: 1_700_000_000,
+            },
+            DetectedAiProcess {
+                agent: "cursor".to_string(),
+                pid: 200,
+                // Running, but not in any workspace we track.
+                cwd: Some(PathBuf::from("/tmp/scratch")),
+                started_at_epoch_seconds: 1_700_000_100,
+            },
+            DetectedAiProcess {
+                agent: "windsurf".to_string(),
+                pid: 300,
+                cwd: None,
+                started_at_epoch_seconds: 1_700_000_050,
+            },
+        ];
+
+        let out = evidence_from_scan(&scan, std::slice::from_ref(&here));
+        assert_eq!(out.len(), 3);
+
+        // Process 1: cwd under a registered root -> exact place match.
+        assert_eq!(out[0].strength, EvidenceStrength::ProcessTreeCwdMatch);
+        assert_eq!(out[0].workspace, Some(here.join("crates/core")));
+        assert!(out[0].strength.is_strong_enough_to_infer());
+
+        // Processes 2 & 3: name-only telemetry, never inferrable.
+        assert_eq!(out[1].strength, EvidenceStrength::ProcessNameOnly);
+        assert_eq!(out[2].strength, EvidenceStrength::ProcessNameOnly);
+        assert!(!out[1].strength.is_strong_enough_to_infer());
+        assert!(!out[2].strength.is_strong_enough_to_infer());
+
+        // The exact-place match outranks the name-only matches.
+        assert!(out[0].strength.rank() < out[1].strength.rank());
+        assert_eq!(strongest_session_evidence(&out).map(|e| e.pid), Some(100));
+    }
+
+    #[test]
+    fn strongest_session_evidence_ignores_ended_sessions_and_breaks_ties_by_recency() {
+        let base = Utc::now();
+        let mk = |pid, strength, activity, ended| SessionProcessEvidence {
+            agent: "codex".to_string(),
+            provider: None,
+            pid,
+            ppid: None,
+            process_identity: "codex".to_string(),
+            workspace: None,
+            session_id: None,
+            tool_event_id: None,
+            started_at: base,
+            last_activity_at: activity,
+            ended_at: ended,
+            strength,
+        };
+        let ev = vec![
+            mk(
+                1,
+                EvidenceStrength::ProcessTreeCwdMatch,
+                base + Duration::seconds(10),
+                None,
+            ),
+            mk(
+                2,
+                EvidenceStrength::ProcessTreeCwdMatch,
+                base + Duration::seconds(40),
+                None,
+            ),
+            // Stronger, but ended — must be ignored.
+            mk(
+                3,
+                EvidenceStrength::NativeLifecycle,
+                base + Duration::seconds(99),
+                Some(base + Duration::seconds(50)),
+            ),
+        ];
+        assert_eq!(strongest_session_evidence(&ev).map(|e| e.pid), Some(2));
+        assert_eq!(strongest_session_evidence(&[]), None);
     }
 
     #[test]
