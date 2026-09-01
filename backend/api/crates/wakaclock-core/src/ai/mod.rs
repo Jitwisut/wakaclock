@@ -22,6 +22,7 @@ pub mod adapter;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
+pub mod correlation_engine;
 pub mod event;
 pub mod filesystem_observer;
 pub mod follow_up;
@@ -45,6 +46,9 @@ pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
+};
+pub use correlation_engine::{
+    CorrelationEngine, CorrelationInput, CorrelationWindows, EvidenceKind,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{
