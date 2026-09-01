@@ -125,13 +125,17 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 4 — item p4.3** (session lifecycle). p4.1 + p4.2 done. p4.3: process
-exit/crash closes the session — set `ended_at`, and duration stays bounded by
-`last_activity_at`/`ended_at`, never wall-clock `now` (`bounded_active_seconds()`
-already enforces this — p4.3 adds the *close-on-exit* driver: a
-`SessionEvidenceLedger` that tracks live evidence and, given "these pids are no
-longer running", stamps `ended_at`). Test: kill a tracked pid → `ended_at` set,
-duration bounded by `last_activity_at`. Then p4.A1–p4.A4.
+**Phase 4 — acceptance tests p4.A1–p4.A4**, then Phase 5. p4.1–p4.3 done.
+- p4.A1 (process/session evidence never produces a heartbeat on its own) →
+  structural: `SessionProcessEvidence` has no heartbeat/duration output path; it
+  is a correlation *input*. Assert + note it's fully enforced by Phase 5.
+- p4.A2 (exact workspace/session match scores higher than a process-name match)
+  → cite `p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match`.
+- p4.A3 (multiple AI tools active + no direct match → `unknown`) → the correlation
+  engine's call (Phase 5 p5.2); here assert `strongest_session_evidence` of two
+  `ProcessNameOnly` entries is still `!is_strong_enough_to_infer()`. `[~]`.
+- p4.A4 (process exit/crash closes the session cleanly) → cite
+  `p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now`.
 
 ---
 
@@ -257,8 +261,9 @@ Session/process is corroborating evidence, never a verdict that AI edited a file
 - [x] **p4.2 Wire `process_observer.rs` + reliability tiers.** Normalize detections into evidence with strength: native session/tool lifecycle > appending transcript with session/workspace metadata > child process spawned from a known agent tool call > process tree + exact cwd/workspace match > process name only (weak telemetry).
   - Tests: exact workspace/session match outranks a process-name-only match; process-name-only never reaches `ai_inferred` strength.
   - → committed | `evidence_from_scan(&[DetectedAiProcess], &[registered_roots]) -> Vec<SessionProcessEvidence>`: a detection whose `cwd` is `==` or under a **registered** workspace root ⇒ `ProcessTreeCwdMatch` (and `workspace` set); anything else ⇒ `ProcessNameOnly`. The stronger tiers (`NativeLifecycle`/`AppendingTranscript`/`ChildOfToolCall`) come from the hook/transcript producers, never from a scan, so this never returns them. `strongest_session_evidence(&[_]) -> Option<&_>`: strongest live entry by `strength.rank()` then most-recent `last_activity_at` (ended sessions skipped). tests: `p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match` (cwd-in-root → `ProcessTreeCwdMatch` + inferrable; the other two → `ProcessNameOnly` + `!is_strong_enough_to_infer()`; strongest is the cwd match), `strongest_session_evidence_ignores_ended_sessions_and_breaks_ties_by_recency`. core +2. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p4.3 Session lifecycle.** Process exit/crash closes the session without using `now` to extend duration unbounded.
+- [x] **p4.3 Session lifecycle.** Process exit/crash closes the session without using `now` to extend duration unbounded.
   - Tests: kill a tracked pid → session `ended_at` set, duration is bounded by `last_activity_at`, not wall-clock now.
+  - → committed | `SessionEvidenceLedger` in `ai/session.rs`: `observe(evidence, observed_at)` inserts/refreshes by pid (pushes `last_activity_at` forward, keeps earliest `started_at`, upgrades strength, backfills workspace/session_id/tool_event_id); `reap(&HashSet<u32> running_pids)` closes every live entry whose pid is absent — `ended_at = its own last_activity_at`, **never `now`** — removes it from the live set and returns it for the caller to flush; `live()`/`len()`/`is_empty()`. tests: `p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now` (pid seen at start then +90s, reaped 3h later → `ended_at == start+90s`, `bounded_active_seconds() == 90`), `reap_leaves_still_running_processes_untouched`, `observe_upgrades_strength_and_keeps_the_earliest_start`. core +3. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 
 ### Phase 4 acceptance criteria — named tests
 
@@ -422,4 +427,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p3.4 — done. `BoundedEventBuffer` (fixed-cap VecDeque ring, evict-oldest + `dropped()` counter, `DEFAULT_CAPACITY=4096`) + `ObserverPool::poll_into()`. 4 new tests incl. 10k-storm-stays-bounded + idle-watcher-doesn't-spin. core +4. Gates + duration-audit green. Committed `3320dcd`.
 - 2026-09-01 — p3.A1–A5 — Phase 3 acceptance. p3.A1/A2/A4 cited to p3.1–p3.4 tests. 2 new: `p3_a3_rename_is_normalized_...` (Removed+Created, never Modify), `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural). p3.A5 `[~]` — full lone-fs-event⇒`unknown` guarantee is Phase 5. **Phase 3 done.** core +2. Gates green. Committed `7f4b90e`.
 - 2026-09-01 — p4.1 — done. New `ai::session` — `SessionProcessEvidence` (12 fields, **no argv/env**, structural + JSON guards) + `EvidenceStrength` (5-tier ladder, `is_strong_enough_to_infer` = name-only can't infer) + `from_detected_process()` + `bounded_active_seconds()` (never wall-clock now). 5 new tests (core +5). Gates + duration-audit green. Committed `faad03d`.
-- 2026-09-01 — p4.2 — done. `evidence_from_scan()` (cwd in a registered root ⇒ `ProcessTreeCwdMatch`, else `ProcessNameOnly`; never returns the hook/transcript-only tiers) + `strongest_session_evidence()` (rank then recency, skips ended). 2 new tests (core +2). Gates + duration-audit green. Committed.
+- 2026-09-01 — p4.2 — done. `evidence_from_scan()` (cwd in a registered root ⇒ `ProcessTreeCwdMatch`, else `ProcessNameOnly`; never returns the hook/transcript-only tiers) + `strongest_session_evidence()` (rank then recency, skips ended). 2 new tests (core +2). Gates + duration-audit green. Committed `62795bb`.
+- 2026-09-01 — p4.3 — done. `SessionEvidenceLedger` — `observe()` (insert/refresh by pid) + `reap(&running_pids)` closes gone processes at `last_activity_at` (never `now`) and returns them. 3 new tests. core +3. Gates + duration-audit green. Committed.

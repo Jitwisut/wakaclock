@@ -11,6 +11,7 @@
 //! can carry secrets. There is no constructor, builder or `From` impl that
 //! accepts them.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -173,6 +174,74 @@ pub fn strongest_session_evidence(
             .cmp(&b.strength.rank())
             .then(b.last_activity_at.cmp(&a.last_activity_at))
     })
+}
+
+/// planai2.md Phase 4 (p4.3): tracks live session/process evidence and closes each
+/// entry the moment its process is gone. A close stamps `ended_at` with the
+/// evidence's own `last_activity_at` — the last time the process was actually
+/// observed doing something — **never** wall-clock `now`. This is what stops a
+/// crashed agent's session from accruing hours of phantom duration on later ticks.
+#[derive(Debug, Default)]
+pub struct SessionEvidenceLedger {
+    live: Vec<SessionProcessEvidence>,
+}
+
+impl SessionEvidenceLedger {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that a session/process was seen at `observed_at`. A repeat sighting
+    /// of the same pid pushes `last_activity_at` forward and keeps the earliest
+    /// `started_at`; the strength is upgraded if the new sighting is stronger.
+    pub fn observe(&mut self, mut evidence: SessionProcessEvidence, observed_at: DateTime<Utc>) {
+        evidence.last_activity_at = evidence.last_activity_at.max(observed_at);
+        if let Some(existing) = self.live.iter_mut().find(|e| e.pid == evidence.pid) {
+            existing.last_activity_at = existing.last_activity_at.max(observed_at);
+            existing.started_at = existing.started_at.min(evidence.started_at);
+            if evidence.strength.rank() < existing.strength.rank() {
+                existing.strength = evidence.strength;
+            }
+            if existing.workspace.is_none() {
+                existing.workspace = evidence.workspace;
+            }
+            existing.session_id = existing.session_id.take().or(evidence.session_id);
+            existing.tool_event_id = existing.tool_event_id.take().or(evidence.tool_event_id);
+        } else {
+            self.live.push(evidence);
+        }
+    }
+
+    /// Reconcile against the pids the OS still reports as alive. Every live entry
+    /// whose pid is absent from `running_pids` is closed (`ended_at =
+    /// last_activity_at`), removed from the live set, and returned so the caller
+    /// can flush it. Entries still running are left untouched.
+    pub fn reap(&mut self, running_pids: &HashSet<u32>) -> Vec<SessionProcessEvidence> {
+        let mut closed = Vec::new();
+        let mut i = 0;
+        while i < self.live.len() {
+            if running_pids.contains(&self.live[i].pid) {
+                i += 1;
+                continue;
+            }
+            let mut gone = self.live.remove(i);
+            gone.ended_at = Some(gone.last_activity_at);
+            closed.push(gone);
+        }
+        closed
+    }
+
+    pub fn live(&self) -> &[SessionProcessEvidence] {
+        &self.live
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +419,85 @@ mod tests {
         ];
         assert_eq!(strongest_session_evidence(&ev).map(|e| e.pid), Some(2));
         assert_eq!(strongest_session_evidence(&[]), None);
+    }
+
+    fn evidence(pid: u32, agent: &str, started: DateTime<Utc>) -> SessionProcessEvidence {
+        SessionProcessEvidence {
+            agent: agent.to_string(),
+            provider: None,
+            pid,
+            ppid: None,
+            process_identity: agent.to_string(),
+            workspace: None,
+            session_id: None,
+            tool_event_id: None,
+            started_at: started,
+            last_activity_at: started,
+            ended_at: None,
+            strength: EvidenceStrength::ProcessNameOnly,
+        }
+    }
+
+    #[test]
+    fn p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now() {
+        let start = Utc::now() - Duration::hours(3);
+        let mut ledger = SessionEvidenceLedger::new();
+
+        // Seen at start, then seen again 90s later still alive.
+        ledger.observe(evidence(42, "codex", start), start);
+        ledger.observe(evidence(42, "codex", start), start + Duration::seconds(90));
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(
+            ledger.live()[0].last_activity_at,
+            start + Duration::seconds(90)
+        );
+
+        // A tick much later where pid 42 is no longer in the process table.
+        let still_running: HashSet<u32> = [7, 999].into_iter().collect();
+        let closed = ledger.reap(&still_running);
+
+        assert_eq!(closed.len(), 1);
+        assert!(ledger.is_empty(), "a reaped session leaves the live set");
+        let dead = &closed[0];
+        // ended_at is the LAST time it was seen, not `now` (which is ~3h after start).
+        assert_eq!(dead.ended_at, Some(start + Duration::seconds(90)));
+        assert_eq!(dead.bounded_active_seconds(), 90);
+        assert!(!dead.is_live());
+    }
+
+    #[test]
+    fn reap_leaves_still_running_processes_untouched() {
+        let start = Utc::now();
+        let mut ledger = SessionEvidenceLedger::new();
+        ledger.observe(evidence(10, "cursor", start), start);
+        ledger.observe(evidence(20, "codex", start), start);
+
+        let closed = ledger.reap(&[10].into_iter().collect());
+        assert_eq!(closed.iter().map(|e| e.pid).collect::<Vec<_>>(), vec![20]);
+        assert_eq!(
+            ledger.live().iter().map(|e| e.pid).collect::<Vec<_>>(),
+            vec![10]
+        );
+        assert!(ledger.live()[0].is_live());
+        assert!(ledger.live()[0].ended_at.is_none());
+    }
+
+    #[test]
+    fn observe_upgrades_strength_and_keeps_the_earliest_start() {
+        let t0 = Utc::now();
+        let mut ledger = SessionEvidenceLedger::new();
+        ledger.observe(evidence(1, "codex", t0), t0);
+
+        let mut stronger = evidence(1, "codex", t0 + Duration::seconds(5));
+        stronger.strength = EvidenceStrength::ProcessTreeCwdMatch;
+        stronger.workspace = Some(PathBuf::from("/w"));
+        ledger.observe(stronger, t0 + Duration::seconds(30));
+
+        let e = &ledger.live()[0];
+        assert_eq!(e.strength, EvidenceStrength::ProcessTreeCwdMatch);
+        assert_eq!(e.started_at, t0); // earliest kept
+        assert_eq!(e.last_activity_at, t0 + Duration::seconds(30));
+        assert_eq!(e.workspace, Some(PathBuf::from("/w")));
     }
 
     #[test]
