@@ -125,21 +125,25 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 7 — item p7.4 (precision/recall report)** next. **p7.1, p7.2, p7.3
-done.** p7.2 VS Code half `1de00d0`; p7.2 frontend half `40fba12`
-(`AiAttributionLegend`). p7.3 `d03596a` — `ai/shadow.rs`: `ObserverConfig` gate
-(`enabled` + `attribution_mode` observe_only|infer) + per-workspace/per-source
-kill switches + `observe()` → `ObserverOutcome`; `ShadowRecord` / `ShadowLog`
-(the dataset p7.4 reads — proposed grade + native-hook oracle + p6.1 fingerprint
-join key + p5.5 lineage). core 281.
+**Phase 7 — item p7.A1 (acceptance tests)** next. **p7.1, p7.2, p7.3, p7.4
+done.** p7.3 `d03596a` (`ai/shadow.rs` observer gate + kill switches). p7.4
+`16f211b` (`ai/shadow_report.rs` — `compare_to_oracle` → `native_adapter_recall`
++ `universal_inference_precision`, two unmerged `Option<f64>`; new
+`ShadowRecord.ground_truth` label axis, DECISION logged). core 287.
 
-p7.4: a report over a `ShadowLog` (or a fixture shadow dataset) comparing the
-proposed (shadow) grades to verified events. **Precision reported SEPARATELY
-from native-adapter recall — never merged** (planai2.md l.620–621: "รายงาน
-precision แยกจาก native adapter recall ห้ามนำ verified/inferred มารวมเป็นตัวเลขเดียว").
-Likely a new `ai/shadow_report.rs` (or an fn in `shadow.rs`) producing a struct
-with two distinct fields; test asserts the two numbers are surfaced separately
-and a fixture produces the expected values. Duration-gated (run the 4 scripts).
+Next: **p7.A1–p7.A4** acceptance tests. Read them at the "Phase 7 acceptance
+criteria" heading. Likely most are already substantially covered by
+p7.1–p7.4's tests — for each, either point at the existing test(s) that
+discharge it, or add a small dedicated one. **p7.A1** (observe-only ≠ output
+change) and **p7.A2** (precision/recall report exists + separates the two): the
+evidence lines MUST carry the "no production call site / no labelled corpus yet"
+caveats from the p7.3 and p7.4 Decisions-log entries — do not let them read as
+independently end-to-end verified. **p7.A3** (rollout per-agent/per-platform)
+and **p7.A4** (rollback needs no migration, deletes no data): p7.3's
+`disabled_workspaces`/`disabled_sources` are plain set edits — A4 is close;
+A3 may need a per-agent/per-platform toggle if `disabled_sources` (per
+`EvidenceKind`) doesn't already satisfy "per-agent". Then **p7.2c** (deferred
+sub-project). Then check Run DoD.
 
 **p7.2c added** (`[ ]`, blocks Run DoD): the broker-health panel + parser-lag /
 stale-adapter warnings from p7.2's original text were split out — they need
@@ -380,8 +384,8 @@ Duration-gated **and** frontend-gated where it touches `frontend/app/`.
   - Tests: server round-trip over a fixture diagnostics payload asserting metadata-only (no prompt/diff/patch/source/argv/clipboard keys); frontend panel render test with a `userId`-scoped query key; `npm run validate` + backend gate suite green.
 - [x] **p7.3 Shadow mode.** New `ai/shadow.rs`. `ObserverConfig { enabled, attribution_mode: AttributionMode::{ObserveOnly (Default / rollout-start) | Infer}, disabled_workspaces: BTreeSet<PathBuf>, disabled_sources: BTreeSet<EvidenceKind> }` — the two kill switches are plain set edits (no migration, symmetric to undo → satisfies p7.A4 "rollback ไม่ต้อง migrate หรือลบข้อมูล"). `observe(config, entity, workspace, proposed, oracle, at) -> ObserverOutcome { production: Option<Verdict>, record: Option<ShadowRecord> }`: `production` is `Some` **only** in `enabled` + `Infer` on a live workspace; every other state (incl. `enabled` + `observe_only`) → `None` = "leave existing attribution untouched". `ShadowRecord` = sanitized proposed-vs-native-hook-oracle row for the p7.4 report — keeps the p6.1 canonical fingerprint (opaque join key; explicitly allowed here, unlike p5.5's `Verdict`) + p5.5 lineage ids, no diff/prompt/argv/clipboard/file text. `ShadowLog::agreement_counts() -> (match, mismatch, no_oracle)`. **Not wired into the heartbeat path** (`CorrelationEngine` still has no production call site) so "byte-identical analytics" is trivially true today — the switch is what p7.3 pins; real end-to-end assertion lands at a future wiring item. `ai/mod.rs` staged via save/restore dance. Commit `d03596a`.
   - → `d03596a` | tests (8, core 273→281): `observer_config_round_trips_and_defaults_to_off_and_observe_only`, `the_rollout_start_config_records_but_does_not_feed_production`, `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` (renamed from the tracker's "byte-identical" wording + doc comment explaining why that claim is trivial today — advisor), `flipping_to_infer_is_the_only_switch_that_changes_production_output`, `a_per_source_kill_switch_disables_exactly_that_source`, `a_per_workspace_kill_switch_removes_only_that_workspace`, `a_shadow_record_is_metadata_only`, `oracle_agreement_is_match_mismatch_or_no_oracle` | gates: fmt/clippy/test --workspace green; duration-audit verify_port / golden (**total_error 0.0**) / verify_actor_migration / verify_certification green.
-- [ ] **p7.4 Precision/recall report.** A report comparing proposed (shadow) attribution to verified events, precision reported **separately** from native-adapter recall — never merged into one number.
-  - Tests: report generation over a fixture shadow dataset; asserts the two numbers are reported distinctly.
+- [x] **p7.4 Precision/recall report.** New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with two ratio accessors from **different relations** over the log, never merged: `native_adapter_recall()` (label→oracle: of corpus-labelled-AI changes, the fraction a native adapter directly reported; ignores `proposed`) and `universal_inference_precision()` (proposal→label: of `ai_inferred` proposals carrying a label, the fraction the label confirms as AI; ignores `oracle`, ignores every `ai_verified` proposal). Both `Option<f64>` (`None` on empty denominator). **No `combined()`/`accuracy()`** — planai2.md Release Gates forbid one blended verified/inferred number. Raw counts (incl. `unscored_inferences`) stay on the struct so a ratio is never read without its base. Needed a third axis: new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>` — an **independent** dataset label (not derived from proposal or oracle). DECISION logged (advisor): without it, `proposed == AiInferred && oracle.is_some()` is empty by construction (§5 rule 2 vs rule 6 mutually exclusive per entity), so precision would be structurally unmeasurable. `ai/mod.rs` via save/restore dance. Commit `16f211b`.
+  - → `16f211b` | tests (6, core 281→287): `the_report_keeps_inference_precision_and_native_adapter_recall_as_separate_numbers` (fixture → recall 0.6, precision 0.5, two visibly different numbers), `precision_is_measured_only_over_inferred_proposals` (verified-only log → precision `None`), `recall_is_measured_only_over_label_known_ai_changes` (unlabelled log → recall `None`), `an_inferred_proposal_the_label_calls_human_is_a_precision_miss` (precision 2/3), `unscored_inferences_stay_visible_next_to_a_perfect_precision` (1.0 over 3, with 100 unscored surfaced), `the_report_exposes_the_counts_but_no_merged_number_and_no_content` (serialized JSON has the five counts, no `accuracy`/`combined`/`blended`/`f1`/content key) | gates: fmt/clippy/test --workspace green; duration-audit verify_port / golden (**total_error 0.0**) / verify_actor_migration / verify_certification green.
 
 ### Phase 7 acceptance criteria — named tests
 
@@ -576,6 +580,44 @@ Files: `frontend/app/components/wakaclock/ai-attribution-legend.tsx` (new),
 `frontend/app/app/dashboard/(auth)/wakaclock/ai/page.tsx`. Commit `40fba12`
 + this file.
 
+### 2026-09-02 — p7.4 — shadow report needs an independent ground-truth label
+
+Read: `ai/correlation_engine.rs` §5 ladder (rule 2 `ai_verified` ⇐ a verified
+producer present for the file; rule 6 `ai_inferred` ⇐ **no** verified producer),
+`ai/shadow.rs` `ShadowRecord` (`proposed`, `oracle`, fingerprint, lineage).
+
+**Problem (advisor):** if the report scores inference precision as "of
+`proposed == AiInferred` records with an `oracle`, how many the oracle confirms
+as AI", the denominator is **empty by construction** — §5 rules 2 and 6 are
+mutually exclusive per `(entity, at)` and `verdict_for` returns one verdict per
+record, so `proposed == AiInferred && oracle.is_some()` never happens when the
+oracle *is* the native hook. A hand-built fixture would pass anyway (records
+written by hand, not through the ladder) — the same vacuous-test trap as p7.3's
+renamed test.
+
+**Decision:** scoring gets a **third, independent axis** —
+`ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>`, a dataset label
+(a tool call's file manifest ⇒ `Ai`; a keystroke-logged session ⇒ `Human`),
+never derived from `proposed` or `oracle`. Then:
+- **native-adapter recall** = label→oracle: `count(label==Ai && oracle.is_some())
+  / count(label==Ai)`. Non-circular (label ⟂ oracle). This is the KPI's real
+  meaning ("of AI edits that happened, how many did an adapter report").
+- **universal-inference precision** = proposal→label: `count(proposed==AiInferred
+  && label==Ai) / count(proposed==AiInferred && label.is_some())`.
+The two relate different pairs of the three axes and share no term. No
+`combined()`/`accuracy()` accessor. `unscored_inferences` (inferred proposals
+with no label) is kept on the struct so precision is never quoted without its
+base. A hand-labelled fixture is legitimate here — a *shadow dataset* is by
+definition hand-labelled; that is the artifact p7.4 consumes.
+
+**Owed:** when p7.A2 is ticked, its evidence line must note that precision is
+only measurable once a labelled shadow corpus exists (same caveat discipline as
+p7.3 / p7.A1) — the report *exists and separates the two numbers*, which is what
+p7.A2 asserts, but a real precision figure needs the corpus.
+
+Files: `ai/shadow_report.rs` (new), `ai/shadow.rs` (`LabeledActor` +
+`ground_truth`), `ai/mod.rs` (my hunks, dance). Commit `16f211b` + this file.
+
 ---
 
 ## Iteration log
@@ -623,3 +665,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-02 — p7.2 (VS Code half) — done. `AtoAxis: Test AI Detection` command: new `extensions/vscode/src/aiDetectionSelfTest.ts` (`runAiDetectionSelfTest` → ok/degraded/failing verdict over broker + adapter status; `formatAiDetectionReport`), registered in `commands.ts`, contributed in `package.json`. 12 vitest cases (vscode 82→94). lint clean. `out/src/commands.js` regen owed (concurrent refactor edits the same generated file). `commands.ts` staged via save/restore dance. Frontend half (broker-health panel + tooltip + parser-lag warnings) blocked on a non-existent backend diagnostics endpoint — see Current position. Committed `1de00d0` (+ tracker).
 - 2026-09-02 — p7.2 (frontend half) — done. `AiAttributionLegend` on `ai/page.tsx`: per-class explainer of the §5 decision rule (verified = native hook/MCP; inferred = agent activity in the correlation window with no competing editor input; human = positive editor keystroke/save; unknown = unproven/conflicting, never AI), rendered from the existing `wakaclockKeys.aiStats(userId, …)` query — no new endpoint. Metadata-only privacy test. `test/wakaclock-ai-attribution-legend.test.tsx` ×4. `npm run validate` green (40/213 → 41/217). Scoped out the broker-health panel + parser-lag / stale-adapter warnings to new **p7.2c** — they need local broker/transcript state the hosted API never receives; `[ ]` not `[~]` (unbuilt infra, not a missing tool). Decision logged. **p7.2 now `[x]`.** Committed `40fba12` (+ tracker). Frontend files are outside the concurrent change set — staged directly, no dance.
 - 2026-09-02 — p7.3 — done. New `ai/shadow.rs`: `ObserverConfig` (`enabled` + `AttributionMode` observe_only|infer + `disabled_workspaces`/`disabled_sources` kill switches, all plain set edits → p7.A4 rollback-without-migration). `observe()` → `ObserverOutcome { production: Option<Verdict>, record: Option<ShadowRecord> }`; `production` is `Some` only in `enabled`+`Infer` on a live workspace, `None` everywhere else. `ShadowRecord`/`ShadowLog` = the sanitized proposed-vs-oracle dataset p7.4 consumes (p6.1 fingerprint join key + p5.5 lineage, no content). Engine still has no production call site so "byte-identical analytics" is trivially true today — renamed that test to `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` with a doc comment saying so (advisor); the real assertion is owed at a future wiring item. 8 tests, core 273→281. `ai/mod.rs` via save/restore dance (concurrent `producer` hunks kept out; combined restored, builds). Gates + duration-audit (total_error 0.0) green. Committed `d03596a` (+ tracker). Took p7.3 before p7.2c per the `/loop` Current position ordering (p7.2c is a sub-project, deferred to end of Phase 7) — noted at the p7.2c item so a cold-context agent sees the deliberate step-3 skip.
+- 2026-09-02 — p7.4 — done. New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with `native_adapter_recall()` (label→oracle) and `universal_inference_precision()` (proposal→label) — two `Option<f64>` from different relations over the log, **no merged accessor** (planai2.md Release Gates: "ห้ามนำ verified/inferred มารวมเป็นตัวเลขเดียว"). Raw counts incl. `unscored_inferences` on the struct. Advisor call surfaced that precision is empty by construction without an independent label (§5 rule 2 vs 6 mutually exclusive) → new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>`; DECISION logged. 6 tests, core 281→287. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `16f211b` (+ tracker).
