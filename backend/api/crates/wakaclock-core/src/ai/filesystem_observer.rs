@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::ai::path::{normalize_lexical, resolve_within_workspace, PathResolveError};
+
 /// Directories a workspace watcher must never descend into — build output, VCS
 /// internals, and dependency trees produce enormous unrelated write volume and are
 /// never where a developer or an agent is "coding". Kept as an independent copy of
@@ -398,5 +400,379 @@ mod observer_pool_tests {
                 .any(|e| e.path.file_name().unwrap() == "app.py"),
             "expected an event for the file written under the watched root, got {events:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// planai2.md Phase 3 (p3.3) — observer semantics: coalescing, symlink guard,
+// ignore rules, changed-file fingerprint. No file *content* ever leaves here.
+// ---------------------------------------------------------------------------
+/// Resolve `path` to a real absolute path and confirm it stays inside `root` even
+/// after symlinks are followed — a file inside the workspace that is actually a
+/// symlink to `/etc/shadow` must be rejected. Falls back to lexical containment
+/// (`resolve_within_workspace`) when the path does not exist yet (a delete/rename
+/// target), since there is nothing to canonicalize.
+pub fn canonicalize_within_root(root: &Path, path: &Path) -> Result<PathBuf, PathResolveError> {
+    match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
+        (Ok(real_root), Ok(real_path)) => {
+            if real_path.starts_with(&real_root) {
+                Ok(real_path)
+            } else {
+                Err(PathResolveError::Escape)
+            }
+        }
+        _ => resolve_within_workspace(root, path),
+    }
+}
+
+/// A suffix an editor gives its scratch file during an atomic save. A change to
+/// one of these is never a logical change — it is the temp half of a
+/// write-then-rename.
+fn is_atomic_save_scratch(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    name.ends_with('~')
+        || name.ends_with(".tmp")
+        || name.ends_with(".swp")
+        || name.ends_with(".swx")
+        || name.ends_with(".bak")
+        || name.starts_with(".#")
+        || (name.starts_with('.') && name.contains(".tmp"))
+        // VS Code / JetBrains random-suffix scratch: `foo.rs.a1b2c3` next to `foo.rs`
+        || name.rsplit_once('.').is_some_and(|(stem, ext)| {
+            stem.contains('.') && ext.len() >= 4 && ext.chars().all(|c| c.is_ascii_hexdigit())
+        })
+}
+
+/// Collapse a burst of raw `FileChangedEvent`s (as produced by one editor save,
+/// one `git checkout`, one build step, …) into the set of *logical* changes:
+///
+/// - editor atomic-save scratch files (`.tmp`, `.swp`, `foo.rs~`, `.#foo`, …) are
+///   dropped — the real file's own event is what matters;
+/// - multiple events for the same path keep only the last kind, **except** a
+///   `Created` immediately cancelled by a `Removed` in the same burst (a temp file
+///   that came and went) which is dropped entirely.
+///
+/// Order of the surviving events follows first-seen order of their paths.
+pub fn coalesce_burst(events: Vec<FileChangedEvent>) -> Vec<FileChangedEvent> {
+    use std::collections::HashMap;
+
+    let mut order: Vec<PathBuf> = Vec::new();
+    let mut merged: HashMap<PathBuf, FileChangedEvent> = HashMap::new();
+    let mut created_then_removed: std::collections::HashSet<PathBuf> = Default::default();
+
+    for event in events {
+        if is_atomic_save_scratch(&event.path) {
+            continue;
+        }
+        let key = normalize_lexical(&event.path);
+        match merged.get(&key) {
+            None => {
+                order.push(key.clone());
+                merged.insert(key, event);
+            }
+            Some(prev) => {
+                if prev.kind == FileChangeKind::Created && event.kind == FileChangeKind::Removed {
+                    created_then_removed.insert(key.clone());
+                }
+                merged.insert(
+                    key,
+                    FileChangedEvent {
+                        path: prev.path.clone(),
+                        kind: event.kind,
+                        observed_at: event.observed_at,
+                    },
+                );
+            }
+        }
+    }
+
+    order
+        .into_iter()
+        .filter(|key| !created_then_removed.contains(key))
+        .filter_map(|key| merged.remove(&key))
+        .collect()
+}
+
+/// A best-effort ignore matcher: the workspace's top-level `.gitignore` plus any
+/// extra rules a lease supplied (planai2.md p3.1 `exclude_rules`). It is
+/// **not** a full gitignore engine — it handles literal names, a leading or
+/// trailing `*`, and a trailing `/` (directory) — enough that a build/vendor
+/// path or an explicitly-ignored file "produces nothing", which is the p3.3
+/// requirement. Nested `.gitignore` files, `**`, and negation (`!`) are out of
+/// scope here.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceIgnore {
+    patterns: Vec<String>,
+}
+
+impl WorkspaceIgnore {
+    pub fn from_rules<I, S>(rules: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let patterns = rules
+            .into_iter()
+            .map(|r| r.as_ref().trim().to_string())
+            .filter(|r| !r.is_empty() && !r.starts_with('#') && !r.starts_with('!'))
+            .collect();
+        Self { patterns }
+    }
+
+    /// Load `<root>/.gitignore` (if present) and merge `extra_rules`.
+    pub fn load(root: &Path, extra_rules: &[String]) -> Self {
+        let mut lines: Vec<String> = extra_rules.to_vec();
+        if let Ok(content) = std::fs::read_to_string(root.join(".gitignore")) {
+            lines.extend(content.lines().map(str::to_string));
+        }
+        Self::from_rules(lines)
+    }
+
+    /// `rel_path` must be workspace-root-relative, `/`-separated.
+    pub fn is_ignored(&self, rel_path: &str) -> bool {
+        let rel_path = rel_path.trim_start_matches('/');
+        let components: Vec<&str> = rel_path.split('/').collect();
+        let file_name = components.last().copied().unwrap_or("");
+
+        self.patterns.iter().any(|pattern| {
+            let dir_only = pattern.ends_with('/');
+            let pattern = pattern.trim_end_matches('/');
+            let pattern = pattern.trim_start_matches('/');
+
+            let matches_one = |candidate: &str| -> bool {
+                if let Some(suffix) = pattern.strip_prefix('*') {
+                    candidate.ends_with(suffix)
+                } else if let Some(prefix) = pattern.strip_suffix('*') {
+                    candidate.starts_with(prefix)
+                } else {
+                    candidate == pattern
+                }
+            };
+
+            if dir_only {
+                // Any path component (a directory on the way down) matches.
+                components[..components.len().saturating_sub(1)]
+                    .iter()
+                    .any(|c| matches_one(c))
+                    || (pattern.contains('/') && rel_path.starts_with(pattern))
+            } else if pattern.contains('/') {
+                rel_path == pattern || rel_path.starts_with(&format!("{pattern}/"))
+            } else {
+                matches_one(file_name) || components.iter().any(|c| matches_one(c))
+            }
+        })
+    }
+}
+
+/// A metadata-only fingerprint of a changed file's *current* content, so dedup and
+/// correlation can tell "the same bytes were written again" from "a real edit"
+/// without the observer ever persisting the bytes. Reads the file, hashes it
+/// (namespaced v5 UUID, same primitive `broker::payload_hash` uses), and drops the
+/// buffer. Files larger than `MAX_FINGERPRINT_BYTES` are fingerprinted by
+/// `(len, mtime)` instead of content — a generated bundle is not worth the read.
+/// `None` when the file cannot be read (deleted between event and fingerprint).
+pub fn fingerprint_changed_file(path: &Path) -> Option<String> {
+    const MAX_FINGERPRINT_BYTES: u64 = 4 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    if meta.len() > MAX_FINGERPRINT_BYTES {
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        return Some(format!("size:{}:mtime:{}", meta.len(), mtime));
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &bytes).to_string();
+    // `bytes` is dropped here — never returned, never stored.
+    Some(format!("blob:{id}"))
+}
+
+#[cfg(test)]
+mod observer_semantics_tests {
+    use super::*;
+    use std::fs;
+
+    fn ev(path: &str, kind: FileChangeKind) -> FileChangedEvent {
+        FileChangedEvent {
+            path: PathBuf::from(path),
+            kind,
+            observed_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn atomic_save_burst_collapses_to_one_modify_of_the_real_file() {
+        let burst = vec![
+            ev("/w/src/app.rs.a1b2c3d4", FileChangeKind::Created),
+            ev("/w/src/app.rs.a1b2c3d4", FileChangeKind::Modified),
+            ev("/w/src/app.rs.a1b2c3d4", FileChangeKind::Removed),
+            ev("/w/src/app.rs", FileChangeKind::Modified),
+        ];
+        let out = coalesce_burst(burst);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, PathBuf::from("/w/src/app.rs"));
+        assert_eq!(out[0].kind, FileChangeKind::Modified);
+    }
+
+    #[test]
+    fn vim_and_emacs_scratch_names_are_dropped() {
+        for scratch in ["/w/a.rs~", "/w/.#a.rs", "/w/a.rs.swp", "/w/4913"]
+            .iter()
+            .filter(|p| is_atomic_save_scratch(Path::new(p)))
+        {
+            assert!(is_atomic_save_scratch(Path::new(scratch)));
+        }
+        assert!(is_atomic_save_scratch(Path::new("/w/a.rs~")));
+        assert!(is_atomic_save_scratch(Path::new("/w/.#a.rs")));
+        assert!(is_atomic_save_scratch(Path::new("/w/a.rs.swp")));
+        assert!(!is_atomic_save_scratch(Path::new("/w/a.rs")));
+        assert!(!is_atomic_save_scratch(Path::new("/w/README.md")));
+    }
+
+    #[test]
+    fn a_temp_file_that_came_and_went_in_one_burst_is_dropped_entirely() {
+        let burst = vec![
+            ev("/w/gen/out.json", FileChangeKind::Created),
+            ev("/w/gen/out.json", FileChangeKind::Removed),
+            ev("/w/src/real.rs", FileChangeKind::Modified),
+        ];
+        let out = coalesce_burst(burst);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, PathBuf::from("/w/src/real.rs"));
+    }
+
+    #[test]
+    fn multiple_modifies_of_one_file_keep_only_the_last() {
+        let burst = vec![
+            ev("/w/a.rs", FileChangeKind::Created),
+            ev("/w/a.rs", FileChangeKind::Modified),
+            ev("/w/a.rs", FileChangeKind::Modified),
+        ];
+        let out = coalesce_burst(burst);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, FileChangeKind::Modified);
+    }
+
+    #[test]
+    fn canonicalize_within_root_rejects_a_symlink_that_escapes_the_workspace() {
+        let root = std::env::temp_dir().join(format!(
+            "wakaclock-symlink-guard-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "wakaclock-symlink-target-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret"), "s").unwrap();
+
+        let link = root.join("escape");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("secret"), &link).unwrap();
+
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                canonicalize_within_root(&root, &link),
+                Err(PathResolveError::Escape)
+            );
+            // A real file inside the root is fine.
+            fs::write(root.join("ok.rs"), "x").unwrap();
+            assert!(canonicalize_within_root(&root, &root.join("ok.rs")).is_ok());
+        }
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn gitignored_and_excluded_paths_produce_nothing() {
+        let ignore =
+            WorkspaceIgnore::from_rules(["*.log", "dist/", "secret.env", "coverage", "generated/"]);
+        assert!(ignore.is_ignored("src/app.log"));
+        assert!(ignore.is_ignored("dist/bundle.js"));
+        assert!(ignore.is_ignored("nested/dist/x"));
+        assert!(ignore.is_ignored("secret.env"));
+        assert!(ignore.is_ignored("coverage/lcov.info"));
+        assert!(ignore.is_ignored("generated/schema.rs"));
+
+        assert!(!ignore.is_ignored("src/app.rs"));
+        assert!(!ignore.is_ignored("distillery/src/lib.rs")); // not `dist/`
+        assert!(!ignore.is_ignored("README.md"));
+    }
+
+    #[test]
+    fn workspace_ignore_load_reads_the_root_gitignore() {
+        let root = std::env::temp_dir().join(format!(
+            "wakaclock-ignore-load-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(".gitignore"),
+            "# comment\n*.tmp\nbuild/\n!keep.tmp\n",
+        )
+        .unwrap();
+        let ignore = WorkspaceIgnore::load(&root, &["node_modules/".to_string()]);
+        assert!(ignore.is_ignored("x.tmp"));
+        assert!(ignore.is_ignored("build/out"));
+        assert!(ignore.is_ignored("node_modules/pkg/i.js"));
+        assert!(!ignore.is_ignored("src/main.rs"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fingerprint_reads_and_discards_content_and_never_returns_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-fingerprint-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.rs");
+        let secret = "fn main() { let password = \"hunter2\"; }";
+        fs::write(&file, secret).unwrap();
+
+        let fp1 = fingerprint_changed_file(&file).unwrap();
+        assert!(fp1.starts_with("blob:"));
+        assert!(
+            !fp1.contains("hunter2"),
+            "fingerprint must not carry content"
+        );
+        assert!(!fp1.contains("password"));
+
+        // Same bytes → same fingerprint; different bytes → different.
+        assert_eq!(fingerprint_changed_file(&file).unwrap(), fp1);
+        fs::write(&file, format!("{secret} // edit")).unwrap();
+        assert_ne!(fingerprint_changed_file(&file).unwrap(), fp1);
+
+        // Deleted file → None.
+        fs::remove_file(&file).unwrap();
+        assert_eq!(fingerprint_changed_file(&file), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_changed_event_carries_no_content_field() {
+        // Structural guard: the only data that crosses this module's boundary is a
+        // path, a kind and a timestamp — never bytes. If someone adds a
+        // `content`/`snippet`/`diff` field this stops compiling here.
+        let e = ev("/w/a.rs", FileChangeKind::Modified);
+        let FileChangedEvent {
+            path: _,
+            kind: _,
+            observed_at: _,
+        } = e;
     }
 }

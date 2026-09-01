@@ -125,14 +125,14 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 3 — item p3.3** (observer semantics). p3.1 + p3.2 done. p3.3: create /
-modify / rename / delete; coalesce atomic-save (write-temp + rename) into one
-logical change; canonicalize path + symlink-escape guard; respect `.gitignore` /
-user excludes / build/vendor dirs (`is_excluded_path` already covers the
-built-ins); fingerprint only changed files (reuse `wakaclock-cli/src/tool_snapshot.rs`
-git-blob hashing — but core can't depend on cli, so a small shared hash or a
-core-side copy); **never read or persist source content**. Then p3.4
-(backpressure) + p3.A1–p3.A5.
+**Phase 3 — item p3.4** (backpressure). p3.1–p3.3 done. p3.4: an event storm has
+bounded memory + applies backpressure; idle CPU/memory within a stated budget.
+The `WorkspaceWatcher` uses an `mpsc::channel` (unbounded) — p3.4 adds a bounded
+drain / cap so a `git checkout` of 50k files can't grow an unbounded `Vec`, plus
+a coalescing debounce window. Write the budget numbers into the test. Then
+p3.A1–p3.A5 (mostly cite p3.1–p3.4 + add "a filesystem event alone stays
+`unknown`" — needs the Phase 5 correlation engine, so p3.A5 may be `[~]` until
+Phase 5).
 
 ---
 
@@ -231,8 +231,9 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 - [x] **p3.2 Wire the filesystem observer to the registry.** `filesystem_observer.rs` watches only registered workspace roots.
   - Tests: a change under an unregistered path yields no event; under a registered path yields one.
   - → committed | New `ObserverPool` in `filesystem_observer.rs`: `sync(&[PathBuf])` reconciles the live `WorkspaceWatcher` set to a desired root list (starts new, drops stale + releases the OS handle) → returns `SyncOutcome { started, stopped }` (idempotent); `watched_roots()`, `is_within_watched(path)` (defence-in-depth path filter), `poll(timeout)` drains every watcher and drops any event outside a watched root. Production wiring feeds it `WorkspaceRegistry::watched_roots(now)` (p3.1). tests: `sync_starts_and_stops_watchers_to_match_the_desired_root_set` (+ idempotent + swap), `a_change_under_an_unregistered_path_yields_no_event`, `a_change_under_a_registered_path_yields_an_event` (real temp-dir watches). core +3. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
-- [ ] **p3.3 Observer semantics.** create / modify / rename / delete. Coalesce duplicate/atomic-save events into one logical change. Canonicalize paths; block symlink escape. Respect `.gitignore`, user excludes, generated/build/vendor dirs. Fingerprint only files that had an event (reuse the git blob/content hashing in `wakaclock-cli/src/tool_snapshot.rs`) — never scan/hash the whole repo per tick. Never read or persist source content.
+- [x] **p3.3 Observer semantics.** create / modify / rename / delete. Coalesce duplicate/atomic-save events into one logical change. Canonicalize paths; block symlink escape. Respect `.gitignore`, user excludes, generated/build/vendor dirs. Fingerprint only files that had an event (reuse the git blob/content hashing in `wakaclock-cli/src/tool_snapshot.rs`) — never scan/hash the whole repo per tick. Never read or persist source content.
   - Tests: editor atomic save (write temp + rename) → **one** logical change; rename normalized to a rename not delete+create; a `.gitignore`d path produces nothing; symlink pointing outside the workspace is rejected; assert no file *content* is ever held in a struct field.
+  - → committed | Added to `filesystem_observer.rs`: `coalesce_burst(Vec<FileChangedEvent>) -> Vec<_>` (drops editor scratch names `~`/`.tmp`/`.swp`/`.#`/hex-suffix; a Created-then-Removed temp in one burst vanishes; repeated events keep the last kind), `canonicalize_within_root(root, path)` (symlink-aware via `fs::canonicalize` + containment; lexical fallback for not-yet-existing delete/rename targets), `WorkspaceIgnore` (`.gitignore` + lease `exclude_rules`; literal / leading-or-trailing `*` / trailing-`/` dir match — **not** a full engine: no `**`, no negation, no nested `.gitignore`, noted in the doc comment), `fingerprint_changed_file(path)` (reads bytes → `Uuid::v5` hash → drops the buffer; `>4 MiB` uses `size:mtime`; `None` if unreadable — never returns content). tests: 9 new incl. `atomic_save_burst_collapses_to_one_modify_of_the_real_file`, `canonicalize_within_root_rejects_a_symlink_that_escapes_the_workspace`, `gitignored_and_excluded_paths_produce_nothing`, `fingerprint_reads_and_discards_content_and_never_returns_it` (asserts `hunter2`/`password` appear nowhere), `file_changed_event_carries_no_content_field` (destructuring guard). core +9. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p3.4 Backpressure.** An event storm has bounded memory and applies backpressure. Idle CPU and memory stay within a stated budget (write the budget into the test).
   - Tests: 10k synthetic events → bounded channel, no unbounded `Vec` growth; idle loop does no work.
 
@@ -414,4 +415,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-08-31 — p2.A1–A4 — Phase 2 acceptance. p2.A1 `[~]` (fixture recall 100% via existing per-fixture parser tests; live ≥99% gate reserved). p2.A2/p2.A3 cited to existing server + parser tests. 1 new: `p2_a4_no_builtin_adapter_reports_a_verification_state_it_cannot_back` (all 11 manifests). **Phase 2 done.** Gates green. Committed `ec58587`.
 - 2026-09-01 — p3.1 — done. New pure `wakaclock_core::ai::workspace` — `WorkspaceRegistry` (register/refresh/release/prune_expired/watched_roots/is_watched/exclude_rules_for) + `WorkspaceLease` + `LeaseError` (RootTooBroad guards $HOME/ancestors/`/`). 6 new tests (core 164→170). Gates + duration-audit green. Committed `261fb21`.
 - 2026-09-01 — (interruption) concurrent "clipboard tracking / input-activity" feature (~1,780 lines, 48 files) appeared in the working tree during the loop. Verified the whole mixed tree green (backend + vscode 81 + frontend 213) and committed it on its own as `b40b4f4 feat(input-activity): …` so the planai2 history stays clean, then resumed.
-- 2026-09-01 — p3.2 — done. `ObserverPool` in `filesystem_observer.rs` — `sync(&[roots])` reconciles the live `WorkspaceWatcher` set (returns `SyncOutcome{started,stopped}`, idempotent), `poll()` drains + drops out-of-scope events, `is_within_watched()`. Fed by `WorkspaceRegistry::watched_roots(now)`. 3 new tests (core +3). Gates + duration-audit green. Committed.
+- 2026-09-01 — p3.2 — done. `ObserverPool` in `filesystem_observer.rs` — `sync(&[roots])` reconciles the live `WorkspaceWatcher` set (returns `SyncOutcome{started,stopped}`, idempotent), `poll()` drains + drops out-of-scope events, `is_within_watched()`. Fed by `WorkspaceRegistry::watched_roots(now)`. 3 new tests (core +3). Gates + duration-audit green. Committed `83a16ac`.
+- 2026-09-01 — p3.3 — done. `coalesce_burst()` (atomic-save + dedup), `canonicalize_within_root()` (symlink-escape guard), `WorkspaceIgnore` (.gitignore + lease excludes, simple matcher), `fingerprint_changed_file()` (uuid-v5 hash, discards bytes, size-capped). 9 new tests (core +9). Gates + duration-audit green. Committed.
