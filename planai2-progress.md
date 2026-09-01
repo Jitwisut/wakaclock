@@ -125,26 +125,31 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 6 — item p6.1** (versioned canonical fingerprint). **Phase 5 complete**
-(p5.0–p5.5 + p5.A1–p5.A5, `ai/correlation_engine.rs`, 233 core tests). Every
-Phase 6 item is **duration-gated** — run all three `duration-audit` scripts, and
-`golden.py` must stay `total_error: 0.0`.
+**Phase 6 — item p6.2** (canonical activity aggregates child evidence IDs).
+**Phase 5 complete**; p6.1 done (`ai/canonical.rs`, `CanonicalFingerprint::v1`,
+7 tests). Every Phase 6 item is **duration-gated** — run all three
+`duration-audit` scripts, and `golden.py` must stay `total_error: 0.0`.
 
-p6.1: a **versioned canonical fingerprint** built from {workspace, normalized
-entity, change kind, *bounded* timestamp, line delta / content fingerprint,
-session/tool identity when present}. It must be **transport-independent** — a
-native hook and a transcript tool call for the same logical edit hash to the
-*same* value — so `EvidenceKind` / producer is NOT an input, and the timestamp is
-bucketed (truncate to e.g. a small number of seconds) so near-simultaneous
-observations collide. Versioned via an explicit prefix (e.g. `caf1:`) so the
-scheme can evolve; a version bump changes the prefix, not silently the bytes.
-Likely a new `ai/canonical.rs` with a `CanonicalFingerprint` type +
-`fingerprint_v1(&CanonicalInput) -> String`; wire it so a `CorrelationInput` (or
-a small projection of it) can produce one. Tests:
-`same_logical_edit_from_two_transports_yields_one_fingerprint`,
-`a_fingerprint_scheme_version_is_explicit_in_the_value` (+ a bounded-timestamp
-collision test). Re-export from `ai/mod.rs`. Then p6.2 (canonical activity
-aggregates child evidence ids), p6.3 (dedup rules), p6.A1–p6.A5.
+**Concurrency note (2026-09-02):** a large concurrent feature landed in the tree
+while paused — new `ai/producer.rs` (+ `ai/mod.rs` re-exports), plus
+`wakaclock-cli` / `adapter.rs` / `event.rs` / `broker.rs` / vscode / ai-agents
+shell adapters, and `plans/planplugin/`, `planplugin.md`. **Not mine** — never
+staged/reverted. `ai/mod.rs` now carries both my `canonical` lines and their
+`producer` lines; p6.1's commit staged only my 2 hunks (save/restore dance).
+Full gate suite is green *with* the concurrent code, so no blockage. Watch for
+`ai/producer.rs` overlapping p6.2/p6.3 (it builds file-change events + event
+ids) — reuse its `file_event_id` / `ProducerFileChange` if they fit rather than
+duplicating.
+
+p6.2: a **canonical activity** record that aggregates the child evidence IDs
+behind one logical edit — native hook / transcript / filesystem / editor — keyed
+by the p6.1 `CanonicalFingerprint`. Likely `CanonicalActivity { fingerprint,
+verdict: Option<Verdict>, child_evidence: Vec<(EvidenceKind, lineage_id)> }` (or
+similar) with a builder that folds `CorrelationInput`s sharing a fingerprint into
+one, preserving every child `lineage_id`, no content. Test:
+`a_canonical_activity_built_from_three_evidence_sources_lists_all_three_child_ids`.
+Then p6.3 (dedup rules — one named test per rule; multi-file case asserts
+duration unchanged), p6.A1–p6.A5.
 
 ---
 
@@ -317,8 +322,8 @@ The core that planai.md left "not built".
 
 **Every item here is duration-gated** (run the four `duration-audit` scripts).
 
-- [ ] **p6.1 Versioned canonical fingerprint.** From: workspace, normalized entity, change kind, bounded timestamp, line delta / content fingerprint, session/tool identity when present. Versioned so the scheme can evolve.
-  - Tests: same logical edit from two transports → same fingerprint; a fingerprint-scheme version bump is explicit.
+- [x] **p6.1 Versioned canonical fingerprint.** New `ai/canonical.rs`: `CanonicalIdentity<'a>` {workspace, entity, change kind, `occurred_at_unix`, `content_fingerprint` OR `line_delta`, `session_or_tool_id`} + `CanonicalFingerprint::v1(&identity)` — UUIDv5 (broker.rs convention) over `scheme | workspace | normalized entity | change kind | time-bucket | (cf: else ld:) | id:`. **Transport-independent by construction**: `CanonicalIdentity` has no `EvidenceKind`/producer field, and the timestamp is bucketed to `FINGERPRINT_TIME_BUCKET_SECONDS` (10 s), so a hook + its transcript line hash identically. Scheme prefix explicit in the value (`caf1:<uuid>`, `FINGERPRINT_SCHEME_V1`, `.scheme()`) — a bump is a visible prefix change. Re-exported from `ai/mod.rs`. Commit `93d7b83`.
+  - Tests (7): `same_logical_edit_from_two_transports_yields_one_fingerprint`, `a_fingerprint_scheme_version_is_explicit_in_the_value`, `timestamps_crossing_a_bucket_boundary_produce_a_different_fingerprint`, `entity_change_kind_workspace_and_identity_each_change_the_fingerprint`, `a_line_delta_is_used_only_when_no_content_fingerprint_is_present`, `entity_path_is_normalised_before_hashing`. Gates: fmt/clippy/test --workspace green (250 core); duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
 - [ ] **p6.2 Canonical activity aggregates child evidence IDs.** `canonical_event` holds child IDs: native hook / transcript / filesystem / editor.
   - Tests: a canonical activity built from 3 evidence sources lists all 3 child IDs.
 - [ ] **p6.3 Dedup rules.** Same `event_id` + same payload → duplicate success (drop). Same `event_id` + different payload → conflict, kept as a diagnostic, **never a silent overwrite**. Different `event_id` + same fingerprint → merge. Weaker inferred evidence is superseded by verified. A multi-file event does not multiply duration by file count. The final heartbeat is generated from a single canonical-activity point.
@@ -512,3 +517,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.3 — done. `ClipBounds` half-open `[start,end)` + `utc_day`/`session`/`contains`/`intersect`; `verdict_for_within(entity, at, bounds)` hard-drops out-of-range inputs before the §5 ladder, `inputs_for_within` exposes survivors. `verdict_for` → shared private `decide()`. 4 new tests (core 222→226). Gates + duration-audit(total_error 0.0) green. Committed `bd93fa5` (+ tracker).
 - 2026-09-01 — p5.4 — done. `SystemActorKind` (Formatter/Build/VersionControl/Codegen) + optional `CorrelationInput.system_actor`; `verdict_for` rule 3 (below `ai_verified`, above conflict/inferred/human): `system_actor` set on any relevant input ⇒ `Unknown`/`SystemActor`. Per-entity so it can't suppress a real edit on another file. **Closes p5.A5; all p5.A1–A5 now discharged.** 5 new tests (core 226→231). One clippy fixup (renumbered the doc-comment rule ladder — `doc_list_item` rejects `2b.`). Gates + duration-audit(total_error 0.0) green. Committed `aae2f6e` (+ tracker).
 - 2026-09-01 — p5.5 — done. `Verdict` reframed as §5's evidence-lineage record (grade `AiVerdict` = confidence, `VerdictReason` = clause, `supporting_lineage` = producer ids, no content); doc comment updated. 2 new tests (core 231→233): same agent + 3 evidence sets ⇒ 3 different verdicts; lineage record is ids + reason only, no content/fingerprint/path leak, round-trips. **Phase 5 (Universal Correlation Engine) complete — p5.0–p5.5 + p5.A1–p5.A5.** Gates + duration-audit(total_error 0.0) green. Committed `08208a0` (+ tracker).
+- 2026-09-02 — p6.1 — done. New `ai/canonical.rs`: `CanonicalIdentity` + `CanonicalFingerprint::v1` (UUIDv5 over workspace|normalized-entity|change-kind|10s-time-bucket|content-fp-or-line-delta|session/tool-id). Transport-independent by construction (no `EvidenceKind` field); explicit `caf1:` scheme prefix. 7 tests. core 233→250 (incl. concurrent `producer.rs` tests). Committed `93d7b83` (+ tracker). NOTE: concurrent feature (`ai/producer.rs` et al.) landed in-tree while paused — not staged/reverted; full gate suite green with it.
