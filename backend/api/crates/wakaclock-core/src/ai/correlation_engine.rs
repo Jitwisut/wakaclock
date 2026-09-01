@@ -361,8 +361,47 @@ impl CorrelationEngine {
     /// 7. file changed, none of the above                    → `unknown`
     /// 8. nothing relevant in-window                         → `unknown`
     pub fn verdict_for(&self, entity: &std::path::Path, at: DateTime<Utc>) -> Verdict {
+        self.decide(self.for_entity(entity).collect(), at)
+    }
+
+    /// As [`verdict_for`], but first **hard-clips** the entity's inputs to
+    /// `bounds` before deciding (planai2.md §5 "clip evidence to the query day /
+    /// session boundary" — a hard clip, deliberately *not* one of the
+    /// [`CorrelationWindows`]). Evidence whose timestamps straddle midnight is
+    /// therefore attributed to each day on its own, and a prior day's or prior
+    /// session's evidence cannot reach into the query range.
+    pub fn verdict_for_within(
+        &self,
+        entity: &std::path::Path,
+        at: DateTime<Utc>,
+        bounds: ClipBounds,
+    ) -> Verdict {
+        self.decide(
+            self.for_entity(entity)
+                .filter(|i| bounds.contains(i.occurred_at))
+                .collect(),
+            at,
+        )
+    }
+
+    /// Inputs for `entity` that fall inside `bounds` — the hard clip of p5.3,
+    /// exposed for callers that need the surviving evidence, not just the
+    /// verdict.
+    pub fn inputs_for_within<'a>(
+        &'a self,
+        entity: &'a std::path::Path,
+        bounds: ClipBounds,
+    ) -> Vec<&'a CorrelationInput> {
+        self.for_entity(entity)
+            .filter(|i| bounds.contains(i.occurred_at))
+            .collect()
+    }
+
+    /// Shared core of [`verdict_for`] and [`verdict_for_within`]: the §5
+    /// predicate ladder over an already-selected `all` (one entity, optionally
+    /// day/session-clipped).
+    fn decide(&self, all: Vec<&CorrelationInput>, at: DateTime<Utc>) -> Verdict {
         let w = &self.windows;
-        let all: Vec<&CorrelationInput> = self.for_entity(entity).collect();
         if all.is_empty() {
             return Verdict::unknown(VerdictReason::NoEvidence, Vec::new());
         }
@@ -591,6 +630,61 @@ impl Verdict {
             reason,
             supporting_lineage: lineage.into(),
         }
+    }
+}
+
+/// A half-open `[start, end)` instant range used for the planai2.md §5 **hard
+/// clip** — "clip evidence to the query day / session boundary". This is not a
+/// tolerance window: evidence outside the range is *removed* before the verdict,
+/// so an edit that straddles midnight is scored once per day and a prior
+/// session's evidence never bleeds into the current one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipBounds {
+    /// Inclusive lower bound.
+    pub start: DateTime<Utc>,
+    /// Exclusive upper bound.
+    pub end: DateTime<Utc>,
+}
+
+impl ClipBounds {
+    /// `start..end`. If `end <= start` the range is empty and clips everything.
+    pub fn new(start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
+        Self { start, end }
+    }
+
+    /// The UTC calendar day containing `instant`: `[00:00:00, next 00:00:00)`.
+    pub fn utc_day(instant: DateTime<Utc>) -> Self {
+        let start = instant
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .expect("00:00:00 is always valid")
+            .and_utc();
+        Self {
+            start,
+            end: start + Duration::days(1),
+        }
+    }
+
+    /// Clip from `session_start` up to (and excluding) `until` — e.g. a
+    /// session's `started_at` and the end of the query day. Evidence before the
+    /// session began is dropped.
+    pub fn session(session_start: DateTime<Utc>, until: DateTime<Utc>) -> Self {
+        Self {
+            start: session_start,
+            end: until,
+        }
+    }
+
+    pub fn contains(&self, t: DateTime<Utc>) -> bool {
+        self.start <= t && t < self.end
+    }
+
+    /// The overlap of two clips (e.g. a session window intersected with a day),
+    /// or `None` when they do not overlap.
+    pub fn intersect(&self, other: &Self) -> Option<Self> {
+        let start = self.start.max(other.start);
+        let end = self.end.min(other.end);
+        (start < end).then_some(Self { start, end })
     }
 }
 
@@ -1056,5 +1150,127 @@ mod tests {
         for forbidden in ["\"content", "\"diff", "\"patch", "\"prompt", "\"source"] {
             assert!(!json.contains(forbidden), "verdict leaked content: {json}");
         }
+    }
+
+    // ---- p5.3: day / session boundary hard-clip ---------------------------
+
+    fn utc(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, mi, s)
+            .unwrap()
+            .and_utc()
+    }
+
+    #[test]
+    fn clip_bounds_utc_day_is_midnight_to_midnight_and_half_open() {
+        let day = ClipBounds::utc_day(utc(2026, 9, 1, 13, 20, 0));
+        assert_eq!(day.start, utc(2026, 9, 1, 0, 0, 0));
+        assert_eq!(day.end, utc(2026, 9, 2, 0, 0, 0));
+        assert!(day.contains(utc(2026, 9, 1, 0, 0, 0)));
+        assert!(day.contains(utc(2026, 9, 1, 23, 59, 59)));
+        assert!(!day.contains(utc(2026, 9, 2, 0, 0, 0)));
+        assert!(!day.contains(utc(2026, 8, 31, 23, 59, 59)));
+    }
+
+    #[test]
+    fn an_edit_spanning_midnight_is_attributed_to_each_day_separately() {
+        let mut e = CorrelationEngine::with_default_windows();
+        // Day 1, just before midnight: an AI edit (fs change + strong session).
+        e.ingest(ci(
+            "fs-d1",
+            EvidenceKind::FilesystemObserver,
+            utc(2026, 9, 1, 23, 59, 40),
+        ));
+        e.ingest(
+            ci(
+                "sess-d1",
+                EvidenceKind::SessionProcessObserver,
+                utc(2026, 9, 1, 23, 59, 20),
+            )
+            .with_agent("codex")
+            .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        // Day 2, just after midnight: a human save.
+        e.ingest(ci(
+            "edit-d2",
+            EvidenceKind::EditorInput,
+            utc(2026, 9, 2, 0, 0, 20),
+        ));
+        e.ingest(ci(
+            "fs-d2",
+            EvidenceKind::FilesystemObserver,
+            utc(2026, 9, 2, 0, 0, 22),
+        ));
+
+        let day1 = ClipBounds::utc_day(utc(2026, 9, 1, 12, 0, 0));
+        let day2 = ClipBounds::utc_day(utc(2026, 9, 2, 12, 0, 0));
+
+        // Day 1's verdict sees only day-1 evidence -> the AI edit.
+        let v1 = e.verdict_for_within(
+            std::path::Path::new(FILE),
+            utc(2026, 9, 1, 23, 59, 40),
+            day1,
+        );
+        assert_eq!(v1.verdict, AiVerdict::AiInferred);
+        assert!(v1.supporting_lineage.iter().all(|id| id.ends_with("-d1")));
+
+        // Day 2's verdict sees only day-2 evidence -> the human save.
+        let v2 = e.verdict_for_within(std::path::Path::new(FILE), utc(2026, 9, 2, 0, 0, 30), day2);
+        assert_eq!(v2.verdict, AiVerdict::Human);
+        assert_eq!(v2.supporting_lineage, vec!["edit-d2"]);
+
+        // Without the clip, day-2's session-less human save would still be Human,
+        // but the earlier AI evidence is now in scope as noise — the clip is what
+        // keeps the two days' evidence from mixing.
+        assert!(e
+            .inputs_for_within(std::path::Path::new(FILE), day1)
+            .iter()
+            .all(|i| i.lineage_id.ends_with("-d1")));
+    }
+
+    #[test]
+    fn evidence_from_before_a_session_started_is_clipped_out() {
+        let mut e = CorrelationEngine::with_default_windows();
+        let session_start = utc(2026, 9, 1, 10, 0, 0);
+        // A change 30 s before this session existed — cannot be this session's.
+        e.ingest(ci(
+            "fs-early",
+            EvidenceKind::FilesystemObserver,
+            utc(2026, 9, 1, 9, 59, 30),
+        ));
+        e.ingest(
+            ci(
+                "sess",
+                EvidenceKind::SessionProcessObserver,
+                utc(2026, 9, 1, 9, 59, 45),
+            )
+            .with_agent("codex")
+            .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+
+        let bounds = ClipBounds::session(session_start, utc(2026, 9, 2, 0, 0, 0));
+        let v = e.verdict_for_within(
+            std::path::Path::new(FILE),
+            utc(2026, 9, 1, 9, 59, 30),
+            bounds,
+        );
+        // Both the pre-session change and the pre-session sighting are dropped.
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::NoEvidence);
+        assert!(e
+            .inputs_for_within(std::path::Path::new(FILE), bounds)
+            .is_empty());
+    }
+
+    #[test]
+    fn clip_bounds_intersect_is_the_overlap_or_none() {
+        let a = ClipBounds::new(utc(2026, 9, 1, 8, 0, 0), utc(2026, 9, 1, 18, 0, 0));
+        let b = ClipBounds::new(utc(2026, 9, 1, 12, 0, 0), utc(2026, 9, 2, 2, 0, 0));
+        let both = a.intersect(&b).unwrap();
+        assert_eq!(both.start, utc(2026, 9, 1, 12, 0, 0));
+        assert_eq!(both.end, utc(2026, 9, 1, 18, 0, 0));
+        let disjoint = ClipBounds::new(utc(2026, 9, 3, 0, 0, 0), utc(2026, 9, 4, 0, 0, 0));
+        assert_eq!(a.intersect(&disjoint), None);
     }
 }
