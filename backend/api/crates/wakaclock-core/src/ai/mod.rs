@@ -19,6 +19,7 @@
 //! result.
 
 pub mod adapter;
+pub mod canonical;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -41,6 +42,9 @@ pub mod workspace;
 pub use adapter::{
     AdapterManifest, AdapterRegistry, ExecutableDetection, HealthProbe, InstallContext,
     InstallOutcome, InstallStrategy, NativeHookCapabilities, Verification, VerificationStatus,
+};
+pub use canonical::{
+    CanonicalFingerprint, CanonicalIdentity, FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
