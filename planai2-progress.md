@@ -125,26 +125,22 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 5 — item p5.4** (system actors). p5.0–p5.3 done (windows / intake /
-`verdict_for` + precedence DECISION / `ClipBounds` hard-clip). **p5.5 note:**
-confidence already derives from the evidence combination not the agent name
-(`confidence_comes_from_the_evidence_combination_not_the_agent_name`) and
-`Verdict.supporting_lineage` carries ids only, no content — p5.5 is largely
-covered; revisit only for an explicit "different evidence sets → different
-confidence *grade*" if p5.4 introduces a graded confidence.
+**Phase 5 — item p5.5** (confidence + lineage), then **Phase 5 done**. p5.0–p5.4
+done (windows / intake / `verdict_for` + precedence DECISION / `ClipBounds`
+hard-clip / system actors — all of p5.A1–p5.A5 discharged).
 
-p5.4: formatter / build / `git checkout` / `git merge` / codegen must get a
-**`system`/`unknown`** treatment, never `ai_*` (closes p5.A5). Add a
-`SystemActor` classification — likely a new `EvidenceKind::SystemActor` (or a
-`CorrelationInput` flag) that a producer sets for a change it recognises as a
-formatter/build/VCS/codegen sweep — and a `VerdictReason::SystemActor` so
-`verdict_for` returns `AiVerdict::Unknown` with that reason (NOT `ai_inferred`)
-whenever the change is dominated by system-actor evidence, even if an agent
-session happens to be live. `system` stays a *reason under `Unknown`*, not a 5th
-`AiVerdict` variant (p5.2 DECISION). Tests: a `prettier --write` burst → not
-`ai_inferred`; a `git merge` touching 40 files → not AI; a real agent edit in the
-same window is still `ai_inferred` (system evidence for a *different* file/change
-doesn't suppress it). Then p5.5 if needed, then remaining p5.A / done.
+p5.5: "confidence derives from the *evidence combination*, never the agent name;
+evidence lineage is retained so a result can be explained after the fact without
+storing source content." **Mostly already built:** `AiVerdict` *is* the graded
+outcome, `VerdictReason` names the clause, `Verdict.supporting_lineage` carries
+producer `lineage_id`s (no content — `the_verdict_carries_the_lineage_that_backed_it_and_no_content`),
+and `confidence_comes_from_the_evidence_combination_not_the_agent_name` already
+proves agent-name independence. p5.5 finishes it: add one test
+`same_agent_different_evidence_sets_yield_different_verdicts` (one agent string,
+three evidence sets — verified hook / strong session+fs / name-only session+fs —
+⇒ `AiVerified` / `AiInferred` / `Unknown`), confirm the `Verdict` doc-comments
+frame it as the lineage record, tick p5.5, and close Phase 5. Then Phase 6
+(p6.1 — every Phase 6 item is duration-gated).
 
 ---
 
@@ -298,8 +294,8 @@ The core that planai.md left "not built".
   - Tests (15 new, core 207→222): `a_native_hook_for_the_file_is_ai_verified`, `two_agents_both_verified_for_one_file_is_unknown_competing`, `p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred`, `p4_a3_process_name_only_sessions_cannot_infer_and_stay_unknown`, `p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai`, `p4_a1_a_session_with_no_change_produces_no_attribution`, `positive_editor_input_after_the_window_closes_is_human`, `editor_input_while_the_window_is_still_open_is_unknown_not_yet_human`, `p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human`, `p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict`, `two_strong_agent_sessions_competing_is_unknown`, `a_fingerprint_mismatch_blocks_ai_inferred`, `a_change_outside_every_window_is_unknown_no_evidence`, `confidence_comes_from_the_evidence_combination_not_the_agent_name`, `the_verdict_carries_the_lineage_that_backed_it_and_no_content`. Gates: fmt/clippy/test --workspace green; duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
 - [x] **p5.3 Boundary clipping.** `ClipBounds` (half-open `[start, end)` instant range) + `utc_day()` / `session(started_at, until)` / `contains` / `intersect`; `CorrelationEngine::verdict_for_within(entity, at, bounds)` runs the §5 ladder after **hard-dropping** every input outside `bounds` (not a `CorrelationWindows` tolerance — a real clip), `inputs_for_within()` exposes the survivors. `verdict_for` now delegates to a shared private `decide()`; un-clipped path unchanged. Commit `bd93fa5`.
   - Tests (4, core 222→226): `clip_bounds_utc_day_is_midnight_to_midnight_and_half_open`, `an_edit_spanning_midnight_is_attributed_to_each_day_separately` (day-1 clip ⇒ `AiInferred` from day-1 evidence only; day-2 clip ⇒ `Human` from the day-2 save only), `evidence_from_before_a_session_started_is_clipped_out` (pre-`started_at` change + sighting dropped ⇒ `Unknown`/`NoEvidence`), `clip_bounds_intersect_is_the_overlap_or_none`. Gates + duration-audit(total_error 0.0) green.
-- [ ] **p5.4 System actors.** Formatter, build, `git checkout` / `git merge`, codegen get a `system`/`unknown` treatment, not `ai_*`.
-  - Tests: a `prettier --write` burst → not `ai_inferred`; a `git merge` touching 40 files → not AI.
+- [x] **p5.4 System actors.** `SystemActorKind` (Formatter / Build / VersionControl / Codegen) + optional `CorrelationInput.system_actor` a producer sets for a recognised formatter/build/VCS/codegen sweep. `verdict_for` rule 3 (between `ai_verified` and every conflict/inferred/human branch): any relevant input with `system_actor` set ⇒ `Unknown` / `VerdictReason::SystemActor`. A native hook still wins (rule 2); `system` stays a reason under `Unknown`, not a 5th `AiVerdict`. `decide()` is per-entity so system evidence for one file never suppresses a real agent edit on another. **Closes p5.A5.** Commit `aae2f6e`.
+  - Tests (5, core 226→231): `p5_a5_a_formatter_write_burst_is_system_not_ai_inferred` (fmt sweep + live strong session ⇒ `Unknown`/`SystemActor`), `p5_a5_a_git_merge_touching_a_file_is_not_attributed_to_ai_or_human` (VCS change + concurrent editor input ⇒ `Unknown`/`SystemActor`), `a_verified_hook_still_wins_over_a_concurrent_formatter_pass`, `system_actor_evidence_for_one_file_does_not_suppress_a_real_ai_edit_on_another`, `system_actor_kind_round_trips_through_json`. Gates + duration-audit(total_error 0.0) green.
 - [ ] **p5.5 Confidence + lineage.** Confidence derives from the *evidence combination*, never the agent name. Evidence lineage is retained so a result can be explained after the fact — **without** storing source content.
   - Tests: same agent, different evidence sets → different confidence; a lineage record contains IDs and reasons, no file content.
 
@@ -309,7 +305,7 @@ The core that planai.md left "not built".
 - [x] **p5.A2** Human input just before an AI edit is not retroactively swallowed by the AI edit. → `p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict` (`verdict_for` at the human's time ⇒ `Human`; at the later AI edit's time ⇒ `AiInferred` — each change keeps its own verdict, `verdict_for` is per-change).
 - [x] **p5.A3** A simultaneous human/AI conflict is not auto-resolved to `human`. → `p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human` (`EditorInput` + strong session inside `editor_to_ai_edit` ⇒ `Unknown` / `ConflictingHumanAndAiEvidence`).
 - [x] **p5.A4** A shell mutation from an active verified tool session is correctly inferred. → `p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred` (`FilesystemObserver` + `ProcessTreeCwdMatch` session in-window ⇒ `AiInferred` / `InferredFromAgentActivity`).
-- [~] **p5.A5** Formatter / git / build never become an AI false positive. → deferred to **p5.4** (system-actor treatment); the `ai_inferred` path already refuses a `ProcessNameOnly`/weak session, but the explicit formatter/`git merge` classification lands with p5.4.
+- [x] **p5.A5** Formatter / git / build never become an AI false positive. → `p5_a5_a_formatter_write_burst_is_system_not_ai_inferred` + `p5_a5_a_git_merge_touching_a_file_is_not_attributed_to_ai_or_human` (p5.4: `system_actor` input ⇒ `Unknown`/`SystemActor`, ahead of the `ai_inferred`/conflict/human branches).
 
 ---
 
@@ -510,3 +506,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.1 — done. New `ai/correlation_engine.rs`: `EvidenceKind` (7 producers, strongest-first `Ord`), `CorrelationInput` (verbatim `lineage_id` + normalized entity + optional workspace/agent/change_kind/confidence/session/tool-event/fingerprint — **no content field**), `CorrelationEngine::ingest` (preserves lineage + order) + `for_entity`/`entities`. `CorrelationWindows` (p5.0 six fields + `DEFAULT` + `between(a,b)` order-independent). Re-exported from `ai/mod.rs`. 6 new tests (core 201→207). Fixed one self-bug: `between` match arms must be in sorted `EvidenceKind` order. Gates + duration-audit(total_error 0.0) green. Committed `9f081ac`.
 - 2026-09-01 — p5.2 — done. §5 verdict pass: `AiVerdict` (4 outcomes, no `system`), `VerdictReason` (8 clauses), `Verdict {verdict, reason, supporting_lineage}`, `CorrelationEngine::verdict_for(entity, at)`. §5 has no stated precedence → 8-step fixed order recorded as a DECISION (Decisions log), constrained by the §5 ACs. `between()` drives `TimeWindowMatches`; new optional `CorrelationInput.evidence_strength` lets the engine (not the producer) apply `is_strong_enough_to_infer()`. 15 new tests (core 207→222). **Discharged** `[~]` p3.A5 / p4.A1 / p4.A3 (added runtime engine tests alongside the structural ones) and p5.A1–p5.A4; p5.A5 `[~]` → p5.4 (system actors). Gates + duration-audit(total_error 0.0) green. Committed `c45beca` (+ this tracker `<next>`).
 - 2026-09-01 — p5.3 — done. `ClipBounds` half-open `[start,end)` + `utc_day`/`session`/`contains`/`intersect`; `verdict_for_within(entity, at, bounds)` hard-drops out-of-range inputs before the §5 ladder, `inputs_for_within` exposes survivors. `verdict_for` → shared private `decide()`. 4 new tests (core 222→226). Gates + duration-audit(total_error 0.0) green. Committed `bd93fa5` (+ tracker).
+- 2026-09-01 — p5.4 — done. `SystemActorKind` (Formatter/Build/VersionControl/Codegen) + optional `CorrelationInput.system_actor`; `verdict_for` rule 3 (below `ai_verified`, above conflict/inferred/human): `system_actor` set on any relevant input ⇒ `Unknown`/`SystemActor`. Per-entity so it can't suppress a real edit on another file. **Closes p5.A5; all p5.A1–A5 now discharged.** 5 new tests (core 226→231). One clippy fixup (renumbered the doc-comment rule ladder — `doc_list_item` rejects `2b.`). Gates + duration-audit(total_error 0.0) green. Committed `aae2f6e` (+ tracker).
