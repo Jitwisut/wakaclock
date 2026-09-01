@@ -49,7 +49,7 @@ pub use correlation::{
 };
 pub use correlation_engine::{
     AiVerdict, ClipBounds, CorrelationEngine, CorrelationInput, CorrelationWindows, EvidenceKind,
-    Verdict, VerdictReason,
+    SystemActorKind, Verdict, VerdictReason,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{

@@ -190,6 +190,29 @@ pub struct CorrelationInput {
     /// alone is not enough for `ai_inferred`").
     #[serde(default)]
     pub evidence_strength: Option<EvidenceStrength>,
+    /// Set when the producer recognises this change as the work of a system
+    /// actor — a formatter, a build, a `git checkout` / `git merge`, a codegen
+    /// sweep. planai2.md §5 implementation rules: these get a `system`/`unknown`
+    /// treatment, never `ai_*`.
+    #[serde(default)]
+    pub system_actor: Option<SystemActorKind>,
+}
+
+/// A non-human, non-AI actor that mechanically rewrites files (planai2.md §5:
+/// "formatter, build, Git checkout/merge and codegen must have system/unknown
+/// treatment"). Not an [`AiVerdict`] variant — it is a *reason* a change lands on
+/// [`AiVerdict::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemActorKind {
+    /// `prettier --write`, `rustfmt`, `gofmt`, `black`, …
+    Formatter,
+    /// A build / bundler / compiler writing generated output.
+    Build,
+    /// `git checkout`, `git merge`, `git rebase`, `git stash pop`, …
+    VersionControl,
+    /// A codegen tool (protobuf, OpenAPI clients, ORM models, …).
+    Codegen,
 }
 
 fn unknown_confidence() -> AiConfidence {
@@ -218,6 +241,7 @@ impl CorrelationInput {
             tool_event_id: None,
             fingerprint: None,
             evidence_strength: None,
+            system_actor: None,
         }
     }
 
@@ -251,6 +275,10 @@ impl CorrelationInput {
     }
     pub fn with_evidence_strength(mut self, strength: EvidenceStrength) -> Self {
         self.evidence_strength = Some(strength);
+        self
+    }
+    pub fn with_system_actor(mut self, actor: SystemActorKind) -> Self {
+        self.system_actor = Some(actor);
         self
     }
 
@@ -349,17 +377,19 @@ impl CorrelationEngine {
     /// conflict must not auto-resolve to `human`.
     ///
     /// 1. two+ distinct agents with **verified** evidence → `unknown` (competing)
-    /// 2. one **verified** producer for the file             → `ai_verified`
-    /// 3. positive editor input **and** AI activity inside the
-    ///    `editor_to_ai_edit` conflict window                → `unknown` (conflict)
-    /// 4. two+ distinct agents with **inferring** activity   → `unknown` (competing)
-    /// 5. file changed + exactly one agent's inferring activity + the pair's
+    /// 2. one **verified** producer for the file → `ai_verified`
+    /// 3. a **system actor** (formatter / build / VCS / codegen) produced it →
+    ///    `unknown` (system)
+    /// 4. positive editor input **and** AI activity inside the
+    ///    `editor_to_ai_edit` conflict window → `unknown` (conflict)
+    /// 5. two+ distinct agents with **inferring** activity → `unknown` (competing)
+    /// 6. file changed + exactly one agent's inferring activity + the pair's
     ///    time window matches + fingerprint/shape matches + no editor input
-    ///    close enough to explain the change                 → `ai_inferred`
-    /// 6. positive editor input, correlation window closed   → `human`
+    ///    close enough to explain the change → `ai_inferred`
+    /// 7. positive editor input, correlation window closed → `human`
     ///    (still open → `unknown`, an AI edit could still land)
-    /// 7. file changed, none of the above                    → `unknown`
-    /// 8. nothing relevant in-window                         → `unknown`
+    /// 8. file changed, none of the above → `unknown`
+    /// 9. nothing relevant in-window → `unknown`
     pub fn verdict_for(&self, entity: &std::path::Path, at: DateTime<Utc>) -> Verdict {
         self.decide(self.for_entity(entity).collect(), at)
     }
@@ -460,7 +490,23 @@ impl CorrelationEngine {
             };
         }
 
-        // 3. Human/AI conflict: editor input with AI activity inside the
+        // 3. A system actor (formatter / build / VCS / codegen) produced this
+        //     change. planai2.md §5 implementation rules: `system`/`unknown`
+        //     treatment, never `ai_*`. Below `ai_verified` — a native hook is
+        //     still ground truth for the agent's own edit — but above every
+        //     inferred / conflict / human branch, so a `git merge` or
+        //     `prettier --write` sweep cannot be mistaken for an AI edit or a
+        //     human/AI conflict just because a session or editor was active.
+        let system: Vec<&CorrelationInput> = relevant
+            .iter()
+            .copied()
+            .filter(|i| i.system_actor.is_some())
+            .collect();
+        if !system.is_empty() {
+            return Verdict::unknown(VerdictReason::SystemActor, lineage(&system));
+        }
+
+        // 4. Human/AI conflict: editor input with AI activity inside the
         //    `editor_to_ai_edit` window. Never auto-resolves to `human`.
         let conflicting_ai: Vec<&CorrelationInput> = inferring
             .iter()
@@ -477,7 +523,7 @@ impl CorrelationEngine {
             return Verdict::unknown(VerdictReason::ConflictingHumanAndAiEvidence, ids);
         }
 
-        // 4. Competing inferring agents (each already past the p4 strength bar).
+        // 5. Competing inferring agents (each already past the p4 strength bar).
         if distinct_agents(&inferring) >= 2 {
             return Verdict::unknown(
                 VerdictReason::MultipleCompetingAiSessions,
@@ -485,7 +531,7 @@ impl CorrelationEngine {
             );
         }
 
-        // 5. AI inferred.
+        // 6. AI inferred.
         let editor_explains_change = editor
             .iter()
             .any(|e| within(e.occurred_at, at, w.filesystem_to_editor_input));
@@ -509,7 +555,7 @@ impl CorrelationEngine {
             }
         }
 
-        // 6. Human (or "window still open").
+        // 7. Human (or "window still open").
         if let Some(latest_editor) = editor.iter().map(|e| e.occurred_at).max() {
             if at >= latest_editor + w.editor_to_ai_edit {
                 return Verdict {
@@ -521,7 +567,7 @@ impl CorrelationEngine {
             return Verdict::unknown(VerdictReason::CorrelationWindowStillOpen, lineage(&editor));
         }
 
-        // 7. A change with no sufficient provenance.
+        // 8. A change with no sufficient provenance.
         if file_changed {
             let fs: Vec<&CorrelationInput> = relevant
                 .iter()
@@ -534,7 +580,7 @@ impl CorrelationEngine {
             );
         }
 
-        // 8. Nothing that attributes a change.
+        // 9. Nothing that attributes a change.
         Verdict::unknown(VerdictReason::NoEvidence, Vec::new())
     }
 }
@@ -608,6 +654,10 @@ pub enum VerdictReason {
     /// `unknown`: editor input seen but the correlation window has not closed —
     /// an AI edit could still land.
     CorrelationWindowStillOpen,
+    /// `unknown`: the change is the work of a system actor — a formatter, a
+    /// build, `git checkout` / `git merge`, a codegen sweep — not a human or an
+    /// AI agent (planai2.md §5 implementation rules).
+    SystemActor,
     /// `unknown`: nothing relevant was ingested for this entity/time.
     NoEvidence,
 }
@@ -1272,5 +1322,113 @@ mod tests {
         assert_eq!(both.end, utc(2026, 9, 1, 18, 0, 0));
         let disjoint = ClipBounds::new(utc(2026, 9, 3, 0, 0, 0), utc(2026, 9, 4, 0, 0, 0));
         assert_eq!(a.intersect(&disjoint), None);
+    }
+
+    // ---- p5.4: system actors (formatter / build / VCS / codegen) ----------
+
+    #[test]
+    fn p5_a5_a_formatter_write_burst_is_system_not_ai_inferred() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(
+            ci("fs-fmt", EvidenceKind::FilesystemObserver, t0)
+                .with_change_kind(BrokerChangeKind::Modify)
+                .with_system_actor(SystemActorKind::Formatter),
+        );
+        // An agent session is live in the workspace at the same time.
+        e.ingest(
+            ci("sess-1", EvidenceKind::SessionProcessObserver, at(t0, -3))
+                .with_agent("codex")
+                .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::SystemActor);
+        assert_eq!(v.supporting_lineage, vec!["fs-fmt"]);
+    }
+
+    #[test]
+    fn p5_a5_a_git_merge_touching_a_file_is_not_attributed_to_ai_or_human() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(
+            ci("fs-merge", EvidenceKind::FilesystemObserver, t0)
+                .with_system_actor(SystemActorKind::VersionControl),
+        );
+        // The developer happened to be typing in the editor around the merge.
+        e.ingest(ci("edit-1", EvidenceKind::EditorInput, at(t0, -1)));
+        let v = verdict(&e, at(t0, 10));
+        assert_eq!(v.verdict, AiVerdict::Unknown);
+        assert_eq!(v.reason, VerdictReason::SystemActor);
+    }
+
+    #[test]
+    fn a_verified_hook_still_wins_over_a_concurrent_formatter_pass() {
+        let t0 = Utc::now();
+        let mut e = CorrelationEngine::with_default_windows();
+        e.ingest(ci("hook-1", EvidenceKind::NativeHook, t0).with_agent("claude-code"));
+        e.ingest(
+            ci("fs-fmt", EvidenceKind::FilesystemObserver, at(t0, 1))
+                .with_system_actor(SystemActorKind::Formatter),
+        );
+        let v = verdict(&e, t0);
+        assert_eq!(v.verdict, AiVerdict::AiVerified);
+        assert_eq!(v.reason, VerdictReason::DirectAiProducer);
+    }
+
+    #[test]
+    fn system_actor_evidence_for_one_file_does_not_suppress_a_real_ai_edit_on_another() {
+        let t0 = Utc::now();
+        let other = "/w/src/other.rs";
+        let mut e = CorrelationEngine::with_default_windows();
+        // File A: a formatter sweep.
+        e.ingest(
+            CorrelationInput::new("fs-fmt", EvidenceKind::FilesystemObserver, FILE, t0)
+                .with_workspace("/w")
+                .with_system_actor(SystemActorKind::Formatter),
+        );
+        // File B: a genuine agent edit at the same instant.
+        e.ingest(
+            CorrelationInput::new("fs-b", EvidenceKind::FilesystemObserver, other, t0)
+                .with_workspace("/w"),
+        );
+        e.ingest(
+            CorrelationInput::new(
+                "sess-b",
+                EvidenceKind::SessionProcessObserver,
+                other,
+                at(t0, -3),
+            )
+            .with_workspace("/w")
+            .with_agent("codex")
+            .with_evidence_strength(EvidenceStrength::ProcessTreeCwdMatch),
+        );
+
+        assert_eq!(
+            e.verdict_for(std::path::Path::new(FILE), t0).reason,
+            VerdictReason::SystemActor
+        );
+        assert_eq!(
+            e.verdict_for(std::path::Path::new(other), t0).verdict,
+            AiVerdict::AiInferred
+        );
+    }
+
+    #[test]
+    fn system_actor_kind_round_trips_through_json() {
+        for k in [
+            SystemActorKind::Formatter,
+            SystemActorKind::Build,
+            SystemActorKind::VersionControl,
+            SystemActorKind::Codegen,
+        ] {
+            let s = serde_json::to_string(&k).unwrap();
+            let back: SystemActorKind = serde_json::from_str(&s).unwrap();
+            assert_eq!(k, back);
+        }
+        assert_eq!(
+            serde_json::to_string(&SystemActorKind::VersionControl).unwrap(),
+            "\"version_control\""
+        );
     }
 }
