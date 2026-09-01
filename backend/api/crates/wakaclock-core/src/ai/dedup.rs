@@ -83,11 +83,43 @@ pub struct DedupOutcome {
     pub conflicts: Vec<DedupConflict>,
     /// Count of observations dropped as exact duplicates (rule 1).
     pub duplicates_dropped: usize,
+    /// Number of observations handed to [`dedup`] (before any rule ran).
+    pub observations_in: usize,
+}
+
+impl DedupOutcome {
+    /// Fraction of the input corpus that was an exact redelivery absorbed by
+    /// rule 1 — the "duplicate canonical activity rate" of planai2.md p6.A1.
+    /// `0.0` for an empty corpus.
+    pub fn duplicate_rate(&self) -> f64 {
+        if self.observations_in == 0 {
+            0.0
+        } else {
+            self.duplicates_dropped as f64 / self.observations_in as f64
+        }
+    }
+
+    /// Distinct fingerprints that produced more than one activity — must be `0`;
+    /// a non-zero value means two observations of one logical edit were given
+    /// different fingerprints (a p6.1 bucketing miss).
+    pub fn residual_duplicate_activities(&self) -> usize {
+        let mut seen: Vec<&CanonicalFingerprint> = Vec::new();
+        let mut dupes = 0;
+        for a in &self.activities {
+            if seen.contains(&a.fingerprint()) {
+                dupes += 1;
+            } else {
+                seen.push(a.fingerprint());
+            }
+        }
+        dupes
+    }
 }
 
 /// Apply the p6.3 ruleset. Input order is significant: for a given `event_id`
 /// the **first** observation is the one that is kept.
 pub fn dedup(observations: Vec<DedupObservation>) -> DedupOutcome {
+    let observations_in = observations.len();
     let mut conflicts = Vec::new();
     let mut duplicates_dropped = 0usize;
 
@@ -148,6 +180,7 @@ pub fn dedup(observations: Vec<DedupObservation>) -> DedupOutcome {
         total_active_seconds,
         conflicts,
         duplicates_dropped,
+        observations_in,
     }
 }
 
@@ -334,5 +367,177 @@ mod tests {
         let out = dedup(vec![hook, transcript]);
         assert_eq!(out.activities.len(), 1);
         assert_eq!(out.total_active_seconds, 120.0);
+    }
+
+    // ---- p6.A: Phase 6 acceptance -----------------------------------------
+
+    const CORPUS_EDITS: usize = 500;
+    const CORPUS_REPLAYS: usize = 30;
+    /// 60 s of activity per logical edit (placed on the hook record; the
+    /// filesystem sibling carries 0.0, as at ingress).
+    const SECONDS_PER_EDIT: f64 = 60.0;
+
+    /// A realistic slice of activity: `CORPUS_EDITS` distinct logical edits, each
+    /// seen by a native hook **and** the filesystem observer (two `event_id`s,
+    /// one `CanonicalFingerprint` → rule 3 merge), plus `CORPUS_REPLAYS` exact
+    /// redeliveries of a hook event (rule 1).
+    fn corpus() -> Vec<DedupObservation> {
+        let mut v = Vec::new();
+        for i in 0..CORPUS_EDITS {
+            let fp = fp_for(&format!("/w/src/file{i}.rs"));
+            let mut hook = obs(&format!("hook-{i}"), &format!("ph-{i}"), fp.clone());
+            hook.kind = EvidenceKind::NativeHook;
+            hook.lineage_id = format!("hook-lin-{i}");
+            hook.active_seconds = SECONDS_PER_EDIT;
+
+            let mut fs = obs(&format!("fs-{i}"), &format!("pf-{i}"), fp);
+            fs.kind = EvidenceKind::FilesystemObserver;
+            fs.lineage_id = format!("fs-lin-{i}");
+            fs.transport = Some("filesystem".to_string());
+            fs.source = AiEventSource::IdeTelemetry;
+            fs.confidence = AiConfidence::Inferred;
+            fs.active_seconds = 0.0;
+
+            v.push(hook.clone());
+            v.push(fs);
+            if i < CORPUS_REPLAYS {
+                v.push(hook); // an exact redelivery of the hook event
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn p6_a1_duplicate_canonical_activity_rate_is_far_below_one_per_mille() {
+        let out = dedup(corpus());
+
+        // Every logical edit collapses to exactly one activity; none is split
+        // across two fingerprints.
+        assert_eq!(out.activities.len(), CORPUS_EDITS);
+        assert_eq!(out.residual_duplicate_activities(), 0);
+
+        let residual_rate =
+            out.residual_duplicate_activities() as f64 / out.activities.len() as f64;
+        assert!(
+            residual_rate < 0.001,
+            "duplicate canonical activity rate {residual_rate} must be < 0.1%",
+        );
+
+        // Recorded for the acceptance log: the corpus carried ~2.9% exact
+        // redeliveries, all absorbed by rule 1.
+        assert_eq!(out.duplicates_dropped, CORPUS_REPLAYS);
+        let absorbed = out.duplicate_rate();
+        assert!(
+            (0.028..0.030).contains(&absorbed),
+            "absorbed replay rate {absorbed}"
+        );
+    }
+
+    #[test]
+    fn p6_a2_vscode_hook_transcript_and_filesystem_evidence_for_one_edit_is_one_activity() {
+        let fp = fp_for("/w/src/main.rs");
+        let mk = |id: &str, kind: EvidenceKind, transport: &str, src: AiEventSource| {
+            let mut o = obs(id, &format!("p-{id}"), fp.clone());
+            o.kind = kind;
+            o.lineage_id = id.to_string();
+            o.transport = Some(transport.to_string());
+            o.source = src;
+            o
+        };
+        let out = dedup(vec![
+            mk(
+                "editor",
+                EvidenceKind::EditorInput,
+                "vscode",
+                AiEventSource::IdeTelemetry,
+            ),
+            mk(
+                "hook",
+                EvidenceKind::NativeHook,
+                "shell_hook",
+                AiEventSource::AgentHook,
+            ),
+            mk(
+                "transcript",
+                EvidenceKind::CompletedTranscriptToolCall,
+                "transcript",
+                AiEventSource::Transcript,
+            ),
+            mk(
+                "fs",
+                EvidenceKind::FilesystemObserver,
+                "filesystem",
+                AiEventSource::IdeTelemetry,
+            ),
+        ]);
+
+        assert_eq!(out.activities.len(), 1);
+        assert_eq!(out.activities[0].children().len(), 4);
+        assert_eq!(
+            out.activities[0].evidence_kinds(),
+            vec![
+                EvidenceKind::EditorInput,
+                EvidenceKind::NativeHook,
+                EvidenceKind::CompletedTranscriptToolCall,
+                EvidenceKind::FilesystemObserver,
+            ],
+        );
+        // The native hook is the strongest of the four.
+        assert_eq!(
+            out.activities[0].strongest_evidence().unwrap().kind,
+            EvidenceKind::NativeHook,
+        );
+    }
+
+    #[test]
+    fn p6_a3_restart_and_replay_add_no_duration() {
+        let once = dedup(corpus());
+
+        let mut twice = corpus();
+        twice.extend(corpus()); // the whole slice redelivered
+        let replayed = dedup(twice);
+
+        assert_eq!(replayed.total_active_seconds, once.total_active_seconds);
+        assert_eq!(
+            once.total_active_seconds,
+            CORPUS_EDITS as f64 * SECONDS_PER_EDIT,
+        );
+        assert_eq!(replayed.activities.len(), once.activities.len());
+        // Every observation in the second copy was an exact duplicate.
+        assert_eq!(
+            replayed.duplicates_dropped,
+            once.duplicates_dropped + corpus().len(),
+        );
+    }
+
+    #[test]
+    fn p6_a4_an_evidence_conflict_is_a_stored_diagnostic_not_an_overwrite() {
+        let fp = fp_for("/w/src/main.rs");
+        let mut original = obs("evt-1", "payload-A", fp.clone());
+        original.lineage_id = "original".to_string();
+
+        let mut tampered = obs("evt-1", "payload-B", fp.clone());
+        tampered.lineage_id = "tampered".to_string();
+        tampered.kind = EvidenceKind::FilesystemObserver;
+        tampered.confidence = AiConfidence::Inferred;
+
+        let out = dedup(vec![original, tampered]);
+
+        assert_eq!(
+            out.conflicts,
+            vec![DedupConflict {
+                event_id: "evt-1".to_string(),
+                kept_payload_hash: "payload-A".to_string(),
+                rejected_payload_hash: "payload-B".to_string(),
+            }],
+        );
+        // The activity reflects only the first-seen observation; the conflicting
+        // payload contributed no child and did not replace anything.
+        assert_eq!(out.activities.len(), 1);
+        assert_eq!(out.activities[0].child_lineage_ids(), vec!["original"]);
+        assert_eq!(
+            out.activities[0].strongest_evidence().unwrap().lineage_id,
+            "original",
+        );
     }
 }
