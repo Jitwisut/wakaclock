@@ -516,6 +516,16 @@ mod tests {
             created_at: event_base,
             actor_type: "human".to_string(),
             actor_confidence: 1.0,
+            clipboard_tracking_version: None,
+            copy_actions: None,
+            paste_actions: None,
+            copied_chars: None,
+            copied_lines: None,
+            pasted_chars: None,
+            pasted_lines: None,
+            paste_same_file_actions: None,
+            paste_same_workspace_actions: None,
+            paste_external_or_unknown_actions: None,
         };
         let mut unknown_row = human_row.clone();
         unknown_row.time = (event_base + 240) as f64;

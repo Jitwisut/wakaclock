@@ -21,6 +21,7 @@ function config(): WakaclockConfigSnapshot {
     debugLogging: false,
     trackDebugSessions: true,
     trackBuildTasks: true,
+    trackClipboardActions: true,
   };
 }
 

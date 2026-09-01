@@ -80,6 +80,16 @@ pub struct HeartbeatRow {
     /// migration remains compatible with the existing column order.
     pub actor_type: String,
     pub actor_confidence: f32,
+    pub clipboard_tracking_version: Option<u8>,
+    pub copy_actions: Option<u32>,
+    pub paste_actions: Option<u32>,
+    pub copied_chars: Option<u32>,
+    pub copied_lines: Option<u32>,
+    pub pasted_chars: Option<u32>,
+    pub pasted_lines: Option<u32>,
+    pub paste_same_file_actions: Option<u32>,
+    pub paste_same_workspace_actions: Option<u32>,
+    pub paste_external_or_unknown_actions: Option<u32>,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+pub const CLIPBOARD_TRACKING_VERSION: u8 = 1;
+pub const MAX_CLIPBOARD_COUNTER: u32 = 10_000_000;
+
 /// Canonical owner of a heartbeat or file mutation.
 ///
 /// `unknown` is intentional: absence of AI metadata is not positive evidence that a
@@ -451,6 +454,26 @@ pub struct Heartbeat {
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_tracking_version: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_actions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_actions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_chars: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_lines: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pasted_chars: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pasted_lines: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_same_file_actions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_same_workspace_actions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste_external_or_unknown_actions: Option<u32>,
     pub active_seconds: Option<f64>,
     /// Explicit intervals are the canonical source of duration. `active_seconds` remains
     /// for backwards compatibility with older clients and imported WakaTime payloads.
@@ -551,6 +574,16 @@ impl Heartbeat {
             keystrokes: None,
             chars_added: None,
             chars_deleted: None,
+            clipboard_tracking_version: None,
+            copy_actions: None,
+            paste_actions: None,
+            copied_chars: None,
+            copied_lines: None,
+            pasted_chars: None,
+            pasted_lines: None,
+            paste_same_file_actions: None,
+            paste_same_workspace_actions: None,
+            paste_external_or_unknown_actions: None,
             active_seconds: None,
             activity_segments: vec![],
             actor_type: ActorType::Unknown,
@@ -616,6 +649,7 @@ impl Heartbeat {
                 return Err("heartbeat_id cannot be empty".to_string());
             }
         }
+        self.validate_clipboard_metrics()?;
         for segment in &self.activity_segments {
             if segment.segment_id.trim().is_empty()
                 || !segment.start.is_finite()
@@ -626,6 +660,46 @@ impl Heartbeat {
             {
                 return Err("activity segment is invalid or exceeds the 120 second gap".to_string());
             }
+        }
+        Ok(())
+    }
+
+    fn validate_clipboard_metrics(&self) -> Result<(), String> {
+        let counters = [
+            self.copy_actions,
+            self.paste_actions,
+            self.copied_chars,
+            self.copied_lines,
+            self.pasted_chars,
+            self.pasted_lines,
+            self.paste_same_file_actions,
+            self.paste_same_workspace_actions,
+            self.paste_external_or_unknown_actions,
+        ];
+        let has_metrics = counters.iter().flatten().any(|value| *value > 0);
+        if has_metrics && self.clipboard_tracking_version.is_none() {
+            return Err("clipboard metrics require clipboard_tracking_version".to_string());
+        }
+        if self
+            .clipboard_tracking_version
+            .is_some_and(|version| version != CLIPBOARD_TRACKING_VERSION)
+        {
+            return Err("unsupported clipboard_tracking_version".to_string());
+        }
+        if counters
+            .iter()
+            .flatten()
+            .any(|value| *value > MAX_CLIPBOARD_COUNTER)
+        {
+            return Err("clipboard metric exceeds the per-heartbeat limit".to_string());
+        }
+        let origins = self
+            .paste_same_file_actions
+            .unwrap_or(0)
+            .saturating_add(self.paste_same_workspace_actions.unwrap_or(0))
+            .saturating_add(self.paste_external_or_unknown_actions.unwrap_or(0));
+        if origins != self.paste_actions.unwrap_or(0) {
+            return Err("paste origin action totals must equal paste_actions".to_string());
         }
         Ok(())
     }
@@ -674,6 +748,12 @@ impl Heartbeat {
         positive(self.keystrokes)
             || positive(self.chars_added)
             || positive(self.chars_deleted)
+            || positive(self.copy_actions)
+            || positive(self.paste_actions)
+            || positive(self.copied_chars)
+            || positive(self.copied_lines)
+            || positive(self.pasted_chars)
+            || positive(self.pasted_lines)
             || positive(self.human_lines_added)
             || positive(self.human_lines_deleted)
             || positive(self.unattributed_lines_added)
@@ -976,6 +1056,33 @@ mod tests {
         zeroed.active_seconds = Some(0.0);
 
         assert!(zeroed.is_duplicate_of(&base));
+    }
+
+    #[test]
+    fn clipboard_metrics_validate_version_origin_totals_and_bounds() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-vscode/1.0".to_string(),
+        );
+        heartbeat.paste_actions = Some(1);
+        heartbeat.paste_external_or_unknown_actions = Some(1);
+        assert!(heartbeat.validate().is_err());
+
+        heartbeat.clipboard_tracking_version = Some(CLIPBOARD_TRACKING_VERSION);
+        assert!(heartbeat.validate().is_ok());
+
+        heartbeat.paste_same_file_actions = Some(1);
+        assert!(heartbeat.validate().is_err());
+
+        heartbeat.paste_same_file_actions = None;
+        heartbeat.pasted_chars = Some(MAX_CLIPBOARD_COUNTER + 1);
+        assert!(heartbeat.validate().is_err());
+
+        heartbeat.pasted_chars = Some(10);
+        heartbeat.clipboard_tracking_version = Some(CLIPBOARD_TRACKING_VERSION + 1);
+        assert!(heartbeat.validate().is_err());
     }
 
     /// Regression test: `is_duplicate_of` used to only check `self.is_write`, so a save

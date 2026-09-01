@@ -11,6 +11,8 @@ import type {
   ActivitySegment,
   ActorType,
   BufferedFileState,
+  ClipboardCopyMetrics,
+  ClipboardPasteMetrics,
   ExtraHeartbeatPayload,
   FlushOverrides,
   FlushReason,
@@ -56,6 +58,15 @@ interface FlushSnapshot {
   humanLinesDeleted: number;
   unattributedLinesAdded: number;
   unattributedLinesDeleted: number;
+  copyActions: number;
+  pasteActions: number;
+  copiedChars: number;
+  copiedLines: number;
+  pastedChars: number;
+  pastedLines: number;
+  pasteSameFileActions: number;
+  pasteSameWorkspaceActions: number;
+  pasteExternalOrUnknownActions: number;
   pendingWrite: boolean;
   lastEditAt?: number;
   lastActivityAt?: number;
@@ -92,7 +103,8 @@ export class HeartbeatBufferManager {
     selection?: Pick<Selection, "active">,
     now = Date.now(),
     project?: string,
-    changeReason?: number
+    changeReason?: number,
+    paste?: ClipboardPasteMetrics
   ): Promise<void> {
     if (!isFileDocument(document) || changes.length === 0) {
       return;
@@ -124,10 +136,23 @@ export class HeartbeatBufferManager {
     // no activity at all (`hasPendingActivity` would see nothing to report), silently
     // dropping the heartbeat whose timestamp anchor the idle bridge relies on to
     // resume the clock after a break (see docs/duration-accuracy-audit.md Finding 0).
-    state.keystrokes += summary.keystrokes;
+    state.keystrokes += paste ? 0 : summary.keystrokes;
     state.charsAdded += summary.charsAdded;
     state.charsDeleted += summary.charsDeleted;
-    if (
+    if (paste && this.getConfig().trackClipboardActions) {
+      state.pasteActions += 1;
+      state.pastedChars += summary.charsAdded;
+      state.pastedLines += summary.linesAdded;
+      if (paste.origin === "same_file") {
+        state.pasteSameFileActions += 1;
+      } else if (paste.origin === "same_workspace") {
+        state.pasteSameWorkspaceActions += 1;
+      } else {
+        state.pasteExternalOrUnknownActions += 1;
+      }
+      state.unattributedLinesAdded += summary.linesAdded;
+      state.unattributedLinesDeleted += summary.linesDeleted;
+    } else if (
       changeReason !== TEXT_DOCUMENT_CHANGE_REASON_UNDO &&
       changeReason !== TEXT_DOCUMENT_CHANGE_REASON_REDO
     ) {
@@ -144,6 +169,32 @@ export class HeartbeatBufferManager {
       (state.lastHeartbeatAt === undefined ||
         now - state.lastHeartbeatAt >= this.getConfig().heartbeatRateLimitMs) &&
       this.hasPendingActivity(state)
+    ) {
+      await this.flushFile(entity, "gap", { now });
+    }
+  }
+
+  public async recordClipboardCopy(
+    document: Pick<TextDocument, "uri">,
+    metrics: ClipboardCopyMetrics,
+    now = Date.now(),
+    project?: string
+  ): Promise<void> {
+    if (!this.getConfig().trackClipboardActions || !isFileDocument(document)) {
+      return;
+    }
+    const entity = normalizeFsPath(document.uri.fsPath);
+    const state = this.getOrCreateState(entity);
+    this.updateProjectState(state, project);
+    this.observeActivity(state, now);
+    state.heartbeatId ||= randomUUID();
+    state.copyActions += 1;
+    state.copiedChars += metrics.copiedChars;
+    state.copiedLines += metrics.copiedLines;
+    this.onActivity?.();
+    if (
+      state.lastHeartbeatAt === undefined ||
+      now - state.lastHeartbeatAt >= this.getConfig().heartbeatRateLimitMs
     ) {
       await this.flushFile(entity, "gap", { now });
     }
@@ -367,6 +418,15 @@ export class HeartbeatBufferManager {
       humanLinesDeleted: 0,
       unattributedLinesAdded: 0,
       unattributedLinesDeleted: 0,
+      copyActions: 0,
+      pasteActions: 0,
+      copiedChars: 0,
+      copiedLines: 0,
+      pastedChars: 0,
+      pastedLines: 0,
+      pasteSameFileActions: 0,
+      pasteSameWorkspaceActions: 0,
+      pasteExternalOrUnknownActions: 0,
       pendingWrite: false
     };
     this.states.set(entity, created);
@@ -384,6 +444,8 @@ export class HeartbeatBufferManager {
       state.humanLinesDeleted > 0 ||
       state.unattributedLinesAdded > 0 ||
       state.unattributedLinesDeleted > 0 ||
+      state.copyActions > 0 ||
+      state.pasteActions > 0 ||
       state.activitySegments.length > 0
     );
   }
@@ -408,6 +470,7 @@ export class HeartbeatBufferManager {
     category: HeartbeatCategory,
     write: boolean
   ): ExtraHeartbeatPayload {
+    const clipboardEnabled = this.getConfig().trackClipboardActions;
     const hasAmbiguousLines =
       state.unattributedLinesAdded > 0 || state.unattributedLinesDeleted > 0;
     const hasHumanEvidence =
@@ -417,6 +480,7 @@ export class HeartbeatBufferManager {
       state.keystrokes > 0 ||
       state.charsAdded > 0 ||
       state.charsDeleted > 0 ||
+      state.copyActions > 0 ||
       state.activitySegments.length > 0;
     // `state.aiEventId` is set only when this flush is reporting an edit the broker
     // sidecar already matched to an agent (see classifyPendingAttribution). That takes
@@ -457,6 +521,22 @@ export class HeartbeatBufferManager {
       human_lines_deleted: state.humanLinesDeleted || undefined,
       unattributed_lines_added: state.unattributedLinesAdded || undefined,
       unattributed_lines_deleted: state.unattributedLinesDeleted || undefined,
+      clipboard_tracking_version: clipboardEnabled ? 1 : undefined,
+      copy_actions: clipboardEnabled ? state.copyActions || undefined : undefined,
+      paste_actions: clipboardEnabled ? state.pasteActions || undefined : undefined,
+      copied_chars: clipboardEnabled ? state.copiedChars || undefined : undefined,
+      copied_lines: clipboardEnabled ? state.copiedLines || undefined : undefined,
+      pasted_chars: clipboardEnabled ? state.pastedChars || undefined : undefined,
+      pasted_lines: clipboardEnabled ? state.pastedLines || undefined : undefined,
+      paste_same_file_actions: clipboardEnabled
+        ? state.pasteSameFileActions || undefined
+        : undefined,
+      paste_same_workspace_actions: clipboardEnabled
+        ? state.pasteSameWorkspaceActions || undefined
+        : undefined,
+      paste_external_or_unknown_actions: clipboardEnabled
+        ? state.pasteExternalOrUnknownActions || undefined
+        : undefined,
       active_seconds: unionSeconds(state.activitySegments),
       heartbeat_id: state.heartbeatId,
       activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined,
@@ -504,6 +584,8 @@ export class HeartbeatBufferManager {
     state.humanLinesDeleted = 0;
     state.unattributedLinesAdded = 0;
     state.unattributedLinesDeleted = 0;
+    // AI provenance changes who owns the edited lines, not who invoked the editor's
+    // Copy/Paste interaction. Clipboard counters therefore survive correlation.
     // A transcript-confirmed AI patch is not evidence that the developer was actively
     // interacting with the editor, so the interval the patch itself closed is dropped.
     //
@@ -591,6 +673,15 @@ export class HeartbeatBufferManager {
     state.humanLinesDeleted = 0;
     state.unattributedLinesAdded = 0;
     state.unattributedLinesDeleted = 0;
+    state.copyActions = 0;
+    state.pasteActions = 0;
+    state.copiedChars = 0;
+    state.copiedLines = 0;
+    state.pastedChars = 0;
+    state.pastedLines = 0;
+    state.pasteSameFileActions = 0;
+    state.pasteSameWorkspaceActions = 0;
+    state.pasteExternalOrUnknownActions = 0;
     state.activeSeconds = 0;
     state.activitySegments = [];
     state.heartbeatId = undefined;
@@ -629,6 +720,15 @@ export class HeartbeatBufferManager {
       humanLinesDeleted: state.humanLinesDeleted,
       unattributedLinesAdded: state.unattributedLinesAdded,
       unattributedLinesDeleted: state.unattributedLinesDeleted,
+      copyActions: state.copyActions,
+      pasteActions: state.pasteActions,
+      copiedChars: state.copiedChars,
+      copiedLines: state.copiedLines,
+      pastedChars: state.pastedChars,
+      pastedLines: state.pastedLines,
+      pasteSameFileActions: state.pasteSameFileActions,
+      pasteSameWorkspaceActions: state.pasteSameWorkspaceActions,
+      pasteExternalOrUnknownActions: state.pasteExternalOrUnknownActions,
       pendingWrite: state.pendingWrite,
       lastEditAt: state.lastEditAt,
       lastActivityAt: state.lastActivityAt

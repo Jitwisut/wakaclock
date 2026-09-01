@@ -59,10 +59,46 @@ function createConfig() {
         statusBarEnabled: true,
         debugLogging: false,
         trackDebugSessions: true,
-        trackBuildTasks: true
+        trackBuildTasks: true,
+        trackClipboardActions: true
     };
 }
 (0, vitest_1.describe)("HeartbeatBufferManager", () => {
+    (0, vitest_1.it)("flushes copy-only activity and records paste volume without inflating keystrokes", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordClipboardCopy({ uri: fileUri("C:/project/a.ts") }, { copiedChars: 24, copiedLines: 3 }, 1_000, "project");
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "x".repeat(2_000), rangeLength: 0 }], selection(4, 2), 122_000, "project", undefined, { origin: "external_or_unknown" });
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenNthCalledWith(1, "C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            clipboard_tracking_version: 1,
+            copy_actions: 1,
+            copied_chars: 24,
+            copied_lines: 3,
+            actor_type: "human"
+        }));
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenNthCalledWith(2, "C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            clipboard_tracking_version: 1,
+            paste_actions: 1,
+            pasted_chars: 2_000,
+            paste_external_or_unknown_actions: 1,
+            unattributed_lines_added: 1,
+            human_lines_added: undefined,
+            copy_actions: undefined
+        }));
+    });
+    (0, vitest_1.it)("does not collect or send clipboard fields when tracking is disabled", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const config = { ...createConfig(), trackClipboardActions: false };
+        const manager = new buffer_1.HeartbeatBufferManager(() => config, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordClipboardCopy({ uri: fileUri("C:/project/a.ts") }, { copiedChars: 8, copiedLines: 1 }, 1_000);
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "paste", rangeLength: 0 }], selection(0, 5), 2_000, undefined, undefined, { origin: "external_or_unknown" });
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            chars_added: 5,
+            clipboard_tracking_version: undefined,
+            paste_actions: undefined
+        }));
+    });
     (0, vitest_1.it)("does not call an editor change Human when broker line evidence is unknown", async () => {
         const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
         try {

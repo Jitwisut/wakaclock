@@ -128,7 +128,7 @@ export const navItems: NavGroup[] = [
       },
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
-      { title: 'Keystrokes', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
+      { title: 'Input Activity', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
       {
         title: 'Goals',
         href: '/dashboard/wakaclock/goals',

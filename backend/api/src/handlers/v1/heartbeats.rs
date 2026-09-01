@@ -62,6 +62,26 @@ pub struct HeartbeatPayload {
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
+    #[serde(default)]
+    pub clipboard_tracking_version: Option<u8>,
+    #[serde(default)]
+    pub copy_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_actions: Option<u32>,
+    #[serde(default)]
+    pub copied_chars: Option<u32>,
+    #[serde(default)]
+    pub copied_lines: Option<u32>,
+    #[serde(default)]
+    pub pasted_chars: Option<u32>,
+    #[serde(default)]
+    pub pasted_lines: Option<u32>,
+    #[serde(default)]
+    pub paste_same_file_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_same_workspace_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_external_or_unknown_actions: Option<u32>,
     pub active_seconds: Option<f64>,
     #[serde(default)]
     pub activity_segments: Vec<ActivitySegment>,
@@ -168,6 +188,16 @@ pub struct HeartbeatItem {
     pub machine: String,
     pub heartbeat_id: Option<String>,
     pub activity_segments: Vec<ActivitySegment>,
+    pub clipboard_tracking_version: Option<u8>,
+    pub copy_actions: Option<u32>,
+    pub paste_actions: Option<u32>,
+    pub copied_chars: Option<u32>,
+    pub copied_lines: Option<u32>,
+    pub pasted_chars: Option<u32>,
+    pub pasted_lines: Option<u32>,
+    pub paste_same_file_actions: Option<u32>,
+    pub paste_same_workspace_actions: Option<u32>,
+    pub paste_external_or_unknown_actions: Option<u32>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -367,6 +397,16 @@ pub async fn list(
                 actor_confidence: r.actor_confidence,
                 heartbeat_id: r.heartbeat_id,
                 activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
+                clipboard_tracking_version: r.clipboard_tracking_version,
+                copy_actions: r.copy_actions,
+                paste_actions: r.paste_actions,
+                copied_chars: r.copied_chars,
+                copied_lines: r.copied_lines,
+                pasted_chars: r.pasted_chars,
+                pasted_lines: r.pasted_lines,
+                paste_same_file_actions: r.paste_same_file_actions,
+                paste_same_workspace_actions: r.paste_same_workspace_actions,
+                paste_external_or_unknown_actions: r.paste_external_or_unknown_actions,
                 is_ai_generated: actor_type.is_ai(),
                 ai_agent: r.ai_agent,
                 ai_provider: r.ai_provider,
@@ -521,6 +561,16 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         keystrokes: p.keystrokes,
         chars_added: p.chars_added,
         chars_deleted: p.chars_deleted,
+        clipboard_tracking_version: p.clipboard_tracking_version,
+        copy_actions: p.copy_actions,
+        paste_actions: p.paste_actions,
+        copied_chars: p.copied_chars,
+        copied_lines: p.copied_lines,
+        pasted_chars: p.pasted_chars,
+        pasted_lines: p.pasted_lines,
+        paste_same_file_actions: p.paste_same_file_actions,
+        paste_same_workspace_actions: p.paste_same_workspace_actions,
+        paste_external_or_unknown_actions: p.paste_external_or_unknown_actions,
         active_seconds: p.active_seconds,
         activity_segments: p.activity_segments,
         actor_type: attribution.actor_type,

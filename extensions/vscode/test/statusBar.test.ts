@@ -42,6 +42,7 @@ function createConfig(overrides: Partial<WakaclockConfigSnapshot> = {}): Wakaclo
     debugLogging: false,
     trackDebugSessions: true,
     trackBuildTasks: true,
+    trackClipboardActions: true,
     ...overrides
   };
 }

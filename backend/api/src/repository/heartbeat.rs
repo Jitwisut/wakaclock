@@ -97,7 +97,17 @@ impl HeartbeatRepository {
                             AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
                         actor_type = 'ai_inferred', 0.6,
                         0.0
-                    )
+                    ),
+                    clipboard_tracking_version Nullable(UInt8),
+                    copy_actions Nullable(UInt32),
+                    paste_actions Nullable(UInt32),
+                    copied_chars Nullable(UInt32),
+                    copied_lines Nullable(UInt32),
+                    pasted_chars Nullable(UInt32),
+                    pasted_lines Nullable(UInt32),
+                    paste_same_file_actions Nullable(UInt32),
+                    paste_same_workspace_actions Nullable(UInt32),
+                    paste_external_or_unknown_actions Nullable(UInt32)
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -195,6 +205,16 @@ impl HeartbeatRepository {
                 actor_type = 'ai_inferred', 0.6,
                 0.0
             )",
+            "clipboard_tracking_version Nullable(UInt8)",
+            "copy_actions Nullable(UInt32)",
+            "paste_actions Nullable(UInt32)",
+            "copied_chars Nullable(UInt32)",
+            "copied_lines Nullable(UInt32)",
+            "pasted_chars Nullable(UInt32)",
+            "pasted_lines Nullable(UInt32)",
+            "paste_same_file_actions Nullable(UInt32)",
+            "paste_same_workspace_actions Nullable(UInt32)",
+            "paste_external_or_unknown_actions Nullable(UInt32)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -312,6 +332,16 @@ impl HeartbeatRepository {
             // The Null replay table is long-lived, so columns added to raw heartbeats
             // after its first CREATE ... AS must be mirrored explicitly.
             "active_seconds_claimed Nullable(Float64)",
+            "clipboard_tracking_version Nullable(UInt8)",
+            "copy_actions Nullable(UInt32)",
+            "paste_actions Nullable(UInt32)",
+            "copied_chars Nullable(UInt32)",
+            "copied_lines Nullable(UInt32)",
+            "pasted_chars Nullable(UInt32)",
+            "pasted_lines Nullable(UInt32)",
+            "paste_same_file_actions Nullable(UInt32)",
+            "paste_same_workspace_actions Nullable(UInt32)",
+            "paste_external_or_unknown_actions Nullable(UInt32)",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -602,7 +632,11 @@ impl HeartbeatRepository {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at, actor_type, actor_confidence
+                    created_at, actor_type, actor_confidence,
+                    clipboard_tracking_version, copy_actions, paste_actions,
+                    copied_chars, copied_lines, pasted_chars, pasted_lines,
+                    paste_same_file_actions, paste_same_workspace_actions,
+                    paste_external_or_unknown_actions
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND time >= ? AND time < ?
                 ORDER BY time ASC",

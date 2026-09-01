@@ -145,6 +145,11 @@
           "type": "boolean",
           "default": true,
           "description": "Send building heartbeats when VS Code tasks start and stop."
+        },
+        "wakaclock.trackClipboardActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track metadata-only copy and paste counts. Clipboard contents are never stored or sent."
         }
       }
     }

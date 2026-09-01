@@ -53,6 +53,7 @@ function config() {
         debugLogging: false,
         trackDebugSessions: true,
         trackBuildTasks: true,
+        trackClipboardActions: true,
     };
 }
 async function fixture() {

@@ -294,14 +294,26 @@ export interface AiStatsResponse {
 // ---------------------------------------------------------------------------
 // GET /users/current/keystroke_stats
 // ---------------------------------------------------------------------------
-export interface KeystrokeProjectItem {
+export interface ClipboardMetrics {
+  copied_chars: number;
+  copied_lines: number;
+  copy_actions: number;
+  paste_actions: number;
+  paste_external_or_unknown_actions: number;
+  paste_same_file_actions: number;
+  paste_same_workspace_actions: number;
+  pasted_chars: number;
+  pasted_lines: number;
+}
+
+export interface KeystrokeProjectItem extends ClipboardMetrics {
   chars_added: number;
   chars_deleted: number;
   keystrokes: number;
   name: string;
 }
 
-export interface KeystrokeDailyItem {
+export interface KeystrokeDailyItem extends ClipboardMetrics {
   chars_added: number;
   chars_deleted: number;
   date: string;
@@ -309,12 +321,26 @@ export interface KeystrokeDailyItem {
 }
 
 export interface KeystrokeStatsData {
+  clipboard_coverage: {
+    percent: number;
+    supported_vscode_heartbeats: number;
+    total_vscode_heartbeats: number;
+  };
   daily: KeystrokeDailyItem[];
   days_with_activity: number;
   projects: KeystrokeProjectItem[];
   total_chars_added: number;
   total_chars_deleted: number;
+  total_copied_chars: number;
+  total_copied_lines: number;
+  total_copy_actions: number;
   total_keystrokes: number;
+  total_paste_actions: number;
+  total_paste_external_or_unknown_actions: number;
+  total_paste_same_file_actions: number;
+  total_paste_same_workspace_actions: number;
+  total_pasted_chars: number;
+  total_pasted_lines: number;
 }
 
 export interface KeystrokeStatsResponse {

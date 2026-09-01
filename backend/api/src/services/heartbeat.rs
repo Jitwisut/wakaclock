@@ -275,6 +275,16 @@ impl HeartbeatService {
                 created_at,
                 actor_type: hb.actor_type.as_str().to_string(),
                 actor_confidence: hb.actor_confidence,
+                clipboard_tracking_version: hb.clipboard_tracking_version,
+                copy_actions: hb.copy_actions,
+                paste_actions: hb.paste_actions,
+                copied_chars: hb.copied_chars,
+                copied_lines: hb.copied_lines,
+                pasted_chars: hb.pasted_chars,
+                pasted_lines: hb.pasted_lines,
+                paste_same_file_actions: hb.paste_same_file_actions,
+                paste_same_workspace_actions: hb.paste_same_workspace_actions,
+                paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
             };
 
             rows.push(row);

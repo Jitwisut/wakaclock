@@ -117,6 +117,36 @@ enum Commands {
         chars_deleted: Option<u32>,
 
         #[arg(long)]
+        clipboard_tracking_version: Option<u8>,
+
+        #[arg(long)]
+        copy_actions: Option<u32>,
+
+        #[arg(long)]
+        paste_actions: Option<u32>,
+
+        #[arg(long)]
+        copied_chars: Option<u32>,
+
+        #[arg(long)]
+        copied_lines: Option<u32>,
+
+        #[arg(long)]
+        pasted_chars: Option<u32>,
+
+        #[arg(long)]
+        pasted_lines: Option<u32>,
+
+        #[arg(long)]
+        paste_same_file_actions: Option<u32>,
+
+        #[arg(long)]
+        paste_same_workspace_actions: Option<u32>,
+
+        #[arg(long)]
+        paste_external_or_unknown_actions: Option<u32>,
+
+        #[arg(long)]
         active_seconds: Option<f64>,
 
         /// Stable transport identity. Retries must reuse this value.
@@ -479,6 +509,26 @@ struct ExtraHeartbeatInput {
     #[serde(default)]
     chars_deleted: Option<u32>,
     #[serde(default)]
+    clipboard_tracking_version: Option<u8>,
+    #[serde(default)]
+    copy_actions: Option<u32>,
+    #[serde(default)]
+    paste_actions: Option<u32>,
+    #[serde(default)]
+    copied_chars: Option<u32>,
+    #[serde(default)]
+    copied_lines: Option<u32>,
+    #[serde(default)]
+    pasted_chars: Option<u32>,
+    #[serde(default)]
+    pasted_lines: Option<u32>,
+    #[serde(default)]
+    paste_same_file_actions: Option<u32>,
+    #[serde(default)]
+    paste_same_workspace_actions: Option<u32>,
+    #[serde(default)]
+    paste_external_or_unknown_actions: Option<u32>,
+    #[serde(default)]
     active_seconds: Option<f64>,
     #[serde(default)]
     heartbeat_id: Option<String>,
@@ -768,6 +818,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             keystrokes,
             chars_added,
             chars_deleted,
+            clipboard_tracking_version,
+            copy_actions,
+            paste_actions,
+            copied_chars,
+            copied_lines,
+            pasted_chars,
+            pasted_lines,
+            paste_same_file_actions,
+            paste_same_workspace_actions,
+            paste_external_or_unknown_actions,
             active_seconds,
             heartbeat_id,
             activity_segments,
@@ -828,6 +888,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 keystrokes,
                 chars_added,
                 chars_deleted,
+                clipboard_tracking_version,
+                copy_actions,
+                paste_actions,
+                copied_chars,
+                copied_lines,
+                pasted_chars,
+                pasted_lines,
+                paste_same_file_actions,
+                paste_same_workspace_actions,
+                paste_external_or_unknown_actions,
                 active_seconds,
                 heartbeat_id,
                 activity_segments: parsed_activity_segments.unwrap_or_default(),
@@ -1058,6 +1128,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "cli_path": cli_paths.to_json(),
                         "legacy_service_alias": legacy_service_alias,
                         "stale_service_binary": stale_service_binary,
+                        "capabilities": ["clipboard_metrics_v1"],
                     })
                 );
             } else {
@@ -1069,6 +1140,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
                 println!("{}", identity_line(&config));
                 println!("Queued heartbeats: {queued}");
+                println!("Capabilities: clipboard_metrics_v1");
                 match key_check {
                     "verified" => {
                         println!("Key check: verified — the server accepted this API key")
@@ -3573,6 +3645,16 @@ fn build_heartbeat(
         heartbeat.keystrokes = extra.keystrokes;
         heartbeat.chars_added = extra.chars_added;
         heartbeat.chars_deleted = extra.chars_deleted;
+        heartbeat.clipboard_tracking_version = extra.clipboard_tracking_version;
+        heartbeat.copy_actions = extra.copy_actions;
+        heartbeat.paste_actions = extra.paste_actions;
+        heartbeat.copied_chars = extra.copied_chars;
+        heartbeat.copied_lines = extra.copied_lines;
+        heartbeat.pasted_chars = extra.pasted_chars;
+        heartbeat.pasted_lines = extra.pasted_lines;
+        heartbeat.paste_same_file_actions = extra.paste_same_file_actions;
+        heartbeat.paste_same_workspace_actions = extra.paste_same_workspace_actions;
+        heartbeat.paste_external_or_unknown_actions = extra.paste_external_or_unknown_actions;
         heartbeat.active_seconds = extra.active_seconds;
         heartbeat.heartbeat_id = extra
             .heartbeat_id

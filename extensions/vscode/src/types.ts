@@ -1,5 +1,15 @@
 export type HeartbeatCategory = "coding" | "building" | "debugging";
 export type ActorType = "human" | "ai_verified" | "ai_inferred" | "unknown";
+export type PasteOrigin = "same_file" | "same_workspace" | "external_or_unknown";
+
+export interface ClipboardCopyMetrics {
+    copiedChars: number;
+    copiedLines: number;
+}
+
+export interface ClipboardPasteMetrics {
+    origin: PasteOrigin;
+}
 
 export type FlushReason =
     | "save"
@@ -37,6 +47,15 @@ export interface BufferedFileState {
     humanLinesDeleted: number;
     unattributedLinesAdded: number;
     unattributedLinesDeleted: number;
+    copyActions: number;
+    pasteActions: number;
+    copiedChars: number;
+    copiedLines: number;
+    pastedChars: number;
+    pastedLines: number;
+    pasteSameFileActions: number;
+    pasteSameWorkspaceActions: number;
+    pasteExternalOrUnknownActions: number;
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
@@ -86,6 +105,16 @@ export interface ExtraHeartbeatPayload {
     human_lines_deleted?: number;
     unattributed_lines_added?: number;
     unattributed_lines_deleted?: number;
+    clipboard_tracking_version?: number;
+    copy_actions?: number;
+    paste_actions?: number;
+    copied_chars?: number;
+    copied_lines?: number;
+    pasted_chars?: number;
+    pasted_lines?: number;
+    paste_same_file_actions?: number;
+    paste_same_workspace_actions?: number;
+    paste_external_or_unknown_actions?: number;
 }
 
 export interface CliResult {
@@ -163,6 +192,7 @@ export interface StatusSnapshot {
     userId?: string;
     queuedHeartbeats?: number;
     flushedNow?: number;
+    capabilities?: string[];
 }
 
 export interface BrokerStatusSnapshot {
@@ -202,6 +232,7 @@ export interface WakaclockConfigSnapshot {
     debugLogging: boolean;
     trackDebugSessions: boolean;
     trackBuildTasks: boolean;
+    trackClipboardActions: boolean;
 }
 
 export interface FlushOverrides {

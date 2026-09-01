@@ -222,6 +222,16 @@ fn map_heartbeat(
         created_at,
         actor_type: attribution.actor_type.to_string(),
         actor_confidence: attribution.confidence,
+        clipboard_tracking_version: None,
+        copy_actions: None,
+        paste_actions: None,
+        copied_chars: None,
+        copied_lines: None,
+        pasted_chars: None,
+        pasted_lines: None,
+        paste_same_file_actions: None,
+        paste_same_workspace_actions: None,
+        paste_external_or_unknown_actions: None,
     })
 }
 

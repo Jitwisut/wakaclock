@@ -8,6 +8,7 @@ class WakaclockCliService {
     getApiKey;
     managedCli;
     pluginId;
+    clipboardCapability;
     constructor(getConfig, logger, 
     // Optional so existing 2-arg call sites (tests) keep working unauthenticated.
     getApiKey = () => Promise.resolve(undefined), managedCli, 
@@ -62,13 +63,39 @@ class WakaclockCliService {
         this.pushOptionalNumber(args, "--human-lines-deleted", primaryExtra.human_lines_deleted);
         this.pushOptionalNumber(args, "--unattributed-lines-added", primaryExtra.unattributed_lines_added);
         this.pushOptionalNumber(args, "--unattributed-lines-deleted", primaryExtra.unattributed_lines_deleted);
+        if (this.clipboardCapability !== false) {
+            this.pushOptionalNumber(args, "--clipboard-tracking-version", primaryExtra.clipboard_tracking_version);
+            this.pushOptionalNumber(args, "--copy-actions", primaryExtra.copy_actions);
+            this.pushOptionalNumber(args, "--paste-actions", primaryExtra.paste_actions);
+            this.pushOptionalNumber(args, "--copied-chars", primaryExtra.copied_chars);
+            this.pushOptionalNumber(args, "--copied-lines", primaryExtra.copied_lines);
+            this.pushOptionalNumber(args, "--pasted-chars", primaryExtra.pasted_chars);
+            this.pushOptionalNumber(args, "--pasted-lines", primaryExtra.pasted_lines);
+            this.pushOptionalNumber(args, "--paste-same-file-actions", primaryExtra.paste_same_file_actions);
+            this.pushOptionalNumber(args, "--paste-same-workspace-actions", primaryExtra.paste_same_workspace_actions);
+            this.pushOptionalNumber(args, "--paste-external-or-unknown-actions", primaryExtra.paste_external_or_unknown_actions);
+        }
         const stdinPayload = extraHeartbeats.length > 0
             ? JSON.stringify(extraHeartbeats, null, 2)
             : undefined;
         if (stdinPayload) {
             args.push("--extra-heartbeats");
         }
-        return this.runCli(args, stdinPayload);
+        try {
+            return await this.runCli(args, stdinPayload);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const hadClipboardFlags = args.includes("--clipboard-tracking-version");
+            if (!hadClipboardFlags || !/unexpected argument|found argument|usage:/i.test(message)) {
+                throw error;
+            }
+            this.clipboardCapability = false;
+            this.logger.warn("legacy wakaclock-cli does not support clipboard metrics", {
+                error: message
+            });
+            return this.runCli(stripClipboardArgs(args), stdinPayload);
+        }
     }
     async getToday(timezone) {
         const args = ["today"];
@@ -239,12 +266,18 @@ class WakaclockCliService {
     async getStatus() {
         const result = await this.runCli(["status"]);
         const lines = this.parseKeyValueLines(result.stdout);
+        const capabilities = (lines.Capabilities ?? "")
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean);
+        this.clipboardCapability = capabilities.includes("clipboard_metrics_v1");
         return {
             configPath: lines["Config path"],
             serverUrl: lines["Server URL"],
             userId: lines["User ID"],
             queuedHeartbeats: this.parseNumber(lines["Queued heartbeats"]),
             flushedNow: this.parseNumber(lines["Flushed now"]),
+            capabilities,
         };
     }
     async installAgent() {
@@ -395,4 +428,27 @@ class WakaclockCliService {
     }
 }
 exports.WakaclockCliService = WakaclockCliService;
+const CLIPBOARD_FLAGS = new Set([
+    "--clipboard-tracking-version",
+    "--copy-actions",
+    "--paste-actions",
+    "--copied-chars",
+    "--copied-lines",
+    "--pasted-chars",
+    "--pasted-lines",
+    "--paste-same-file-actions",
+    "--paste-same-workspace-actions",
+    "--paste-external-or-unknown-actions",
+]);
+function stripClipboardArgs(args) {
+    const stripped = [];
+    for (let index = 0; index < args.length; index += 1) {
+        if (CLIPBOARD_FLAGS.has(args[index])) {
+            index += 1;
+            continue;
+        }
+        stripped.push(args[index]);
+    }
+    return stripped;
+}
 //# sourceMappingURL=cli.js.map
