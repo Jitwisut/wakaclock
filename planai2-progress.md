@@ -125,18 +125,18 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**PHASE 4 COMPLETE** (p4.1–p4.3 + p4.A2/p4.A4; p4.A1/p4.A3 `[~]` — the runtime
-"never a heartbeat alone" / "→ unknown" verdicts are Phase 5's). **Phase 5 next**
-— **Universal Correlation Engine**, the largest remaining piece.
-
-**p5.0 is a `DECISION` item** → the loop must resolve it first: named correlation
-windows per evidence type (hook↔transcript, editor↔AI-edit, filesystem↔session,
-snapshot↔hook, …), each with a stated reason, **no single shared constant**.
-Read `.context/backend/crates.md` + `backend/api/crates/wakaclock-core/src/ai/correlation.rs`
-(has `EXACT_MATCH_WINDOW = 5s` for editor↔AI-event already) before deciding.
-Write the window table + rationale into **Decisions log**, commit `docs(planai2-p5.0)`,
-end the iteration. Then p5.1 (unified evidence intake) … p5.5, then p5.A1–p5.A5.
-Phase 5 is multi-iteration — expect several commits.
+**Phase 5 — item p5.1** (unified evidence intake). p5.0 decided (Decisions log:
+`CorrelationWindows` type + per-pair windows). p5.1: **build a new
+`ai/correlation_engine.rs`** — a `CorrelationInput` enum with one variant per
+producer (native hook, structured MCP, completed transcript tool call,
+before/after snapshot, filesystem observer, session/process observer, editor
+input), each carrying a lineage id + normalized entity + workspace + timestamp;
+and a `CorrelationEngine` that accepts any of them via `ingest(input)` and
+preserves lineage. Also implement the `CorrelationWindows` type (fields per the
+p5.0 table, each with its reason as a doc comment). Existing `correlation.rs`
+stays (editor↔AI-event line-level attribution) — the new engine is the universal
+layer above it. Tests: each producer type ingests; intake preserves lineage IDs.
+Then p5.2 (decision rules) … p5.5, then p5.A1–p5.A5. Multi-iteration.
 
 ---
 
@@ -279,7 +279,7 @@ Session/process is corroborating evidence, never a verdict that AI edited a file
 
 The core that planai.md left "not built".
 
-- [ ] **p5.0 DECISION: named correlation windows.** Each evidence type gets a named window with a stated reason (hook↔transcript, editor↔AI-edit, filesystem↔session, snapshot↔hook, …). **No single shared constant.** Write the table + rationale in **Decisions log**, commit `docs(planai2-p5.0)`.
+- [x] **p5.0 DECISION: named correlation windows.** → resolved in Decisions log: a `CorrelationWindows` value type, one named+reasoned field per evidence pair (`hook_to_transcript` 10s, `editor_to_ai_edit` 5s, `filesystem_to_agent_activity` 60s, `snapshot_to_hook` 30s, `filesystem_to_editor_input` 15s, `session_liveness_grace` 120s), the engine takes `&CorrelationWindows`, day/session clip is a separate hard clip. Committed `docs(planai2-p5.0)`.
 - [ ] **p5.1 Unified evidence intake.** One correlation input stream fed by every producer: native hook, structured MCP, completed transcript tool call, before/after snapshot, filesystem observer, session/process observer, editor input. (Extends `correlation.rs`, which today only matches AI events to editor buffers.)
   - Tests: each producer type can be pushed into the engine; intake preserves lineage IDs.
 - [ ] **p5.2 Decision rules — exactly as planai2.md §5 states them.**
@@ -396,6 +396,33 @@ is therefore *contract hardening + a registry*, not "add fields".
 
 Commit: `docs(planai2-p1.0)` (this file only).
 
+### 2026-09-01 — p5.0 — named correlation windows
+
+Read: `correlation.rs` (`EXACT_MATCH_WINDOW = 5s`, editor↔AI-event, measured to an
+`EditorObservation`'s *window* not a point) and `extensions/vscode/src/aiAttribution.ts`
+(`CORRELATION_WINDOW_SECONDS = 15s`, point-to-point on the editor side).
+
+**Decision: a `CorrelationWindows` value type with one named, individually-reasoned
+field per evidence pair — never a single shared constant.** The Phase 5 engine
+takes `&CorrelationWindows`, so tests (and a future config) can vary them;
+`CorrelationWindows::DEFAULT` holds:
+
+| pair (field) | window | reason |
+|---|---|---|
+| `hook_to_transcript` | **10 s** | the transcript is appended by the *same* tool moments after its hook fires; wider would merge two genuinely separate edits of one file into one canonical event |
+| `editor_to_ai_edit` | **5 s** | unchanged — the existing `EXACT_MATCH_WINDOW`, measured to the editor flush *window*. The VS Code side's 15 s is point-to-point and deliberately not unified (`correlation.rs` doc) |
+| `filesystem_to_agent_activity` | **60 s** | fs events lag (fsync, editor debounce, the atomic-save rename sequence); "an agent tool/session was active around this change" tolerates more slack than a line-level claim, but 60 s still excludes a formatter or `git` run minutes later |
+| `snapshot_to_hook` | **30 s** | the before/after git-sweep brackets one shell/MCP tool call; its hook event fires inside that bracket — 30 s covers a slow multi-file `apply_patch` without reaching the next tool call |
+| `filesystem_to_editor_input` | **15 s** | matches the VS Code extension's own `CORRELATION_WINDOW_SECONDS`; a human editor save emits an editor-buffer flush and an fs event within a few seconds of each other |
+| `session_liveness_grace` | **120 s** | **not a point match** — a session/process counts as live at change time `t` when `started_at ≤ t ≤ ended_at` (or `last_activity_at + this grace` while still live). A scan cadence is seconds-to-a-minute, so ~90 s of prior liveness is still plausible causation; 5 min of silence is not |
+
+The session/day boundary clip (p5.3) is a **hard clip**, not a window — kept
+separate. Every window is a field with its own doc comment carrying the reason
+above, so no future edit can collapse them into one number without deleting a
+documented rationale.
+
+Commit: `docs(planai2-p5.0)` (this file only).
+
 ---
 
 ## Iteration log
@@ -430,4 +457,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p4.1 — done. New `ai::session` — `SessionProcessEvidence` (12 fields, **no argv/env**, structural + JSON guards) + `EvidenceStrength` (5-tier ladder, `is_strong_enough_to_infer` = name-only can't infer) + `from_detected_process()` + `bounded_active_seconds()` (never wall-clock now). 5 new tests (core +5). Gates + duration-audit green. Committed `faad03d`.
 - 2026-09-01 — p4.2 — done. `evidence_from_scan()` (cwd in a registered root ⇒ `ProcessTreeCwdMatch`, else `ProcessNameOnly`; never returns the hook/transcript-only tiers) + `strongest_session_evidence()` (rank then recency, skips ended). 2 new tests (core +2). Gates + duration-audit green. Committed `62795bb`.
 - 2026-09-01 — p4.3 — done. `SessionEvidenceLedger` — `observe()` (insert/refresh by pid) + `reap(&running_pids)` closes gone processes at `last_activity_at` (never `now`) and returns them. 3 new tests. core +3. Gates + duration-audit green. Committed `330ca78`.
-- 2026-09-01 — p4.A1–A4 — Phase 4 acceptance. p4.A2/p4.A4 cited to p4.2/p4.3 tests. 2 new: `p4_a1_...has_no_path_to_a_heartbeat_on_its_own` (structural), `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`. p4.A1/A3 `[~]` — runtime verdicts are Phase 5. **Phase 4 done.** core +2. Gates green. Committed.
+- 2026-09-01 — p4.A1–A4 — Phase 4 acceptance. p4.A2/p4.A4 cited to p4.2/p4.3 tests. 2 new: `p4_a1_...has_no_path_to_a_heartbeat_on_its_own` (structural), `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`. p4.A1/A3 `[~]` — runtime verdicts are Phase 5. **Phase 4 done.** core +2. Gates green. Committed `300648d`.
+- 2026-09-01 — p5.0 — DECISION resolved (docs only). `CorrelationWindows` type, one named+reasoned window per evidence pair (10s hook↔transcript, 5s editor↔AI-edit, 60s fs↔agent-activity, 30s snapshot↔hook, 15s fs↔editor, 120s session-liveness grace), engine takes `&CorrelationWindows`, day/session clip separate. See Decisions log. Committed.
