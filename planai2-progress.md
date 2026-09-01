@@ -125,22 +125,26 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 5 — item p5.5** (confidence + lineage), then **Phase 5 done**. p5.0–p5.4
-done (windows / intake / `verdict_for` + precedence DECISION / `ClipBounds`
-hard-clip / system actors — all of p5.A1–p5.A5 discharged).
+**Phase 6 — item p6.1** (versioned canonical fingerprint). **Phase 5 complete**
+(p5.0–p5.5 + p5.A1–p5.A5, `ai/correlation_engine.rs`, 233 core tests). Every
+Phase 6 item is **duration-gated** — run all three `duration-audit` scripts, and
+`golden.py` must stay `total_error: 0.0`.
 
-p5.5: "confidence derives from the *evidence combination*, never the agent name;
-evidence lineage is retained so a result can be explained after the fact without
-storing source content." **Mostly already built:** `AiVerdict` *is* the graded
-outcome, `VerdictReason` names the clause, `Verdict.supporting_lineage` carries
-producer `lineage_id`s (no content — `the_verdict_carries_the_lineage_that_backed_it_and_no_content`),
-and `confidence_comes_from_the_evidence_combination_not_the_agent_name` already
-proves agent-name independence. p5.5 finishes it: add one test
-`same_agent_different_evidence_sets_yield_different_verdicts` (one agent string,
-three evidence sets — verified hook / strong session+fs / name-only session+fs —
-⇒ `AiVerified` / `AiInferred` / `Unknown`), confirm the `Verdict` doc-comments
-frame it as the lineage record, tick p5.5, and close Phase 5. Then Phase 6
-(p6.1 — every Phase 6 item is duration-gated).
+p6.1: a **versioned canonical fingerprint** built from {workspace, normalized
+entity, change kind, *bounded* timestamp, line delta / content fingerprint,
+session/tool identity when present}. It must be **transport-independent** — a
+native hook and a transcript tool call for the same logical edit hash to the
+*same* value — so `EvidenceKind` / producer is NOT an input, and the timestamp is
+bucketed (truncate to e.g. a small number of seconds) so near-simultaneous
+observations collide. Versioned via an explicit prefix (e.g. `caf1:`) so the
+scheme can evolve; a version bump changes the prefix, not silently the bytes.
+Likely a new `ai/canonical.rs` with a `CanonicalFingerprint` type +
+`fingerprint_v1(&CanonicalInput) -> String`; wire it so a `CorrelationInput` (or
+a small projection of it) can produce one. Tests:
+`same_logical_edit_from_two_transports_yields_one_fingerprint`,
+`a_fingerprint_scheme_version_is_explicit_in_the_value` (+ a bounded-timestamp
+collision test). Re-export from `ai/mod.rs`. Then p6.2 (canonical activity
+aggregates child evidence ids), p6.3 (dedup rules), p6.A1–p6.A5.
 
 ---
 
@@ -296,8 +300,8 @@ The core that planai.md left "not built".
   - Tests (4, core 222→226): `clip_bounds_utc_day_is_midnight_to_midnight_and_half_open`, `an_edit_spanning_midnight_is_attributed_to_each_day_separately` (day-1 clip ⇒ `AiInferred` from day-1 evidence only; day-2 clip ⇒ `Human` from the day-2 save only), `evidence_from_before_a_session_started_is_clipped_out` (pre-`started_at` change + sighting dropped ⇒ `Unknown`/`NoEvidence`), `clip_bounds_intersect_is_the_overlap_or_none`. Gates + duration-audit(total_error 0.0) green.
 - [x] **p5.4 System actors.** `SystemActorKind` (Formatter / Build / VersionControl / Codegen) + optional `CorrelationInput.system_actor` a producer sets for a recognised formatter/build/VCS/codegen sweep. `verdict_for` rule 3 (between `ai_verified` and every conflict/inferred/human branch): any relevant input with `system_actor` set ⇒ `Unknown` / `VerdictReason::SystemActor`. A native hook still wins (rule 2); `system` stays a reason under `Unknown`, not a 5th `AiVerdict`. `decide()` is per-entity so system evidence for one file never suppresses a real agent edit on another. **Closes p5.A5.** Commit `aae2f6e`.
   - Tests (5, core 226→231): `p5_a5_a_formatter_write_burst_is_system_not_ai_inferred` (fmt sweep + live strong session ⇒ `Unknown`/`SystemActor`), `p5_a5_a_git_merge_touching_a_file_is_not_attributed_to_ai_or_human` (VCS change + concurrent editor input ⇒ `Unknown`/`SystemActor`), `a_verified_hook_still_wins_over_a_concurrent_formatter_pass`, `system_actor_evidence_for_one_file_does_not_suppress_a_real_ai_edit_on_another`, `system_actor_kind_round_trips_through_json`. Gates + duration-audit(total_error 0.0) green.
-- [ ] **p5.5 Confidence + lineage.** Confidence derives from the *evidence combination*, never the agent name. Evidence lineage is retained so a result can be explained after the fact — **without** storing source content.
-  - Tests: same agent, different evidence sets → different confidence; a lineage record contains IDs and reasons, no file content.
+- [x] **p5.5 Confidence + lineage.** Confidence = `AiVerdict` itself (verified > inferred > unknown), reached by the evidence-combination ladder — never keyed on the agent name. `Verdict` is planai2.md §5's evidence-lineage record: grade + `VerdictReason` (the §5 clause) + `supporting_lineage` (producer `lineage_id`s the engine walked), no source content. Doc comment reframed to say so. Commit `08208a0`. **Phase 5 complete.**
+  - Tests (2, core 231→233): `same_agent_different_evidence_sets_yield_different_verdicts` (one agent string; native-hook vs fs+strong-session vs fs+name-only-session ⇒ `AiVerified` / `AiInferred` / `Unknown`), `a_lineage_record_is_ids_plus_a_reason_and_never_file_content` (serialized `Verdict` = exact walked ids + machine-readable reason; asserts no content/diff/patch/prompt/source/text/body key, no fingerprint value, no path; round-trips). Gates + duration-audit(total_error 0.0) green.
 
 ### Phase 5 acceptance criteria — named tests
 
@@ -507,3 +511,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.2 — done. §5 verdict pass: `AiVerdict` (4 outcomes, no `system`), `VerdictReason` (8 clauses), `Verdict {verdict, reason, supporting_lineage}`, `CorrelationEngine::verdict_for(entity, at)`. §5 has no stated precedence → 8-step fixed order recorded as a DECISION (Decisions log), constrained by the §5 ACs. `between()` drives `TimeWindowMatches`; new optional `CorrelationInput.evidence_strength` lets the engine (not the producer) apply `is_strong_enough_to_infer()`. 15 new tests (core 207→222). **Discharged** `[~]` p3.A5 / p4.A1 / p4.A3 (added runtime engine tests alongside the structural ones) and p5.A1–p5.A4; p5.A5 `[~]` → p5.4 (system actors). Gates + duration-audit(total_error 0.0) green. Committed `c45beca` (+ this tracker `<next>`).
 - 2026-09-01 — p5.3 — done. `ClipBounds` half-open `[start,end)` + `utc_day`/`session`/`contains`/`intersect`; `verdict_for_within(entity, at, bounds)` hard-drops out-of-range inputs before the §5 ladder, `inputs_for_within` exposes survivors. `verdict_for` → shared private `decide()`. 4 new tests (core 222→226). Gates + duration-audit(total_error 0.0) green. Committed `bd93fa5` (+ tracker).
 - 2026-09-01 — p5.4 — done. `SystemActorKind` (Formatter/Build/VersionControl/Codegen) + optional `CorrelationInput.system_actor`; `verdict_for` rule 3 (below `ai_verified`, above conflict/inferred/human): `system_actor` set on any relevant input ⇒ `Unknown`/`SystemActor`. Per-entity so it can't suppress a real edit on another file. **Closes p5.A5; all p5.A1–A5 now discharged.** 5 new tests (core 226→231). One clippy fixup (renumbered the doc-comment rule ladder — `doc_list_item` rejects `2b.`). Gates + duration-audit(total_error 0.0) green. Committed `aae2f6e` (+ tracker).
+- 2026-09-01 — p5.5 — done. `Verdict` reframed as §5's evidence-lineage record (grade `AiVerdict` = confidence, `VerdictReason` = clause, `supporting_lineage` = producer ids, no content); doc comment updated. 2 new tests (core 231→233): same agent + 3 evidence sets ⇒ 3 different verdicts; lineage record is ids + reason only, no content/fingerprint/path leak, round-trips. **Phase 5 (Universal Correlation Engine) complete — p5.0–p5.5 + p5.A1–p5.A5.** Gates + duration-audit(total_error 0.0) green. Committed `08208a0` (+ tracker).
