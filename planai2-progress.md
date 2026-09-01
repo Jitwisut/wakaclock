@@ -125,19 +125,28 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 6 — item p6.A1** (Phase 6 acceptance). **p6.1–p6.3 done**
-(`ai/canonical.rs` fingerprint + activity, `ai/dedup.rs` ruleset). Every Phase 6
-item is **duration-gated** — run all three `duration-audit` scripts, and
-`golden.py` must stay `total_error: 0.0`.
+**Phase 7 — item p7.1** (pipeline stage model). **Phases 0–6 complete** (planai.md
+Phases 0–2 were already certified; planai2 Phases 0–6 now done — the Local AI
+Activity Broker, canonical evidence contract, direct-evidence producers,
+workspace registry + universal filesystem observer, agent session/process
+evidence, the Universal Correlation Engine, and the dedup / canonical-heartbeat
+generator). Phase 7 is **duration-gated AND frontend-gated** where it touches
+`frontend/app/`, and vscode-gated where it touches `extensions/vscode/`.
 
-Phase 6 acceptance (p6.A1–p6.A5): mostly expressible as tests over `dedup` +
-`CanonicalActivity` + a small synthetic corpus.
-- **p6.A1** duplicate canonical-activity rate < 0.1% over a test corpus, and the rate is *recorded*. Build a fixture corpus (a `Vec<DedupObservation>` mixing genuine distinct edits + realistic redeliveries/replays), run `dedup`, assert `duplicates_dropped / total < 0.001` after the intended dedup, and surface the measured rate (return it / assert on it). Likely `dedup.rs` gains a `DedupOutcome::duplicate_rate()` helper.
-- **p6.A2** VS Code + hook + transcript + filesystem evidence for one edit → exactly one activity (four `DedupObservation`s, four `EvidenceKind`s, one shared `CanonicalFingerprint` ⇒ `activities.len() == 1`, 4 children).
-- **p6.A3** restart / replay adds no duration — re-run the whole corpus twice through `dedup`, assert `total_active_seconds` unchanged and `duplicates_dropped` == corpus size. (Overlaps `rule6_...` — extend to the full corpus.)
-- **p6.A4** an evidence conflict is stored as a diagnostic, not silently overwritten — assert `conflicts` is populated and the kept activity still reflects the first payload (overlaps `rule2_...`).
-- **p6.A5** `golden.py` still `total_error: 0.0`; `verify_port.py` still green — this is the gate, just record it in the tick line.
-One commit `feat(planai2-p6.A): …` covering the new acceptance tests, then **Phase 6 done → Phase 7** (p7.1 pipeline stage model; Phase 7 is duration- **and** frontend-gated where it touches `frontend/app/`).
+p7.1: a **pipeline stage model** — represent and surface the lifecycle
+`Agent detected → Adapter installed/trusted → Evidence received → Correlated →
+Accepted locally → Queued for delivery → Delivered | Rejected`. Backend model +
+API exposure. Read `.context/backend/overview.md` + `.context/backend/api-routes.md`
++ `.context/workflows/adding-endpoint.md` before touching any handler/route.
+Likely a `PipelineStage` enum in `wakaclock-core` (client-side, since the broker
++ adapters live there) with a `StageTransition` / per-agent current-stage map,
+plus — if a server endpoint is in scope — a `/api/v*/ai/pipeline` read model
+following handler→service→repository. Watch the concurrent `ai/adapter.rs` /
+`ai/producer.rs` churn (adapter install/trust state overlaps "Adapter
+installed/trusted"). Tests: a stage-transition test (valid orderings, no
+skipping backwards silently); the API returns the current stage per agent.
+Then p7.2 (diagnostics UI + commands — vscode + frontend), p7.3 (shadow mode),
+p7.4 (precision/recall report), p7.A1–p7.A4.
 
 **Concurrency note (2026-09-02):** a large concurrent feature landed in the tree
 while paused — new `ai/producer.rs` (+ `ai/mod.rs` re-exports), plus
@@ -340,11 +349,11 @@ The core that planai.md left "not built".
 
 ### Phase 6 acceptance criteria — named tests
 
-- [ ] **p6.A1** Duplicate canonical activity rate < 0.1% over the test corpus (record it).
-- [ ] **p6.A2** VS Code + hook + transcript + filesystem evidence for one edit → exactly one activity.
-- [ ] **p6.A3** Restart / replay adds no duration (re-run the dedup + duration gates).
-- [ ] **p6.A4** An evidence conflict is stored as a diagnostic, not silently overwritten.
-- [ ] **p6.A5** `golden.py` still `total_error: 0.0`; `verify_port.py` still green.
+- [x] **p6.A1** Duplicate canonical activity rate < 0.1% over the test corpus (record it). → `p6_a1_duplicate_canonical_activity_rate_is_far_below_one_per_mille`: 500-edit synthetic corpus (hook + filesystem per edit, 30 exact hook redeliveries); `residual_duplicate_activities() == 0` ⇒ residual rate **0.0 < 0.1%**; recorded absorbed-replay rate `duplicate_rate() ≈ 2.9%`. New `DedupOutcome::{observations_in, duplicate_rate(), residual_duplicate_activities()}`.
+- [x] **p6.A2** VS Code + hook + transcript + filesystem evidence for one edit → exactly one activity. → `p6_a2_vscode_hook_transcript_and_filesystem_evidence_for_one_edit_is_one_activity`: 4 `DedupObservation`s (EditorInput/NativeHook/CompletedTranscriptToolCall/FilesystemObserver), one shared fingerprint ⇒ `activities.len() == 1`, 4 children, strongest = NativeHook.
+- [x] **p6.A3** Restart / replay adds no duration (re-run the dedup + duration gates). → `p6_a3_restart_and_replay_add_no_duration`: corpus once vs corpus++corpus ⇒ same `total_active_seconds` (`500 × 60 s`), same activity count, every second-copy obs dropped as a duplicate. Duration-audit re-run green.
+- [x] **p6.A4** An evidence conflict is stored as a diagnostic, not silently overwritten. → `p6_a4_an_evidence_conflict_is_a_stored_diagnostic_not_an_overwrite`: same `event_id`, payload-A then payload-B ⇒ one `DedupConflict{kept: A, rejected: B}`, activity still reflects only the first-seen child/strongest — nothing replaced.
+- [x] **p6.A5** `golden.py` still `total_error: 0.0`; `verify_port.py` still green. → gate, re-run at `4a30d35`: `verify_port` ok, `golden.py` `total_error 0.0`, `verify_actor_migration` ok. **Phase 6 complete.**
 
 ---
 
@@ -561,3 +570,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p5.5 — done. `Verdict` reframed as §5's evidence-lineage record (grade `AiVerdict` = confidence, `VerdictReason` = clause, `supporting_lineage` = producer ids, no content); doc comment updated. 2 new tests (core 231→233): same agent + 3 evidence sets ⇒ 3 different verdicts; lineage record is ids + reason only, no content/fingerprint/path leak, round-trips. **Phase 5 (Universal Correlation Engine) complete — p5.0–p5.5 + p5.A1–p5.A5.** Gates + duration-audit(total_error 0.0) green. Committed `08208a0` (+ tracker).
 - 2026-09-02 — p6.1 — done. New `ai/canonical.rs`: `CanonicalIdentity` + `CanonicalFingerprint::v1` (UUIDv5 over workspace|normalized-entity|change-kind|10s-time-bucket|content-fp-or-line-delta|session/tool-id). Transport-independent by construction (no `EvidenceKind` field); explicit `caf1:` scheme prefix. 7 tests. core 233→250 (incl. concurrent `producer.rs` tests). Committed `93d7b83` (+ tracker). NOTE: concurrent feature (`ai/producer.rs` et al.) landed in-tree while paused — not staged/reverted; full gate suite green with it.
 - 2026-09-02 — p6.3 — done. `ai/dedup.rs`: `dedup()` applies §6's 6 rules → `DedupOutcome{activities, total_active_seconds, conflicts, duplicates_dropped}`. Conflict = first-seen stands + diagnostic (mirrors broker `DO NOTHING`). Rule 4 reuses `broker::evidence_rank_key` (new pub fn; private `evidence_rank` delegates — behaviour-preserving). Duration = strongest obs's seconds per activity, summed over activities. `DedupObservation` lean (not `BrokerEventV1` — DECISION logged). `CanonicalActivity` += `strongest_evidence: Option<ChildEvidence>`. 7 tests. core 255→262. broker.rs + ai/mod.rs staged via save/restore dance (concurrent hunks kept out). Committed `9756d8a` (+ tracker).
+- 2026-09-02 — p6.A1–A5 — done. `DedupOutcome` += `observations_in` / `duplicate_rate()` / `residual_duplicate_activities()`. 4 acceptance tests over a 500-edit synthetic corpus: residual duplicate-activity rate 0.0 (<0.1%), 4-source→1-activity, replay adds no duration (500×60s both ways), conflict is a stored diagnostic. p6.A5 = the duration gate (golden.py total_error 0.0, verify_port green). **Phase 6 complete.** core 262→266. Committed `4a30d35` (+ tracker). dedup.rs is fully mine — no staging dance needed.
