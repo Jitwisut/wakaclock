@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
@@ -236,6 +237,13 @@ function AiStatsPanel() {
                   </div>
                 </div>
               </DashboardPanel>
+
+              <AiAttributionLegend
+                aiInferredPercent={aiInferredPct}
+                aiVerifiedPercent={aiVerifiedPct}
+                humanPercent={humanPct}
+                unknownPercent={unknownPct}
+              />
 
               <div>
                 <h3 className="mb-2 text-sm font-medium">Agents</h3>
