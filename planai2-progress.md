@@ -125,25 +125,29 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 7 — item p7.A1 (acceptance tests)** next. **p7.1, p7.2, p7.3, p7.4
-done.** p7.3 `d03596a` (`ai/shadow.rs` observer gate + kill switches). p7.4
-`16f211b` (`ai/shadow_report.rs` — `compare_to_oracle` → `native_adapter_recall`
-+ `universal_inference_precision`, two unmerged `Option<f64>`; new
-`ShadowRecord.ground_truth` label axis, DECISION logged). core 287.
+**Phase 7 — item p7.2c** next (the only remaining `[ ]` in Phase 7; deferred
+sub-project). **p7.1, p7.2, p7.3, p7.4, p7.A1–p7.A4 done.** core 291. p7.A
+`d5dfd86` — added `ObserverConfig.rollout_agents`/`rollout_platforms:
+RolloutScope{All|Only}` + `agent_in_rollout()`/`platform_in_rollout()` for
+p7.A3; 4 acceptance tests, shared "no production call site" caveat recorded at
+the Phase 7 acceptance heading for A1/A2/A4.
 
-Next: **p7.A1–p7.A4** acceptance tests. Read them at the "Phase 7 acceptance
-criteria" heading. Likely most are already substantially covered by
-p7.1–p7.4's tests — for each, either point at the existing test(s) that
-discharge it, or add a small dedicated one. **p7.A1** (observe-only ≠ output
-change) and **p7.A2** (precision/recall report exists + separates the two): the
-evidence lines MUST carry the "no production call site / no labelled corpus yet"
-caveats from the p7.3 and p7.4 Decisions-log entries — do not let them read as
-independently end-to-end verified. **p7.A3** (rollout per-agent/per-platform)
-and **p7.A4** (rollback needs no migration, deletes no data): p7.3's
-`disabled_workspaces`/`disabled_sources` are plain set edits — A4 is close;
-A3 may need a per-agent/per-platform toggle if `disabled_sources` (per
-`EvidenceKind`) doesn't already satisfy "per-agent". Then **p7.2c** (deferred
-sub-project). Then check Run DoD.
+Next: **p7.2c — Local AI diagnostics telemetry channel.** This is the deferred
+sub-project (broker-health panel + parser-lag / stale-adapter warnings from
+p7.2's original text). It needs: (1) a client→server push of sanitized
+broker/parser/adapter-freshness metadata (new wire type + producer in
+`wakaclock-cli` / `wakaclock-core`), (2) a server read model + `GET` endpoint
+(read `.context/workflows/adding-endpoint.md` + `.context/backend/overview.md`
++ `.context/data/migrations.md` + `.context/dead-code.md` first;
+handler→service→repository; likely a new ClickHouse table or a Postgres row —
+migration ordering is load-bearing), (3) a dashboard panel + `userId`-keyed
+TanStack query + render test (`.context/workflows/adding-dashboard-panel.md` +
+`.context/frontend/data-layer.md`). **If step 1+2 is large, land the backend as
+`feat(planai2-p7.2c-backend)` first, then the panel as `feat(planai2-p7.2c)`.**
+Watch concurrent churn in `src/handlers/v1/status_bar.rs`, `broker.rs`,
+`wakaclock-cli/src/main.rs`. When p7.2c is `[x]`, **check the Run Definition of
+Done** — Phases 0–7 would then all be complete; if the DoD is met, stop the
+loop (`ScheduleWakeup stop:true`).
 
 **p7.2c added** (`[ ]`, blocks Run DoD): the broker-health panel + parser-lag /
 stale-adapter warnings from p7.2's original text were split out — they need
@@ -389,10 +393,18 @@ Duration-gated **and** frontend-gated where it touches `frontend/app/`.
 
 ### Phase 7 acceptance criteria — named tests
 
-- [ ] **p7.A1** Observe-only mode does not change current heartbeat / analytics output.
-- [ ] **p7.A2** A precision/recall report vs verified events exists and separates precision from recall.
-- [ ] **p7.A3** Rollout can be enabled per-agent / per-platform.
-- [ ] **p7.A4** Rollback requires no migration and deletes no data.
+**Shared caveat (p7.A1 / p7.A2 / p7.A4):** these are discharged against the
+`ai/shadow.rs` + `ai/shadow_report.rs` **module contract**. The full
+end-to-end claims — "no diff in heartbeat / analytics output", "a real
+precision figure", "deletes no analytics data" — hold today only because
+`CorrelationEngine` has **no production call site** (see the p7.3 and p7.4
+Decisions-log entries). A future wiring item that connects the engine to the
+heartbeat path owes the end-to-end assertions.
+
+- [x] **p7.A1** Observe-only mode does not change current heartbeat / analytics output. → `p7_a1_observe_only_mode_does_not_change_current_output` (`shadow.rs`): for every grade (`ai_verified`/`ai_inferred`/`human`), `observe(observe_only_rollout_start())` returns `production: None` — the same production-facing result as `observe(ObserverConfig::default())` (observer off). Also covered structurally by p7.3's `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` + `flipping_to_infer_is_the_only_switch_that_changes_production_output`. **Caveat above.**
+- [x] **p7.A2** A precision/recall report vs verified events exists and separates precision from recall. → `p7_a2_a_precision_recall_report_exists_and_separates_the_two` (`shadow_report.rs`): `compare_to_oracle` over a labelled fixture yields recall `2/3` and precision `1/2` — two distinct `Option<f64>` from disjoint relations (label→oracle vs proposal→label), serialized report has no `accuracy`/`combined` field. Also p7.4's `the_report_keeps_inference_precision_and_native_adapter_recall_as_separate_numbers` + `the_report_exposes_the_counts_but_no_merged_number_and_no_content`. **Caveat above** — a real precision number needs a labelled shadow corpus.
+- [x] **p7.A3** Rollout can be enabled per-agent / per-platform. → `p7_a3_rollout_is_enabled_per_agent_and_per_platform` (`shadow.rs`): `ObserverConfig.rollout_agents` / `rollout_platforms: RolloutScope { All | Only(set) }` + `agent_in_rollout()` / `platform_in_rollout()`. Named agent/platform in, others out; ids normalised (`"Claude Code"` ⇒ `claude-code`, `"VS Code"` ⇒ `vscode`); `All` covers everyone (terminal state); empty `Only` and a disabled observer both fail closed. `AdapterRegistry` has no enable/disable so this gate is genuinely new (not a duplicate mechanism). No caveat — this is a pure config predicate, fully verified.
+- [x] **p7.A4** Rollback requires no migration and deletes no data. → `p7_a4_rollback_needs_no_migration_and_deletes_no_data` (`shadow.rs`): a legacy config JSON (no `rollout_*` / `disabled_*` keys) deserializes via `#[serde(default)]` (no migration); `disable → re-enable` round-trips to a byte-identical `ObserverConfig` (lossless); `ShadowLog` is append-only — `record` only grows it, no `clear`/`drain`/`remove`. **Caveat above** for the "no analytics data deleted" clause (nothing wired to delete yet).
 
 ---
 
@@ -666,3 +678,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-02 — p7.2 (frontend half) — done. `AiAttributionLegend` on `ai/page.tsx`: per-class explainer of the §5 decision rule (verified = native hook/MCP; inferred = agent activity in the correlation window with no competing editor input; human = positive editor keystroke/save; unknown = unproven/conflicting, never AI), rendered from the existing `wakaclockKeys.aiStats(userId, …)` query — no new endpoint. Metadata-only privacy test. `test/wakaclock-ai-attribution-legend.test.tsx` ×4. `npm run validate` green (40/213 → 41/217). Scoped out the broker-health panel + parser-lag / stale-adapter warnings to new **p7.2c** — they need local broker/transcript state the hosted API never receives; `[ ]` not `[~]` (unbuilt infra, not a missing tool). Decision logged. **p7.2 now `[x]`.** Committed `40fba12` (+ tracker). Frontend files are outside the concurrent change set — staged directly, no dance.
 - 2026-09-02 — p7.3 — done. New `ai/shadow.rs`: `ObserverConfig` (`enabled` + `AttributionMode` observe_only|infer + `disabled_workspaces`/`disabled_sources` kill switches, all plain set edits → p7.A4 rollback-without-migration). `observe()` → `ObserverOutcome { production: Option<Verdict>, record: Option<ShadowRecord> }`; `production` is `Some` only in `enabled`+`Infer` on a live workspace, `None` everywhere else. `ShadowRecord`/`ShadowLog` = the sanitized proposed-vs-oracle dataset p7.4 consumes (p6.1 fingerprint join key + p5.5 lineage, no content). Engine still has no production call site so "byte-identical analytics" is trivially true today — renamed that test to `observe_only_and_observer_off_produce_the_same_absence_of_production_attribution` with a doc comment saying so (advisor); the real assertion is owed at a future wiring item. 8 tests, core 273→281. `ai/mod.rs` via save/restore dance (concurrent `producer` hunks kept out; combined restored, builds). Gates + duration-audit (total_error 0.0) green. Committed `d03596a` (+ tracker). Took p7.3 before p7.2c per the `/loop` Current position ordering (p7.2c is a sub-project, deferred to end of Phase 7) — noted at the p7.2c item so a cold-context agent sees the deliberate step-3 skip.
 - 2026-09-02 — p7.4 — done. New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with `native_adapter_recall()` (label→oracle) and `universal_inference_precision()` (proposal→label) — two `Option<f64>` from different relations over the log, **no merged accessor** (planai2.md Release Gates: "ห้ามนำ verified/inferred มารวมเป็นตัวเลขเดียว"). Raw counts incl. `unscored_inferences` on the struct. Advisor call surfaced that precision is empty by construction without an independent label (§5 rule 2 vs 6 mutually exclusive) → new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>`; DECISION logged. 6 tests, core 281→287. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `16f211b` (+ tracker).
+- 2026-09-02 — p7.A1–p7.A4 — done. p7.A3 needed code (no enable/disable on `AdapterRegistry`): `ObserverConfig.rollout_agents`/`rollout_platforms: RolloutScope { All | Only(BTreeSet<String>) }` + `agent_in_rollout()`/`platform_in_rollout()` ingest predicates; empty `Only` fails closed; ids normalised. p7.A1/A2/A4 discharged at module-contract level with a shared "no production call site / no labelled corpus yet" caveat written once at the Phase 7 acceptance heading (advisor — so a skim doesn't read three independent verifications). 4 tests (`p7_a1_..`, `p7_a2_..` in `shadow_report.rs`, `p7_a3_..`, `p7_a4_..`), core 287→291. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `d5dfd86` (+ tracker). **Phase 7 code complete; only p7.2c (`[ ]`, deferred sub-project) remains before Run DoD.**
