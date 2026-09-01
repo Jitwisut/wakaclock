@@ -125,28 +125,29 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 7 — item p7.1** (pipeline stage model). **Phases 0–6 complete** (planai.md
-Phases 0–2 were already certified; planai2 Phases 0–6 now done — the Local AI
-Activity Broker, canonical evidence contract, direct-evidence producers,
-workspace registry + universal filesystem observer, agent session/process
-evidence, the Universal Correlation Engine, and the dedup / canonical-heartbeat
-generator). Phase 7 is **duration-gated AND frontend-gated** where it touches
-`frontend/app/`, and vscode-gated where it touches `extensions/vscode/`.
+**Phase 7 — item p7.2 (frontend half)**, then p7.3. **p7.1 done; p7.2 VS Code
+half done** (`1de00d0` — `AtoAxis: Test AI Detection` command +
+`aiDetectionSelfTest.ts`, 12 vitest cases). Toolchains confirmed available
+(`node v24`, both `node_modules` present); vscode `npm test` 94 pass, lint clean.
 
-p7.1: a **pipeline stage model** — represent and surface the lifecycle
-`Agent detected → Adapter installed/trusted → Evidence received → Correlated →
-Accepted locally → Queued for delivery → Delivered | Rejected`. Backend model +
-API exposure. Read `.context/backend/overview.md` + `.context/backend/api-routes.md`
-+ `.context/workflows/adding-endpoint.md` before touching any handler/route.
-Likely a `PipelineStage` enum in `wakaclock-core` (client-side, since the broker
-+ adapters live there) with a `StageTransition` / per-agent current-stage map,
-plus — if a server endpoint is in scope — a `/api/v*/ai/pipeline` read model
-following handler→service→repository. Watch the concurrent `ai/adapter.rs` /
-`ai/producer.rs` churn (adapter install/trust state overlaps "Adapter
-installed/trusted"). Tests: a stage-transition test (valid orderings, no
-skipping backwards silently); the API returns the current stage per agent.
-Then p7.2 (diagnostics UI + commands — vscode + frontend), p7.3 (shadow mode),
-p7.4 (precision/recall report), p7.A1–p7.A4.
+p7.2 frontend half: a **broker-health panel + evidence source/confidence tooltip
++ parser-lag / stale-adapter warnings** on `app/dashboard/(auth)/wakaclock/ai/page.tsx`.
+The data source does not exist yet — `frontend/app` only calls analytics
+endpoints. So this item is really two steps:
+  1. **Backend**: a read endpoint exposing broker health + parser lag + adapter
+     freshness (the `wakaclock doctor ai --json` fields, server-side). Read
+     `.context/workflows/adding-endpoint.md` + `.context/backend/overview.md` +
+     `.context/backend/api-routes.md` + `.context/dead-code.md` first. Likely
+     `handlers/v1/` or `v2.rs` → `services/` → (probably no new repo/table;
+     reads existing broker/AI state). Watch concurrent churn in
+     `src/handlers/v1/status_bar.rs`, `broker.rs`.
+  2. **Frontend**: `.context/workflows/adding-dashboard-panel.md` +
+     `.context/frontend/data-layer.md`. New `wakaclockKeys.aiDiagnostics(userId)`
+     (must include `userId` — CLAUDE.md rule 6), an endpoint fn, a panel
+     component, a render test. `cd frontend/app && npm run validate` green.
+If step 1 turns out to be a large sub-project, land it as its own
+`feat(planai2-p7.2b)` commit before the frontend panel. Then tick p7.2 and go to
+p7.3 (shadow mode), p7.4 (precision/recall), p7.A1–p7.A4.
 
 **Concurrency note (2026-09-02):** a large concurrent feature landed in the tree
 while paused — new `ai/producer.rs` (+ `ai/mod.rs` re-exports), plus
@@ -361,10 +362,12 @@ The core that planai.md left "not built".
 
 Duration-gated **and** frontend-gated where it touches `frontend/app/`.
 
-- [ ] **p7.1 Pipeline stage model.** Represent and surface: Agent detected → Adapter installed/trusted → Evidence received → Correlated → Accepted locally → Queued for delivery → Delivered / Rejected. Backend model + API exposure.
-  - Tests: a stage-transition test; the API returns the current stage per agent.
-- [ ] **p7.2 Diagnostics UI + commands.** `AtoAxis: Test AI Detection`, `AtoAxis: Repair AI Integrations` (VS Code). Broker health/status panel, evidence source/confidence tooltip, parser-lag + stale-adapter warnings (frontend dashboard). 
+- [x] **p7.1 Pipeline stage model.** New `ai/pipeline.rs`: `PipelineStage` (AgentDetected → AdapterInstalled → EvidenceReceived → Correlated → AcceptedLocally → QueuedForDelivery → Delivered | Rejected) with `rank()`/`is_terminal()`/`can_advance_to()`; `PipelineTracker` holds one `AgentPipelineState` per agent (stage + `entered_stage_at` + full `history` + `rejection_reason`). `observe()` advances forward (skips OK), refuses equal/backward/out-of-terminal moves with `StageRegression` (agent untouched — p7.1 "no skipping backwards silently"); first sighting may start mid-chain; `reject()` is the terminal rejection from any non-terminal stage. `snapshot()` = the per-agent read model (stage + timestamps only, no evidence content) an API/CLI-`doctor`/editor panel returns. HTTP/CLI surfacing deferred (concurrent `wakaclock-cli/src/main.rs` churn) — the read model is the contract. Re-exported from `ai/mod.rs`. Commit `e9f5220`.
+  - Tests (7, core 266→273): `pipeline_advances_through_the_chain_and_refuses_to_regress`, `the_snapshot_returns_the_current_stage_per_agent`, `a_rejection_is_reachable_from_any_non_terminal_stage_and_is_terminal`, `a_forward_skip_is_allowed_and_recorded_in_history`, `a_first_sighting_can_start_mid_chain`, `the_read_model_serializes_without_evidence_content`, `can_advance_to_encodes_the_transition_rules`. Gates: fmt/clippy/test --workspace green; duration-audit (total_error 0.0) ok.
+- [ ] **p7.2 Diagnostics UI + commands.** `AtoAxis: Test AI Detection`, `AtoAxis: Repair AI Integrations` (VS Code). Broker health/status panel, evidence source/confidence tooltip, parser-lag + stale-adapter warnings (frontend dashboard).
   - Tests: VS Code command registration test; frontend panel render test with a query key that includes `userId`; `npm run validate` green.
+  - **VS Code half done** (`1de00d0`): `AtoAxis: Repair AI Integrations` + `AtoAxis: Show AI Broker Status` already existed; added `AtoAxis: Test AI Detection` → new `src/aiDetectionSelfTest.ts` (`runAiDetectionSelfTest(deps)` composes broker + adapter status into an `ok`/`degraded`/`failing` verdict with per-check severity: broker reachable/running, inbox draining, last-delivery error, 24h evidence freshness, agent detected/enabled; `formatAiDetectionReport`). Registered in `commands.ts`, contributed in `package.json`. 12 vitest cases (9 verdict logic + 3 registration). `npm run lint` clean, `npm test` 94 pass. `out/src/commands.js` regen owed (can't split from concurrent refactor's edits to the same generated file). Rust gates unchanged (no Rust touched).
+  - **Frontend half TODO**: broker-health panel + evidence source/confidence tooltip + parser-lag / stale-adapter warnings on the AI dashboard. Blocked on there being **no backend read endpoint** for pipeline/broker diagnostics — `frontend/app` only has analytics endpoints (`/users/current/ai_stats`, `/status_bar/today`). Needs a `GET /api/v1|v2/ai/diagnostics` (or extend an existing AI-status handler) following handler→service→repository, then a panel + `userId`-keyed TanStack query + render test + `npm run validate`.
 - [ ] **p7.3 Shadow mode.** `observer.enabled` and `observer.attribution_mode = "observe_only" | "infer"`. In `observe_only`: record sanitized proposed attribution and compare against the native-hook oracle; change nothing in production attribution. Kill switch per workspace **and** per evidence source.
   - Tests: in `observe_only`, heartbeat + analytics output is byte-identical to observer-off; a per-source kill switch disables exactly that source; flipping to `infer` is the only thing that changes output.
 - [ ] **p7.4 Precision/recall report.** A report comparing proposed (shadow) attribution to verified events, precision reported **separately** from native-adapter recall — never merged into one number.
@@ -571,3 +574,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-02 — p6.1 — done. New `ai/canonical.rs`: `CanonicalIdentity` + `CanonicalFingerprint::v1` (UUIDv5 over workspace|normalized-entity|change-kind|10s-time-bucket|content-fp-or-line-delta|session/tool-id). Transport-independent by construction (no `EvidenceKind` field); explicit `caf1:` scheme prefix. 7 tests. core 233→250 (incl. concurrent `producer.rs` tests). Committed `93d7b83` (+ tracker). NOTE: concurrent feature (`ai/producer.rs` et al.) landed in-tree while paused — not staged/reverted; full gate suite green with it.
 - 2026-09-02 — p6.3 — done. `ai/dedup.rs`: `dedup()` applies §6's 6 rules → `DedupOutcome{activities, total_active_seconds, conflicts, duplicates_dropped}`. Conflict = first-seen stands + diagnostic (mirrors broker `DO NOTHING`). Rule 4 reuses `broker::evidence_rank_key` (new pub fn; private `evidence_rank` delegates — behaviour-preserving). Duration = strongest obs's seconds per activity, summed over activities. `DedupObservation` lean (not `BrokerEventV1` — DECISION logged). `CanonicalActivity` += `strongest_evidence: Option<ChildEvidence>`. 7 tests. core 255→262. broker.rs + ai/mod.rs staged via save/restore dance (concurrent hunks kept out). Committed `9756d8a` (+ tracker).
 - 2026-09-02 — p6.A1–A5 — done. `DedupOutcome` += `observations_in` / `duplicate_rate()` / `residual_duplicate_activities()`. 4 acceptance tests over a 500-edit synthetic corpus: residual duplicate-activity rate 0.0 (<0.1%), 4-source→1-activity, replay adds no duration (500×60s both ways), conflict is a stored diagnostic. p6.A5 = the duration gate (golden.py total_error 0.0, verify_port green). **Phase 6 complete.** core 262→266. Committed `4a30d35` (+ tracker). dedup.rs is fully mine — no staging dance needed.
+- 2026-09-02 — p7.2 (VS Code half) — done. `AtoAxis: Test AI Detection` command: new `extensions/vscode/src/aiDetectionSelfTest.ts` (`runAiDetectionSelfTest` → ok/degraded/failing verdict over broker + adapter status; `formatAiDetectionReport`), registered in `commands.ts`, contributed in `package.json`. 12 vitest cases (vscode 82→94). lint clean. `out/src/commands.js` regen owed (concurrent refactor edits the same generated file). `commands.ts` staged via save/restore dance. Frontend half (broker-health panel + tooltip + parser-lag warnings) blocked on a non-existent backend diagnostics endpoint — see Current position. Committed `1de00d0` (+ tracker).
