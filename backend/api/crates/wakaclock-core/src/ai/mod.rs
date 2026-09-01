@@ -25,6 +25,7 @@ pub mod codex;
 pub mod correlation;
 pub mod correlation_engine;
 pub mod dedup;
+pub mod diagnostics;
 pub mod event;
 pub mod filesystem_observer;
 pub mod follow_up;
@@ -61,6 +62,10 @@ pub use correlation_engine::{
     SystemActorKind, Verdict, VerdictReason,
 };
 pub use dedup::{dedup, DedupConflict, DedupObservation, DedupOutcome};
+pub use diagnostics::{
+    build_report as build_ai_diagnostics_report, AdapterFreshness, AiDiagnosticsReport, BrokerHealth,
+    ParserLagSummary, AI_DIAGNOSTICS_SCHEMA_VERSION,
+};
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{
     canonicalize_within_root, coalesce_burst, fingerprint_changed_file, is_excluded_path,

@@ -26,6 +26,7 @@ use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
+use crate::services::ai_diagnostics::AiDiagnosticsService;
 use crate::services::ai_stats::AiStatsService;
 use crate::services::ai_usage::AiUsageService;
 use crate::services::all_time::AllTimeService;
@@ -90,6 +91,7 @@ pub struct AppState {
     pub org_repo: Arc<OrgRepository>,
     pub team_repo: Arc<TeamRepository>,
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
+    pub ai_diagnostics_service: Arc<AiDiagnosticsService>,
     pub ai_stats_service: Arc<AiStatsService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
     pub billing_service: Arc<BillingService>,
@@ -237,6 +239,7 @@ pub async fn create_app_state() -> Result<AppState> {
     let coworking_session_repo = Arc::new(CoworkingSessionRepository::new(clickhouse.clone()));
 
     // Initialise Services
+    let ai_diagnostics_service = Arc::new(AiDiagnosticsService::new());
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
     let account_analytics_service =
         Arc::new(AccountAnalyticsService::new(account_analytics_repo.clone()));
@@ -354,6 +357,7 @@ pub async fn create_app_state() -> Result<AppState> {
         org_repo,
         team_repo,
         coworking_session_repo,
+        ai_diagnostics_service,
         ai_stats_service,
         account_analytics_service,
         billing_service,

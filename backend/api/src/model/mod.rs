@@ -1,4 +1,5 @@
 pub mod account_analytics;
+pub mod ai_diagnostics;
 pub mod ai_stats;
 pub mod ai_usage;
 pub mod all_time;
