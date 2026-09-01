@@ -125,20 +125,24 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**Phase 5 — item p5.2** (decision rules). p5.0 (windows) and p5.1 (intake:
-`ai/correlation_engine.rs`, `CorrelationInput`/`EvidenceKind`/`CorrelationEngine`/
-`CorrelationWindows`) are done. p5.2: implement the verdict pass **exactly as
-planai2.md §5 states it** — a function over the ingested `CorrelationInput`s for
-one entity in a time window that returns `ai_verified` / `ai_inferred` / `human`
-/ `unknown`:
-- `ai_verified` ⇐ NativeHook | StructuredMcp | CompletedTranscriptToolCall present for the entity (i.e. an `EvidenceKind::is_verified_ai_edit`).
-- `ai_inferred` ⇐ FilesystemObserver change AND (a recent agent tool call OR a live session — `is_strong_enough_to_infer`) in the same workspace AND `windows.filesystem_to_agent_activity` matches AND fingerprint-or-change-shape consistent AND **no competing agent evidence**. Process name alone is insufficient.
-- `human` ⇐ positive EditorInput evidence AND the editor↔AI-edit window has closed with no conflicting AI evidence.
-- `unknown` ⇐ FilesystemObserver change without sufficient provenance, OR conflicting human+AI evidence, OR multiple competing AI sessions.
-New type e.g. `AiVerdict` + `CorrelationEngine::verdict_for(entity, at, &windows)`.
-Tests: one named test per rule + the three `unknown` branches (these also
-discharge the `[~]` on p3.A5 / p4.A1 / p4.A3). Then p5.3 … p5.5, then
-p5.A1–p5.A5. Multi-iteration.
+**Phase 5 — item p5.3** (boundary clipping). p5.0 (windows), p5.1 (intake), p5.2
+(`verdict_for` + `AiVerdict`/`VerdictReason`/`Verdict`, precedence DECISION
+logged, p3.A5/p4.A1/p4.A3/p5.A1–A4 discharged) are done. **p5.5 note:** confidence
+already derives from the evidence combination not the agent name
+(`confidence_comes_from_the_evidence_combination_not_the_agent_name`) and the
+`Verdict` carries `supporting_lineage` with no content — p5.5 is largely covered,
+revisit for an explicit "different evidence sets → different confidence *grade*"
+if p5.4 adds a graded confidence.
+
+p5.3: clip evidence to the query **day / session boundary** — a hard clip, not a
+window (Decisions log p5.0). Add e.g. `CorrelationEngine::verdict_for_clipped(entity, at, day_bounds)` /
+a `clip_to(range)` that drops inputs outside `[day_start, day_end)` (and/or the
+session interval) **before** `verdict_for` runs, so an edit spanning midnight is
+attributed to each day separately and a prior day's session cannot reach into
+today. Test: an edit/among evidence spanning midnight is clipped to each day;
+evidence before `session.started_at` is excluded. Then p5.4 (system actors:
+formatter / `git checkout|merge` / build / codegen → `system`/`unknown`, closes
+p5.A5), then p5.5 if needed, then the remaining p5.A / done.
 
 ---
 
@@ -250,7 +254,7 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 - [x] **p3.A2** An editor atomic save creates a single logical change. → `observer_semantics_tests::atomic_save_burst_collapses_to_one_modify_of_the_real_file` (p3.3).
 - [x] **p3.A3** rename / delete / create are normalized correctly. → `translate_event_kind_maps_the_three_reported_kinds` + new `p3_a3_rename_is_normalized_to_remove_old_plus_create_new_not_a_modify` (rename ⇒ Removed(old)+Created(new), never a spurious Modify, both halves survive coalescing).
 - [x] **p3.A4** An event storm stays within bounded memory / backpressure. → `backpressure_tests::a_ten_thousand_event_storm_stays_bounded_and_keeps_the_newest` + `a_tiny_buffer_still_never_grows_past_its_capacity` (p3.4).
-- [~] **p3.A5** **A filesystem event on its own resolves to `unknown`** — never `human`, never `ai_*`. → new `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction`: `FileChangedEvent` has **no** actor/confidence/agent field — the observer *cannot* attribute; and `FileChangeKind` has exactly `Created/Modified/Removed`, no `Ai*`. `[~]` for the full guarantee that the **Phase 5 correlation engine** resolves a lone filesystem event to `unknown` (not built yet — that is Phase 5's own p5.A1).
+- [x] **p3.A5** **A filesystem event on its own resolves to `unknown`** — never `human`, never `ai_*`. → `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural: `FileChangedEvent` has no actor/confidence/agent field; `FileChangeKind` = `Created/Modified/Removed` only) **+ p5.2 runtime** `p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai` (`verdict_for` on a lone `FilesystemObserver` input ⇒ `Unknown` / `FileChangedWithoutSufficientProvenance`).
 
 ---
 
@@ -270,9 +274,9 @@ Session/process is corroborating evidence, never a verdict that AI edited a file
 
 ### Phase 4 acceptance criteria — named tests
 
-- [~] **p4.A1** Process/session evidence never produces a heartbeat on its own. → `p4_a1_session_evidence_has_no_path_to_a_heartbeat_on_its_own`: `SessionProcessEvidence` exposes no `to_heartbeat`/`to_broker_event`/duration-emitting method (`bounded_active_seconds()` is a *bound* consumed by correlation, not an output), and its JSON has no `heartbeat`/`total_seconds`/`active_seconds` output key. `[~]` — the runtime guarantee that this never *reaches* a heartbeat without correlation is Phase 5's (p5.1 intake + p5.2 rules).
+- [x] **p4.A1** Process/session evidence never produces a heartbeat on its own. → `p4_a1_session_evidence_has_no_path_to_a_heartbeat_on_its_own` (structural: no `to_heartbeat`/`to_broker_event`/duration-emitting method; JSON has no `heartbeat`/`total_seconds`/`active_seconds` key) **+ p5.2 runtime** `p4_a1_a_session_with_no_change_produces_no_attribution` (a `SessionProcessObserver` input with no `FilesystemObserver` change ⇒ `verdict_for` = `Unknown` / `NoEvidence` — the session alone attributes nothing).
 - [x] **p4.A2** An exact workspace/session match scores higher than a process-name match. → `p4_2_cwd_in_a_registered_root_outranks_a_bare_name_match` (p4.2) — cwd-in-registered-root ⇒ `ProcessTreeCwdMatch` (`rank 3`, inferrable), bare name ⇒ `ProcessNameOnly` (`rank 4`, not).
-- [~] **p4.A3** Multiple AI tools active + no direct match → `unknown`. → `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`: 3 concurrent `ProcessNameOnly` candidates, every one `!is_strong_enough_to_infer()`, so nothing at this layer can promote a change to `ai_inferred`. `[~]` — the actual `unknown` verdict is emitted by the Phase 5 engine (p5.2 `MultipleCompetingAiSessions` rule).
+- [x] **p4.A3** Multiple AI tools active + no direct match → `unknown`. → `p4_a3_multiple_name_only_tools_active_cannot_be_inferred` (p4 layer: 3 concurrent `ProcessNameOnly` candidates, every one `!is_strong_enough_to_infer()`) **+ p5.2 runtime** `p4_a3_process_name_only_sessions_cannot_infer_and_stay_unknown` (a `FilesystemObserver` change + 3 `ProcessNameOnly` sessions from 3 agents ⇒ `verdict_for` = `Unknown` / `FileChangedWithoutSufficientProvenance` — none is strong enough to be "inferring", so no promotion) and `two_strong_agent_sessions_competing_is_unknown` (2 *strong* competing agents ⇒ `Unknown` / `MultipleCompetingAiSessions`).
 - [x] **p4.A4** Process exit/crash closes the session cleanly (no unbounded duration). → `p4_3_a_gone_process_is_closed_at_its_last_activity_not_at_now` (p4.3) — reaped 3h after last activity ⇒ `ended_at == last_activity_at`, `bounded_active_seconds() == 90` not ~10800.
 
 ---
@@ -284,12 +288,12 @@ The core that planai.md left "not built".
 - [x] **p5.0 DECISION: named correlation windows.** → resolved in Decisions log: a `CorrelationWindows` value type, one named+reasoned field per evidence pair (`hook_to_transcript` 10s, `editor_to_ai_edit` 5s, `filesystem_to_agent_activity` 60s, `snapshot_to_hook` 30s, `filesystem_to_editor_input` 15s, `session_liveness_grace` 120s), the engine takes `&CorrelationWindows`, day/session clip is a separate hard clip. Committed `docs(planai2-p5.0)`.
 - [x] **p5.1 Unified evidence intake.** New `ai/correlation_engine.rs`: `CorrelationInput` (one metadata-only record per producer — `EvidenceKind` ∈ {NativeHook, StructuredMcp, CompletedTranscriptToolCall, ToolSnapshot, FilesystemObserver, SessionProcessObserver, EditorInput}) with a verbatim `lineage_id`, and `CorrelationEngine::ingest` preserving lineage + insertion order. Landed `CorrelationWindows` (p5.0 table, six doc-commented fields, `DEFAULT`) with `between(a,b)` mapping a pair → its window order-independently. `correlation.rs` untouched; engine sits above it. Re-exported from `ai/mod.rs`. Commit `9f081ac`.
   - Tests: `every_producer_kind_can_be_ingested_and_keeps_its_lineage_id`, `entity_is_normalised_on_intake_and_grouping_uses_the_normal_form`, `correlation_windows_are_distinct_and_round_trip`, `between_maps_evidence_pairs_to_the_right_window_order_independently`, `a_correlation_input_carries_no_content_field`, `is_verified_ai_edit_only_for_the_direct_producers`. Gates: fmt/clippy/test --workspace green (207 core); duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
-- [ ] **p5.2 Decision rules — exactly as planai2.md §5 states them.**
+- [x] **p5.2 Decision rules — exactly as planai2.md §5 states them.** `correlation_engine.rs`: `AiVerdict` (the four §5 outcomes; `system` is **not** one — p5.4 maps system actors to `Unknown` + a system `VerdictReason`), `VerdictReason` (which §5 clause fired), `Verdict {verdict, reason, supporting_lineage: Vec<lineage_id>}`, `CorrelationEngine::verdict_for(entity, at)`. §5 gives the four predicates with **no precedence** → precedence is the p5.2 DECISION (Decisions log 2026-09-01 — p5.2), pinned by the §5 ACs. `TimeWindowMatches` uses `windows.between(FilesystemObserver, candidate.kind)` per pair, fallback `filesystem_to_agent_activity` only where `between` is `None`. `RecentAgentToolOrSession` strength is evaluated **by the engine** via a new optional `CorrelationInput.evidence_strength: Option<EvidenceStrength>` + `EvidenceStrength::is_strong_enough_to_infer()` — a `ProcessNameOnly` session never counts. Commit `c45beca`.
   - `ai_verified` ⇐ `NativeHook(file)` OR `StructuredMcpWrite(file)` OR `CompletedStructuredToolCall(file)`.
   - `ai_inferred` ⇐ `FileChanged(file)` AND `RecentAgentToolOrSession(workspace)` AND `TimeWindowMatches` AND `FingerprintOrChangeShapeMatches` AND `NoCompetingAgentEvidence`. **Process name alone is insufficient.**
   - `human` ⇐ `PositiveEditorInput(file)` AND `CorrelationWindowClosed` AND `NoConflictingAiEvidence`.
   - `unknown` ⇐ `FileChangedWithoutSufficientProvenance` OR `ConflictingHumanAndAiEvidence` OR `MultipleCompetingAiSessions`.
-  - Tests: one per predicate branch, plus the five acceptance cases below.
+  - Tests (15 new, core 207→222): `a_native_hook_for_the_file_is_ai_verified`, `two_agents_both_verified_for_one_file_is_unknown_competing`, `p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred`, `p4_a3_process_name_only_sessions_cannot_infer_and_stay_unknown`, `p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai`, `p4_a1_a_session_with_no_change_produces_no_attribution`, `positive_editor_input_after_the_window_closes_is_human`, `editor_input_while_the_window_is_still_open_is_unknown_not_yet_human`, `p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human`, `p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict`, `two_strong_agent_sessions_competing_is_unknown`, `a_fingerprint_mismatch_blocks_ai_inferred`, `a_change_outside_every_window_is_unknown_no_evidence`, `confidence_comes_from_the_evidence_combination_not_the_agent_name`, `the_verdict_carries_the_lineage_that_backed_it_and_no_content`. Gates: fmt/clippy/test --workspace green; duration-audit verify_port/golden(total_error 0.0)/verify_actor_migration ok.
 - [ ] **p5.3 Boundary clipping.** Evidence is clipped to the query day / session boundary.
   - Tests: an edit spanning midnight is clipped to each day.
 - [ ] **p5.4 System actors.** Formatter, build, `git checkout` / `git merge`, codegen get a `system`/`unknown` treatment, not `ai_*`.
@@ -299,11 +303,11 @@ The core that planai.md left "not built".
 
 ### Phase 5 acceptance criteria — named tests
 
-- [ ] **p5.A1** `unknown` is never flipped to `human` by the mere absence of AI evidence.
-- [ ] **p5.A2** Human input just before an AI edit is not retroactively swallowed by the AI edit.
-- [ ] **p5.A3** A simultaneous human/AI conflict is not auto-resolved to `human`.
-- [ ] **p5.A4** A shell mutation from an active verified tool session is correctly inferred.
-- [ ] **p5.A5** Formatter / git / build never become an AI false positive.
+- [x] **p5.A1** `unknown` is never flipped to `human` by the mere absence of AI evidence. → `p3_a5_and_p5_a1_a_lone_filesystem_change_is_unknown_never_human_or_ai` (no AI + no editor input ⇒ `Unknown`, not `Human`); `human` requires a *positive* `EditorInput`.
+- [x] **p5.A2** Human input just before an AI edit is not retroactively swallowed by the AI edit. → `p5_a2_a_human_edit_just_before_an_ai_edit_keeps_its_own_human_verdict` (`verdict_for` at the human's time ⇒ `Human`; at the later AI edit's time ⇒ `AiInferred` — each change keeps its own verdict, `verdict_for` is per-change).
+- [x] **p5.A3** A simultaneous human/AI conflict is not auto-resolved to `human`. → `p5_a3_simultaneous_human_and_inferred_ai_edit_is_unknown_not_human` (`EditorInput` + strong session inside `editor_to_ai_edit` ⇒ `Unknown` / `ConflictingHumanAndAiEvidence`).
+- [x] **p5.A4** A shell mutation from an active verified tool session is correctly inferred. → `p5_a4_a_shell_change_from_an_active_verified_session_is_ai_inferred` (`FilesystemObserver` + `ProcessTreeCwdMatch` session in-window ⇒ `AiInferred` / `InferredFromAgentActivity`).
+- [~] **p5.A5** Formatter / git / build never become an AI false positive. → deferred to **p5.4** (system-actor treatment); the `ai_inferred` path already refuses a `ProcessNameOnly`/weak session, but the explicit formatter/`git merge` classification lands with p5.4.
 
 ---
 
@@ -427,6 +431,46 @@ Commit: `docs(planai2-p5.0)` (this file only).
 
 ---
 
+### 2026-09-01 — p5.2 — verdict precedence order
+
+Read: `planai2.md` §5 verbatim. It states the four predicates (`ai_verified`,
+`ai_inferred`, `human`, `unknown`) as **independent boolean formulas with no
+precedence**. `NativeHook(file)` alone satisfies `ai_verified`; a concurrent
+`PositiveEditorInput` simultaneously satisfies `unknown`'s
+`ConflictingHumanAndAiEvidence` disjunct. §5 does not say which wins — so the
+order is a DECISION here, constrained by the §5 acceptance criteria: "unknown is
+not turned into human by *absence* of AI evidence" and "a simultaneous human/AI
+conflict is not *auto-resolved to human*" (neither forbids `ai_verified`).
+
+**Decision — `verdict_for` evaluates the predicates in this fixed order, first
+match wins:**
+
+1. ≥2 distinct agents with **verified** evidence for the file, in-window → `Unknown` / `MultipleCompetingAiSessions`
+2. ≥1 **verified** producer for the file, in-window → `AiVerified` / `DirectAiProducer` — the agent's own hook/tool-call is authoritative and outranks concurrent editor input; the conflict rule governs *inferred*-strength AI evidence, not verified
+3. `PositiveEditorInput` **and** inferring AI evidence within `editor_to_ai_edit` of it → `Unknown` / `ConflictingHumanAndAiEvidence`
+4. ≥2 distinct agents with **inferring** activity (each past the p4 strength bar), in-window → `Unknown` / `MultipleCompetingAiSessions`
+5. `FileChanged` + exactly one agent's inferring activity + pair time-window matches (`between`) + `FingerprintOrChangeShapeMatches` + no editor input within `filesystem_to_editor_input` that would explain the change → `AiInferred` / `InferredFromAgentActivity`
+6. `PositiveEditorInput` + `at ≥ latest_editor + editor_to_ai_edit` (window closed) → `Human` / `PositiveEditorInput`; window still open → `Unknown` / `CorrelationWindowStillOpen`
+7. `FileChanged`, none of the above → `Unknown` / `FileChangedWithoutSufficientProvenance`
+8. nothing relevant in-window → `Unknown` / `NoEvidence`
+
+Supporting: `TimeWindowMatches` = `windows.between(FilesystemObserver, candidate.kind)`
+per pair (fallback `filesystem_to_agent_activity` only where `between` is `None`) —
+`between` is load-bearing, not decorative. `RecentAgentToolOrSession` strength is
+judged **by the engine**: new optional `CorrelationInput.evidence_strength:
+Option<EvidenceStrength>`; a `SessionProcessObserver` counts only if
+`EvidenceStrength::is_strong_enough_to_infer()` (a bare `ProcessNameOnly` never
+does — §5 "process name alone is not enough"); tool-call kinds
+(`NativeHook`/`StructuredMcp`/`CompletedTranscriptToolCall`/`ToolSnapshot`)
+always count. `FingerprintOrChangeShapeMatches`: exact fingerprint match if both
+sides carry one, else change-kind match if both carry one, else not disprovable →
+does not veto. `system` is **not** an `AiVerdict` variant — p5.4 maps system
+actors to `Unknown` + a system `VerdictReason`.
+
+Commit: `feat(planai2-p5.2)` (code) + this file.
+
+---
+
 ## Iteration log
 
 _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest last.)_
@@ -462,3 +506,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p4.A1–A4 — Phase 4 acceptance. p4.A2/p4.A4 cited to p4.2/p4.3 tests. 2 new: `p4_a1_...has_no_path_to_a_heartbeat_on_its_own` (structural), `p4_a3_multiple_name_only_tools_active_cannot_be_inferred`. p4.A1/A3 `[~]` — runtime verdicts are Phase 5. **Phase 4 done.** core +2. Gates green. Committed `300648d`.
 - 2026-09-01 — p5.0 — DECISION resolved (docs only). `CorrelationWindows` type, one named+reasoned window per evidence pair (10s hook↔transcript, 5s editor↔AI-edit, 60s fs↔agent-activity, 30s snapshot↔hook, 15s fs↔editor, 120s session-liveness grace), engine takes `&CorrelationWindows`, day/session clip separate. See Decisions log. Committed.
 - 2026-09-01 — p5.1 — done. New `ai/correlation_engine.rs`: `EvidenceKind` (7 producers, strongest-first `Ord`), `CorrelationInput` (verbatim `lineage_id` + normalized entity + optional workspace/agent/change_kind/confidence/session/tool-event/fingerprint — **no content field**), `CorrelationEngine::ingest` (preserves lineage + order) + `for_entity`/`entities`. `CorrelationWindows` (p5.0 six fields + `DEFAULT` + `between(a,b)` order-independent). Re-exported from `ai/mod.rs`. 6 new tests (core 201→207). Fixed one self-bug: `between` match arms must be in sorted `EvidenceKind` order. Gates + duration-audit(total_error 0.0) green. Committed `9f081ac`.
+- 2026-09-01 — p5.2 — done. §5 verdict pass: `AiVerdict` (4 outcomes, no `system`), `VerdictReason` (8 clauses), `Verdict {verdict, reason, supporting_lineage}`, `CorrelationEngine::verdict_for(entity, at)`. §5 has no stated precedence → 8-step fixed order recorded as a DECISION (Decisions log), constrained by the §5 ACs. `between()` drives `TimeWindowMatches`; new optional `CorrelationInput.evidence_strength` lets the engine (not the producer) apply `is_strong_enough_to_infer()`. 15 new tests (core 207→222). **Discharged** `[~]` p3.A5 / p4.A1 / p4.A3 (added runtime engine tests alongside the structural ones) and p5.A1–p5.A4; p5.A5 `[~]` → p5.4 (system actors). Gates + duration-audit(total_error 0.0) green. Committed `c45beca` (+ this tracker `<next>`).
