@@ -292,6 +292,47 @@ export interface AiStatsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// GET /users/current/ai_diagnostics  (planai2 p7.2c)
+// Mirrors wakaclock_core::ai::AiDiagnosticsReport — sanitized, metadata only.
+// ---------------------------------------------------------------------------
+export type AdapterVerification = 'scaffold' | 'unverified' | 'verified';
+
+export interface BrokerHealth {
+  inbox_dead_letter: number;
+  inbox_pending: number;
+  inbox_retry: number;
+  last_delivery_unix?: null | number;
+  last_error_code?: null | string;
+  running: boolean;
+}
+
+export interface ParserLagSummary {
+  max_lag_seconds: number;
+  transcripts_behind: number;
+  transcripts_watched: number;
+}
+
+export interface AdapterFreshness {
+  agent: string;
+  detected: boolean;
+  enabled: boolean;
+  last_evidence_unix?: null | number;
+  verification: AdapterVerification;
+}
+
+export interface AiDiagnosticsReport {
+  adapters: AdapterFreshness[];
+  broker: BrokerHealth;
+  captured_at: string;
+  parser: ParserLagSummary;
+  schema_version: number;
+}
+
+export interface AiDiagnosticsResponse {
+  report: AiDiagnosticsReport | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /users/current/keystroke_stats
 // ---------------------------------------------------------------------------
 export interface ClipboardMetrics {

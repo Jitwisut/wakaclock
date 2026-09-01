@@ -22,13 +22,14 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
+import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getAiStats } from '@/lib/wakaclock/endpoints';
+import { getAiDiagnostics, getAiStats } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -62,6 +63,12 @@ function AiStatsPanel() {
   const { data, isLoading, error } = useQuery({
     queryKey: wakaclockKeys.aiStats(userId, start, end),
     queryFn: () => getAiStats(userId, start, end),
+    enabled: Boolean(userId),
+  });
+
+  const { data: diagnostics } = useQuery({
+    queryKey: wakaclockKeys.aiDiagnostics(userId),
+    queryFn: () => getAiDiagnostics(userId),
     enabled: Boolean(userId),
   });
 
@@ -244,6 +251,8 @@ function AiStatsPanel() {
                 humanPercent={humanPct}
                 unknownPercent={unknownPct}
               />
+
+              <AiDiagnosticsPanel report={diagnostics?.report ?? null} />
 
               <div>
                 <h3 className="mb-2 text-sm font-medium">Agents</h3>
