@@ -125,15 +125,14 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 
 ## Current position
 
-**PHASE 3 COMPLETE** (p3.1–p3.4 + p3.A1–p3.A4; p3.A5 `[~]` — full "lone fs event ⇒
-`unknown`" guarantee is Phase 5's p5.A1). **Phase 4 next** — Agent Session and
-Process Evidence. No `DECISION` item; loop picks **p4.1** (session/process
-evidence model). `process_observer.rs` already exists (`DetectedAiProcess`,
-`scan()`, `match_agent()` — unverified against real running instances). p4.1:
-the evidence model — `pid`/`ppid`, process identity, agent/provider, workspace,
-`session_id`, `tool_event_id`, `started_at`/`last_activity_at`/`ended_at`,
-evidence strength; **no command arguments, no environment secrets**. Read
-`.context/backend/crates.md` first.
+**Phase 4 — item p4.2** (wire `process_observer.rs` + reliability tiers). p4.1
+done (`ai::session::{SessionProcessEvidence, EvidenceStrength}`). p4.2: normalise
+`process_observer::scan()` detections into `SessionProcessEvidence`, and assign
+strength — an exact cwd/workspace match → `ProcessTreeCwdMatch`, a bare
+name-match with no cwd → `ProcessNameOnly`. Test: exact workspace/session match
+outranks name-only; name-only never reaches inferrable strength (`EvidenceStrength::
+is_strong_enough_to_infer` already encodes that — p4.2 exercises it against real
+scan output shape). Then p4.3 (lifecycle) + p4.A1–p4.A4.
 
 ---
 
@@ -253,8 +252,9 @@ Goal: raise recall through trustworthy evidence before any universal inference.
 
 Session/process is corroborating evidence, never a verdict that AI edited a file.
 
-- [ ] **p4.1 Session/process evidence model.** Fields: `pid`/`ppid`, process identity, `agent`/`provider`, `workspace`, `session_id`, `tool_event_id`, `started_at`, `last_activity_at`, `ended_at`, evidence strength. **No command arguments, no environment secrets.**
+- [x] **p4.1 Session/process evidence model.** Fields: `pid`/`ppid`, process identity, `agent`/`provider`, `workspace`, `session_id`, `tool_event_id`, `started_at`, `last_activity_at`, `ended_at`, evidence strength. **No command arguments, no environment secrets.**
   - Tests: serde round-trip; a construction path that would capture argv is rejected/absent at the type level.
+  - → committed | New `wakaclock_core::ai::session`: `SessionProcessEvidence { agent, provider, pid, ppid, process_identity, workspace, session_id, tool_event_id, started_at, last_activity_at, ended_at, strength }` + `EvidenceStrength` (NativeLifecycle < AppendingTranscript < ChildOfToolCall < ProcessTreeCwdMatch < ProcessNameOnly; `rank()` lower=stronger; `is_strong_enough_to_infer()` = rank ≤ ProcessTreeCwdMatch, i.e. process-name-only can never feed an inference). `from_detected_process(&DetectedAiProcess)` maps a bare name-match scan → `ProcessNameOnly`, no session identity, `last_activity_at == started_at`. `bounded_active_seconds()` = `(ended_at || last_activity_at) - started_at`, clamped ≥ 0 — **never wall-clock `now`** (p4.3 groundwork). **No argv/env**: no field, no constructor takes them; the round-trip test asserts `argv`/`args`/`command`/`env`/`cmdline` appear nowhere in the JSON, and `no_constructor_captures_argv_or_environment` is an exhaustive-destructure compile guard. tests: 5 new (`evidence_strength_orders_strongest_first`, `round_trips_through_json`, `no_constructor_captures_argv_or_environment`, `from_detected_process_is_name_only_strength_with_no_session_identity`, `bounded_active_seconds_never_uses_wall_clock_now`). core +5. Gates: fmt/clippy/`cargo test --workspace` + duration-audit green.
 - [ ] **p4.2 Wire `process_observer.rs` + reliability tiers.** Normalize detections into evidence with strength: native session/tool lifecycle > appending transcript with session/workspace metadata > child process spawned from a known agent tool call > process tree + exact cwd/workspace match > process name only (weak telemetry).
   - Tests: exact workspace/session match outranks a process-name-only match; process-name-only never reaches `ai_inferred` strength.
 - [ ] **p4.3 Session lifecycle.** Process exit/crash closes the session without using `now` to extend duration unbounded.
@@ -420,4 +420,5 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-01 — p3.2 — done. `ObserverPool` in `filesystem_observer.rs` — `sync(&[roots])` reconciles the live `WorkspaceWatcher` set (returns `SyncOutcome{started,stopped}`, idempotent), `poll()` drains + drops out-of-scope events, `is_within_watched()`. Fed by `WorkspaceRegistry::watched_roots(now)`. 3 new tests (core +3). Gates + duration-audit green. Committed `83a16ac`.
 - 2026-09-01 — p3.3 — done. `coalesce_burst()` (atomic-save + dedup), `canonicalize_within_root()` (symlink-escape guard), `WorkspaceIgnore` (.gitignore + lease excludes, simple matcher), `fingerprint_changed_file()` (uuid-v5 hash, discards bytes, size-capped). 9 new tests (core +9). Gates + duration-audit green. Committed `306e08f`.
 - 2026-09-01 — p3.4 — done. `BoundedEventBuffer` (fixed-cap VecDeque ring, evict-oldest + `dropped()` counter, `DEFAULT_CAPACITY=4096`) + `ObserverPool::poll_into()`. 4 new tests incl. 10k-storm-stays-bounded + idle-watcher-doesn't-spin. core +4. Gates + duration-audit green. Committed `3320dcd`.
-- 2026-09-01 — p3.A1–A5 — Phase 3 acceptance. p3.A1/A2/A4 cited to p3.1–p3.4 tests. 2 new: `p3_a3_rename_is_normalized_...` (Removed+Created, never Modify), `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural). p3.A5 `[~]` — full lone-fs-event⇒`unknown` guarantee is Phase 5. **Phase 3 done.** core +2. Gates green. Committed.
+- 2026-09-01 — p3.A1–A5 — Phase 3 acceptance. p3.A1/A2/A4 cited to p3.1–p3.4 tests. 2 new: `p3_a3_rename_is_normalized_...` (Removed+Created, never Modify), `p3_a5_a_filesystem_event_carries_no_actor_or_confidence_by_construction` (structural). p3.A5 `[~]` — full lone-fs-event⇒`unknown` guarantee is Phase 5. **Phase 3 done.** core +2. Gates green. Committed `7f4b90e`.
+- 2026-09-01 — p4.1 — done. New `ai::session` — `SessionProcessEvidence` (12 fields, **no argv/env**, structural + JSON guards) + `EvidenceStrength` (5-tier ladder, `is_strong_enough_to_infer` = name-only can't infer) + `from_detected_process()` + `bounded_active_seconds()` (never wall-clock now). 5 new tests (core +5). Gates + duration-audit green. Committed.
