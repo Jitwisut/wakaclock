@@ -454,7 +454,7 @@ mod tests {
             mk(
                 "hook",
                 EvidenceKind::NativeHook,
-                "shell_hook",
+                "native_plugin",
                 AiEventSource::AgentHook,
             ),
             mk(
