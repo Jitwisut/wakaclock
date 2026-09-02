@@ -18,6 +18,11 @@ impl AnalyticsRepository {
     pub async fn migrate(&self) -> Result<()> {
         let ch_client = self.client.get_client();
 
+        // Must run before STATEMENTS: the corrected view definitions below are
+        // `CREATE MATERIALIZED VIEW IF NOT EXISTS`, which is a no-op against a view
+        // that already exists, so the stale pair has to be dropped first.
+        let redefined_ai_summary = self.drop_stale_ai_summary_views().await?;
+
         for statement in STATEMENTS {
             ch_client
                 .query(statement)
@@ -30,7 +35,75 @@ impl AnalyticsRepository {
 
         self.backfill_actor_daily_v2().await?;
 
+        // Marked last, so any failure earlier in `migrate()` — including the backfill's
+        // reconciliation bail — leaves the marker unwritten and the next boot redoes
+        // the drop and recreate rather than skipping a half-applied redefinition.
+        if redefined_ai_summary {
+            self.mark_ai_summary_redefined().await?;
+        }
+
         Ok(())
+    }
+
+    /// `mv_ai_summary` and `mv_inc_ai_summary` shipped with
+    /// `coalesce(ai_agent, 'human')`, which files an AI heartbeat carrying no agent
+    /// name — every event written before the broker sidecar started emitting `agent`
+    /// — under the literal agent name `'human'`, together with its non-zero
+    /// `ai_lines_added`. The definitions now key those rows as `'unknown'`, matching
+    /// the spelling `AiStatsService::fetch_agents` already reads with.
+    ///
+    /// Returns whether the drop ran, so the caller can publish the marker only after
+    /// the recreate has succeeded. `ai_daily` is a separate table and keeps every row
+    /// it holds; the historical rows already keyed `'human'` stay wrong until
+    /// `POST /api/v1/analytics/rebuild` rewrites the range.
+    async fn drop_stale_ai_summary_views(&self) -> Result<bool> {
+        let client = self.client.get_client();
+        client
+            .query(
+                "CREATE TABLE IF NOT EXISTS wakaclock.analytics_view_definition_state (
+                    definition String,
+                    applied_at DateTime64(3)
+                ) ENGINE = MergeTree ORDER BY definition",
+            )
+            .execute()
+            .await
+            .context("Failed to create analytics view definition state")?;
+
+        let applied: u64 = client
+            .query(
+                "SELECT count()
+                 FROM wakaclock.analytics_view_definition_state
+                 WHERE definition = ?",
+            )
+            .bind(AI_SUMMARY_DEFINITION)
+            .fetch_one()
+            .await
+            .context("Failed to read analytics view definition state")?;
+        if applied > 0 {
+            return Ok(false);
+        }
+
+        for view in ["mv_ai_summary", "mv_inc_ai_summary"] {
+            client
+                .query(&format!("DROP VIEW IF EXISTS wakaclock.{view}"))
+                .execute()
+                .await
+                .with_context(|| format!("Failed to drop stale materialized view {view}"))?;
+        }
+        Ok(true)
+    }
+
+    async fn mark_ai_summary_redefined(&self) -> Result<()> {
+        self.client
+            .get_client()
+            .query(
+                "INSERT INTO wakaclock.analytics_view_definition_state
+                 SELECT ? AS definition, now64(3) AS applied_at",
+            )
+            .bind(AI_SUMMARY_DEFINITION)
+            .execute()
+            .await
+            .context("Failed to publish analytics view definition marker")
     }
 
     /// Build the actor-aware rollup once from raw heartbeats. The marker makes the
@@ -151,6 +224,9 @@ struct ActorRollupTotalsRow {
     unknown_lines_deleted: u64,
     heartbeat_count: u64,
 }
+
+/// Marker for the one-time redefinition of the two AI summary materialized views.
+const AI_SUMMARY_DEFINITION: &str = "ai_summary_unknown_agent_v1";
 
 const STATEMENTS: &[&str] = &[
     // ============================================================
@@ -564,7 +640,7 @@ const STATEMENTS: &[&str] = &[
     SELECT
         user_id,
         date,
-        coalesce(ai_agent, 'human') AS ai_agent,
+        coalesce(ai_agent, 'unknown') AS ai_agent,
         sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
         sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
         sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
@@ -663,7 +739,7 @@ const STATEMENTS: &[&str] = &[
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_ai_summary
     TO wakaclock.ai_daily AS
-    SELECT user_id, date, coalesce(ai_agent, 'human') AS ai_agent,
+    SELECT user_id, date, coalesce(ai_agent, 'unknown') AS ai_agent,
            sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
            sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
            sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
