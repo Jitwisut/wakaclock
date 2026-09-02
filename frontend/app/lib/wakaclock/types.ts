@@ -314,9 +314,23 @@ export interface ParserLagSummary {
 
 export interface AdapterFreshness {
   agent: string;
+  client_version?: null | string;
+  contract_version?: null | string;
   detected: boolean;
+  diagnostic_code?: null | string;
   enabled: boolean;
   last_evidence_unix?: null | number;
+  last_delivery_result?: null | string;
+  last_native_event_unix?: null | number;
+  last_transcript_event_unix?: null | number;
+  model_id?: null | string;
+  pending_events?: number;
+  plugin_version?: null | string;
+  provider_id?: null | string;
+  retry_events?: number;
+  dead_letter_events?: number;
+  transcript_lag_seconds?: null | number;
+  transport?: null | string;
   verification: AdapterVerification;
 }
 
@@ -826,6 +840,9 @@ export interface HeartbeatPayload {
 
 export interface HeartbeatResponse {
   heartbeats_inserted: number;
+  /** Bulk only, and only when non-zero: payloads the server could not accept. */
+  heartbeats_rejected?: number;
+  /** `"ok"`, or `"partial"` when a bulk batch had rejections. */
   status: string;
 }
 

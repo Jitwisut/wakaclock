@@ -128,6 +128,15 @@ pub struct HeartbeatPayload {
 pub struct HeartbeatResponse {
     pub status: String,
     pub heartbeats_inserted: usize,
+    /// Payloads in a bulk batch that could not be converted or validated. Additive:
+    /// omitted from the body when zero, so the single-heartbeat and all-accepted
+    /// responses keep the exact shape WakaTime clients already parse.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub heartbeats_rejected: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 /// Query params for GET /heartbeats?date=YYYY-MM-DD&timezone=Asia/Bangkok
@@ -246,6 +255,7 @@ pub async fn create(
     Ok(Json(HeartbeatResponse {
         status: "ok".to_string(),
         heartbeats_inserted: inserted,
+        heartbeats_rejected: 0,
     }))
 }
 
@@ -261,24 +271,40 @@ pub async fn create_bulk(
     }
     require_active_access(&state, user_id).await?;
 
-    let mut heartbeats: Vec<Heartbeat> = payloads
-        .into_iter()
-        .map(|p| payload_to_heartbeat(p, user_id))
-        .collect::<Result<_, _>>()
-        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    // A batch is many independent observations, so one unconvertible payload must not
+    // discard the rest. `collect::<Result<_, _>>()` used to fail the whole request,
+    // which meant a single heartbeat tripping `resolve_attribution` — for example a
+    // payload carrying both AI and Human evidence — silently threw away every other
+    // heartbeat the client had buffered, and the client saw it as "AI tracking stopped".
+    // Rejections are counted and logged rather than dropped quietly.
+    let submitted = payloads.len();
+    let (mut heartbeats, mut rejections) = partition_bulk_payloads(payloads, user_id);
 
     let mut resolved = Vec::with_capacity(heartbeats.len());
     for heartbeat in heartbeats.drain(..) {
         let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
             .await
             .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        resolved.push(heartbeat);
+        // Validation is per-heartbeat for the same reason the conversion above is.
+        match heartbeat.validate() {
+            Ok(()) => resolved.push(heartbeat),
+            Err(reason) => rejections.push(reason),
+        }
     }
     let heartbeats = resolved;
 
-    for hb in &heartbeats {
-        hb.validate()
-            .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    for reason in &rejections {
+        // The reason is a validation message, never heartbeat content.
+        tracing::warn!(%user_id, reason, "rejected one heartbeat from a bulk batch");
+    }
+    // A batch in which nothing survived is a client-side contract error, not a partial
+    // success — report it the way the all-or-nothing path used to.
+    if heartbeats.is_empty() && submitted > 0 {
+        let reason = rejections
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "no heartbeat in the batch could be accepted".to_string());
+        return Err(app_error(StatusCode::BAD_REQUEST, &reason));
     }
 
     let count = state
@@ -299,8 +325,13 @@ pub async fn create_bulk(
     }
 
     Ok(Json(HeartbeatResponse {
-        status: "ok".to_string(),
+        status: if rejections.is_empty() {
+            "ok".to_string()
+        } else {
+            "partial".to_string()
+        },
         heartbeats_inserted: count,
+        heartbeats_rejected: rejections.len(),
     }))
 }
 
@@ -482,6 +513,24 @@ async fn require_active_access(
     }
 }
 
+/// Split a bulk batch into the heartbeats that converted and the reasons the rest did
+/// not. Kept separate from the handler so the partial-batch contract is testable
+/// without an `AppState`.
+fn partition_bulk_payloads(
+    payloads: Vec<HeartbeatPayload>,
+    user_id: Uuid,
+) -> (Vec<Heartbeat>, Vec<String>) {
+    let mut heartbeats = Vec::with_capacity(payloads.len());
+    let mut rejections = Vec::new();
+    for payload in payloads {
+        match payload_to_heartbeat(payload, user_id) {
+            Ok(heartbeat) => heartbeats.push(heartbeat),
+            Err(reason) => rejections.push(reason),
+        }
+    }
+    (heartbeats, rejections)
+}
+
 fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
     let date = Heartbeat::date_from_time(p.time);
     let created_at = p
@@ -645,6 +694,65 @@ mod tests {
         );
         assert_eq!(sanitize_entity("../../secrets.env"), "secrets.env");
         assert_eq!(sanitize_entity("src/main.rs"), "src/main.rs");
+    }
+
+    #[test]
+    fn one_bad_payload_no_longer_discards_the_rest_of_a_bulk_batch() {
+        let good = |entity: &str| {
+            serde_json::from_value::<super::HeartbeatPayload>(json!({
+                "entity": entity,
+                "entity_type": "file",
+                "time": 1_700_000_000.0,
+                "is_write": true
+            }))
+            .unwrap()
+        };
+        // Both AI and Human evidence with no explicit actor_type — the exact shape
+        // `resolve_attribution` refuses.
+        let contradictory = serde_json::from_value::<super::HeartbeatPayload>(json!({
+            "entity": "src/mixed.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "claude-code",
+            "ai_lines_added": 4,
+            "keystrokes": 12
+        }))
+        .unwrap();
+
+        let (accepted, rejected) = super::partition_bulk_payloads(
+            vec![good("src/a.rs"), contradictory, good("src/b.rs")],
+            Uuid::nil(),
+        );
+
+        assert_eq!(accepted.len(), 2, "the two valid heartbeats must survive");
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(
+            accepted
+                .iter()
+                .map(|h| h.entity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/a.rs", "src/b.rs"]
+        );
+        assert!(rejected[0].contains("conflicting"), "{}", rejected[0]);
+    }
+
+    #[test]
+    fn a_batch_with_no_survivors_still_reports_a_reason() {
+        let contradictory = || {
+            serde_json::from_value::<super::HeartbeatPayload>(json!({
+                "entity": "src/mixed.rs",
+                "entity_type": "file",
+                "time": 1_700_000_000.0,
+                "ai_agent": "claude-code",
+                "ai_lines_added": 4,
+                "keystrokes": 12
+            }))
+            .unwrap()
+        };
+        let (accepted, rejected) =
+            super::partition_bulk_payloads(vec![contradictory(), contradictory()], Uuid::nil());
+        assert!(accepted.is_empty());
+        assert_eq!(rejected.len(), 2);
     }
 
     #[test]
