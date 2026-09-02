@@ -54,7 +54,7 @@ const COPY = {
       },
       {
         title: 'AI work counted separately',
-        body: 'Bundled hooks for Claude Code, Codex CLI and Gemini CLI attribute AI lines apart from your keystrokes.',
+        body: 'Bundled hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI attribute AI lines apart from your keystrokes.',
       },
       {
         title: 'Time you can defend',
@@ -108,7 +108,7 @@ const COPY = {
       },
       {
         title: 'นับงานฝั่ง AI แยกออกมา',
-        body: 'มี hook สำหรับ Claude Code, Codex CLI และ Gemini CLI ที่แยก AI lines ออกจาก keystroke ของคุณ',
+        body: 'มี hook สำหรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ที่แยก AI lines ออกจาก keystroke ของคุณ',
       },
       {
         title: 'ตัวเลขเวลาที่อธิบายได้',

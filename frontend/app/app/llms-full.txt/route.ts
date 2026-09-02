@@ -76,7 +76,7 @@ const BODY = `# ${SITE_NAME} — full text
 
 > ${PRODUCT_ANSWER}
 
-${SITE_NAME} is a commercial, proprietary product published by StandUpCode / Lodash (Thailand) Co., Ltd.
+${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
 It is a hosted service; customers do not deploy or maintain its infrastructure.
 
 Every page below is also published in Thai under /th with the same content, and each page

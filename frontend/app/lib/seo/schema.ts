@@ -31,13 +31,8 @@ export function organizationSchema(): JsonLdValue {
   return {
     '@type': 'Organization',
     '@id': absoluteUrl('/#organization'),
-    // The company is known publicly by the product it ships. `alternateName` lets a
-    // search engine resolve the brand query "AtoAxis" to this entity even though the
-    // registered `name` is the legal one.
-    alternateName: SITE_NAME,
-    description: `Publisher of ${SITE_NAME}, a hosted developer time-tracking service compatible with the WakaTime API.`,
+    description: `The team behind ${SITE_NAME}, a hosted developer time-tracking service compatible with the WakaTime API.`,
     email: `mailto:${ORGANIZATION.email}`,
-    legalName: ORGANIZATION.legalName,
     logo: ORGANIZATION.logo,
     name: ORGANIZATION.name,
     url: ORGANIZATION.url,
@@ -90,7 +85,7 @@ export function softwareApplicationSchema(): JsonLdValue {
       'Breakdown by project, programming language, editor, branch and operating system',
       'Complete coding history on every account, not a limited recent window',
       'AI, human and Unattributed line attribution with reported coverage',
-      'Per-agent AI provenance with bundled hooks for Claude Code, Codex CLI and Gemini CLI',
+      'Per-agent AI provenance with bundled hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI',
       'Estimated AI token cost per project from versioned effective prices',
       'WakaTime API compatibility and WakaTime data-export import',
     ],
