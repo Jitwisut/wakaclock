@@ -126,8 +126,10 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live-verifica
 ## Current position
 
 **RUN COMPLETE — every planai2 Phase 0–7 item is `[x]` or a documented `[~]`.**
-Final feat commits: p7.2c backend `20f39df`, p7.2c frontend `b350496`.
-core 295 / server 167 / frontend 42 files 223 tests / vscode 94.
+Final feat commits: p7.2c backend `20f39df`, frontend `b350496`, producer +
+transport follow-up `918313c`. core 297 / server 167 / frontend 42 files 223
+tests / vscode 94 (planai2-authored modules; see clause 3 for 2 concurrent-code
+`cargo test --workspace` failures).
 
 ### Run Definition of Done — assessment (2026-09-02)
 
@@ -142,21 +144,33 @@ core 295 / server 167 / frontend 42 files 223 tests / vscode 94.
      committed corpus; the >=99% *gate* is reserved (plan line 604) for a real
      labelled corpus + live run. VERIFICATION.md "Phase 2 — adapter rollout" +
      "Still not verified against a live system".
-3. **Full gate suite green at the final commit** — planai2-owned gates MET; one
-   workspace gate red on concurrent code.
-   - MET: `cargo fmt --all -- --check`; `cargo clippy -p wakaclock-core -p
-     wakaclock-server --all-targets -- -D warnings`; `cargo test --workspace`
-     (core 295 / server 167 / 0 failed); duration-audit verify_port + golden
-     (**total_error 0.0**) + verify_actor_migration + verify_certification;
-     `frontend/app` `npm run validate` (42/223); `extensions/vscode` `npm test`
-     (94).
-   - RED, not this run: `cargo clippy --workspace --all-targets -- -D warnings`
-     fails only in concurrent **uncommitted** `wakaclock-cli/src/agent_service.rs`
-     (a mid-refactor `AgentLock` rewrite adding `fs2` file locking —
-     `suspicious_open_options` :58, `incompatible_msrv` :96). In the
-     do-not-touch concurrent set. Workspace clippy was green at `d5dfd86`
-     (p7.A); the concurrent edit landed after. No planai2 commit regresses
-     clippy.
+3. **Full gate suite green at the final commit** — planai2-owned gates MET; the
+   workspace `clippy` **and** `test` gates are red **only** on concurrent
+   uncommitted code.
+   - MET (this run's code): `cargo fmt --all -- --check`; `cargo clippy -p
+     wakaclock-core -p wakaclock-server --all-targets -- -D warnings`;
+     `cargo test -p wakaclock-core --lib ai::{diagnostics,shadow,shadow_report,
+     pipeline,canonical,dedup,correlation_engine}` (every planai2-authored
+     module green); duration-audit verify_port + golden (**total_error 0.0**) +
+     verify_actor_migration + verify_certification; `frontend/app` `npm run
+     validate` (42/223); `extensions/vscode` `npm test` (94).
+   - RED, not this run — `cargo clippy --workspace -D warnings`: concurrent
+     **uncommitted** `wakaclock-cli/src/agent_service.rs` (`AgentLock` `fs2`
+     rewrite — `suspicious_open_options` :58, `incompatible_msrv` :96). Green at
+     `d5dfd86`; the concurrent edit landed after.
+   - RED, not this run — `cargo test --workspace` (2 failures): a concurrent
+     **uncommitted** `TransportKind` rework in `wakaclock-core/src/broker.rs`
+     (`"shell_hook"` moved `NativePlugin`→`ToolSnapshot`; new `process_observer`
+     ⇒`Other` / `ide_telemetry`⇒`Editor` arms; `classify`/`priority` changed).
+     Breaks `broker::tests::transport_kind_ranks_producers_by_evidence_strength`
+     (the concurrent feature's **own** test, not yet updated by its author) and
+     `ai::dedup::tests::p6_a2_vscode_hook_transcript_and_filesystem_evidence_
+     for_one_edit_is_one_activity` (downstream: `dedup` picks "strongest
+     evidence" via `broker::evidence_rank_key` → `TransportKind::priority()`).
+     Neither test's file is touched by any planai2 commit; both were green at
+     `20f39df`. Not fixed here — the concurrent `TransportKind` change is
+     mid-flight and adjusting a planai2 test to its in-progress ranking would
+     churn against a moving target and could mask a real regression.
 
 ### Module-contract caveats (tracked in each item's evidence, not end-to-end)
 
@@ -165,22 +179,34 @@ core 295 / server 167 / frontend 42 files 223 tests / vscode 94.
   and "rollback deletes no analytics data" are verified against the module
   contract. End-to-end assertions owed at a future engine-wiring item.
 - **p7.2c** — the server diagnostics store is **process-local** (lost on
-  restart, wrong across instances; adding a repository is additive), and the
-  **client transport call is owed** (`build_report` ships tested; `wakaclock-cli`
-  does not yet POST it — its `main.rs` is concurrently churned).
+  restart, wrong across instances; adding a repository is additive). The client
+  producer + transport are now **complete** (`918313c`):
+  `report_from_doctor_json(&doctor_json, at)` turns the exact `wakaclock doctor
+  ai --json` blob into the wire type, and `ApiClient::send_ai_diagnostics()`
+  POSTs it. **Owed:** the single call site in `wakaclock-cli`'s `doctor ai` path
+  — left unwired because `print_ai_doctor_report` in the concurrently-churned
+  `wakaclock-cli/src/main.rs` has a live concurrent hunk in that exact function.
 
 ### Owed follow-ups (out of this run's scope)
 
 1. Wire `CorrelationEngine` verdicts into the heartbeat/actor-attribution path,
    then convert the four p7 module-contract caveats to end-to-end tests.
-2. `wakaclock-cli`: call `build_ai_diagnostics_report(...)` and POST it to
-   `/api/v1/ai/diagnostics` (blocked on concurrent `main.rs` churn settling).
+2. `wakaclock-cli` `doctor ai`: one call site — `report_from_doctor_json(&blob,
+   Utc::now())` then `api_client.send_ai_diagnostics(&report).await` (both now
+   exist + tested, `918313c`). Blocked only on the concurrent `main.rs` rewrite
+   of `print_ai_doctor_report` settling.
 3. p7.2c server store → a repository + `migrate()` if diagnostics must survive
    restart / span instances.
 4. p0.3 Codex plugin-manifest packaging; p2.A1 >=99% recall — both need a live
    run recorded in `VERIFICATION.md`.
-5. Concurrent `wakaclock-cli/src/agent_service.rs` clippy breakage — owned by
-   the concurrent feature, not this run.
+5. Concurrent-code gate breakage owned by the concurrent feature, not this run:
+   `wakaclock-cli/src/agent_service.rs` clippy (`fs2` `AgentLock` rewrite); the
+   `wakaclock-core/src/broker.rs` `TransportKind` rework's 2 `cargo test
+   --workspace` failures (its own `transport_kind_ranks…` test + `dedup`'s
+   `p6_a2`). When that rework lands, re-run `cargo test --workspace`; if `p6_a2`
+   still fails, its expected "strongest evidence" pick needs updating to the new
+   `TransportKind::priority()` order (a 1-line assertion change, not a logic
+   bug).
 
 **Loop stopped** (`ScheduleWakeup stop:true`). Re-run `/loop` to pick up any
 owed follow-up once its blocker clears.
@@ -683,3 +709,4 @@ _(One line per loop iteration: date/time, item id, outcome, commit SHA. Newest l
 - 2026-09-02 — p7.4 — done. New `ai/shadow_report.rs`: `compare_to_oracle(&ShadowLog) -> ShadowComparisonReport` with `native_adapter_recall()` (label→oracle) and `universal_inference_precision()` (proposal→label) — two `Option<f64>` from different relations over the log, **no merged accessor** (planai2.md Release Gates: "ห้ามนำ verified/inferred มารวมเป็นตัวเลขเดียว"). Raw counts incl. `unscored_inferences` on the struct. Advisor call surfaced that precision is empty by construction without an independent label (§5 rule 2 vs 6 mutually exclusive) → new `ShadowRecord.ground_truth: Option<LabeledActor{Ai,Human}>`; DECISION logged. 6 tests, core 281→287. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `16f211b` (+ tracker).
 - 2026-09-02 — p7.A1–p7.A4 — done. p7.A3 needed code (no enable/disable on `AdapterRegistry`): `ObserverConfig.rollout_agents`/`rollout_platforms: RolloutScope { All | Only(BTreeSet<String>) }` + `agent_in_rollout()`/`platform_in_rollout()` ingest predicates; empty `Only` fails closed; ids normalised. p7.A1/A2/A4 discharged at module-contract level with a shared "no production call site / no labelled corpus yet" caveat written once at the Phase 7 acceptance heading (advisor — so a skim doesn't read three independent verifications). 4 tests (`p7_a1_..`, `p7_a2_..` in `shadow_report.rs`, `p7_a3_..`, `p7_a4_..`), core 287→291. `ai/mod.rs` via save/restore dance. Gates + duration-audit (total_error 0.0) green. Committed `d5dfd86` (+ tracker). **Phase 7 code complete; only p7.2c (`[ ]`, deferred sub-project) remains before Run DoD.**
 - 2026-09-02 — p7.2c — done (backend + frontend). Advisor scoped it **down** from a full ClickHouse table: `status_bar` (the closest per-user "current state" read) has no repo/table, and nothing needs yesterday's diagnostics — so the server store is an in-memory `AiDiagnosticsService` (latest snapshot per user, mirrors `presence_store`), **no `migrate()` / no `main.rs` ordering edit**. Backend `20f39df`: `wakaclock-core/src/ai/diagnostics.rs` (`AiDiagnosticsReport` + `build_report` producer, metadata-only round-trip test) + `POST /ai/diagnostics` + `GET /users/current/ai_diagnostics` + service/handler/model/`AppState` wiring. Frontend `b350496`: `AiDiagnosticsPanel` on `ai/page.tsx`, `wakaclockKeys.aiDiagnostics(userId)` + `getAiDiagnostics`, 6 render tests. core 291→295, server 159→167, frontend 41/217→42/223. Gates: fmt clean; clippy clean for wakaclock-core + wakaclock-server; `test --workspace` green; duration-audit (total_error 0.0) green; `npm run validate` green. **Workspace `cargo clippy -D warnings` is red only in concurrent uncommitted `wakaclock-cli/src/agent_service.rs`** (`AgentLock` `fs2` rewrite — `suspicious_open_options` :58 / `incompatible_msrv` :96) — not this run; noted, not fixed. Caveats: server store is process-local; the `wakaclock-cli` transport POST is owed (its `main.rs` is concurrently churned). **RUN COMPLETE — see Current position for the full Run DoD assessment.**
+- 2026-09-02 — p7.2c follow-up (`918313c`) — closed most of the "client transport owed" caveat. `ai/diagnostics.rs` += `report_from_doctor_json(&serde_json::Value, DateTime<Utc>) -> AiDiagnosticsReport` — parses the real `wakaclock doctor ai --json` shape (broker inbox counts, per-agent transcript lag, `last_delivery_failure.category`) defensively (missing/wrong-typed → defaults, never fails), keeps the error *category* not the message, looks up per-agent `verification` from `AdapterRegistry::builtin()`, normalises agent ids. `api_client.rs` += `ApiClient::send_ai_diagnostics(&report)` (one-liner over `post_json`). 2 new tests (core 295→297). Owed: 1 call site in `wakaclock-cli`'s `doctor ai` — deliberately not wired, `print_ai_doctor_report` in `main.rs` has a live concurrent hunk. Gates: fmt/clippy(core+server)/`cargo test -p wakaclock-core --lib ai::diagnostics` 6/6 / duration-audit (total_error 0.0) green. **`cargo test --workspace` now has 2 failures from a concurrent `wakaclock-core/src/broker.rs` `TransportKind` rework** (`transport_kind_ranks…` — the concurrent feature's own test — and `dedup`'s `p6_a2` downstream); not caused by and not touching this change; see Current position clause 3.
