@@ -48,8 +48,6 @@ const ImageEditDialog = React.forwardRef<HTMLDivElement, ImageEditDialogProps>(
   ({ editor, size, variant, labels: labelsProp }, ref) => {
     const [open, setOpen] = React.useState(false);
     const labels = { ...defaultLabels, ...(labelsProp ?? {}) };
-    const titleId = 'image-edit-title';
-
     return (
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
@@ -69,10 +67,9 @@ const ImageEditDialog = React.forwardRef<HTMLDivElement, ImageEditDialogProps>(
           data-slot="image-edit-dialog"
           data-testid="image-edit-dialog"
           className="sm:max-w-lg"
-          aria-labelledby={titleId}
         >
           <DialogHeader>
-            <DialogTitle id={titleId}>{labels.dialogTitle}</DialogTitle>
+            <DialogTitle>{labels.dialogTitle}</DialogTitle>
             <DialogDescription className="sr-only">{labels.dialogDescription}</DialogDescription>
           </DialogHeader>
           <ImageEditBlock editor={editor} close={() => setOpen(false)} labels={labels.editBlock} />

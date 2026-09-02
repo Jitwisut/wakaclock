@@ -89,7 +89,7 @@ function activate(context) {
         statusBar.setConnectionState(key ? "connecting" : "needs-api-key");
     })();
     statusBar.start();
-    (0, commands_1.registerCommands)(context, configService, cliService, bufferManager, statusBar, aiIntegrations);
+    (0, commands_1.registerCommands)(context, configService, cliService, bufferManager, statusBar, aiIntegrations, () => void initializeConnection(context, cliService, aiIntegrations, logger));
     (0, events_1.registerEventSubscriptions)(context, configService, bufferManager, logger);
     void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
     // AI discovery/setup is deliberately detached from the editor heartbeat pipeline.

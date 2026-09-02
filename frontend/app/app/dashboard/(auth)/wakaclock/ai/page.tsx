@@ -21,26 +21,39 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
+import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getAiStats } from '@/lib/wakaclock/endpoints';
+import { getAiDiagnostics, getAiStats } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+const actorColors = {
+  ai_inferred: 'var(--chart-2)',
+  ai_verified: 'var(--chart-1)',
+  human: 'var(--chart-3)',
+  unknown: 'var(--chart-5)',
+} as const;
+
 const attributionConfig = {
   heartbeats: { label: 'Heartbeats' },
-  ai: { label: 'AI-assisted', color: 'var(--chart-1)' },
-  human: { label: 'Human', color: 'var(--chart-3)' },
+  ai_inferred: { label: 'AI inferred', color: actorColors.ai_inferred },
+  ai_verified: { label: 'AI verified', color: actorColors.ai_verified },
+  human: { label: 'Human', color: actorColors.human },
+  unknown: { label: 'Unknown', color: actorColors.unknown },
 } satisfies ChartConfig;
 
 const dailyConfig = {
-  ai_lines_added: { label: 'AI lines added', color: 'var(--chart-1)' },
-  human_lines_added: { label: 'Human lines added', color: 'var(--chart-3)' },
+  ai_inferred_lines_added: { label: 'AI inferred lines', color: actorColors.ai_inferred },
+  ai_verified_lines_added: { label: 'AI verified lines', color: actorColors.ai_verified },
+  human_lines_added: { label: 'Human lines added', color: actorColors.human },
+  unknown_lines_added: { label: 'Unknown lines', color: actorColors.unknown },
 } satisfies ChartConfig;
 
 function AiStatsPanel() {
@@ -53,15 +66,39 @@ function AiStatsPanel() {
     enabled: Boolean(userId),
   });
 
+  const { data: diagnostics } = useQuery({
+    queryKey: wakaclockKeys.aiDiagnostics(userId),
+    queryFn: () => getAiDiagnostics(userId),
+    enabled: Boolean(userId),
+  });
+
   const stats = data?.data;
   const aiPct = stats?.ai_heartbeat_percentage ?? 0;
+  const aiVerifiedPct = stats?.ai_verified_heartbeat_percentage ?? 0;
+  const aiInferredPct = stats?.ai_inferred_heartbeat_percentage ?? 0;
+  const humanPct = stats?.human_heartbeat_percentage ?? 0;
+  const unknownPct = stats?.unknown_heartbeat_percentage ?? 0;
   const pieData = stats
     ? [
-        { key: 'ai', heartbeats: Math.round(aiPct * 10) / 10, fill: 'var(--color-ai)' },
+        {
+          key: 'ai_verified',
+          heartbeats: Math.round(aiVerifiedPct * 10) / 10,
+          fill: 'var(--color-ai_verified)',
+        },
+        {
+          key: 'ai_inferred',
+          heartbeats: Math.round(aiInferredPct * 10) / 10,
+          fill: 'var(--color-ai_inferred)',
+        },
         {
           key: 'human',
-          heartbeats: Math.round((100 - aiPct) * 10) / 10,
+          heartbeats: Math.round(humanPct * 10) / 10,
           fill: 'var(--color-human)',
+        },
+        {
+          key: 'unknown',
+          heartbeats: Math.round(unknownPct * 10) / 10,
+          fill: 'var(--color-unknown)',
         },
       ]
     : [];
@@ -84,17 +121,27 @@ function AiStatsPanel() {
         >
           {stats && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-7">
                 <StatTile label="AI heartbeats" value={formatPercent(aiPct)} />
                 <StatTile
-                  label="AI lines added"
-                  subtext={`${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`}
-                  value={formatCompactNumber(stats.total_ai_lines_added)}
+                  label="AI verified lines"
+                  subtext={`${formatCompactNumber(stats.total_ai_verified_lines_deleted)} deleted`}
+                  value={formatCompactNumber(stats.total_ai_verified_lines_added)}
+                />
+                <StatTile
+                  label="AI inferred lines"
+                  subtext={`${formatCompactNumber(stats.total_ai_inferred_lines_deleted)} deleted`}
+                  value={formatCompactNumber(stats.total_ai_inferred_lines_added)}
                 />
                 <StatTile
                   label="Human lines added"
                   subtext={`${formatCompactNumber(stats.total_human_lines_deleted)} deleted`}
                   value={formatCompactNumber(stats.total_human_lines_added)}
+                />
+                <StatTile
+                  label="Unknown lines"
+                  subtext={`${formatCompactNumber(stats.total_unknown_lines_deleted)} deleted`}
+                  value={formatCompactNumber(stats.total_unknown_lines_added)}
                 />
                 <StatTile
                   label="Human keystrokes"
@@ -109,7 +156,7 @@ function AiStatsPanel() {
               <DashboardPanel id="ai.charts">
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
-                    <h3 className="mb-2 text-sm font-medium">AI vs. human heartbeats</h3>
+                    <h3 className="mb-2 text-sm font-medium">Human / AI verified / AI inferred / Unknown heartbeats</h3>
                     <ChartContainer
                       className="mx-auto aspect-square max-h-64"
                       config={attributionConfig}
@@ -160,7 +207,7 @@ function AiStatsPanel() {
                   </div>
 
                   <div>
-                    <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
+                    <h3 className="mb-2 text-sm font-medium">Daily attribution</h3>
                     <ChartContainer className="h-64 w-full" config={dailyConfig}>
                       <BarChart data={stats.daily} margin={{ left: 4, right: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -173,13 +220,23 @@ function AiStatsPanel() {
                         <YAxis axisLine={false} tickLine={false} width={40} />
                         <ChartTooltip content={<ChartTooltipContent />} />
                         <Bar
-                          dataKey="ai_lines_added"
-                          fill="var(--color-ai_lines_added)"
+                          dataKey="ai_verified_lines_added"
+                          fill="var(--color-ai_verified_lines_added)"
+                          radius={3}
+                        />
+                        <Bar
+                          dataKey="ai_inferred_lines_added"
+                          fill="var(--color-ai_inferred_lines_added)"
                           radius={3}
                         />
                         <Bar
                           dataKey="human_lines_added"
                           fill="var(--color-human_lines_added)"
+                          radius={3}
+                        />
+                        <Bar
+                          dataKey="unknown_lines_added"
+                          fill="var(--color-unknown_lines_added)"
                           radius={3}
                         />
                       </BarChart>
@@ -188,17 +245,28 @@ function AiStatsPanel() {
                 </div>
               </DashboardPanel>
 
+              <AiAttributionLegend
+                aiInferredPercent={aiInferredPct}
+                aiVerifiedPercent={aiVerifiedPct}
+                humanPercent={humanPct}
+                unknownPercent={unknownPct}
+              />
+
+              <AiDiagnosticsPanel report={diagnostics?.report ?? null} />
+
               <div>
                 <h3 className="mb-2 text-sm font-medium">Agents</h3>
                 <div className="overflow-x-auto rounded-md border">
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead>Actor</TableHead>
                         <TableHead>Agent</TableHead>
                         <TableHead>Provider / model</TableHead>
                         <TableHead>AI added</TableHead>
                         <TableHead>AI deleted</TableHead>
                         <TableHead>Human added</TableHead>
+                        <TableHead>Unknown</TableHead>
                         <TableHead className="text-right">Heartbeats</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -207,6 +275,9 @@ function AiStatsPanel() {
                         <TableRow
                           key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
                         >
+                          <TableCell className="capitalize">
+                            {agent.actor_type.replaceAll('_', ' ')}
+                          </TableCell>
                           <TableCell className="font-medium">{agent.agent}</TableCell>
                           <TableCell>
                             {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
@@ -214,6 +285,7 @@ function AiStatsPanel() {
                           <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
                           <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
                           <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
+                          <TableCell>{formatCompactNumber(agent.unknown_lines_added)}</TableCell>
                           <TableCell className="text-right">
                             {formatCompactNumber(agent.heartbeat_count)}
                           </TableCell>
@@ -235,7 +307,7 @@ export default function AiStatsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="How much of the work your AI party member carried vs. what you typed yourself."
+        description="Separate verified AI activity, positively attributed human changes, and work whose author is not yet proven."
         title="AI Stats"
       />
       <RequireUser>

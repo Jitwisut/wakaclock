@@ -1,6 +1,15 @@
 import type { ActivitySegment } from "./types";
 
-/** The strict activity window used by the editor and AI integrations. */
+/**
+ * The strict client-measured activity window: how long one wire segment may span
+ * before it must be split, so the backend never mistakes a long continuously-typed
+ * segment for a legacy long-gap heartbeat. This is not a correlation window and is
+ * unrelated to matching an edit against AI evidence — see `aiAttribution.ts`'s
+ * `CORRELATION_WINDOW_SECONDS` (editor-side AI match) and
+ * `wakaclock-core::ai::correlation::EXACT_MATCH_WINDOW` (server-side transcript
+ * match) for the two windows that do that job, each sized for what it measures.
+ * Do not unify these three constants — they answer different questions.
+ */
 export const MAX_ACTIVITY_GAP_SECONDS = 120;
 export const MAX_ACTIVITY_GAP_MS = MAX_ACTIVITY_GAP_SECONDS * 1000;
 

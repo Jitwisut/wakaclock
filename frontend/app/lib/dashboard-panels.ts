@@ -34,7 +34,7 @@ export const DASHBOARD_PANEL_PAGES: readonly DashboardPanelPage[] = [
   { href: '/dashboard/wakaclock', id: OVERVIEW, title: 'Overview' },
   { href: '/dashboard/wakaclock/insights', id: 'insights', title: 'Insights' },
   { href: '/dashboard/wakaclock/ai', id: 'ai', title: 'AI Stats' },
-  { href: '/dashboard/wakaclock/keystrokes', id: 'keystrokes', title: 'Keystrokes' },
+  { href: '/dashboard/wakaclock/keystrokes', id: 'keystrokes', title: 'Input Activity' },
 ];
 
 export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
@@ -62,7 +62,7 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     page: OVERVIEW,
     parent: ANALYTICS_CARD,
     label: 'Daily attribution chart',
-    description: 'Stacked bars of AI, human and unattributed line changes per day.',
+    description: 'Stacked bars of AI verified, AI inferred, human and unknown line changes per day.',
   },
   {
     id: 'overview.analytics-breakdowns',
@@ -82,6 +82,12 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     page: OVERVIEW,
     label: 'Range statistics',
     description: 'Totals and averages for the selected date range.',
+  },
+  {
+    id: 'overview.top-projects',
+    page: OVERVIEW,
+    label: 'Projects',
+    description: 'The projects with the most time in the selected range. Each name opens its charts.',
   },
   {
     id: 'overview.summaries',
@@ -110,7 +116,7 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
   {
     id: 'keystrokes.chart',
     page: 'keystrokes',
-    label: 'Keystrokes chart',
+    label: 'Input activity charts',
     description: 'The daily keystroke trend line. The table stays either way.',
   },
 ];

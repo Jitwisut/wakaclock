@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::all_time::{AllTimeData, AllTimeResponse, AllTimeRow};
 use crate::services::activity_timeline::{
-    canonicalize_bridged, total_seconds, ActivityTimelineService,
+    canonicalize_bridged, total_seconds, ActivityTimelineService, BridgeConfig,
 };
 
 pub struct AllTimeService {
@@ -14,9 +14,9 @@ pub struct AllTimeService {
 }
 
 impl AllTimeService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
-            timeline: ActivityTimelineService::new(clickhouse, idle_timeout_seconds),
+            timeline: ActivityTimelineService::new(clickhouse, bridge),
         }
     }
 
@@ -36,7 +36,7 @@ impl AllTimeService {
 
     async fn fetch_all_time(&self, user_id: Uuid) -> Result<AllTimeRow> {
         let intervals = self.timeline.intervals(user_id, 0.0, f64::MAX).await?;
-        let canonical = canonicalize_bridged(&intervals, self.timeline.idle_timeout_seconds());
+        let canonical = canonicalize_bridged(&intervals, self.timeline.bridge_config());
         let total = total_seconds(&canonical);
         let mut days = std::collections::HashSet::new();
         let since = canonical

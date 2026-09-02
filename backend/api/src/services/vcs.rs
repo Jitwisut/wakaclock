@@ -32,10 +32,19 @@ impl VcsService {
         }
     }
 
-    pub async fn connect(&self, actor: Uuid, request: ConnectVcsRequest) -> Result<Vec<Repository>> {
+    pub async fn connect(
+        &self,
+        actor: Uuid,
+        request: ConnectVcsRequest,
+    ) -> Result<Vec<Repository>> {
         validate_provider(&request.provider)?;
         self.authorization
-            .require(actor, request.organization_id, OrganizationAction::ManageIntegrations, None)
+            .require(
+                actor,
+                request.organization_id,
+                OrganizationAction::ManageIntegrations,
+                None,
+            )
             .await?;
         let credentials = BASE64
             .decode(request.encrypted_credentials.trim())
@@ -43,7 +52,8 @@ impl VcsService {
         if credentials.len() < 16 || credentials.len() > 128 * 1024 {
             return Err(anyhow!("encrypted_credentials has an invalid size"));
         }
-        if request.external_account_id.trim().is_empty() || request.external_account_id.len() > 320 {
+        if request.external_account_id.trim().is_empty() || request.external_account_id.len() > 320
+        {
             return Err(anyhow!("external_account_id must contain 1-320 characters"));
         }
         let postgres = self.required()?;
@@ -56,7 +66,12 @@ impl VcsService {
                     (id, organization_id, provider, display_name, status, scopes)
                  VALUES ($1, $2, $3, $4, 'connected', '{}')
                  ON CONFLICT DO NOTHING",
-                &[&integration_id, &request.organization_id, &request.provider, &display_name],
+                &[
+                    &integration_id,
+                    &request.organization_id,
+                    &request.provider,
+                    &display_name,
+                ],
             )
             .await
             .context("failed to create VCS integration connection")?;
@@ -121,14 +136,28 @@ impl VcsService {
                 )
                 .await
                 .context("failed to upsert repository")?;
-            repositories.push(self.repository_from_row(row, connection_id, request.organization_id, &request.provider)?);
+            repositories.push(self.repository_from_row(
+                row,
+                connection_id,
+                request.organization_id,
+                &request.provider,
+            )?);
         }
         Ok(repositories)
     }
 
-    pub async fn repositories(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<Repository>> {
+    pub async fn repositories(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<Repository>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres
@@ -165,10 +194,20 @@ impl VcsService {
             .context("failed to resolve repository organization")?
             .get::<_, Uuid>("organization_id");
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageIntegrations, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageIntegrations,
+                None,
+            )
             .await?;
-        if !matches!(request.mapping_source.as_str(), "manual" | "observed_head" | "import") {
-            return Err(anyhow!("mapping_source must be manual, observed_head or import"));
+        if !matches!(
+            request.mapping_source.as_str(),
+            "manual" | "observed_head" | "import"
+        ) {
+            return Err(anyhow!(
+                "mapping_source must be manual, observed_head or import"
+            ));
         }
         let row = postgres
             .client()
@@ -197,7 +236,12 @@ impl VcsService {
         limit: i64,
     ) -> Result<Vec<Commit>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let limit = limit.clamp(1, 1000);
@@ -225,7 +269,12 @@ impl VcsService {
         limit: i64,
     ) -> Result<Vec<PullRequest>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let limit = limit.clamp(1, 1000);
@@ -252,7 +301,12 @@ impl VcsService {
         pull_request_id: Uuid,
     ) -> Result<Option<PullRequestAnalytics>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let row = postgres
@@ -314,10 +368,14 @@ fn validate_provider(provider: &str) -> Result<()> {
 
 fn validate_repository(external_id: &str, full_name: &str) -> Result<()> {
     if external_id.trim().is_empty() || external_id.len() > 320 {
-        return Err(anyhow!("repository external_id must contain 1-320 characters"));
+        return Err(anyhow!(
+            "repository external_id must contain 1-320 characters"
+        ));
     }
     if full_name.trim().is_empty() || full_name.len() > 320 {
-        return Err(anyhow!("repository full_name must contain 1-320 characters"));
+        return Err(anyhow!(
+            "repository full_name must contain 1-320 characters"
+        ));
     }
     Ok(())
 }

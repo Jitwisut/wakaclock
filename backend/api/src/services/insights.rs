@@ -1,18 +1,29 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Local, NaiveDate};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::insights::{InsightItem, InsightRow, InsightsAllTimeRangeRow, InsightsResponse};
+use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
 pub struct InsightsService {
     clickhouse: Arc<ClickHouseClient>,
+    /// Insights used to read `insights_agg`, a `sum(active_seconds)` rollup, so every
+    /// figure on this page was a different number from the same day's dashboard total —
+    /// no union across overlapping emitters and no idle bridging. It reads the canonical
+    /// timeline now, like every other duration surface. See docs/duration-accuracy-audit.md,
+    /// Finding 4.
+    timeline: ActivityTimelineService,
 }
 
 impl InsightsService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>) -> Self {
-        Self { clickhouse }
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
+        Self {
+            timeline: ActivityTimelineService::new(clickhouse.clone(), bridge),
+            clickhouse,
+        }
     }
 
     pub async fn get_by_type_and_range(
@@ -21,9 +32,11 @@ impl InsightsService {
         insight_type: &str,
         range: &str,
     ) -> Result<InsightsResponse> {
-        let column = map_insight_type(insight_type)?;
+        let dimension = map_insight_type(insight_type)?;
         let (start, end) = self.resolve_range(user_id, range).await?;
-        let rows = self.fetch_insights(user_id, &start, &end, column).await?;
+        let rows = self
+            .fetch_insights(user_id, &start, &end, dimension)
+            .await?;
 
         Ok(InsightsResponse {
             r#type: insight_type.to_string(),
@@ -72,7 +85,12 @@ impl InsightsService {
                 SELECT
                     if(count() = 0, NULL, toString(min(date))) AS start_day,
                     if(count() = 0, NULL, toString(max(date))) AS end_day
-                FROM wakaclock.insights_agg
+                -- Read the span from the heartbeats themselves. A `SummingMergeTree`
+                -- rollup survives deletion of its source rows, so an aggregate that has
+                -- been repaired or partially cleaned can report an all-time range that
+                -- extends past any surviving activity. See docs/duration-accuracy-audit.md,
+                -- Finding 5.
+                FROM wakaclock.heartbeats
                 WHERE user_id = ?
                 ",
             )
@@ -84,46 +102,82 @@ impl InsightsService {
             })
     }
 
+    /// One insight breakdown, built from the canonical timeline.
+    ///
+    /// `days` is counted from the interval starts rather than from a stored `unique_days`
+    /// aggregate, so a day appears exactly when the timeline says work happened on it.
     async fn fetch_insights(
         &self,
         user_id: Uuid,
         start: &str,
         end: &str,
-        column: &'static str,
+        dimension: Dimension,
     ) -> Result<Vec<InsightRow>> {
-        let sql = format!(
-            "
-            SELECT
-                if(empty({column}), 'Unknown', {column}) AS name,
-                sum(total_seconds) AS total_seconds,
-                sum(heartbeat_count) AS heartbeat_count,
-                uniqMerge(unique_days) AS days
-            FROM wakaclock.insights_agg
-            WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-            GROUP BY name
-            ORDER BY total_seconds DESC, name ASC
-            "
-        );
+        let (start_epoch, end_epoch) = local_day_bounds(start, end)?;
+        let canonical = self
+            .timeline
+            .canonical(user_id, start_epoch, end_epoch)
+            .await?;
 
-        self.clickhouse
-            .get_client()
-            .query(&sql)
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<InsightRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse insights query error: {error}"))
+        let mut grouped: HashMap<String, (f64, HashSet<String>, HashSet<String>)> = HashMap::new();
+        for interval in &canonical {
+            let entry = grouped.entry(dimension.value_of(interval)).or_default();
+            entry.0 += interval.end - interval.start;
+            entry.1.insert(interval.heartbeat_id.clone());
+            if let Some(day) = local_day(interval.start) {
+                entry.2.insert(day);
+            }
+        }
+
+        let mut rows: Vec<InsightRow> = grouped
+            .into_iter()
+            .map(|(name, (total_seconds, heartbeats, days))| InsightRow {
+                name,
+                total_seconds,
+                heartbeat_count: heartbeats.len() as u64,
+                days: days.len() as u64,
+            })
+            .collect();
+        rows.sort_by(|left, right| {
+            right
+                .total_seconds
+                .partial_cmp(&left.total_seconds)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        Ok(rows)
     }
 }
 
-fn map_insight_type(insight_type: &str) -> Result<&'static str> {
+/// Inclusive `YYYY-MM-DD` days in the server's local zone, as epoch bounds. The insights
+/// range has always been expressed in local days; only the storage it resolves against
+/// changed.
+fn local_day_bounds(start: &str, end: &str) -> Result<(f64, f64)> {
+    let start_day = NaiveDate::parse_from_str(start, "%Y-%m-%d")
+        .with_context(|| format!("invalid insights start date: {start}"))?;
+    let end_day = NaiveDate::parse_from_str(end, "%Y-%m-%d")
+        .with_context(|| format!("invalid insights end date: {end}"))?;
+    let to_epoch = |day: NaiveDate| -> Result<f64> {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|naive| naive.and_local_timezone(Local).single())
+            .map(|dt| dt.timestamp() as f64)
+            .ok_or_else(|| anyhow::anyhow!("ambiguous local midnight for {day}"))
+    };
+    Ok((to_epoch(start_day)?, to_epoch(end_day + Duration::days(1))?))
+}
+
+fn local_day(epoch: f64) -> Option<String> {
+    chrono::DateTime::from_timestamp(epoch as i64, 0)
+        .map(|dt| fmt_date(dt.with_timezone(&Local).date_naive()))
+}
+
+fn map_insight_type(insight_type: &str) -> Result<Dimension> {
     match insight_type {
-        "languages" => Ok("language"),
-        "projects" => Ok("project"),
-        "editors" => Ok("editor"),
-        "operating_systems" => Ok("os"),
-        "branches" => Ok("branch"),
+        "languages" => Ok(Dimension::Language),
+        "projects" => Ok(Dimension::Project),
+        "editors" => Ok(Dimension::Editor),
+        "operating_systems" => Ok(Dimension::OperatingSystem),
+        "branches" => Ok(Dimension::Branch),
         _ => anyhow::bail!(
             "Invalid insight type, expected one of: languages, projects, editors, operating_systems, branches"
         ),

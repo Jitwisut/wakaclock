@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::model::heartbeat::HeartbeatRow;
 use crate::model::wakatime_import::{WakaTimeDump, WakaTimeHeartbeat};
 use crate::repository::heartbeat::HeartbeatRepository;
+use wakaclock_core::heartbeat::{resolve_attribution, AttributionInput};
 
 pub struct WakaTimeImportResult {
     pub imported_heartbeats: usize,
@@ -45,12 +46,20 @@ impl WakaTimeImportService {
         let mut skipped = 0usize;
 
         for day in dump.days {
+            let day_date = day.date;
             let Some(heartbeats) = day.heartbeats else {
                 continue;
             };
 
             for heartbeat in heartbeats {
-                match map_heartbeat(user_id, heartbeat, &editor, &operating_system, &user_agent) {
+                match map_heartbeat(
+                    user_id,
+                    heartbeat,
+                    &editor,
+                    &operating_system,
+                    &user_agent,
+                    &day_date,
+                ) {
                     Some(row) => rows.push(row),
                     None => skipped += 1,
                 }
@@ -110,6 +119,7 @@ fn map_heartbeat(
     editor: &str,
     operating_system: &str,
     user_agent: &str,
+    day_date: &str,
 ) -> Option<HeartbeatRow> {
     if heartbeat.entity.trim().is_empty() || heartbeat.time <= 0.0 {
         return None;
@@ -117,15 +127,32 @@ fn map_heartbeat(
 
     let entity_type = normalize_entity_type(&heartbeat.entity_type)?;
     let date = (heartbeat.time as i64 / 86400).max(0) as u16;
-    let created_at = parse_created_at(heartbeat.created_at.as_deref());
+    let created_at = parse_created_at(heartbeat.created_at.as_deref(), day_date);
     let category = normalize_category(heartbeat.category.as_deref());
-    let is_ai_generated = is_ai_generated(&heartbeat);
-    let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
+    let legacy_ai_generated = is_ai_generated(&heartbeat);
     let ai_event_id = heartbeat.ai_session.clone();
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
     let human_lines_added = to_positive_u32(heartbeat.human_line_changes);
     let human_lines_deleted = to_negative_u32(heartbeat.human_line_changes);
+    let attribution = resolve_attribution(AttributionInput {
+        legacy_is_ai_generated: Some(legacy_ai_generated),
+        ai_agent: legacy_ai_generated.then_some("wakatime"),
+        ai_source: legacy_ai_generated.then_some("wakatime_import"),
+        ai_confidence: legacy_ai_generated.then_some("verified"),
+        ai_event_id: heartbeat.ai_session.as_deref(),
+        ai_lines_added,
+        ai_lines_deleted,
+        human_lines_added,
+        human_lines_deleted,
+        chars_added: human_lines_added,
+        chars_deleted: human_lines_deleted,
+        positive_editor_evidence: heartbeat.is_write,
+        ..Default::default()
+    })
+    .ok()?;
+    let is_ai_generated = attribution.actor_type.is_ai();
+    let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
 
     Some(HeartbeatRow {
         user_id,
@@ -166,6 +193,7 @@ fn map_heartbeat(
         chars_added: human_lines_added,
         chars_deleted: human_lines_deleted,
         active_seconds: None,
+        active_seconds_claimed: None,
         activity_segments: "[]".to_string(),
         is_ai_generated,
         ai_agent,
@@ -192,6 +220,18 @@ fn map_heartbeat(
         unattributed_lines_added: Some(0),
         unattributed_lines_deleted: Some(0),
         created_at,
+        actor_type: attribution.actor_type.to_string(),
+        actor_confidence: attribution.confidence,
+        clipboard_tracking_version: None,
+        copy_actions: None,
+        paste_actions: None,
+        copied_chars: None,
+        copied_lines: None,
+        pasted_chars: None,
+        pasted_lines: None,
+        paste_same_file_actions: None,
+        paste_same_workspace_actions: None,
+        paste_external_or_unknown_actions: None,
     })
 }
 
@@ -267,10 +307,16 @@ fn infer_operating_system(last_plugin: Option<&str>) -> String {
     }
 }
 
-fn parse_created_at(created_at: Option<&str>) -> u32 {
+fn parse_created_at(created_at: Option<&str>, day_date: &str) -> u32 {
     created_at
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|dt| dt.timestamp().max(0) as u32)
+        .or_else(|| {
+            chrono::NaiveDate::parse_from_str(day_date, "%Y-%m-%d")
+                .ok()
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .map(|midnight| midnight.and_utc().timestamp().max(0) as u32)
+        })
         .unwrap_or_else(|| Utc::now().timestamp().max(0) as u32)
 }
 
@@ -295,5 +341,5 @@ fn to_positive_u32(value: Option<i32>) -> Option<u32> {
 fn to_negative_u32(value: Option<i32>) -> Option<u32> {
     value
         .filter(|current| *current < 0)
-        .and_then(|current| u32::try_from(current.unsigned_abs()).ok())
+        .map(|current| current.unsigned_abs())
 }

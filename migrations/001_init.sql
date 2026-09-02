@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS wakaclock.heartbeats
     time            Float64,                    -- Unix epoch with ms precision
     date            Date DEFAULT toDate(toDateTime(toUInt32(time))),
     project         Nullable(String),
+    project_id      Nullable(UUID),
     branch          Nullable(String),
+    head_revision   Nullable(String),
+    repository_id   Nullable(UUID),
     language        Nullable(String),
     dependencies    Array(String),
     `lines`         Nullable(UInt32),
@@ -26,6 +29,11 @@ CREATE TABLE IF NOT EXISTS wakaclock.heartbeats
     operating_system String DEFAULT '',
     machine         String DEFAULT '',
     user_agent      String DEFAULT '',
+    machine_name_hash Nullable(String),
+    hostname_hash   Nullable(String),
+    timezone        Nullable(String),
+    feature_id      Nullable(String),
+    feature_name    Nullable(String),
 
     -- Wakaclock additions: AST detection
     ast_language    Nullable(String),
@@ -36,6 +44,8 @@ CREATE TABLE IF NOT EXISTS wakaclock.heartbeats
     chars_added     Nullable(UInt32),
     chars_deleted   Nullable(UInt32),
     active_seconds  Nullable(Float64),
+    active_seconds_claimed Nullable(Float64),
+    activity_segments String DEFAULT '[]',
 
     -- AI agent tracking
     is_ai_generated Bool DEFAULT false,
@@ -45,10 +55,59 @@ CREATE TABLE IF NOT EXISTS wakaclock.heartbeats
     ai_source       Nullable(String),
     ai_confidence   Nullable(String),
     ai_event_id     Nullable(String),
+    ai_change_id    Nullable(String),
+    prompt_character_count Nullable(UInt64),
+    input_tokens    Nullable(UInt64),
+    output_tokens   Nullable(UInt64),
+    cache_read_tokens Nullable(UInt64),
+    cache_write_tokens Nullable(UInt64),
+    ai_subscription_plan Nullable(String),
+    token_source    Nullable(String),
+    attribution_source Nullable(String),
+    attribution_confidence Nullable(Float32),
+    ai_event_fingerprint Nullable(String),
     ai_lines_added  Nullable(UInt32),
     ai_lines_deleted Nullable(UInt32),
     human_lines_added Nullable(UInt32),
     human_lines_deleted Nullable(UInt32),
+    unattributed_lines_added Nullable(UInt32),
+    unattributed_lines_deleted Nullable(UInt32),
+
+    -- Canonical attribution. Legacy is_ai_generated remains a compatibility field;
+    -- readers must use actor_type so missing AI metadata is not treated as Human.
+    actor_type      LowCardinality(String) DEFAULT multiIf(
+        (
+            is_ai_generated = 1
+            OR ifNull(ai_agent, '') != ''
+            OR ifNull(ai_event_id, '') != ''
+            OR coalesce(ai_lines_added, 0) > 0
+            OR coalesce(ai_lines_deleted, 0) > 0
+            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+            ) AND (
+            lower(ifNull(ai_confidence, '')) = 'verified'
+            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+        ), 'ai_verified',
+        is_ai_generated = 1
+            OR ifNull(ai_agent, '') != ''
+            OR ifNull(ai_event_id, '') != ''
+            OR coalesce(ai_lines_added, 0) > 0
+            OR coalesce(ai_lines_deleted, 0) > 0
+            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+        coalesce(human_lines_added, 0) > 0
+            OR coalesce(human_lines_deleted, 0) > 0
+            OR coalesce(keystrokes, 0) > 0
+            OR coalesce(chars_added, 0) > 0
+            OR coalesce(chars_deleted, 0) > 0, 'human',
+        'unknown'
+    ),
+    actor_confidence Float32 DEFAULT multiIf(
+        actor_type = 'human', 1.0,
+        actor_type = 'ai_verified' AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+        actor_type = 'ai_verified', 1.0,
+        actor_type = 'ai_inferred' AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+        actor_type = 'ai_inferred', 0.6,
+        0.0
+    ),
 
     -- Metadata
     created_at      DateTime64(3) DEFAULT now64(3)
@@ -65,6 +124,36 @@ TTL date + INTERVAL 2 YEAR;
 CREATE TABLE IF NOT EXISTS wakaclock.heartbeats_incoming AS wakaclock.heartbeats
 ENGINE = Null;
 
+-- Canonical measured intervals. This projection is additive and can be rebuilt from
+-- raw heartbeats; actor_type is carried explicitly so an absent legacy boolean never
+-- turns an interval into Human time.
+CREATE TABLE IF NOT EXISTS wakaclock.activity_intervals
+(
+    user_id          UUID,
+    segment_id       String,
+    heartbeat_id     String,
+    `start`          Float64,
+    `end`            Float64,
+    source           String,
+    entity           String,
+    project          Nullable(String),
+    project_id       Nullable(UUID),
+    branch           Nullable(String),
+    language         Nullable(String),
+    category         String,
+    editor           String DEFAULT '',
+    operating_system String DEFAULT '',
+    created_at       UInt32,
+    actor_type       LowCardinality(String) DEFAULT multiIf(
+        source = 'ai', 'ai_inferred',
+        source = 'editor', 'human',
+        'unknown'
+    ),
+    actor_confidence Float32 DEFAULT 0.0
+)
+ENGINE = ReplacingMergeTree(created_at)
+ORDER BY (user_id, segment_id);
+
 
 -- ============================================================
 -- 2. Daily totals (SummingMergeTree)
@@ -78,6 +167,43 @@ CREATE TABLE IF NOT EXISTS wakaclock.daily_totals
 )
 ENGINE = SummingMergeTree((total_seconds, heartbeat_count))
 ORDER BY (user_id, date);
+
+-- ============================================================
+-- 2b. Actor-aware attribution daily rollup (additive replacement for ai_daily)
+-- ============================================================
+-- Keep the legacy boolean-keyed ai_daily table below for existing readers. New
+-- attribution reports use this dimensioned rollup so verified, inferred and unknown
+-- facts cannot collapse into one boolean bucket.
+CREATE TABLE IF NOT EXISTS wakaclock.actor_daily_v2
+(
+    user_id             UUID,
+    date                Date,
+    actor_type          LowCardinality(String),
+    ai_agent            String,
+    ai_provider         String,
+    ai_model            String,
+    ai_lines_added      UInt64,
+    ai_lines_deleted    UInt64,
+    human_lines_added   UInt64,
+    human_lines_deleted UInt64,
+    unknown_lines_added UInt64,
+    unknown_lines_deleted UInt64,
+    human_keystrokes    UInt64,
+    human_chars_added   UInt64,
+    heartbeat_count     UInt64
+)
+ENGINE = SummingMergeTree((ai_lines_added, ai_lines_deleted, human_lines_added,
+    human_lines_deleted, unknown_lines_added, unknown_lines_deleted,
+    human_keystrokes, human_chars_added, heartbeat_count))
+ORDER BY (user_id, date, actor_type, ai_agent, ai_provider, ai_model);
+
+CREATE TABLE IF NOT EXISTS wakaclock.actor_daily_v2_backfill_state
+(
+    migration    String,
+    completed_at DateTime64(3)
+)
+ENGINE = ReplacingMergeTree(completed_at)
+ORDER BY migration;
 
 
 -- ============================================================
@@ -268,7 +394,8 @@ CREATE TABLE IF NOT EXISTS wakaclock.users
     user_id    UUID,
     username   String,
     email      String DEFAULT '',
-    api_key    String,              -- hashed API key
+    api_key    String,              -- SHA-256 hash used for authentication
+    api_key_plain String DEFAULT '', -- retrievable value for the authenticated dashboard
     is_active  Bool DEFAULT true,
     created_at DateTime64(3) DEFAULT now64(3),
     updated_at DateTime64(3) DEFAULT now64(3)
@@ -364,15 +491,39 @@ SELECT
     user_id,
     date,
     coalesce(ai_agent, 'human') AS ai_agent,
-    sum(coalesce(ai_lines_added, 0))  AS ai_lines_added,
-    sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
-    sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-    sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
-    sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
-    sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+    sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+    sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+    sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
+    sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human') AS human_lines_deleted,
+    sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS human_keystrokes,
+    sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
     count() AS heartbeat_count
 FROM wakaclock.heartbeats
 GROUP BY user_id, date, ai_agent;
+
+-- MV: actor_daily_v2
+CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_actor_summary_v2
+TO wakaclock.actor_daily_v2 AS
+SELECT
+    user_id,
+    date,
+    actor_type,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_agent, ''), '') AS ai_agent,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_provider, ''), '') AS ai_provider,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_model, ''), '') AS ai_model,
+    sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+    sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+    sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+    sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+    sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+    sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+    sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
+    sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
+    count() AS heartbeat_count
+FROM wakaclock.heartbeats AS h
+GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model;
 
 -- MV: keystroke_daily
 CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_keystroke_summary
@@ -381,9 +532,9 @@ SELECT
     user_id,
     date,
     coalesce(project, 'Unknown') AS project,
-    sum(coalesce(keystrokes, 0))    AS keystrokes,
-    sum(coalesce(chars_added, 0))   AS chars_added,
-    sum(coalesce(chars_deleted, 0)) AS chars_deleted,
+    sumIf(coalesce(keystrokes, 0), actor_type = 'human')    AS keystrokes,
+    sumIf(coalesce(chars_added, 0), actor_type = 'human')   AS chars_added,
+    sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
     count() AS heartbeat_count
 FROM wakaclock.heartbeats
 GROUP BY user_id, date, project;
@@ -432,20 +583,43 @@ FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, language, project, ed
 CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_ai_summary
 TO wakaclock.ai_daily AS
 SELECT user_id, date, coalesce(ai_agent, 'human') AS ai_agent,
-       sum(coalesce(ai_lines_added, 0)) AS ai_lines_added,
-       sum(coalesce(ai_lines_deleted, 0)) AS ai_lines_deleted,
-       sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-       sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
-       sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
-       sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+       sumIf(coalesce(ai_lines_added, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+       sumIf(coalesce(ai_lines_deleted, 0), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+       sumIf(coalesce(human_lines_added, 0), actor_type = 'human') AS human_lines_added,
+       sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human') AS human_lines_deleted,
+       sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS human_keystrokes,
+       sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
        count() AS heartbeat_count
 FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, ai_agent;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_actor_summary_v2
+TO wakaclock.actor_daily_v2 AS
+SELECT
+    user_id,
+    date,
+    actor_type,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_agent, ''), '') AS ai_agent,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_provider, ''), '') AS ai_provider,
+    if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_model, ''), '') AS ai_model,
+    sumIf(toUInt64(ifNull(ai_lines_added, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+    sumIf(toUInt64(ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+    sumIf(toUInt64(ifNull(human_lines_added, 0)), actor_type = 'human') AS human_lines_added,
+    sumIf(toUInt64(ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_lines_deleted,
+    sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), actor_type = 'unknown') AS unknown_lines_added,
+    sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
+    sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
+    sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
+    count() AS heartbeat_count
+FROM wakaclock.heartbeats_incoming AS h
+GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_keystroke_summary
 TO wakaclock.keystroke_daily AS
 SELECT user_id, date, coalesce(project, 'Unknown') AS project,
-       sum(coalesce(keystrokes, 0)) AS keystrokes,
-       sum(coalesce(chars_added, 0)) AS chars_added,
-       sum(coalesce(chars_deleted, 0)) AS chars_deleted,
+       sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS keystrokes,
+       sumIf(coalesce(chars_added, 0), actor_type = 'human') AS chars_added,
+       sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
        count() AS heartbeat_count
 FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, project;

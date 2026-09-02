@@ -1,11 +1,13 @@
 use crate::cache::{self, CachedResult};
 use crate::languages::{candidates_for, looks_like_objective_c};
 use crate::pool::with_parsed_tree;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
-const MAX_SOURCE_BYTES: usize = 8 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 8 * 1024;
 const DETECTION_BUDGET: Duration = Duration::from_millis(50);
 
 pub struct AstResult {
@@ -14,8 +16,21 @@ pub struct AstResult {
     pub dependencies: Vec<String>,
 }
 
+/// Detect a file from disk while reading at most the parser input budget.
+/// In-memory editor buffers should continue using `detect` so unsaved text wins over disk.
+pub fn detect_file(path: &Path) -> std::io::Result<Option<AstResult>> {
+    let mut file = File::open(path)?;
+    let mut source = Vec::with_capacity(MAX_SOURCE_BYTES);
+    file.by_ref()
+        .take(MAX_SOURCE_BYTES as u64)
+        .read_to_end(&mut source)?;
+    Ok(detect(&path.to_string_lossy(), &source))
+}
+
 pub fn detect(entity: &str, source: &[u8]) -> Option<AstResult> {
-    if let Some(cached) = cache::get(entity) {
+    let source = truncate_source(source);
+
+    if let Some(cached) = cache::get(entity, source) {
         return Some(AstResult {
             language: cached.language,
             confidence: cached.confidence,
@@ -26,6 +41,7 @@ pub fn detect(entity: &str, source: &[u8]) -> Option<AstResult> {
     if let Some(static_result) = detect_static_asset(entity, source) {
         cache::insert(
             entity,
+            source,
             CachedResult {
                 language: static_result.language.clone(),
                 confidence: static_result.confidence,
@@ -36,7 +52,6 @@ pub fn detect(entity: &str, source: &[u8]) -> Option<AstResult> {
     }
 
     let started_at = Instant::now();
-    let source = truncate_source(source);
     let candidates = candidates_for(entity, source);
     if candidates.is_empty() {
         return None;
@@ -114,6 +129,7 @@ pub fn detect(entity: &str, source: &[u8]) -> Option<AstResult> {
     if let Some(ref result) = best {
         cache::insert(
             entity,
+            source,
             CachedResult {
                 language: result.language.clone(),
                 confidence: result.confidence,
@@ -405,7 +421,7 @@ fn extract_go(root: tree_sitter::Node, source: &[u8]) -> Vec<String> {
         if node.kind() == "import_spec" {
             if let Some(path_node) = node.child_by_field_name("path") {
                 if let Some(text) = string_content(path_node, source) {
-                    let last = text.split('/').last().unwrap_or(text).trim();
+                    let last = text.split('/').next_back().unwrap_or(text).trim();
                     deps.push(last.to_string());
                 }
             }
@@ -477,7 +493,7 @@ fn string_content<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a s
 
 fn strip_path_specifier(path: &str) -> String {
     if path.starts_with('.') {
-        path.split('/').last().unwrap_or(path).to_string()
+        path.split('/').next_back().unwrap_or(path).to_string()
     } else if path.starts_with('@') {
         let parts: Vec<&str> = path.splitn(3, '/').collect();
         parts[..2.min(parts.len())].join("/")
@@ -915,12 +931,69 @@ mod tests {
     }
 
     #[test]
-    fn cache_returns_same_result() {
-        let src = b"use tokio::runtime::Runtime;\nfn main() {}";
-        let first = detect("tokio_test.rs", src).unwrap();
-        let second = detect("tokio_test.rs", src).unwrap();
-        assert_eq!(first.language, second.language);
-        assert_eq!(first.dependencies, second.dependencies);
+    fn cache_invalidates_when_editor_buffer_changes_without_a_disk_mtime_change() {
+        cache::clear_for_tests();
+        let first = detect(
+            "buffer.ts",
+            b"import react from 'react';\nconst value: number = 1;",
+        )
+        .unwrap();
+        let second = detect(
+            "buffer.ts",
+            b"import axios from 'axios';\nconst value: number = 2;",
+        )
+        .unwrap();
+        assert!(first.dependencies.contains(&"react".to_string()));
+        assert!(!first.dependencies.contains(&"axios".to_string()));
+        assert!(second.dependencies.contains(&"axios".to_string()));
+        assert!(!second.dependencies.contains(&"react".to_string()));
+    }
+
+    #[test]
+    fn detect_file_reads_only_the_detection_prefix() {
+        let unique = format!(
+            "wakaclock-ast-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(format!("{unique}.py"));
+        let mut source = b"import pathlib\n".to_vec();
+        source.extend(std::iter::repeat_n(b'#', MAX_SOURCE_BYTES + 4096));
+        std::fs::write(&path, source).unwrap();
+        let result = detect_file(&path).unwrap().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(result.language, "Python");
+        assert!(result.dependencies.contains(&"pathlib".to_string()));
+    }
+
+    #[test]
+    fn concurrent_detection_is_consistent() {
+        cache::clear_for_tests();
+        let cases = [
+            (
+                "a.rs",
+                b"use serde::Serialize; fn main() {}".as_slice(),
+                "Rust",
+            ),
+            ("b.py", b"import pathlib\nprint('ok')".as_slice(), "Python"),
+            (
+                "c.ts",
+                b"import axios from 'axios'; const n: number = 1;".as_slice(),
+                "TypeScript",
+            ),
+        ];
+        std::thread::scope(|scope| {
+            for (entity, source, language) in cases {
+                scope.spawn(move || {
+                    for _ in 0..32 {
+                        assert_eq!(detect(entity, source).unwrap().language, language);
+                    }
+                });
+            }
+        });
     }
 
     #[test]

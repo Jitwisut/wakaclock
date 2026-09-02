@@ -10,7 +10,9 @@ use tokio_postgres::{Client, NoTls};
 
 use crate::config::PostgresConfig;
 
-const FOUNDATION_MIGRATION: &str = include_str!("../../migrations/postgres/001_phase10_foundation.sql");
+const FOUNDATION_MIGRATION: &str =
+    include_str!("../../migrations/postgres/001_phase10_foundation.sql");
+const PRESENCE_MIGRATION: &str = include_str!("../../migrations/postgres/002_presence_v2.sql");
 
 pub struct PostgresClient {
     client: Client,
@@ -40,7 +42,11 @@ impl PostgresClient {
         self.client
             .batch_execute(FOUNDATION_MIGRATION)
             .await
-            .context("failed to apply PostgreSQL Phase 10 foundation migration")
+            .context("failed to apply PostgreSQL Phase 10 foundation migration")?;
+        self.client
+            .batch_execute(PRESENCE_MIGRATION)
+            .await
+            .context("failed to apply PostgreSQL Presence v2 migration")
     }
 
     pub async fn health_check(&self) -> Result<()> {
@@ -80,6 +86,23 @@ mod tests {
             assert!(
                 FOUNDATION_MIGRATION.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
                 "migration is missing {table}"
+            );
+        }
+        assert!(
+            FOUNDATION_MIGRATION.contains("'atoaxis_figma'"),
+            "migration is missing the first-party Figma OAuth client"
+        );
+        assert!(PRESENCE_MIGRATION.contains("CREATE EXTENSION IF NOT EXISTS pgcrypto"));
+        assert!(PRESENCE_MIGRATION.contains("Pairing Table A"));
+        for table in [
+            "presence_rooms",
+            "presence_room_zones",
+            "presence_room_grants",
+            "presence_room_invites",
+        ] {
+            assert!(
+                PRESENCE_MIGRATION.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+                "presence migration is missing {table}"
             );
         }
     }

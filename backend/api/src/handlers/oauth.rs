@@ -6,10 +6,12 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
-use chrono::Utc;
+
+use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -60,6 +62,18 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .with_state(app_state)
 }
 
+/// Mirror an authenticated identity into PostgreSQL before an OAuth write puts a foreign
+/// key on it. Identity lives in ClickHouse and PostgreSQL is optional, so a session
+/// minted before `POSTGRES_URL` was configured names a user with no `users` row — the
+/// INSERT would then fail with a foreign-key violation instead of granting the consent.
+async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), OAuthError> {
+    state
+        .user_service
+        .ensure_postgres_identity(user_id)
+        .await
+        .map_err(OAuthError::service_unavailable)
+}
+
 pub async fn list_apps(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -81,16 +95,18 @@ pub async fn revoke_app(
 ) -> Result<StatusCode, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
-    if state
+    let Some(access_hashes) = state
         .oauth_service
         .revoke_app(owner_user_id, &client_id)
         .await
         .map_err(OAuthError::service_unavailable)?
-    {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(OAuthError::bad_request("OAuth application not found"))
+    else {
+        return Err(OAuthError::bad_request("OAuth application not found"));
+    };
+    for hash in access_hashes {
+        state.auth_cache.remove_hash(&hash);
     }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn authorize(
@@ -103,6 +119,7 @@ pub async fn authorize(
     }
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, user_id).await?;
     let scopes = parse_scopes(query.scope.as_deref())?;
     let code = state
         .oauth_service
@@ -116,7 +133,11 @@ pub async fn authorize(
         )
         .await
         .map_err(OAuthError::service_unavailable)?;
-    let separator = if query.redirect_uri.contains('?') { '&' } else { '?' };
+    let separator = if query.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     let mut location = format!(
         "{}{separator}code={}",
         query.redirect_uri,
@@ -134,11 +155,8 @@ pub async fn token(
     headers: HeaderMap,
     Form(form): Form<TokenForm>,
 ) -> Result<Json<crate::services::oauth::TokenResponse>, OAuthError> {
-    let (client_id, client_secret) = client_credentials(
-        &headers,
-        &form.client_id,
-        form.client_secret.as_deref(),
-    )?;
+    let (client_id, client_secret) =
+        client_credentials(&headers, &form.client_id, form.client_secret.as_deref())?;
     let (response, user_id) = match form.grant_type.as_str() {
         "authorization_code" => state
             .oauth_service
@@ -168,18 +186,16 @@ pub async fn token(
             .map_err(OAuthError::invalid_grant)?,
         _ => return Err(OAuthError::bad_request("unsupported grant_type")),
     };
-    state
-        .auth_cache
-        .insert_with_expiry_and_scopes(
-            auth::hash_key(&response.access_token),
-            user_id,
-            Utc::now().timestamp() + response.expires_in,
-            &response
-                .scope
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
-        );
+    state.auth_cache.insert_with_expiry_and_scopes(
+        auth::hash_key(&response.access_token),
+        user_id,
+        Utc::now().timestamp() + response.expires_in,
+        &response
+            .scope
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    );
     Ok(Json(response))
 }
 
@@ -187,12 +203,14 @@ pub async fn revoke(
     State(state): State<Arc<AppState>>,
     Form(form): Form<RevokeForm>,
 ) -> Result<StatusCode, OAuthError> {
-    state
+    let revoked_hashes = state
         .oauth_service
         .revoke(&form.token)
         .await
         .map_err(OAuthError::service_unavailable)?;
-    state.auth_cache.remove_hash(&auth::hash_key(&form.token));
+    for hash in revoked_hashes {
+        state.auth_cache.remove_hash(&hash);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -208,6 +226,7 @@ pub async fn register_app(
 ) -> Result<(StatusCode, Json<crate::services::oauth::RegisteredApp>), OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, owner_user_id).await?;
     let app = state
         .oauth_service
         .register_app(
@@ -243,9 +262,10 @@ pub async fn device_code(
     Form(form): Form<DeviceCodeForm>,
 ) -> Result<Json<crate::services::oauth::DeviceCodeResponse>, OAuthError> {
     let scopes = parse_scopes(form.scope.as_deref())?;
+    let verification_uri = format!("{}/device", state.config.public_app_url);
     let response = state
         .oauth_service
-        .issue_device_code(&form.client_id, &scopes)
+        .issue_device_code(&form.client_id, &scopes, &verification_uri)
         .await
         .map_err(OAuthError::invalid_grant)?;
     Ok(Json(response))
@@ -280,6 +300,7 @@ pub async fn device_approve(
 ) -> Result<StatusCode, OAuthError> {
     let user_id = auth::require_session_user(&state, &headers)
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
+    ensure_pg_identity(&state, user_id).await?;
     state
         .oauth_service
         .approve_device_code(user_id, &form.user_code)
@@ -291,9 +312,20 @@ pub async fn device_approve(
 fn parse_scopes(raw: Option<&str>) -> Result<Vec<String>, OAuthError> {
     let scopes: Vec<String> = raw
         .map(|value| value.split_whitespace().map(str::to_string).collect())
-        .unwrap_or_else(|| DEFAULT_SCOPES.iter().map(|scope| (*scope).to_string()).collect());
-    if scopes.is_empty() || scopes.iter().any(|scope| !SUPPORTED_SCOPES.contains(&scope.as_str())) {
-        return Err(OAuthError::bad_request("scope contains an unsupported value"));
+        .unwrap_or_else(|| {
+            DEFAULT_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_string())
+                .collect()
+        });
+    if scopes.is_empty()
+        || scopes
+            .iter()
+            .any(|scope| !SUPPORTED_SCOPES.contains(&scope.as_str()))
+    {
+        return Err(OAuthError::bad_request(
+            "scope contains an unsupported value",
+        ));
     }
     Ok(scopes)
 }
@@ -303,7 +335,10 @@ fn client_credentials(
     form_client_id: &str,
     form_secret: Option<&str>,
 ) -> Result<(String, Option<String>), OAuthError> {
-    if let Some(value) = headers.get("authorization").and_then(|value| value.to_str().ok()) {
+    if let Some(value) = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+    {
         if let Some(encoded) = value.strip_prefix("Basic ") {
             let decoded = BASE64
                 .decode(encoded.trim())

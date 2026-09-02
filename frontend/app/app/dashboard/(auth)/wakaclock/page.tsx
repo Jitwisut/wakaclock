@@ -8,6 +8,7 @@ import { PhaseNineDashboard } from './components/phase-nine-dashboard';
 import { RangeStats } from './components/range-stats';
 import { StatusTiles } from './components/status-tiles';
 import { SummariesPanel } from './components/summaries-panel';
+import { TopProjects } from './components/top-projects';
 
 export default function WakaclockOverviewPage() {
   return (
@@ -30,6 +31,9 @@ export default function WakaclockOverviewPage() {
           </DashboardPanel>
           <DashboardPanel id="overview.range-stats">
             <RangeStats />
+          </DashboardPanel>
+          <DashboardPanel id="overview.top-projects">
+            <TopProjects />
           </DashboardPanel>
           <DashboardPanel id="overview.summaries">
             <SummariesPanel />

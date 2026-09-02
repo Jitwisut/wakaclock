@@ -26,4 +26,3 @@ pub struct Invoice {
     pub period_end: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
-

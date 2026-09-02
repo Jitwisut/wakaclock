@@ -1,7 +1,9 @@
 pub mod account_analytics;
+pub mod ai_diagnostics;
 pub mod ai_stats;
 pub mod ai_usage;
 pub mod all_time;
+pub mod analytics_explorer;
 pub mod api_key;
 pub mod auth;
 pub mod catalog;
@@ -53,6 +55,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(heartbeats::create_bulk).delete(heartbeats::delete_bulk),
         )
         .route("/ai/usage", post(ai_usage::ingest))
+        .route("/ai/diagnostics", post(ai_diagnostics::ingest))
         .route("/analytics/rebuild", post(account_analytics::rebuild))
         .route("/all_time_since_today", get(all_time::get))
         .route("/editors", get(catalog::editors))
@@ -211,7 +214,9 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/users/:user/status_bar/today", get(status_bar::today))
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/:user/ai_stats", get(ai_stats::get))
+        .route("/users/current/ai_diagnostics", get(ai_diagnostics::get))
         .route("/dashboard/analytics", get(dashboard_analytics::overview))
+        .route("/dashboard/explorer", get(analytics_explorer::get))
         .route(
             "/users/current/api_key",
             get(api_key::current)
@@ -239,6 +244,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route(
             "/presence/rooms/:room_id/sessions/leave",
             post(presence::leave_session),
+        )
+        .route(
+            "/presence/rooms/:room_id/stream-ticket",
+            post(presence::create_stream_ticket),
         )
         .route(
             "/presence/rooms/:room_id/stream",

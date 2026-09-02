@@ -13,7 +13,10 @@ use uuid::Uuid;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
-use wakaclock_core::heartbeat::{ActivitySegment, Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{
+    resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
+    Heartbeat,
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Request / Response models
@@ -59,9 +62,33 @@ pub struct HeartbeatPayload {
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
+    #[serde(default)]
+    pub clipboard_tracking_version: Option<u8>,
+    #[serde(default)]
+    pub copy_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_actions: Option<u32>,
+    #[serde(default)]
+    pub copied_chars: Option<u32>,
+    #[serde(default)]
+    pub copied_lines: Option<u32>,
+    #[serde(default)]
+    pub pasted_chars: Option<u32>,
+    #[serde(default)]
+    pub pasted_lines: Option<u32>,
+    #[serde(default)]
+    pub paste_same_file_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_same_workspace_actions: Option<u32>,
+    #[serde(default)]
+    pub paste_external_or_unknown_actions: Option<u32>,
     pub active_seconds: Option<f64>,
     #[serde(default)]
     pub activity_segments: Vec<ActivitySegment>,
+    #[serde(default)]
+    pub actor_type: Option<ActorType>,
+    #[serde(default)]
+    pub actor_confidence: Option<f32>,
     pub is_ai_generated: Option<bool>,
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
@@ -141,6 +168,8 @@ pub struct HeartbeatItem {
     pub ast_language: Option<String>,
     pub ast_confidence: Option<f32>,
     pub active_seconds: Option<f64>,
+    pub actor_type: ActorType,
+    pub actor_confidence: f32,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
@@ -159,6 +188,16 @@ pub struct HeartbeatItem {
     pub machine: String,
     pub heartbeat_id: Option<String>,
     pub activity_segments: Vec<ActivitySegment>,
+    pub clipboard_tracking_version: Option<u8>,
+    pub copy_actions: Option<u32>,
+    pub paste_actions: Option<u32>,
+    pub copied_chars: Option<u32>,
+    pub copied_lines: Option<u32>,
+    pub pasted_chars: Option<u32>,
+    pub pasted_lines: Option<u32>,
+    pub paste_same_file_actions: Option<u32>,
+    pub paste_same_workspace_actions: Option<u32>,
+    pub paste_external_or_unknown_actions: Option<u32>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -176,10 +215,11 @@ pub async fn create(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     require_active_access(&state, user_id).await?;
-    let heartbeat =
-        resolve_heartbeat_project(&state, user_id, payload_to_heartbeat(payload, user_id))
-            .await
-            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let heartbeat = payload_to_heartbeat(payload, user_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     heartbeat
         .validate()
@@ -196,6 +236,11 @@ pub async fn create(
     // heartbeat, and `record_heartbeat` cannot itself fail (see presence_store).
     if inserted > 0 {
         state.presence.record_heartbeat(user_id).await;
+        if let Some(redis_presence) = &state.redis_presence {
+            if let Err(error) = redis_presence.heartbeat(user_id).await {
+                tracing::warn!(%error, %user_id, "failed to mirror heartbeat to Redis presence");
+            }
+        }
     }
 
     Ok(Json(HeartbeatResponse {
@@ -219,7 +264,8 @@ pub async fn create_bulk(
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
         .map(|p| payload_to_heartbeat(p, user_id))
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
 
     let mut resolved = Vec::with_capacity(heartbeats.len());
     for heartbeat in heartbeats.drain(..) {
@@ -245,6 +291,11 @@ pub async fn create_bulk(
     // sent zero actual heartbeats — does not mark the user as having just been active.
     if count > 0 {
         state.presence.record_heartbeat(user_id).await;
+        if let Some(redis_presence) = &state.redis_presence {
+            if let Err(error) = redis_presence.heartbeat(user_id).await {
+                tracing::warn!(%error, %user_id, "failed to mirror bulk heartbeat to Redis presence");
+            }
+        }
     }
 
     Ok(Json(HeartbeatResponse {
@@ -271,7 +322,10 @@ pub async fn delete_bulk(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     if payload.heartbeat_ids.len() > 1000 {
-        return Err(app_error(StatusCode::BAD_REQUEST, "at most 1000 heartbeat ids may be deleted"));
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "at most 1000 heartbeat ids may be deleted",
+        ));
     }
     let ids: Vec<String> = payload
         .heartbeat_ids
@@ -283,7 +337,9 @@ pub async fn delete_bulk(
         .delete_ids(user_id, &ids)
         .await
         .map_err(|error| app_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()))?;
-    Ok(Json(json!({ "status": "ok", "heartbeats_deleted": accepted })))
+    Ok(Json(
+        json!({ "status": "ok", "heartbeats_deleted": accepted }),
+    ))
 }
 
 /// GET /api/v1/heartbeats?date=2026-04-10&user_id=...
@@ -313,46 +369,61 @@ pub async fn list(
 
     let items: Vec<HeartbeatItem> = rows
         .into_iter()
-        .map(|r| HeartbeatItem {
-            // History is still owner-scoped, but the response must not become a path
-            // exfiltration endpoint. Keep project-relative names where possible and reduce
-            // legacy absolute/traversal rows to a safe basename.
-            entity: sanitize_entity(&r.entity),
-            entity_type: r.entity_type,
-            time: r.time,
-            project: r.project,
-            project_id: r.project_id,
-            branch: r.branch,
-            head_revision: r.head_revision,
-            repository_id: r.repository_id,
-            language: r.language,
-            is_write: r.is_write,
-            category: r.category,
-            lines: r.lines,
-            line_number: r.line_number,
-            cursor_position: r.cursor_position,
-            dependencies: r.dependencies,
-            ast_language: r.ast_language,
-            ast_confidence: r.ast_confidence,
-            active_seconds: r.active_seconds,
-            heartbeat_id: r.heartbeat_id,
-            activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
-            is_ai_generated: r.is_ai_generated,
-            ai_agent: r.ai_agent,
-            ai_provider: r.ai_provider,
-            ai_model: r.ai_model,
-            ai_source: r.ai_source,
-            ai_confidence: r.ai_confidence,
-            ai_event_id: r.ai_event_id,
-            ai_lines_added: r.ai_lines_added,
-            ai_lines_deleted: r.ai_lines_deleted,
-            human_lines_added: r.human_lines_added,
-            human_lines_deleted: r.human_lines_deleted,
-            unattributed_lines_added: r.unattributed_lines_added,
-            unattributed_lines_deleted: r.unattributed_lines_deleted,
-            editor: r.editor,
-            operating_system: r.operating_system,
-            machine: r.machine,
+        .map(|r| {
+            let actor_type = r.actor_type.parse().unwrap_or(ActorType::Unknown);
+            HeartbeatItem {
+                // History is still owner-scoped, but the response must not become a path
+                // exfiltration endpoint. Keep project-relative names where possible and reduce
+                // legacy absolute/traversal rows to a safe basename.
+                entity: sanitize_entity(&r.entity),
+                entity_type: r.entity_type,
+                time: r.time,
+                project: r.project,
+                project_id: r.project_id,
+                branch: r.branch,
+                head_revision: r.head_revision,
+                repository_id: r.repository_id,
+                language: r.language,
+                is_write: r.is_write,
+                category: r.category,
+                lines: r.lines,
+                line_number: r.line_number,
+                cursor_position: r.cursor_position,
+                dependencies: r.dependencies,
+                ast_language: r.ast_language,
+                ast_confidence: r.ast_confidence,
+                active_seconds: r.active_seconds,
+                actor_type,
+                actor_confidence: r.actor_confidence,
+                heartbeat_id: r.heartbeat_id,
+                activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
+                clipboard_tracking_version: r.clipboard_tracking_version,
+                copy_actions: r.copy_actions,
+                paste_actions: r.paste_actions,
+                copied_chars: r.copied_chars,
+                copied_lines: r.copied_lines,
+                pasted_chars: r.pasted_chars,
+                pasted_lines: r.pasted_lines,
+                paste_same_file_actions: r.paste_same_file_actions,
+                paste_same_workspace_actions: r.paste_same_workspace_actions,
+                paste_external_or_unknown_actions: r.paste_external_or_unknown_actions,
+                is_ai_generated: actor_type.is_ai(),
+                ai_agent: r.ai_agent,
+                ai_provider: r.ai_provider,
+                ai_model: r.ai_model,
+                ai_source: r.ai_source,
+                ai_confidence: r.ai_confidence,
+                ai_event_id: r.ai_event_id,
+                ai_lines_added: r.ai_lines_added,
+                ai_lines_deleted: r.ai_lines_deleted,
+                human_lines_added: r.human_lines_added,
+                human_lines_deleted: r.human_lines_deleted,
+                unattributed_lines_added: r.unattributed_lines_added,
+                unattributed_lines_deleted: r.unattributed_lines_deleted,
+                editor: r.editor,
+                operating_system: r.operating_system,
+                machine: r.machine,
+            }
         })
         .collect();
 
@@ -411,13 +482,52 @@ async fn require_active_access(
     }
 }
 
-fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
+fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
     let date = Heartbeat::date_from_time(p.time);
     let created_at = p
         .created_at
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    Heartbeat {
+    let has_ai_metadata = p.is_ai_generated == Some(true)
+        || p.ai_agent
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.ai_source
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.ai_event_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.ai_lines_added.is_some_and(|value| value > 0)
+        || p.ai_lines_deleted.is_some_and(|value| value > 0);
+    let positive_editor_evidence = !has_ai_metadata
+        && (p.is_write.unwrap_or(false)
+            || p.activity_segments.iter().any(|segment| {
+                segment.source.as_deref().is_some_and(|source| {
+                    source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor")
+                })
+            }));
+    let attribution = resolve_attribution(AttributionInput {
+        explicit_actor_type: p.actor_type,
+        explicit_confidence: p.actor_confidence,
+        legacy_is_ai_generated: p.is_ai_generated,
+        ai_agent: p.ai_agent.as_deref(),
+        ai_source: p.ai_source.as_deref(),
+        ai_confidence: p.ai_confidence.as_deref(),
+        ai_event_id: p.ai_event_id.as_deref(),
+        ai_lines_added: p.ai_lines_added,
+        ai_lines_deleted: p.ai_lines_deleted,
+        human_lines_added: p.human_lines_added,
+        human_lines_deleted: p.human_lines_deleted,
+        unattributed_lines_added: p.unattributed_lines_added,
+        unattributed_lines_deleted: p.unattributed_lines_deleted,
+        keystrokes: p.keystrokes,
+        chars_added: p.chars_added,
+        chars_deleted: p.chars_deleted,
+        positive_editor_evidence,
+    })?;
+
+    Ok(Heartbeat {
         user_id,
         entity: p.entity,
         entity_type: p.entity_type,
@@ -451,12 +561,21 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         keystrokes: p.keystrokes,
         chars_added: p.chars_added,
         chars_deleted: p.chars_deleted,
+        clipboard_tracking_version: p.clipboard_tracking_version,
+        copy_actions: p.copy_actions,
+        paste_actions: p.paste_actions,
+        copied_chars: p.copied_chars,
+        copied_lines: p.copied_lines,
+        pasted_chars: p.pasted_chars,
+        pasted_lines: p.pasted_lines,
+        paste_same_file_actions: p.paste_same_file_actions,
+        paste_same_workspace_actions: p.paste_same_workspace_actions,
+        paste_external_or_unknown_actions: p.paste_external_or_unknown_actions,
         active_seconds: p.active_seconds,
         activity_segments: p.activity_segments,
-        // An agent name is authoritative. This prevents a malformed client from
-        // sending `ai_agent` with `is_ai_generated: false` and having the same edit
-        // counted as human by the materialized view.
-        is_ai_generated: p.ai_agent.is_some() || p.is_ai_generated.unwrap_or(false),
+        actor_type: attribution.actor_type,
+        actor_confidence: attribution.confidence,
+        is_ai_generated: attribution.actor_type.is_ai(),
         ai_agent: p.ai_agent,
         ai_provider: p.ai_provider,
         ai_model: p.ai_model,
@@ -480,7 +599,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
         created_at,
-    }
+    })
 }
 
 async fn resolve_heartbeat_project(
@@ -509,7 +628,10 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_entity;
+    use super::{payload_to_heartbeat, sanitize_entity};
+    use serde_json::json;
+    use uuid::Uuid;
+    use wakaclock_core::heartbeat::ActorType;
 
     #[test]
     fn history_entity_redacts_absolute_and_traversal_paths() {
@@ -523,5 +645,57 @@ mod tests {
         );
         assert_eq!(sanitize_entity("../../secrets.env"), "secrets.env");
         assert_eq!(sanitize_entity("src/main.rs"), "src/main.rs");
+    }
+
+    #[test]
+    fn legacy_ingest_derives_human_from_positive_editor_evidence() {
+        let payload: super::HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "is_ai_generated": false,
+            "is_write": true
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+        assert!(!heartbeat.is_ai_generated);
+    }
+
+    #[test]
+    fn enum_ingest_preserves_mcp_attribution_and_derived_boolean() {
+        let payload: super::HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/tan.ts",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "actor_type": "ai_verified",
+            "actor_confidence": 0.95,
+            "is_ai_generated": true,
+            "ai_agent": "tan",
+            "ai_source": "mcp",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, ActorType::AiVerified);
+        assert_eq!(heartbeat.actor_confidence, 0.95);
+        assert!(heartbeat.is_ai_generated);
+    }
+
+    #[test]
+    fn contradictory_enum_and_legacy_boolean_are_rejected() {
+        let payload: super::HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "actor_type": "human",
+            "is_ai_generated": true
+        }))
+        .unwrap();
+
+        assert!(payload_to_heartbeat(payload, Uuid::nil()).is_err());
     }
 }

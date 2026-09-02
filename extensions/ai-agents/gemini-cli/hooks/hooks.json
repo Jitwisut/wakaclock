@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command|mcp_.*",
+        "hooks": [
+          {
+            "name": "atoaxis-sweep-before",
+            "type": "command",
+            "command": "\"${extensionPath}/scripts/git-sweep-before.sh\" gemini-cli",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
     "AfterTool": [
       {
         "matcher": "write_file|replace",
@@ -8,6 +21,17 @@
             "name": "atoaxis-heartbeat",
             "type": "command",
             "command": "\"${extensionPath}/scripts/heartbeat.sh\"",
+            "timeout": 10000
+          }
+        ]
+      },
+      {
+        "matcher": "run_shell_command|mcp_.*",
+        "hooks": [
+          {
+            "name": "atoaxis-sweep-after",
+            "type": "command",
+            "command": "\"${extensionPath}/scripts/git-sweep-after.sh\" gemini-cli google",
             "timeout": 10000
           }
         ]

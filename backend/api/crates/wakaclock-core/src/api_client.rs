@@ -1,5 +1,5 @@
 use crate::{
-    ai::{AiUsageIngestReport, AiUsageRecord},
+    ai::{AiDiagnosticsReport, AiUsageIngestReport, AiUsageRecord},
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -36,6 +36,84 @@ pub struct StatusBarSnapshot {
     pub last_increment_source: Option<String>,
     #[serde(default)]
     pub discarded_seconds: f64,
+}
+
+/// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
+/// process that saw it — see `record_delivery_failure`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryFailure {
+    pub at: f64,
+    pub message: String,
+}
+
+/// planai2.md Phase 0.5: `wakaclock doctor ai` must report a delivery refusal split
+/// into `401` (bad/expired credential), `402` (entitlement — trial or subscription
+/// lapsed, *not* a detection failure), a network/transport problem, and a request
+/// the server rejected as malformed. Collapsing these hides the one case — 402 —
+/// where local capture is working perfectly and only billing is wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryFailureKind {
+    Auth401,
+    Payment402,
+    Network,
+    Validation,
+    Other,
+}
+
+impl DeliveryFailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auth401 => "auth_401",
+            Self::Payment402 => "payment_402",
+            Self::Network => "network",
+            Self::Validation => "validation",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Classify a recorded refusal message. The messages come from `AppError`'s
+/// `Display` (`"HTTP status <code>: <body>"`) and from `reqwest` transport errors,
+/// so this matches on the shapes those produce rather than parsing structured data.
+pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("402")
+        || lower.contains("trial expired")
+        || lower.contains("subscription inactive")
+    {
+        DeliveryFailureKind::Payment402
+    } else if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+    {
+        DeliveryFailureKind::Auth401
+    } else if lower.contains("400")
+        || lower.contains("422")
+        || lower.contains("validation")
+        || lower.contains("malformed")
+        || lower.contains("invalid heartbeat")
+    {
+        DeliveryFailureKind::Validation
+    } else if lower.contains("dns")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection")
+        || lower.contains("connect")
+        || lower.contains("network")
+        || lower.contains("unreachable")
+        || lower.contains("could not reach")
+    {
+        DeliveryFailureKind::Network
+    } else {
+        DeliveryFailureKind::Other
+    }
+}
+
+impl DeliveryFailure {
+    pub fn kind(&self) -> DeliveryFailureKind {
+        classify_delivery_failure(&self.message)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +199,6 @@ impl ApiClient {
                 heartbeat.heartbeat_id = Some(uuid::Uuid::new_v4().to_string());
             }
         }
-        let queue = Queue::open()?;
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 
@@ -130,7 +207,7 @@ impl ApiClient {
             // the server was unreachable. The local cache can call the retry a
             // duplicate, but that must not prevent the durable queue from being
             // drained (otherwise it waits for an unrelated heartbeat).
-            let flush = match self.flush_queue_inner(&queue).await {
+            let flush = match self.flush_queue_inner().await {
                 Ok(flush) => flush,
                 Err(error) => FlushReport {
                     flushed: 0,
@@ -160,6 +237,7 @@ impl ApiClient {
 
         match send_result {
             Ok(()) => {
+                self.clear_delivery_failure();
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 // The server has accepted the current payload at this point. Cache and
@@ -170,7 +248,7 @@ impl ApiClient {
                     .store_last_heartbeats(&last_by_entity)
                     .err()
                     .map(|error| format!("could not persist local dedup cache: {error}"));
-                let flush = match self.flush_queue_inner(&queue).await {
+                let flush = match self.flush_queue_inner().await {
                     Ok(flush) => flush,
                     Err(error) => FlushReport {
                         flushed: 0,
@@ -193,6 +271,8 @@ impl ApiClient {
                 })
             }
             Err(error) => {
+                self.record_delivery_failure(&error.to_string());
+                let queue = Queue::open()?;
                 for payload in &payloads {
                     queue.push(payload)?;
                 }
@@ -210,8 +290,7 @@ impl ApiClient {
     }
 
     pub async fn flush_queue(&self) -> AppResult<FlushReport> {
-        let queue = Queue::open()?;
-        self.flush_queue_inner(&queue).await
+        self.flush_queue_inner().await
     }
 
     pub async fn today(&self) -> AppResult<StatusBarSnapshot> {
@@ -268,6 +347,13 @@ impl ApiClient {
         Ok(response.json::<AiUsageIngestReport>().await?)
     }
 
+    /// POST a sanitized [`AiDiagnosticsReport`] to `/api/v1/ai/diagnostics`
+    /// (planai2 p7.2c). The server keeps only the latest snapshot per user, so a
+    /// failed or retried push can simply be sent again without any duplication.
+    pub async fn send_ai_diagnostics(&self, report: &AiDiagnosticsReport) -> AppResult<()> {
+        self.post_json("/api/v1/ai/diagnostics", report).await
+    }
+
     pub async fn repair_day(
         &self,
         date: &str,
@@ -322,20 +408,26 @@ impl ApiClient {
         })
     }
 
-    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
-        let pending = queue.pop_all()?;
+    async fn flush_queue_inner(&self) -> AppResult<FlushReport> {
+        let pending = Queue::open()?.pop_all()?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
         for (id, payload) in pending {
             match self.post_json("/api/v1/heartbeats", &payload).await {
                 Ok(()) => {
-                    queue.remove(id)?;
+                    // A drained queue is proof the server is accepting again, and the
+                    // editor reads this state to decide whether to warn. Leaving a stale
+                    // refusal here would keep the warning up after recovery, which trains
+                    // the developer to ignore it — the opposite of the point.
+                    self.clear_delivery_failure();
+                    Queue::open()?.remove(id)?;
                     flushed += 1;
                 }
                 Err(error) => {
+                    self.record_delivery_failure(&error.to_string());
                     stopped_because = Some(error.to_string());
-                    queue.mark_retry(id)?;
+                    Queue::open()?.mark_retry(id)?;
                     break;
                 }
             }
@@ -432,6 +524,54 @@ impl ApiClient {
             dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
         Ok(home.join(".wakaclock").join("last_heartbeat.json"))
     }
+
+    fn delivery_failure_path() -> AppResult<PathBuf> {
+        let home =
+            dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
+        Ok(home.join(".wakaclock").join("last-delivery-failure.json"))
+    }
+
+    /// Remember why the server last refused a heartbeat.
+    ///
+    /// Without this the refusal existed only in the `SendReport` handed back to the
+    /// caller, and every caller that matters discards it — the agent hooks end their CLI
+    /// invocation with `>/dev/null 2>&1 || true` precisely so a tracking failure can never
+    /// break the tool call it is observing. The heartbeat went quietly into the offline
+    /// queue and the developer's dashboard simply showed a light day.
+    ///
+    /// That is how an expired trial spent a day and a half looking exactly like an idle
+    /// one. Writing the reason down is what lets `wakaclock status` and the editor say
+    /// "the server is refusing these" instead of nothing at all. Best-effort: failing to
+    /// record a failure must never turn into a second failure.
+    fn record_delivery_failure(&self, message: &str) {
+        let Ok(path) = Self::delivery_failure_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let failure = DeliveryFailure {
+            at: chrono::Utc::now().timestamp() as f64,
+            message: message.to_string(),
+        };
+        if let Ok(serialized) = serde_json::to_string(&failure) {
+            let _ = fs::write(&path, serialized);
+        }
+    }
+
+    /// A send got through, so whatever was wrong no longer is.
+    fn clear_delivery_failure(&self) {
+        if let Ok(path) = Self::delivery_failure_path() {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// The last recorded refusal, if the server has not accepted anything since.
+    pub fn last_delivery_failure() -> Option<DeliveryFailure> {
+        let path = Self::delivery_failure_path().ok()?;
+        let raw = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
 }
 
 struct FilteredHeartbeats {
@@ -494,6 +634,52 @@ mod tests {
     use super::*;
     use crate::heartbeat::EntityType;
     use uuid::Uuid;
+
+    #[test]
+    fn delivery_failure_402_is_distinct_from_401_and_network() {
+        // planai2.md Phase 0.5: 402 (billing) must never be conflated with 401
+        // (bad credential) or a transport failure — 402 is the case where local
+        // capture is fine and only the subscription lapsed.
+        assert_eq!(
+            classify_delivery_failure(
+                "HTTP status 402: {\"error\":\"trial expired or subscription inactive\"}"
+            ),
+            DeliveryFailureKind::Payment402
+        );
+        assert_eq!(
+            classify_delivery_failure("HTTP status 401: {\"error\":\"invalid api key\"}"),
+            DeliveryFailureKind::Auth401
+        );
+        assert_eq!(
+            classify_delivery_failure(
+                "error sending request for url (https://api): connection refused"
+            ),
+            DeliveryFailureKind::Network
+        );
+        assert_eq!(
+            classify_delivery_failure("HTTP status 422: validation failed for field time"),
+            DeliveryFailureKind::Validation
+        );
+        assert_eq!(
+            classify_delivery_failure("something else entirely"),
+            DeliveryFailureKind::Other
+        );
+        // The three kinds the doctor most needs to keep apart are pairwise distinct.
+        for (a, b) in [
+            (
+                DeliveryFailureKind::Payment402,
+                DeliveryFailureKind::Auth401,
+            ),
+            (
+                DeliveryFailureKind::Payment402,
+                DeliveryFailureKind::Network,
+            ),
+            (DeliveryFailureKind::Auth401, DeliveryFailureKind::Network),
+        ] {
+            assert_ne!(a, b);
+            assert_ne!(a.as_str(), b.as_str());
+        }
+    }
 
     fn heartbeat(entity: &str, time: f64) -> Heartbeat {
         let mut hb = Heartbeat::new(

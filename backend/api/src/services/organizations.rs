@@ -10,6 +10,7 @@ use crate::model::organization::{
     Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
     UpdateOrganizationRequest,
 };
+use crate::repository::presence::PresenceRepository;
 use crate::services::authorization::{AuthorizationService, Entitlement, OrganizationAction};
 
 // Keep the role validation in one place. PostgreSQL also has a CHECK constraint,
@@ -20,16 +21,19 @@ const SEAT_TYPES: &[&str] = &["developer", "viewer"];
 pub struct OrganizationsService {
     postgres: Option<Arc<PostgresClient>>,
     authorization: Arc<AuthorizationService>,
+    presence_repo: Option<Arc<PresenceRepository>>,
 }
 
 impl OrganizationsService {
     pub fn new(
         postgres: Option<Arc<PostgresClient>>,
         authorization: Arc<AuthorizationService>,
+        presence_repo: Option<Arc<PresenceRepository>>,
     ) -> Self {
         Self {
             postgres,
             authorization,
+            presence_repo,
         }
     }
 
@@ -118,7 +122,12 @@ impl OrganizationsService {
         request: UpdateOrganizationRequest,
     ) -> Result<Option<Organization>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageTeams, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
             .await?;
         let Some(name) = request.name else {
             return self.get(actor, organization_id).await;
@@ -158,7 +167,12 @@ impl OrganizationsService {
         organization_id: Uuid,
     ) -> Result<Vec<OrganizationMember>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres
@@ -185,7 +199,12 @@ impl OrganizationsService {
         request: AddOrganizationMemberRequest,
     ) -> Result<OrganizationMember> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageMembers, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
             .await?;
         let role = request.role.unwrap_or_else(|| "member".to_string());
         let seat_type = request.seat_type.unwrap_or_else(|| "developer".to_string());
@@ -257,7 +276,12 @@ impl OrganizationsService {
         member_user_id: Uuid,
     ) -> Result<bool> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageMembers, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let changed = postgres
@@ -284,11 +308,7 @@ impl OrganizationsService {
         Ok(changed == 1)
     }
 
-    pub async fn teams(
-        &self,
-        actor: Uuid,
-        organization_id: Uuid,
-    ) -> Result<Vec<OrganizationTeam>> {
+    pub async fn teams(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<OrganizationTeam>> {
         self.authorization
             .require(actor, organization_id, OrganizationAction::ReadTeam, None)
             .await?;
@@ -312,7 +332,12 @@ impl OrganizationsService {
         request: CreateOrganizationTeamRequest,
     ) -> Result<OrganizationTeam> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageTeams, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
             .await?;
         let name = request.name.trim();
         if name.is_empty() || name.len() > 120 {
@@ -331,6 +356,22 @@ impl OrganizationsService {
             )
             .await
             .context("failed to create organization team")?;
+        postgres
+            .client()
+            .execute(
+                "INSERT INTO team_members (team_id, user_id, role)
+                 VALUES ($1, $2, 'lead')
+                 ON CONFLICT (team_id, user_id) DO NOTHING",
+                &[&id, &actor],
+            )
+            .await
+            .context("failed to add team creator as lead")?;
+        if let Some(presence_repo) = &self.presence_repo {
+            presence_repo
+                .ensure_team_room(id, name)
+                .await
+                .context("failed to create team presence room")?;
+        }
         self.audit(
             organization_id,
             actor,
@@ -380,9 +421,18 @@ impl OrganizationsService {
         })
     }
 
-    pub async fn audit_logs(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<serde_json::Value>> {
+    pub async fn audit_logs(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<serde_json::Value>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ReadOrganization, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres

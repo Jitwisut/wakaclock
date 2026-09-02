@@ -2,7 +2,7 @@
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
-use crate::services::activity_timeline::total_seconds;
+use crate::services::activity_timeline::{total_seconds, union_ranges};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -33,6 +33,10 @@ pub struct StatusBarResponse {
     pub last_increment_source: Option<String>,
     #[serde(default)]
     pub discarded_seconds: f64,
+    /// How much of `total_seconds` a client actually measured versus how much the idle
+    /// bridge inferred, and how much was attended versus agent-produced. On real data
+    /// the inferred half is the larger one; nothing used to say so.
+    pub evidence: crate::services::activity_timeline::EvidenceSplit,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +81,14 @@ pub async fn today(
         .activity_timeline_service
         .intervals(user_id, start, end)
         .await;
+    let ai_session_ranges = state
+        .activity_timeline_service
+        .ai_session_intervals(user_id, start, end)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, %user_id, "AI session duration unavailable for status bar");
+            Vec::new()
+        });
     let result = state
         .clickhouse
         .get_client()
@@ -99,11 +111,16 @@ pub async fn today(
                 .map(|interval| interval.end - interval.start)
                 .sum();
             // Bridged here too: the status bar and the dashboard must never disagree
-            // about the same day.
-            let canonical = crate::services::activity_timeline::canonicalize_bridged(
+            // about the same day. One sweep produces both the reported total and the
+            // proven figure the evidence split needs.
+            let timeline = crate::services::activity_timeline::Timeline::build(
                 &raw_intervals,
-                state.activity_timeline_service.idle_timeout_seconds(),
+                state.activity_timeline_service.bridge_config(),
             );
+            let evidence = timeline
+                .evidence()
+                .with_ai_session_seconds(union_ranges(&ai_session_ranges));
+            let canonical = timeline.bridged;
             let total = total_seconds(&canonical);
             let covered_intervals = canonical
                 .iter()
@@ -129,6 +146,7 @@ pub async fn today(
                 last_increment_seconds: last.map(|interval| interval.end - interval.start),
                 last_increment_source: last.map(|interval| interval.source.clone()),
                 discarded_seconds: (raw_seconds - total).max(0.0),
+                evidence,
             })
         }
         Err(_) => Json(StatusBarResponse {
@@ -145,6 +163,7 @@ pub async fn today(
             last_increment_seconds: None,
             last_increment_source: None,
             discarded_seconds: 0.0,
+            evidence: crate::services::activity_timeline::EvidenceSplit::default(),
         }),
     })
 }

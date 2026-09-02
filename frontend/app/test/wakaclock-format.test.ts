@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDurationShort, formatSeconds } from '@/lib/wakaclock/format';
+import {
+  formatDurationShort,
+  formatMagnitude,
+  formatSeconds,
+  toDivergingNegative,
+} from '@/lib/wakaclock/format';
 
 describe('formatDurationShort', () => {
   /**
@@ -49,5 +54,36 @@ describe('formatDurationShort', () => {
   it('differs from formatSeconds precisely where formatSeconds loses the value', () => {
     expect(formatSeconds(36)).toBe('0m');
     expect(formatDurationShort(36)).toBe('36s');
+  });
+});
+
+describe('toDivergingNegative', () => {
+  it('mirrors a count onto the negative half of the axis', () => {
+    expect(toDivergingNegative(42)).toBe(-42);
+    expect(toDivergingNegative(0)).toBe(-0);
+  });
+
+  /**
+   * The whole reason this helper exists. `unattributed_added` and friends are nullable
+   * because the API refuses to report an unknown as a measured zero; negating that
+   * directly yields NaN and the bar vanishes without anyone noticing.
+   */
+  it('keeps an unknown unknown instead of turning it into a number', () => {
+    expect(toDivergingNegative(null)).toBeNull();
+    expect(toDivergingNegative(undefined)).toBeNull();
+  });
+});
+
+describe('formatMagnitude', () => {
+  it('drops the sign, which the axis already carries', () => {
+    expect(formatMagnitude(-1200)).toBe('1,200');
+    expect(formatMagnitude(1200)).toBe('1,200');
+  });
+
+  it('renders anything that is not a finite number as unknown', () => {
+    expect(formatMagnitude(null)).toBe('—');
+    expect(formatMagnitude(undefined)).toBe('—');
+    expect(formatMagnitude(Number.NaN)).toBe('—');
+    expect(formatMagnitude('12')).toBe('—');
   });
 });

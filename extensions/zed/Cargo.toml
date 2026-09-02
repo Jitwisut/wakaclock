@@ -1,0 +1,12 @@
+[package]
+name = "atoaxis-zed-extension"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sha2 = "0.10"
+zed_extension_api = "0.7.0"

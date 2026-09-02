@@ -29,15 +29,16 @@ export function ApiKeyPanel() {
   const [plaintextKey, setPlaintextKey] = React.useState<null | string>(null);
   const [copied, setCopied] = React.useState(false);
 
-  // The API only returns plaintext once, immediately after generation. A follow-up read
-  // intentionally returns null because bearer credentials are never stored in plaintext.
+  // The session-only API returns the current key so it remains available after a reload
+  // or when the user returns to Settings later.
   const currentKeyQuery = useQuery({
     queryKey: ['wakaclock', 'api-key', userId],
     queryFn: getCurrentApiKey,
     enabled: Boolean(userId),
   });
 
-  const shownKey = plaintextKey;
+  // Prefer the freshly generated value until the follow-up query catches up.
+  const shownKey = plaintextKey ?? currentKeyQuery.data?.data.api_key ?? null;
 
   const queryClient = useQueryClient();
 
@@ -56,6 +57,9 @@ export function ApiKeyPanel() {
       }
       setPlaintextKey(key);
       setCopied(false);
+      queryClient.setQueryData(['wakaclock', 'api-key', userId], {
+        data: { api_key: key, user_id: userId },
+      });
       void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('New API key generated');
     },
@@ -66,6 +70,9 @@ export function ApiKeyPanel() {
     mutationFn: revokeApiKey,
     onSuccess: () => {
       setPlaintextKey(null);
+      queryClient.setQueryData(['wakaclock', 'api-key', userId], {
+        data: { api_key: null, user_id: userId },
+      });
       void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('API key revoked');
     },
@@ -99,8 +106,8 @@ export function ApiKeyPanel() {
               <TriangleAlertIcon />
               <AlertTitle>Treat this like a password</AlertTitle>
               <AlertDescription>
-                Anyone with this key can send and read coding activity as you. Copy it into your
-                clients now; AtoAxis will not display it again after this page is closed.
+                Anyone with this key can send and read coding activity as you. It stays visible in
+                this panel so you can copy it whenever you need to configure another client.
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
@@ -119,7 +126,7 @@ export function ApiKeyPanel() {
           <p className="text-muted-foreground text-sm">
             {currentKeyQuery.isLoading
               ? 'Loading your API key…'
-              : 'No key is visible. Generate a key below; it is shown once and cannot be recovered after you leave this page.'}
+              : 'No API key is available to display. Generate a new one below if needed.'}
           </p>
         )}
 

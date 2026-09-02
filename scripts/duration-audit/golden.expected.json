@@ -1,0 +1,106 @@
+{
+  "version": "phase0-golden-v1",
+  "fixture": "golden.jsonl",
+  "limits": {
+    "max_total_error": 0.01,
+    "max_daily_error": 0.03,
+    "min_daily_seconds": 60.0
+  },
+  "expected": {
+    "duration": {
+      "waclock_seconds": 3600,
+      "wakatime_seconds": 3600,
+      "daily": {
+        "2026-01-05": {
+          "waclock_seconds": 1920,
+          "wakatime_seconds": 1920,
+          "projects": {
+            "waclock_seconds": {"atlas": 900.0, "beacon": 1020.0},
+            "wakatime_seconds": {"atlas": 600.0, "beacon": 1320.0}
+          },
+          "actor_duration_seconds": {
+            "human": 300.0,
+            "ai_verified": 300.0,
+            "ai_inferred": 0.0,
+            "unknown": 1320.0
+          }
+        },
+        "2026-01-06": {
+          "waclock_seconds": 900,
+          "wakatime_seconds": 900,
+          "projects": {
+            "waclock_seconds": {"nova": 360.0, "orbit": 540.0},
+            "wakatime_seconds": {"nova": 360.0, "orbit": 540.0}
+          },
+          "actor_duration_seconds": {
+            "human": 0.0,
+            "ai_verified": 0.0,
+            "ai_inferred": 60.0,
+            "unknown": 840.0
+          }
+        },
+        "2026-01-07": {
+          "waclock_seconds": 780,
+          "wakatime_seconds": 780,
+          "projects": {
+            "waclock_seconds": {"lumen": 120.0, "quasar": 660.0},
+            "wakatime_seconds": {"lumen": 120.0, "quasar": 660.0}
+          },
+          "actor_duration_seconds": {
+            "human": 0.0,
+            "ai_verified": 120.0,
+            "ai_inferred": 0.0,
+            "unknown": 660.0
+          }
+        }
+      }
+    },
+    "attribution": {
+      "heartbeat_counts": {
+        "human": 9,
+        "ai_verified": 6,
+        "ai_inferred": 4,
+        "unknown": 6
+      },
+      "duration_seconds": {
+        "human": 300.0,
+        "ai_verified": 420.0,
+        "ai_inferred": 60.0,
+        "unknown": 2820.0
+      },
+      "lines": {
+        "human": {"added": 109, "deleted": 19},
+        "ai_verified": {"added": 97, "deleted": 12},
+        "ai_inferred": {"added": 29, "deleted": 4},
+        "unknown": {"added": 25, "deleted": 5}
+      },
+      "cases": {
+        "human_editor_activity": {"actor_type": "human", "actor_confidence": 1.0},
+        "claude_verified_hook": {"actor_type": "ai_verified", "actor_confidence": 1.0},
+        "codex_correlated": {"actor_type": "ai_inferred", "actor_confidence": 0.8},
+        "gemini_legacy_boolean": {"actor_type": "ai_inferred", "actor_confidence": 0.6},
+        "tan_mcp_verified": {"actor_type": "ai_verified", "actor_confidence": 0.95},
+        "human_ai_handover": {"actor_type": "human", "actor_confidence": 1.0},
+        "bulk_edit": {"actor_type": "human", "actor_confidence": 1.0},
+        "ambiguous_edit": {"actor_type": "unknown", "actor_confidence": 0.0},
+        "shell_mutation_no_provenance": {"actor_type": "unknown", "actor_confidence": 0.0},
+        "long_absence_return": {"actor_type": "human", "actor_confidence": 1.0},
+        "legacy_human_with_editor_counters": {"actor_type": "human", "actor_confidence": 1.0},
+        "verified_codex_bulk": {"actor_type": "ai_verified", "actor_confidence": 1.0},
+        "ambiguous_nearby_ai": {"actor_type": "unknown", "actor_confidence": 0.0},
+        "tan_mcp_project_two": {"actor_type": "ai_verified", "actor_confidence": 0.95},
+        "ordinary_human_after_ai": {"actor_type": "human", "actor_confidence": 1.0},
+        "no_evidence_raw_change": {"actor_type": "unknown", "actor_confidence": 0.0},
+        "claude_inferred_import": {"actor_type": "ai_inferred", "actor_confidence": 0.6},
+        "day_two_long_absence": {"actor_type": "human", "actor_confidence": 1.0},
+        "gemini_verified": {"actor_type": "ai_verified", "actor_confidence": 1.0},
+        "codex_inferred": {"actor_type": "ai_inferred", "actor_confidence": 0.6},
+        "human_handover": {"actor_type": "human", "actor_confidence": 1.0},
+        "shell_ambiguous": {"actor_type": "unknown", "actor_confidence": 0.0},
+        "bulk_human_other_project": {"actor_type": "human", "actor_confidence": 1.0},
+        "tan_mcp_lumen": {"actor_type": "ai_verified", "actor_confidence": 0.95},
+        "day_three_long_absence": {"actor_type": "unknown", "actor_confidence": 0.0}
+      }
+    }
+  }
+}

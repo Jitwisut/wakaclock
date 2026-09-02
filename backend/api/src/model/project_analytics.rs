@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::model::date_range::RangeInfo;
 
-pub const PROJECT_ANALYTICS_SCHEMA_VERSION: u32 = 1;
+pub const PROJECT_ANALYTICS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectSort {
@@ -88,6 +88,9 @@ pub struct ProjectAnalyticsTotals {
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectAnalyticsCard {
     pub ai: AttributionTotals,
+    /// Compatibility aggregate for both AI actor states.
+    pub ai_inferred: AttributionTotals,
+    pub ai_verified: AttributionTotals,
     pub attribution_coverage_percent: Option<f64>,
     pub estimated_spend: EstimatedSpend,
     pub human: AttributionTotals,
@@ -99,6 +102,9 @@ pub struct ProjectAnalyticsCard {
     pub sessions: Option<u64>,
     pub tokens: TokenTotals,
     pub total_seconds: i64,
+    /// Canonical Unknown bucket. `unattributed` below is retained as a response alias.
+    pub unknown: UnattributedTotals,
+    /// Deprecated compatibility alias for `unknown`.
     pub unattributed: UnattributedTotals,
 }
 
@@ -176,14 +182,18 @@ pub struct ProjectSummary {
 #[derive(Debug, Serialize)]
 pub struct ProjectAiSummary {
     pub ai_lines: u64,
+    pub ai_inferred_lines: u64,
     pub ai_percentage: Option<f64>,
     pub attribution_coverage_percent: Option<f64>,
     pub estimated_spend: EstimatedSpend,
     pub human_lines: u64,
+    pub ai_verified_lines: u64,
     pub prompts: Option<u64>,
     pub prompts_per_session: Option<f64>,
     pub sessions: Option<u64>,
     pub tokens: TokenTotals,
+    pub unknown_lines: Option<u64>,
+    /// Deprecated compatibility alias for `unknown_lines`.
     pub unattributed_lines: Option<u64>,
 }
 
@@ -191,10 +201,17 @@ pub struct ProjectAiSummary {
 pub struct ProjectDailyItem {
     pub ai_added: u64,
     pub ai_deleted: u64,
+    pub ai_inferred_added: u64,
+    pub ai_inferred_deleted: u64,
+    pub ai_verified_added: u64,
+    pub ai_verified_deleted: u64,
     pub date: String,
     pub human_added: u64,
     pub human_deleted: u64,
     pub total_seconds: i64,
+    pub unknown_added: Option<u64>,
+    pub unknown_deleted: Option<u64>,
+    /// Deprecated compatibility aliases for the Unknown bucket.
     pub unattributed_added: Option<u64>,
     pub unattributed_deleted: Option<u64>,
 }
@@ -209,16 +226,22 @@ pub struct ProjectBreakdownItem {
 #[derive(Debug, Serialize)]
 pub struct ProjectBranchItem {
     pub ai_changes: u64,
+    pub ai_inferred_changes: u64,
+    pub ai_verified_changes: u64,
     pub branch: String,
     pub heartbeat_count: u64,
     pub human_changes: u64,
     pub total_seconds: i64,
+    pub unknown_changes: Option<u64>,
+    /// Deprecated compatibility alias for `unknown_changes`.
     pub unattributed_changes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ProjectFileItem {
     pub ai_changes: u64,
+    pub ai_inferred_changes: u64,
+    pub ai_verified_changes: u64,
     pub display_name: String,
     pub entity_key: String,
     pub human_changes: u64,
@@ -226,6 +249,8 @@ pub struct ProjectFileItem {
     pub path: String,
     pub percentage_of_project: f64,
     pub total_seconds: i64,
+    pub unknown_changes: Option<u64>,
+    /// Deprecated compatibility alias for `unknown_changes`.
     pub unattributed_changes: Option<u64>,
 }
 

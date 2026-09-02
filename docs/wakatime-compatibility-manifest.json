@@ -1,11 +1,14 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "AtoAxis WakaTime v1 compatibility",
   "source_inventory": "../wakatime-api-routes.json",
   "route_count": 87,
   "base_path": "/api/v1",
   "defaults": {
-    "authorization": ["api_key_basic", "oauth_bearer"],
+    "authorization": [
+      "api_key_basic",
+      "oauth_bearer"
+    ],
     "oauth_scope": "read_logged_time",
     "response_envelope": "wakatime_v1",
     "pagination": "wakatime_page_and_limit",
@@ -22,50 +25,1580 @@
     "production_ready",
     "deprecated"
   ],
-  "implemented_route_patterns": [
-    { "method": "GET", "pattern": "/users/current", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/all_time_since_today", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/all_time_since_today", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/durations", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/durations", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/projects", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/projects", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/stats/:range", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/stats/:range", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/summaries", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/summaries", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/insights/:type/:range", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/insights/:type/:range", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/status_bar/today", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/:user/status_bar/today", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/heartbeats", "status": "production_ready" },
-    { "method": "POST", "pattern": "/users/current/heartbeats", "status": "production_ready" },
-    { "method": "POST", "pattern": "/users/current/heartbeats.bulk", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/ai_stats", "status": "production_ready" },
-    { "method": "GET", "pattern": "/users/current/data_dumps", "status": "beta" },
-    { "method": "POST", "pattern": "/users/current/data_dumps", "status": "beta" },
-    { "method": "GET", "pattern": "/users/current/external_durations", "status": "beta" },
-    { "method": "POST", "pattern": "/users/current/external_durations", "status": "beta" },
-    { "method": "DELETE", "pattern": "/users/current/external_durations", "status": "beta" },
-    { "method": "POST", "pattern": "/users/current/external_durations.bulk", "status": "beta" },
-    { "method": "DELETE", "pattern": "/users/current/external_durations.bulk", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/editors", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/leaders", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/meta", "status": "production_ready" }
-    ,{ "method": "GET", "pattern": "/program_languages", "status": "partial" }
-    ,{ "method": "GET", "pattern": "/users/current/machine_names", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/users/current/user_agents", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/users/current/custom_rules", "status": "beta" }
-    ,{ "method": "PUT", "pattern": "/users/current/custom_rules", "status": "beta" }
-    ,{ "method": "DELETE", "pattern": "/users/current/custom_rules/:rule_id", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/users/current/custom_rules_progress", "status": "partial" }
-    ,{ "method": "GET", "pattern": "/users/current/orgs", "status": "beta" }
-    ,{ "method": "GET", "pattern": "/users/current/leaderboards", "status": "beta" }
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user",
+      "pattern": "/users/:user",
+      "section": "Users",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current",
+      "pattern": "/users/current",
+      "section": "Users",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/all_time_since_today",
+      "pattern": "/users/:user/all_time_since_today",
+      "section": "All Time Since Today",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/all_time_since_today",
+      "pattern": "/users/current/all_time_since_today",
+      "section": "All Time Since Today",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/projects/:project/commits",
+      "pattern": "/users/:user/projects/:project/commits",
+      "section": "Commits",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/projects/:project/commits",
+      "pattern": "/users/current/projects/:project/commits",
+      "section": "Commits",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/projects/:project/commits/:hash",
+      "pattern": "/users/:user/projects/:project/commits/:hash",
+      "section": "Commit",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/projects/:project/commits/:hash",
+      "pattern": "/users/current/projects/:project/commits/:hash",
+      "section": "Commit",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/custom_rules",
+      "pattern": "/users/:user/custom_rules",
+      "section": "Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/custom_rules",
+      "pattern": "/users/current/custom_rules",
+      "section": "Custom Rules",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/users/:user/custom_rules",
+      "pattern": "/users/:user/custom_rules",
+      "section": "Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/users/current/custom_rules",
+      "pattern": "/users/current/custom_rules",
+      "section": "Custom Rules",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/:user/custom_rules/:rule_id",
+      "pattern": "/users/:user/custom_rules/:rule_id",
+      "section": "Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/current/custom_rules/:rule_id",
+      "pattern": "/users/current/custom_rules/:rule_id",
+      "section": "Custom Rules",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/custom_rules_progress",
+      "pattern": "/users/:user/custom_rules_progress",
+      "section": "Custom Rules Progress",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/custom_rules_progress",
+      "pattern": "/users/current/custom_rules_progress",
+      "section": "Custom Rules Progress",
+      "status": "partial",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/:user/custom_rules_progress",
+      "pattern": "/users/:user/custom_rules_progress",
+      "section": "Custom Rules Progress",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/current/custom_rules_progress",
+      "pattern": "/users/current/custom_rules_progress",
+      "section": "Custom Rules Progress",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/data_dumps",
+      "pattern": "/users/:user/data_dumps",
+      "section": "Data Dumps",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/data_dumps",
+      "pattern": "/users/current/data_dumps",
+      "section": "Data Dumps",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/:user/data_dumps",
+      "pattern": "/users/:user/data_dumps",
+      "section": "Data Dumps",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/data_dumps",
+      "pattern": "/users/current/data_dumps",
+      "section": "Data Dumps",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/durations",
+      "pattern": "/users/:user/durations",
+      "section": "Durations",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/durations",
+      "pattern": "/users/current/durations",
+      "section": "Durations",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/editors",
+      "pattern": "/editors",
+      "section": "Editors",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/external_durations",
+      "pattern": "/users/:user/external_durations",
+      "section": "External Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/external_durations",
+      "pattern": "/users/current/external_durations",
+      "section": "External Durations",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/:user/external_durations",
+      "pattern": "/users/:user/external_durations",
+      "section": "External Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/external_durations",
+      "pattern": "/users/current/external_durations",
+      "section": "External Durations",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/:user/external_durations.bulk",
+      "pattern": "/users/:user/external_durations.bulk",
+      "section": "External Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/external_durations.bulk",
+      "pattern": "/users/current/external_durations.bulk",
+      "section": "External Durations",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/:user/external_durations.bulk",
+      "pattern": "/users/:user/external_durations.bulk",
+      "section": "External Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/current/external_durations.bulk",
+      "pattern": "/users/current/external_durations.bulk",
+      "section": "External Durations",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/goals",
+      "pattern": "/users/:user/goals",
+      "section": "Goals",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/goals",
+      "pattern": "/users/current/goals",
+      "section": "Goals",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/goals/:goal",
+      "pattern": "/users/:user/goals/:goal",
+      "section": "Goal",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/goals/:goal",
+      "pattern": "/users/current/goals/:goal",
+      "section": "Goal",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/heartbeats",
+      "pattern": "/users/:user/heartbeats",
+      "section": "Heartbeats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/heartbeats",
+      "pattern": "/users/current/heartbeats",
+      "section": "Heartbeats",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/:user/heartbeats",
+      "pattern": "/users/:user/heartbeats",
+      "section": "Heartbeats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/heartbeats",
+      "pattern": "/users/current/heartbeats",
+      "section": "Heartbeats",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/:user/heartbeats.bulk",
+      "pattern": "/users/:user/heartbeats.bulk",
+      "section": "Heartbeats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/heartbeats.bulk",
+      "pattern": "/users/current/heartbeats.bulk",
+      "section": "Heartbeats",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/:user/heartbeats.bulk",
+      "pattern": "/users/:user/heartbeats.bulk",
+      "section": "Heartbeats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/users/current/heartbeats.bulk",
+      "pattern": "/users/current/heartbeats.bulk",
+      "section": "Heartbeats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/insights/:insight_type/:range",
+      "pattern": "/users/:user/insights/:insight_type/:range",
+      "section": "Insights",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/insights/:insight_type/:range",
+      "pattern": "/users/current/insights/:insight_type/:range",
+      "section": "Insights",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/leaders",
+      "pattern": "/leaders",
+      "section": "Leaders",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/machine_names",
+      "pattern": "/users/:user/machine_names",
+      "section": "Machine Names",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/machine_names",
+      "pattern": "/users/current/machine_names",
+      "section": "Machine Names",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/meta",
+      "pattern": "/meta",
+      "section": "Meta",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/custom_rules",
+      "pattern": "/users/:user/orgs/:org/custom_rules",
+      "section": "Org Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:org/custom_rules",
+      "pattern": "/users/current/orgs/:org/custom_rules",
+      "section": "Org Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/users/:user/orgs/:org/custom_rules",
+      "pattern": "/users/:user/orgs/:org/custom_rules",
+      "section": "Org Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/users/current/orgs/:org/custom_rules",
+      "pattern": "/users/current/orgs/:org/custom_rules",
+      "section": "Org Custom Rules",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards",
+      "pattern": "/users/:user/orgs/:org/dashboards",
+      "section": "Org Dashboards",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:org/dashboards",
+      "pattern": "/users/current/orgs/:org/dashboards",
+      "section": "Org Dashboards",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/durations",
+      "pattern": "/users/:user/orgs/:org/dashboards/:dashboard/durations",
+      "section": "Org Dashboard Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:orgs/dashboards/:dashboard/durations",
+      "pattern": "/users/current/orgs/:orgs/dashboards/:dashboard/durations",
+      "section": "Org Dashboard Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members",
+      "pattern": "/users/:user/orgs/:org/dashboards/:dashboard/members",
+      "section": "Org Dashboard Members",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/members",
+      "pattern": "/users/current/orgs/:org/dashboards/:dashboard/members",
+      "section": "Org Dashboard Members",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members/:member/durations",
+      "pattern": "/users/:user/orgs/:org/dashboards/:dashboard/members/:member/durations",
+      "section": "Org Dashboard Member Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:orgs/dashboards/:dashboard/members/:member/durations",
+      "pattern": "/users/current/orgs/:orgs/dashboards/:dashboard/members/:member/durations",
+      "section": "Org Dashboard Member Durations",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/members/:member/summaries",
+      "pattern": "/users/:user/orgs/:org/dashboards/:dashboard/members/:member/summaries",
+      "section": "Org Dashboard Member Summaries",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/members/:member/summaries",
+      "pattern": "/users/current/orgs/:org/dashboards/:dashboard/members/:member/summaries",
+      "section": "Org Dashboard Member Summaries",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs/:org/dashboards/:dashboard/summaries",
+      "pattern": "/users/:user/orgs/:org/dashboards/:dashboard/summaries",
+      "section": "Org Dashboard Summaries",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs/:org/dashboards/:dashboard/summaries",
+      "pattern": "/users/current/orgs/:org/dashboards/:dashboard/summaries",
+      "section": "Org Dashboard Summaries",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/orgs",
+      "pattern": "/users/:user/orgs",
+      "section": "Orgs",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/orgs",
+      "pattern": "/users/current/orgs",
+      "section": "Orgs",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/leaderboards",
+      "pattern": "/users/:user/leaderboards",
+      "section": "Private Leaderboards",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/leaderboards",
+      "pattern": "/users/current/leaderboards",
+      "section": "Private Leaderboards",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/leaderboards/:board",
+      "pattern": "/users/:user/leaderboards/:board",
+      "section": "Private Leaderboards Leaders",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/leaderboards/:board",
+      "pattern": "/users/current/leaderboards/:board",
+      "section": "Private Leaderboards Leaders",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/program_languages",
+      "pattern": "/program_languages",
+      "section": "Program Languages",
+      "status": "partial",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/projects",
+      "pattern": "/users/:user/projects",
+      "section": "Projects",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/projects",
+      "pattern": "/users/current/projects",
+      "section": "Projects",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/stats",
+      "pattern": "/users/:user/stats",
+      "section": "Stats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/stats",
+      "pattern": "/users/current/stats",
+      "section": "Stats",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/stats/:range",
+      "pattern": "/users/:user/stats/:range",
+      "section": "Stats",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/stats/:range",
+      "pattern": "/users/current/stats/:range",
+      "section": "Stats",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats/:range",
+      "pattern": "/stats/:range",
+      "section": "Stats Aggregated",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/status_bar/today",
+      "pattern": "/users/:user/status_bar/today",
+      "section": "Status Bar",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/status_bar/today",
+      "pattern": "/users/current/status_bar/today",
+      "section": "Status Bar",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/summaries",
+      "pattern": "/users/:user/summaries",
+      "section": "Summaries",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/summaries",
+      "pattern": "/users/current/summaries",
+      "section": "Summaries",
+      "status": "production_ready",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/:user/user_agents",
+      "pattern": "/users/:user/user_agents",
+      "section": "User Agents",
+      "status": "not_started",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Inventory entry not yet wired to a live handler."
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/user_agents",
+      "pattern": "/users/current/user_agents",
+      "section": "User Agents",
+      "status": "beta",
+      "owner": "api-platform",
+      "authorization": [
+        "api_key_basic",
+        "oauth_bearer"
+      ],
+      "oauth_scope": "read_logged_time",
+      "response_envelope": "wakatime_v1",
+      "pagination": "wakatime_page_and_limit",
+      "date_format": "ISO-8601",
+      "rate_limit_headers": true,
+      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+    }
   ],
-  "unlisted_routes": {
-    "status": "not_started",
-    "owner": "api-platform",
-    "notes": "The complete 87-route source inventory is expanded at build time; unknown routes return an explicit compatibility error rather than silently changing the WakaTime contract."
-  }
+  "summary": {
+    "production_ready": 18,
+    "beta": 15,
+    "partial": 2,
+    "not_started": 52
+  },
+  "generated_from": "wakatime-api-routes.json",
+  "compatibility_rule": "Unknown routes return an explicit compatibility error; v1 envelopes and auth are never silently changed."
 }

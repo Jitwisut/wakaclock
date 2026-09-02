@@ -11,17 +11,72 @@ use crate::model::integration::{
 };
 
 const PROVIDERS: &[IntegrationProvider] = &[
-    IntegrationProvider { id: "google_calendar", display_name: "Google Calendar", auth: "oauth2", supports_webhooks: false },
-    IntegrationProvider { id: "microsoft_calendar", display_name: "Microsoft Outlook Calendar", auth: "oauth2", supports_webhooks: false },
-    IntegrationProvider { id: "microsoft_teams", display_name: "Microsoft Teams", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "zoom", display_name: "Zoom", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "slack", display_name: "Slack", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "github", display_name: "GitHub", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "gitlab", display_name: "GitLab", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "bitbucket", display_name: "Bitbucket", auth: "oauth2", supports_webhooks: true },
-    IntegrationProvider { id: "paymo", display_name: "Paymo", auth: "oauth2", supports_webhooks: false },
-    IntegrationProvider { id: "zube", display_name: "Zube", auth: "oauth2", supports_webhooks: false },
-    IntegrationProvider { id: "generic_webhook", display_name: "Generic webhook", auth: "signed_webhook", supports_webhooks: true },
+    IntegrationProvider {
+        id: "google_calendar",
+        display_name: "Google Calendar",
+        auth: "oauth2",
+        supports_webhooks: false,
+    },
+    IntegrationProvider {
+        id: "microsoft_calendar",
+        display_name: "Microsoft Outlook Calendar",
+        auth: "oauth2",
+        supports_webhooks: false,
+    },
+    IntegrationProvider {
+        id: "microsoft_teams",
+        display_name: "Microsoft Teams",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "zoom",
+        display_name: "Zoom",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "slack",
+        display_name: "Slack",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "github",
+        display_name: "GitHub",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "gitlab",
+        display_name: "GitLab",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "bitbucket",
+        display_name: "Bitbucket",
+        auth: "oauth2",
+        supports_webhooks: true,
+    },
+    IntegrationProvider {
+        id: "paymo",
+        display_name: "Paymo",
+        auth: "oauth2",
+        supports_webhooks: false,
+    },
+    IntegrationProvider {
+        id: "zube",
+        display_name: "Zube",
+        auth: "oauth2",
+        supports_webhooks: false,
+    },
+    IntegrationProvider {
+        id: "generic_webhook",
+        display_name: "Generic webhook",
+        auth: "signed_webhook",
+        supports_webhooks: true,
+    },
 ];
 
 pub struct IntegrationService {
@@ -112,11 +167,7 @@ impl IntegrationService {
         rows.into_iter().map(connection_from_row).collect()
     }
 
-    pub async fn status(
-        &self,
-        user_id: Uuid,
-        id: Uuid,
-    ) -> Result<Option<IntegrationConnection>> {
+    pub async fn status(&self, user_id: Uuid, id: Uuid) -> Result<Option<IntegrationConnection>> {
         let postgres = self.required()?;
         let row = postgres
             .client()
@@ -252,4 +303,3 @@ fn connection_from_row(row: Row) -> Result<IntegrationConnection> {
         disconnected_at: row.try_get("disconnected_at")?,
     })
 }
-

@@ -3,7 +3,6 @@
   "timestamp": "2026-08-14T09:19:40.001Z",
   "payload": {
     "id": "018f0000-bbbb-7000-8000-000000000000",
-    "session_id": "018f0000-bbbb-7000-8000-000000000000",
     "cwd": "/home/dev/example-project",
     "cli_version": "0.1.0-example"
   }

@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
+import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { getStats } from '@/lib/wakaclock/endpoints';
@@ -22,9 +23,11 @@ const RANGE_LABELS: Record<StatsRange, string> = {
   all_time: 'All time',
 };
 
+// Projects deliberately absent: `StatsBreakdownItem` carries only a name, so a project
+// here cannot link anywhere. The overview's `TopProjects` panel covers projects instead,
+// reading `/projects/analytics` for the stable `project_id` the detail route needs.
 const BREAKDOWN_LABELS = {
   languages: 'Languages',
-  projects: 'Projects',
   editors: 'Editors',
   operating_systems: 'Operating systems',
 } as const;
@@ -82,6 +85,8 @@ export function RangeStats() {
                   value={stats.best_day?.text ?? '—'}
                 />
               </div>
+
+              {stats.evidence && <EvidenceSplitPanel evidence={stats.evidence} />}
 
               <Tabs onValueChange={(v) => setBreakdown(v as typeof breakdown)} value={breakdown}>
                 <TabsList>

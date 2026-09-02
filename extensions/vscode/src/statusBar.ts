@@ -1,19 +1,16 @@
 import * as vscode from "vscode";
 import type { WakaclockCliService } from "./cli";
 import { Logger } from "./logging";
-import type { ConnectionState, WakaclockConfigSnapshot } from "./types";
+import type {
+  BrokerStatusSnapshot,
+  ConnectionState,
+  WakaclockConfigSnapshot,
+} from "./types";
 import type { ActivitySegment } from "./types";
 import { unionSeconds } from "./activity";
+import { localTimezone } from "./utils";
 
 const STATUS_REFRESH_MS = 15_000;
-
-function localTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
 
 function formatLiveDuration(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
@@ -43,15 +40,18 @@ export class StatusBarController implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
   private interval?: NodeJS.Timeout;
   private authFailureReported = false;
+  private deliveryFailureReported = false;
   private legacyCliReported = false;
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
+  private lastBrokerStatus?: BrokerStatusSnapshot;
   private getBufferedSeconds: () => number = () => 0;
   private getBufferedSegments: () => ActivitySegment[] = () => [];
   private connectionState: ConnectionState = "connecting";
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
-    private readonly cli: Pick<WakaclockCliService, "getToday">,
+    private readonly cli: Pick<WakaclockCliService, "getToday"> &
+      Partial<Pick<WakaclockCliService, "getBrokerStatus">>,
     private readonly logger: Logger,
     private readonly getApiKey?: () => Thenable<string | undefined>,
   ) {
@@ -121,12 +121,37 @@ export class StatusBarController implements vscode.Disposable {
       }
     }
 
+    // Broker status is local and remains useful while the hosted API is offline.
+    // Older test/embedded CLI adapters may not expose it, so this is deliberately
+    // additive and never blocks the regular total refresh.
+    await this.refreshBrokerStatus();
+
     try {
       const snapshot = await this.cli.getToday(localTimezone());
       this.lastSnapshot = snapshot;
-      this.connectionState = snapshot.queuedSeconds && snapshot.queuedSeconds > 0
-        ? "offline-queued"
-        : "verified";
+      // A refusal is not an outage and must not be reported as one. Reading today's
+      // total is a GET and keeps working while POST /heartbeats returns 402, so this
+      // branch is the *success* path even when nothing is being recorded — which is
+      // exactly how an expired trial spent a day and a half looking like an idle one.
+      // `queuedSeconds` cannot catch it either: it is scoped to today, so yesterday's
+      // refused backlog reads zero.
+      const refused = snapshot.delivery?.startsWith("REFUSED") ?? false;
+      const backlog = snapshot.queuedHeartbeats ?? 0;
+      this.connectionState = refused
+        ? "subscription-required"
+        : (snapshot.queuedSeconds && snapshot.queuedSeconds > 0) || backlog > 0
+          ? "offline-queued"
+          : "verified";
+      if (refused && !this.deliveryFailureReported) {
+        this.deliveryFailureReported = true;
+        void vscode.window.showWarningMessage(
+          `AtoAxis is not recording your time: ${snapshot.delivery}. ` +
+            `${backlog} heartbeat(s) are held locally and will be sent once the server accepts them.`
+        );
+      }
+      if (!refused) {
+        this.deliveryFailureReported = false;
+      }
       this.render(snapshot);
       if (snapshot.legacyCli && !this.legacyCliReported) {
         this.legacyCliReported = true;
@@ -134,7 +159,9 @@ export class StatusBarController implements vscode.Disposable {
           "wakaclock-cli is too old for timezone-aware status totals. Upgrade the CLI to the current workspace version."
         );
       }
-      this.item.backgroundColor = undefined;
+      this.item.backgroundColor = refused
+        ? new vscode.ThemeColor("statusBarItem.warningBackground")
+        : undefined;
       this.item.command = "wakaclock.showToday";
       this.authFailureReported = false;
       this.item.show();
@@ -187,17 +214,19 @@ export class StatusBarController implements vscode.Disposable {
   }
 
   private render(snapshot: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>): void {
+    // Keep the number shown in the status bar on the same contract as the
+    // `Show Today` command and the dashboard: `snapshot.totalSeconds` is the
+    // CLI's authoritative total for this timezone/day. Local editor activity
+    // has not been accepted by the CLI yet, so it belongs in the tooltip as a
+    // pending amount rather than silently changing the meaning of "Today".
     const bufferedSeconds = Math.max(
       this.getBufferedSeconds(),
+      unionSeconds(this.getBufferedSegments()),
       snapshot.bufferedSeconds ?? 0
     );
     const queued = snapshot.queuedSeconds ?? 0;
     const confirmed = snapshot.confirmedSeconds ?? Math.max(0, snapshot.totalSeconds - queued);
-    const bufferedSegments = this.getBufferedSegments();
-    const serverIntervals = snapshot.coveredIntervals ?? [];
-    const totalSeconds = serverIntervals.length > 0
-      ? unionSeconds([...serverIntervals, ...bufferedSegments])
-      : confirmed + queued + bufferedSeconds;
+    const totalSeconds = Math.max(0, snapshot.totalSeconds ?? 0);
     const humanReadable = formatLiveDuration(totalSeconds);
     const agentState =
       snapshot.agentHealth &&
@@ -205,6 +234,12 @@ export class StatusBarController implements vscode.Disposable {
       "state" in snapshot.agentHealth
         ? String((snapshot.agentHealth as { state?: unknown }).state)
         : undefined;
+    const brokerState = this.lastBrokerStatus
+      ? this.lastBrokerStatus.running
+        ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+        : "stopped"
+      : undefined;
+    const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
     if (this.connectionState === "needs-api-key") {
       this.item.text = "$(plug) AtoAxis: Connect";
       this.item.command = "wakaclock.setApiKey";
@@ -220,14 +255,33 @@ export class StatusBarController implements vscode.Disposable {
       `Today: ${humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}` +
       `\nConfirmed: ${formatLiveDuration(confirmed)}` +
       `\nOffline queued: ${formatLiveDuration(queued)}` +
-      `\nLocal buffer: ${formatLiveDuration(bufferedSeconds)}` +
+      `\nLocal pending: ${formatLiveDuration(bufferedSeconds)}` +
       (snapshot.lastIncrementSeconds === undefined
         ? ""
         : `\nLast increment: ${formatLiveDuration(snapshot.lastIncrementSeconds)}${snapshot.lastIncrementSource ? ` (${snapshot.lastIncrementSource})` : ""}`) +
       (snapshot.discardedSeconds && snapshot.discardedSeconds > 0
         ? `\nDiscarded overlap/idle: ${formatLiveDuration(snapshot.discardedSeconds)}`
         : "") +
-      (agentState ? `\nAgent: ${agentState}` : "");
+      (snapshot.queuedHeartbeats
+        ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
+        : "") +
+      (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
+      (agentState ? `\nAgent: ${agentState}` : "") +
+      (brokerState ? `\nBroker: ${brokerState}` : "") +
+      (brokerError ? `\nBroker last error: ${brokerError}` : "");
+  }
+
+  private async refreshBrokerStatus(): Promise<void> {
+    if (!this.cli.getBrokerStatus) {
+      return;
+    }
+    try {
+      this.lastBrokerStatus = await this.cli.getBrokerStatus();
+    } catch (error) {
+      this.logger.debug("failed to read local broker status", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

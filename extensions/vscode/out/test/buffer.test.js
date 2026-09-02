@@ -59,10 +59,64 @@ function createConfig() {
         statusBarEnabled: true,
         debugLogging: false,
         trackDebugSessions: true,
-        trackBuildTasks: true
+        trackBuildTasks: true,
+        trackClipboardActions: true
     };
 }
 (0, vitest_1.describe)("HeartbeatBufferManager", () => {
+    (0, vitest_1.it)("flushes copy-only activity and records paste volume without inflating keystrokes", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordClipboardCopy({ uri: fileUri("C:/project/a.ts") }, { copiedChars: 24, copiedLines: 3 }, 1_000, "project");
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "x".repeat(2_000), rangeLength: 0 }], selection(4, 2), 122_000, "project", undefined, { origin: "external_or_unknown" });
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenNthCalledWith(1, "C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            clipboard_tracking_version: 1,
+            copy_actions: 1,
+            copied_chars: 24,
+            copied_lines: 3,
+            actor_type: "human"
+        }));
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenNthCalledWith(2, "C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            clipboard_tracking_version: 1,
+            paste_actions: 1,
+            pasted_chars: 2_000,
+            paste_external_or_unknown_actions: 1,
+            unattributed_lines_added: 1,
+            human_lines_added: undefined,
+            copy_actions: undefined
+        }));
+    });
+    (0, vitest_1.it)("does not collect or send clipboard fields when tracking is disabled", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const config = { ...createConfig(), trackClipboardActions: false };
+        const manager = new buffer_1.HeartbeatBufferManager(() => config, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordClipboardCopy({ uri: fileUri("C:/project/a.ts") }, { copiedChars: 8, copiedLines: 1 }, 1_000);
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "paste", rangeLength: 0 }], selection(0, 5), 2_000, undefined, undefined, { origin: "external_or_unknown" });
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            chars_added: 5,
+            clipboard_tracking_version: undefined,
+            paste_actions: undefined
+        }));
+    });
+    (0, vitest_1.it)("does not call an editor change Human when broker line evidence is unknown", async () => {
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+        try {
+            const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+            await fs.mkdir(path.dirname(logPath), { recursive: true });
+            await fs.writeFile(logPath, JSON.stringify({
+                event_id: "shell-unknown-lines",
+                entity: "C:/project/a.ts",
+                time: 10,
+                lines_added: null,
+                lines_deleted: null
+            }) + "\n");
+            await (0, vitest_1.expect)(new aiAttribution_1.AiAttributionStore(homeDir).classifyRecentEdit("C:/project/a.ts", 10_000, 2, 0)).resolves.toBe("unattributed");
+        }
+        finally {
+            await fs.rm(homeDir, { recursive: true, force: true });
+        }
+    });
     (0, vitest_1.it)("text changes send the first heartbeat immediately", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
         const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
@@ -77,15 +131,49 @@ function createConfig() {
             // editor activity establishes the interval after it.
             active_seconds: 0,
             human_lines_added: 1,
+            actor_type: "human",
+            actor_confidence: 1,
             line_number: 5,
             cursor_position: 3
         }));
+    });
+    (0, vitest_1.it)("does not count an undo/redo replay as new lines, but still reports presence", async () => {
+        // TextDocumentChangeReason.Undo === 1 (mirrored as
+        // TEXT_DOCUMENT_CHANGE_REASON_UNDO in buffer.ts, without importing the real
+        // vscode enum). Undo/redo replays content already counted once; if the line delta
+        // were counted again, a large undo could also line-match an unrelated nearby AI
+        // event purely by coincidence of size. Keystrokes/chars still count, and a
+        // heartbeat still goes out — dropping the heartbeat entirely would also drop its
+        // timestamp anchor, which the idle bridge needs to resume the clock correctly.
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "hello", rangeLength: 0 }], selection(4, 2), 1_000, "Daniel", 1);
+        await manager.flushDueBuffers("timer", 31_000);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
+            keystrokes: 5,
+            chars_added: 5,
+            human_lines_added: undefined,
+            human_lines_deleted: undefined
+        }));
+    });
+    (0, vitest_1.it)("still counts an ordinary edit when reason is undefined", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "hello", rangeLength: 0 }], selection(4, 2), 1_000, "Daniel", undefined);
+        await manager.flushDueBuffers("timer", 31_000);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({ keystrokes: 5, human_lines_added: 1 }));
     });
     (0, vitest_1.it)("save flushes immediately with write=true", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
         const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
         await manager.recordSave({ uri: fileUri("C:/project/a.ts") }, 5_000);
-        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", true, "coding", [], vitest_1.expect.objectContaining({ write: true, active_seconds: 0 }));
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", true, "coding", [], vitest_1.expect.objectContaining({
+            write: true,
+            active_seconds: 0,
+            actor_type: "human",
+            actor_confidence: 1
+        }));
     });
     (0, vitest_1.it)("does not grow the local duration after the final activity event", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
@@ -248,7 +336,9 @@ function createConfig() {
             (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
                 unattributed_lines_added: 1,
                 human_lines_added: undefined,
-                keystrokes: 5
+                keystrokes: 5,
+                actor_type: "unknown",
+                actor_confidence: 0
             }));
         }
         finally {
@@ -328,8 +418,144 @@ function createConfig() {
             await manager.flushDueBuffers("timer", 31_000);
             (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
                 unattributed_lines_added: 1,
-                human_lines_added: undefined
+                human_lines_added: undefined,
+                actor_type: "unknown",
+                actor_confidence: 0
             }));
+        }
+        finally {
+            await fs.rm(homeDir, { recursive: true, force: true });
+        }
+    });
+    (0, vitest_1.it)("does not relabel a preceding human interval as AI when a whole-file overwrite follows it", async () => {
+        // A whole-file agent overwrite (see the next test) must not turn the developer's
+        // own preceding seconds into AI time. `human_lines_added` is correctly cleared —
+        // the agent owns this edit's line counts — but `active_seconds: 40` here is time
+        // the developer earned *before* the agent touched the file, so `actor_type` must
+        // stay "human" for it. The agent's own attribution reaches the server separately,
+        // through the CLI/broker path that classified this edit in the first place.
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+        try {
+            const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+            await fs.mkdir(path.dirname(logPath), { recursive: true });
+            await fs.writeFile(logPath, JSON.stringify({
+                event_id: "claude-write-overwrite",
+                entity: "C:/project/a.ts",
+                time: 105,
+                lines_added: 5,
+                lines_deleted: 0,
+                agent: "claude-code",
+                actor_type: "ai_verified",
+                actor_confidence: 1
+            }) + "\n");
+            const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+            const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
+            await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 0), undefined, 60_000);
+            await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 1), undefined, 80_000);
+            await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 2), undefined, 100_000);
+            (0, vitest_1.expect)(manager.getBufferedSeconds()).toBe(40);
+            await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [
+                {
+                    text: "line1\nline2\nline3\nline4\nline5",
+                    rangeLength: 4000,
+                    range: { start: { line: 0, character: 0 }, end: { line: 200, character: 0 } }
+                }
+            ], selection(0, 3), 105_000);
+            await manager.flushDueBuffers("timer", 130_000);
+            const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
+            (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
+            (0, vitest_1.expect)(payload.active_seconds).toBe(40);
+            (0, vitest_1.expect)(payload.actor_type).toBe("human");
+            (0, vitest_1.expect)(payload.ai_event_id).toBeUndefined();
+        }
+        finally {
+            await fs.rm(homeDir, { recursive: true, force: true });
+        }
+    });
+    (0, vitest_1.it)("attributes a whole-file agent overwrite as AI on the save that follows it", async () => {
+        // Regression test for the `Write` line-delta asymmetry: an agent hook overwriting
+        // an existing file has no prior content to diff, so it reports lines_deleted: 0.
+        // VS Code sees the reload as a full-range replacement, so its own linesDeleted is
+        // the old file's line count (200 here) — far outside LINE_MATCH_SLACK of the
+        // hook's 0. Before this fix that mismatch fell through to "unattributed", so the
+        // agent's entire rewrite was counted as neither Human nor AI in the wire payload.
+        //
+        // This edit has no prior activity behind it, so the classifying flush sends
+        // nothing on its own (an AI-only edit produces no heartbeat by design — see "does
+        // not resend a matching AI edit as human activity"). The save that follows is what
+        // must carry the AI attribution: before this fix, `write: true` alone forced
+        // `actor_type: "human"` on that save, even though every human-side counter for
+        // this exact edit had already been zeroed.
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+        try {
+            const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+            await fs.mkdir(path.dirname(logPath), { recursive: true });
+            await fs.writeFile(logPath, JSON.stringify({
+                event_id: "claude-write-overwrite-2",
+                entity: "C:/project/b.ts",
+                time: 10,
+                lines_added: 5,
+                lines_deleted: 0,
+                agent: "claude-code",
+                provider: "anthropic",
+                model: "claude-sonnet-5",
+                source: "agent_hook",
+                confidence: "verified",
+                actor_type: "ai_verified",
+                actor_confidence: 1
+            }) + "\n");
+            const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+            const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
+            await manager.recordTextChange({ uri: fileUri("C:/project/b.ts") }, [
+                {
+                    text: "line1\nline2\nline3\nline4\nline5",
+                    rangeLength: 4000,
+                    range: { start: { line: 0, character: 0 }, end: { line: 200, character: 0 } }
+                }
+            ], selection(0, 0), 10_000);
+            (0, vitest_1.expect)(sendHeartbeat).not.toHaveBeenCalled();
+            await manager.recordSave({ uri: fileUri("C:/project/b.ts") }, 10_500);
+            (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+            const payload = sendHeartbeat.mock.calls[0][4];
+            (0, vitest_1.expect)(payload.actor_type).toBe("ai_verified");
+            (0, vitest_1.expect)(payload.actor_confidence).toBe(1);
+            (0, vitest_1.expect)(payload.ai_agent).toBe("claude-code");
+            (0, vitest_1.expect)(payload.ai_provider).toBe("anthropic");
+            (0, vitest_1.expect)(payload.ai_model).toBe("claude-sonnet-5");
+            (0, vitest_1.expect)(payload.ai_event_id).toBe("claude-write-overwrite-2");
+            (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
+        }
+        finally {
+            await fs.rm(homeDir, { recursive: true, force: true });
+        }
+    });
+    (0, vitest_1.it)("does not attribute prettier or eslint whole-file reformat to AI without sidecar evidence", async () => {
+        // Guards the A-2 whole-file-overwrite rule above: a large edit that looks like an
+        // agent overwrite (big line delta, no matching deletions) must still resolve to
+        // Human when the broker recorded nothing for this file — e.g. a "format on save"
+        // reformat by prettier or eslint, which VS Code delivers as an ordinary large
+        // `onDidChangeTextDocument` event with no AI evidence behind it. The whole-file
+        // rule only ever narrows what counts as a match against an *existing* candidate
+        // event (see `classify`'s `candidates.length === 0` early return above it); it can
+        // never manufacture AI attribution out of no evidence.
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
+        try {
+            // No sidecar file is written at all for this home directory.
+            const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+            const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
+            await manager.recordTextChange({ uri: fileUri("C:/project/formatted.ts") }, [
+                {
+                    text: "line1\nline2\nline3\nline4\nline5",
+                    rangeLength: 4000,
+                    range: { start: { line: 0, character: 0 }, end: { line: 200, character: 0 } }
+                }
+            ], selection(0, 0), 10_000);
+            await manager.flushDueBuffers("timer", 40_000);
+            (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+            const payload = sendHeartbeat.mock.calls[0][4];
+            (0, vitest_1.expect)(payload.actor_type).toBe("human");
+            (0, vitest_1.expect)(payload.ai_event_id).toBeUndefined();
+            (0, vitest_1.expect)(payload.human_lines_added).toBe(5);
         }
         finally {
             await fs.rm(homeDir, { recursive: true, force: true });

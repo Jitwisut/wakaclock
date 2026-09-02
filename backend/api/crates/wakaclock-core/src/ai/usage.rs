@@ -214,7 +214,11 @@ fn parse_generic_usage_str(
         if record_type == "user" || record_type == "prompt" {
             let prompt_chars = value
                 .get("content")
-                .or_else(|| value.get("message").and_then(|message| message.get("content")))
+                .or_else(|| {
+                    value
+                        .get("message")
+                        .and_then(|message| message.get("content"))
+                })
                 .map(content_character_count)
                 .unwrap_or(0);
             pending_prompts
@@ -320,7 +324,8 @@ fn parse_generic_usage_str(
             provider: provider.map(str::to_string),
             model,
             prompt_count,
-            prompt_character_count: (prompt_count > 0).then_some(prompt_character_count.unwrap_or(0)),
+            prompt_character_count: (prompt_count > 0)
+                .then_some(prompt_character_count.unwrap_or(0)),
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: cache_read,
@@ -353,8 +358,7 @@ fn sanitize_project_hint(raw: &str) -> Option<String> {
     let candidate = raw
         .trim()
         .split(['/', '\\'])
-        .filter(|part| !part.is_empty() && *part != "." && *part != "..")
-        .next_back()?;
+        .rfind(|part| !part.is_empty() && *part != "." && *part != "..")?;
     if candidate.is_empty()
         || candidate.len() > 160
         || candidate.chars().any(|character| character.is_control())
@@ -471,7 +475,8 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
             provider: Some("anthropic".to_string()),
             model: message.model.filter(|model| model != SYNTHETIC_MODEL),
             prompt_count,
-            prompt_character_count: (prompt_count > 0).then_some(prompt_character_count.unwrap_or(0)),
+            prompt_character_count: (prompt_count > 0)
+                .then_some(prompt_character_count.unwrap_or(0)),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_read_tokens: usage.cache_read_input_tokens,
@@ -520,9 +525,7 @@ fn content_character_count(value: &serde_json::Value) -> u64 {
         serde_json::Value::Array(items) => items
             .iter()
             .filter(|item| {
-                item.get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .map_or(true, |kind| kind != "tool_result")
+                item.get("type").and_then(serde_json::Value::as_str) != Some("tool_result")
             })
             .map(content_character_count)
             .sum(),

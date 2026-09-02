@@ -14,6 +14,8 @@ export type Category =
   | 'meeting'
   | 'modeling';
 
+export type ActorType = 'ai_inferred' | 'ai_verified' | 'human' | 'unknown';
+
 export type StatsRange = 'all_time' | 'last_30_days' | 'last_7_days' | 'today';
 
 export const STATS_RANGES: StatsRange[] = ['today', 'last_7_days', 'last_30_days', 'all_time'];
@@ -31,6 +33,24 @@ export const INSIGHT_TYPES: InsightType[] = [
 // ---------------------------------------------------------------------------
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
+/**
+ * How much of a reported total the server can show a reason for.
+ *
+ * `proven_seconds` is time a client actually measured; `inferred_seconds` is the
+ * pause-filling the server's idle bridge adds on top to stay WakaTime-compatible, and
+ * on real data it is the larger of the two. `attended + agent + other` is a second
+ * partition of the same total. Both sum to the surface's `total_seconds`.
+ */
+export interface EvidenceSplit {
+  agent_seconds: number;
+  ai_coding_seconds: number;
+  ai_session_seconds: number;
+  attended_seconds: number;
+  inferred_seconds: number;
+  other_seconds: number;
+  proven_seconds: number;
+}
+
 export interface StatusBarResponse {
   agent_health?: unknown;
   buffered_seconds?: number;
@@ -42,6 +62,7 @@ export interface StatusBarResponse {
     start: number;
   }>;
   discarded_seconds?: number;
+  evidence?: EvidenceSplit;
   heartbeat_count: number;
   human_readable: string;
   last_heartbeat_at?: null | number;
@@ -86,11 +107,13 @@ export interface BestDay {
 
 export interface StatsData {
   best_day: BestDay | null;
+  categories?: StatsBreakdownItem[];
   daily_average_seconds: number;
   daily_average_text: string;
   days_included: number;
   days_with_activity: number;
   editors: StatsBreakdownItem[];
+  evidence?: EvidenceSplit;
   hours: number;
   languages: StatsBreakdownItem[];
   operating_systems: StatsBreakdownItem[];
@@ -118,6 +141,7 @@ export interface SummaryItem {
 }
 
 export interface SummaryGrandTotal {
+  evidence?: EvidenceSplit;
   heartbeats: number;
   hours: number;
   text: string;
@@ -125,6 +149,7 @@ export interface SummaryGrandTotal {
 }
 
 export interface SummaryDay {
+  categories?: SummaryItem[];
   date: string;
   editors: SummaryItem[];
   grand_total: SummaryGrandTotal;
@@ -200,6 +225,7 @@ export interface InsightsResponse {
 // GET /users/current/ai_stats
 // ---------------------------------------------------------------------------
 export interface AiAgentItem {
+  actor_type: ActorType;
   agent: string;
   ai_lines_added: number;
   ai_lines_deleted: number;
@@ -208,30 +234,55 @@ export interface AiAgentItem {
   human_lines_deleted: number;
   model?: null | string;
   provider?: null | string;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
 }
 
 export interface AiDailyItem {
+  ai_inferred_lines_added: number;
+  ai_inferred_lines_deleted: number;
   ai_lines_added: number;
   ai_lines_deleted: number;
+  ai_verified_lines_added: number;
+  ai_verified_lines_deleted: number;
   date: string;
   heartbeat_count: number;
   human_chars_added: number;
   human_keystrokes: number;
   human_lines_added: number;
   human_lines_deleted: number;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
 }
 
 export interface AiStatsData {
   agents: AiAgentItem[];
   ai_heartbeat_percentage: number;
+  ai_inferred_heartbeat_percentage: number;
+  ai_verified_heartbeat_percentage: number;
   daily: AiDailyItem[];
+  human_heartbeat_percentage: number;
+  total_ai_inferred_lines_added: number;
+  total_ai_inferred_lines_deleted: number;
   total_ai_lines_added: number;
   total_ai_lines_deleted: number;
+  total_ai_verified_lines_added: number;
+  total_ai_verified_lines_deleted: number;
   total_heartbeats: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
   total_human_lines_added: number;
   total_human_lines_deleted: number;
+  total_unattributed_lines_added: number;
+  total_unattributed_lines_deleted: number;
+  total_unknown_lines_added: number;
+  total_unknown_lines_deleted: number;
+  unattributed_heartbeat_percentage: number;
+  unknown_heartbeat_percentage: number;
 }
 
 export interface AiStatsResponse {
@@ -241,16 +292,69 @@ export interface AiStatsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// GET /users/current/ai_diagnostics  (planai2 p7.2c)
+// Mirrors wakaclock_core::ai::AiDiagnosticsReport — sanitized, metadata only.
+// ---------------------------------------------------------------------------
+export type AdapterVerification = 'scaffold' | 'unverified' | 'verified';
+
+export interface BrokerHealth {
+  inbox_dead_letter: number;
+  inbox_pending: number;
+  inbox_retry: number;
+  last_delivery_unix?: null | number;
+  last_error_code?: null | string;
+  running: boolean;
+}
+
+export interface ParserLagSummary {
+  max_lag_seconds: number;
+  transcripts_behind: number;
+  transcripts_watched: number;
+}
+
+export interface AdapterFreshness {
+  agent: string;
+  detected: boolean;
+  enabled: boolean;
+  last_evidence_unix?: null | number;
+  verification: AdapterVerification;
+}
+
+export interface AiDiagnosticsReport {
+  adapters: AdapterFreshness[];
+  broker: BrokerHealth;
+  captured_at: string;
+  parser: ParserLagSummary;
+  schema_version: number;
+}
+
+export interface AiDiagnosticsResponse {
+  report: AiDiagnosticsReport | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /users/current/keystroke_stats
 // ---------------------------------------------------------------------------
-export interface KeystrokeProjectItem {
+export interface ClipboardMetrics {
+  copied_chars: number;
+  copied_lines: number;
+  copy_actions: number;
+  paste_actions: number;
+  paste_external_or_unknown_actions: number;
+  paste_same_file_actions: number;
+  paste_same_workspace_actions: number;
+  pasted_chars: number;
+  pasted_lines: number;
+}
+
+export interface KeystrokeProjectItem extends ClipboardMetrics {
   chars_added: number;
   chars_deleted: number;
   keystrokes: number;
   name: string;
 }
 
-export interface KeystrokeDailyItem {
+export interface KeystrokeDailyItem extends ClipboardMetrics {
   chars_added: number;
   chars_deleted: number;
   date: string;
@@ -258,12 +362,26 @@ export interface KeystrokeDailyItem {
 }
 
 export interface KeystrokeStatsData {
+  clipboard_coverage: {
+    percent: number;
+    supported_vscode_heartbeats: number;
+    total_vscode_heartbeats: number;
+  };
   daily: KeystrokeDailyItem[];
   days_with_activity: number;
   projects: KeystrokeProjectItem[];
   total_chars_added: number;
   total_chars_deleted: number;
+  total_copied_chars: number;
+  total_copied_lines: number;
+  total_copy_actions: number;
   total_keystrokes: number;
+  total_paste_actions: number;
+  total_paste_external_or_unknown_actions: number;
+  total_paste_same_file_actions: number;
+  total_paste_same_workspace_actions: number;
+  total_pasted_chars: number;
+  total_pasted_lines: number;
 }
 
 export interface KeystrokeStatsResponse {
@@ -308,15 +426,15 @@ export interface AuthResponse {
 // ---------------------------------------------------------------------------
 // POST/DELETE /users/current/api_key — requires a logged-in session (Authorization:
 // Bearer <session token>); user_id comes from that session, not from a query param.
-// Plaintext key is returned exactly once, at generation time — only its hash is
-// persisted server-side.
+// The hash is used for authentication and the owning session can read the current
+// plaintext key back through GET /users/current/api_key.
 // ---------------------------------------------------------------------------
 export interface GenerateApiKeyData {
   api_key: string;
   user_id: string;
 }
 
-/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
+/** `api_key` is null only when no retrievable key exists yet. */
 // ---------------------------------------------------------------------------
 // GET /dashboard/analytics — every value carries the metric it counts and the unit
 // it is measured in, because the cards mix seconds, lines and currency.
@@ -367,19 +485,31 @@ export interface DashboardAnalyticsResponse {
     weekdays: Breakdown;
   };
   coverage: {
+    attributed_changes: number;
+    attribution_data_coverage_percent: null | number;
     attribution_percent: null | number;
+    attribution_relevant_rows: number;
+    attribution_status: 'complete' | 'no_activity' | 'partial';
     cost_percent: null | number;
+    incomplete_attribution_rows: number;
     token_percent: null | number;
+    unattributed_changes: number;
   };
   daily_attribution: Array<{
     ai_added: number;
     ai_deleted: number;
+    ai_inferred_added?: number;
+    ai_inferred_deleted?: number;
+    ai_verified_added?: number;
+    ai_verified_deleted?: number;
     date: string;
     human_added: number;
     human_deleted: number;
     unattributed_added: null | number;
     unattributed_deleted: null | number;
     unit: 'lines';
+    unknown_added?: number;
+    unknown_deleted?: number;
   }>;
   data_version: number;
   generated_at: string;
@@ -424,6 +554,8 @@ export interface ProjectAnalyticsCard {
     lines_deleted: number;
     percentage: null | number;
   };
+  ai_inferred: ProjectAnalyticsCard['ai'];
+  ai_verified: ProjectAnalyticsCard['ai'];
   attribution_coverage_percent: null | number;
   estimated_spend: {
     amount_microusd: null | number;
@@ -457,6 +589,7 @@ export interface ProjectAnalyticsCard {
     lines_deleted: number;
     percentage_of_observed: null | number;
   };
+  unknown: ProjectAnalyticsCard['unattributed'];
 }
 
 export interface ProjectAnalyticsListResponse {
@@ -471,8 +604,10 @@ export interface ProjectAnalyticsListResponse {
 
 export interface ProjectAnalyticsDetailResponse {
   ai: {
+    ai_inferred_lines: number;
     ai_lines: number;
     ai_percentage: null | number;
+    ai_verified_lines: number;
     attribution_coverage_percent: null | number;
     estimated_spend: ProjectAnalyticsCard['estimated_spend'];
     human_lines: number;
@@ -481,24 +616,34 @@ export interface ProjectAnalyticsDetailResponse {
     sessions: null | number;
     tokens: ProjectAnalyticsCard['tokens'];
     unattributed_lines: null | number;
+    unknown_lines: null | number;
   };
   branches: Array<{
     ai_changes: number;
+    ai_inferred_changes: number;
+    ai_verified_changes: number;
     branch: string;
     heartbeat_count: number;
     human_changes: number;
     total_seconds: number;
     unattributed_changes: null | number;
+    unknown_changes: null | number;
   }>;
   daily_activity: Array<{
     ai_added: number;
     ai_deleted: number;
+    ai_inferred_added: number;
+    ai_inferred_deleted: number;
+    ai_verified_added: number;
+    ai_verified_deleted: number;
     date: string;
     human_added: number;
     human_deleted: number;
     total_seconds: number;
     unattributed_added: null | number;
     unattributed_deleted: null | number;
+    unknown_added: null | number;
+    unknown_deleted: null | number;
   }>;
   data_version: number;
   editors: Array<{ name: string; percentage: number; total_seconds: number }>;
@@ -518,6 +663,8 @@ export interface ProjectAnalyticsDetailResponse {
 
 export interface ProjectFileItem {
   ai_changes: number;
+  ai_inferred_changes: number;
+  ai_verified_changes: number;
   display_name: string;
   entity_key: string;
   human_changes: number;
@@ -526,6 +673,7 @@ export interface ProjectFileItem {
   percentage_of_project: number;
   total_seconds: number;
   unattributed_changes: null | number;
+  unknown_changes: null | number;
 }
 
 export interface ProjectFilesResponse {
@@ -592,6 +740,8 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  actor_confidence: number;
+  actor_type: ActorType;
   ai_agent?: null | string;
   ai_confidence?: null | string;
   ai_event_fingerprint?: null | string;
@@ -612,6 +762,8 @@ export interface HeartbeatItem {
   entity_type: string;
   human_lines_added?: null | number;
   human_lines_deleted?: null | number;
+  /** Deprecated compatibility flag; derive state from actor_type instead. */
+  is_ai_generated?: boolean;
   is_write: boolean;
   language: null | string;
   line_number: null | number;
@@ -632,6 +784,8 @@ export interface HeartbeatListResponse {
 
 export interface HeartbeatPayload {
   active_seconds?: number;
+  actor_confidence?: number;
+  actor_type?: ActorType;
   ai_agent?: string;
   ai_confidence?: string;
   ai_event_id?: string;
@@ -802,6 +956,7 @@ export interface PresenceRosterEntry {
   state: PresenceState;
   user_id: string;
   username: string;
+  zone_id?: null | string;
 }
 
 /** What the SSE stream at /presence/rooms/:roomId/stream delivers on every tick. */
@@ -815,8 +970,220 @@ export interface CreatePresenceRoomResponse {
   room_id: string;
 }
 
+/** Every /api/v2 response is wrapped in this. See `unwrapV2` in `client-v2.ts`. */
+export interface V2Envelope<T> {
+  data: T;
+  meta: {
+    coverage: null | unknown;
+    data_freshness: string;
+    generated_at: string;
+    request_id: string;
+    timezone: string;
+  };
+}
+
+export interface V2Capabilities {
+  analytics_store: string;
+  api_version: string;
+  postgres_enabled: boolean;
+  presence_v2_available?: boolean;
+  product: string;
+  transactional_store: string;
+}
+
+export interface Goal {
+  created_at: string;
+  direction: string;
+  ends_on: null | string;
+  filter_kind: string;
+  filter_value: null | string;
+  id: string;
+  metric: string;
+  name: string;
+  period: string;
+  priority: number;
+  public: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone: string;
+  updated_at: string;
+}
+
+export interface CreateGoalPayload {
+  direction: string;
+  ends_on?: null | string;
+  filter_kind: string;
+  filter_value?: null | string;
+  metric: string;
+  name: string;
+  period: string;
+  priority?: number;
+  public?: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone?: string;
+}
+
+export interface GoalProgress {
+  /** 0 means no data covered this window — render it as unknown, never as 0%. */
+  coverage: number;
+  current_seconds: number;
+  direction: string;
+  goal_id: string;
+  on_track: boolean;
+  percentage: number;
+  period: string;
+  target_seconds: number;
+}
+
+export interface Leaderboard {
+  anonymous: boolean;
+  country: null | string;
+  created_at: string;
+  id: string;
+  language: null | string;
+  metric: string;
+  organization_id: null | string;
+  owner_user_id: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface CreateLeaderboardPayload {
+  anonymous?: boolean;
+  country?: null | string;
+  language?: null | string;
+  metric: string;
+  organization_id?: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface LeaderboardMember {
+  joined_at: string;
+  user_id: string;
+  username: string;
+}
+
+export interface PresenceStreamTicketResponse {
+  expires_in_seconds: number;
+  ticket: string;
+}
+
 export interface PresenceActionResponse {
   status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Presence v2 — durable rooms, Redis live state and collaboration zones.
+// ---------------------------------------------------------------------------
+export type PresenceRoomKindV2 = 'adhoc' | 'team';
+
+export interface PresenceV2Zone {
+  center_x: number;
+  center_y: number;
+  height: number;
+  id: string;
+  label: string;
+  room_id: string;
+  sort_order: number;
+  width: number;
+}
+
+export interface PresenceV2Room {
+  ended_at: null | string;
+  expires_at: null | string;
+  id: string;
+  kind: PresenceRoomKindV2;
+  name: string;
+  owner_user_id?: null | string;
+  team_id: null | string;
+}
+
+export interface PresenceV2RoomData extends PresenceV2Room {
+  zones: PresenceV2Zone[];
+}
+
+export type PresenceV2State = 'coding' | 'idle' | 'offline';
+
+export interface PresenceV2RosterEntry {
+  position: null | PresencePoint;
+  state: PresenceV2State;
+  user_id: string;
+  username: string;
+  zone_id: null | string;
+}
+
+export interface PresenceV2SessionParticipant {
+  user_id: string;
+  username: string;
+}
+
+export interface PresenceV2Session {
+  leaving_deadlines: Record<string, number>;
+  participants: PresenceV2SessionParticipant[];
+  session_id: string;
+  started_at: number;
+  zone_id: string;
+}
+
+export interface PresenceV2Snapshot {
+  room: PresenceV2Room;
+  roster: PresenceV2RosterEntry[];
+  server_time: number;
+  sessions: PresenceV2Session[];
+  version: number;
+  zones: PresenceV2Zone[];
+}
+
+export interface PresenceV2Invite {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  invite_url_token?: null | string;
+  revoked_at: null | string;
+  room_id: string;
+  used_count: number;
+}
+
+export interface PresenceV2Ticket {
+  expires_in_seconds: number;
+  ticket: string;
+}
+
+export interface PresenceHistoryParticipant {
+  user_id: string;
+  username: string;
+}
+
+export interface PresenceHistoryItem {
+  duration_seconds: number;
+  ended_at: null | number;
+  ended_reason: string;
+  participants: PresenceHistoryParticipant[];
+  room_id: string;
+  room_name: string;
+  session_id: string;
+  source: string;
+  started_at: number;
+  team_id: null | string;
+  your_joined_at: number;
+  your_left_at: null | number;
+  your_projects: string[];
+  zone_id: null | string;
+}
+
+export interface PresenceHistoryData {
+  items: PresenceHistoryItem[];
+  next_cursor: null | string;
+}
+
+export interface PresenceSummaryData {
+  active_days: null | number;
+  average_group_size: null | number;
+  session_count: null | number;
+  suppressed: boolean;
+  total_collaboration_seconds: null | number;
 }
 
 // ---------------------------------------------------------------------------
@@ -856,5 +1223,5 @@ export interface TeamsResponse {
 // Error shape — every handler returns this on failure
 // ---------------------------------------------------------------------------
 export interface ApiErrorBody {
-  error: string;
+  error: { code?: number; message?: string } | string;
 }

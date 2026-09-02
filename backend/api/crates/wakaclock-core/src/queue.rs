@@ -21,10 +21,10 @@ impl Queue {
         let path = Self::db_path();
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| AppError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(AppError::Io)?;
         }
 
-        let conn = Connection::open(&path).map_err(|e| AppError::Queue(e))?;
+        let conn = Connection::open(&path).map_err(AppError::Queue)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(AppError::Queue)?;
 
@@ -45,7 +45,7 @@ impl Queue {
             WHERE created_at < strftime('%s', 'now') - 2592000;
         ",
         )
-        .map_err(|e| AppError::Queue(e))?;
+        .map_err(AppError::Queue)?;
 
         // Older queue databases predate retry scheduling. Migrate them in place so an
         // upgrade never drops durable heartbeats or hammers a server that is offline.
@@ -146,7 +146,7 @@ impl Queue {
 
     /// บันทึก heartbeat payload ลง queue
     pub fn push(&self, payload: &serde_json::Value) -> Result<(), AppError> {
-        let json = serde_json::to_string(payload).map_err(|e| AppError::Serde(e))?;
+        let json = serde_json::to_string(payload).map_err(AppError::Serde)?;
 
         let now = chrono::Utc::now().timestamp();
 
@@ -173,7 +173,7 @@ impl Queue {
                 "INSERT OR IGNORE INTO heartbeat_queue (heartbeat_id, payload, created_at) VALUES (?1, ?2, ?3)",
                 params![heartbeat_id, json, now],
             )
-            .map_err(|e| AppError::Queue(e))?;
+            .map_err(AppError::Queue)?;
 
         Ok(())
     }
@@ -187,7 +187,7 @@ impl Queue {
                  WHERE next_retry_at <= strftime('%s', 'now')
                  ORDER BY created_at ASC",
             )
-            .map_err(|e| AppError::Queue(e))?;
+            .map_err(AppError::Queue)?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -195,13 +195,12 @@ impl Queue {
                 let json: String = row.get(1)?;
                 Ok((id, json))
             })
-            .map_err(|e| AppError::Queue(e))?;
+            .map_err(AppError::Queue)?;
 
         let mut result = vec![];
         for row in rows {
-            let (id, json) = row.map_err(|e| AppError::Queue(e))?;
-            let value: serde_json::Value =
-                serde_json::from_str(&json).map_err(|e| AppError::Serde(e))?;
+            let (id, json) = row.map_err(AppError::Queue)?;
+            let value: serde_json::Value = serde_json::from_str(&json).map_err(AppError::Serde)?;
             result.push((id, value));
         }
 
@@ -236,7 +235,7 @@ impl Queue {
     pub fn remove(&self, id: i64) -> Result<(), AppError> {
         self.conn
             .execute("DELETE FROM heartbeat_queue WHERE id = ?1", params![id])
-            .map_err(|e| AppError::Queue(e))?;
+            .map_err(AppError::Queue)?;
 
         Ok(())
     }
@@ -246,9 +245,14 @@ impl Queue {
         let count: usize = self
             .conn
             .query_row("SELECT COUNT(*) FROM heartbeat_queue", [], |row| row.get(0))
-            .map_err(|e| AppError::Queue(e))?;
+            .map_err(AppError::Queue)?;
 
         Ok(count)
+    }
+
+    /// Whether the durable heartbeat queue has no pending rows.
+    pub fn is_empty(&self) -> Result<bool, AppError> {
+        Ok(self.len()? == 0)
     }
 
     /// Sum the active time in the offline queue for the calendar day in `timezone`.

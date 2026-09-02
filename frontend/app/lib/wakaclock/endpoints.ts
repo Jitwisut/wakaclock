@@ -1,7 +1,8 @@
 import { wakaclockClient } from './client';
-import { getCurrentToken } from './session';
 
+import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from './analytics';
 import type {
+  AiDiagnosticsResponse,
   AiStatsResponse,
   AllTimeResponse,
   AuthResponse,
@@ -20,6 +21,7 @@ import type {
   OrgResponse,
   OrgsResponse,
   PresenceActionResponse,
+  PresenceStreamTicketResponse,
   ProjectAiResponse,
   ProjectAnalyticsDetailResponse,
   ProjectAnalyticsListResponse,
@@ -138,6 +140,15 @@ export async function getAiStats(userId: string, start: string, end: string) {
   return data;
 }
 
+// GET /users/current/ai_diagnostics
+export async function getAiDiagnostics(userId: string) {
+  const { data } = await wakaclockClient.get<AiDiagnosticsResponse>(
+    '/users/current/ai_diagnostics',
+    { params: { user_id: userId } }
+  );
+  return data;
+}
+
 // GET /users/current/keystroke_stats?start=&end=
 export async function getKeystrokeStats(userId: string, start: string, end: string) {
   const { data } = await wakaclockClient.get<KeystrokeStatsResponse>(
@@ -156,8 +167,14 @@ export async function getCurrentUser(userId: string) {
 }
 
 // POST /users/current/api_key — requires a logged-in session; user_id comes from that
-// session (Authorization header, attached automatically), not a query param. Plaintext
-// key returned once, never again.
+// session (Authorization header, attached automatically), not a query param.
+export async function getAnalyticsExplorer(params: AnalyticsExplorerParams) {
+  const { data } = await wakaclockClient.get<AnalyticsExplorerResponse>('/dashboard/explorer', {
+    params,
+  });
+  return data;
+}
+
 // GET /dashboard/analytics — the Phase 9 overview: summary plus every breakdown in
 // one request, sized for the initial dashboard render.
 export async function getDashboardAnalytics(params: {
@@ -258,8 +275,7 @@ export async function getProjectAnalyticsAi(
   return data;
 }
 
-// GET /users/current/api_key — metadata only. Plaintext credentials are never returned
-// after the one-time POST response.
+// GET /users/current/api_key — returns the current key to the logged-in dashboard session.
 export async function getCurrentApiKey() {
   const { data } = await wakaclockClient.get<CurrentApiKeyResponse>('/users/current/api_key');
   return data;
@@ -369,12 +385,25 @@ export async function leaveSession(roomId: string) {
  * Returns `null` if there is no current session — callers should not open a connection
  * without one.
  */
-export function presenceStreamUrl(roomId: string): null | string {
-  const token = getCurrentToken();
-  if (!token) return null;
+// POST /presence/rooms/:room_id/stream-ticket
+/**
+ * Mint a short-lived, room-scoped credential for the SSE stream.
+ *
+ * `EventSource` cannot send an `Authorization` header, so something has to go in the
+ * query string. This used to be the session token — account-wide and valid for a day,
+ * which then sat in access logs, proxy logs and browser history. A ticket expires in
+ * minutes and opens exactly one room.
+ */
+export async function createPresenceStreamTicket(roomId: string) {
+  const { data } = await wakaclockClient.post<PresenceStreamTicketResponse>(
+    `/presence/rooms/${roomId}/stream-ticket`
+  );
+  return data;
+}
 
+export function presenceStreamUrl(roomId: string, ticket: string): string {
   const base = wakaclockClient.defaults.baseURL;
-  return `${base}/presence/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
+  return `${base}/presence/rooms/${roomId}/stream?ticket=${encodeURIComponent(ticket)}`;
 }
 
 // GET /project_rules?user_id= — user_id REQUIRED (400 if omitted)

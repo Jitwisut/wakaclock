@@ -9,7 +9,9 @@
   publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "20"
+  NODE_VERSION = "24"
+  NEXT_PUBLIC_APP_URL = "https://atoaxis.com"
+  NEXT_PUBLIC_WAKACLOCK_API_URL = "https://api.atoaxis.com"
   # Next.js type-checking reaches Node's default ~2 GB heap on Netlify.
   # Give the build process enough headroom for the production type pass.
   NODE_OPTIONS = "--max-old-space-size=4096"

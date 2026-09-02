@@ -18,10 +18,11 @@
 //!     clears that file's buffered/dirty state so the next periodic flush doesn't send
 //!     a redundant second heartbeat for it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
@@ -29,10 +30,25 @@ use tower_lsp::{async_trait, Client, LanguageServer, LspService, Server};
 use tracing::{info, warn};
 
 use wakaclock_ast::detect;
+use wakaclock_core::ai::has_nearby_event_in_home_dir;
 use wakaclock_core::api_client::ApiClient;
 use wakaclock_core::config::Config;
 use wakaclock_core::git;
-use wakaclock_core::heartbeat::{Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{ActorType, Category, EntityType, Heartbeat};
+
+/// How far a broker sidecar event may sit from this heartbeat's own timestamp and
+/// still count as "nearby AI activity" for the same file. Wider than
+/// `aiAttribution.ts`'s 15s point-match window on purpose: unlike VS Code, this check
+/// has no line delta to narrow the match, only entity + time, so it errs toward not
+/// missing agent activity rather than toward precision. See `sidecar.rs`'s doc comment.
+const AI_SIDECAR_CORRELATION_WINDOW_SECONDS: f64 = 20.0;
+
+/// Epoch seconds matching both `Heartbeat::time`'s own construction and the broker
+/// sidecar's `time` field, so a correlation-window comparison between the two is
+/// comparing the same clock.
+fn now_seconds() -> f64 {
+    Utc::now().timestamp_millis() as f64 / 1000.0
+}
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -94,8 +110,13 @@ struct Shared {
     /// uri -> current buffer contents, kept in sync by didOpen/didChange/didClose since
     /// tower-lsp does not track document text itself.
     documents: Arc<Mutex<HashMap<Url, String>>>,
-    /// URIs changed since the last periodic flush.
-    dirty: Arc<Mutex<HashSet<Url>>>,
+    /// uri -> the timestamp (epoch seconds) of the most recent didChange event not yet
+    /// flushed. An edit can sit here for up to `FLUSH_INTERVAL` before its heartbeat is
+    /// built, so `build_heartbeat`'s AI sidecar correlation needs this real edit time,
+    /// not the later flush time — otherwise a same-file agent edit near the start of
+    /// the buffering window falls outside a correlation window sized for one edit, not
+    /// for a 30-second buffering delay.
+    dirty: Arc<Mutex<HashMap<Url, f64>>>,
 }
 
 struct Backend {
@@ -106,7 +127,13 @@ struct Backend {
 /// same project/branch resolution via `git::discover`, same AST-based language and
 /// dependency detection, same fields populated. Kept as a free function taking only the
 /// pieces it needs rather than a `&Backend` so it has no dependency on the LSP types.
-fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Option<Heartbeat> {
+fn build_heartbeat(
+    config: &Config,
+    uri: &Url,
+    text: &str,
+    is_write: bool,
+    correlation_time_seconds: f64,
+) -> Option<Heartbeat> {
     let path = uri.to_file_path().ok()?;
     let entity = path.to_string_lossy().to_string();
 
@@ -121,6 +148,28 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     heartbeat.project = git_info.as_ref().map(|g| g.project.clone());
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
+    // Zed is an editor producer, so its ordinary open/change/save telemetry is
+    // positive Human evidence — but only when there is no competing AI evidence for
+    // this same file. Unlike the VS Code extension, wakaclock-ls does not track a
+    // per-change line delta, so it cannot reproduce aiAttribution.ts's exact-match
+    // correlation; it can only check whether the broker recorded AI activity for this
+    // entity at roughly the same time. A hit means "not provably Human", not "AI" (no
+    // line counts to claim ownership of), so it lands as Unknown rather than either
+    // confident label. Phase 1: `RAW_CHANGE_WITHOUT_PROVENANCE != HUMAN` — see
+    // `wakaclock_core::ai::sidecar`.
+    if has_nearby_event_in_home_dir(
+        &path,
+        correlation_time_seconds,
+        AI_SIDECAR_CORRELATION_WINDOW_SECONDS,
+    ) {
+        heartbeat.actor_type = ActorType::Unknown;
+        heartbeat.actor_confidence = 0.0;
+        heartbeat.is_ai_generated = false;
+    } else {
+        heartbeat.actor_type = ActorType::Human;
+        heartbeat.actor_confidence = 1.0;
+        heartbeat.is_ai_generated = false;
+    }
     heartbeat.category = Category::Coding;
     heartbeat.operating_system = std::env::consts::OS.to_string();
     heartbeat.machine = hostname::get()
@@ -140,66 +189,6 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     Some(heartbeat)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_heartbeat_returns_none_for_a_non_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("untitled:Untitled-1").unwrap();
-
-        assert!(build_heartbeat(&config, &uri, "fn main() {}", false).is_none());
-    }
-
-    #[test]
-    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false)
-            .expect("a file:// URI should always produce a heartbeat");
-
-        assert_eq!(heartbeat.user_id, config.user_id);
-        assert_eq!(heartbeat.entity_type, EntityType::File);
-        assert_eq!(heartbeat.category, Category::Coding);
-        assert_eq!(heartbeat.editor, "Zed");
-        assert!(!heartbeat.is_write);
-        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
-    }
-
-    #[test]
-    fn build_heartbeat_marks_is_write_when_asked() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
-
-        assert!(heartbeat.is_write);
-    }
-
-    #[test]
-    fn build_heartbeat_detects_language_from_content() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
-        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
-    }
-
-    #[test]
-    fn build_heartbeat_result_passes_its_own_validation() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert!(heartbeat.validate().is_ok());
-    }
-}
-
 impl Shared {
     /// Builds one heartbeat for `uri` and hands it to the delivery worker (see
     /// `spawn_heartbeat_worker`) if it both resolves to a real file path and passes its
@@ -210,7 +199,7 @@ impl Shared {
     ///
     /// Handing off is a plain channel push, not a network call — this returns as soon as
     /// the heartbeat is queued, well before it is actually sent.
-    async fn send_for(&self, uri: &Url, is_write: bool) {
+    async fn send_for(&self, uri: &Url, is_write: bool, correlation_time_seconds: f64) {
         let text = {
             let documents = self.documents.lock().await;
             match documents.get(uri) {
@@ -219,7 +208,9 @@ impl Shared {
             }
         };
 
-        let Some(heartbeat) = build_heartbeat(&self.config, uri, &text, is_write) else {
+        let Some(heartbeat) =
+            build_heartbeat(&self.config, uri, &text, is_write, correlation_time_seconds)
+        else {
             return;
         };
 
@@ -249,13 +240,13 @@ impl Shared {
         loop {
             interval.tick().await;
 
-            let uris: Vec<Url> = {
+            let uris: Vec<(Url, f64)> = {
                 let mut dirty = self.dirty.lock().await;
                 dirty.drain().collect()
             };
 
-            for uri in &uris {
-                self.send_for(uri, false).await;
+            for (uri, edit_time_seconds) in &uris {
+                self.send_for(uri, false, *edit_time_seconds).await;
             }
         }
     }
@@ -266,8 +257,14 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _params: InitializeParams) -> LspResult<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        will_save: Some(false),
+                        will_save_wait_until: Some(false),
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                    },
                 )),
                 ..ServerCapabilities::default()
             },
@@ -298,7 +295,7 @@ impl LanguageServer for Backend {
         let text = params.text_document.text;
 
         self.shared.documents.lock().await.insert(uri.clone(), text);
-        self.shared.send_for(&uri, false).await;
+        self.shared.send_for(&uri, false, now_seconds()).await;
     }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
@@ -315,13 +312,15 @@ impl LanguageServer for Backend {
             .lock()
             .await
             .insert(uri.clone(), change.text);
-        self.shared.dirty.lock().await.insert(uri);
+        // Overwriting on repeated inserts keeps the latest edit's timestamp, matching
+        // the VS Code extension's `state.lastEditAt = now` semantics for the same file.
+        self.shared.dirty.lock().await.insert(uri, now_seconds());
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        self.shared.send_for(&uri, true).await;
+        self.shared.send_for(&uri, true, now_seconds()).await;
         self.shared.dirty.lock().await.remove(&uri);
     }
 
@@ -363,7 +362,7 @@ async fn main() {
             config: config.clone(),
             heartbeat_tx: heartbeat_tx.clone(),
             documents: Arc::new(Mutex::new(HashMap::new())),
-            dirty: Arc::new(Mutex::new(HashSet::new())),
+            dirty: Arc::new(Mutex::new(HashMap::new())),
         };
 
         // `Shared` is `Clone` (every field is an `Arc` or an `Arc`-backed handle), so the
@@ -375,4 +374,210 @@ async fn main() {
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes the tests below that override the process-wide `HOME` env var (see
+    /// their own comments): `cargo test` runs tests in parallel by default within one
+    /// binary, and `std::env::set_var` is process state, not per-thread — without this,
+    /// one test's override can be visible to another mid-run. Held for the full
+    /// mutate-call-restore span in each such test.
+    ///
+    /// `std::sync::Mutex` rather than `tokio::sync::Mutex`: this guards plain sync test
+    /// functions with no async runtime in scope to `.await` a lock on, and there is no
+    /// executor here to block.
+    #[allow(clippy::disallowed_types)]
+    static HOME_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn build_heartbeat_returns_none_for_a_non_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("untitled:Untitled-1").unwrap();
+
+        assert!(build_heartbeat(&config, &uri, "fn main() {}", false, now_seconds()).is_none());
+    }
+
+    #[test]
+    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false, now_seconds())
+            .expect("a file:// URI should always produce a heartbeat");
+
+        assert_eq!(heartbeat.user_id, config.user_id);
+        assert_eq!(heartbeat.entity_type, EntityType::File);
+        assert_eq!(heartbeat.category, Category::Coding);
+        assert_eq!(heartbeat.editor, "Zed");
+        assert!(!heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
+    }
+
+    #[test]
+    fn build_heartbeat_withholds_human_when_the_broker_saw_ai_activity_here() {
+        // `build_heartbeat` has no injection seam for the home directory (it calls the
+        // production `has_nearby_event_in_home_dir`, matching wakaclock-cli's own
+        // `dirs::home_dir()` convention elsewhere in this workspace), so this test
+        // overrides `HOME` — the same var `dirs::home_dir()` reads on Unix — for its
+        // duration. `HOME_ENV_GUARD` keeps this from interleaving with the other test
+        // that does the same.
+        let _home_guard = HOME_ENV_GUARD.lock().unwrap();
+        let temp_home = std::env::temp_dir().join(format!(
+            "wakaclock-ls-test-home-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let sidecar_dir = temp_home.join(".wakaclock");
+        std::fs::create_dir_all(&sidecar_dir).unwrap();
+
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/ai-attributed-example.rs").unwrap();
+        let entity = uri.to_file_path().unwrap().to_string_lossy().to_string();
+        let edit_time_seconds = now_seconds();
+        std::fs::write(
+            sidecar_dir.join("ai-events.jsonl"),
+            format!(
+                r#"{{"event_id":"claude-1","entity":"{entity}","time":{edit_time_seconds},"lines_added":3,"lines_deleted":0}}"#
+            ),
+        )
+        .unwrap();
+
+        let previous_home = std::env::var_os("HOME");
+        // SAFETY: `HOME_ENV_GUARD` above ensures no other test reads/writes HOME while
+        // this section runs.
+        unsafe {
+            std::env::set_var("HOME", &temp_home);
+        }
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false, edit_time_seconds);
+        unsafe {
+            match &previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        let heartbeat = heartbeat.expect("a file:// URI should always produce a heartbeat");
+        assert_eq!(heartbeat.actor_type, ActorType::Unknown);
+        assert_eq!(heartbeat.actor_confidence, 0.0);
+        assert!(!heartbeat.is_ai_generated);
+    }
+
+    #[test]
+    fn build_heartbeat_still_matches_a_stale_edit_time_from_a_buffered_flush() {
+        // Regression test: `didChange` buffers for up to `FLUSH_INTERVAL` (30s) before
+        // `run_periodic_flush` builds the heartbeat, so the correlation check must use
+        // the edit's own timestamp, not the later flush time — otherwise an edit near
+        // the start of that buffering window falls outside a correlation window (20s)
+        // sized for one edit, not for the buffering delay. This constructs exactly that
+        // gap: the sidecar event and the "edit" are both 25 seconds in the past relative
+        // to `now`, well past the correlation window if `now` were used instead.
+        let _home_guard = HOME_ENV_GUARD.lock().unwrap();
+        let temp_home = std::env::temp_dir().join(format!(
+            "wakaclock-ls-test-home-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let sidecar_dir = temp_home.join(".wakaclock");
+        std::fs::create_dir_all(&sidecar_dir).unwrap();
+
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/stale-flush-example.rs").unwrap();
+        let entity = uri.to_file_path().unwrap().to_string_lossy().to_string();
+        let edit_time_seconds = now_seconds() - 25.0;
+        std::fs::write(
+            sidecar_dir.join("ai-events.jsonl"),
+            format!(
+                r#"{{"event_id":"claude-2","entity":"{entity}","time":{edit_time_seconds},"lines_added":3,"lines_deleted":0}}"#
+            ),
+        )
+        .unwrap();
+
+        let previous_home = std::env::var_os("HOME");
+        // SAFETY: `HOME_ENV_GUARD` above ensures no other test reads/writes HOME while
+        // this section runs.
+        unsafe {
+            std::env::set_var("HOME", &temp_home);
+        }
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false, edit_time_seconds);
+        unsafe {
+            match &previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temp_home);
+
+        let heartbeat = heartbeat.expect("a file:// URI should always produce a heartbeat");
+        assert_eq!(heartbeat.actor_type, ActorType::Unknown);
+    }
+
+    #[test]
+    fn build_heartbeat_marks_is_write_when_asked() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat =
+            build_heartbeat(&config, &uri, "fn main() {}\n", true, now_seconds()).unwrap();
+
+        assert!(heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+    }
+
+    #[test]
+    fn build_heartbeat_detects_language_from_content() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat =
+            build_heartbeat(&config, &uri, "fn main() {}\n", false, now_seconds()).unwrap();
+
+        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
+        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
+    }
+
+    #[test]
+    fn build_heartbeat_uses_latest_unsaved_buffer_for_ast_dependencies() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.ts").unwrap();
+
+        let first = build_heartbeat(
+            &config,
+            &uri,
+            "import react from 'react';\nconst n: number = 1;",
+            false,
+            now_seconds(),
+        )
+        .unwrap();
+        let second = build_heartbeat(
+            &config,
+            &uri,
+            "import axios from 'axios';\nconst n: number = 2;",
+            false,
+            now_seconds(),
+        )
+        .unwrap();
+
+        assert!(first.dependencies.contains(&"react".to_string()));
+        assert!(!first.dependencies.contains(&"axios".to_string()));
+        assert!(second.dependencies.contains(&"axios".to_string()));
+        assert!(!second.dependencies.contains(&"react".to_string()));
+    }
+
+    #[test]
+    fn build_heartbeat_result_passes_its_own_validation() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat =
+            build_heartbeat(&config, &uri, "fn main() {}\n", false, now_seconds()).unwrap();
+
+        assert!(heartbeat.validate().is_ok());
+    }
 }

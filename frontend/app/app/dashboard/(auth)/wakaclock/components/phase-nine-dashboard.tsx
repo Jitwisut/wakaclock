@@ -1,27 +1,53 @@
 'use client';
 
+import * as React from 'react';
+
 import { useQuery } from '@tanstack/react-query';
-import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 
 import { DashboardPanel } from '@/components/dashboard-panels';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChartContainer } from '@/components/ui/chart';
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
+import {
+  presentAttributionDataCoverage,
+  presentCodeAttribution,
+  presentPeriodComparison,
+} from '@/lib/wakaclock/dashboard-analytics-presenters';
 import { getDashboardAnalytics } from '@/lib/wakaclock/endpoints';
-import { formatDurationShort } from '@/lib/wakaclock/format';
+import {
+  formatDurationShort,
+  formatMagnitude,
+  toDivergingNegative,
+} from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+/**
+ * Colour means attribution class; position means direction.
+ *
+ * Colour means actor class; position means direction. Deletions sit below the zero line,
+ * while verified AI, inferred AI and Unknown remain separate series so a boolean cannot
+ * collapse materially different evidence classes into one dashboard number.
+ */
 const chartConfig = {
-  ai_added: { color: 'var(--chart-1)', label: 'AI additions' },
-  ai_deleted: { color: 'var(--chart-1)', label: 'AI deletions' },
-  human_added: { color: 'var(--chart-2)', label: 'Human additions' },
-  human_deleted: { color: 'var(--chart-2)', label: 'Human deletions' },
-  unattributed_added: { color: 'var(--chart-4)', label: 'Unattributed additions' },
-  unattributed_deleted: { color: 'var(--chart-4)', label: 'Unattributed deletions' },
+  ai_verified_added: { color: 'var(--chart-1)', label: 'AI verified' },
+  ai_verified_deleted: { color: 'var(--chart-1)', label: 'AI verified deleted' },
+  ai_inferred_added: { color: 'var(--chart-3)', label: 'AI inferred' },
+  ai_inferred_deleted: { color: 'var(--chart-3)', label: 'AI inferred deleted' },
+  human_added: { color: 'var(--chart-2)', label: 'Human' },
+  human_deleted: { color: 'var(--chart-2)', label: 'Human deleted' },
+  unknown_added: { color: 'var(--chart-4)', label: 'Unknown' },
+  unknown_deleted: { color: 'var(--chart-4)', label: 'Unknown deleted' },
 } satisfies ChartConfig;
 
 function percent(value: null | number) {
@@ -36,12 +62,21 @@ function spend(value: null | number) {
   return value === null ? 'Unavailable' : `$${(value / 1_000_000).toFixed(2)}`;
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  subtext,
+  value,
+}: {
+  label: string;
+  subtext?: string;
+  value: string;
+}) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-2xl">{value}</CardTitle>
+        {subtext && <p className="text-muted-foreground text-xs leading-relaxed">{subtext}</p>}
       </CardHeader>
     </Card>
   );
@@ -92,6 +127,31 @@ export function PhaseNineDashboard() {
     queryKey: [...wakaclockKeys.all, 'dashboard-analytics', userId, start, end, timezone],
   });
 
+  // `unattributed_*` is nullable on purpose — the API reports "we cannot tell" rather
+  // than a measured zero — so the transform has to preserve null instead of negating it
+  // into NaN, which would silently drop the bar.
+  const divergingSeries = React.useMemo(
+    () =>
+      (data?.daily_attribution ?? []).map((row) => ({
+        ai_verified_added: row.ai_verified_added ?? 0,
+        ai_verified_deleted: toDivergingNegative(row.ai_verified_deleted ?? 0),
+        ai_inferred_added: row.ai_inferred_added ?? 0,
+        ai_inferred_deleted: toDivergingNegative(row.ai_inferred_deleted ?? 0),
+        date: row.date,
+        human_added: row.human_added,
+        human_deleted: toDivergingNegative(row.human_deleted),
+        unknown_added: row.unknown_added ?? row.unattributed_added ?? 0,
+        unknown_deleted: toDivergingNegative(row.unknown_deleted ?? row.unattributed_deleted ?? 0),
+      })),
+    [data]
+  );
+
+  const periodComparison = data
+    ? presentPeriodComparison(data.summary.previous_period, data.range.days_included)
+    : null;
+  const codeAttribution = data ? presentCodeAttribution(data.coverage) : null;
+  const attributionDataCoverage = data ? presentAttributionDataCoverage(data.coverage) : null;
+
   return (
     <Card>
       <CardHeader>
@@ -129,17 +189,30 @@ export function PhaseNineDashboard() {
                     label="Best day"
                     value={data.summary.most_active_day?.text ?? 'No activity'}
                   />
-                  <MetricCard
-                    label="Previous period"
-                    value={`${data.summary.previous_period.percent?.toFixed(1) ?? '—'}% ${data.summary.previous_period.direction}`}
-                  />
+                  {periodComparison && (
+                    <MetricCard
+                      label={periodComparison.label}
+                      subtext={periodComparison.subtext}
+                      value={periodComparison.value}
+                    />
+                  )}
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-3">
-                  <MetricCard
-                    label="Attribution coverage"
-                    value={percent(data.coverage.attribution_percent)}
-                  />
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {codeAttribution && (
+                    <MetricCard
+                      label={codeAttribution.label}
+                      subtext={codeAttribution.subtext}
+                      value={codeAttribution.value}
+                    />
+                  )}
+                  {attributionDataCoverage && (
+                    <MetricCard
+                      label={attributionDataCoverage.label}
+                      subtext={attributionDataCoverage.subtext}
+                      value={attributionDataCoverage.value}
+                    />
+                  )}
                   <MetricCard label="Token coverage" value={percent(data.coverage.token_percent)} />
                   <MetricCard label="Cost coverage" value={percent(data.coverage.cost_percent)} />
                 </div>
@@ -159,41 +232,65 @@ export function PhaseNineDashboard() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Daily code-change attribution</CardTitle>
-                    <CardDescription>Unknown provenance remains Unattributed.</CardDescription>
+                    <CardDescription>
+                      Additions above the axis, deletions below. Human, verified AI, inferred AI
+                      and Unknown remain separate actor classes.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <ChartContainer className="h-72 w-full" config={chartConfig}>
-                      <BarChart data={data.daily_attribution} margin={{ left: 0, right: 12 }}>
+                      <BarChart data={divergingSeries} margin={{ left: 0, right: 12 }} stackOffset="sign">
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis dataKey="date" tickLine={false} tickMargin={8} />
-                        <YAxis tickLine={false} tickMargin={8} />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="ai_added" fill="var(--color-ai_added)" stackId="changes" />
+                        <YAxis tickFormatter={formatMagnitude} tickLine={false} tickMargin={8} />
+                        <ReferenceLine stroke="var(--border)" y={0} />
+                        <ChartTooltip
+                          content={<ChartTooltipContent formatter={(value) => formatMagnitude(value)} />}
+                        />
+                        <ChartLegend content={<ChartLegendContent />} />
+                        <Bar
+                          dataKey="ai_verified_added"
+                          fill="var(--color-ai_verified_added)"
+                          stackId="churn"
+                        />
+                        <Bar
+                          dataKey="ai_inferred_added"
+                          fill="var(--color-ai_inferred_added)"
+                          stackId="churn"
+                        />
                         <Bar
                           dataKey="human_added"
                           fill="var(--color-human_added)"
-                          stackId="changes"
+                          stackId="churn"
+                        />
+                        <Bar dataKey="unknown_added" fill="var(--color-unknown_added)" stackId="churn" />
+                        <Bar
+                          dataKey="ai_verified_deleted"
+                          fill="var(--color-ai_verified_deleted)"
+                          fillOpacity={0.55}
+                          legendType="none"
+                          stackId="churn"
                         />
                         <Bar
-                          dataKey="unattributed_added"
-                          fill="var(--color-unattributed_added)"
-                          stackId="changes"
-                        />
-                        <Bar
-                          dataKey="ai_deleted"
-                          fill="var(--color-ai_deleted)"
-                          stackId="deletions"
+                          dataKey="ai_inferred_deleted"
+                          fill="var(--color-ai_inferred_deleted)"
+                          fillOpacity={0.55}
+                          legendType="none"
+                          stackId="churn"
                         />
                         <Bar
                           dataKey="human_deleted"
                           fill="var(--color-human_deleted)"
-                          stackId="deletions"
+                          fillOpacity={0.55}
+                          legendType="none"
+                          stackId="churn"
                         />
                         <Bar
-                          dataKey="unattributed_deleted"
-                          fill="var(--color-unattributed_deleted)"
-                          stackId="deletions"
+                          dataKey="unknown_deleted"
+                          fill="var(--color-unknown_deleted)"
+                          fillOpacity={0.55}
+                          legendType="none"
+                          stackId="churn"
                         />
                       </BarChart>
                     </ChartContainer>

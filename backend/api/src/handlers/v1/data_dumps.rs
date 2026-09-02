@@ -100,4 +100,3 @@ fn internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>)
         Json(serde_json::json!({ "error": error.to_string() })),
     )
 }
-

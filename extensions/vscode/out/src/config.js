@@ -72,7 +72,8 @@ class WakaclockConfigService {
             statusBarEnabled: config.get("statusBarEnabled", true),
             debugLogging: config.get("debugLogging", false),
             trackDebugSessions: config.get("trackDebugSessions", true),
-            trackBuildTasks: config.get("trackBuildTasks", true)
+            trackBuildTasks: config.get("trackBuildTasks", true),
+            trackClipboardActions: config.get("trackClipboardActions", true)
         };
     }
     async updateSetting(key, value) {

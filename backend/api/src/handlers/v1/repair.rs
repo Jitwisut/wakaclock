@@ -61,10 +61,7 @@ pub async fn day(
         .intervals(user_id, start, end)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
-    let canonical = canonicalize_bridged(
-        &raw,
-        state.activity_timeline_service.idle_timeout_seconds(),
-    );
+    let canonical = canonicalize_bridged(&raw, state.activity_timeline_service.bridge_config());
     let after_seconds = total_seconds(&canonical);
     let raw_seconds: f64 = raw
         .iter()

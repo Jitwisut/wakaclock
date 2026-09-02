@@ -21,6 +21,7 @@ function config(): WakaclockConfigSnapshot {
     debugLogging: false,
     trackDebugSessions: true,
     trackBuildTasks: true,
+    trackClipboardActions: true,
   };
 }
 
@@ -80,5 +81,38 @@ describe("ManagedCliManager", () => {
       new Logger(() => false),
     );
     await expect(manager.ensureReady()).rejects.toThrow(/checksum/i);
+  });
+
+  it("rejects manifest versions that could escape the managed CLI directory", async () => {
+    const { root } = await fixture();
+    const manifestPath = path.join(root, "resources", "cli-manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.cliVersion = "../../outside";
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    await expect(managedCliInternals.readManifest(manifestPath)).rejects.toThrow(/required fields/i);
+  });
+
+  it("rejects unsupported CLI protocol versions before execution", async () => {
+    const { root } = await fixture();
+    const manifestPath = path.join(root, "resources", "cli-manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.protocolVersion = 999;
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const manager = new ManagedCliManager(
+      { extensionPath: root, globalStoragePath: path.join(root, "global") },
+      config,
+      new Logger(() => false),
+    );
+    await expect(manager.ensureReady()).rejects.toThrow(/protocol/i);
+  });
+
+  it("rejects a bundled CLI version that does not match the Extension version", async () => {
+    const { root } = await fixture();
+    const manager = new ManagedCliManager(
+      { extensionPath: root, globalStoragePath: path.join(root, "global"), extensionVersion: "9.9.9" },
+      config,
+      new Logger(() => false),
+    );
+    await expect(manager.ensureReady()).rejects.toThrow(/does not match Extension/i);
   });
 });

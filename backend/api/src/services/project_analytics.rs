@@ -19,7 +19,10 @@ use crate::model::project_analytics::{
     PROJECT_ANALYTICS_SCHEMA_VERSION,
 };
 use crate::repository::project_analytics::{
-    ProjectAggregateRow, ProjectAnalyticsRepository, ProjectBreakdownTable,
+    ProjectAggregateRow, ProjectAnalyticsRepository, ProjectBreakdownRow, ProjectBreakdownTable,
+};
+use crate::services::activity_timeline::{
+    totals_by, ActivityTimelineService, BridgeConfig, Dimension,
 };
 use crate::services::project_identity::ProjectIdentityService;
 
@@ -31,6 +34,15 @@ pub struct ProjectAnalyticsService {
     cursor_secret: String,
     identity_service: Arc<ProjectIdentityService>,
     repo: Arc<ProjectAnalyticsRepository>,
+    /// Seconds come from here, not from the repository's `sum(active_seconds)`.
+    ///
+    /// The repository still answers everything else — line counts, token spend, last
+    /// activity — because those genuinely are per-heartbeat sums. Duration is not: summing
+    /// `active_seconds` counts a second twice when the editor and an agent hook both
+    /// report it, and it credits none of the idle bridging the dashboard's own total is
+    /// built from. That is why this page and the front page disagreed. See
+    /// docs/duration-accuracy-audit.md, Finding 4.
+    timeline: ActivityTimelineService,
 }
 
 impl ProjectAnalyticsService {
@@ -38,12 +50,48 @@ impl ProjectAnalyticsService {
         repo: Arc<ProjectAnalyticsRepository>,
         identity_service: Arc<ProjectIdentityService>,
         cursor_secret: String,
+        clickhouse: Arc<crate::infrastructure::database::ClickHouseClient>,
+        bridge: impl Into<BridgeConfig>,
     ) -> Self {
         Self {
             cursor_secret,
             identity_service,
             repo,
+            timeline: ActivityTimelineService::new(clickhouse, bridge),
         }
+    }
+
+    /// Canonical seconds for a range, keyed by project id *and* by display name.
+    ///
+    /// Keying on the id alone loses almost everything on real data: `project_id` was added
+    /// to `activity_intervals` long after the table existed, so every historical interval
+    /// carries NULL, and 303 of this repository's own 992 heartbeats have no id either. A
+    /// display name is present on 97% of them. Each interval is therefore counted exactly
+    /// once — under its id when it has one, under its name when it does not — and a caller
+    /// adds the two buckets for the project it is asking about.
+    async fn canonical_project_seconds(
+        &self,
+        user_id: Uuid,
+        start_epoch: f64,
+        end_epoch: f64,
+    ) -> Result<ProjectSeconds> {
+        let canonical = self
+            .timeline
+            .canonical(user_id, start_epoch, end_epoch)
+            .await?;
+        let mut by_id: HashMap<String, f64> = HashMap::new();
+        let mut by_name: HashMap<String, f64> = HashMap::new();
+        for interval in &canonical {
+            let seconds = interval.end - interval.start;
+            match interval.project_id {
+                Some(id) => *by_id.entry(id.to_string()).or_default() += seconds,
+                None => {
+                    let name = interval.project.as_deref().unwrap_or("Unknown");
+                    *by_name.entry(name.to_string()).or_default() += seconds;
+                }
+            }
+        }
+        Ok(ProjectSeconds { by_id, by_name })
     }
 
     pub async fn list(
@@ -56,12 +104,23 @@ impl ProjectAnalyticsService {
         cursor: Option<&str>,
     ) -> Result<ProjectAnalyticsListResponse> {
         let (start_epoch, end_epoch) = range.unix_bounds();
+        let canonical_seconds = self
+            .canonical_project_seconds(user_id, start_epoch, end_epoch)
+            .await?;
         let mut cards: Vec<_> = self
             .repo
             .project_aggregates(user_id, start_epoch, end_epoch, None)
             .await?
             .into_iter()
-            .map(card_from_row)
+            .map(|row| {
+                let mut card = card_from_row(row);
+                // A project the timeline has no seconds for reports zero rather than the
+                // aggregate's figure: mixing the two algorithms in one list is exactly the
+                // disagreement this replaces.
+                card.total_seconds =
+                    rounded_seconds(canonical_seconds.get(card.project_id, &card.name));
+                card
+            })
             .collect();
         cards.sort_by(|left, right| compare_cards(left, right, sort, order));
         let cursor_scope = project_list_cursor_scope(user_id, range);
@@ -72,7 +131,6 @@ impl ProjectAnalyticsService {
                 cards
                     .iter()
                     .position(|card| cursor_is_after(card, &payload, sort, order))
-                    .map(|index| index)
                     .or_else(|| {
                         cards
                             .iter()
@@ -85,7 +143,7 @@ impl ProjectAnalyticsService {
         };
         let page_size =
             usize::from(limit.unwrap_or(DEFAULT_PAGE_SIZE as u16)).clamp(1, MAX_PAGE_SIZE);
-        let total_seconds = cards.iter().map(|card| card.total_seconds).sum();
+        let total_seconds = rounded_seconds(canonical_seconds.total());
         let project_count = cards.len() as u64;
         let items: Vec<_> = cards
             .iter()
@@ -130,7 +188,7 @@ impl ProjectAnalyticsService {
             .ok_or_else(|| anyhow::anyhow!("project not found"))?;
         let (start_epoch, end_epoch) = range.unix_bounds();
         let timezone = range.timezone.to_string();
-        let (daily, languages, editors, branches, files, all_projects, aggregates) = tokio::try_join!(
+        let (daily, languages, editors, branches, files, aggregates) = tokio::try_join!(
             self.repo.project_daily(
                 user_id,
                 project_id,
@@ -160,20 +218,70 @@ impl ProjectAnalyticsService {
             self.repo
                 .project_files(user_id, project_id, start_epoch, end_epoch, branch),
             self.repo
-                .all_projects_seconds(user_id, start_epoch, end_epoch),
-            self.repo
                 .project_aggregates(user_id, start_epoch, end_epoch, branch),
         )?;
         let aggregate = aggregates
             .into_iter()
             .find(|row| row.project_id == project_id);
-        let total_seconds = aggregate
-            .as_ref()
-            .map(|row| rounded_seconds(row.total_seconds))
-            .unwrap_or(0);
+
+        // Seconds come from the canonical timeline so this page agrees with the dashboard
+        // total; everything else in the response is a genuine per-heartbeat sum and stays
+        // on the repository. A branch filter is the one case the timeline cannot serve —
+        // `activity_intervals` carries no branch — so those views keep the aggregate
+        // figure and remain a known disagreement.
+        let canonical = if branch.is_none() {
+            Some(
+                self.timeline
+                    .canonical(user_id, start_epoch, end_epoch)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        // Deliberately unscoped: this is the denominator for "how much of your time went
+        // to this project", so a branch filter must not shrink it too.
+        let all_projects_canonical = self
+            .canonical_project_seconds(user_id, start_epoch, end_epoch)
+            .await?
+            .total();
+        let project_key = project_id.to_string();
+        // Same identity rule as the list: an interval that carries an id must match it,
+        // and one that does not falls back to the display name. Matching on the id alone
+        // would report zero for every project whose intervals predate that column.
+        let project_name = aggregate.as_ref().map(|row| row.name.clone());
+        let project_canonical: Option<Vec<_>> = canonical.as_ref().map(|intervals| {
+            intervals
+                .iter()
+                .filter(|interval| match interval.project_id {
+                    Some(id) => id.to_string() == project_key,
+                    None => project_name.as_deref().is_some_and(|name| {
+                        interval.project.as_deref().unwrap_or("Unknown") == name
+                    }),
+                })
+                .cloned()
+                .collect()
+        });
+
+        let total_seconds = match project_canonical.as_ref() {
+            Some(intervals) => {
+                rounded_seconds(crate::services::activity_timeline::total_seconds(intervals))
+            }
+            None => aggregate
+                .as_ref()
+                .map(|row| rounded_seconds(row.total_seconds))
+                .unwrap_or(0),
+        };
         let ai_lines = aggregate
             .as_ref()
             .map(|row| row.ai_added + row.ai_deleted)
+            .unwrap_or(0);
+        let ai_verified_lines = aggregate
+            .as_ref()
+            .map(|row| row.ai_verified_added + row.ai_verified_deleted)
+            .unwrap_or(0);
+        let ai_inferred_lines = aggregate
+            .as_ref()
+            .map(|row| row.ai_inferred_added + row.ai_inferred_deleted)
             .unwrap_or(0);
         let human_lines = aggregate
             .as_ref()
@@ -219,12 +327,14 @@ impl ProjectAnalyticsService {
         Ok(ProjectAnalyticsDetailResponse {
             ai: ProjectAiSummary {
                 ai_lines,
+                ai_inferred_lines,
                 ai_percentage,
                 attribution_coverage_percent: attribution_known
                     .then(|| coverage_for(ai_lines + human_lines, observed_lines))
                     .flatten(),
                 estimated_spend: usage_spend.unwrap_or_else(unknown_spend),
                 human_lines,
+                ai_verified_lines,
                 prompts: usage.map(|row| row.prompts),
                 prompts_per_session: usage.and_then(|row| {
                     (row.sessions > 0).then(|| row.prompts as f64 / row.sessions as f64)
@@ -234,13 +344,11 @@ impl ProjectAnalyticsService {
                     TokenTotals {
                         cache_read: usage.map(|row| row.cache_read_tokens),
                         cache_write: usage.map(|row| row.cache_write_tokens),
-                        coverage_percent: usage
-                            .map(|row| {
-                                (row.reported_tokens > 0).then(|| {
-                                    row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64
-                                })
+                        coverage_percent: usage.and_then(|row| {
+                            (row.reported_tokens > 0).then(|| {
+                                row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64
                             })
-                            .flatten(),
+                        }),
                         input: usage.map(|row| row.input_tokens),
                         output: usage.map(|row| row.output_tokens),
                         total: total_tokens,
@@ -248,16 +356,21 @@ impl ProjectAnalyticsService {
                 } else {
                     unknown_tokens()
                 },
+                unknown_lines: attribution_known.then_some(unattributed_lines),
                 unattributed_lines: attribution_known.then_some(unattributed_lines),
             },
             branches: branches
                 .into_iter()
                 .map(|row| ProjectBranchItem {
                     ai_changes: row.ai_changes,
+                    ai_inferred_changes: row.ai_inferred_changes,
+                    ai_verified_changes: row.ai_verified_changes,
                     branch: row.branch,
                     heartbeat_count: row.heartbeat_count,
                     human_changes: row.human_changes,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_changes: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_changes),
                     unattributed_changes: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_changes),
                 })
@@ -267,10 +380,18 @@ impl ProjectAnalyticsService {
                 .map(|row| ProjectDailyItem {
                     ai_added: row.ai_added,
                     ai_deleted: row.ai_deleted,
+                    ai_inferred_added: row.ai_inferred_added,
+                    ai_inferred_deleted: row.ai_inferred_deleted,
+                    ai_verified_added: row.ai_verified_added,
+                    ai_verified_deleted: row.ai_verified_deleted,
                     date: row.date,
                     human_added: row.human_added,
                     human_deleted: row.human_deleted,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_added: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_added),
+                    unknown_deleted: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_deleted),
                     unattributed_added: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_added),
                     unattributed_deleted: (row.unattributed_unknown == 0)
@@ -278,9 +399,17 @@ impl ProjectAnalyticsService {
                 })
                 .collect(),
             data_version: RAW_DATA_VERSION,
-            editors: breakdown_items(editors, total_seconds),
+            editors: breakdown_items(
+                canonical_breakdown(project_canonical.as_deref(), Dimension::Editor)
+                    .unwrap_or(editors),
+                total_seconds,
+            ),
             generated_at: Utc::now().to_rfc3339(),
-            languages: breakdown_items(languages, total_seconds),
+            languages: breakdown_items(
+                canonical_breakdown(project_canonical.as_deref(), Dimension::Language)
+                    .unwrap_or(languages),
+                total_seconds,
+            ),
             project: ProjectIdentity {
                 name: identity.display_name,
                 project_id,
@@ -293,7 +422,7 @@ impl ProjectAnalyticsService {
             schema_version: PROJECT_ANALYTICS_SCHEMA_VERSION,
             summary: ProjectSummary {
                 active_days,
-                all_projects_seconds: rounded_seconds(all_projects),
+                all_projects_seconds: rounded_seconds(all_projects_canonical),
                 last_activity_at: aggregate
                     .as_ref()
                     .and_then(|row| format_timestamp(row.last_activity)),
@@ -432,10 +561,14 @@ impl ProjectAnalyticsService {
                 .take(page_size)
                 .map(|row| ProjectBranchItem {
                     ai_changes: row.ai_changes,
+                    ai_inferred_changes: row.ai_inferred_changes,
+                    ai_verified_changes: row.ai_verified_changes,
                     branch: row.branch,
                     heartbeat_count: row.heartbeat_count,
                     human_changes: row.human_changes,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_changes: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_changes),
                     unattributed_changes: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_changes),
                 })
@@ -478,10 +611,18 @@ impl ProjectAnalyticsService {
                 .map(|row| ProjectDailyItem {
                     ai_added: row.ai_added,
                     ai_deleted: row.ai_deleted,
+                    ai_inferred_added: row.ai_inferred_added,
+                    ai_inferred_deleted: row.ai_inferred_deleted,
+                    ai_verified_added: row.ai_verified_added,
+                    ai_verified_deleted: row.ai_verified_deleted,
                     date: row.date,
                     human_added: row.human_added,
                     human_deleted: row.human_deleted,
                     total_seconds: rounded_seconds(row.total_seconds),
+                    unknown_added: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_added),
+                    unknown_deleted: (row.unattributed_unknown == 0)
+                        .then_some(row.unattributed_deleted),
                     unattributed_added: (row.unattributed_unknown == 0)
                         .then_some(row.unattributed_added),
                     unattributed_deleted: (row.unattributed_unknown == 0)
@@ -693,8 +834,57 @@ fn cursor_is_after(
     }
 }
 
+/// Canonical seconds split by how each interval could be identified. See
+/// `canonical_project_seconds` for why both halves are needed.
+struct ProjectSeconds {
+    by_id: HashMap<String, f64>,
+    by_name: HashMap<String, f64>,
+}
+
+impl ProjectSeconds {
+    /// Every canonical second in the range, including activity whose project could not be
+    /// resolved at all. The per-project rows cannot cover that remainder — the aggregate
+    /// query only returns projects with a resolved id — so the page's headline total is
+    /// taken from here rather than by summing the rows. That is what makes it equal the
+    /// dashboard's figure instead of falling short by whatever was unattributed.
+    fn total(&self) -> f64 {
+        self.by_id.values().sum::<f64>() + self.by_name.values().sum::<f64>()
+    }
+
+    fn get(&self, project_id: Uuid, name: &str) -> f64 {
+        self.by_id
+            .get(&project_id.to_string())
+            .copied()
+            .unwrap_or(0.0)
+            + self.by_name.get(name).copied().unwrap_or(0.0)
+    }
+}
+
+/// One breakdown of a project's canonical intervals, shaped like the repository rows it
+/// replaces so the caller can fall back without branching twice.
+///
+/// Returning `None` when the timeline was not built (a branch filter is active) keeps the
+/// old aggregate path reachable rather than silently reporting zeros.
+fn canonical_breakdown(
+    intervals: Option<&[crate::services::activity_timeline::CanonicalInterval]>,
+    dimension: Dimension,
+) -> Option<Vec<ProjectBreakdownRow>> {
+    let intervals = intervals?;
+    Some(
+        totals_by(intervals, dimension)
+            .into_iter()
+            .map(|(name, seconds, _)| ProjectBreakdownRow {
+                name,
+                total_seconds: seconds,
+            })
+            .collect(),
+    )
+}
+
 fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
     let ai_changes = row.ai_added + row.ai_deleted;
+    let ai_verified_changes = row.ai_verified_added + row.ai_verified_deleted;
+    let ai_inferred_changes = row.ai_inferred_added + row.ai_inferred_deleted;
     let human_changes = row.human_added + row.human_deleted;
     let unattributed_changes = row.unattributed_added + row.unattributed_deleted;
     let observed = ai_changes + human_changes + unattributed_changes;
@@ -705,14 +895,24 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
         .saturating_add(row.cache_write_tokens);
     let token_coverage = (row.reported_tokens > 0)
         .then(|| row.priced_tokens as f64 * 100.0 / row.reported_tokens as f64);
-    let estimated_spend = (row.priced_events > 0)
-        .then_some(EstimatedSpend {
+    let estimated_spend = if row.priced_events > 0 {
+        EstimatedSpend {
             amount_microusd: Some(row.estimated_cost_microusd),
             coverage_percent: (row.usage_events > 0)
                 .then(|| row.priced_events as f64 * 100.0 / row.usage_events as f64),
             currency: "USD",
-        })
-        .unwrap_or_else(unknown_spend);
+        }
+    } else {
+        unknown_spend()
+    };
+    let unknown = UnattributedTotals {
+        changes: unattributed_changes,
+        lines_added: row.unattributed_added,
+        lines_deleted: row.unattributed_deleted,
+        percentage_of_observed: (row.unattributed_unknown == 0)
+            .then(|| percentage(unattributed_changes, observed))
+            .flatten(),
+    };
     ProjectAnalyticsCard {
         ai: AttributionTotals {
             changes: ai_changes,
@@ -720,6 +920,22 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
             lines_deleted: row.ai_deleted,
             percentage: (row.unattributed_unknown == 0)
                 .then(|| percentage(ai_changes, observed))
+                .flatten(),
+        },
+        ai_inferred: AttributionTotals {
+            changes: ai_inferred_changes,
+            lines_added: row.ai_inferred_added,
+            lines_deleted: row.ai_inferred_deleted,
+            percentage: (row.unattributed_unknown == 0)
+                .then(|| percentage(ai_inferred_changes, observed))
+                .flatten(),
+        },
+        ai_verified: AttributionTotals {
+            changes: ai_verified_changes,
+            lines_added: row.ai_verified_added,
+            lines_deleted: row.ai_verified_deleted,
+            percentage: (row.unattributed_unknown == 0)
+                .then(|| percentage(ai_verified_changes, observed))
                 .flatten(),
         },
         attribution_coverage_percent: (row.unattributed_unknown == 0)
@@ -753,14 +969,8 @@ fn card_from_row(row: ProjectAggregateRow) -> ProjectAnalyticsCard {
             unknown_tokens()
         },
         total_seconds: rounded_seconds(row.total_seconds),
-        unattributed: UnattributedTotals {
-            changes: unattributed_changes,
-            lines_added: row.unattributed_added,
-            lines_deleted: row.unattributed_deleted,
-            percentage_of_observed: (row.unattributed_unknown == 0)
-                .then(|| percentage(unattributed_changes, observed))
-                .flatten(),
-        },
+        unknown: unknown.clone(),
+        unattributed: unknown,
     }
 }
 
@@ -827,6 +1037,8 @@ fn file_items(
             let display_name = path.rsplit('/').next().unwrap_or(&path).to_string();
             ProjectFileItem {
                 ai_changes: row.ai_changes,
+                ai_inferred_changes: row.ai_inferred_changes,
+                ai_verified_changes: row.ai_verified_changes,
                 display_name,
                 entity_key: row.entity_key,
                 human_changes: row.human_changes,
@@ -838,6 +1050,8 @@ fn file_items(
                 )
                 .unwrap_or(0.0),
                 total_seconds: rounded_seconds(row.total_seconds),
+                unknown_changes: (row.unattributed_unknown == 0)
+                    .then_some(row.unattributed_changes),
                 unattributed_changes: (row.unattributed_unknown == 0)
                     .then_some(row.unattributed_changes),
             }
@@ -980,6 +1194,10 @@ fn zero_fill_daily(
                 crate::repository::project_analytics::ProjectDailyRow {
                     date: date.to_string(),
                     total_seconds: 0.0,
+                    ai_verified_added: 0,
+                    ai_verified_deleted: 0,
+                    ai_inferred_added: 0,
+                    ai_inferred_deleted: 0,
                     ai_added: 0,
                     ai_deleted: 0,
                     human_added: 0,

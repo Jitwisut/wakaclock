@@ -9,45 +9,107 @@
 //! `CAPABILITIES.md`). `gemini.rs` accepts the stable JSON/JSONL edit-result contract
 //! used by Gemini CLI releases and ignores any unproven conversational claims.
 //! `correlation.rs` matches AI events to editor-observed buffers (in-memory pool
-//! only). `state.rs` persists parser cursors and delivered-event identity to SQLite so
-//! a re-run doesn't re-attribute the same edit twice; the cross-process `ai-sync.lock`
-//! plan.md 8.6 also calls for is not yet implemented (see state.rs's doc comment for
-//! why a single local writer is safe without it, just uncoordinated).
+//! only). `sidecar.rs` is a lighter-weight, time-and-entity-only check against the same
+//! broker-written JSONL file `extensions/vscode/src/aiAttribution.ts` reads, for
+//! editor producers that don't track line deltas per change (currently
+//! `wakaclock-ls`). `state.rs` persists parser cursors and delivered-event identity to
+//! SQLite so a re-run doesn't re-attribute the same edit twice; `wakaclock ai sync`
+//! takes the companion cross-process `~/.wakaclock/ai-sync.lock` across scan, delivery
+//! and state commit so overlapping sync processes exit as a nonfatal `AlreadyRunning`
+//! result.
 
+pub mod adapter;
+pub mod canonical;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
+pub mod correlation_engine;
+pub mod dedup;
+pub mod diagnostics;
 pub mod event;
+pub mod filesystem_observer;
 pub mod follow_up;
 pub mod gemini;
 mod jsonl;
 pub mod parser;
 pub mod patch;
 pub mod path;
+pub mod pipeline;
+pub mod process_observer;
+pub mod producer;
+pub mod session;
+pub mod shadow;
+pub mod shadow_report;
+pub mod sidecar;
 pub mod state;
 pub mod usage;
+pub mod workspace;
 
+pub use adapter::{
+    AdapterManifest, AdapterRegistry, ExecutableDetection, HealthProbe, InstallContext,
+    InstallOutcome, InstallStrategy, NativeHookCapabilities, Verification, VerificationStatus,
+};
+pub use canonical::{
+    CanonicalActivity, CanonicalFingerprint, CanonicalIdentity, ChildEvidence,
+    FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
+};
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
+pub use correlation_engine::{
+    AiVerdict, ClipBounds, CorrelationEngine, CorrelationInput, CorrelationWindows, EvidenceKind,
+    SystemActorKind, Verdict, VerdictReason,
+};
+pub use dedup::{dedup, DedupConflict, DedupObservation, DedupOutcome};
+pub use diagnostics::{
+    build_report as build_ai_diagnostics_report, report_from_doctor_json, AdapterFreshness,
+    AiDiagnosticsReport, BrokerHealth, ParserLagSummary, AI_DIAGNOSTICS_SCHEMA_VERSION,
+};
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
+pub use filesystem_observer::{
+    canonicalize_within_root, coalesce_burst, fingerprint_changed_file, is_excluded_path,
+    BoundedEventBuffer, FileChangeKind, FileChangedEvent, ObserverPool, SyncOutcome,
+    WorkspaceIgnore, WorkspaceWatcher,
+};
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    ParseContext, ParseWarning, ParserCursor, TranscriptLag,
 };
 pub use patch::{
-    count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,
-    StructuredPatchHunk,
+    count_content_lines, count_structured_patch_lines, count_unified_diff_lines, parse_apply_patch,
+    ApplyPatchFileChange, LineDelta, StructuredPatchHunk,
 };
 pub use path::{
     normalize_lexical, resolve_within_workspace, to_comparable_string, PathResolveError,
 };
+pub use pipeline::{
+    AgentPipelineState, PipelineStage, PipelineTracker, StageEntry, StageRegression,
+};
+pub use process_observer::{
+    match_agent as match_ai_process_agent, scan as scan_ai_processes, DetectedAiProcess,
+};
+pub use producer::{
+    build_file_change_event, file_event_id, normalize_client_id, normalize_model_id,
+    normalize_provider_id, ProducerError, ProducerFileChange, ProducerIdentity,
+    PRODUCER_CONTRACT_VERSION,
+};
+pub use session::{
+    evidence_from_scan, strongest_session_evidence, EvidenceStrength, SessionEvidenceLedger,
+    SessionProcessEvidence,
+};
+pub use shadow::{
+    observe as observe_shadow, AttributionMode, LabeledActor, ObserverConfig, ObserverOutcome,
+    OracleAgreement, RolloutScope, ShadowLog, ShadowRecord,
+};
+pub use shadow_report::{compare_to_oracle, ShadowComparisonReport};
+pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};
 pub use state::AiAttributionState;
 pub use usage::{
     parse_claude_usage, parse_claude_usage_str, parse_codex_usage, parse_codex_usage_str,
     parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageRecord, TokenSource,
 };
+pub use workspace::{workspace_id_for, LeaseError, WorkspaceLease, WorkspaceRegistry};
