@@ -384,7 +384,7 @@ async function setupAiTracking(
       return serviceInstalled;
     } else {
       await vscode.window.showInformationMessage(
-        "No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again."
+        "No supported AI CLI was detected. Install a supported integration and run setup again."
       );
       return false;
     }
@@ -409,8 +409,8 @@ async function chooseAiAgents(
   if (candidates.length === 0) {
     await vscode.window.showInformationMessage(
       repairing
-        ? "No configured supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run repair again."
-        : "No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.",
+        ? "No configured supported AI coding tool was detected. Install a supported integration and run repair again."
+        : "No new supported AI coding tool was detected. Install a supported integration and run setup again.",
     );
     return undefined;
   }

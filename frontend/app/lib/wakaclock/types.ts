@@ -316,11 +316,12 @@ export interface AdapterFreshness {
   agent: string;
   client_version?: null | string;
   contract_version?: null | string;
+  dead_letter_events?: number;
   detected: boolean;
   diagnostic_code?: null | string;
   enabled: boolean;
-  last_evidence_unix?: null | number;
   last_delivery_result?: null | string;
+  last_evidence_unix?: null | number;
   last_native_event_unix?: null | number;
   last_transcript_event_unix?: null | number;
   model_id?: null | string;
@@ -328,7 +329,6 @@ export interface AdapterFreshness {
   plugin_version?: null | string;
   provider_id?: null | string;
   retry_events?: number;
-  dead_letter_events?: number;
   transcript_lag_seconds?: null | number;
   transport?: null | string;
   verification: AdapterVerification;

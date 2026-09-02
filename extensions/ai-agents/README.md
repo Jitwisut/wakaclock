@@ -1,14 +1,14 @@
 # AtoAxis AI agent integrations
 
 Sends real AtoAxis coding-time heartbeats whenever an AI coding agent (Claude Code,
-Codex CLI, Gemini CLI) edits a file — attributed to that agent, not silently merged
+Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI) edits a file — attributed to that agent, not silently merged
 into your own human coding time. This does **not** depend on an editor being open or
 noticing the change (unlike `extensions/vscode`, which only sees edits made through
 VS Code's own document-change events) — each integration here hooks directly into the
 agent's own tool-call lifecycle, the same mechanism WakaTime's official Claude Code /
 Codex / Gemini CLI plugins use.
 
-All three send the same metadata-only event to the local Broker through the existing
+All adapters send the same metadata-only event to the local Broker through the existing
 `wakaclock` binary:
 
 ```
@@ -32,6 +32,20 @@ transcripts every five seconds, resumes per-agent/per-file cursors, and starts o
 transcripts at their tail (only the last 24 hours are replayed on first discovery).
 Use `wakaclock broker status --json` to inspect process, inbox, outbound queue and
 delivery error state. `wakaclock agent status --json` remains a compatibility alias.
+
+The same setup is available without VS Code:
+
+```sh
+wakaclock ai setup --all          # configure every detected client
+wakaclock ai setup codex          # configure one client (aliases are accepted)
+wakaclock ai setup --all --json   # machine-readable health and remediation report
+```
+
+The CLI copies this tested bundle to a versioned directory below
+`~/.wakaclock/agent-plugins/` before registering paths. Missing clients are reported
+as `not_detected`, and a service-manager failure does not prevent another adapter
+from being configured. Run `wakaclock doctor ai --json` afterward to inspect the
+actual broker and transcript state.
 
 ## Claude Code (`plugins/atoaxis-heartbeat/`)
 
@@ -63,7 +77,7 @@ registered by hand in `~/.codex/config.toml`:
 hooks = true
 
 [[hooks.PostToolUse]]
-matcher = "apply_patch"
+matcher = "^apply_patch$"
 [[hooks.PostToolUse.hooks]]
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/heartbeat-hook.sh"
@@ -82,9 +96,18 @@ matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/git-sweep-after.sh"
 timeout = 60
+
+[[hooks.PostToolUseFailure]]
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+[[hooks.PostToolUseFailure.hooks]]
+type = "command"
+command = "/absolute/path/to/extensions/ai-agents/codex/tool-abort.sh"
+timeout = 60
 ```
 
-`apply_patch` still uses the verified per-file delta adapter when that hook fires. Shell
+`apply_patch` still uses the verified per-file delta adapter when that hook fires. The
+current PostToolUse payload carries the patch DSL in `tool_input.command`; the adapter
+also accepts the older `input`/`patch` shapes for one upgrade cycle. Shell
 and MCP mutations use the shared Before/After fingerprint engine and therefore do not
 need to parse command text. Current Codex releases use `[features].hooks = true`; the VS Code setup
 helper migrates the deprecated `codex_hooks = true` setting automatically. Codex hook
@@ -104,6 +127,29 @@ Registers the verified `AfterTool` adapter on `write_file|replace`, plus Before/
 fingerprint snapshots around `run_shell_command|mcp_.*`. Gemini's hook matcher is regex-based, so
 this also covers file mutations performed through Gemini MCP tools without trying to
 parse arbitrary shell command text.
+
+## Kilo Code (`kilo-code/`)
+
+Kilo loads TypeScript server plugins in both its CLI and VS Code runtimes. The VS
+Code setup command copies a top-level `atoaxis-kilo-code.ts` entrypoint and its
+private helper modules into `~/.config/kilo/plugin/`; they can also be installed
+through Kilo's supported plugin mechanism. The plugin listens to `tool.execute.after` and `file.edited`,
+keeps `client_id=kilo-code` separate from the provider/model selected for each
+request, and sends only allowlisted file metadata. It remains scaffold until a
+real Kilo run is inspected.
+
+## Kimi Code CLI (`kimi-code/`)
+
+Kimi's Beta lifecycle hooks are installed with `kimi-code/installer/install.sh`
+(the VS Code setup command invokes it automatically). Current releases use
+`~/.kimi-code/config.toml`; the installer also preserves older `~/.kimi/config.toml`
+configurations. `WriteFile`/`StrReplaceFile`
+success events use the shared producer; Shell uses `ai tool-before`/`ai tool-after`,
+and failed Shell calls use `ai tool-abort`. The installer owns one marker-bounded
+block in `~/.kimi/config.toml` and preserves other user hooks. SessionStart/End
+record only bounded identity/timestamps in `~/.wakaclock/ai-sessions.json`; Stop and
+StopFailure close the same interval as lifecycle metadata. This adapter remains
+scaffold until a real Kimi version and broker row are verified.
 
 ## Shell / MCP mutation snapshot engine
 
@@ -130,6 +176,10 @@ All file events from one shell call share `ai_change_id = tool_event_id`. Only t
 heartbeat carries the tool-call activity interval; the rest carry zero duration, so a
 codemod touching 100 files does not multiply coding time by 100. If an exact native-hook
 fingerprint already exists, the weaker inferred event is suppressed.
+
+When a tool fails or is cancelled, adapters call `wakaclock ai tool-abort --json`
+with the same `tool_event_id`. This only discards the pending snapshot and never
+emits an AI edit.
 
 ## Generic MCP / tool ingress
 

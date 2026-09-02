@@ -36,6 +36,8 @@ pub mod patch;
 pub mod path;
 pub mod pipeline;
 pub mod process_observer;
+pub mod producer;
+pub mod provider;
 pub mod session;
 pub mod shadow;
 pub mod shadow_report;
@@ -49,8 +51,8 @@ pub use adapter::{
     InstallOutcome, InstallStrategy, NativeHookCapabilities, Verification, VerificationStatus,
 };
 pub use canonical::{
-    CanonicalActivity, CanonicalFingerprint, CanonicalIdentity, ChildEvidence,
-    FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
+    fingerprint_for_heartbeat, CanonicalActivity, CanonicalFingerprint, CanonicalIdentity,
+    ChildEvidence, FINGERPRINT_SCHEME_V1, FINGERPRINT_TIME_BUCKET_SECONDS,
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
@@ -90,6 +92,15 @@ pub use pipeline::{
 };
 pub use process_observer::{
     match_agent as match_ai_process_agent, scan as scan_ai_processes, DetectedAiProcess,
+};
+pub use producer::{
+    build_file_change_event, file_event_id, normalize_client_id, normalize_model_id,
+    normalize_provider_id, ProducerError, ProducerFileChange, ProducerIdentity,
+    PRODUCER_CONTRACT_VERSION,
+};
+pub use provider::{
+    canonical_provider_alias, is_known_provider_id, provider_aliases, provider_for_endpoint,
+    KNOWN_PROVIDER_IDS,
 };
 pub use session::{
     evidence_from_scan, strongest_session_evidence, EvidenceStrength, SessionEvidenceLedger,

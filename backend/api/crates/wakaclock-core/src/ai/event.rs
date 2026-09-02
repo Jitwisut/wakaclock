@@ -1,6 +1,32 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use uuid::Uuid;
+
+/// Event IDs cross the local producer/broker boundary and are persisted in the
+/// sidecar/inbox. Keep the visible form deliberately narrow so a prompt, command
+/// line, or other free-form hook value cannot be smuggled through an allowlisted
+/// identity field. Values outside this alphabet are deterministically hashed by
+/// the producer/broker while preserving retry identity.
+pub fn is_safe_event_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+/// Build a stable producer event ID without putting a file path (or any other
+/// path-bearing identity) in the value sent across the machine boundary.  The
+/// complete identity is still part of the UUIDv5 input, so two files touched by
+/// one tool call remain distinct while the emitted ID is opaque metadata.
+pub fn opaque_file_event_id(prefix: &str, operation_id: &str, raw_path: &str) -> String {
+    let material = format!("{prefix}|{operation_id}|{raw_path}");
+    format!(
+        "{prefix}:{}",
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
+    )
+}
 
 /// Where an [`AiEditEvent`] was derived from. Distinct from [`AiConfidence`]: a
 /// transcript-sourced event can still carry low confidence if correlation was
@@ -90,6 +116,11 @@ pub fn normalize_agent_id(raw: &str) -> String {
         "claude" | "claude-code" | "claude code" | "anthropic-claude-code" => {
             "claude-code".to_string()
         }
+        "kilo" | "kilocode" | "kilo-code" | "kilo code" => "kilo-code".to_string(),
+        "kimi" | "kimi-cli" | "kimi cli" | "kimi-code" | "kimi-code-cli" => {
+            "kimi-code-cli".to_string()
+        }
+        "deepcode" | "deep-code" | "deepseek-code" => "deep-code".to_string(),
         "gemini" | "gemini-cli" | "gemini cli" | "google-gemini-cli" => "gemini-cli".to_string(),
         other => other.replace([' ', '_'], "-"),
     }
@@ -118,6 +149,9 @@ mod tests {
     fn normalize_agent_id_canonicalizes_known_agents() {
         assert_eq!(normalize_agent_id("Codex CLI"), "codex");
         assert_eq!(normalize_agent_id("Claude Code"), "claude-code");
+        assert_eq!(normalize_agent_id("Kilo Code"), "kilo-code");
+        assert_eq!(normalize_agent_id("Kimi CLI"), "kimi-code-cli");
+        assert_eq!(normalize_agent_id("Deep Code"), "deep-code");
         assert_eq!(normalize_agent_id("GEMINI-CLI"), "gemini-cli");
     }
 
@@ -129,7 +163,7 @@ mod tests {
     #[test]
     fn event_serializes_without_raw_content_fields() {
         let event = AiEditEvent {
-            event_id: "codex:exec-1:src/lib.rs".to_string(),
+            event_id: opaque_file_event_id("codex-v1", "exec-1", "src/lib.rs"),
             agent: "codex".to_string(),
             provider: Some("openai".to_string()),
             model: None,
@@ -152,5 +186,28 @@ mod tests {
                 "unexpected field: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn opaque_file_event_id_is_stable_distinct_and_path_free() {
+        let first = opaque_file_event_id("codex-v1", "call-1", "/Users/alice/project/src/lib.rs");
+        assert_eq!(
+            first,
+            opaque_file_event_id("codex-v1", "call-1", "/Users/alice/project/src/lib.rs")
+        );
+        assert_ne!(
+            first,
+            opaque_file_event_id("codex-v1", "call-1", "/Users/alice/project/src/main.rs")
+        );
+        assert!(!first.contains("/Users/alice/project"));
+        assert!(!first.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn event_id_allowlist_rejects_free_form_values() {
+        assert!(is_safe_event_id("ape1:0123-abc_def"));
+        assert!(!is_safe_event_id("prompt: run this command"));
+        assert!(!is_safe_event_id("path/src/file.rs"));
+        assert!(!is_safe_event_id(&"x".repeat(129)));
     }
 }

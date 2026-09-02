@@ -6,7 +6,10 @@
 //! attribution or retry state.
 
 use crate::{
-    ai::{normalize_agent_id, AiConfidence, AiEventSource},
+    ai::{
+        event::is_safe_event_id, normalize_agent_id, normalize_model_id, normalize_provider_id,
+        AiConfidence, AiEventSource,
+    },
     error::AppError,
     heartbeat::{resolve_attribution, ActorType, AttributionInput},
 };
@@ -102,14 +105,26 @@ impl TransportKind {
     /// `Other` (weakest), never a panic.
     pub fn classify(transport: Option<&str>) -> Self {
         match transport.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-            "native_plugin" | "native-plugin" | "plugin" | "agent_hook" | "shell_hook" | "hook" => {
+            "native_plugin" | "native-plugin" | "plugin" | "agent_hook" | "hook" => {
                 Self::NativePlugin
             }
             "mcp" | "mcp_bridge" | "tool_bridge" => Self::Mcp,
             "transcript" | "session_log" | "jsonl" => Self::Transcript,
-            "tool_snapshot" | "snapshot" | "before_after" | "git_sweep" => Self::ToolSnapshot,
-            "filesystem" | "fs" | "notify" | "fs_observer" => Self::Filesystem,
-            "editor" | "vscode" | "ide" | "sidecar" => Self::Editor,
+            "tool_snapshot" | "snapshot" | "before_after" | "git_sweep" | "shell_hook" => {
+                Self::ToolSnapshot
+            }
+            "filesystem"
+            | "fs"
+            | "notify"
+            | "fs_observer"
+            | "filesystem_observer"
+            | "filesystem-observer" => Self::Filesystem,
+            // A process observer only says that an agent executable was present;
+            // it is not file-edit evidence and must never outrank a real edit
+            // producer. Keep it at the weakest bucket until paired with another
+            // signal by the correlation engine.
+            "process_observer" | "process-observer" => Self::Other,
+            "editor" | "vscode" | "ide" | "ide_telemetry" | "sidecar" => Self::Editor,
             "cli" | "wakaclock-cli" | "manual" => Self::Cli,
             _ => Self::Other,
         }
@@ -135,6 +150,7 @@ impl TransportKind {
 /// `allow_list_matches_the_struct_fields` in tests).
 pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
     "schema_version",
+    "producer_version",
     "event_type",
     "event_id",
     "occurred_at",
@@ -257,6 +273,11 @@ impl QuarantineDiagnostic {
 #[serde(deny_unknown_fields)]
 pub struct BrokerEventV1 {
     pub schema_version: u8,
+    /// Version of the metadata-only producer contract used by the adapter.
+    /// `None` is retained for pre-producer-v1 events so old transcript/CLI
+    /// payloads remain readable; new native producers set this to `1`.
+    #[serde(default)]
+    pub producer_version: Option<u8>,
     pub event_type: BrokerEventType,
     pub event_id: String,
     pub occurred_at: DateTime<Utc>,
@@ -374,6 +395,13 @@ impl BrokerEventV1 {
                 self.schema_version
             )));
         }
+        if let Some(version) = self.producer_version {
+            if version != crate::ai::producer::PRODUCER_CONTRACT_VERSION {
+                return Err(AppError::Validation(format!(
+                    "unsupported producer_version: {version}"
+                )));
+            }
+        }
         if !matches!(self.event_type, BrokerEventType::FileChange) {
             return Err(AppError::Validation(
                 "unsupported broker event_type".to_string(),
@@ -381,7 +409,29 @@ impl BrokerEventV1 {
         }
         self.event_id = clean_required("event_id", self.event_id)?;
         self.agent = normalize_agent_id(&clean_required("agent", self.agent)?);
+        self.provider = self
+            .provider
+            .as_deref()
+            .map(normalize_provider_id)
+            .transpose()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        self.model = self
+            .model
+            .as_deref()
+            .map(normalize_model_id)
+            .transpose()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
         self.entity = normalize_absolute_path("entity", &self.entity)?;
+        // Legacy adapters occasionally used `session:relative/path` as their
+        // event identity.  The identity crosses the broker boundary and must be
+        // opaque even when the producer predates the shared SDK.  Preserve stable
+        // retry semantics by deterministically hashing the supplied identity and
+        // normalized entity instead of rejecting the otherwise valid event.
+        if !is_safe_event_id(&self.event_id) {
+            let raw_event_id = std::mem::take(&mut self.event_id);
+            self.event_id =
+                crate::ai::event::opaque_file_event_id("broker-v1", &raw_event_id, &self.entity);
+        }
         self.project_root = self
             .project_root
             .as_deref()
@@ -1235,6 +1285,7 @@ mod tests {
     fn sample_event(id: &str) -> BrokerEventV1 {
         BrokerEventV1 {
             schema_version: BROKER_SCHEMA_VERSION,
+            producer_version: Some(crate::ai::producer::PRODUCER_CONTRACT_VERSION),
             event_type: BrokerEventType::FileChange,
             event_id: id.to_string(),
             occurred_at: Utc::now(),
@@ -1277,10 +1328,42 @@ mod tests {
     }
 
     #[test]
+    fn legacy_path_bearing_event_ids_are_rewritten_to_opaque_ids() {
+        let event = sample_event("session-1:src/lib.rs:1").normalize().unwrap();
+        assert!(event.event_id.starts_with("broker-v1:"));
+        assert!(!event.event_id.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn free_form_event_ids_are_rewritten_before_persistence() {
+        let event = sample_event("prompt: run this secret command")
+            .normalize()
+            .unwrap();
+        assert!(is_safe_event_id(&event.event_id));
+        assert!(!event.event_id.contains("secret"));
+    }
+
+    #[test]
+    fn normalizes_provider_and_model_without_changing_client_identity() {
+        let mut event = sample_event("provider-model");
+        event.agent = "Kilo Code".to_string();
+        event.provider = Some("DeepSeek API".to_string());
+        event.model = Some("deepseek-v4-pro".to_string());
+        let event = event.normalize().unwrap();
+        assert_eq!(event.agent, "kilo-code");
+        assert_eq!(event.provider.as_deref(), Some("deepseek"));
+        assert_eq!(event.model.as_deref(), Some("deepseek-v4-pro"));
+    }
+
+    #[test]
     fn full_envelope_round_trips_through_json() {
         // planai2.md p1.1: every field the plan's target evidence JSON names must
         // survive a serialize → deserialize round trip unchanged.
         let event = sample_event("round-trip");
+        assert_eq!(
+            event.producer_version,
+            Some(crate::ai::producer::PRODUCER_CONTRACT_VERSION)
+        );
         let json = serde_json::to_string(&event).unwrap();
         let back: BrokerEventV1 = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
@@ -1288,6 +1371,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         for key in [
             "schema_version",
+            "producer_version",
             "event_type",
             "event_id",
             "occurred_at",
@@ -1326,6 +1410,7 @@ mod tests {
         });
         let event: BrokerEventV1 = serde_json::from_value(value).unwrap();
         assert_eq!(event.project_root, None);
+        assert_eq!(event.producer_version, None);
         assert_eq!(event.transport, None);
         assert_eq!(event.tool_event_id, None);
         assert_eq!(event.lines_added, None);
@@ -1340,6 +1425,16 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_producer_contract_version_is_rejected() {
+        let mut event = sample_event("bad-producer-version");
+        event.producer_version = Some(crate::ai::producer::PRODUCER_CONTRACT_VERSION + 1);
+        let error = event
+            .normalize()
+            .expect_err("unknown producer version must fail");
+        assert!(error.to_string().contains("producer_version"));
+    }
+
+    #[test]
     fn transport_kind_ranks_producers_by_evidence_strength() {
         assert_eq!(
             TransportKind::classify(Some("native_plugin")),
@@ -1349,6 +1444,22 @@ mod tests {
         assert_eq!(
             TransportKind::classify(Some("fs_observer")),
             TransportKind::Filesystem
+        );
+        assert_eq!(
+            TransportKind::classify(Some("filesystem_observer")),
+            TransportKind::Filesystem
+        );
+        assert_eq!(
+            TransportKind::classify(Some("ide_telemetry")),
+            TransportKind::Editor
+        );
+        assert_eq!(
+            TransportKind::classify(Some("process_observer")),
+            TransportKind::Other
+        );
+        assert_eq!(
+            TransportKind::classify(Some("shell_hook")),
+            TransportKind::ToolSnapshot
         );
         assert_eq!(TransportKind::classify(None), TransportKind::Other);
         assert_eq!(
@@ -1360,7 +1471,7 @@ mod tests {
         assert!(TransportKind::Mcp.priority() < TransportKind::Transcript.priority());
         assert_eq!(
             sample_event("t").transport_kind(),
-            TransportKind::NativePlugin // sample uses "shell_hook"
+            TransportKind::ToolSnapshot // sample uses "shell_hook"
         );
     }
 

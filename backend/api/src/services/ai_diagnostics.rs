@@ -29,10 +29,20 @@ impl AiDiagnosticsService {
         Self::default()
     }
 
-    /// Store `report` as the newest snapshot for `user_id`, replacing any
-    /// previous one (last write wins — the client always sends a full snapshot).
-    pub async fn record(&self, user_id: Uuid, report: AiDiagnosticsReport) {
-        self.latest.write().await.insert(user_id, report);
+    /// Store `report` when it is at least as new as the current snapshot. A
+    /// delayed HTTP request must not overwrite a fresh health view after a
+    /// reconnect; equal timestamps remain last-write-wins for retry safety.
+    /// Returns `true` when the snapshot became the latest value.
+    pub async fn record(&self, user_id: Uuid, report: AiDiagnosticsReport) -> bool {
+        let mut latest = self.latest.write().await;
+        if latest
+            .get(&user_id)
+            .is_some_and(|current| current.captured_at > report.captured_at)
+        {
+            return false;
+        }
+        latest.insert(user_id, report);
+        true
     }
 
     /// The newest snapshot for `user_id`, or `None` if the client has never
@@ -74,6 +84,7 @@ mod tests {
                 enabled: true,
                 verification: VerificationStatus::Verified,
                 last_evidence_unix: None,
+                ..Default::default()
             }],
         }
     }
@@ -94,6 +105,20 @@ mod tests {
         let user = Uuid::new_v4();
         service.record(user, report(0)).await;
         service.record(user, report(5)).await;
+        assert_eq!(
+            service.latest(user).await.unwrap().broker.inbox_dead_letter,
+            5
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delayed_snapshot_cannot_replace_a_newer_health_view() {
+        let service = AiDiagnosticsService::new();
+        let user = Uuid::new_v4();
+        assert!(service.record(user, report(5)).await);
+        let mut delayed = report(1);
+        delayed.captured_at -= chrono::Duration::seconds(1);
+        assert!(!service.record(user, delayed).await);
         assert_eq!(
             service.latest(user).await.unwrap().broker.inbox_dead_letter,
             5

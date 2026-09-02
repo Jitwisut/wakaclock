@@ -46,7 +46,7 @@ pub struct ParserLagSummary {
 
 /// One adapter's freshness — is it detected, is it on, when did it last produce
 /// evidence, and how far has it been live-verified.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AdapterFreshness {
     /// Normalised agent id (`normalize_agent_id` output).
     pub agent: String,
@@ -55,6 +55,74 @@ pub struct AdapterFreshness {
     pub verification: VerificationStatus,
     #[serde(default)]
     pub last_evidence_unix: Option<i64>,
+    /// Optional identity and transport metadata. These fields are additive so
+    /// older clients can continue posting schema-v1 reports unchanged.
+    #[serde(default)]
+    pub client_version: Option<String>,
+    #[serde(default)]
+    pub plugin_version: Option<String>,
+    #[serde(default)]
+    pub contract_version: Option<String>,
+    #[serde(default)]
+    pub transport: Option<String>,
+    #[serde(default)]
+    pub last_native_event_unix: Option<i64>,
+    #[serde(default)]
+    pub last_transcript_event_unix: Option<i64>,
+    #[serde(default)]
+    pub transcript_lag_seconds: Option<i64>,
+    #[serde(default)]
+    pub pending_events: u32,
+    #[serde(default)]
+    pub retry_events: u32,
+    #[serde(default)]
+    pub dead_letter_events: u32,
+    #[serde(default)]
+    pub last_delivery_result: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// A short diagnostic code, never a raw error message or path.
+    #[serde(default)]
+    pub diagnostic_code: Option<String>,
+}
+
+impl AdapterFreshness {
+    /// Product-facing status. Capture, verification and delivery are separate
+    /// signals so a locally captured event cannot be mistaken for a delivered
+    /// or live-verified one.
+    pub fn health_status(&self) -> &'static str {
+        if self.diagnostic_code.as_deref() == Some("unsupported") {
+            return "unsupported";
+        }
+        if self.diagnostic_code.as_deref() == Some("disabled_by_policy") {
+            return "disabled";
+        }
+        if !self.detected {
+            return "needs_setup";
+        }
+        if !self.enabled {
+            return "needs_trust";
+        }
+        if self.pending_events > 0
+            || self.retry_events > 0
+            || self.dead_letter_events > 0
+            || self
+                .transcript_lag_seconds
+                .is_some_and(|seconds| seconds > 300)
+            || self.diagnostic_code.is_some()
+        {
+            return "degraded";
+        }
+        if self.last_evidence_unix.is_some() && self.verification == VerificationStatus::Verified {
+            "healthy"
+        } else if self.last_evidence_unix.is_some() {
+            "captured_locally"
+        } else {
+            "unverified"
+        }
+    }
 }
 
 /// The whole sanitized diagnostics snapshot for one client at one moment.
@@ -202,19 +270,61 @@ pub fn report_from_doctor_json(
                 }
             }
 
+            let last_event_unix = row
+                .get("last_event_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|dt| dt.timestamp());
+            let verification = row
+                .get("verification_status")
+                .and_then(serde_json::Value::as_str)
+                .and_then(parse_verification_status)
+                .or_else(|| {
+                    registry
+                        .get(&agent)
+                        .map(|manifest| manifest.effective_status())
+                })
+                .unwrap_or(VerificationStatus::Unverified);
             adapters.push(AdapterFreshness {
-                verification: registry
-                    .get(&agent)
-                    .map(|manifest| manifest.effective_status())
-                    .unwrap_or(VerificationStatus::Unverified),
-                last_evidence_unix: row
-                    .get("last_event_at")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .map(|dt| dt.timestamp()),
+                verification,
+                last_evidence_unix: last_event_unix,
+                client_version: string_field(row, "client_version"),
+                plugin_version: string_field(row, "plugin_version"),
+                contract_version: string_field(row, "contract_version"),
+                transport: string_field(row, "transport"),
+                last_native_event_unix: parse_unix_field(row, "last_native_event_at"),
+                last_transcript_event_unix: parse_unix_field(row, "last_transcript_event_at"),
+                transcript_lag_seconds: row
+                    .get("lag_seconds")
+                    .and_then(serde_json::Value::as_i64)
+                    .or_else(|| Some(lag_seconds).filter(|seconds| *seconds > 0)),
+                pending_events: row
+                    .get("pending_events")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32,
+                retry_events: row
+                    .get("retry_events")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32,
+                dead_letter_events: row
+                    .get("dead_letter_events")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32,
+                last_delivery_result: string_field(row, "last_delivery_result"),
+                provider_id: string_field(row, "provider_id"),
+                model_id: string_field(row, "model_id"),
+                diagnostic_code: string_field(row, "diagnostic_code").or_else(|| {
+                    row.get("diagnostic")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(classify_diagnostic)
+                        .map(str::to_string)
+                }),
                 agent,
                 detected: installed,
-                enabled: installed,
+                enabled: row
+                    .get("enabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(installed),
             });
         }
     }
@@ -229,6 +339,42 @@ pub fn report_from_doctor_json(
             max_lag_seconds,
         },
         adapters,
+    }
+}
+
+fn string_field(row: &serde_json::Value, key: &str) -> Option<String> {
+    row.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_unix_field(row: &serde_json::Value, key: &str) -> Option<i64> {
+    row.get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|dt| dt.timestamp())
+}
+
+fn parse_verification_status(value: &str) -> Option<VerificationStatus> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "verified" => Some(VerificationStatus::Verified),
+        "scaffold" => Some(VerificationStatus::Scaffold),
+        "unverified" => Some(VerificationStatus::Unverified),
+        _ => None,
+    }
+}
+
+fn classify_diagnostic(value: &str) -> Option<&'static str> {
+    let value = value.to_ascii_lowercase();
+    if value.contains("unsupported") {
+        Some("unsupported")
+    } else if value.contains("permission") {
+        Some("permission_denied")
+    } else if value.contains("not found") || value.contains("not installed") {
+        Some("needs_setup")
+    } else {
+        None
     }
 }
 
@@ -260,6 +406,7 @@ mod tests {
                 enabled: true,
                 verification: VerificationStatus::Verified,
                 last_evidence_unix: Some(1_699_999_950),
+                ..Default::default()
             }],
         }
     }
@@ -311,6 +458,33 @@ mod tests {
         let mut report = sample();
         report.schema_version = AI_DIAGNOSTICS_SCHEMA_VERSION + 1;
         assert!(!report.schema_is_supported());
+    }
+
+    #[test]
+    fn adapter_health_status_distinguishes_capture_from_verification_and_setup() {
+        let mut adapter = AdapterFreshness {
+            agent: "deep-code".to_string(),
+            detected: true,
+            enabled: true,
+            verification: VerificationStatus::Unverified,
+            last_evidence_unix: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(adapter.health_status(), "captured_locally");
+        adapter.verification = VerificationStatus::Verified;
+        assert_eq!(adapter.health_status(), "healthy");
+        adapter.pending_events = 1;
+        assert_eq!(adapter.health_status(), "degraded");
+        adapter.pending_events = 0;
+        adapter.detected = false;
+        assert_eq!(adapter.health_status(), "needs_setup");
+        adapter.detected = true;
+        adapter.enabled = false;
+        adapter.diagnostic_code = Some("disabled_by_policy".to_string());
+        assert_eq!(adapter.health_status(), "disabled");
+        adapter.enabled = true;
+        adapter.diagnostic_code = Some("unsupported".to_string());
+        assert_eq!(adapter.health_status(), "unsupported");
     }
 
     #[test]
@@ -401,6 +575,12 @@ mod tests {
                 {
                     "agent": "Claude Code",
                     "installed": true,
+                    "enabled": true,
+                    "verification_status": "verified",
+                    "client_version": "1.2.3",
+                    "provider_id": "anthropic",
+                    "model_id": "claude-sonnet",
+                    "transport": "transcript",
                     "transcript_found": true,
                     "lag_bytes": 8192,
                     "lag_seconds": 75,
@@ -441,6 +621,9 @@ mod tests {
         assert_eq!(report.adapters.len(), 2);
         assert_eq!(report.adapters[0].agent, "claude-code"); // normalised
         assert!(report.adapters[0].detected && report.adapters[0].enabled);
+        assert_eq!(report.adapters[0].client_version.as_deref(), Some("1.2.3"));
+        assert_eq!(report.adapters[0].provider_id.as_deref(), Some("anthropic"));
+        assert_eq!(report.adapters[0].health_status(), "healthy");
         assert_eq!(
             report.adapters[0].last_evidence_unix,
             Some(

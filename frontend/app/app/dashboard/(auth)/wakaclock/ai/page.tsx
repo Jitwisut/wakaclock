@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table';
 import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
 import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
+import { AiIntegrationsPanel } from '@/components/wakaclock/ai-integrations-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
@@ -253,6 +254,7 @@ function AiStatsPanel() {
               />
 
               <AiDiagnosticsPanel report={diagnostics?.report ?? null} />
+              <AiIntegrationsPanel report={diagnostics?.report ?? null} />
 
               <div>
                 <h3 className="mb-2 text-sm font-medium">Agents</h3>
@@ -273,7 +275,7 @@ function AiStatsPanel() {
                     <TableBody>
                       {stats.agents.map((agent) => (
                         <TableRow
-                          key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
+                          key={`${agent.actor_type}:${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
                         >
                           <TableCell className="capitalize">
                             {agent.actor_type.replaceAll('_', ' ')}

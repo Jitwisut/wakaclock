@@ -159,12 +159,14 @@ async function runHook(script, input, env) {
         const config = (0, agentSetup_1.ensureCodexHooksFeature)("");
         const updated = (0, agentSetup_1.ensureCodexHook)(config, "/tmp/Ato Axis/heartbeat-hook.sh");
         (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI attribution hook");
-        (0, vitest_1.expect)(updated).toContain('matcher = "apply_patch"');
+        (0, vitest_1.expect)(updated).toContain('matcher = "^apply_patch$"');
         (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/heartbeat-hook.sh"');
         (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell sweep hooks");
         (0, vitest_1.expect)(updated).toContain('matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"');
         (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/git-sweep-before.sh"');
         (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/git-sweep-after.sh"');
+        (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell failure cleanup");
+        (0, vitest_1.expect)(updated).toContain('command = "/tmp/Ato Axis/tool-abort.sh"');
         (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHook)(updated, "/tmp/Ato Axis/heartbeat-hook.sh")).toBe(updated);
     });
     (0, vitest_1.it)("upgrades an existing attribution-only config with shell sweep hooks", () => {
@@ -183,6 +185,21 @@ async function runHook(script, input, env) {
         ].join("\n");
         const updated = (0, agentSetup_1.ensureCodexHook)(legacy, "/tmp/Ato Axis/heartbeat-hook.sh");
         (0, vitest_1.expect)(updated).toContain("# AtoAxis managed AI shell sweep hooks");
+    });
+    (0, vitest_1.it)("anchors a legacy managed apply-patch matcher so current Codex fires it", () => {
+        const legacy = [
+            "# AtoAxis managed AI attribution hook",
+            "[[hooks.PostToolUse]]",
+            'matcher = "apply_patch"',
+            "[[hooks.PostToolUse.hooks]]",
+            'type = "command"',
+            'command = "/tmp/heartbeat-hook.sh"',
+            "timeout = 60",
+            ""
+        ].join("\n");
+        const updated = (0, agentSetup_1.ensureCodexHook)(legacy, "/tmp/heartbeat-hook.sh");
+        (0, vitest_1.expect)(updated).toContain('matcher = "^apply_patch$"');
+        (0, vitest_1.expect)((0, agentSetup_1.ensureCodexHook)(updated, "/tmp/heartbeat-hook.sh")).toBe(updated);
     });
     (0, vitest_1.it)("repoints a stale managed hook path from an old plugin version, preserving user config", () => {
         const oldRoot = "/home/u/.wakaclock/agent-plugins/1.0.0/codex";

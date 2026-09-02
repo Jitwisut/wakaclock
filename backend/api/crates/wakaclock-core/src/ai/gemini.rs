@@ -6,7 +6,7 @@
 //! content.  A record is emitted only when a successful file-edit tool result proves a
 //! mutation; a model saying that it edited a file is not evidence.
 
-use crate::ai::event::{AiConfidence, AiEditEvent, AiEventSource};
+use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventSource};
 use crate::ai::jsonl::JsonlCursorReader;
 use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
@@ -288,9 +288,9 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
         return None;
     }
     let occurred_at = first_timestamp(value).unwrap_or_else(Utc::now);
-    let event_id = first_string(value, &["event_id", "eventId", "call_id", "callId", "id"])
-        .map(|id| format!("gemini-cli-v1:{id}:{path}"))
-        .unwrap_or_else(|| format!("gemini-cli-v1:{offset}:{path}"));
+    let operation_id = first_string(value, &["event_id", "eventId", "call_id", "callId", "id"])
+        .unwrap_or_else(|| offset.to_string());
+    let event_id = opaque_file_event_id("gemini-cli-v1", &operation_id, &path);
     Some(AiEditEvent {
         event_id,
         agent: "gemini-cli".to_string(),
@@ -357,6 +357,8 @@ mod tests {
         assert_eq!(event.agent, "gemini-cli");
         assert_eq!(event.lines_added, Some(1));
         assert_eq!(event.entity, PathBuf::from("/workspace/src/lib.rs"));
+        assert!(!event.event_id.contains("/workspace"));
+        assert!(!event.event_id.contains("lib.rs"));
         let encoded = serde_json::to_string(&event).unwrap();
         assert!(!encoded.contains("fn main"));
     }
@@ -378,6 +380,7 @@ mod tests {
             .parse_since(&ParseContext::default(), Some(&cursor))
             .unwrap();
         assert_eq!(first.events.len(), 1);
+        assert!(!first.events[0].event_id.contains("src/a.ts"));
         let second = parser
             .parse_since(&ParseContext::default(), Some(&first.next_cursor))
             .unwrap();

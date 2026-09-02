@@ -128,7 +128,7 @@ pub enum AiParseError {
 /// Correlation logic (`correlation.rs`, not yet implemented) depends only on this
 /// trait, never on an individual parser, so a new agent adds a struct here without
 /// touching matching logic (plan.md 8.4/8.5.4).
-pub trait AiActivityParser {
+pub trait AiActivityParser: Send + Sync {
     /// Stable identifier, e.g. `"codex"`. Must match [`crate::ai::event::normalize_agent_id`]'s
     /// output for this agent.
     fn id(&self) -> &'static str;

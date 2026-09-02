@@ -1,8 +1,9 @@
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::Error,
     fs,
     io::{self, BufRead, BufReader, Read},
@@ -13,17 +14,19 @@ use std::{
 };
 use uuid::Uuid;
 mod agent_service;
+mod ai_setup;
 mod broker;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
-        normalize_agent_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        scan_ai_processes, AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent,
-        AiEventSource, ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult,
-        DiscoveryState, FileChangeKind, GeminiCliParser, ParseContext, ParserCursor, TranscriptLag,
-        WorkspaceWatcher,
+        normalize_agent_id, normalize_client_id, normalize_model_id, normalize_provider_id,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, scan_ai_processes,
+        AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent, AiEventSource,
+        ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult, DiscoveryState,
+        FileChangeKind, GeminiCliParser, ParseContext, ParserCursor, TranscriptLag,
+        WorkspaceWatcher, PRODUCER_CONTRACT_VERSION,
     },
     api_client::ApiClient,
     broker::BrokerEventV1,
@@ -396,7 +399,34 @@ enum AgentAction {
 enum AiAction {
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
-    Status,
+    Status {
+        /// Emit a stable machine-readable adapter health snapshot.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Discover installed AI clients and install the metadata-only integrations.
+    /// `--all` configures every detected adapter; pass an adapter id to configure
+    /// one client. Setup is idempotent and only writes AtoAxis-managed files/blocks.
+    Setup {
+        /// Adapter id or alias (for example `codex`, `claude`, `kilo-code`).
+        agent: Option<String>,
+        /// Configure every supported adapter detected on this machine.
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Remove only AtoAxis-managed hooks/files for one adapter (or every
+    /// adapter configured by standalone setup). User-owned configuration is
+    /// preserved and unsupported integrations return a nonfatal explanation.
+    Uninstall {
+        /// Adapter id or alias. Omit this when using `--all`.
+        agent: Option<String>,
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Phase A of the Universal Detector Core (planai.md Phase 4): scan the local
     /// process table for known AI coding tools currently running and report what was
     /// found — presence only, never an attribution decision. Reads no file contents;
@@ -436,6 +466,23 @@ enum AiAction {
     /// Compare the current workspace against a matching ToolBefore snapshot and emit
     /// inferred AI file events for the actual changes caused during that tool call.
     ToolAfter {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Remove a pending shell/tool snapshot after a failed or cancelled call.
+    /// This never emits an edit; it only releases durable pending state.
+    ToolAbort {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Record metadata-only session start/resume state for adapters that expose
+    /// lifecycle hooks. This never stores prompts or model responses.
+    SessionStart {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Close metadata-only session state at the adapter-reported end time.
+    SessionEnd {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -568,6 +615,11 @@ struct ExtraHeartbeatInput {
 #[serde(deny_unknown_fields)]
 struct GenericAiEventInput {
     event_id: String,
+    /// Metadata producer contract version. Old flat/transcript producers may
+    /// omit it; native v1 adapters must send `1` so the broker can reject an
+    /// unknown envelope deliberately instead of guessing.
+    #[serde(default)]
+    producer_version: Option<u8>,
     agent: String,
     #[serde(default)]
     provider: Option<String>,
@@ -609,6 +661,53 @@ struct GenericAiEventInput {
     /// Old path for a one-to-one inferred rename. No file content is retained.
     #[serde(default)]
     previous_entity: Option<PathBuf>,
+}
+
+/// Lifecycle metadata emitted by SessionStart/SessionEnd hooks. This is a local
+/// state record, not a file-change broker event: it gives future session rollups a
+/// bounded interval without pretending that a session boundary is an edit.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AiSessionInput {
+    session_id: String,
+    agent: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    cwd: Option<PathBuf>,
+    #[serde(default)]
+    source: Option<AiEventSource>,
+    #[serde(default)]
+    occurred_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AiSessionState {
+    #[serde(default = "default_session_state_version")]
+    version: u8,
+    #[serde(default)]
+    sessions: BTreeMap<String, AiSessionRecord>,
+}
+
+fn default_session_state_version() -> u8 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AiSessionRecord {
+    #[serde(default = "default_session_state_version")]
+    producer_version: u8,
+    session_id: String,
+    agent: String,
+    provider: Option<String>,
+    model: Option<String>,
+    cwd: Option<String>,
+    source: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    last_event_at: chrono::DateTime<chrono::Utc>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Flat pre-v1 input accepted only by the CLI compatibility adapter. This shape was
@@ -705,6 +804,7 @@ impl LegacyAiEventInput {
         });
         Ok(GenericAiEventInput {
             event_id: self.event_id,
+            producer_version: None,
             agent: self
                 .agent
                 .or(self.legacy_agent)
@@ -1128,7 +1228,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "cli_path": cli_paths.to_json(),
                         "legacy_service_alias": legacy_service_alias,
                         "stale_service_binary": stale_service_binary,
-                        "capabilities": ["clipboard_metrics_v1"],
+                        "capabilities": ["clipboard_metrics_v1", "ai_producer_v1"],
+                        "ai_producer_contract_version": PRODUCER_CONTRACT_VERSION,
                     })
                 );
             } else {
@@ -1140,7 +1241,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
                 println!("{}", identity_line(&config));
                 println!("Queued heartbeats: {queued}");
-                println!("Capabilities: clipboard_metrics_v1");
+                println!("Capabilities: clipboard_metrics_v1, ai_producer_v1 (contract v{PRODUCER_CONTRACT_VERSION})");
                 match key_check {
                     "verified" => {
                         println!("Key check: verified — the server accepted this API key")
@@ -1358,7 +1459,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::Ai { action } => match action {
-            AiAction::Status => print_ai_status()?,
+            AiAction::Status { json } => print_ai_status(json)?,
+            AiAction::Setup { agent, all, json } => ai_setup::run(agent.as_deref(), all, json)?,
+            AiAction::Uninstall { agent, all, json } => {
+                ai_setup::uninstall(agent.as_deref(), all, json)?
+            }
             AiAction::ProcessScan { json } => print_ai_process_scan(json),
             AiAction::Watch {
                 path,
@@ -1368,6 +1473,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
             AiAction::ToolBefore { json } => run_ai_tool_before(json)?,
             AiAction::ToolAfter { json } => run_ai_tool_after(&config, &api_client, json).await?,
+            AiAction::ToolAbort { json } => run_ai_tool_abort(json)?,
+            AiAction::SessionStart { json } => run_ai_session(false, json)?,
+            AiAction::SessionEnd { json } => run_ai_session(true, json)?,
             AiAction::Sync {
                 agent,
                 dry_run,
@@ -1534,7 +1642,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         },
         Commands::Doctor { target } => match target {
-            DoctorTarget::Ai { json } => print_ai_doctor_report(&config, json)?,
+            DoctorTarget::Ai { json } => print_ai_doctor_report(&config, &api_client, json).await?,
         },
         Commands::Adapter { action } => match action {
             AdapterAction::List { json } => {
@@ -2009,6 +2117,14 @@ mod ai_doctor_tests {
         assert!(!id.build_time.is_empty());
     }
 
+    #[test]
+    fn disabled_adapter_policy_normalizes_aliases_and_ignores_unknown_values() {
+        let disabled = parse_disabled_ai_adapters(Some("Codex CLI, kilo,not-a-client"));
+        assert!(disabled.contains("codex"));
+        assert!(disabled.contains("kilo-code"));
+        assert!(!disabled.contains("not-a-client"));
+    }
+
     fn cli_path_report_fixture(path_mismatch: bool, hook_version: Option<&str>) -> CliPathReport {
         CliPathReport {
             current_exe: Some(PathBuf::from("/opt/new/wakaclock")),
@@ -2176,7 +2292,11 @@ mod ai_sync_isolation_tests {
 /// development machine on 2026-08-31: a `PATH` binary 8 days stale with no `broker`
 /// subcommand at all, and a Codex transcript with backlog the running service's own
 /// aggregate `last_scan_at` could not localize to one agent.
-fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Error>> {
+async fn print_ai_doctor_report(
+    config: &Config,
+    api_client: &ApiClient,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
     let current_exe = std::env::current_exe().ok();
     let on_path = resolve_on_path();
     let cli_path_override = fs::read_to_string(
@@ -2203,10 +2323,13 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
 
     let context = ai_discovery_context()?;
     let state = AiAttributionState::open().ok();
+    let disabled_adapters = disabled_ai_adapters();
     let mut agents = Vec::new();
     for (id, parser) in supported_ai_parsers() {
         let discovery = parser.discover(&context);
         let installed = !matches!(discovery.state, DiscoveryState::NotInstalled);
+        let discovery_is_unsupported =
+            matches!(&discovery.state, DiscoveryState::UnsupportedVersion { .. });
         // planai2.md Phase 0.4: an unsupported schema or a permission error must be
         // reported as a distinct diagnostic, never silently folded into "no
         // transcript" — that is the shape of a scanner that looks healthy while
@@ -2260,11 +2383,20 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
             (Some(modified), Some(scanned)) => Some(modified.saturating_sub(scanned)),
             _ => None,
         };
+        let latest = latest_sidecar_event(Some(id));
         agents.push(serde_json::json!({
             "agent": id,
             "installed": installed,
+            "enabled": installed && !disabled_adapters.contains(id),
             "transcript_found": transcript_path.is_some(),
             "diagnostic": diagnostic,
+            "diagnostic_code": if disabled_adapters.contains(id) {
+                Some("disabled_by_policy")
+            } else if discovery_is_unsupported {
+                Some("unsupported_schema")
+            } else {
+                None
+            },
             "ever_scanned": lag.map(|l| l.ever_scanned).unwrap_or(false),
             "file_size": file_size,
             "cursor_offset": lag.map(|l| l.cursor_offset),
@@ -2273,9 +2405,20 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
                 .as_ref()
                 .and_then(|c| c.last_record_time)
                 .map(|t| t.to_rfc3339()),
+            "last_native_event_at": latest.as_ref().and_then(|event| event.time.clone()),
+            "last_delivery_result": latest.as_ref().map(|_| "captured"),
+            "provider_id": latest.as_ref().and_then(|event| event.provider.clone()),
+            "model_id": latest.as_ref().and_then(|event| event.model.clone()),
+            "transport": latest.as_ref().and_then(|event| event.transport.clone()),
+            "contract_version": "producer-v1",
             "lag_seconds": lag_seconds,
         }));
     }
+
+    // Native adapters without a stable transcript parser still belong in the
+    // doctor report. Showing executable/config state makes a Kilo/Kimi setup
+    // failure distinguishable from an empty activity window.
+    agents.extend(native_adapter_doctor_entries(&context.home_dir));
 
     // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
     // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
@@ -2299,7 +2442,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     } else {
         None
     };
-    let report = build_ai_doctor_report(AiDoctorReportParts {
+    let mut report = build_ai_doctor_report(AiDoctorReportParts {
         cli_identity: serde_json::json!({
             "running_binary": current_exe,
             "running_version": identity.version,
@@ -2325,6 +2468,34 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         last_delivery_failure: last_delivery_failure.clone(),
         configured_server_url: config.server_url.clone(),
     });
+    // Push the same sanitized snapshot that the dashboard reads. A doctor run
+    // remains useful offline: the request is bounded and fail-open, and only a
+    // short delivery category is surfaced (never the response body or key).
+    let diagnostics_push = if config
+        .api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+    {
+        let diagnostics = wakaclock_core::ai::report_from_doctor_json(&report, Utc::now());
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            api_client.send_ai_diagnostics(&diagnostics),
+        )
+        .await
+        {
+            Ok(Ok(())) => serde_json::json!({"status": "delivered"}),
+            Ok(Err(error)) => serde_json::json!({
+                "status": "failed",
+                "category": wakaclock_core::api_client::classify_delivery_failure(&error.to_string()).as_str(),
+            }),
+            Err(_) => serde_json::json!({"status": "failed", "category": "timeout"}),
+        }
+    } else {
+        serde_json::json!({"status": "skipped", "category": "no_api_key"})
+    };
+    if let Some(object) = report.as_object_mut() {
+        object.insert("diagnostics_push".to_string(), diagnostics_push);
+    }
     // planai2.md Phase 0.5: the report must always carry every pipeline-stage key so
     // a reader never has to guess whether a missing field means "healthy" or "not
     // checked". `ai_doctor_report_keys()` is the single source of truth the
@@ -2394,6 +2565,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         Some(failure) => println!("Last delivery failure: {failure}"),
         None => println!("Last delivery failure: none recorded"),
     }
+    println!("Diagnostics push: {}", report["diagnostics_push"]);
     Ok(())
 }
 
@@ -2413,6 +2585,7 @@ fn ai_doctor_report_keys() -> &'static [&'static str] {
         "outbound_queue_depth",
         "last_delivery_failure",
         "configured_server_url",
+        "diagnostics_push",
     ]
 }
 
@@ -2443,6 +2616,7 @@ fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
         "outbound_queue_depth": parts.outbound_queue_depth,
         "last_delivery_failure": parts.last_delivery_failure,
         "configured_server_url": parts.configured_server_url,
+        "diagnostics_push": {"status": "not_attempted"},
     })
 }
 
@@ -2451,12 +2625,51 @@ fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
 /// written by `append_broker_sidecar`). `None` when the sidecar is missing, empty
 /// or unparseable — a best-effort local file, never an error.
 fn latest_sidecar_event_time() -> Option<String> {
+    latest_sidecar_event(None).and_then(|event| event.time)
+}
+
+#[derive(Debug, Default)]
+struct SidecarEventMetadata {
+    time: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    transport: Option<String>,
+}
+
+/// Read only bounded metadata from the newest sidecar event for an optional
+/// client. The sidecar contains an entity path, but this function deliberately
+/// never returns or logs it; diagnostics only need provider/model/freshness.
+fn latest_sidecar_event(agent: Option<&str>) -> Option<SidecarEventMetadata> {
     let path = dirs::home_dir()?.join(".wakaclock").join("ai-events.jsonl");
     let content = fs::read_to_string(path).ok()?;
-    let last = content.lines().rev().find(|line| !line.trim().is_empty())?;
-    let value: serde_json::Value = serde_json::from_str(last).ok()?;
-    let seconds = value.get("time").and_then(serde_json::Value::as_f64)?;
-    chrono::DateTime::from_timestamp(seconds as i64, 0).map(|dt| dt.to_rfc3339())
+    content.lines().rev().find_map(|line| {
+        if line.trim().is_empty() {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        if agent.is_some_and(|expected| {
+            value.get("agent").and_then(serde_json::Value::as_str) != Some(expected)
+        }) {
+            return None;
+        }
+        let seconds = value.get("time").and_then(serde_json::Value::as_f64)?;
+        let time = chrono::DateTime::from_timestamp(seconds as i64, 0)?.to_rfc3339();
+        Some(SidecarEventMetadata {
+            time: Some(time),
+            provider: value
+                .get("provider")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            model: value
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            transport: value
+                .get("transport")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        })
+    })
 }
 
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
@@ -2467,6 +2680,129 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
     ]
 }
 
+fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    let disabled_adapters = disabled_ai_adapters();
+    ["kilo-code", "kimi-code-cli", "deep-code"]
+        .iter()
+        .filter_map(|id| {
+            let manifest = registry.get(id)?;
+            let executable = resolve_named_command(&manifest.executable.command_names);
+            let config_path = match *id {
+                "kilo-code" => home_dir.join(".config/kilo/plugin/atoaxis-kilo-code"),
+                // Kimi renamed its default home directory in newer releases;
+                // prefer the current path but recognize the legacy Beta path.
+                "kimi-code-cli" => {
+                    let modern = home_dir.join(".kimi-code/config.toml");
+                    let legacy = home_dir.join(".kimi/config.toml");
+                    let managed = |path: &Path| {
+                        fs::read_to_string(path)
+                            .map(|text| text.contains("# AtoAxis managed Kimi Code hooks"))
+                            .unwrap_or(false)
+                    };
+                    if managed(&modern) || !managed(&legacy) && modern.exists() {
+                        modern
+                    } else {
+                        legacy
+                    }
+                }
+                "deep-code" => home_dir.join(".wakaclock/unsupported/deep-code"),
+                _ => return None,
+            };
+            let installed = match *id {
+                "kilo-code" => {
+                    config_path.is_dir()
+                        && config_path
+                            .parent()
+                            .map(|parent| parent.join("atoaxis-kilo-code.ts").is_file())
+                            .unwrap_or(false)
+                }
+                "kimi-code-cli" => fs::read_to_string(&config_path)
+                    .map(|text| text.contains("# AtoAxis managed Kimi Code hooks"))
+                    .unwrap_or(false),
+                "deep-code" => false,
+                _ => false,
+            };
+            let latest = latest_sidecar_event(Some(id));
+            let sidecar_transport = latest.as_ref().and_then(|event| event.transport.clone());
+            Some(serde_json::json!({
+                "agent": id,
+                "installed": installed,
+                "enabled": installed && !disabled_adapters.contains(*id),
+                "transcript_found": false,
+                "native_executable": executable,
+                "verification_status": format!("{:?}", manifest.effective_status()).to_lowercase(),
+                "provider_id": latest
+                    .as_ref()
+                    .and_then(|event| event.provider.clone())
+                    .unwrap_or_else(|| manifest.provider.clone()),
+                "model_id": latest.as_ref().and_then(|event| event.model.clone()),
+                "contract_version": "producer-v1",
+                "transport": sidecar_transport.or_else(|| {
+                    installed.then(|| "native_plugin".to_string())
+                }),
+                "last_event_at": latest.as_ref().and_then(|event| event.time.clone()),
+                "last_native_event_at": latest.as_ref().and_then(|event| event.time.clone()),
+                "last_delivery_result": latest.as_ref().map(|_| "captured"),
+                "diagnostic_code": if disabled_adapters.contains(*id) {
+                    Some("disabled_by_policy")
+                } else if *id == "deep-code" {
+                    Some("unsupported")
+                } else if executable.is_none() || !installed {
+                    Some("needs_setup")
+                } else {
+                    None
+                },
+                "diagnostic": if executable.is_none() {
+                    Some("native executable not found on PATH")
+                } else if !installed {
+                    Some("native adapter detected but not installed")
+                } else {
+                    None
+                },
+                "ever_scanned": false,
+                "file_size": serde_json::Value::Null,
+                "cursor_offset": serde_json::Value::Null,
+                "lag_bytes": serde_json::Value::Null,
+                // The keys above are the native event timestamps; keep the
+                // legacy null shape only when no sidecar event exists.
+                "lag_seconds": serde_json::Value::Null,
+            }))
+        })
+        .collect()
+}
+
+fn resolve_named_command(names: &[String]) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|candidate| candidate.is_file())
+}
+
+fn disabled_ai_adapters() -> HashSet<String> {
+    parse_disabled_ai_adapters(
+        std::env::var(ai_setup::DISABLED_ADAPTERS_ENV)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_disabled_ai_adapters(value: Option<&str>) -> HashSet<String> {
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    value
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|value| normalize_client_id(&value).ok())
+        .filter(|value| registry.get(value).is_some())
+        .collect()
+}
+
 fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     Ok(DiscoveryContext {
         home_dir: dirs::home_dir().ok_or("could not resolve home directory")?,
@@ -2474,8 +2810,41 @@ fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     })
 }
 
-fn print_ai_status() -> Result<(), Box<dyn Error>> {
+#[derive(Debug, Serialize)]
+struct AiStatusEntry {
+    agent: String,
+    detected: bool,
+    enabled: bool,
+    installed: bool,
+    provider_id: Option<String>,
+    model_id: Option<String>,
+    plugin_version: Option<String>,
+    contract_version: Option<String>,
+    verification_status: String,
+    client_version: Option<String>,
+    transcript_found: bool,
+    transport: Option<String>,
+    diagnostic_code: Option<String>,
+    last_native_event_at: Option<String>,
+    last_transcript_event_at: Option<String>,
+    last_delivery_result: Option<String>,
+    pending_events: u32,
+    retry_events: u32,
+    dead_letter_events: u32,
+}
+
+fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     let context = ai_discovery_context()?;
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    let native_rows = native_adapter_doctor_entries(&context.home_dir);
+    let disabled_adapters = disabled_ai_adapters();
+    let mut native_by_id = BTreeMap::new();
+    for row in native_rows {
+        if let Some(id) = row.get("agent").and_then(serde_json::Value::as_str) {
+            native_by_id.insert(id.to_string(), row);
+        }
+    }
+    let mut parser_rows = BTreeMap::new();
     for (id, parser) in supported_ai_parsers() {
         let discoveries = parser.discover_sources(&context);
         let paths: Vec<PathBuf> = discoveries
@@ -2493,7 +2862,8 @@ fn print_ai_status() -> Result<(), Box<dyn Error>> {
                     path: paths.first().cloned().unwrap_or_default(),
                 },
             });
-        let description = match result.state {
+        let installed = !matches!(result.state, DiscoveryState::NotInstalled);
+        let status = match result.state {
             DiscoveryState::NotInstalled => "not installed".to_string(),
             DiscoveryState::InstalledNoTranscript => "installed, no transcript found".to_string(),
             DiscoveryState::TranscriptFound { path } => {
@@ -2521,7 +2891,145 @@ fn print_ai_status() -> Result<(), Box<dyn Error>> {
                 )
             }
         };
-        println!("{id}: {description}");
+        let path = paths.first().cloned();
+        parser_rows.insert(id.to_string(), (installed, path.is_some(), status));
+    }
+
+    let mut entries = Vec::new();
+    for manifest in registry.manifests() {
+        let parser = parser_rows.get(&manifest.id);
+        let native = native_by_id.get(&manifest.id);
+        let executable = native
+            .and_then(|row| row.get("native_executable"))
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from);
+        let detected = parser
+            .map(|(installed, _, _)| *installed)
+            .unwrap_or_else(|| executable.is_some());
+        let installed = native
+            .and_then(|row| row.get("installed"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(detected);
+        let diagnostic_code = if disabled_adapters.contains(&manifest.id) {
+            Some("disabled_by_policy".to_string())
+        } else {
+            native
+                .and_then(|row| row.get("diagnostic_code").or_else(|| row.get("diagnostic")))
+                .and_then(serde_json::Value::as_str)
+                .map(|value| {
+                    if value.contains("not found") {
+                        "needs_setup".to_string()
+                    } else if value.contains("unsupported") {
+                        "unsupported".to_string()
+                    } else {
+                        "degraded".to_string()
+                    }
+                })
+                .or_else(|| {
+                    parser.and_then(|(_, _, description)| {
+                        if description.starts_with("unsupported transcript") {
+                            Some("unsupported_schema".to_string())
+                        } else if description.starts_with("permission denied") {
+                            Some("permission_denied".to_string())
+                        } else {
+                            None
+                        }
+                    })
+                })
+        };
+        let client_version = executable.as_deref().and_then(binary_version);
+        let transcript_found = parser.map(|(_, found, _)| *found).unwrap_or(false);
+        let latest = latest_sidecar_event(Some(&manifest.id));
+        entries.push(AiStatusEntry {
+            agent: manifest.id.clone(),
+            detected,
+            enabled: installed && !disabled_adapters.contains(&manifest.id),
+            installed,
+            provider_id: native
+                .and_then(|row| row.get("provider_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| latest.as_ref().and_then(|event| event.provider.clone()))
+                .or_else(|| Some(manifest.provider.clone())),
+            model_id: native
+                .and_then(|row| row.get("model_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| latest.as_ref().and_then(|event| event.model.clone())),
+            plugin_version: native
+                .and_then(|row| row.get("plugin_version"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            contract_version: native
+                .and_then(|row| row.get("contract_version"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+            client_version,
+            transcript_found,
+            transport: if transcript_found {
+                Some("transcript".to_string())
+            } else if executable.is_some() {
+                Some("native_plugin".to_string())
+            } else {
+                None
+            },
+            diagnostic_code,
+            last_native_event_at: native
+                .and_then(|row| row.get("last_native_event_at"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| latest.as_ref().and_then(|event| event.time.clone())),
+            last_transcript_event_at: native
+                .and_then(|row| row.get("last_transcript_event_at"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+            last_delivery_result: native
+                .and_then(|row| row.get("last_delivery_result"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| latest.as_ref().map(|_| "captured".to_string())),
+            pending_events: native
+                .and_then(|row| row.get("pending_events"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32,
+            retry_events: native
+                .and_then(|row| row.get("retry_events"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32,
+            dead_letter_events: native
+                .and_then(|row| row.get("dead_letter_events"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32,
+        });
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "adapters": entries,
+            }))?
+        );
+    } else {
+        for entry in entries {
+            let description = if entry.transcript_found {
+                "transcript found"
+            } else if entry.detected {
+                "detected"
+            } else {
+                "not detected"
+            };
+            println!(
+                "{}: {} (verification={}, transport={}, client_version={})",
+                entry.agent,
+                description,
+                entry.verification_status,
+                entry.transport.as_deref().unwrap_or("unknown"),
+                entry.client_version.as_deref().unwrap_or("unknown")
+            );
+        }
     }
     Ok(())
 }
@@ -2902,6 +3410,175 @@ fn read_ai_tool_input() -> Result<AiToolInput, Box<dyn Error>> {
     Ok(input)
 }
 
+fn run_ai_tool_abort(json: bool) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_tool_input()?;
+    let state = AiAttributionState::open()?;
+    state.delete_tool_session(&input.tool_event_id)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "aborted",
+                "tool_event_id": input.tool_event_id,
+            })
+        );
+    } else {
+        println!("AI tool {} snapshot discarded", input.tool_event_id);
+    }
+    Ok(())
+}
+
+fn read_ai_session_input() -> Result<AiSessionInput, Box<dyn Error>> {
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    if stdin.trim().is_empty() {
+        return Err("AI session metadata JSON is required on stdin".into());
+    }
+    let input: AiSessionInput = serde_json::from_str(&stdin)?;
+    if input.session_id.trim().is_empty() {
+        return Err("session_id must not be empty".into());
+    }
+    if input.session_id.len() > 128 || input.session_id.chars().any(char::is_control) {
+        return Err("session_id is invalid or too long".into());
+    }
+    if input.agent.trim().is_empty() {
+        return Err("agent must not be empty".into());
+    }
+    Ok(input)
+}
+
+fn ai_session_state_path() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(dirs::home_dir()
+        .ok_or("could not resolve home directory")?
+        .join(".wakaclock")
+        .join("ai-sessions.json"))
+}
+
+fn write_ai_session_state_atomically(path: &Path, content: &str) -> Result<(), Box<dyn Error>> {
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, content)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn normalize_session_cwd(cwd: Option<PathBuf>) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(cwd) = cwd else { return Ok(None) };
+    let absolute = if cwd.is_absolute() {
+        cwd
+    } else {
+        std::env::current_dir()?.join(cwd)
+    };
+    Ok(Some(absolute.to_string_lossy().into_owned()))
+}
+
+fn run_ai_session(ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_session_input()?;
+    let now = input.occurred_at.unwrap_or_else(chrono::Utc::now);
+    if now > chrono::Utc::now() + chrono::Duration::minutes(5) {
+        return Err("occurred_at cannot be more than five minutes in the future".into());
+    }
+    let agent = normalize_client_id(&input.agent)?;
+    let provider = input
+        .provider
+        .as_deref()
+        .map(normalize_provider_id)
+        .transpose()?;
+    let model = input.model.as_deref().map(normalize_model_id).transpose()?;
+    let cwd = normalize_session_cwd(input.cwd)?;
+    let source = input
+        .source
+        .as_ref()
+        .unwrap_or(&AiEventSource::AgentHook)
+        .as_str()
+        .to_string();
+    let key = format!("{agent}:{}", input.session_id.trim());
+    let path = ai_session_state_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = path.with_extension("lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock_file.lock_exclusive()?;
+
+    let mut state: AiSessionState = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    state.version = default_session_state_version();
+    // Keep closed metadata bounded while preserving every active session. This file
+    // contains IDs/timestamps/paths only; it is not a transcript or source store.
+    state.sessions.retain(|_, record| {
+        record
+            .ended_at
+            .is_none_or(|ended_at| now.signed_duration_since(ended_at) < chrono::Duration::days(30))
+    });
+
+    let ended_at = {
+        let record = state
+            .sessions
+            .entry(key.clone())
+            .or_insert_with(|| AiSessionRecord {
+                producer_version: PRODUCER_CONTRACT_VERSION,
+                session_id: input.session_id.trim().to_string(),
+                agent: agent.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                cwd: cwd.clone(),
+                source: source.clone(),
+                started_at: now,
+                last_event_at: now,
+                ended_at: None,
+            });
+        // A resumed session keeps its original start, while the latest lifecycle
+        // payload may reveal provider/model/cwd that were absent at first start.
+        record.last_event_at = now;
+        record.provider = provider.or_else(|| record.provider.clone());
+        record.model = model.or_else(|| record.model.clone());
+        record.cwd = cwd.or_else(|| record.cwd.clone());
+        record.source = source;
+        if ended {
+            record.ended_at = Some(now);
+        } else {
+            record.ended_at = None;
+        }
+        record.ended_at
+    };
+    let serialized = serde_json::to_string_pretty(&state)? + "\n";
+    write_ai_session_state_atomically(&path, &serialized)?;
+    // Dropping the file descriptor releases the advisory lock on every supported
+    // Rust MSRV; `FileExt::unlock` is newer than this workspace's MSRV.
+    drop(lock_file);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": if ended { "session_ended" } else { "session_started" },
+                "producer_version": PRODUCER_CONTRACT_VERSION,
+                "agent": agent,
+                "session_id": input.session_id.trim(),
+                "occurred_at": now,
+                "ended_at": ended_at,
+            })
+        );
+    } else {
+        println!(
+            "AI session {} {}",
+            input.session_id.trim(),
+            if ended { "ended" } else { "started" }
+        );
+    }
+    Ok(())
+}
+
 fn run_ai_tool_before(json: bool) -> Result<(), Box<dyn Error>> {
     let input = read_ai_tool_input()?;
     let snapshot = tool_snapshot::capture(&input)?;
@@ -2966,6 +3643,7 @@ fn tool_change_input(
     };
     GenericAiEventInput {
         event_id: tool_snapshot::stable_change_event_id(&before.tool_event_id, change),
+        producer_version: Some(wakaclock_core::ai::PRODUCER_CONTRACT_VERSION),
         agent: before.agent.clone(),
         provider: after_input
             .provider
@@ -3217,6 +3895,7 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         .map(|path| path.to_string());
     Ok(BrokerEventV1 {
         schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        producer_version: input.producer_version,
         event_type: wakaclock_core::broker::BrokerEventType::FileChange,
         event_id: event.event_id,
         occurred_at: event.occurred_at,
@@ -3306,6 +3985,7 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         });
     Ok(BrokerEventV1 {
         schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        producer_version: None,
         event_type: wakaclock_core::broker::BrokerEventType::FileChange,
         event_id,
         occurred_at,
@@ -3369,7 +4049,7 @@ async fn run_ai_emit(
 /// are not dependent on a user remembering to run `wakaclock ai sync`. The bound keeps
 /// extension heartbeat latency predictable; any timeout/error leaves the ordinary
 /// heartbeat path untouched and the transcript cursor replayable on the next call.
-async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
+pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
     const AUTO_SYNC_BUDGET: Duration = Duration::from_secs(2);
     match tokio::time::timeout(
         AUTO_SYNC_BUDGET,
@@ -3887,6 +4567,7 @@ mod generic_ai_ingress_tests {
     fn sample_input() -> GenericAiEventInput {
         GenericAiEventInput {
             event_id: "chatgpt-session-1:src/lib.rs:1".to_string(),
+            producer_version: Some(1),
             agent: "ChatGPT MCP".to_string(),
             provider: Some("openai".to_string()),
             model: Some("gpt".to_string()),
@@ -3919,6 +4600,66 @@ mod generic_ai_ingress_tests {
             parsed.command,
             Commands::Ai {
                 action: AiAction::Emit { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_session_lifecycle_commands_are_first_class_subcommands() {
+        let start = Cli::try_parse_from(["wakaclock", "ai", "session-start", "--json"])
+            .expect("session-start should parse");
+        assert!(matches!(
+            start.command,
+            Commands::Ai {
+                action: AiAction::SessionStart { json: true }
+            }
+        ));
+        let end = Cli::try_parse_from(["wakaclock", "ai", "session-end", "--json"])
+            .expect("session-end should parse");
+        assert!(matches!(
+            end.command,
+            Commands::Ai {
+                action: AiAction::SessionEnd { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_setup_supports_an_adapter_or_all() {
+        let one = Cli::try_parse_from(["wakaclock", "ai", "setup", "codex", "--json"])
+            .expect("adapter setup should parse");
+        assert!(matches!(
+            one.command,
+            Commands::Ai {
+                action: AiAction::Setup {
+                    agent: Some(_),
+                    all: false,
+                    json: true
+                }
+            }
+        ));
+        let all = Cli::try_parse_from(["wakaclock", "ai", "setup", "--all"])
+            .expect("all-adapter setup should parse");
+        assert!(matches!(
+            all.command,
+            Commands::Ai {
+                action: AiAction::Setup {
+                    agent: None,
+                    all: true,
+                    json: false
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_status_supports_a_machine_readable_snapshot() {
+        let parsed = Cli::try_parse_from(["wakaclock", "ai", "status", "--json"])
+            .expect("ai status --json should parse");
+        assert!(matches!(
+            parsed.command,
+            Commands::Ai {
+                action: AiAction::Status { json: true }
             }
         ));
     }

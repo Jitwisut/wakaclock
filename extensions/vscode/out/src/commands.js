@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensureBrokerRunning = ensureBrokerRunning;
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
+const aiDetectionSelfTest_1 = require("./aiDetectionSelfTest");
 const secrets_1 = require("./secrets");
 const utils_1 = require("./utils");
 async function ensureBrokerRunning(deps) {
@@ -205,6 +206,23 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         return setupAiTracking(aiIntegrations, cliService, context);
     }), vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
         return setupAiTracking(aiIntegrations, cliService, context, true);
+    }), vscode.commands.registerCommand("wakaclock.testAiDetection", async () => {
+        try {
+            const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)({
+                getBrokerStatus: () => cliService.getBrokerStatus(),
+                getAiAgentStatuses: () => aiIntegrations.getStatus(),
+            });
+            const body = (0, aiDetectionSelfTest_1.formatAiDetectionReport)(report);
+            if (report.verdict === "ok") {
+                await vscode.window.showInformationMessage(body, { modal: false });
+            }
+            else {
+                await vscode.window.showWarningMessage(body, { modal: false });
+            }
+        }
+        catch (error) {
+            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to run the AI detection self-test.");
+        }
     }));
 }
 async function setupAiTracking(aiIntegrations, cliService, context, repairing = false) {
@@ -255,7 +273,7 @@ async function setupAiTracking(aiIntegrations, cliService, context, repairing = 
             return serviceInstalled;
         }
         else {
-            await vscode.window.showInformationMessage("No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+            await vscode.window.showInformationMessage("No supported AI CLI was detected. Install a supported integration and run setup again.");
             return false;
         }
     }
@@ -270,8 +288,8 @@ async function chooseAiAgents(aiIntegrations, context, repairing = false) {
     const candidates = statuses.filter((status) => status.detected && (repairing || !status.enabled));
     if (candidates.length === 0) {
         await vscode.window.showInformationMessage(repairing
-            ? "No configured supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run repair again."
-            : "No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+            ? "No configured supported AI coding tool was detected. Install a supported integration and run repair again."
+            : "No new supported AI coding tool was detected. Install a supported integration and run setup again.");
         return undefined;
     }
     const picked = await vscode.window.showQuickPick(candidates.map((status) => ({

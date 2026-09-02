@@ -10,7 +10,7 @@
 //! holding the child evidence ids it was folded from (native hook / transcript /
 //! filesystem / editor) — ids and kinds only, never content.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -105,6 +105,60 @@ impl CanonicalFingerprint {
     /// a caller can assert a scheme bump rather than compare opaque bytes.
     pub fn scheme(&self) -> &str {
         self.0.split_once(':').map(|(s, _)| s).unwrap_or(&self.0)
+    }
+}
+
+/// Build the shared canonical identity used by heartbeat ingestion when the
+/// caller has only the metadata fields present on a raw heartbeat.  Transport,
+/// event id, provider and model are deliberately excluded; `ai_change_id` is
+/// accepted only as an optional logical tool identity so one multi-file tool
+/// call can keep independent files separate without making retries transport
+/// specific.
+pub fn fingerprint_for_heartbeat(
+    project: Option<&str>,
+    branch: Option<&str>,
+    entity: &str,
+    change_kind: BrokerChangeKind,
+    occurred_at_unix: i64,
+    lines_added: Option<u32>,
+    lines_deleted: Option<u32>,
+    ai_change_id: Option<&str>,
+) -> CanonicalFingerprint {
+    let workspace = PathBuf::from(format!(
+        "{}|{}",
+        project.unwrap_or("unknown"),
+        branch.unwrap_or_default()
+    ));
+    let normalized_entity = comparable_entity_tail(entity);
+    CanonicalFingerprint::v1(&CanonicalIdentity {
+        workspace: &workspace,
+        entity: &normalized_entity,
+        change_kind,
+        occurred_at_unix,
+        content_fingerprint: None,
+        line_delta: lines_added.or(lines_deleted).map(|_| {
+            (
+                lines_added.unwrap_or_default(),
+                lines_deleted.unwrap_or_default(),
+            )
+        }),
+        session_or_tool_id: ai_change_id,
+    })
+}
+
+fn comparable_entity_tail(entity: &str) -> PathBuf {
+    let normalized = entity.replace('\\', "/");
+    let mut tail = normalized
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>();
+    tail.reverse();
+    if tail.is_empty() {
+        PathBuf::from("unknown")
+    } else {
+        PathBuf::from(tail.join("/"))
     }
 }
 
@@ -347,6 +401,32 @@ mod tests {
             CanonicalFingerprint::v1(&without_fp_same_delta),
             CanonicalFingerprint::v1(&without_fp_different_delta)
         );
+    }
+
+    #[test]
+    fn heartbeat_fingerprint_bridges_absolute_and_relative_transport_metadata() {
+        let hook = fingerprint_for_heartbeat(
+            Some("wakaclock"),
+            Some("main"),
+            "/workspace/src/main.rs",
+            BrokerChangeKind::Modify,
+            104,
+            Some(3),
+            Some(1),
+            None,
+        );
+        let transcript = fingerprint_for_heartbeat(
+            Some("wakaclock"),
+            Some("main"),
+            "src/main.rs",
+            BrokerChangeKind::Modify,
+            109,
+            Some(3),
+            Some(1),
+            None,
+        );
+        assert_eq!(hook, transcript);
+        assert_eq!(hook.scheme(), FINGERPRINT_SCHEME_V1);
     }
 
     #[test]

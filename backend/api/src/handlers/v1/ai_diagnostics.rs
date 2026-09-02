@@ -24,6 +24,8 @@ use crate::model::ai_diagnostics::AiDiagnosticsResponse;
 const MAX_ADAPTERS: usize = 64;
 const MAX_AGENT_ID_BYTES: usize = 128;
 const MAX_ERROR_CODE_BYTES: usize = 64;
+const MAX_METADATA_LABEL_BYTES: usize = 256;
+const MAX_QUEUE_COUNTER: u32 = 1_000_000;
 
 /// POST /api/v1/ai/diagnostics
 pub async fn ingest(
@@ -82,6 +84,41 @@ fn validate(report: &AiDiagnosticsReport) -> Result<(), (StatusCode, Json<serde_
                 "adapter agent id must be a slug, not a filesystem path",
             ));
         }
+        for (field, value) in [
+            ("client_version", adapter.client_version.as_deref()),
+            ("plugin_version", adapter.plugin_version.as_deref()),
+            ("contract_version", adapter.contract_version.as_deref()),
+            ("transport", adapter.transport.as_deref()),
+            ("provider_id", adapter.provider_id.as_deref()),
+            ("model_id", adapter.model_id.as_deref()),
+            (
+                "last_delivery_result",
+                adapter.last_delivery_result.as_deref(),
+            ),
+            ("diagnostic_code", adapter.diagnostic_code.as_deref()),
+        ] {
+            if let Some(value) = value {
+                if value.is_empty()
+                    || value.len() > MAX_METADATA_LABEL_BYTES
+                    || value.chars().any(char::is_control)
+                    || value.chars().any(char::is_whitespace)
+                {
+                    return Err(app_error(
+                        StatusCode::BAD_REQUEST,
+                        &format!("adapter {field} must be a bounded metadata label"),
+                    ));
+                }
+            }
+        }
+        if adapter.pending_events > MAX_QUEUE_COUNTER
+            || adapter.retry_events > MAX_QUEUE_COUNTER
+            || adapter.dead_letter_events > MAX_QUEUE_COUNTER
+        {
+            return Err(app_error(
+                StatusCode::BAD_REQUEST,
+                "adapter queue counters exceed the supported bound",
+            ));
+        }
     }
     if let Some(code) = report.broker.last_error_code.as_deref() {
         if code.len() > MAX_ERROR_CODE_BYTES || code.contains(char::is_whitespace) {
@@ -130,6 +167,7 @@ mod tests {
                 enabled: true,
                 verification: VerificationStatus::Verified,
                 last_evidence_unix: None,
+                ..Default::default()
             }],
         }
     }
@@ -169,6 +207,7 @@ mod tests {
             enabled: false,
             verification: VerificationStatus::Unverified,
             last_evidence_unix: None,
+            ..Default::default()
         })
         .take(MAX_ADAPTERS + 1)
         .collect();

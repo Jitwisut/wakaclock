@@ -157,12 +157,14 @@ describe("Codex hook config helpers", () => {
     const updated = ensureCodexHook(config, "/tmp/Ato Axis/heartbeat-hook.sh");
 
     expect(updated).toContain("# AtoAxis managed AI attribution hook");
-    expect(updated).toContain('matcher = "apply_patch"');
+    expect(updated).toContain('matcher = "^apply_patch$"');
     expect(updated).toContain('command = "/tmp/Ato Axis/heartbeat-hook.sh"');
     expect(updated).toContain("# AtoAxis managed AI shell sweep hooks");
     expect(updated).toContain('matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"');
     expect(updated).toContain('command = "/tmp/Ato Axis/git-sweep-before.sh"');
     expect(updated).toContain('command = "/tmp/Ato Axis/git-sweep-after.sh"');
+    expect(updated).toContain("# AtoAxis managed AI shell failure cleanup");
+    expect(updated).toContain('command = "/tmp/Ato Axis/tool-abort.sh"');
     expect(ensureCodexHook(updated, "/tmp/Ato Axis/heartbeat-hook.sh")).toBe(updated);
   });
 
@@ -182,6 +184,22 @@ describe("Codex hook config helpers", () => {
     ].join("\n");
     const updated = ensureCodexHook(legacy, "/tmp/Ato Axis/heartbeat-hook.sh");
     expect(updated).toContain("# AtoAxis managed AI shell sweep hooks");
+  });
+
+  it("anchors a legacy managed apply-patch matcher so current Codex fires it", () => {
+    const legacy = [
+      "# AtoAxis managed AI attribution hook",
+      "[[hooks.PostToolUse]]",
+      'matcher = "apply_patch"',
+      "[[hooks.PostToolUse.hooks]]",
+      'type = "command"',
+      'command = "/tmp/heartbeat-hook.sh"',
+      "timeout = 60",
+      ""
+    ].join("\n");
+    const updated = ensureCodexHook(legacy, "/tmp/heartbeat-hook.sh");
+    expect(updated).toContain('matcher = "^apply_patch$"');
+    expect(ensureCodexHook(updated, "/tmp/heartbeat-hook.sh")).toBe(updated);
   });
 
   it("repoints a stale managed hook path from an old plugin version, preserving user config", () => {

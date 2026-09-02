@@ -432,10 +432,16 @@ fn codex_manifest() -> AdapterManifest {
             BrokerChangeKind::Delete,
             BrokerChangeKind::Rename,
         ],
-        // Real transcripts parsed (dry-run only); live delivery/dedup still open
-        // per VERIFICATION.md — not full live verification.
-        verification: Verification::scaffold(
-            "codex.rs verified against 156 real local sessions by dry-run; live delivery open",
+        // Promoted after a real codex-cli 0.151.0-alpha.7.1 run through the
+        // managed PostToolUse hook, broker/backend row inspection, and replay
+        // dedup verification recorded in ai/VERIFICATION.md. The legacy shell
+        // collision is a separate acceptance check and does not invalidate the
+        // native hook evidence represented by this status.
+        verification: Verification::verified(
+            DateTime::parse_from_rfc3339("2026-09-01T19:18:51Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            "codex-cli 0.151.0-alpha.7.1 (native hook + transcript dedup)",
         ),
         health_probe: HealthProbe::TranscriptFreshness {
             max_lag_seconds: 300,
@@ -476,7 +482,8 @@ fn no_hooks() -> NativeHookCapabilities {
     NativeHookCapabilities::default()
 }
 
-/// planai2.md Phase 2 (p2.3), rollout order 4-10. Every entry is a manifest only —
+/// planai2.md Phase 2 (p2.3) plus Universal AI Detection rollout. Every entry is a
+/// manifest only —
 /// no parser, no verified capability — recorded so the pipeline *knows about* the
 /// agent and can show it as `scaffold` / `unverified` rather than pretending it
 /// does not exist. Cursor is `Scaffold` because a documented hook payload shape
@@ -508,6 +515,102 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
             verification: Verification::scaffold(
                 "hook payload shape from Cursor public docs only; extensions/ai-agents/cursor/ is a scaffold, not run against a real Cursor",
             ),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "kilo-code".to_string(),
+            // Kilo can route to OpenAI, Anthropic, Moonshot, DeepSeek or a local
+            // model. `multi-provider` is intentionally not presented as the model
+            // vendor; the native plugin reports provider/model per tool call.
+            provider: "multi-provider".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kilo".to_string(), "kilocode".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::NativePlugin {
+                install_args: vec![
+                    "kilo".to_string(),
+                    "plugin".to_string(),
+                    "@atoaxis/kilo-code".to_string(),
+                ],
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                session_lifecycle: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![".config/kilo/sessions".to_string()],
+            payload_schema_versions: vec!["kilo-plugin-event-v1".to_string()],
+            supported_change_kinds: vec![
+                BrokerChangeKind::Create,
+                BrokerChangeKind::Modify,
+                BrokerChangeKind::Rename,
+                BrokerChangeKind::Delete,
+            ],
+            verification: Verification::scaffold(
+                "native plugin package is implemented from Kilo's documented hook surface; real Kilo CLI and VS Code runs are still required",
+            ),
+            health_probe: HealthProbe::HookEventRecency {
+                max_age_seconds: 900,
+            },
+        },
+        AdapterManifest {
+            id: "kimi-code-cli".to_string(),
+            provider: "moonshot".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kimi".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::ConfigHookBlock {
+                // Current Kimi releases use ~/.kimi-code; the installer and
+                // doctor also recognize the legacy ~/.kimi Beta location.
+                config_path_from_home: ".kimi-code/config.toml".to_string(),
+                marker: "# AtoAxis managed Kimi Code hooks".to_string(),
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                session_lifecycle: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![".kimi-code/sessions".to_string(), ".kimi/sessions".to_string()],
+            payload_schema_versions: vec!["kimi-hooks-v1".to_string(), "stream-json-v1".to_string()],
+            supported_change_kinds: vec![
+                BrokerChangeKind::Create,
+                BrokerChangeKind::Modify,
+                BrokerChangeKind::Rename,
+                BrokerChangeKind::Delete,
+            ],
+            verification: Verification::scaffold(
+                "Kimi Code hooks are Beta; install and capture a real payload before promoting to Verified",
+            ),
+            health_probe: HealthProbe::HookEventRecency {
+                max_age_seconds: 900,
+            },
+        },
+        AdapterManifest {
+            id: "deep-code".to_string(),
+            // DeepSeek's standalone coding client is a distinct client when a
+            // future native integration is available.  Do not collapse it into
+            // Kilo/Codex merely because the model provider is the same.
+            provider: "deepseek".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["deep-code".to_string(), "deepseek".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::Manual {
+                instruction: "standalone DeepSeek client has no supported metadata hook yet; use an explicit MCP/native producer".to_string(),
+            },
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            // A model name or process presence cannot promote this adapter.  It
+            // stays unverified until a real client→broker→backend run exists.
+            verification: Verification::unverified(),
             health_probe: HealthProbe::None,
         },
         AdapterManifest {
@@ -764,10 +867,7 @@ mod tests {
         }
         // Trust is graded honestly.
         assert!(registry.get("claude-code").unwrap().is_live_verified());
-        assert_eq!(
-            registry.get("codex").unwrap().effective_status(),
-            VerificationStatus::Scaffold
-        );
+        assert!(registry.get("codex").unwrap().is_live_verified());
         assert_eq!(
             registry.get("gemini-cli").unwrap().effective_status(),
             VerificationStatus::Unverified
@@ -806,6 +906,9 @@ mod tests {
         let registry = AdapterRegistry::builtin();
         for id in [
             "cursor",
+            "kilo-code",
+            "kimi-code-cli",
+            "deep-code",
             "antigravity",
             "copilot",
             "windsurf",
@@ -835,14 +938,22 @@ mod tests {
             registry.get("windsurf").unwrap().effective_status(),
             VerificationStatus::Unverified
         );
-        // Not a single builtin adapter is verified except claude-code.
+        assert_eq!(
+            registry.get("kilo-code").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
+        assert_eq!(
+            registry.get("kimi-code-cli").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
+        // Only adapters with recorded live evidence may be verified.
         let verified: Vec<&str> = registry
             .manifests()
             .iter()
             .filter(|m| m.is_live_verified())
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(verified, vec!["claude-code"]);
+        assert_eq!(verified, vec!["claude-code", "codex"]);
     }
 
     #[test]
@@ -967,6 +1078,7 @@ mod tests {
             for kind in &manifest.supported_change_kinds {
                 let event = BrokerEventV1 {
                     schema_version: BROKER_SCHEMA_VERSION,
+                    producer_version: Some(crate::ai::producer::PRODUCER_CONTRACT_VERSION),
                     event_type: BrokerEventType::FileChange,
                     event_id: format!("{}-evt", manifest.id),
                     occurred_at: Utc::now(),

@@ -28,7 +28,19 @@ SESSION_ID="$(jq -r '.conversation_id // .session_id // .sessionId // empty' <<<
 CALL_ID="$(jq -r '.generation_id // .tool_use_id // .toolUseId // .call_id // .callId // .tool_call_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 TOOL_NAME="$(jq -r '.hook_event_name // .tool_name // .toolName // empty' <<<"$INPUT" 2>/dev/null || true)"
 KEY_MATERIAL="${AGENT}|${CWD}|${SESSION_ID}|${CALL_ID:-${TOOL_NAME}}"
-TOOL_EVENT_ID="${AGENT}-tool-$(printf '%s' "$KEY_MATERIAL" | shasum -a 256 | cut -c1-40)"
+hash_material() {
+  local material="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$material" | shasum -a 256 | cut -c1-40
+  elif command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$material" | sha256sum | cut -c1-40
+  elif command -v cksum >/dev/null 2>&1; then
+    printf '%s' "$material" | cksum | awk '{print $1":"$2}'
+  else
+    printf 'unhashed-%s' "$$"
+  fi
+}
+TOOL_EVENT_ID="${AGENT}-tool-$(hash_material "$KEY_MATERIAL")"
 
 jq -cn \
   --arg tool_event_id "$TOOL_EVENT_ID" \
