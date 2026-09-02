@@ -97,12 +97,17 @@ Box legend: `[ ]` todo · `[x]` done+verified · `[~]` scaffolded, live owed · 
 
 ## Current position
 
-**p8.0 done** (blocker cleared). Next: **p8.1 — evidence intake adapter**
-(`ai/intake.rs`).
+**p8.0 + p8.1 done.** Next: **p8.2 — broker correlation pass** (wire `intake` +
+`CorrelationEngine::verdict_for_within` into the `wakaclock-cli/src/broker.rs`
+poll loop, bounded).
 
-Track A (p8.1 → p8.6) is the critical path and must go in order through p8.3
+Track A (p8.2 → p8.6) is the critical path and must go in order through p8.3
 (shadow gate) before p8.4 (canonical emit). Track B (p8.7 → p8.10) can start
 after p8.1. Do **not** flip `infer` before p8.6's gate passes.
+
+**Note on `broker.rs` (cli):** heavily churned by the concurrent session in the
+**main** worktree. This worktree (`.worktrees/phase8`) is isolated — edit
+freely; reconciliation happens at merge time, not now.
 
 ---
 
@@ -115,8 +120,8 @@ after p8.1. Do **not** flip `infer` before p8.6's gate passes.
 
 ### Track A — Wire the engine into production
 
-- [ ] **p8.1 Evidence intake adapter.** New `wakaclock-core/src/ai/intake.rs` — every producer shape → one `CorrelationInput`. `BrokerEventV1`→(NativeHook/StructuredMcp/CompletedTranscriptToolCall/ToolSnapshot by `TransportKind`); `FileChangedEvent`→FilesystemObserver (`file_event_id()`); `SessionProcessEvidence`→SessionProcessObserver (+`evidence_strength`); editor sidecar→EditorInput. Malformed input → drop + bounded diagnostic, never guess. `workspace` only from `project_root` / `WorkspaceRegistry`.
-  - Tests: `every_producer_shape_maps_to_a_correlation_input_with_its_lineage`, `an_intake_record_carries_no_content_field`, `a_malformed_producer_record_is_dropped_not_guessed`.
+- [x] **p8.1 Evidence intake adapter.** `wakaclock-core/src/ai/intake.rs` — `from_broker_event` / `from_file_change` / `from_session_evidence` / `from_editor_input`, all → `CorrelationInput`, collected in `IntakeBatch { inputs, drops }`. Broker transport → `EvidenceKind` via `TransportKind::classify` with a `source`-field fallback for `Cli`/`Other`. Malformed (no entity) → `IntakeDrop { lineage_id, reason }` (content-free), **never patched**. `evidence_strength` carried through so the engine decides `is_strong_enough_to_infer`, not the producer.
+  - → `d3d18e7` | tests (5, core 303→308): `every_producer_shape_maps_to_a_correlation_input_with_its_lineage`, `transport_drives_the_evidence_kind_with_a_source_fallback`, `an_intake_record_carries_no_content_field`, `a_malformed_producer_record_is_dropped_not_guessed`, `a_non_file_change_broker_event_is_dropped` | gates: fmt/clippy/test --workspace green; duration-audit golden (total_error 0.0) / verify_port green.
 - [ ] **p8.2 Broker correlation pass.** `wakaclock-cli/src/broker.rs` poll loop — after transcript auto-scan, gather in-window evidence → `intake` → `CorrelationEngine::ingest` → `verdict_for_within(entity, at, ClipBounds::utc_day(at))` → `Vec<(entity, Verdict)>`. Bounded per poll (`BoundedEventBuffer` pattern); engine rebuilt each poll (state lives in the inbox).
   - Tests: `a_poll_with_mixed_evidence_produces_one_verdict_per_entity`, `an_empty_poll_is_a_no_op`, `the_correlation_pass_is_bounded_under_a_file_storm`.
 - [ ] **p8.3 Shadow gate at the emit boundary.** `shadow::observe()` between verdict and heartbeat. `ObserverConfig` from `~/.wakaclock/observer.toml` (absent = Default = off). Kill switches checked at **intake**. `observe_only` → `ShadowRecord` to a bounded rotating `shadow_log` in broker SQLite, **no new heartbeat, no change to existing**. `infer` → verdict becomes `actor_type`.
@@ -170,4 +175,5 @@ wire; the broker just delivers an already-correlated `actor_type`.
 
 ## Iteration log
 
-- 2026-09-02 — p8.0 — done. Created isolated worktree `.worktrees/phase8` on `phase8/production-wiring` off `integration/all-branches-2026-09-02` (`36f58e4`). Base carried the concurrent session's mid-refactor `TransportKind` snapshot with 2 stale test assertions; pulled in the concurrent session's own fixes (`dedup.rs` p6_a2 fixture, `broker.rs` `transport_kind_ranks…` assertion — test-only). wakaclock-core lib 301→303 green, fmt clean, clippy clean, `golden.py` total_error 0.0.
+- 2026-09-02 — p8.0 — done. Created isolated worktree `.worktrees/phase8` on `phase8/production-wiring` off `integration/all-branches-2026-09-02` (`36f58e4`). Base carried the concurrent session's mid-refactor `TransportKind` snapshot with 2 stale test assertions; pulled in the concurrent session's own fixes (`dedup.rs` p6_a2 fixture, `broker.rs` `transport_kind_ranks…` assertion — test-only). wakaclock-core lib 301→303 green, fmt clean, clippy clean, `golden.py` total_error 0.0. Commit `1169c4d`.
+- 2026-09-02 — p8.1 — done. `ai/intake.rs`: four mapper fns → `CorrelationInput`, `IntakeBatch { inputs, drops }`. `broker_evidence_kind()` = `TransportKind::classify` → `EvidenceKind` with a `source` fallback for `Cli`/`Other`. Never guesses — no-entity records become content-free `IntakeDrop`. 5 tests, core 303→308. Gates + duration-audit (total_error 0.0) green. Commit `d3d18e7`.
