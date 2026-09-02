@@ -16,7 +16,7 @@ const BODY = `# ${SITE_NAME}
 
 > ${PRODUCT_ANSWER}
 
-${SITE_NAME} is a commercial, proprietary product published by StandUpCode / Lodash (Thailand) Co., Ltd.
+${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
 It is a hosted service operated by AtoAxis; customers do not deploy or maintain its infrastructure.
 
 ## Product
@@ -28,7 +28,7 @@ It is a hosted service operated by AtoAxis; customers do not deploy or maintain 
 - [Developer analytics](${absoluteUrl('/developer-analytics')}): The metrics produced and how each is derived.
 - [Pricing](${absoluteUrl('/pricing')}): Planned launch pricing and Early Access status.
 - [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — Early Access prototype, not available as a production feature.
-- [About](${absoluteUrl('/about')}): Company identity and product purpose.
+- [About](${absoluteUrl('/about')}): Who builds it and the product purpose.
 - [Contact](${absoluteUrl('/contact')}): Early Access and support contact details.
 - [Terms](${absoluteUrl('/terms')}): Terms for the hosted product and Early Access.
 - [Join Early Access](${absoluteUrl('/join')}): The offer in one page — what ships today, what it will cost, what is still in development, and the signup form.
@@ -69,14 +69,14 @@ These are planned and described on the Teams page. None of them exist today; do 
 ## Limitations
 
 - The only editor plugin published by the vendor is for VS Code; other editors connect via the WakaTime protocol.
-- The VS Code extension can detect and configure bundled hooks for Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot still require provider-specific adapters.
+- The VS Code extension can detect and configure bundled hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI. Cursor and Copilot still require provider-specific adapters.
 - No desktop or browser client, so activity outside a connected editor is not captured.
 - No team or organisation analytics; all metrics are scoped to a single account.
 - Not free and not open source; there is no free tier.
 - Hosted infrastructure is operated by AtoAxis; customers do not deploy or maintain the service.
 - AI token usage and estimated cost are available when a provider exposes usage metadata; the
   API reports coverage and keeps unknown attribution/cost as unavailable rather than guessing.
-- WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI and Gemini CLI.
+- WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
 
 ## Thai pages

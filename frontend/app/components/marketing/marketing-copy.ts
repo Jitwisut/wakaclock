@@ -111,7 +111,7 @@ export const EN_HOME = {
   limitationsIntro: `What ${SITE_NAME} does not do today, stated plainly:`,
   limitations: [
     'Only the VS Code plugin is first-party; other editors use the WakaTime protocol',
-    'AI hooks cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need adapters',
+    'AI hooks cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI; Cursor/Copilot need adapters',
     'Tokens and costs require provider usage plus a known price; unavailable coverage is not shown as zero',
     'Nothing outside a connected editor or the AI transcript agent is captured; there is no desktop or browser client',
     'Analytics are single-account; goals, leaderboards and a presence prototype are available where the server runs PostgreSQL, but full team and organisation dashboards remain in development',
@@ -139,7 +139,7 @@ export const EN_HOME = {
     {
       question: 'Does it track AI coding tools?',
       answer:
-        'The API accepts AI attribution and bundled hooks support Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot need adapters.',
+        'The API accepts AI attribution and bundled hooks support Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI. Cursor and Copilot need adapters.',
     },
     {
       question: `How is ${SITE_NAME} different from WakaTime?`,
@@ -149,7 +149,7 @@ export const EN_HOME = {
     {
       question: `Can ${SITE_NAME} track time spent by AI agents like Claude Code?`,
       answer:
-        "Yes. Bundled hooks for Claude Code, Codex CLI and Gemini CLI attribute their edits, and a local agent reads those tools' on-device transcripts so work done with no editor open is still counted. Changes that cannot be proven either way stay Unattributed rather than being assigned to you.",
+        "Yes. Bundled hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI attribute their edits, and a local agent reads those tools' on-device transcripts so work done with no editor open is still counted. Changes that cannot be proven either way stay Unattributed rather than being assigned to you.",
     },
     {
       question: 'How is coding time calculated?',
@@ -188,7 +188,7 @@ export const TH_HOME = {
   limitationsIntro: `สิ่งที่ ${SITE_NAME} ยังไม่ทำในวันนี้:`,
   limitations: [
     'มี first-party plugin สำหรับ VS Code เท่านั้น editor อื่นเชื่อมต่อผ่าน WakaTime protocol',
-    'AI hooks รองรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
+    'AI hooks รองรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor/Copilot ต้องมี adapter',
     'token และ cost แสดงเฉพาะเมื่อมี provider usage และราคาที่ตรวจสอบได้ ข้อมูลที่ไม่ครบจะแสดงว่าไม่พร้อมใช้งาน',
     'ไม่มีการเก็บกิจกรรมนอก editor ที่เชื่อมต่อหรือนอก AI transcript agent และยังไม่มี desktop หรือ browser client',
     'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
@@ -215,7 +215,7 @@ export const TH_HOME = {
     {
       question: 'ติดตาม AI coding ได้หรือไม่?',
       answer:
-        'API รองรับ AI attribution และมี hook ของ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
+        'API รองรับ AI attribution และมี hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor/Copilot ต้องมี adapter',
     },
     {
       question: `${SITE_NAME} ต่างจาก WakaTime อย่างไร?`,
@@ -225,7 +225,7 @@ export const TH_HOME = {
     {
       question: `${SITE_NAME} ติดตามเวลาที่ AI agent อย่าง Claude Code เขียนโค้ดได้ไหม?`,
       answer:
-        'ได้ มี hook สำหรับ Claude Code, Codex CLI และ Gemini CLI ที่ระบุที่มาของการแก้ไข และมี agent ประจำเครื่องอ่าน transcript ในเครื่องของเครื่องมือเหล่านั้น งานที่ทำตอนไม่ได้เปิด editor จึงยังถูกนับ ส่วนการเปลี่ยนแปลงที่พิสูจน์ไม่ได้จะคงเป็น Unattributed ไม่ถูกนับเป็นของคุณ',
+        'ได้ มี hook สำหรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ที่ระบุที่มาของการแก้ไข และมี agent ประจำเครื่องอ่าน transcript ในเครื่องของเครื่องมือเหล่านั้น งานที่ทำตอนไม่ได้เปิด editor จึงยังถูกนับ ส่วนการเปลี่ยนแปลงที่พิสูจน์ไม่ได้จะคงเป็น Unattributed ไม่ถูกนับเป็นของคุณ',
     },
     {
       question: 'คำนวณ coding time อย่างไร?',
@@ -1020,7 +1020,7 @@ dualPage(
       ]),
       section('Supported AI tools', 'supported-tools', [
         p(
-          'Bundled hooks cover Claude Code, Codex CLI and Gemini CLI. Cursor and Copilot need provider-specific adapters.'
+          'Bundled hooks cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI. Cursor and Copilot need provider-specific adapters.'
         ),
         sub('How fields are populated'),
         bullets([
@@ -1125,8 +1125,8 @@ dualPage(
           'It separates AI-attributed lines from duration and human keystrokes using client-supplied metadata.',
       },
       {
-        question: `Does ${SITE_NAME} support Claude Code, Codex and Gemini?`,
-        answer: 'Bundled hooks support all three; Cursor and Copilot require adapters.',
+        question: `Does ${SITE_NAME} support Claude Code, Codex, Gemini, Kilo Code and Kimi Code CLI?`,
+        answer: 'Bundled hooks support all five; Cursor and Copilot require adapters.',
       },
       {
         question: 'Are prompts or responses stored?',
@@ -1173,7 +1173,7 @@ dualPage(
       ]),
       section('เครื่องมือ AI ที่รองรับ', 'supported-tools', [
         p(
-          'bundled hooks รองรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter ของ provider'
+          'bundled hooks รองรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor/Copilot ต้องมี adapter ของ provider'
         ),
         sub('วิธีเติมข้อมูล'),
         bullets([
@@ -1278,8 +1278,8 @@ dualPage(
           'การแยกงานที่มี AI ช่วยออกจากเวลาและ keystrokes ของมนุษย์โดยใช้ metadata ที่ client รายงาน',
       },
       {
-        question: 'รองรับ Claude Code, Codex และ Gemini หรือไม่?',
-        answer: 'มี bundled hooks สำหรับทั้งสามรายการ ส่วน Cursor/Copilot ต้องมี adapter',
+        question: 'รองรับ Claude Code, Codex, Gemini, Kilo Code และ Kimi Code CLI หรือไม่?',
+        answer: 'มี bundled hooks สำหรับทั้งห้ารายการ ส่วน Cursor/Copilot ต้องมี adapter',
       },
       {
         question: 'เก็บ prompt หรือ response หรือไม่?',
@@ -1331,7 +1331,7 @@ emptyPagePair(
         ),
         sub('AI hooks'),
         p(
-          'The setup flow can configure Claude Code, Codex CLI and Gemini CLI hooks without sending prompt or response content.'
+          'The setup flow can configure Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI hooks without sending prompt or response content.'
         ),
         sub('Device authorization'),
         p(
@@ -1419,7 +1419,7 @@ emptyPagePair(
         ),
         sub('AI hooks'),
         p(
-          'ขั้นตอนตั้งค่าสามารถติดตั้ง hook ของ Claude Code, Codex CLI และ Gemini CLI โดยไม่ส่ง prompt หรือ response'
+          'ขั้นตอนตั้งค่าสามารถติดตั้ง hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI โดยไม่ส่ง prompt หรือ response'
         ),
         sub('Device authorization'),
         p(
@@ -1579,13 +1579,13 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'Getting started: requirements, API key, editor setup, verification',
               'VS Code integration: what the extension sends, its settings and its limits',
-              'AI coding tracker: how Claude Code, Codex CLI and Gemini CLI activity is attributed',
+              'AI coding tracker: how Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI activity is attributed',
               'Privacy: the exact heartbeat fields, and the fields that do not exist',
             ]
           : [
               'เริ่มต้นใช้งาน: สิ่งที่ต้องเตรียม, API key, การตั้งค่า editor และการตรวจสอบ',
               'VS Code integration: extension ส่งอะไร มี settings อะไร และมีข้อจำกัดอะไร',
-              'AI coding tracker: วิธี attribute งานจาก Claude Code, Codex CLI และ Gemini CLI',
+              'AI coding tracker: วิธี attribute งานจาก Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
               'Privacy: field ใน heartbeat ทั้งหมด และ field ที่ไม่มีอยู่จริง',
             ]
       ),
@@ -1736,14 +1736,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
               'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
-              'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI or Gemini CLI. Cursor and Copilot have no adapter yet',
+              'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
               'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
               'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
-              'ไม่เห็นงานฝั่ง AI ให้รัน AtoAxis: Show AI Tracking Status แล้วรัน AtoAxis: Set Up AI Tracking เพื่อติดตั้ง hook ของ Claude Code, Codex CLI หรือ Gemini CLI ส่วน Cursor และ Copilot ยังไม่มี adapter',
+              'ไม่เห็นงานฝั่ง AI ให้รัน AtoAxis: Show AI Tracking Status แล้วรัน AtoAxis: Set Up AI Tracking เพื่อติดตั้ง hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code หรือ Kimi Code CLI ส่วน Cursor และ Copilot ยังไม่มี adapter',
             ]
       ),
     ],
@@ -1888,14 +1888,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'Working: heartbeat ingestion, duration blocks, project, language, editor and branch analytics',
-              'Working: AI attribution with hooks for Claude Code, Codex CLI and Gemini CLI',
+              'Working: AI attribution with hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI',
               'Working: a first-party VS Code extension, and WakaTime-protocol compatibility for other editors',
               'Working where the server runs PostgreSQL: goals, leaderboards, and a presence prototype with recorded co-working sessions',
               'Not yet: billing and checkout, assigned team and organisation seats, adapters for Cursor and Copilot',
             ]
           : [
               'ใช้งานได้แล้ว: การรับ heartbeat, duration block และ analytics ของ project, language, editor และ branch',
-              'ใช้งานได้แล้ว: AI attribution พร้อม hook สำหรับ Claude Code, Codex CLI และ Gemini CLI',
+              'ใช้งานได้แล้ว: AI attribution พร้อม hook สำหรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
               'ใช้งานได้แล้ว: extension สำหรับ VS Code ที่เราดูแลเอง และความเข้ากันได้กับ WakaTime protocol สำหรับ editor อื่น',
               'ใช้งานได้เมื่อ server รัน PostgreSQL: goals, leaderboards และ presence prototype ที่มี co-working session บันทึกไว้',
               'ยังไม่มี: ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
@@ -2081,12 +2081,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'File activity only, with no app, domain or url heartbeats',
-              'AI hooks cover Claude Code, Codex CLI and Gemini CLI; Cursor and Copilot need provider-specific adapters',
+              'AI hooks cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI; Cursor and Copilot need provider-specific adapters',
               'The extension requires wakaclock-cli and does not talk to the server directly',
             ]
           : [
               'ส่งเฉพาะกิจกรรมกับไฟล์ ไม่มี heartbeat ประเภท app, domain หรือ url',
-              'AI hook ครอบคลุม Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor และ Copilot ต้องมี adapter เฉพาะของผู้ให้บริการ',
+              'AI hook ครอบคลุม Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor และ Copilot ต้องมี adapter เฉพาะของผู้ให้บริการ',
               'extension ต้องใช้ wakaclock-cli และไม่ได้ติดต่อ server โดยตรง',
             ]
       ),
@@ -2412,15 +2412,15 @@ generic(
   '/about',
   {
     title: `About ${SITE_NAME}`,
-    description: `Learn why ${SITE_NAME} exists and who publishes it.`,
-    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product published by StandUpCode / Lodash (Thailand) Co., Ltd. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
-    headings: ['Why we are building it', 'Current status', 'Publisher'],
+    description: `Learn why ${SITE_NAME} exists and who builds it.`,
+    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
+    headings: ['Why we are building it', 'Current status', 'Who builds it'],
   },
   {
     title: `เกี่ยวกับ ${SITE_NAME}`,
-    description: `รู้จักเหตุผลและผู้เผยแพร่ ${SITE_NAME}`,
-    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา เผยแพร่โดย StandUpCode / Lodash (Thailand) Co., Ltd. ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
-    headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้เผยแพร่'],
+    description: `รู้จักเหตุผลและผู้พัฒนา ${SITE_NAME}`,
+    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาโดยนักศึกษาปี 4 ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
+    headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้พัฒนา'],
   }
 );
 generic(
@@ -2478,7 +2478,7 @@ dualPage(
   {
     metadataTitle: 'AI Coding Cost and Token Usage Tracking',
     description:
-      'Track Claude Code, Codex CLI and Gemini CLI token usage and estimated cost per project. Prices are versioned and effective-dated, and an unknown price stays unknown instead of being reported as zero.',
+      'Track Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI token usage and estimated cost per project. Prices are versioned and effective-dated, and an unknown price stays unknown instead of being reported as zero.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'AI cost tracking', path: '/ai-cost-tracking' },
@@ -2515,7 +2515,7 @@ dualPage(
       ]),
       section('Which agents are covered', 'agents', [
         bullets([
-          'Claude Code, Codex CLI and Gemini CLI have bundled hooks that read their local transcripts',
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI have bundled hooks that read their local transcripts',
           'Any other tool can post to the same endpoint directly',
           'Cursor and Copilot need a provider-specific adapter before their usage can be attributed',
         ]),
@@ -2620,7 +2620,7 @@ dualPage(
       {
         question: 'Which coding agents report token usage?',
         answer:
-          'Claude Code, Codex CLI and Gemini CLI have bundled hooks. Any other tool can post to the same endpoint. Cursor and Copilot need a provider-specific adapter first.',
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI have bundled hooks. Any other tool can post to the same endpoint. Cursor and Copilot need a provider-specific adapter first.',
       },
       {
         question: 'Will the estimate match my provider invoice?',
@@ -2637,7 +2637,7 @@ dualPage(
   {
     metadataTitle: 'ติดตาม Token และค่าใช้จ่าย AI Coding',
     description:
-      'ติดตาม token และค่าใช้จ่ายโดยประมาณของ Claude Code, Codex CLI และ Gemini CLI แยกตามโปรเจกต์ ราคามีเวอร์ชันและช่วงเวลาที่มีผล สิ่งที่คำนวณไม่ได้จะแสดงว่าไม่ทราบ ไม่ใช่ศูนย์',
+      'ติดตาม token และค่าใช้จ่ายโดยประมาณของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI แยกตามโปรเจกต์ ราคามีเวอร์ชันและช่วงเวลาที่มีผล สิ่งที่คำนวณไม่ได้จะแสดงว่าไม่ทราบ ไม่ใช่ศูนย์',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'ติดตามค่าใช้จ่าย AI', path: '/ai-cost-tracking' },
@@ -2674,7 +2674,7 @@ dualPage(
       ]),
       section('agent ที่รองรับ', 'agents', [
         bullets([
-          'Claude Code, Codex CLI และ Gemini CLI มี bundled hook อ่าน transcript ในเครื่อง',
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI มี bundled hook อ่าน transcript ในเครื่อง',
           'เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้โดยตรง',
           'Cursor และ Copilot ต้องมี adapter เฉพาะของ provider ก่อน',
         ]),
@@ -2779,7 +2779,7 @@ dualPage(
       {
         question: 'agent ใดบ้างที่รายงาน token ได้?',
         answer:
-          'Claude Code, Codex CLI และ Gemini CLI มี bundled hook เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้ ส่วน Cursor และ Copilot ต้องมี adapter ก่อน',
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI มี bundled hook เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้ ส่วน Cursor และ Copilot ต้องมี adapter ก่อน',
       },
       {
         question: 'ตัวเลขจะตรงกับบิลจาก provider หรือไม่?',
