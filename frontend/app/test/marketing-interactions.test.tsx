@@ -65,9 +65,12 @@ describe('MarketingNav', () => {
       'aria-expanded',
       'true'
     );
+    // The nav points at the section hub, not a page inside it: linking
+    // `/docs/getting-started` directly left `/docs` with no inbound link anywhere on the
+    // site, and Google declined to crawl it.
     expect(within(menu as HTMLElement).getByRole('link', { name: 'Docs' })).toHaveAttribute(
       'href',
-      '/docs/getting-started'
+      '/docs'
     );
 
     fireEvent.keyDown(document, { key: 'Escape' });
