@@ -30,6 +30,7 @@ pub mod event;
 pub mod filesystem_observer;
 pub mod follow_up;
 pub mod gemini;
+pub mod intake;
 mod jsonl;
 pub mod parser;
 pub mod patch;
@@ -75,6 +76,10 @@ pub use filesystem_observer::{
 };
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
+pub use intake::{
+    from_broker_event, from_editor_input, from_file_change, from_session_evidence, IntakeBatch,
+    IntakeDrop, IntakeDropReason,
+};
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserCursor, TranscriptLag,
