@@ -580,6 +580,11 @@ const developerAnalytics = local(
           description: 'How AI attribution reaches these metrics',
         },
         {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'Token classes, estimated cost and per-project totals',
+        },
+        {
           href: '/integrations/vscode',
           label: 'VS Code time tracking',
           description: 'The editor client that produces the data',
@@ -735,6 +740,11 @@ const developerAnalytics = local(
           href: '/ai-coding-tracker',
           label: 'ติดตาม AI coding activity',
           description: 'วิธีเติม AI attribution เข้า metrics',
+        },
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'ประเภท token ค่าใช้จ่ายโดยประมาณ และยอดรายโปรเจกต์',
         },
         {
           href: '/integrations/vscode',
@@ -1489,6 +1499,21 @@ emptyPagePair(
   }
 );
 
+/**
+ * The section hub a nested page belongs under.
+ *
+ * Without this, a nested page's breadcrumb jumped straight from Home to itself, so the
+ * hub had no inbound link from its own child and nothing pointed at it except the
+ * sitemap. The trail is rendered as real anchors and emitted as `BreadcrumbList`, so
+ * adding the middle step gives the hub a crawl path from every page beneath it.
+ */
+const GENERIC_BREADCRUMB_PARENTS: Partial<
+  Record<MarketingPageKey, { en: string; path: MarketingPageKey; th: string }>
+> = {
+  '/docs/getting-started': { en: 'Docs', path: '/docs', th: 'เอกสาร' },
+  '/integrations/vscode': { en: 'Integrations', path: '/integrations', th: 'การเชื่อมต่อ' },
+};
+
 // The remaining pages use the same strongly typed section model. Keeping their copy here,
 // rather than in route files, prevents the Thai pages from silently becoming short adapters.
 const generic = (
@@ -1510,11 +1535,13 @@ const generic = (
     title: string;
   }
 ) => {
+  const parent = GENERIC_BREADCRUMB_PARENTS[path];
   const make = (value: typeof en, locale: SiteLocale): MarketingPageCopy => ({
     metadataTitle: value.title,
     description: value.description,
     breadcrumbs: [
       { name: locale === 'en' ? 'Home' : 'หน้าหลัก', path: '/' },
+      ...(parent ? [{ name: parent[locale], path: parent.path }] : []),
       { name: value.title, path },
     ],
     title: value.title,
@@ -2227,6 +2254,13 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
   const links: Record<string, MarketingLinkCopy[]> = {
     '/integrations/vscode': [
       {
+        href: '/integrations',
+        label: en ? 'All editor integrations' : 'การเชื่อมต่อ editor ทั้งหมด',
+        description: en
+          ? 'WakaTime-compatible editors and AI hooks'
+          : 'editor ที่รองรับ WakaTime และ AI hooks',
+      },
+      {
         href: '/docs/getting-started',
         label: en ? 'Getting started' : 'เริ่มต้นใช้งาน',
         description: en
@@ -2246,14 +2280,40 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         description: en ? 'Attribution and usage coverage' : 'attribution และ coverage ของ usage',
       },
     ],
+    // A hub is only worth crawling if it points at everything under it. These mirror the
+    // Documentation section of /llms.txt so the two inventories stay in step.
     '/docs': [
       {
         href: '/docs/getting-started',
         label: en ? 'Getting started' : 'เริ่มต้นใช้งาน',
         description: en ? 'Connect an editor' : 'เชื่อม editor',
       },
+      {
+        href: '/integrations',
+        label: en ? 'Editor integrations' : 'การเชื่อมต่อ editor',
+        description: en
+          ? 'First-party and WakaTime-compatible clients'
+          : 'client ของเราเองและที่รองรับ WakaTime',
+      },
+      {
+        href: '/integrations/vscode',
+        label: en ? 'VS Code integration' : 'VS Code integration',
+        description: en ? 'Extension settings and commands' : 'settings และ commands ของ extension',
+      },
+      {
+        href: '/privacy',
+        label: en ? 'Privacy and data collection' : 'Privacy และข้อมูลที่เก็บ',
+        description: en ? 'Every field a heartbeat stores' : 'ทุก field ที่ heartbeat เก็บ',
+      },
     ],
     '/docs/getting-started': [
+      {
+        href: '/docs',
+        label: en ? 'All documentation' : 'เอกสารทั้งหมด',
+        description: en
+          ? 'Setup, integration and privacy guides'
+          : 'คู่มือ setup, integration และ privacy',
+      },
       {
         href: '/integrations/vscode',
         label: en ? 'VS Code integration' : 'VS Code integration',

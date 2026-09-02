@@ -4,6 +4,13 @@ import type { SiteLocale } from '@/lib/seo/site';
  * Real routes rather than same-page anchors, so each destination is crawlable and the
  * anchor text describes the page it points at. Shared by the header nav and the mobile
  * menu so the two can never drift apart.
+ *
+ * Point at section hubs (`/docs`, `/integrations`), never at a page inside them. An
+ * earlier version linked `/docs/getting-started` and `/integrations/vscode` directly,
+ * which left both hubs with no inbound link anywhere on the site — Google discovered
+ * them from the sitemap and then declined to crawl them. The hub carries the crawl path
+ * to its children; `isNavLinkActive` below already keeps the parent highlighted while a
+ * child page is open.
  */
 export const NAV_LINKS = [
   { href: '/wakatime-alternative', label: { en: 'vs WakaTime', th: 'เทียบกับ WakaTime' } },
@@ -11,7 +18,8 @@ export const NAV_LINKS = [
   { href: '/developer-analytics', label: { en: 'Analytics', th: 'Analytics' } },
   { href: '/teams', label: { en: 'Teams', th: 'Teams' } },
   { href: '/pricing', label: { en: 'Pricing', th: 'ราคา' } },
-  { href: '/docs/getting-started', label: { en: 'Docs', th: 'เอกสาร' } },
+  { href: '/integrations', label: { en: 'Integrations', th: 'การเชื่อมต่อ' } },
+  { href: '/docs', label: { en: 'Docs', th: 'เอกสาร' } },
 ] as const;
 
 export const NAV_COPY = {
