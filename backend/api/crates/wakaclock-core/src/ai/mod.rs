@@ -63,8 +63,8 @@ pub use correlation_engine::{
 };
 pub use dedup::{dedup, DedupConflict, DedupObservation, DedupOutcome};
 pub use diagnostics::{
-    build_report as build_ai_diagnostics_report, AdapterFreshness, AiDiagnosticsReport, BrokerHealth,
-    ParserLagSummary, AI_DIAGNOSTICS_SCHEMA_VERSION,
+    build_report as build_ai_diagnostics_report, report_from_doctor_json, AdapterFreshness,
+    AiDiagnosticsReport, BrokerHealth, ParserLagSummary, AI_DIAGNOSTICS_SCHEMA_VERSION,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use filesystem_observer::{

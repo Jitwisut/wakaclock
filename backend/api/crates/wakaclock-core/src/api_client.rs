@@ -1,5 +1,5 @@
 use crate::{
-    ai::{AiUsageIngestReport, AiUsageRecord},
+    ai::{AiDiagnosticsReport, AiUsageIngestReport, AiUsageRecord},
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -345,6 +345,13 @@ impl ApiClient {
         let response = Self::reject_unauthorized(response)?;
         let response = Self::error_for_status_with_body(response).await?;
         Ok(response.json::<AiUsageIngestReport>().await?)
+    }
+
+    /// POST a sanitized [`AiDiagnosticsReport`] to `/api/v1/ai/diagnostics`
+    /// (planai2 p7.2c). The server keeps only the latest snapshot per user, so a
+    /// failed or retried push can simply be sent again without any duplication.
+    pub async fn send_ai_diagnostics(&self, report: &AiDiagnosticsReport) -> AppResult<()> {
+        self.post_json("/api/v1/ai/diagnostics", report).await
     }
 
     pub async fn repair_day(
