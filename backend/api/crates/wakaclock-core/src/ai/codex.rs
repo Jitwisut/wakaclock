@@ -1,4 +1,4 @@
-use crate::ai::event::{AiConfidence, AiEditEvent, AiEventSource};
+use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventSource};
 use crate::ai::jsonl::JsonlCursorReader;
 use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
@@ -272,7 +272,7 @@ impl AiActivityParser for CodexParser {
                             .unwrap_or_default();
                         let entity = resolve_entity(&raw_path, project_root.as_deref());
                         events.push(AiEditEvent {
-                            event_id: format!("codex-v1:{}:{raw_path}", parsed.call_id),
+                            event_id: opaque_file_event_id("codex-v1", &parsed.call_id, &raw_path),
                             agent: "codex".to_string(),
                             provider: Some("openai".to_string()),
                             model: model.clone(),
@@ -341,7 +341,11 @@ impl AiActivityParser for CodexParser {
                             for change in parse_apply_patch(&pending.input) {
                                 let entity = resolve_entity(&change.path, project_root.as_deref());
                                 events.push(AiEditEvent {
-                                    event_id: format!("codex-v2:{call_id}:{}", change.path),
+                                    event_id: opaque_file_event_id(
+                                        "codex-v2",
+                                        &call_id,
+                                        &change.path,
+                                    ),
                                     agent: "codex".to_string(),
                                     provider: Some("openai".to_string()),
                                     model: model.clone(),
@@ -613,6 +617,8 @@ mod tests {
         );
         assert_eq!(greeting.source, AiEventSource::Transcript);
         assert_eq!(greeting.confidence, AiConfidence::Verified);
+        assert!(!greeting.event_id.contains("greeting.rs"));
+        assert!(!greeting.event_id.contains("/workspace"));
 
         let new_module = batch
             .events
@@ -665,6 +671,8 @@ mod tests {
         );
         assert_eq!(greeting.source, AiEventSource::Transcript);
         assert_eq!(greeting.confidence, AiConfidence::Verified);
+        assert!(!greeting.event_id.contains("greeting.rs"));
+        assert!(!greeting.event_id.contains("/workspace"));
 
         let new_module = batch
             .events

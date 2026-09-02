@@ -36,6 +36,7 @@ pub mod patch;
 pub mod path;
 pub mod pipeline;
 pub mod process_observer;
+pub mod producer;
 pub mod session;
 pub mod shadow;
 pub mod shadow_report;
@@ -90,6 +91,11 @@ pub use pipeline::{
 };
 pub use process_observer::{
     match_agent as match_ai_process_agent, scan as scan_ai_processes, DetectedAiProcess,
+};
+pub use producer::{
+    build_file_change_event, file_event_id, normalize_client_id, normalize_model_id,
+    normalize_provider_id, ProducerError, ProducerFileChange, ProducerIdentity,
+    PRODUCER_CONTRACT_VERSION,
 };
 pub use session::{
     evidence_from_scan, strongest_session_evidence, EvidenceStrength, SessionEvidenceLedger,

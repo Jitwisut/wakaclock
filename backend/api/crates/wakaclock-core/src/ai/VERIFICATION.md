@@ -132,12 +132,13 @@ and record the run here. A fixture is not enough (planai2.md line 604).
 
 ## Still not verified against a live system
 
-- Codex live delivery and cross-transport dedup: the "Phase 8 Codex verification"
-  section above ran `--dry-run` only, against real transcripts but with no server
-  contacted — an earlier same-day check against one smaller real rollout (before the
-  `response_item` gap above was found) got the same result: dry-run parsing checked
-  out, but delivery/dedup against a running server with a real credential is still
-  open.
+- Claude post-migration real API/tool execution: the installed plugin is wired and
+  its metadata-only smoke reached the broker, but the local OAuth session expired
+  before Claude could make a tool call. The pre-migration live baseline is retained;
+  re-authentication is required before promoting the migrated hook.
+- Kilo Code and Kimi Code CLI: both adapters are installed as tested scaffolds, but
+  neither native executable is installed on this machine, so there is no honest live
+  tool-version/backend-row claim yet.
 - Gemini CLI: still entirely unverified — no local installation and no real Gemini
   transcript available on this machine, so no fixture is being promoted to a live
   verification claim.
@@ -150,4 +151,148 @@ and record the run here. A fixture is not enough (planai2.md line 604).
   privacy-safe fingerprint (normalized path suffix, project/branch, five-second bucket and
   line deltas), while preserving explicit event IDs as the strongest dedup key. A real
   cross-transport run is still an operational verification task; the fingerprint itself is
-  covered by server unit tests.
+  covered by server unit tests. Codex native-hook plus transcript replay was verified
+  against one backend row, but a separate legacy shell-hook collision run is still
+  required before this item can be promoted broadly.
+
+## Universal producer rollout (Phase 1, 2026-09-01)
+
+The shared Rust producer contract and metadata-only shell boundary are implemented
+and covered by unit/smoke tests. Identity is normalized as separate
+`client_id`/`provider_id`/`model_id` values, event IDs are stable across retries,
+and native wrappers reject/ignore content-bearing fields before broker validation.
+This is code/test evidence only; no new live adapter is promoted by this section.
+
+## Kilo Code and Kimi Code (Phases 4–5, 2026-09-01)
+
+Both adapters are shipped as scaffolds. Kilo has a TypeScript server plugin that
+works in the documented CLI/VS Code plugin runtime, a top-level auto-discovered
+entrypoint, and a VS Code setup path that copies it into the global plugin directory.
+Kimi has Beta lifecycle hook scripts,
+an idempotent marker-bounded installer, direct file-tool evidence, shell snapshot
+cleanup, and Stop/StopFailure session cleanup. Fixture and privacy tests pass, but
+no Kilo/Kimi executable was run on this machine, so neither manifest may claim
+`verified` until a live run records the tool version and resulting broker/backend
+row.
+
+## Codex native hook live check (Phases 0/2, 2026-09-02)
+
+This is a real local run, not a synthetic hook fixture. The machine used
+`codex-cli 0.151.0-alpha.7.1` with the managed global hook in
+`~/.codex/config.toml`, where the hook resolved through the stable managed bundle
+`~/.wakaclock/agent-plugins/0.1.0`, plus the current debug `wakaclock` binary and a
+fresh isolated temporary project. The broker was running at
+`http://127.0.0.1:54838` with zero
+pending and zero dead-letter items after delivery.
+
+The Codex PostToolUse payload exposed the apply-patch DSL as
+`tool_input.command` (the older `input`/`patch` shapes remain accepted for
+backward compatibility). The hook emitted one metadata-only event for the created
+file, and the broker wrote the expected sidecar record with `agent=codex`,
+`source=agent_hook`, `transport=native_plugin`, `confidence=verified`, the real
+session/model identifiers, a bounded line count, and no patch or prompt fields.
+`doctor ai --json` then reported the processed event and its latest native-hook
+timestamp. The global managed matcher was changed to the anchored regex
+`^apply_patch$`; this was required by the current Codex matcher semantics and is
+covered by the VS Code installer regression test.
+
+The native hook also preserves the real `tool_use_id` as `tool_event_id` across all
+files in one multi-file patch; each file retains its own deterministic event ID.
+The change is covered by the shell regression test and a fresh real Codex run at
+2026-09-01T19:18:51Z through the refreshed stable bundle (exit status 0, exactly one
+matching sidecar event for the target file).
+
+A follow-up real single-call three-file probe produced three `apply_patch` broker
+rows with one shared native `tool_event_id` and three distinct file events; all three
+target files existed. This closes the previous multi-file tool-identity gap at the
+local-broker layer while leaving the backend/cross-transport reconciliation gate
+explicitly separate.
+
+The same probe rows were then located in the local ClickHouse backend using only
+metadata columns: all three are `actor_type=ai_verified`, `ai_source=agent_hook`,
+`user_agent=wakaclock-cli/ai-sync`, share one `ai_change_id`, and carry one added line.
+The installed Claude smoke row also persisted as `ai_verified`. The backend query was
+scoped to the temporary target names and did not select source, prompt or payload
+content.
+
+Finally, a fresh real Codex edit was replayed from its exact transcript via
+`wakaclock ai sync --agent codex --transcript ... --from-start`. The target backend
+row count remained one before and after replay (one event ID, one change ID,
+`actor_type=ai_verified`, `ai_source=agent_hook`), demonstrating live native-hook +
+transcript dedup rather than a fixture-only claim. No broker retry/dead-letter row
+was left behind.
+
+This promotes the single-file and multi-file Codex native-hook paths, their backend
+metadata rows, and native-hook plus transcript replay dedup for the exercised edit.
+The remaining Codex acceptance item is a deliberate collision run with the legacy
+shell transport; the server fingerprint and explicit-ID rules are already covered
+by tests. Claude re-authentication, Kilo/Kimi live runs, and other tool adapters
+remain external verification work.
+
+After the portability/privacy hardening, a second real single-file run at
+2026-09-01T18:57:45Z (session
+`01a05e55-85d6-74a3-9fd9-bf7766e7957e`) through the refreshed stable bundle produced
+one additional accepted sidecar event (`lines_added=1`, `lines_deleted=0`) and left
+the broker inbox/dead-letter queues empty. This confirms the hardening did not break
+the already verified Codex delivery path; it does not replace the separate
+legacy-shell cross-transport collision certification.
+
+A subsequent bundle refresh and probe at 2026-09-01T18:58:54Z produced one more
+single-file event with the same metadata-only shape (`source=agent_hook`,
+`transport=native_plugin`), confirming the installed copy—not only the worktree—was
+the script exercised.
+
+## Claude migration refresh attempt (2026-09-02)
+
+An isolated `claude 2.1.246` run was attempted with the migrated plugin loaded and
+one requested `Write` call. The CLI stopped before making an API/tool call because
+the local OAuth session had expired and could not be refreshed (`api_error`). This
+is recorded as an external authentication blocker; the existing 2026-08-14 live
+Claude evidence remains valid for the pre-migration baseline, while the post-
+migration live promotion is still pending a re-authenticated run.
+
+The user-scoped marketplace install was then upgraded from plugin version 1.0.1 to
+1.0.2. A metadata-only smoke payload through the installed cache path reached the
+running local broker and appended exactly one sidecar event; the synthetic content
+was absent from the sidecar. This confirms package/install wiring only and does not
+replace the blocked real Claude API/tool run.
+
+## Input Activity ClickHouse regression check (2026-09-02)
+
+The isolated backend integration suite was run single-threaded against the local
+ClickHouse 24.10 and PostgreSQL test containers (explicit `*_TEST_URL` values; no
+production database). All seven ignored backend tests passed, including
+`range_deserializes_nullable_aggregates_as_non_nullable_values`. That test initially
+exposed a ClickHouse 24.10 alias collision in the project/daily filters: the selected
+aggregate alias `copy_actions` could be resolved from inside `WHERE`, producing
+`ILLEGAL_AGGREGATION`. The service now qualifies raw heartbeat columns with the `hb`
+table alias, and the test verifies nullable metrics, `NULL`/empty projects,
+actor filtering, totals, daily rows and clipboard coverage without a UTF-8 decode
+failure.
+
+## Broker runtime hardening (2026-09-02)
+
+The broker worker now invokes the bounded transcript scanner automatically before
+each inbox poll. A process-level integration test starts an isolated broker with a
+real Codex transcript, never calls `ai sync`, and verifies that cursor state,
+metadata-only sidecar events, delivery and fail-open retry behavior complete on
+their own. The same test suite passes after broker restart.
+
+The per-user singleton now holds an `fs2` exclusive lock for the full broker
+lifetime and keeps the lock path in place after release; this prevents an old
+launchd process from deleting a newly-created lock during restart. macOS service
+manifests also pass the user's `HOME` explicitly because LaunchAgents do not
+inherit it consistently. On this inspection host, launchd test children remained
+inside the macOS dynamic loader before reaching broker userland, so the managed
+LaunchAgent health check is retained as an environment-specific follow-up rather
+than promoted to a successful service certification. The broker implementation,
+lock unit test, auto-scan process test and all workspace/backend acceptance gates
+pass locally.
+
+The producer privacy audit also covers transcript-derived IDs. Codex's legacy
+`call:path` IDs and Gemini's `id:path` IDs are now replaced with deterministic
+UUIDv5 values that retain per-file/retry identity without putting a raw path in the
+wire value. The shared shell emitter and Rust broker apply the same protection to
+older adapters that provide a path-bearing event ID. `filesystem_observer` maps to
+the existing weak filesystem bucket, while `process_observer` remains weakest
+(`Other`) because a running process alone cannot prove a file edit.

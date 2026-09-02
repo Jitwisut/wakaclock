@@ -25,6 +25,17 @@ fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 command -v "$WAKACLOCK_BIN" >/dev/null 2>&1 || exit 0
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${SCRIPT_DIR}/../../../common/emit-event.sh}"
+emit_metadata() {
+  if [ -x "$COMMON_EMITTER" ]; then
+    "$COMMON_EMITTER"
+  else
+    jq -c '{schema_version:1,producer_version:(.producer_version // 1),event_type:"file_change",event_id,occurred_at,entity,project_root:(.project_root // null),change_kind:(.change_kind // "modify"),previous_entity:(.previous_entity // null),agent:(.agent // .client_id),provider:(.provider // .provider_id // null),model:(.model // .model_id // null),source:(.source // "agent_hook"),confidence:(.confidence // "inferred"),lines_added:(.lines_added // null),lines_deleted:(.lines_deleted // null),transport:(.transport // "shell_hook"),tool:(.tool // null),tool_event_id:(.tool_event_id // .tool_call_id // null)}' \
+      | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+  fi
+}
+
 CWD="$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || true)"
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 
@@ -35,7 +46,16 @@ ROOT="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)"
 
 STATE_DIR="${HOME}/.wakaclock/claude-hook-state"
 mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
-STAMP="${STATE_DIR}/sweep-$(printf '%s' "$ROOT" | shasum | cut -c1-40)"
+if command -v shasum >/dev/null 2>&1; then
+  ROOT_HASH="$(printf '%s' "$ROOT" | shasum -a 256 | cut -c1-40)"
+elif command -v sha256sum >/dev/null 2>&1; then
+  ROOT_HASH="$(printf '%s' "$ROOT" | sha256sum | cut -c1-40)"
+elif command -v cksum >/dev/null 2>&1; then
+  ROOT_HASH="$(printf '%s' "$ROOT" | cksum | awk '{print $1":"$2}')"
+else
+  ROOT_HASH="unhashed-$$"
+fi
+STAMP="${STATE_DIR}/sweep-${ROOT_HASH}"
 
 # First sweep in this repository: record the mark and report nothing. Without this the
 # first Bash call in a dirty tree would emit a heartbeat for every uncommitted file.
@@ -69,11 +89,22 @@ while IFS= read -r path; do
   [ "$CHANGED" -le 20 ] || break
 
   FILE_MARK="$(stat -f '%m:%z' "$FULL" 2>/dev/null || stat -c '%Y:%s' "$FULL" 2>/dev/null || true)"
-  EVENT_ID="claude-code-sweep-$(printf '%s|%s|%s' "$ROOT" "$FULL" "$FILE_MARK" | shasum -a 256 | cut -c1-40)"
+  EVENT_MATERIAL="${ROOT}|${FULL}|${FILE_MARK}"
+  if command -v shasum >/dev/null 2>&1; then
+    EVENT_HASH="$(printf '%s' "$EVENT_MATERIAL" | shasum -a 256 | cut -c1-40)"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    EVENT_HASH="$(printf '%s' "$EVENT_MATERIAL" | sha256sum | cut -c1-40)"
+  elif command -v cksum >/dev/null 2>&1; then
+    EVENT_HASH="$(printf '%s' "$EVENT_MATERIAL" | cksum | awk '{print $1":"$2}')"
+  else
+    EVENT_HASH="unhashed-$$"
+  fi
+  EVENT_ID="claude-code-sweep-${EVENT_HASH}"
   # Keep the compatibility sweep on the same durable broker path as native hooks. The
   # file changed during a shell call, but the sweep cannot prove the exact writer or
   # line delta, so it is explicitly inferred with nullable counters.
   jq -cn \
+    --arg client_id "claude-code" \
     --arg event_id "$EVENT_ID" \
     --arg occurred_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg entity "$FULL" \
@@ -81,8 +112,8 @@ while IFS= read -r path; do
     --arg agent "claude-code" \
     --arg provider "anthropic" \
     --arg model "$AI_MODEL" \
-    '{schema_version:1,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:$project_root,change_kind:"modify",agent:$agent,provider:$provider,model:(if $model=="" then null else $model end),source:"agent_hook",confidence:"inferred",lines_added:null,lines_deleted:null,transport:"shell_hook",tool:"shell-sweep",tool_event_id:$event_id}' \
-    | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+    '{client_id:$client_id,producer_version:1,event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:$project_root,change_kind:"modify",provider_id:$provider,model_id:(if $model=="" then null else $model end),source:"agent_hook",confidence:"inferred",lines_added:null,lines_deleted:null,transport:"tool_snapshot",tool:"shell-sweep",tool_event_id:$event_id}' \
+    | emit_metadata
 done < <(git -C "$ROOT" status --porcelain --untracked-files=normal 2>/dev/null \
          | sed 's/^...//' | sed 's/.* -> //')
 

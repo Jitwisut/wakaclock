@@ -16,14 +16,32 @@ fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 command -v "$WAKACLOCK_BIN" >/dev/null 2>&1 || exit 0
 
-CWD="$(jq -r '.cwd // .tool_input.dir_path // .tool_input.cwd // empty' <<<"$INPUT" 2>/dev/null || true)"
+CWD="$(jq -r '.cwd // .workdir // .working_dir // .tool_input.dir_path // .tool_input.cwd // empty' <<<"$INPUT" 2>/dev/null || true)"
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 SESSION_ID="$(jq -r '.session_id // .sessionId // empty' <<<"$INPUT" 2>/dev/null || true)"
 CALL_ID="$(jq -r '.tool_use_id // .toolUseId // .call_id // .callId // .tool_call_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 TOOL_NAME="$(jq -r '.tool_name // .toolName // empty' <<<"$INPUT" 2>/dev/null || true)"
 AI_MODEL="$(jq -r '.model // .model_name // .model_id // .context.model // empty' <<<"$INPUT" 2>/dev/null || true)"
-KEY_MATERIAL="${AGENT}|${CWD}|${SESSION_ID}|${CALL_ID:-${TOOL_NAME}}"
-TOOL_EVENT_ID="${AGENT}-tool-$(printf '%s' "$KEY_MATERIAL" | shasum -a 256 | cut -c1-40)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+COMMON_ID="${WAKACLOCK_AGENT_COMMON_TOOL_ID:-${SCRIPT_DIR}/tool-event-id.sh}"
+if [ -r "$COMMON_ID" ]; then
+  # shellcheck source=/dev/null
+  . "$COMMON_ID"
+fi
+if command -v atoaxis_tool_event_id >/dev/null 2>&1; then
+  TOOL_EVENT_ID="$(atoaxis_tool_event_id "$AGENT" "$CWD" "$SESSION_ID" "$CALL_ID" "$TOOL_NAME")"
+else
+  KEY_MATERIAL="${AGENT}|${CWD}|${SESSION_ID}|${CALL_ID:-${TOOL_NAME}}"
+  if command -v shasum >/dev/null 2>&1; then
+    TOOL_EVENT_ID="${AGENT}-tool-$(printf '%s' "$KEY_MATERIAL" | shasum -a 256 | cut -c1-40)"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    TOOL_EVENT_ID="${AGENT}-tool-$(printf '%s' "$KEY_MATERIAL" | sha256sum | cut -c1-40)"
+  elif command -v cksum >/dev/null 2>&1; then
+    TOOL_EVENT_ID="${AGENT}-tool-$(printf '%s' "$KEY_MATERIAL" | cksum | awk '{print $1":"$2}')"
+  else
+    TOOL_EVENT_ID="${AGENT}-tool-unhashed-$$"
+  fi
+fi
 
 jq -cn \
   --arg tool_event_id "$TOOL_EVENT_ID" \

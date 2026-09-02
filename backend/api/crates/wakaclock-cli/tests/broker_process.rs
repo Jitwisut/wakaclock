@@ -3,7 +3,7 @@ use reqwest::StatusCode;
 use rusqlite::Connection;
 use std::{
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -60,6 +60,7 @@ fn temp_home(name: &str) -> PathBuf {
 fn event(id: &str) -> BrokerEventV1 {
     BrokerEventV1 {
         schema_version: BROKER_SCHEMA_VERSION,
+        producer_version: None,
         event_type: BrokerEventType::FileChange,
         event_id: id.to_string(),
         occurred_at: Utc::now(),
@@ -305,6 +306,90 @@ async fn status_server(status_line: &'static str) -> (String, JoinHandle<()>) {
 fn total_rows(db: &Path) -> u64 {
     let stats = BrokerStore::open_at(db).unwrap().stats().unwrap();
     stats.pending + stats.processing + stats.processed + stats.retry + stats.dead_letter
+}
+
+fn write_codex_transcript(home: &Path) -> PathBuf {
+    let root = home.join(".codex/sessions/2026/09/02");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("rollout-auto-scan.jsonl");
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../wakaclock-core/src/ai/fixtures/codex");
+    let mut file = fs::File::create(&path).unwrap();
+    for name in [
+        "session_meta.json",
+        "turn_context.json",
+        "custom_tool_call.json",
+        "custom_tool_call_output.json",
+    ] {
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(fixture_root.join(name)).unwrap()).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&value).unwrap()).unwrap();
+    }
+    path
+}
+
+async fn wait_for_codex_sidecar(home: &Path, minimum: usize) {
+    let sidecar = home.join(".wakaclock/ai-events.jsonl");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let count = fs::read_to_string(&sidecar)
+                .ok()
+                .map(|content| {
+                    content
+                        .lines()
+                        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                        .filter(|value| {
+                            value.get("agent").and_then(|v| v.as_str()) == Some("codex")
+                        })
+                        .count()
+                })
+                .unwrap_or_default();
+            if count >= minimum {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("broker did not auto-scan the Codex transcript");
+}
+
+/// Phase 0.4/0.5 — the always-on broker starts transcript recovery itself.  A
+/// fresh Codex JSONL file is placed in the isolated HOME before the broker starts;
+/// no `wakaclock ai sync` child process is invoked by this test.  The 402 backend
+/// keeps the check local and proves capture survives delivery refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_autostarts_codex_transcript_scan_without_manual_sync() {
+    let home = temp_home("auto-scan");
+    let db = home.join(".wakaclock/broker.db");
+    let _transcript = write_codex_transcript(&home);
+    let (server_url, server_task) = status_server("402 Payment Required").await;
+    let mut broker = spawn_broker(&home, &server_url);
+    let _discovery = wait_for_discovery(&home).await;
+
+    wait_for_codex_sidecar(&home, 2).await;
+    let stats = timeout(Duration::from_secs(5), async {
+        loop {
+            let stats = BrokerStore::open_at(&db).unwrap().stats().unwrap();
+            if stats.processed >= 2 {
+                return stats;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("auto-scan events were not processed");
+    assert!(
+        stats.processed >= 2,
+        "auto-scan events were not processed: {stats:?}"
+    );
+    assert_eq!(stats.dead_letter, 0);
+    assert_eq!(stats.retry, 0);
+
+    broker.kill();
+    server_task.abort();
+    let _ = server_task.await;
+    let _ = fs::remove_dir_all(&home);
 }
 
 /// Post to the broker's own HTTP endpoint, tolerating the dedup responses (200 for

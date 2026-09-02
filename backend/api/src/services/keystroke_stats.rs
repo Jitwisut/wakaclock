@@ -112,23 +112,23 @@ impl KeystrokeStatsService {
             .query(
                 "
                 SELECT
-                    coalesce(sumIf(keystrokes, actor_type = 'human'), 0) AS total_keystrokes,
-                    coalesce(sumIf(chars_added, actor_type = 'human'), 0) AS total_chars_added,
-                    coalesce(sumIf(chars_deleted, actor_type = 'human'), 0) AS total_chars_deleted,
-                    coalesce(sum(copy_actions), 0) AS total_copy_actions,
-                    coalesce(sum(paste_actions), 0) AS total_paste_actions,
-                    coalesce(sum(copied_chars), 0) AS total_copied_chars,
-                    coalesce(sum(copied_lines), 0) AS total_copied_lines,
-                    coalesce(sum(pasted_chars), 0) AS total_pasted_chars,
-                    coalesce(sum(pasted_lines), 0) AS total_pasted_lines,
-                    coalesce(sum(paste_same_file_actions), 0) AS total_paste_same_file_actions,
-                    coalesce(sum(paste_same_workspace_actions), 0) AS total_paste_same_workspace_actions,
-                    coalesce(sum(paste_external_or_unknown_actions), 0) AS total_paste_external_or_unknown_actions,
-                    uniqExactIf(date, actor_type = 'human' OR coalesce(copy_actions, 0) > 0 OR coalesce(paste_actions, 0) > 0) AS days_with_activity,
-                    countIf(position(user_agent, 'wakaclock-vscode/') > 0 AND clipboard_tracking_version = 1) AS supported_vscode_heartbeats,
-                    countIf(position(user_agent, 'wakaclock-vscode/') > 0) AS total_vscode_heartbeats
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                    coalesce(sumIf(hb.keystrokes, hb.actor_type = 'human'), 0) AS total_keystrokes,
+                    coalesce(sumIf(hb.chars_added, hb.actor_type = 'human'), 0) AS total_chars_added,
+                    coalesce(sumIf(hb.chars_deleted, hb.actor_type = 'human'), 0) AS total_chars_deleted,
+                    coalesce(sum(hb.copy_actions), 0) AS total_copy_actions,
+                    coalesce(sum(hb.paste_actions), 0) AS total_paste_actions,
+                    coalesce(sum(hb.copied_chars), 0) AS total_copied_chars,
+                    coalesce(sum(hb.copied_lines), 0) AS total_copied_lines,
+                    coalesce(sum(hb.pasted_chars), 0) AS total_pasted_chars,
+                    coalesce(sum(hb.pasted_lines), 0) AS total_pasted_lines,
+                    coalesce(sum(hb.paste_same_file_actions), 0) AS total_paste_same_file_actions,
+                    coalesce(sum(hb.paste_same_workspace_actions), 0) AS total_paste_same_workspace_actions,
+                    coalesce(sum(hb.paste_external_or_unknown_actions), 0) AS total_paste_external_or_unknown_actions,
+                    uniqExactIf(hb.date, hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0) AS days_with_activity,
+                    countIf(position(hb.user_agent, 'wakaclock-vscode/') > 0 AND hb.clipboard_tracking_version = 1) AS supported_vscode_heartbeats,
+                    countIf(position(hb.user_agent, 'wakaclock-vscode/') > 0) AS total_vscode_heartbeats
+                FROM wakaclock.heartbeats AS hb
+                WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
                 ",
             )
             .bind(user_id)
@@ -152,22 +152,22 @@ impl KeystrokeStatsService {
             .query(
                 "
                 SELECT
-                    coalesce(nullIf(project, ''), 'Unknown') AS name,
-                    coalesce(sumIf(keystrokes, actor_type = 'human'), 0) AS keystrokes,
-                    coalesce(sumIf(chars_added, actor_type = 'human'), 0) AS chars_added,
-                    coalesce(sumIf(chars_deleted, actor_type = 'human'), 0) AS chars_deleted,
-                    coalesce(sum(copy_actions), 0) AS copy_actions,
-                    coalesce(sum(paste_actions), 0) AS paste_actions,
-                    coalesce(sum(copied_chars), 0) AS copied_chars,
-                    coalesce(sum(copied_lines), 0) AS copied_lines,
-                    coalesce(sum(pasted_chars), 0) AS pasted_chars,
-                    coalesce(sum(pasted_lines), 0) AS pasted_lines,
-                    coalesce(sum(paste_same_file_actions), 0) AS paste_same_file_actions,
-                    coalesce(sum(paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
-                    coalesce(sum(paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                  AND (actor_type = 'human' OR coalesce(copy_actions, 0) > 0 OR coalesce(paste_actions, 0) > 0)
+                    coalesce(nullIf(hb.project, ''), 'Unknown') AS name,
+                    coalesce(sumIf(hb.keystrokes, hb.actor_type = 'human'), 0) AS keystrokes,
+                    coalesce(sumIf(hb.chars_added, hb.actor_type = 'human'), 0) AS chars_added,
+                    coalesce(sumIf(hb.chars_deleted, hb.actor_type = 'human'), 0) AS chars_deleted,
+                    coalesce(sum(hb.copy_actions), 0) AS copy_actions,
+                    coalesce(sum(hb.paste_actions), 0) AS paste_actions,
+                    coalesce(sum(hb.copied_chars), 0) AS copied_chars,
+                    coalesce(sum(hb.copied_lines), 0) AS copied_lines,
+                    coalesce(sum(hb.pasted_chars), 0) AS pasted_chars,
+                    coalesce(sum(hb.pasted_lines), 0) AS pasted_lines,
+                    coalesce(sum(hb.paste_same_file_actions), 0) AS paste_same_file_actions,
+                    coalesce(sum(hb.paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
+                    coalesce(sum(hb.paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
+                FROM wakaclock.heartbeats AS hb
+                WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
+                  AND (hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0)
                 GROUP BY name
                 ORDER BY keystrokes DESC, name ASC
                 ",
@@ -193,22 +193,22 @@ impl KeystrokeStatsService {
             .query(
                 "
                 SELECT
-                    toString(date) AS day,
-                    coalesce(sumIf(keystrokes, actor_type = 'human'), 0) AS keystrokes,
-                    coalesce(sumIf(chars_added, actor_type = 'human'), 0) AS chars_added,
-                    coalesce(sumIf(chars_deleted, actor_type = 'human'), 0) AS chars_deleted,
-                    coalesce(sum(copy_actions), 0) AS copy_actions,
-                    coalesce(sum(paste_actions), 0) AS paste_actions,
-                    coalesce(sum(copied_chars), 0) AS copied_chars,
-                    coalesce(sum(copied_lines), 0) AS copied_lines,
-                    coalesce(sum(pasted_chars), 0) AS pasted_chars,
-                    coalesce(sum(pasted_lines), 0) AS pasted_lines,
-                    coalesce(sum(paste_same_file_actions), 0) AS paste_same_file_actions,
-                    coalesce(sum(paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
-                    coalesce(sum(paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                  AND (actor_type = 'human' OR coalesce(copy_actions, 0) > 0 OR coalesce(paste_actions, 0) > 0)
+                    toString(hb.date) AS day,
+                    coalesce(sumIf(hb.keystrokes, hb.actor_type = 'human'), 0) AS keystrokes,
+                    coalesce(sumIf(hb.chars_added, hb.actor_type = 'human'), 0) AS chars_added,
+                    coalesce(sumIf(hb.chars_deleted, hb.actor_type = 'human'), 0) AS chars_deleted,
+                    coalesce(sum(hb.copy_actions), 0) AS copy_actions,
+                    coalesce(sum(hb.paste_actions), 0) AS paste_actions,
+                    coalesce(sum(hb.copied_chars), 0) AS copied_chars,
+                    coalesce(sum(hb.copied_lines), 0) AS copied_lines,
+                    coalesce(sum(hb.pasted_chars), 0) AS pasted_chars,
+                    coalesce(sum(hb.pasted_lines), 0) AS pasted_lines,
+                    coalesce(sum(hb.paste_same_file_actions), 0) AS paste_same_file_actions,
+                    coalesce(sum(hb.paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
+                    coalesce(sum(hb.paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
+                FROM wakaclock.heartbeats AS hb
+                WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
+                  AND (hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0)
                 GROUP BY day
                 ORDER BY day ASC
                 ",

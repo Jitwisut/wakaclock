@@ -4,6 +4,7 @@
 //! bounded by the broker worker and transcript parsers, while these manifests let the OS
 //! restart the same binary after login/reboot without administrator privileges.
 
+use fs2::FileExt;
 use serde::Serialize;
 use std::{
     fs::{self, OpenOptions},
@@ -32,7 +33,10 @@ pub struct AgentServiceReport {
 }
 
 pub struct AgentLock {
-    path: PathBuf,
+    // Keep the descriptor open for the whole broker lifetime.  The OS-level lock
+    // is the ownership boundary; a PID text file alone races during launchd/systemd
+    // restart when the old process drops its path after the new one has started.
+    _file: fs::File,
 }
 
 impl AgentLock {
@@ -48,43 +52,46 @@ impl AgentLock {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                writeln!(file, "{}", std::process::id()).map_err(|error| error.to_string())?;
-                Ok(Self { path })
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let pid = fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|value| value.trim().parse::<u32>().ok());
-                if pid.is_some_and(process_is_running) {
-                    return Err(format!(
-                        "wakaclock agent is already running{}",
-                        pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
-                    ));
-                }
-                // A crashed process can leave its lock behind. Reclaim it only after
-                // the PID check says it is no longer alive.
-                fs::remove_file(&path).map_err(|remove_error| remove_error.to_string())?;
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .map_err(|retry_error| retry_error.to_string())?;
-                writeln!(file, "{}", std::process::id())
-                    .map_err(|write_error| write_error.to_string())?;
-                Ok(Self { path })
-            }
-            Err(error) => Err(error.to_string()),
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| error.to_string())?;
+
+        // Keep compatibility with lock files created by older releases, which did
+        // not take an OS lock. A live PID is still authoritative for those files;
+        // once it exits, `try_lock_exclusive` below safely reclaims the same path.
+        let previous_pid = fs::read_to_string(&path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        let current_pid = std::process::id();
+        if previous_pid.is_some_and(|pid| pid != current_pid && process_is_running(pid)) {
+            return Err(format!(
+                "wakaclock agent is already running{}",
+                previous_pid
+                    .map(|pid| format!(" (pid {pid})"))
+                    .unwrap_or_default()
+            ));
         }
+
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                "wakaclock agent is already running".to_string()
+            } else {
+                format!("could not acquire wakaclock agent lock: {error}")
+            }
+        })?;
+        file.set_len(0).map_err(|error| error.to_string())?;
+        writeln!(file, "{current_pid}").map_err(|error| error.to_string())?;
+        Ok(Self { _file: file })
     }
 }
 
-impl Drop for AgentLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
+// `AgentLock` deliberately has no custom Drop implementation: dropping the held
+// `fs::File` closes the descriptor and releases the OS lock, while the path stays
+// in place so a concurrent restart can acquire it without a delete/recreate race.
 
 pub fn append_log(message: &str) {
     let path = log_path();
@@ -158,9 +165,20 @@ pub fn record_heartbeat() {
 /// invocation in every platform's output.
 #[cfg(target_os = "macos")]
 fn manifest_content(executable: &str, log_path: &str) -> String {
+    // LaunchAgents do not inherit HOME reliably (launchd only supplies a small
+    // default environment).  The broker resolves all per-user state through
+    // dirs::home_dir(), so pin HOME to the same home directory that owns the
+    // generated log path.  Without this, a login-started broker falls back to
+    // its `/` working directory, cannot acquire ~/.wakaclock/agent.lock, and
+    // silently exits before transcript auto-scan starts.
+    let home = std::path::Path::new(log_path)
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap_or_else(|| std::path::Path::new("/"));
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>broker</string><string>run</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{SERVICE_LABEL}</string>\n  <key>ProgramArguments</key><array><string>{}</string><string>broker</string><string>run</string></array>\n  <key>EnvironmentVariables</key><dict><key>HOME</key><string>{}</string></dict>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>5</integer>\n  <key>StandardOutPath</key><string>{}</string>\n  <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
         xml_escape(executable),
+        xml_escape(&home.to_string_lossy()),
         xml_escape(log_path),
         xml_escape(log_path),
     )
@@ -556,6 +574,7 @@ fn process_is_running(pid: u32) -> bool {
     {
         return Command::new("kill")
             .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
             .status()
             .map(|status| status.success())
             .unwrap_or(false);
@@ -651,6 +670,9 @@ mod tests {
             1
         );
         assert!(a.contains("/opt/atoaxis/wakaclock"));
+        assert!(a.contains(
+            "<key>EnvironmentVariables</key><dict><key>HOME</key><string>/home/u</string>"
+        ));
 
         let other = manifest_content("/opt/atoaxis/wakaclock-new", "/home/u/.wakaclock/agent.log");
         assert_ne!(a, other);

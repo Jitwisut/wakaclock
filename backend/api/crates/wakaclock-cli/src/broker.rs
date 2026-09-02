@@ -66,6 +66,7 @@ struct BrokerHttpState {
 pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> BrokerEventV1 {
     BrokerEventV1 {
         schema_version: BROKER_SCHEMA_VERSION,
+        producer_version: None,
         event_type: wakaclock_core::broker::BrokerEventType::FileChange,
         event_id: event.event_id.clone(),
         occurred_at: event.occurred_at,
@@ -545,6 +546,13 @@ async fn worker_loop(
                         agent_service::append_log("broker reloaded API identity");
                     }
                 }
+                // The broker is the always-on runtime.  Keep transcript recovery in
+                // this same bounded worker so a user never has to remember a manual
+                // `wakaclock ai sync` after an agent's native hook is missed or an
+                // event arrives while the machine was offline.  The sync owns its
+                // cross-process lock and timeout; a slow/failed parser cannot stop
+                // inbox delivery or ordinary heartbeat processing.
+                crate::run_bounded_ai_sync(&config, &api_client).await;
                 match process_pending(&config, &api_client, MAX_BATCH_EVENTS).await {
                     Ok(report) if report.claimed > 0 => agent_service::append_log(&format!(
                         "broker processed={} retried={} dead_lettered={}",
@@ -926,6 +934,7 @@ mod tests {
     fn event(id: &str) -> BrokerEventV1 {
         BrokerEventV1 {
             schema_version: BROKER_SCHEMA_VERSION,
+            producer_version: None,
             event_type: wakaclock_core::broker::BrokerEventType::FileChange,
             event_id: id.to_string(),
             occurred_at: Utc::now(),

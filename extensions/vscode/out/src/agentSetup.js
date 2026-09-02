@@ -152,10 +152,12 @@ async function detectAiAgents(options = {}) {
     const state = await readSetupState(homeDir);
     const codexConfigured = await codexHookIsConfigured(homeDir);
     const registry = await fetchAdapterRegistry(options.cliPath);
-    const [claude, codex, gemini] = await Promise.all([
+    const [claude, codex, gemini, kilo, kimi] = await Promise.all([
         detectExecutable("claude"),
         detectExecutable("codex"),
-        detectExecutable("gemini")
+        detectExecutable("gemini"),
+        detectAnyExecutable(["kilo", "kilocode"]),
+        detectExecutable("kimi")
     ]);
     const withRegistry = (status) => {
         const manifest = registry.get(status.id);
@@ -190,6 +192,24 @@ async function detectAiAgents(options = {}) {
             enabled: Boolean(state["gemini-cli"]),
             executable: gemini.path,
             reason: gemini.reason
+        }),
+        withRegistry({
+            id: "kilo-code",
+            label: "Kilo Code",
+            provider: "multi-provider",
+            detected: kilo.detected,
+            enabled: Boolean(state["kilo-code"]),
+            executable: kilo.path,
+            reason: kilo.reason
+        }),
+        withRegistry({
+            id: "kimi-code-cli",
+            label: "Kimi Code CLI",
+            provider: "moonshot",
+            detected: kimi.detected,
+            enabled: Boolean(state["kimi-code-cli"]),
+            executable: kimi.path,
+            reason: kimi.reason
         })
     ];
 }
@@ -211,6 +231,12 @@ async function setupDetectedAiAgents(options) {
             }
             else if (status.id === "gemini-cli") {
                 await setupGeminiCli(options.stableDir, options.logger, registry.get("gemini-cli"));
+            }
+            else if (status.id === "kilo-code") {
+                await setupKiloCode(options.stableDir, homeDir, options.logger);
+            }
+            else if (status.id === "kimi-code-cli") {
+                await setupKimiCode(options.stableDir, homeDir, options.logger);
             }
             else {
                 await setupCodex(options.stableDir, homeDir, options.logger);
@@ -273,6 +299,63 @@ async function setupCodex(stableDir, homeDir, logger) {
     logger.debug("agentSetup: configured Codex hook", { configPath });
 }
 /**
+ * Kilo loads every TypeScript module in ~/.config/kilo/plugin. Copying the
+ * version-pinned bundle there avoids mutating kilo.json/JSONC and works in both
+ * the CLI and the VS Code runtime. The copy is replaced atomically as a tree.
+ */
+async function setupKiloCode(stableDir, homeDir, logger) {
+    const installer = path.join(stableDir, "kilo-code", "installer", "install.sh");
+    if (await pathExists(installer)) {
+        logger.debug("agentSetup: running Kilo Code plugin installer", { installer });
+        await execFileAsync("/bin/bash", [installer], {
+            timeout: 30_000,
+            env: { ...process.env, HOME: homeDir }
+        });
+        return;
+    }
+    const source = path.join(stableDir, "kilo-code", "src");
+    if (!(await pathExists(source)))
+        throw new Error(`Kilo producer bundle is missing at ${source}`);
+    const pluginRoot = path.join(homeDir, ".config", "kilo", "plugin");
+    const target = path.join(pluginRoot, "atoaxis-kilo-code");
+    const entryTarget = path.join(pluginRoot, "atoaxis-kilo-code.ts");
+    const entrySource = path.join(stableDir, "kilo-code", "installer", "entrypoint.ts");
+    if (!(await pathExists(entrySource)))
+        throw new Error(`Kilo plugin entrypoint is missing at ${entrySource}`);
+    const temp = `${target}.tmp-${process.pid}`;
+    const entryTemp = `${entryTarget}.tmp-${process.pid}`;
+    await fs.rm(temp, { recursive: true, force: true });
+    await fs.rm(entryTemp, { force: true });
+    await fs.mkdir(pluginRoot, { recursive: true });
+    await fs.cp(source, temp, { recursive: true });
+    await fs.copyFile(entrySource, entryTemp);
+    await fs.rm(target, { recursive: true, force: true });
+    await fs.rename(temp, target);
+    await fs.rename(entryTemp, entryTarget);
+    logger.debug("agentSetup: configured Kilo Code plugin", { target, entryTarget });
+}
+/** Kimi's documented hook format is TOML; the bundled installer owns its managed block. */
+async function setupKimiCode(stableDir, homeDir, logger) {
+    if (process.platform === "win32") {
+        logger.debug("agentSetup: Kimi Code hooks are not available on Windows");
+        return;
+    }
+    const installer = path.join(stableDir, "kimi-code", "installer", "install.sh");
+    if (!(await pathExists(installer))) {
+        throw new Error(`Kimi producer installer is missing at ${installer}`);
+    }
+    logger.debug("agentSetup: running Kimi Code hook installer", { installer });
+    try {
+        await execFileAsync("/bin/bash", [installer], {
+            timeout: 30_000,
+            env: { ...process.env, HOME: homeDir }
+        });
+    }
+    catch (error) {
+        throw new Error(`Kimi Code hook installer failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+/**
  * planai2.md Phase 0.3: throws when a hook path is not under the stable managed
  * plugin root (`~/.wakaclock/agent-plugins/`). Guards against a caller passing the
  * extension's version-stamped install directory (replaced wholesale on upgrade) or
@@ -316,11 +399,13 @@ function refreshManagedCodexHookCommands(config, paths) {
     const managedMarkers = [
         "# AtoAxis managed AI attribution hook",
         "# AtoAxis managed AI shell sweep hooks",
+        "# AtoAxis managed AI shell failure cleanup",
     ];
     const byBasename = {
         "heartbeat-hook.sh": paths.heartbeat,
         "git-sweep-before.sh": paths.before,
         "git-sweep-after.sh": paths.after,
+        "tool-abort.sh": paths.abort,
     };
     const lines = config.split("\n");
     let inManagedBlock = false;
@@ -356,6 +441,12 @@ function refreshManagedCodexHookCommands(config, paths) {
             inManagedBlock = false;
             continue;
         }
+        // Codex treats matcher values as regular expressions. An unanchored
+        // apply_patch value is not reliably selected by current releases; migrate
+        // only the AtoAxis attribution block and leave user-owned matchers intact.
+        if (/^([ \t]*)matcher[ \t]*=[ \t]*"apply_patch"[ \t]*$/.test(lines[i])) {
+            lines[i] = lines[i].replace(/"apply_patch"/, '"^apply_patch$"');
+        }
         const match = /^([ \t]*command[ \t]*=[ \t]*)"(.*)"([ \t]*)$/.exec(lines[i]);
         if (!match) {
             continue;
@@ -373,17 +464,19 @@ function ensureCodexHook(config, hookPath) {
     const attributionMarker = "# AtoAxis managed AI attribution hook";
     const sweepMarker = "# AtoAxis managed AI shell sweep hooks";
     const hookDir = path.dirname(hookPath);
+    const matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*";
     let updated = refreshManagedCodexHookCommands(config, {
         heartbeat: hookPath,
         before: path.join(hookDir, "git-sweep-before.sh"),
         after: path.join(hookDir, "git-sweep-after.sh"),
+        abort: path.join(hookDir, "tool-abort.sh"),
     });
     if (!updated.includes(attributionMarker)) {
         const block = [
             "",
             attributionMarker,
             "[[hooks.PostToolUse]]",
-            'matcher = "apply_patch"',
+            'matcher = "^apply_patch$"',
             "[[hooks.PostToolUse.hooks]]",
             'type = "command"',
             `command = ${tomlString(hookPath)}`,
@@ -399,7 +492,6 @@ function ensureCodexHook(config, hookPath) {
     if (!updated.includes(sweepMarker)) {
         const beforePath = path.join(hookDir, "git-sweep-before.sh");
         const afterPath = path.join(hookDir, "git-sweep-after.sh");
-        const matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*";
         const block = [
             "",
             sweepMarker,
@@ -415,6 +507,22 @@ function ensureCodexHook(config, hookPath) {
             "[[hooks.PostToolUse.hooks]]",
             'type = "command"',
             `command = ${tomlString(afterPath)}`,
+            "timeout = 60",
+            ""
+        ].join("\n");
+        updated = `${updated.trimEnd()}\n${block}`;
+    }
+    const failureMarker = "# AtoAxis managed AI shell failure cleanup";
+    if (!updated.includes(failureMarker)) {
+        const abortPath = path.join(hookDir, "tool-abort.sh");
+        const block = [
+            "",
+            failureMarker,
+            "[[hooks.PostToolUseFailure]]",
+            `matcher = ${tomlString(matcher)}`,
+            "[[hooks.PostToolUseFailure.hooks]]",
+            'type = "command"',
+            `command = ${tomlString(abortPath)}`,
             "timeout = 60",
             ""
         ].join("\n");
@@ -436,6 +544,14 @@ async function detectExecutable(command) {
             reason: error instanceof Error ? error.message : String(error)
         };
     }
+}
+async function detectAnyExecutable(commands) {
+    for (const command of commands) {
+        const result = await detectExecutable(command);
+        if (result.detected)
+            return result;
+    }
+    return { detected: false, reason: commands.map((command) => `${command}: not found`).join("; ") };
 }
 async function runCommand(command, args, logger) {
     logger.debug("agentSetup: running integration command", { command, args });

@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::Error,
     fs,
     io::{self, BufRead, BufReader, Read},
@@ -19,11 +19,12 @@ use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
-        normalize_agent_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        scan_ai_processes, AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent,
-        AiEventSource, ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult,
-        DiscoveryState, FileChangeKind, GeminiCliParser, ParseContext, ParserCursor, TranscriptLag,
-        WorkspaceWatcher,
+        normalize_agent_id, normalize_client_id, normalize_model_id, normalize_provider_id,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, scan_ai_processes,
+        AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent, AiEventSource,
+        ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult, DiscoveryState,
+        FileChangeKind, GeminiCliParser, ParseContext, ParserCursor, TranscriptLag,
+        WorkspaceWatcher, PRODUCER_CONTRACT_VERSION,
     },
     api_client::ApiClient,
     broker::BrokerEventV1,
@@ -439,6 +440,23 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Remove a pending shell/tool snapshot after a failed or cancelled call.
+    /// This never emits an edit; it only releases durable pending state.
+    ToolAbort {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Record metadata-only session start/resume state for adapters that expose
+    /// lifecycle hooks. This never stores prompts or model responses.
+    SessionStart {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Close metadata-only session state at the adapter-reported end time.
+    SessionEnd {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Parse new events from each agent's local transcript since the last sync and
     /// send one AI-attributed heartbeat per event. There is no editor buffer to
     /// correlate against here (this reads transcripts directly, not via an IDE
@@ -568,6 +586,11 @@ struct ExtraHeartbeatInput {
 #[serde(deny_unknown_fields)]
 struct GenericAiEventInput {
     event_id: String,
+    /// Metadata producer contract version. Old flat/transcript producers may
+    /// omit it; native v1 adapters must send `1` so the broker can reject an
+    /// unknown envelope deliberately instead of guessing.
+    #[serde(default)]
+    producer_version: Option<u8>,
     agent: String,
     #[serde(default)]
     provider: Option<String>,
@@ -609,6 +632,53 @@ struct GenericAiEventInput {
     /// Old path for a one-to-one inferred rename. No file content is retained.
     #[serde(default)]
     previous_entity: Option<PathBuf>,
+}
+
+/// Lifecycle metadata emitted by SessionStart/SessionEnd hooks. This is a local
+/// state record, not a file-change broker event: it gives future session rollups a
+/// bounded interval without pretending that a session boundary is an edit.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AiSessionInput {
+    session_id: String,
+    agent: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    cwd: Option<PathBuf>,
+    #[serde(default)]
+    source: Option<AiEventSource>,
+    #[serde(default)]
+    occurred_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AiSessionState {
+    #[serde(default = "default_session_state_version")]
+    version: u8,
+    #[serde(default)]
+    sessions: BTreeMap<String, AiSessionRecord>,
+}
+
+fn default_session_state_version() -> u8 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AiSessionRecord {
+    #[serde(default = "default_session_state_version")]
+    producer_version: u8,
+    session_id: String,
+    agent: String,
+    provider: Option<String>,
+    model: Option<String>,
+    cwd: Option<String>,
+    source: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    last_event_at: chrono::DateTime<chrono::Utc>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Flat pre-v1 input accepted only by the CLI compatibility adapter. This shape was
@@ -705,6 +775,7 @@ impl LegacyAiEventInput {
         });
         Ok(GenericAiEventInput {
             event_id: self.event_id,
+            producer_version: None,
             agent: self
                 .agent
                 .or(self.legacy_agent)
@@ -1128,7 +1199,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "cli_path": cli_paths.to_json(),
                         "legacy_service_alias": legacy_service_alias,
                         "stale_service_binary": stale_service_binary,
-                        "capabilities": ["clipboard_metrics_v1"],
+                        "capabilities": ["clipboard_metrics_v1", "ai_producer_v1"],
+                        "ai_producer_contract_version": PRODUCER_CONTRACT_VERSION,
                     })
                 );
             } else {
@@ -1140,7 +1212,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
                 println!("{}", identity_line(&config));
                 println!("Queued heartbeats: {queued}");
-                println!("Capabilities: clipboard_metrics_v1");
+                println!("Capabilities: clipboard_metrics_v1, ai_producer_v1 (contract v{PRODUCER_CONTRACT_VERSION})");
                 match key_check {
                     "verified" => {
                         println!("Key check: verified — the server accepted this API key")
@@ -1368,6 +1440,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
             AiAction::ToolBefore { json } => run_ai_tool_before(json)?,
             AiAction::ToolAfter { json } => run_ai_tool_after(&config, &api_client, json).await?,
+            AiAction::ToolAbort { json } => run_ai_tool_abort(json)?,
+            AiAction::SessionStart { json } => run_ai_session(false, json)?,
+            AiAction::SessionEnd { json } => run_ai_session(true, json)?,
             AiAction::Sync {
                 agent,
                 dry_run,
@@ -2277,6 +2352,11 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         }));
     }
 
+    // Native adapters without a stable transcript parser still belong in the
+    // doctor report. Showing executable/config state makes a Kilo/Kimi setup
+    // failure distinguishable from an empty activity window.
+    agents.extend(native_adapter_doctor_entries(&context.home_dir));
+
     // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
     // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
     // network failure without eyeballing the raw message.
@@ -2465,6 +2545,77 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
         ("codex", Box::new(CodexParser::new())),
         ("gemini-cli", Box::new(GeminiCliParser::new())),
     ]
+}
+
+fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    ["kilo-code", "kimi-code-cli"]
+        .iter()
+        .filter_map(|id| {
+            let manifest = registry.get(id)?;
+            let executable = resolve_named_command(&manifest.executable.command_names);
+            let config_path = match *id {
+                "kilo-code" => home_dir.join(".config/kilo/plugin/atoaxis-kilo-code"),
+                // Kimi renamed its default home directory in newer releases;
+                // prefer the current path but recognize the legacy Beta path.
+                "kimi-code-cli" => {
+                    let modern = home_dir.join(".kimi-code/config.toml");
+                    let legacy = home_dir.join(".kimi/config.toml");
+                    let managed = |path: &Path| {
+                        fs::read_to_string(path)
+                            .map(|text| text.contains("# AtoAxis managed Kimi Code hooks"))
+                            .unwrap_or(false)
+                    };
+                    if managed(&modern) || !managed(&legacy) && modern.exists() {
+                        modern
+                    } else {
+                        legacy
+                    }
+                }
+                _ => return None,
+            };
+            let installed = match *id {
+                "kilo-code" => {
+                    config_path.is_dir()
+                        && config_path
+                            .parent()
+                            .map(|parent| parent.join("atoaxis-kilo-code.ts").is_file())
+                            .unwrap_or(false)
+                }
+                "kimi-code-cli" => fs::read_to_string(&config_path)
+                    .map(|text| text.contains("# AtoAxis managed Kimi Code hooks"))
+                    .unwrap_or(false),
+                _ => false,
+            };
+            Some(serde_json::json!({
+                "agent": id,
+                "installed": installed,
+                "transcript_found": false,
+                "native_executable": executable,
+                "verification_status": format!("{:?}", manifest.effective_status()).to_lowercase(),
+                "diagnostic": if executable.is_none() {
+                    Some("native executable not found on PATH")
+                } else if !installed {
+                    Some("native adapter detected but not installed")
+                } else {
+                    None
+                },
+                "ever_scanned": false,
+                "file_size": serde_json::Value::Null,
+                "cursor_offset": serde_json::Value::Null,
+                "lag_bytes": serde_json::Value::Null,
+                "last_event_at": serde_json::Value::Null,
+                "lag_seconds": serde_json::Value::Null,
+            }))
+        })
+        .collect()
+}
+
+fn resolve_named_command(names: &[String]) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|candidate| candidate.is_file())
 }
 
 fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
@@ -2902,6 +3053,175 @@ fn read_ai_tool_input() -> Result<AiToolInput, Box<dyn Error>> {
     Ok(input)
 }
 
+fn run_ai_tool_abort(json: bool) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_tool_input()?;
+    let state = AiAttributionState::open()?;
+    state.delete_tool_session(&input.tool_event_id)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "aborted",
+                "tool_event_id": input.tool_event_id,
+            })
+        );
+    } else {
+        println!("AI tool {} snapshot discarded", input.tool_event_id);
+    }
+    Ok(())
+}
+
+fn read_ai_session_input() -> Result<AiSessionInput, Box<dyn Error>> {
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    if stdin.trim().is_empty() {
+        return Err("AI session metadata JSON is required on stdin".into());
+    }
+    let input: AiSessionInput = serde_json::from_str(&stdin)?;
+    if input.session_id.trim().is_empty() {
+        return Err("session_id must not be empty".into());
+    }
+    if input.session_id.len() > 128 || input.session_id.chars().any(char::is_control) {
+        return Err("session_id is invalid or too long".into());
+    }
+    if input.agent.trim().is_empty() {
+        return Err("agent must not be empty".into());
+    }
+    Ok(input)
+}
+
+fn ai_session_state_path() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(dirs::home_dir()
+        .ok_or("could not resolve home directory")?
+        .join(".wakaclock")
+        .join("ai-sessions.json"))
+}
+
+fn write_ai_session_state_atomically(path: &Path, content: &str) -> Result<(), Box<dyn Error>> {
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, content)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn normalize_session_cwd(cwd: Option<PathBuf>) -> Result<Option<String>, Box<dyn Error>> {
+    let Some(cwd) = cwd else { return Ok(None) };
+    let absolute = if cwd.is_absolute() {
+        cwd
+    } else {
+        std::env::current_dir()?.join(cwd)
+    };
+    Ok(Some(absolute.to_string_lossy().into_owned()))
+}
+
+fn run_ai_session(ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
+    let input = read_ai_session_input()?;
+    let now = input.occurred_at.unwrap_or_else(chrono::Utc::now);
+    if now > chrono::Utc::now() + chrono::Duration::minutes(5) {
+        return Err("occurred_at cannot be more than five minutes in the future".into());
+    }
+    let agent = normalize_client_id(&input.agent)?;
+    let provider = input
+        .provider
+        .as_deref()
+        .map(normalize_provider_id)
+        .transpose()?;
+    let model = input.model.as_deref().map(normalize_model_id).transpose()?;
+    let cwd = normalize_session_cwd(input.cwd)?;
+    let source = input
+        .source
+        .as_ref()
+        .unwrap_or(&AiEventSource::AgentHook)
+        .as_str()
+        .to_string();
+    let key = format!("{agent}:{}", input.session_id.trim());
+    let path = ai_session_state_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = path.with_extension("lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock_file.lock_exclusive()?;
+
+    let mut state: AiSessionState = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    state.version = default_session_state_version();
+    // Keep closed metadata bounded while preserving every active session. This file
+    // contains IDs/timestamps/paths only; it is not a transcript or source store.
+    state.sessions.retain(|_, record| {
+        record
+            .ended_at
+            .is_none_or(|ended_at| now.signed_duration_since(ended_at) < chrono::Duration::days(30))
+    });
+
+    let ended_at = {
+        let record = state
+            .sessions
+            .entry(key.clone())
+            .or_insert_with(|| AiSessionRecord {
+                producer_version: PRODUCER_CONTRACT_VERSION,
+                session_id: input.session_id.trim().to_string(),
+                agent: agent.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                cwd: cwd.clone(),
+                source: source.clone(),
+                started_at: now,
+                last_event_at: now,
+                ended_at: None,
+            });
+        // A resumed session keeps its original start, while the latest lifecycle
+        // payload may reveal provider/model/cwd that were absent at first start.
+        record.last_event_at = now;
+        record.provider = provider.or_else(|| record.provider.clone());
+        record.model = model.or_else(|| record.model.clone());
+        record.cwd = cwd.or_else(|| record.cwd.clone());
+        record.source = source;
+        if ended {
+            record.ended_at = Some(now);
+        } else {
+            record.ended_at = None;
+        }
+        record.ended_at
+    };
+    let serialized = serde_json::to_string_pretty(&state)? + "\n";
+    write_ai_session_state_atomically(&path, &serialized)?;
+    // Dropping the file descriptor releases the advisory lock on every supported
+    // Rust MSRV; `FileExt::unlock` is newer than this workspace's MSRV.
+    drop(lock_file);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": if ended { "session_ended" } else { "session_started" },
+                "producer_version": PRODUCER_CONTRACT_VERSION,
+                "agent": agent,
+                "session_id": input.session_id.trim(),
+                "occurred_at": now,
+                "ended_at": ended_at,
+            })
+        );
+    } else {
+        println!(
+            "AI session {} {}",
+            input.session_id.trim(),
+            if ended { "ended" } else { "started" }
+        );
+    }
+    Ok(())
+}
+
 fn run_ai_tool_before(json: bool) -> Result<(), Box<dyn Error>> {
     let input = read_ai_tool_input()?;
     let snapshot = tool_snapshot::capture(&input)?;
@@ -2966,6 +3286,7 @@ fn tool_change_input(
     };
     GenericAiEventInput {
         event_id: tool_snapshot::stable_change_event_id(&before.tool_event_id, change),
+        producer_version: Some(wakaclock_core::ai::PRODUCER_CONTRACT_VERSION),
         agent: before.agent.clone(),
         provider: after_input
             .provider
@@ -3217,6 +3538,7 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         .map(|path| path.to_string());
     Ok(BrokerEventV1 {
         schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        producer_version: input.producer_version,
         event_type: wakaclock_core::broker::BrokerEventType::FileChange,
         event_id: event.event_id,
         occurred_at: event.occurred_at,
@@ -3306,6 +3628,7 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         });
     Ok(BrokerEventV1 {
         schema_version: wakaclock_core::broker::BROKER_SCHEMA_VERSION,
+        producer_version: None,
         event_type: wakaclock_core::broker::BrokerEventType::FileChange,
         event_id,
         occurred_at,
@@ -3369,7 +3692,7 @@ async fn run_ai_emit(
 /// are not dependent on a user remembering to run `wakaclock ai sync`. The bound keeps
 /// extension heartbeat latency predictable; any timeout/error leaves the ordinary
 /// heartbeat path untouched and the transcript cursor replayable on the next call.
-async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
+pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
     const AUTO_SYNC_BUDGET: Duration = Duration::from_secs(2);
     match tokio::time::timeout(
         AUTO_SYNC_BUDGET,
@@ -3887,6 +4210,7 @@ mod generic_ai_ingress_tests {
     fn sample_input() -> GenericAiEventInput {
         GenericAiEventInput {
             event_id: "chatgpt-session-1:src/lib.rs:1".to_string(),
+            producer_version: Some(1),
             agent: "ChatGPT MCP".to_string(),
             provider: Some("openai".to_string()),
             model: Some("gpt".to_string()),
@@ -3919,6 +4243,26 @@ mod generic_ai_ingress_tests {
             parsed.command,
             Commands::Ai {
                 action: AiAction::Emit { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_session_lifecycle_commands_are_first_class_subcommands() {
+        let start = Cli::try_parse_from(["wakaclock", "ai", "session-start", "--json"])
+            .expect("session-start should parse");
+        assert!(matches!(
+            start.command,
+            Commands::Ai {
+                action: AiAction::SessionStart { json: true }
+            }
+        ));
+        let end = Cli::try_parse_from(["wakaclock", "ai", "session-end", "--json"])
+            .expect("session-end should parse");
+        assert!(matches!(
+            end.command,
+            Commands::Ai {
+                action: AiAction::SessionEnd { json: true }
             }
         ));
     }

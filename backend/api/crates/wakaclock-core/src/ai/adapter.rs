@@ -476,7 +476,8 @@ fn no_hooks() -> NativeHookCapabilities {
     NativeHookCapabilities::default()
 }
 
-/// planai2.md Phase 2 (p2.3), rollout order 4-10. Every entry is a manifest only —
+/// planai2.md Phase 2 (p2.3) plus Universal AI Detection rollout. Every entry is a
+/// manifest only —
 /// no parser, no verified capability — recorded so the pipeline *knows about* the
 /// agent and can show it as `scaffold` / `unverified` rather than pretending it
 /// does not exist. Cursor is `Scaffold` because a documented hook payload shape
@@ -509,6 +510,80 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 "hook payload shape from Cursor public docs only; extensions/ai-agents/cursor/ is a scaffold, not run against a real Cursor",
             ),
             health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "kilo-code".to_string(),
+            // Kilo can route to OpenAI, Anthropic, Moonshot, DeepSeek or a local
+            // model. `multi-provider` is intentionally not presented as the model
+            // vendor; the native plugin reports provider/model per tool call.
+            provider: "multi-provider".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kilo".to_string(), "kilocode".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::NativePlugin {
+                install_args: vec![
+                    "kilo".to_string(),
+                    "plugin".to_string(),
+                    "@atoaxis/kilo-code".to_string(),
+                ],
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                session_lifecycle: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![".config/kilo/sessions".to_string()],
+            payload_schema_versions: vec!["kilo-plugin-event-v1".to_string()],
+            supported_change_kinds: vec![
+                BrokerChangeKind::Create,
+                BrokerChangeKind::Modify,
+                BrokerChangeKind::Rename,
+                BrokerChangeKind::Delete,
+            ],
+            verification: Verification::scaffold(
+                "native plugin package is implemented from Kilo's documented hook surface; real Kilo CLI and VS Code runs are still required",
+            ),
+            health_probe: HealthProbe::HookEventRecency {
+                max_age_seconds: 900,
+            },
+        },
+        AdapterManifest {
+            id: "kimi-code-cli".to_string(),
+            provider: "moonshot".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kimi".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::ConfigHookBlock {
+                // Current Kimi releases use ~/.kimi-code; the installer and
+                // doctor also recognize the legacy ~/.kimi Beta location.
+                config_path_from_home: ".kimi-code/config.toml".to_string(),
+                marker: "# AtoAxis managed Kimi Code hooks".to_string(),
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                session_lifecycle: true,
+                shell_mutation: true,
+                ..Default::default()
+            },
+            transcript_roots: vec![".kimi-code/sessions".to_string(), ".kimi/sessions".to_string()],
+            payload_schema_versions: vec!["kimi-hooks-v1".to_string(), "stream-json-v1".to_string()],
+            supported_change_kinds: vec![
+                BrokerChangeKind::Create,
+                BrokerChangeKind::Modify,
+                BrokerChangeKind::Rename,
+                BrokerChangeKind::Delete,
+            ],
+            verification: Verification::scaffold(
+                "Kimi Code hooks are Beta; install and capture a real payload before promoting to Verified",
+            ),
+            health_probe: HealthProbe::HookEventRecency {
+                max_age_seconds: 900,
+            },
         },
         AdapterManifest {
             id: "antigravity".to_string(),
@@ -806,6 +881,8 @@ mod tests {
         let registry = AdapterRegistry::builtin();
         for id in [
             "cursor",
+            "kilo-code",
+            "kimi-code-cli",
             "antigravity",
             "copilot",
             "windsurf",
@@ -834,6 +911,14 @@ mod tests {
         assert_eq!(
             registry.get("windsurf").unwrap().effective_status(),
             VerificationStatus::Unverified
+        );
+        assert_eq!(
+            registry.get("kilo-code").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
+        assert_eq!(
+            registry.get("kimi-code-cli").unwrap().effective_status(),
+            VerificationStatus::Scaffold
         );
         // Not a single builtin adapter is verified except claude-code.
         let verified: Vec<&str> = registry
@@ -967,6 +1052,7 @@ mod tests {
             for kind in &manifest.supported_change_kinds {
                 let event = BrokerEventV1 {
                     schema_version: BROKER_SCHEMA_VERSION,
+                    producer_version: Some(crate::ai::producer::PRODUCER_CONTRACT_VERSION),
                     event_type: BrokerEventType::FileChange,
                     event_id: format!("{}-evt", manifest.id),
                     occurred_at: Utc::now(),
