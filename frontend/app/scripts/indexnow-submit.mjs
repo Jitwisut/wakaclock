@@ -3,10 +3,11 @@
  * Seznam and Naver recrawl within minutes instead of days.
  *
  * Wired in as `postbuild`, so it runs after every `npm run build`. It is a no-op
- * unless this is a real production build: INDEXNOW_KEY must be set and the resolved
- * site URL must be a public custom domain — not localhost, not a *.netlify.app
- * preview. Every failure is swallowed; IndexNow is best-effort and must never break
- * a deploy.
+ * unless this is a real production build: INDEXNOW_KEY must be set, the resolved
+ * site URL must be a public custom domain — not localhost, not a *.netlify.app or
+ * *.vercel.app preview — and, on Vercel, VERCEL_ENV (when present) must say
+ * "production" rather than "preview". Every failure is swallowed; IndexNow is
+ * best-effort and must never break a deploy.
  *
  * The URL list comes from the sitemap already published on the live site, so this
  * file never needs its own copy of the route inventory. On the very first deploy the
@@ -25,10 +26,15 @@ async function main() {
     return;
   }
 
+  // Vercel's own URL variables carry a bare host with no protocol.
+  const vercelHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
+
   const rawSiteUrl = (
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.URL ||
     process.env.DEPLOY_PRIME_URL ||
+    (vercelHost && `https://${vercelHost}`) ||
     ''
   ).trim();
 
@@ -42,8 +48,20 @@ async function main() {
     return;
   }
 
+  // VERCEL_ENV is the authoritative signal on Vercel: a preview deployment can be
+  // aliased to a custom domain, which the hostname check below would otherwise miss.
+  if (process.env.VERCEL_ENV && process.env.VERCEL_ENV !== 'production') {
+    console.log(`[indexnow] skipped: VERCEL_ENV is "${process.env.VERCEL_ENV}", not production`);
+    return;
+  }
+
   const { hostname, origin } = siteUrl;
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.netlify.app')) {
+  if (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname.endsWith('.netlify.app') ||
+    hostname.endsWith('.vercel.app')
+  ) {
     console.log(`[indexnow] skipped: ${hostname} is not a public host`);
     return;
   }

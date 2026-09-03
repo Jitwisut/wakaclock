@@ -33,13 +33,19 @@ export const DEFAULT_LOCALE: SiteLocale = 'en';
  */
 function resolveSiteUrl(): string {
   // NEXT_PUBLIC_APP_URL is the preferred value because it can point at a
-  // custom production domain. Netlify exposes URL/DEPLOY_PRIME_URL during a
-  // build, so previews still get a valid canonical origin when the project
-  // variable has not been configured yet.
+  // custom production domain on any host. Netlify exposes URL/DEPLOY_PRIME_URL and
+  // Vercel exposes VERCEL_PROJECT_PRODUCTION_URL/VERCEL_URL during a build, so
+  // previews and first deploys on either provider still get a valid canonical
+  // origin when the project variable has not been configured yet. Vercel's
+  // variables carry a bare host with no protocol, so one is added below.
+  const vercelHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
+
   const configured =
     process.env.NEXT_PUBLIC_APP_URL?.trim() ||
     process.env.URL?.trim() ||
-    process.env.DEPLOY_PRIME_URL?.trim();
+    process.env.DEPLOY_PRIME_URL?.trim() ||
+    (vercelHost ? `https://${vercelHost}` : undefined);
 
   if (configured && !configured.includes('localhost')) {
     return configured.replace(/\/$/, '');

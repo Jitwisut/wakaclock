@@ -30,8 +30,8 @@ const nextConfig: NextConfig = {
   },
 
   // The repository contains other lockfiles above this app. Keep Turbopack's
-  // project boundary at the Netlify base directory instead of the parent
-  // `frontend` directory.
+  // project boundary at this app's directory — the Netlify base directory /
+  // Vercel root directory — instead of the parent `frontend` directory.
   turbopack: {
     root: process.cwd(),
   },
