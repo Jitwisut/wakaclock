@@ -35,7 +35,9 @@ function parseRenderedJsonLd(data: unknown): unknown {
 
 describe('JsonLd', () => {
   it('escapes characters that could terminate the surrounding script element', () => {
-    const { container } = render(<JsonLd data={{ name: '</script><img src=x onerror=alert(1)>' }} />);
+    const { container } = render(
+      <JsonLd data={{ name: '</script><img src=x onerror=alert(1)>' }} />
+    );
     const html = container.querySelector('script')?.innerHTML ?? '';
 
     expect(html).not.toContain('</script>');
@@ -200,6 +202,7 @@ describe('site URL resolution', () => {
   afterEach(() => {
     process.env.NEXT_PUBLIC_APP_URL = originalUrl;
     vi.stubEnv('NODE_ENV', originalNodeEnv ?? 'test');
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 
@@ -229,6 +232,11 @@ describe('site URL resolution', () => {
     vi.resetModules();
     delete process.env.NEXT_PUBLIC_APP_URL;
     vi.stubEnv('NODE_ENV', 'production');
+    // The throw only guards the server: it must not fire in a client bundle that pulled
+    // this module in for its other exports (see the comment in resolveSiteUrl). jsdom
+    // provides `window` unconditionally, so it's unstubbed here to simulate the real
+    // server context this check is meant for.
+    vi.stubGlobal('window', undefined);
 
     await expect(import('@/lib/seo/site')).rejects.toThrow(/NEXT_PUBLIC_APP_URL/);
   });
@@ -237,8 +245,21 @@ describe('site URL resolution', () => {
     vi.resetModules();
     process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubGlobal('window', undefined);
 
     await expect(import('@/lib/seo/site')).rejects.toThrow(/NEXT_PUBLIC_APP_URL/);
+  });
+
+  it('does not throw in a browser context even with no public origin configured', async () => {
+    vi.resetModules();
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubEnv('NODE_ENV', 'production');
+
+    // No window stub here: jsdom's ambient `window` stands in for a real client bundle.
+    // Client components (the nav, the language switcher) import this module for its
+    // other exports, so this must resolve rather than take down the whole app.
+    const { SITE_URL: siteUrl } = await import('@/lib/seo/site');
+    expect(siteUrl).toBe('http://localhost:3000');
   });
 });
 
@@ -323,7 +344,11 @@ describe('robots', () => {
     const [rule] = [robots().rules].flat();
     const disallow = [rule.disallow].flat().filter(Boolean) as string[];
 
-    for (const route of ['/docs/getting-started', '/wakatime-alternative', '/integrations/vscode']) {
+    for (const route of [
+      '/docs/getting-started',
+      '/wakatime-alternative',
+      '/integrations/vscode',
+    ]) {
       expect(disallow.some((entry) => route.startsWith(entry))).toBe(false);
     }
   });

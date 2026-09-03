@@ -51,7 +51,15 @@ function resolveSiteUrl(): string {
     return configured.replace(/\/$/, '');
   }
 
-  if (process.env.NODE_ENV === 'production') {
+  // Client components (the nav, the language switcher, the early-access form) import
+  // this module for its other exports — SITE_NAME, localizedPath, the SiteLocale type —
+  // which pulls this whole function, and this throw, into the browser bundle too. SITE_URL
+  // itself is only ever read server-side (root layout metadata, manifest.ts, the JSON-LD
+  // in lib/seo/schema.ts), so the guard below scopes the fail-loud check to a real Node
+  // build/runtime. Without it, any preview deploy that hasn't set NEXT_PUBLIC_APP_URL yet
+  // throws during module evaluation in the browser and takes down every page with a
+  // client-side exception, instead of just missing a canonical tag server-side.
+  if (typeof window === 'undefined' && process.env.NODE_ENV === 'production') {
     throw new Error(
       'NEXT_PUBLIC_APP_URL (or a hosting-provided public URL) must be set for production builds. ' +
         'Canonical URLs and structured data cannot be generated from a localhost origin.'
