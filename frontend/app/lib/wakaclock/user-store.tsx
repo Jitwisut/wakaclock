@@ -7,6 +7,32 @@ import { setCurrentToken, setUnauthorizedHandler } from './session';
 const STORAGE_KEY = 'wakaclock-session';
 
 /**
+ * True if `token` is missing, malformed, or past its `exp` claim.
+ *
+ * Without this check, hydration trusts whatever is in localStorage: a signed-in visitor
+ * whose 24h token has since expired gets bounced from /login to /dashboard (because
+ * `userId` is present) and then straight back to /login a moment later (because every
+ * request the dashboard fires 401s and `notifyUnauthorized` clears the session) — a
+ * visible flash of dashboard content on what should have been a quiet render of the sign-in
+ * form. Checking `exp` locally, before anything renders on that assumption, skips the round
+ * trip for the common case. A token rejected for another reason (rotated secret, revoked
+ * server-side) still recovers via `notifyUnauthorized`, just with that same flash.
+ */
+function isTokenExpired(token: string): boolean {
+  const payload = token.split('.')[1];
+  if (!payload) return true;
+
+  try {
+    const base64 = payload.replaceAll('-', '+').replaceAll('_', '/');
+    const json = atob(base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '='));
+    const { exp } = JSON.parse(json) as { exp?: number };
+    return typeof exp !== 'number' || exp * 1000 <= Date.now();
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Session state after POST /auth/register or /auth/login — replaces the earlier
  * "type any uuid" identity model. `token` is a short-lived (24h) JWT the axios
  * interceptor in client.ts attaches as `Authorization: Bearer` on every request; the
@@ -70,7 +96,7 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as StoredShape;
-        if (parsed.userId && parsed.token && parsed.username) {
+        if (parsed.userId && parsed.token && parsed.username && !isTokenExpired(parsed.token)) {
           dispatch({
             type: 'set',
             userId: parsed.userId,
