@@ -108,6 +108,24 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         as who should.
       */}
       <div className="mx-auto max-w-3xl px-4 md:px-6">
+        <Section heading={copy.sources.heading} id="sources">
+          <p style={MUTED_TEXT}>{copy.sources.intro}</p>
+          <ul className="mt-4 space-y-3 text-sm" style={MUTED_TEXT}>
+            {copy.sources.items.map((item) => (
+              <li key={item.href}>
+                {item.claim}{' '}
+                <a
+                  className="underline underline-offset-4"
+                  href={item.href}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  {item.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Section>
         <Section heading={copy.verdict.heading} id="verdict">
           <p className="text-base leading-relaxed">{copy.verdict.fits}</p>
           <p style={MUTED_TEXT}>{copy.verdict.doesNotFit}</p>

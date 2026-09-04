@@ -152,6 +152,47 @@ export const EN_HOME = {
    * the same words the limitations list uses, because a recommendation that only points
    * one way is not a recommendation.
    */
+  /**
+   * Claim-to-source pairs, each linking the authority for one statement made above.
+   *
+   * The point is not link count. Every entry names the primary source for a capability
+   * this page claims, so a reader — or an answer engine deciding whether to cite this
+   * page — can check it without taking our word for it. The language count is exact:
+   * `backend/api/crates/wakaclock-ast/src/languages.rs` maps these nine names, and only
+   * these, to a tree-sitter grammar. Update the number there and here together.
+   */
+  sources: {
+    heading: 'How do we verify these claims?',
+    intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
+    items: [
+      {
+        claim: `${SITE_NAME} implements the WakaTime API, so an editor with an existing WakaTime plugin can send to it.`,
+        href: 'https://wakatime.com/developers',
+        label: 'WakaTime API documentation',
+      },
+      {
+        claim: 'Bundled hooks attribute work done through Claude Code.',
+        href: 'https://docs.anthropic.com/en/docs/claude-code/hooks',
+        label: 'Claude Code hooks documentation',
+      },
+      {
+        claim: 'Bundled hooks attribute work done through Codex CLI.',
+        href: 'https://github.com/openai/codex',
+        label: 'OpenAI Codex CLI',
+      },
+      {
+        claim: 'Bundled hooks attribute work done through Gemini CLI.',
+        href: 'https://github.com/google-gemini/gemini-cli',
+        label: 'Google Gemini CLI',
+      },
+      {
+        claim:
+          'Language is confirmed by parsing the file, not guessed from its extension. Nine languages have a grammar — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++ and Objective-C — which is how an ambiguous extension like .h is resolved.',
+        href: 'https://tree-sitter.github.io/tree-sitter/',
+        label: 'Tree-sitter',
+      },
+    ],
+  },
   verdict: {
     heading: `Is ${SITE_NAME} right for you?`,
     fits: `${SITE_NAME} fits you best if you already code in a WakaTime-compatible editor, you want your complete history rather than a rolling window, and you care how much of the work an AI agent actually did.`,
@@ -251,6 +292,38 @@ export const TH_HOME = {
     'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
   ],
+  sources: {
+    heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',
+    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
+    items: [
+      {
+        claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
+        href: 'https://wakatime.com/developers',
+        label: 'เอกสาร WakaTime API',
+      },
+      {
+        claim: 'hooks ที่ให้มาระบุที่มาของงานที่ทำผ่าน Claude Code ได้',
+        href: 'https://docs.anthropic.com/en/docs/claude-code/hooks',
+        label: 'เอกสาร Claude Code hooks',
+      },
+      {
+        claim: 'hooks ที่ให้มาระบุที่มาของงานที่ทำผ่าน Codex CLI ได้',
+        href: 'https://github.com/openai/codex',
+        label: 'OpenAI Codex CLI',
+      },
+      {
+        claim: 'hooks ที่ให้มาระบุที่มาของงานที่ทำผ่าน Gemini CLI ได้',
+        href: 'https://github.com/google-gemini/gemini-cli',
+        label: 'Google Gemini CLI',
+      },
+      {
+        claim:
+          'ระบุภาษาด้วยการ parse ไฟล์จริง ไม่ใช่เดาจากนามสกุล มีไวยากรณ์รองรับ 9 ภาษา ได้แก่ Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++ และ Objective-C จึงแยกนามสกุลกำกวมอย่าง .h ได้',
+        href: 'https://tree-sitter.github.io/tree-sitter/',
+        label: 'Tree-sitter',
+      },
+    ],
+  },
   verdict: {
     heading: `${SITE_NAME} เหมาะกับคุณไหม?`,
     fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร`,
