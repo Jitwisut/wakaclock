@@ -125,10 +125,16 @@ export const EN_HOME = {
    * the definition, the compatibility story and the privacy boundary without reading
    * anything above it — while each paragraph stays short enough to quote by itself.
    */
+  /**
+   * The first entry is deliberately one 120-180 word block rather than split further: it
+   * needs to stand alone as a complete answer to "what is AtoAxis", opening with the
+   * definition, for a reader or an answer engine that quotes only this one paragraph. The
+   * second stays short — it is a boundary statement (what heartbeats do NOT contain), and
+   * padding it would just be filler.
+   */
   whatIs: [
-    `${SITE_NAME} is a developer time tracking service. Your editor sends it heartbeats — small metadata signals describing what you are working on — and it turns them into dashboards for coding time, projects, programming languages, branches and editors.`,
-    'It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window.',
-    'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, not file contents.',
+    `${SITE_NAME} is a developer time tracking service that turns editor activity into dashboards for coding time, projects, programming languages, branches and editors. Your editor sends it heartbeats — small metadata events describing what you are working on, such as which file, project and branch you touched and when, and nothing about the contents of the file itself. It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window, so a project you touched in your first week is still there to look back on however long you have been using it.`,
+    'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, never file contents.',
   ],
   howItWorks: [
     'Your editor sends a heartbeat when you type, switch to or save a file. Each signal carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
@@ -213,7 +219,7 @@ export const EN_HOME = {
   ],
   sources: {
     heading: 'How do we verify these claims?',
-    intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
+    intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up: 9 languages are verified by parsing rather than guessed from a file extension, and 3 AI agents ship with a bundled hook rather than being claimed without one. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
     items: [
       {
         claim: `${SITE_NAME} implements the WakaTime API, so an editor with an existing WakaTime plugin can send to it.`,
@@ -316,8 +322,7 @@ export const TH_HOME = {
     `Early Access: ราคาที่วางแผนไว้คือ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี และยังไม่เปิดให้ชำระเงิน`,
   ],
   whatIs: [
-    `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา editor ของคุณจะส่ง heartbeat ซึ่งเป็น metadata ขนาดเล็กที่บอกว่าคุณกำลังทำอะไรอยู่ แล้วระบบเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor`,
-    'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้โดยไม่ต้องติดตั้งอะไรใหม่ และนำเข้า WakaTime export มาดูใน dashboard เดียวกันได้ ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงล่าสุด',
+    `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา เปลี่ยน activity ใน editor เป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor editor ของคุณจะส่ง heartbeat ซึ่งเป็น metadata ขนาดเล็ก เช่น ไฟล์ โปรเจกต์ และ branch ที่คุณแตะและเวลาที่แตะ ไม่มีเนื้อหาในไฟล์เลย รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้โดยไม่ต้องติดตั้งอะไรใหม่ และนำเข้า WakaTime export มาดูใน dashboard เดียวกันได้ ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงล่าสุด โปรเจกต์ที่คุณแตะตั้งแต่สัปดาห์แรกยังอยู่ให้ย้อนดูได้ ไม่ว่าจะใช้งานมานานแค่ไหน`,
     'ส่วน source code, prompt และคำตอบของ AI จะไม่ออกจาก editor ของคุณเลย เพราะ heartbeat มีแค่ metadata ของไฟล์และตัวเลข ไม่มีเนื้อหาในไฟล์',
   ],
   howItWorks: [
@@ -377,7 +382,7 @@ export const TH_HOME = {
   ],
   sources: {
     heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',
-    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
+    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 3 AI agent ที่มี hooks ให้จริงพร้อมใช้งาน ไม่ใช่แค่กล่าวอ้างลอย ๆ โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
     items: [
       {
         claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
