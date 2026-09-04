@@ -9,6 +9,29 @@ const withBundleAnalyzer = bundleAnalyzer({
   openAnalyzer: true,
 });
 
+const developmentScriptPolicy = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : '';
+const developmentConnectPolicy =
+  process.env.NODE_ENV === 'development' ? ' http: ws: wss:' : '';
+
+/**
+ * Next's static App Router output contains inline bootstrap/RSC scripts, so a nonce-only
+ * policy would force every public page to become dynamic. `unsafe-inline` is therefore
+ * limited to scripts and styles while every remote origin remains explicitly bounded.
+ */
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+  `script-src 'self' 'unsafe-inline'${developmentScriptPolicy} https://www.googletagmanager.com`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  `connect-src 'self'${developmentConnectPolicy} https://api.atoaxis.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.posthog.com`,
+  "worker-src 'self' blob:",
+].join('; ');
+
 // =============================================================================
 // NEXT.JS CONFIGURATION
 // =============================================================================
@@ -72,6 +95,10 @@ const nextConfig: NextConfig = {
           {
             key: 'X-DNS-Prefetch-Control',
             value: 'on',
+          },
+          {
+            key: 'Content-Security-Policy',
+            value: contentSecurityPolicy,
           },
           {
             key: 'X-Frame-Options',

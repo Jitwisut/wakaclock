@@ -6,6 +6,7 @@ import {
   SITE_NAME,
   SITE_TAGLINE,
   SITE_URL,
+  SOURCE_REPOSITORY_URL,
 } from './site';
 
 /**
@@ -17,6 +18,7 @@ import {
  */
 
 type JsonLdValue = Record<string, unknown>;
+const ORGANIZATION_ID = absoluteUrl('/#organization');
 
 export interface FaqEntry {
   answer: string;
@@ -31,7 +33,7 @@ export interface BreadcrumbEntry {
 export function organizationSchema(): JsonLdValue {
   return {
     '@type': 'Organization',
-    '@id': absoluteUrl('/#organization'),
+    '@id': ORGANIZATION_ID,
     // The company is known publicly by the product it ships. `alternateName` lets a
     // search engine resolve the brand query "AtoAxis" to this entity even though the
     // registered `name` is the legal one.
@@ -65,8 +67,8 @@ export function websiteSchema(): JsonLdValue {
     url: SITE_URL,
     inLanguage: ['en', 'th'],
     dateModified: SITE_MODIFIED,
-    author: { '@id': absoluteUrl('/#organization') },
-    publisher: { '@id': absoluteUrl('/#organization') },
+    author: { '@id': ORGANIZATION_ID },
+    publisher: { '@id': ORGANIZATION_ID },
   };
 }
 
@@ -93,10 +95,12 @@ export function softwareApplicationSchema(): JsonLdValue {
     disambiguatingDescription: `${SITE_NAME} is a hosted developer time-tracking service compatible with the WakaTime API. It is unrelated to similarly named products such as ATOSS, Atto or Axis ERP.`,
     applicationCategory: 'DeveloperApplication',
     applicationSubCategory: 'Time tracking and developer analytics',
+    codeRepository: SOURCE_REPOSITORY_URL,
     operatingSystem: 'Linux, macOS, Windows',
+    sameAs: [SOURCE_REPOSITORY_URL],
     slogan: SITE_TAGLINE,
     dateModified: SITE_MODIFIED,
-    author: { '@id': absoluteUrl('/#organization') },
+    author: { '@id': ORGANIZATION_ID },
     featureList: [
       'Coding time tracking derived from editor heartbeats',
       'Breakdown by project, programming language, editor, branch and operating system',
@@ -106,7 +110,7 @@ export function softwareApplicationSchema(): JsonLdValue {
       'Estimated AI token cost per project from versioned effective prices',
       'WakaTime API compatibility and WakaTime data-export import',
     ],
-    publisher: { '@id': absoluteUrl('/#organization') },
+    publisher: { '@id': ORGANIZATION_ID },
   };
 }
 

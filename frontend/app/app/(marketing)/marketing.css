@@ -364,6 +364,22 @@
   }
 }
 
+@keyframes mkt-hero-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.mkt-hero-panel {
+  animation: mkt-hero-panel-in 500ms ease-out 150ms both;
+}
+
 /*
  * Scroll-linked reveal, CSS only.
  *
@@ -387,6 +403,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .wakaclock-marquee-track,
+  .mkt-hero-panel,
   .mkt-blink {
     animation: none;
   }

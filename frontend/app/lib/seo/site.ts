@@ -72,6 +72,7 @@ function resolveSiteUrl(): string {
 export const SITE_URL = resolveSiteUrl();
 
 export const SOCIAL_IMAGE_PATH = '/opengraph-image';
+export const SOURCE_REPOSITORY_URL = 'https://github.com/Jitwisut/wakaclock';
 
 export function localizedPath(locale: SiteLocale, path: string): string {
   let normalized = path;
@@ -181,7 +182,7 @@ export interface PublicRouteDefinition {
  * entry when you change that page's words, not when you touch its component.
  */
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/': '2026-09-04',
+  '/': '2026-09-05',
   '/ai-cost-tracking': '2026-08-23',
 };
 
@@ -236,6 +237,9 @@ export function createMarketingMetadata({
         en: englishPath,
         th: thaiPath,
         'x-default': englishPath,
+      },
+      types: {
+        'application/rss+xml': '/feed.xml',
       },
     },
     openGraph: {

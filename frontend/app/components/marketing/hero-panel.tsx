@@ -1,7 +1,3 @@
-'use client';
-
-import { motion } from 'motion/react';
-
 import type { SiteLocale } from '@/lib/seo/site';
 
 const CONFIG_SNIPPET = `~/.wakatime.cfg
@@ -11,18 +7,12 @@ api_url = https://api.atoaxis.com/api/v1
 api_key = your_generated_api_key`;
 
 /**
- * Decorative side panel only. The animation lives here — and deliberately not on the
- * hero heading — so the H1 and the product definition render at full opacity in the
- * server HTML instead of waiting for hydration to become visible.
+ * Decorative side panel only. Its entrance is CSS-only so this component stays on the
+ * server and does not ship an animation library to the homepage.
  */
 export function HeroPanel({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
-    <motion.div
-      animate={{ opacity: 1, scale: 1 }}
-      className="min-w-0"
-      initial={{ opacity: 0, scale: 0.97 }}
-      transition={{ duration: 0.5, delay: 0.15, ease: 'easeOut' }}
-    >
+    <div className="mkt-hero-panel min-w-0">
       <div
         className="mkt-pixel-shadow-lg overflow-hidden border-[3px]"
         style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-code-bg)' }}
@@ -54,6 +44,6 @@ export function HeroPanel({ locale = 'en' }: { locale?: SiteLocale }) {
           <code>{CONFIG_SNIPPET}</code>
         </pre>
       </div>
-    </motion.div>
+    </div>
   );
 }

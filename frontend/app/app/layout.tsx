@@ -39,6 +39,9 @@ export const metadata: Metadata = {
       th: '/th',
       'x-default': '/',
     },
+    types: {
+      'application/rss+xml': '/feed.xml',
+    },
   },
   openGraph: {
     type: 'website',
@@ -73,6 +76,12 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true,
+    // Repeated outside `googleBot` on purpose. Next.js only writes these three into the
+    // <meta name="googlebot"> tag when they are nested, and several crawlers — plus every
+    // auditing tool that reads one tag — look only at <meta name="robots">.
+    'max-image-preview': 'large',
+    'max-snippet': -1,
+    'max-video-preview': -1,
     googleBot: {
       index: true,
       follow: true,
@@ -100,6 +109,11 @@ export default function RootLayout({
   // before hydration; the server cannot render that localStorage/system value.
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* The signed-in app talks to the API origin immediately after navigation. */}
+        <link href="https://api.atoaxis.com" rel="dns-prefetch" />
+        <link crossOrigin="anonymous" href="https://api.atoaxis.com" rel="preconnect" />
+      </head>
       <body className="bg-background group/layout">{children}</body>
     </html>
   );

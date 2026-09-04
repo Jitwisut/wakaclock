@@ -99,6 +99,15 @@ export const EN_HOME = {
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
   description: `${SITE_NAME} records your coding time by project, language, branch and editor. It implements the WakaTime API and keeps your complete coding history.`,
   /**
+   * The visible opening paragraph, deliberately separate from `description` above.
+   *
+   * They used to be the same string, which put them in direct conflict: a meta
+   * description has to stay near 155 characters to avoid truncation in a result, while
+   * the first paragraph on the page is what an answer engine lifts as a snippet and is
+   * useless when it is one line long. Keeping two fields lets each be the right length.
+   */
+  heroLead: `${SITE_NAME} is a developer time tracking service for people who want the whole picture. It records how long you spend coding and breaks that down by project, programming language, branch and editor. It speaks the WakaTime API, so the plugin your editor already has can point at it, and every account keeps its full history instead of a rolling window.`,
+  /**
    * The homepage's summary block. Every line restates a claim already made and verified
    * elsewhere on this page — nothing here introduces a capability the product does not
    * ship, and nothing from IN_DEVELOPMENT belongs in it.
@@ -117,13 +126,13 @@ export const EN_HOME = {
    * anything above it — while each paragraph stays short enough to quote by itself.
    */
   whatIs: [
-    `${SITE_NAME} is a developer time tracking service. Your editor sends it heartbeats — small metadata events describing what you are working on — and it turns them into dashboards for coding time, projects, programming languages, branches and editors.`,
+    `${SITE_NAME} is a developer time tracking service. Your editor sends it heartbeats — small metadata signals describing what you are working on — and it turns them into dashboards for coding time, projects, programming languages, branches and editors.`,
     'It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window.',
     'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, not file contents.',
   ],
   howItWorks: [
-    'Your editor sends a heartbeat when you type, switch to or save a file. Each event carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
-    'The server groups consecutive events into duration blocks, and a long gap closes a block rather than padding it, so idle time is not counted as coding time.',
+    'Your editor sends a heartbeat when you type, switch to or save a file. Each signal carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
+    'The server groups consecutive heartbeats into duration blocks, and a long gap closes a block rather than padding it, so idle time is not counted as coding time.',
     'Line changes are split three ways: AI, human and Unattributed. Work we cannot prove either way stays Unattributed instead of being credited to you, and the coverage behind every total is reported as a percentage rather than guessed.',
   ],
   useCases: [
@@ -161,6 +170,18 @@ export const EN_HOME = {
    * `backend/api/crates/wakaclock-ast/src/languages.rs` maps these nine names, and only
    * these, to a tree-sitter grammar. Update the number there and here together.
    */
+  /** Jump links. Each `id` must match a Section id rendered on the homepage. */
+  tableOfContents: [
+    { id: 'what-is-atoaxis', label: `What is ${SITE_NAME}?` },
+    { id: 'how-it-works', label: 'How it tracks your coding time' },
+    { id: 'use-cases', label: 'What you can do with it' },
+    { id: 'worked-example', label: 'Worked dashboard example' },
+    { id: 'limitations', label: 'What it does not do yet' },
+    { id: 'faq', label: 'Frequently asked questions' },
+    { id: 'accountability', label: 'Who publishes and reviews this page' },
+    { id: 'sources', label: 'How we verify these claims' },
+    { id: 'verdict', label: 'Is it right for you?' },
+  ],
   sources: {
     heading: 'How do we verify these claims?',
     intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
@@ -208,7 +229,7 @@ export const EN_HOME = {
     {
       question: `How does ${SITE_NAME} track coding activity?`,
       answer:
-        'The editor sends metadata heartbeats and the server groups close events into duration blocks for daily and weekly totals.',
+        'The editor sends metadata heartbeats and the server groups nearby heartbeats into duration blocks for daily and weekly totals.',
     },
     {
       question: `Is ${SITE_NAME} a WakaTime alternative?`,
@@ -257,6 +278,7 @@ export const TH_HOME = {
   tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
   // Same length budget as the English description above.
   description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
+  heroLead: `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนาที่อยากเห็นภาพรวมทั้งหมด ระบบบันทึกว่าคุณใช้เวลาเขียนโค้ดไปเท่าไร แล้วแยกให้เห็นตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API จึงใช้ plugin ที่ editor ของคุณมีอยู่แล้วชี้มาที่นี่ได้ และทุกบัญชีเก็บประวัติไว้ครบถ้วน ไม่ใช่แค่ช่วงเวลาล่าสุด`,
   keyTakeaways: [
     `${SITE_NAME} บันทึกเวลาเขียนโค้ดของคุณจาก editor heartbeat โดยเก็บเฉพาะ metadata ไม่เก็บ source code`,
     'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้ และนำเข้า WakaTime export ได้',
@@ -291,6 +313,17 @@ export const TH_HOME = {
     'ไม่มีการเก็บกิจกรรมนอก editor ที่เชื่อมต่อหรือนอก AI transcript agent และยังไม่มี desktop หรือ browser client',
     'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
+  ],
+  tableOfContents: [
+    { id: 'what-is-atoaxis', label: `${SITE_NAME} คืออะไร?` },
+    { id: 'how-it-works', label: 'ติดตามเวลาเขียนโค้ดอย่างไร' },
+    { id: 'use-cases', label: 'ใช้ทำอะไรได้บ้าง' },
+    { id: 'worked-example', label: 'ตัวอย่างการอ่าน dashboard' },
+    { id: 'limitations', label: 'ยังทำอะไรไม่ได้บ้าง' },
+    { id: 'faq', label: 'คำถามที่พบบ่อย' },
+    { id: 'accountability', label: 'ผู้เผยแพร่และผู้ตรวจทานหน้านี้' },
+    { id: 'sources', label: 'เราตรวจสอบข้อมูลอย่างไร' },
+    { id: 'verdict', label: 'เหมาะกับคุณไหม' },
   ],
   sources: {
     heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',

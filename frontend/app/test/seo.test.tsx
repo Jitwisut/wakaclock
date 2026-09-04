@@ -21,6 +21,7 @@ import {
   PUBLIC_ROUTE_DEFINITIONS,
   PUBLIC_ROUTES,
   SITE_NAME,
+  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 /** Reads the JSON-LD payload back out of a rendered <JsonLd /> block. */
@@ -66,6 +67,7 @@ describe('structured data', () => {
 
     expect(schema.name).toBe(SITE_NAME);
     expect(schema.applicationCategory).toBe('DeveloperApplication');
+    expect(schema.sameAs).toContain(SOURCE_REPOSITORY_URL);
   });
 
   it('never fabricates ratings, reviews or download counts', () => {
@@ -317,6 +319,9 @@ describe('marketing metadata', () => {
       en: '/pricing',
       th: '/th/pricing',
       'x-default': '/pricing',
+    });
+    expect(metadata.alternates?.types).toMatchObject({
+      'application/rss+xml': '/feed.xml',
     });
     expect(metadata.openGraph).toMatchObject({
       siteName: SITE_NAME,
