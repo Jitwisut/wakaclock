@@ -170,6 +170,35 @@ export const EN_HOME = {
    * `backend/api/crates/wakaclock-ast/src/languages.rs` maps these nine names, and only
    * these, to a tree-sitter grammar. Update the number there and here together.
    */
+  /**
+   * A spec block: label and value, no prose around it.
+   *
+   * Every figure is countable in the repository rather than rounded for effect — the nine
+   * languages are the nine grammars in `wakaclock-ast/src/languages.rs`, the three agents
+   * are the three bundled hook sets under `extensions/ai-agents`. If either changes, this
+   * block is wrong until it is changed with them.
+   */
+  atAGlance: {
+    heading: `${SITE_NAME} at a glance`,
+    entries: [
+      { label: 'Product', value: 'Hosted developer time tracking service' },
+      { label: 'Status', value: 'Early Access — checkout is not open yet' },
+      {
+        label: 'Planned price',
+        value: `$${PRICING.monthlyUsd} per month, or $${PRICING.annualUsd} per year`,
+      },
+      { label: 'Protocol', value: 'WakaTime API, including WakaTime export import' },
+      { label: 'First-party editor client', value: 'VS Code' },
+      { label: 'AI agents with bundled hooks', value: '3 — Claude Code, Codex CLI, Gemini CLI' },
+      {
+        label: 'Languages verified by parsing',
+        value: '9 — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++, Objective-C',
+      },
+      { label: 'History retained', value: 'Complete, with no rolling window' },
+      { label: 'Stored per heartbeat', value: 'File metadata and counts — never file contents' },
+      { label: 'Site languages', value: 'English and Thai' },
+    ],
+  },
   /** Jump links. Each `id` must match a Section id rendered on the homepage. */
   tableOfContents: [
     { id: 'what-is-atoaxis', label: `What is ${SITE_NAME}?` },
@@ -215,7 +244,7 @@ export const EN_HOME = {
     ],
   },
   verdict: {
-    heading: `Is ${SITE_NAME} right for you?`,
+    heading: `In conclusion: is ${SITE_NAME} right for you?`,
     fits: `${SITE_NAME} fits you best if you already code in a WakaTime-compatible editor, you want your complete history rather than a rolling window, and you care how much of the work an AI agent actually did.`,
     doesNotFit:
       'It is a weaker fit today if you need a desktop or browser client, if your team needs shared organisation dashboards, or if you work mainly in Cursor or Copilot — those still need adapters.',
@@ -314,6 +343,27 @@ export const TH_HOME = {
     'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
   ],
+  atAGlance: {
+    heading: `${SITE_NAME} โดยสรุป`,
+    entries: [
+      { label: 'ผลิตภัณฑ์', value: 'บริการติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา (hosted)' },
+      { label: 'สถานะ', value: 'Early Access — ยังไม่เปิดให้ชำระเงิน' },
+      {
+        label: 'ราคาที่วางแผนไว้',
+        value: `$${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี`,
+      },
+      { label: 'โปรโตคอล', value: 'WakaTime API รวมถึงการนำเข้า WakaTime export' },
+      { label: 'editor ที่เราดูแลเอง', value: 'VS Code' },
+      { label: 'AI agent ที่มี hooks ให้', value: '3 ตัว — Claude Code, Codex CLI, Gemini CLI' },
+      {
+        label: 'ภาษาที่ยืนยันด้วยการ parse',
+        value: '9 ภาษา — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++, Objective-C',
+      },
+      { label: 'ประวัติที่เก็บ', value: 'ครบถ้วน ไม่ตัดเป็นช่วงเวลา' },
+      { label: 'ข้อมูลต่อ heartbeat', value: 'metadata และตัวเลขของไฟล์ ไม่มีเนื้อหาในไฟล์' },
+      { label: 'ภาษาของเว็บไซต์', value: 'อังกฤษและไทย' },
+    ],
+  },
   tableOfContents: [
     { id: 'what-is-atoaxis', label: `${SITE_NAME} คืออะไร?` },
     { id: 'how-it-works', label: 'ติดตามเวลาเขียนโค้ดอย่างไร' },
@@ -358,7 +408,7 @@ export const TH_HOME = {
     ],
   },
   verdict: {
-    heading: `${SITE_NAME} เหมาะกับคุณไหม?`,
+    heading: `สรุปแล้ว ${SITE_NAME} เหมาะกับคุณไหม?`,
     fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร`,
     doesNotFit:
       'แต่ยังไม่เหมาะถ้าคุณต้องการ desktop หรือ browser client ถ้าทีมต้องการ organisation dashboard ร่วมกัน หรือถ้าคุณทำงานกับ Cursor หรือ Copilot เป็นหลัก เพราะสองตัวนี้ยังต้องมี adapter',

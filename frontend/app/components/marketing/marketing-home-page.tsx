@@ -1,3 +1,5 @@
+import { Fragment } from 'react';
+
 import Image from 'next/image';
 import Link from 'next/link';
 
@@ -35,6 +37,7 @@ const ACCOUNTABILITY_COPY = {
     publisher: 'Publisher',
     reviewer: 'Reviewed by',
     reviewerValue: 'AtoAxis product engineering',
+    markCaption: 'The AtoAxis product mark, used by the publisher named below.',
     reviewed: 'Last reviewed',
     evidence: 'Evidence',
     evidenceValue: 'Public source code and primary vendor documentation',
@@ -51,6 +54,7 @@ const ACCOUNTABILITY_COPY = {
     publisher: 'ผู้เผยแพร่',
     reviewer: 'ผู้ตรวจทาน',
     reviewerValue: 'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis',
+    markCaption: 'เครื่องหมายผลิตภัณฑ์ AtoAxis ใช้โดยผู้เผยแพร่ที่ระบุด้านล่าง',
     reviewed: 'ตรวจทานล่าสุด',
     evidence: 'หลักฐาน',
     evidenceValue: 'source code สาธารณะและเอกสารต้นทางของผู้ให้บริการ',
@@ -115,6 +119,24 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
             </ul>
           </details>
         </Section>
+        {/*
+          Label/value rather than prose. A spec block is the shape a reader scans for a
+          single fact, and the shape an answer engine can lift one row out of without
+          having to parse a sentence for it.
+        */}
+        <Section heading={copy.atAGlance.heading} id="at-a-glance" reveal={false}>
+          <dl
+            className="grid gap-3 border-2 p-4 text-sm sm:grid-cols-[minmax(0,14rem)_1fr] sm:gap-x-6"
+            style={{ borderColor: 'var(--mkt-border)' }}
+          >
+            {copy.atAGlance.entries.map((entry) => (
+              <Fragment key={entry.label}>
+                <dt className="font-semibold">{entry.label}:</dt>
+                <dd style={MUTED_TEXT}>{entry.value}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </Section>
         <Section
           heading={locale === 'th' ? `${SITE_NAME} คืออะไร?` : `What is ${SITE_NAME}?`}
           id="what-is-atoaxis"
@@ -177,16 +199,33 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
       <div className="mx-auto max-w-3xl px-4 md:px-6">
         <Section heading={accountability.heading} id="accountability">
           <div className="flex items-start gap-4">
-            <Image
-              alt={`${SITE_NAME} product mark`}
-              className="size-16 border-2 object-cover"
-              height={64}
-              src="/atoaxis-logo-mark.png"
-              width={64}
-            />
+            {/*
+              A figure with a caption rather than a bare <img>: the caption says which
+              entity the mark belongs to, which is the thing a reader — or a model
+              summarising who stands behind this page — actually needs from it.
+
+              No `priority` here on purpose. This sits below the FAQ, well under the fold,
+              so lazy loading is correct; preloading it would compete with the content that
+              really is above the fold.
+            */}
+            <figure className="shrink-0 text-center">
+              <Image
+                alt={`${SITE_NAME} product mark`}
+                className="size-16 border-2 object-cover"
+                height={64}
+                src="/atoaxis-logo-mark.png"
+                width={64}
+              />
+              <figcaption className="mt-1 text-[0.65rem]" style={MUTED_TEXT}>
+                {accountability.markCaption}
+              </figcaption>
+            </figure>
             <p style={MUTED_TEXT}>{accountability.intro}</p>
           </div>
-          <dl className="grid gap-3 border-2 p-4 text-sm" style={{ borderColor: 'var(--mkt-border)' }}>
+          <dl
+            className="grid gap-3 border-2 p-4 text-sm"
+            style={{ borderColor: 'var(--mkt-border)' }}
+          >
             <div>
               <dt className="font-semibold">{accountability.publisher}:</dt>
               <dd style={MUTED_TEXT}>{ORGANIZATION.legalName}</dd>
@@ -234,18 +273,25 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         </Section>
         <Section heading={copy.sources.heading} id="sources">
           <p style={MUTED_TEXT}>{copy.sources.intro}</p>
+          {/*
+            <cite> marks the title of the referenced work, which is what these labels are.
+            It costs nothing visually and makes the citation legible to anything reading
+            the markup rather than the prose.
+          */}
           <ul className="mt-4 space-y-3 text-sm" style={MUTED_TEXT}>
             {copy.sources.items.map((item) => (
               <li key={item.href}>
-                {item.claim}{' '}
-                <a
-                  className="underline underline-offset-4"
-                  href={item.href}
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  {item.label}
-                </a>
+                {item.claim} {locale === 'th' ? 'แหล่งอ้างอิง' : 'Source'}:{' '}
+                <cite>
+                  <a
+                    className="underline underline-offset-4"
+                    href={item.href}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    {item.label}
+                  </a>
+                </cite>
               </li>
             ))}
           </ul>
