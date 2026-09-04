@@ -155,6 +155,11 @@
           "type": "boolean",
           "default": true,
           "description": "Track metadata-only copy and paste counts. Clipboard contents are never stored or sent."
+        },
+        "wakaclock.autoInstallAgentHooks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer one-time consent to install metadata-only hooks for detected AI tools. Turning this off stops automatic setup; existing hooks are not removed."
         }
       }
     }

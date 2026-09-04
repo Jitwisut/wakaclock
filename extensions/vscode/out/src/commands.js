@@ -36,6 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensureBrokerRunning = ensureBrokerRunning;
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
+const os = __importStar(require("node:os"));
+const agentSetup_1 = require("./agentSetup");
 const aiDetectionSelfTest_1 = require("./aiDetectionSelfTest");
 const secrets_1 = require("./secrets");
 const utils_1 = require("./utils");
@@ -322,6 +324,9 @@ async function chooseAiAgents(aiIntegrations, context, repairing = false) {
             return undefined;
         }
         const state = action === "Don't ask again" ? "denied" : "deferred";
+        if (state === "denied") {
+            await (0, agentSetup_1.writeHookConsentState)(os.homedir(), picked.map((item) => item.id), state);
+        }
         for (const item of picked) {
             await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {
                 state,

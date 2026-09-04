@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
+import * as os from "node:os";
 import {
   detectAiAgents,
   setupDetectedAiAgents,
-  syncAgentPluginsToStableDir
+  syncAgentPluginsToStableDir,
+  writeHookAutoInstallPolicy
 } from "./agentSetup";
 import type { AiAgentId } from "./agentSetup";
 import { HeartbeatBufferManager } from "./buffer";
@@ -82,7 +84,30 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  context.subscriptions.push(configService, statusBar);
+  context.subscriptions.push(
+    configService,
+    statusBar,
+    configService.onDidChange((snapshot) => {
+      void writeHookAutoInstallPolicy(os.homedir(), snapshot.autoInstallAgentHooks ?? true).catch((error) =>
+        logger.debug("agentSetup: could not persist automatic hook policy", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }),
+  );
+
+  // The broker is a separate process and may start before VS Code emits its
+  // first configuration-change event. Persist the initial setting as well so a
+  // user who has disabled automatic hook installation is protected immediately
+  // on activation, including after an extension update or broker restart.
+  void writeHookAutoInstallPolicy(
+    os.homedir(),
+    configService.getSnapshot().autoInstallAgentHooks ?? true,
+  ).catch((error) =>
+    logger.debug("agentSetup: could not persist initial automatic hook policy", {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
 
   void (async () => {
     const key =
@@ -208,6 +233,9 @@ async function maybeOfferAiSetup(
   aiIntegrations: AiIntegrationController,
   logger: Logger
 ): Promise<void> {
+  if (!vscode.workspace.getConfiguration("wakaclock").get<boolean>("autoInstallAgentHooks", true)) {
+    return;
+  }
   const lastPromptedAt = context.globalState.get<number>("atoaxis.aiSetupPromptedAt");
   const promptSnoozeMs = 7 * 24 * 60 * 60 * 1000;
   if (lastPromptedAt && Date.now() - lastPromptedAt < promptSnoozeMs) {

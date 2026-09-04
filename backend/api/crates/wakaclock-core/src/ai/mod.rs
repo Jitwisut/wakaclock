@@ -30,6 +30,7 @@ pub mod event;
 pub mod filesystem_observer;
 pub mod follow_up;
 pub mod gemini;
+pub mod intake;
 mod jsonl;
 pub mod parser;
 pub mod patch;
@@ -40,6 +41,7 @@ pub mod producer;
 pub mod provider;
 pub mod session;
 pub mod shadow;
+pub mod shadow_corpus;
 pub mod shadow_report;
 pub mod sidecar;
 pub mod state;
@@ -76,6 +78,11 @@ pub use filesystem_observer::{
 };
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
+pub use intake::{
+    from_broker_event as intake_broker_event, from_editor_observation as intake_editor_observation,
+    from_file_change as intake_file_change, from_session_evidence as intake_session_evidence,
+    to_correlation_inputs, IntakeBatch, IntakeDiagnostic,
+};
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserCursor, TranscriptLag,
@@ -109,6 +116,10 @@ pub use session::{
 pub use shadow::{
     observe as observe_shadow, AttributionMode, LabeledActor, ObserverConfig, ObserverOutcome,
     OracleAgreement, RolloutScope, ShadowLog, ShadowRecord,
+};
+pub use shadow_corpus::{
+    append_default as append_shadow_record, default_path as shadow_corpus_path,
+    load_default as load_shadow_log, report_default as shadow_comparison_report,
 };
 pub use shadow_report::{compare_to_oracle, ShadowComparisonReport};
 pub use sidecar::{has_nearby_event, has_nearby_event_in_home_dir};

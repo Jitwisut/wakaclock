@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as os from "node:os";
+import { writeHookConsentState } from "./agentSetup";
 import type { AiAgentId, AiAgentSetupResult, AiAgentStatus } from "./agentSetup";
 import { formatAiDetectionReport, runAiDetectionSelfTest } from "./aiDetectionSelfTest";
 import type { HeartbeatBufferManager } from "./buffer";
@@ -451,6 +453,13 @@ async function chooseAiAgents(
       return undefined;
     }
     const state = action === "Don't ask again" ? "denied" : "deferred";
+    if (state === "denied") {
+      await writeHookConsentState(
+        os.homedir(),
+        picked.map((item) => item.id),
+        state,
+      );
+    }
     for (const item of picked) {
       await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {
         state,

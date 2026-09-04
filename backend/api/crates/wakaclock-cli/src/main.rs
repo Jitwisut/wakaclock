@@ -404,6 +404,13 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Compare universal-observer proposals against the locally labelled shadow
+    /// corpus. Precision and native-adapter recall are reported separately; an
+    /// empty/unlabelled corpus is an explicit "not ready" result, never a pass.
+    ShadowReport {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Discover installed AI clients and install the metadata-only integrations.
     /// `--all` configures every detected adapter; pass an adapter id to configure
     /// one client. Setup is idempotent and only writes AtoAxis-managed files/blocks.
@@ -413,6 +420,10 @@ enum AiAction {
         /// Configure every supported adapter detected on this machine.
         #[arg(long, default_value_t = false)]
         all: bool,
+        /// Explicitly consent to the first managed hook write. This is useful for
+        /// terminal installers; a persisted per-agent opt-out is never overridden.
+        #[arg(long, default_value_t = false)]
+        yes: bool,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -427,10 +438,10 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Phase A of the Universal Detector Core (planai.md Phase 4): scan the local
-    /// process table for known AI coding tools currently running and report what was
-    /// found — presence only, never an attribution decision. Reads no file contents;
-    /// nothing is sent anywhere.
+    /// Scan the local process table for known AI coding tools currently running and
+    /// report what was found — presence only, never an attribution decision. The
+    /// always-on broker consumes the same metadata through the correlation engine;
+    /// this command remains read-only and sends nothing.
     ProcessScan {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -1460,7 +1471,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::Ai { action } => match action {
             AiAction::Status { json } => print_ai_status(json)?,
-            AiAction::Setup { agent, all, json } => ai_setup::run(agent.as_deref(), all, json)?,
+            AiAction::ShadowReport { json } => print_ai_shadow_report(json)?,
+            AiAction::Setup {
+                agent,
+                all,
+                yes,
+                json,
+            } => ai_setup::run(agent.as_deref(), all, json, yes)?,
             AiAction::Uninstall { agent, all, json } => {
                 ai_setup::uninstall(agent.as_deref(), all, json)?
             }
@@ -2097,6 +2114,7 @@ mod ai_doctor_tests {
                 "at": 1.0, "message": "HTTP status 402", "category": "payment_402"
             })),
             configured_server_url: "http://localhost".to_string(),
+            hook_audit: serde_json::json!([]),
         });
         for key in ai_doctor_report_keys() {
             assert!(report.get(key).is_some(), "missing doctor key: {key}");
@@ -2467,6 +2485,7 @@ async fn print_ai_doctor_report(
         outbound_queue_depth: queue_count(),
         last_delivery_failure: last_delivery_failure.clone(),
         configured_server_url: config.server_url.clone(),
+        hook_audit: hook_setup_audit(),
     });
     // Push the same sanitized snapshot that the dashboard reads. A doctor run
     // remains useful offline: the request is bounded and fail-open, and only a
@@ -2566,6 +2585,7 @@ async fn print_ai_doctor_report(
         None => println!("Last delivery failure: none recorded"),
     }
     println!("Diagnostics push: {}", report["diagnostics_push"]);
+    println!("Hook setup audit: {}", report["hook_audit"]);
     Ok(())
 }
 
@@ -2586,6 +2606,7 @@ fn ai_doctor_report_keys() -> &'static [&'static str] {
         "last_delivery_failure",
         "configured_server_url",
         "diagnostics_push",
+        "hook_audit",
     ]
 }
 
@@ -2601,6 +2622,7 @@ struct AiDoctorReportParts {
     outbound_queue_depth: usize,
     last_delivery_failure: Option<serde_json::Value>,
     configured_server_url: String,
+    hook_audit: serde_json::Value,
 }
 
 fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
@@ -2617,7 +2639,50 @@ fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
         "last_delivery_failure": parts.last_delivery_failure,
         "configured_server_url": parts.configured_server_url,
         "diagnostics_push": {"status": "not_attempted"},
+        "hook_audit": parts.hook_audit,
     })
+}
+
+/// Return only the bounded, non-sensitive fields written by the automatic hook
+/// installer. Paths, command output and user configuration never enter this
+/// diagnostic view.
+fn hook_setup_audit() -> serde_json::Value {
+    let Some(home) = dirs::home_dir() else {
+        return serde_json::json!([]);
+    };
+    let path = home.join(".wakaclock").join("agent-hook-audit.jsonl");
+    let Ok(text) = fs::read_to_string(path) else {
+        return serde_json::json!([]);
+    };
+    let mut rows = Vec::new();
+    let recent: Vec<&str> = text.lines().rev().take(32).collect();
+    for line in recent.into_iter().rev() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let at = value.get("at").and_then(serde_json::Value::as_u64);
+        let agent = value
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.len() <= 64);
+        let action = value
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.len() <= 32);
+        let result = value
+            .get("result")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.len() <= 64);
+        if let (Some(at), Some(agent), Some(action), Some(result)) = (at, agent, action, result) {
+            rows.push(serde_json::json!({
+                "at": at,
+                "agent": agent,
+                "action": action,
+                "result": result,
+            }));
+        }
+    }
+    serde_json::Value::Array(rows)
 }
 
 /// planai2.md Phase 0.5: the timestamp of the most recent native-hook event the
@@ -3030,6 +3095,46 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
                 entry.client_version.as_deref().unwrap_or("unknown")
             );
         }
+    }
+    Ok(())
+}
+
+fn print_ai_shadow_report(json: bool) -> Result<(), Box<dyn Error>> {
+    let report = wakaclock_core::ai::shadow_comparison_report()?;
+    let precision = report.universal_inference_precision();
+    let recall = report.native_adapter_recall();
+    let ready = precision.is_some_and(|value| value >= 0.99);
+    let payload = serde_json::json!({
+        "schema_version": 1,
+        "path": wakaclock_core::ai::shadow_corpus_path(),
+        "labeled_ai": report.labeled_ai,
+        "adapter_reported_ai": report.adapter_reported_ai,
+        "scored_inferences": report.scored_inferences,
+        "inference_true_positives": report.inference_true_positives,
+        "unscored_inferences": report.unscored_inferences,
+        "universal_inference_precision": precision,
+        "native_adapter_recall": recall,
+        "gate": if ready { "ready" } else { "not_ready" },
+        "gate_requirements": {
+            "precision_at_least": 0.99,
+            "requires_labelled_corpus": true,
+            "unknown_to_human_is_zero": "verify_with_labelled_corpus",
+        },
+    });
+    if json {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("Shadow corpus: {}", payload["path"]);
+        println!(
+            "Inference precision: {}",
+            payload["universal_inference_precision"]
+        );
+        println!(
+            "Native adapter recall: {}",
+            payload["native_adapter_recall"]
+        );
+        println!("Scored inferences: {}", report.scored_inferences);
+        println!("Gate: {}", payload["gate"]);
     }
     Ok(())
 }
@@ -4639,6 +4744,7 @@ mod generic_ai_ingress_tests {
                 action: AiAction::Setup {
                     agent: Some(_),
                     all: false,
+                    yes: false,
                     json: true
                 }
             }
@@ -4651,6 +4757,7 @@ mod generic_ai_ingress_tests {
                 action: AiAction::Setup {
                     agent: None,
                     all: true,
+                    yes: false,
                     json: false
                 }
             }

@@ -242,3 +242,15 @@ bodies, command arguments or source content.
 No row is promoted to `verified` from a fixture. The missing live rows are an
 operational prerequisite for Phase 0 exit, not a reason to fabricate a certification
 artifact.
+
+## Direction note (2026-09-04, out-of-plan)
+
+See [`../decision-accuracy-over-coverage.md`](../decision-accuracy-over-coverage.md):
+the user chose accuracy-over-coverage after comparing this project's
+inferred/unknown tier against how WakaTime itself does AI attribution
+(native-per-tool plugins only, no heuristic fallback). This does not change any
+row above — Kilo Code / Kimi Code CLI / DeepSeek remain scaffold/unsupported —
+but it does reprioritize *future* work: promoting gemini-cli and kilo-code to
+`verified` (both have real, matching npm packages — see that file) is now
+preferred over deepening the filesystem/process/correlation heuristic stack.
+

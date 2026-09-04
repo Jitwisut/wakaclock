@@ -26,6 +26,9 @@ const MAX_AGENT_ID_BYTES: usize = 128;
 const MAX_ERROR_CODE_BYTES: usize = 64;
 const MAX_METADATA_LABEL_BYTES: usize = 256;
 const MAX_QUEUE_COUNTER: u32 = 1_000_000;
+const MAX_PIPELINE_AGENTS: usize = 64;
+const MAX_PIPELINE_HISTORY: usize = 32;
+const MAX_PIPELINE_LABEL_BYTES: usize = 64;
 
 /// POST /api/v1/ai/diagnostics
 pub async fn ingest(
@@ -68,6 +71,45 @@ fn validate(report: &AiDiagnosticsReport) -> Result<(), (StatusCode, Json<serde_
             StatusCode::PAYLOAD_TOO_LARGE,
             &format!("at most {MAX_ADAPTERS} adapters per report"),
         ));
+    }
+    if report.pipeline.len() > MAX_PIPELINE_AGENTS {
+        return Err(app_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!("at most {MAX_PIPELINE_AGENTS} pipeline agents per report"),
+        ));
+    }
+    for state in &report.pipeline {
+        if state.agent.trim().is_empty()
+            || state.agent.len() > MAX_PIPELINE_LABEL_BYTES
+            || state.agent.contains('/')
+            || state.agent.contains('\\')
+            || state.agent.chars().any(char::is_whitespace)
+            || state.history.len() > MAX_PIPELINE_HISTORY
+        {
+            return Err(app_error(
+                StatusCode::BAD_REQUEST,
+                "pipeline state contains an invalid agent label or history",
+            ));
+        }
+        if let Some(reason) = state.rejection_reason.as_deref() {
+            if reason.is_empty()
+                || reason.len() > MAX_PIPELINE_LABEL_BYTES
+                || reason.chars().any(char::is_whitespace)
+            {
+                return Err(app_error(
+                    StatusCode::BAD_REQUEST,
+                    "pipeline rejection reason must be a short metadata label",
+                ));
+            }
+        }
+        if state.history.iter().any(|entry| {
+            entry.stage.is_terminal() && entry.stage != state.stage && state.stage.is_terminal()
+        }) {
+            return Err(app_error(
+                StatusCode::BAD_REQUEST,
+                "pipeline history contains an invalid terminal transition",
+            ));
+        }
     }
     for adapter in &report.adapters {
         if adapter.agent.trim().is_empty() || adapter.agent.len() > MAX_AGENT_ID_BYTES {
@@ -169,6 +211,7 @@ mod tests {
                 last_evidence_unix: None,
                 ..Default::default()
             }],
+            pipeline: Vec::new(),
         }
     }
 

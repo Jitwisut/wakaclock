@@ -38,6 +38,7 @@ export function AiDiagnosticsPanel({ report }: AiDiagnosticsPanelProps) {
   }
 
   const { adapters, broker, parser } = report;
+  const pipeline = report.pipeline ?? [];
   const brokerWarn = !broker.running || broker.inbox_dead_letter > 0 || Boolean(broker.last_error_code);
   const parserWarn = parser.transcripts_behind > 0;
 
@@ -96,6 +97,23 @@ export function AiDiagnosticsPanel({ report }: AiDiagnosticsPanelProps) {
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {pipeline.length > 0 ? (
+        <div className="mt-3 rounded-md border p-3">
+          <p className="text-sm font-medium">Detection pipeline</p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {pipeline.map((state) => (
+              <li className="flex flex-wrap justify-between gap-2" key={state.agent}>
+                <span className="font-medium">{state.agent}</span>
+                <span className={state.stage === 'rejected' ? 'text-destructive' : 'text-muted-foreground'}>
+                  {state.stage.replaceAll('_', ' ')}
+                  {state.rejection_reason ? ` (${state.rejection_reason})` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   );

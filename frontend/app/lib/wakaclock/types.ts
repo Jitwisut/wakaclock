@@ -334,11 +334,30 @@ export interface AdapterFreshness {
   verification: AdapterVerification;
 }
 
+export type AiPipelineStage =
+  | 'accepted_locally'
+  | 'adapter_installed'
+  | 'agent_detected'
+  | 'correlated'
+  | 'delivered'
+  | 'evidence_received'
+  | 'queued_for_delivery'
+  | 'rejected';
+
+export interface AiPipelineState {
+  agent: string;
+  entered_stage_at: string;
+  history: Array<{ at: string; stage: AiPipelineStage }>;
+  rejection_reason?: null | string;
+  stage: AiPipelineStage;
+}
+
 export interface AiDiagnosticsReport {
   adapters: AdapterFreshness[];
   broker: BrokerHealth;
   captured_at: string;
   parser: ParserLagSummary;
+  pipeline?: AiPipelineState[];
   schema_version: number;
 }
 

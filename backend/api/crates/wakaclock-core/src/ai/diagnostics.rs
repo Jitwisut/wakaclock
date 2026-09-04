@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::ai::adapter::{AdapterRegistry, VerificationStatus};
 use crate::ai::event::normalize_agent_id;
 use crate::ai::parser::TranscriptLag;
+use crate::ai::pipeline::AgentPipelineState;
 
 /// Wire schema version for [`AiDiagnosticsReport`]. Bump on any breaking field
 /// change; the server rejects an unknown version.
@@ -133,6 +134,11 @@ pub struct AiDiagnosticsReport {
     pub broker: BrokerHealth,
     pub parser: ParserLagSummary,
     pub adapters: Vec<AdapterFreshness>,
+    /// Current metadata-only pipeline stage per detected agent. Additive in
+    /// schema v1 so older clients and reports without a broker snapshot remain
+    /// valid.
+    #[serde(default)]
+    pub pipeline: Vec<AgentPipelineState>,
 }
 
 impl AiDiagnosticsReport {
@@ -175,6 +181,7 @@ pub fn build_report(
             max_lag_seconds,
         },
         adapters,
+        pipeline: Vec::new(),
     }
 }
 
@@ -329,6 +336,17 @@ pub fn report_from_doctor_json(
         }
     }
 
+    let pipeline = broker_json
+        .and_then(|broker| broker.get("pipeline"))
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| serde_json::from_value::<AgentPipelineState>(row.clone()).ok())
+                .take(64)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
     AiDiagnosticsReport {
         schema_version: AI_DIAGNOSTICS_SCHEMA_VERSION,
         captured_at,
@@ -339,6 +357,7 @@ pub fn report_from_doctor_json(
             max_lag_seconds,
         },
         adapters,
+        pipeline,
     }
 }
 
@@ -408,6 +427,7 @@ mod tests {
                 last_evidence_unix: Some(1_699_999_950),
                 ..Default::default()
             }],
+            pipeline: Vec::new(),
         }
     }
 

@@ -25,16 +25,25 @@ use std::{
 use tokio::{net::TcpListener, sync::watch};
 use uuid::Uuid;
 use wakaclock_core::{
-    ai::{AiAttributionState, AiEditEvent},
+    ai::{
+        append_shadow_record, dedup, evidence_from_scan, fingerprint_changed_file,
+        intake_file_change, intake_session_evidence, scan_ai_processes, AiAttributionState,
+        AiEditEvent, AiVerdict, CanonicalFingerprint, CanonicalIdentity, ClipBounds,
+        CorrelationEngine, CorrelationInput, CorrelationWindows, DedupObservation, EvidenceKind,
+        ObserverConfig, ObserverPool, PipelineStage, PipelineTracker, SessionEvidenceLedger,
+        SessionProcessEvidence,
+    },
     api_client::ApiClient,
     broker::{
-        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
-        BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck, BrokerEventStatus,
-        BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, QuarantineDiagnostic,
-        BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
+        broker_discovery_path, broker_runtime_dir, broker_token_path, evidence_rank_key,
+        BrokerBatchAck, BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck,
+        BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats,
+        QuarantineDiagnostic, BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
+        MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
+    git,
     heartbeat::{ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS},
     queue::Queue,
 };
@@ -43,6 +52,293 @@ use crate::agent_service;
 
 const BROKER_POLL_SECONDS: u64 = 1;
 const BROKER_AI_ACTIVITY_STREAM: &str = "broker-ai";
+const OBSERVER_CONFIG_FILENAME: &str = "observer.toml";
+const OBSERVER_WORKSPACE_TTL_SECONDS: i64 = 180;
+const OBSERVER_MAX_FILES_PER_POLL: usize = 256;
+const OBSERVER_MAX_WORKSPACES: usize = 32;
+const PIPELINE_SNAPSHOT_FILENAME: &str = "ai-pipeline.json";
+
+/// A filesystem observation plus the session evidence that may explain it.  The
+/// candidate is deliberately kept separate from `BrokerEventV1`: filesystem input
+/// is not an AI event until the correlation engine returns `ai_inferred`.
+#[derive(Debug, Clone)]
+struct FilesystemCandidate {
+    file_input: CorrelationInput,
+    session_inputs: Vec<CorrelationInput>,
+    agent: String,
+    workspace: PathBuf,
+    fingerprint: Option<String>,
+}
+
+/// Client-side universal-observer state.  It is held for the broker lifetime so
+/// workspace leases, notify watchers and process/session liveness survive each
+/// one-second poll.  The engine itself remains stateless per pass; durable event
+/// identity lives in the SQLite inbox/state databases.
+struct BrokerInferenceRuntime {
+    config: ObserverConfig,
+    registry: wakaclock_core::ai::WorkspaceRegistry,
+    pool: ObserverPool,
+    sessions: SessionEvidenceLedger,
+    candidates: Vec<FilesystemCandidate>,
+    tracker: PipelineTracker,
+    last_auto_setup_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl BrokerInferenceRuntime {
+    fn new() -> Self {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        Self {
+            config: load_observer_config(),
+            registry: wakaclock_core::ai::WorkspaceRegistry::new(
+                chrono::Duration::seconds(OBSERVER_WORKSPACE_TTL_SECONDS),
+                home,
+            ),
+            pool: ObserverPool::new(),
+            sessions: SessionEvidenceLedger::new(),
+            candidates: Vec::new(),
+            tracker: PipelineTracker::new(),
+            last_auto_setup_at: None,
+        }
+    }
+
+    /// Refresh process/workspace evidence and drain bounded filesystem events.
+    /// Every path entering the engine has already passed the workspace lease and
+    /// observer filters; malformed evidence is dropped with a short diagnostic.
+    fn poll(&mut self) {
+        self.config = load_observer_config();
+        let now = Utc::now();
+        let detected = scan_ai_processes();
+        if self
+            .last_auto_setup_at
+            .is_none_or(|last| now - last >= chrono::Duration::minutes(10))
+        {
+            crate::ai_setup::auto_setup_detected_agents(&detected);
+            self.last_auto_setup_at = Some(now);
+        }
+        if !self.config.enabled {
+            self.candidates.clear();
+            let _ = self.pool.sync(&[]);
+            return;
+        }
+
+        for process in &detected {
+            observe_pipeline(
+                &mut self.tracker,
+                &process.agent,
+                PipelineStage::AgentDetected,
+                now,
+            );
+        }
+        let mut registered = Vec::new();
+        for process in &detected {
+            let Some(cwd) = process.cwd.as_deref() else {
+                continue;
+            };
+            let Some(root) = git::discover(&cwd.to_string_lossy()).map(|info| info.root) else {
+                continue;
+            };
+            let known_roots = self.registry.watched_roots(now);
+            if !known_roots.contains(&root) && known_roots.len() >= OBSERVER_MAX_WORKSPACES {
+                tracing::warn!(
+                    agent = %process.agent,
+                    "universal observer workspace limit reached; root not registered"
+                );
+                continue;
+            }
+            let producer_id = format!("process-observer:{}", process.pid);
+            if self
+                .registry
+                .register(
+                    root.clone(),
+                    producer_id,
+                    Some(process.pid),
+                    None,
+                    Vec::new(),
+                    now,
+                )
+                .is_ok()
+            {
+                registered.push(root);
+            }
+        }
+        self.registry.prune_expired(now);
+        let roots = self.registry.watched_roots(now);
+        if let Err(error) = self.pool.sync(&roots) {
+            eprintln!(
+                "Warning: universal observer could not sync workspace watchers code=observer_io"
+            );
+            tracing::debug!(error = %error, "observer watcher sync failed");
+        }
+
+        let registered_roots = if registered.is_empty() {
+            roots.clone()
+        } else {
+            registered
+        };
+        let evidence = evidence_from_scan(&detected, &registered_roots);
+        let running: std::collections::HashSet<u32> = detected.iter().map(|p| p.pid).collect();
+        for item in evidence {
+            self.sessions.observe(item, now);
+        }
+        let _closed = self.sessions.reap(&running);
+
+        self.candidates.clear();
+        let events = self.pool.poll(Duration::from_millis(1));
+        for event in events.into_iter().take(OBSERVER_MAX_FILES_PER_POLL) {
+            let Some(workspace) = roots.iter().find(|root| event.path.starts_with(root)) else {
+                continue;
+            };
+            let fingerprint = fingerprint_changed_file(&event.path);
+            let sessions: Vec<&SessionProcessEvidence> = self
+                .sessions
+                .live()
+                .iter()
+                .filter(|session| {
+                    session
+                        .workspace
+                        .as_deref()
+                        .is_some_and(|root| event.path.starts_with(root))
+                })
+                .collect();
+            for session in sessions {
+                let file_input = match intake_file_change(
+                    &event,
+                    workspace,
+                    Some(&session.agent),
+                    session.session_id.as_deref(),
+                    fingerprint.clone(),
+                ) {
+                    Ok(input) => input,
+                    Err(diagnostic) => {
+                        eprintln!(
+                            "Warning: universal observer dropped {} evidence code=malformed",
+                            diagnostic.producer
+                        );
+                        continue;
+                    }
+                };
+                let session_input =
+                    match intake_session_evidence(session, &event.path, event.observed_at) {
+                        Ok(input) => input,
+                        Err(_) => continue,
+                    };
+                self.candidates.push(FilesystemCandidate {
+                    file_input,
+                    session_inputs: vec![session_input],
+                    agent: session.agent.clone(),
+                    workspace: workspace.clone(),
+                    fingerprint: fingerprint.clone(),
+                });
+                if self.candidates.len() >= OBSERVER_MAX_FILES_PER_POLL {
+                    break;
+                }
+            }
+            if self.candidates.len() >= OBSERVER_MAX_FILES_PER_POLL {
+                break;
+            }
+        }
+    }
+
+    fn take_candidates(&mut self) -> Vec<FilesystemCandidate> {
+        std::mem::take(&mut self.candidates)
+    }
+}
+
+fn observer_config_path() -> PathBuf {
+    broker_runtime_dir().join(OBSERVER_CONFIG_FILENAME)
+}
+
+fn pipeline_snapshot_path() -> PathBuf {
+    broker_runtime_dir().join(PIPELINE_SNAPSHOT_FILENAME)
+}
+
+fn load_observer_config() -> ObserverConfig {
+    let path = observer_config_path();
+    let Ok(text) = fs::read_to_string(path) else {
+        return ObserverConfig::default();
+    };
+    match toml::from_str::<ObserverConfig>(&text) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Warning: universal observer config ignored code=invalid_config");
+            tracing::debug!(error = %error, "invalid observer config");
+            ObserverConfig::default()
+        }
+    }
+}
+
+/// Advance an agent's diagnostic state without allowing a repeated poll to move
+/// it backwards (or to produce noisy warnings for the expected equal-stage
+/// observation).  A first observation is bootstrapped at `agent_detected` so a
+/// native event cannot make the diagnostic timeline start in the middle.
+fn observe_pipeline(
+    tracker: &mut PipelineTracker,
+    agent: &str,
+    stage: PipelineStage,
+    at: chrono::DateTime<Utc>,
+) {
+    if tracker.stage_of(agent).is_none() {
+        let _ = tracker.observe(agent, PipelineStage::AgentDetected, at);
+    }
+    let Some(current) = tracker.stage_of(agent) else {
+        return;
+    };
+    if current == stage || !current.can_advance_to(stage) {
+        return;
+    }
+    let _ = tracker.observe(agent, stage, at);
+}
+
+fn input_is_live(config: &ObserverConfig, input: &CorrelationInput) -> bool {
+    config.source_live(input.kind)
+        && input
+            .agent
+            .as_deref()
+            .map(|agent| config.agent_in_rollout(agent))
+            .unwrap_or(true)
+        && input
+            .workspace
+            .as_deref()
+            .map(|root| config.workspace_live(root))
+            .unwrap_or(true)
+}
+
+fn reject_pipeline(
+    tracker: &mut PipelineTracker,
+    agent: &str,
+    reason: &str,
+    at: chrono::DateTime<Utc>,
+) {
+    if tracker.stage_of(agent).is_none() {
+        let _ = tracker.observe(agent, PipelineStage::AgentDetected, at);
+    }
+    if tracker
+        .stage_of(agent)
+        .is_some_and(PipelineStage::is_terminal)
+    {
+        return;
+    }
+    let _ = tracker.reject(agent, reason, at);
+}
+
+fn persist_pipeline_snapshot(tracker: &PipelineTracker) {
+    let Ok(json) = serde_json::to_string_pretty(&tracker.snapshot()) else {
+        return;
+    };
+    if let Err(error) = write_private_atomic(&pipeline_snapshot_path(), &json) {
+        tracing::debug!(error = %error, "could not persist AI pipeline snapshot");
+    }
+}
+
+/// Read-only, sanitized pipeline state for `broker status` and `doctor ai`.
+/// Corrupt or partially-written local diagnostics fail closed to an empty list;
+/// they must never stop heartbeat delivery.
+pub(crate) fn pipeline_snapshot_json() -> serde_json::Value {
+    let Ok(text) = fs::read_to_string(pipeline_snapshot_path()) else {
+        return serde_json::json!([]);
+    };
+    serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]))
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct BrokerProcessReport {
@@ -229,6 +525,21 @@ pub(crate) async fn process_pending(
     api_client: &ApiClient,
     limit: usize,
 ) -> Result<BrokerProcessReport, AppError> {
+    let mut runtime = BrokerInferenceRuntime::new();
+    runtime.poll();
+    process_pending_with_runtime(config, api_client, limit, &mut runtime).await
+}
+
+/// Process pending inbox rows with one bounded correlation/dedup pass.  The
+/// legacy `process_pending` wrapper above keeps callers/tests source compatible;
+/// the long-running broker passes its persistent observer runtime here so
+/// filesystem/session evidence can be joined with native/transcript events.
+async fn process_pending_with_runtime(
+    config: &Config,
+    api_client: &ApiClient,
+    limit: usize,
+    runtime: &mut BrokerInferenceRuntime,
+) -> Result<BrokerProcessReport, AppError> {
     let records = {
         let mut store = BrokerStore::open()?;
         store.claim_ready(limit)?
@@ -240,9 +551,182 @@ pub(crate) async fn process_pending(
         dead_lettered: 0,
     };
 
+    let candidates = runtime.take_candidates();
+    let mut engine = CorrelationEngine::new(CorrelationWindows::DEFAULT);
+    let mut intake_diagnostics = Vec::new();
+    for record in &records {
+        match wakaclock_core::ai::intake_broker_event(&record.event) {
+            Ok(input) => {
+                if input_is_live(&runtime.config, &input) {
+                    engine.ingest(input);
+                }
+            }
+            Err(diagnostic) => intake_diagnostics.push(diagnostic),
+        }
+    }
+    for candidate in &candidates {
+        if input_is_live(&runtime.config, &candidate.file_input) {
+            engine.ingest(candidate.file_input.clone());
+        }
+        for input in &candidate.session_inputs {
+            if input_is_live(&runtime.config, input) {
+                engine.ingest(input.clone());
+            }
+        }
+    }
+    for diagnostic in intake_diagnostics {
+        eprintln!(
+            "Warning: universal evidence dropped producer={} code=malformed",
+            diagnostic.producer
+        );
+    }
+
+    // p8.4: run the canonical dedup pass before emitting any claimed event.  The
+    // broker's event-id uniqueness remains the durable safety net; this pass also
+    // collapses hook/transcript/filesystem observations that have different IDs but
+    // share a bounded canonical fingerprint.
+    if runtime.config.enabled {
+        let dedup_observations = records
+            .iter()
+            .filter_map(|record| dedup_observation(&record.event).ok())
+            .collect::<Vec<_>>();
+        let dedup_outcome = dedup(dedup_observations);
+        if !dedup_outcome.conflicts.is_empty() {
+            eprintln!(
+                "Warning: universal evidence conflict count={} code=dedup_conflict",
+                dedup_outcome.conflicts.len()
+            );
+        }
+    }
+    // Canonical suppression is a production-emission change. Keep it disabled
+    // while the observer is off or in observe-only so the legacy heartbeat stream
+    // stays byte-identical during the shadow gate.
+    let canonical_winners = runtime
+        .config
+        .feeds_production()
+        .then(|| canonical_winners(&records));
+
     for record in records {
-        match process_record(config, api_client, &record.event).await {
-            Ok(()) => {
+        // A weaker transport for the same canonical activity is acknowledged as
+        // processed but never emits a second heartbeat.  This is the engine-owned
+        // equivalent of the existing line/time fingerprint fallback.
+        let winner = canonical_winners
+            .as_ref()
+            .map(|winners| {
+                winners
+                    .get(&canonical_key(&record.event))
+                    .is_some_and(|winner| winner == &record.event_id)
+            })
+            .unwrap_or(true);
+        if !winner {
+            let state = AiAttributionState::open()?;
+            state.mark_delivered(&record.event_id, "broker_canonical_duplicate")?;
+            observe_pipeline(
+                &mut runtime.tracker,
+                &record.event.agent,
+                PipelineStage::AcceptedLocally,
+                record.event.occurred_at,
+            );
+            observe_pipeline(
+                &mut runtime.tracker,
+                &record.event.agent,
+                PipelineStage::Delivered,
+                record.event.occurred_at,
+            );
+            if BrokerStore::open()?
+                .mark_processed_for_attempt(&record.event_id, record.attempt_count)?
+            {
+                report.processed += 1;
+            }
+            continue;
+        }
+
+        let mut event = record.event.clone();
+        if let Ok(input) = wakaclock_core::ai::intake_broker_event(&event) {
+            observe_pipeline(
+                &mut runtime.tracker,
+                &event.agent,
+                PipelineStage::EvidenceReceived,
+                event.occurred_at,
+            );
+            if input.kind.is_verified_ai_edit() {
+                observe_pipeline(
+                    &mut runtime.tracker,
+                    &event.agent,
+                    PipelineStage::AdapterInstalled,
+                    event.occurred_at,
+                );
+            }
+            if input_is_live(&runtime.config, &input) {
+                let verdict = engine.verdict_for_within(
+                    Path::new(&event.entity),
+                    event.occurred_at,
+                    ClipBounds::utc_day(event.occurred_at),
+                );
+                let oracle =
+                    (input.kind == EvidenceKind::NativeHook).then_some(AiVerdict::AiVerified);
+                let mut outcome = wakaclock_core::ai::shadow::observe(
+                    &runtime.config,
+                    Path::new(&event.entity),
+                    event.project_root.as_deref().map(Path::new),
+                    &verdict,
+                    oracle,
+                    event.occurred_at,
+                );
+                if let Some(record) = outcome.record.take() {
+                    let mut record = record;
+                    if let Ok(fingerprint) = canonical_fingerprint(&event) {
+                        record = record.with_canonical_fingerprint(fingerprint.to_string());
+                    }
+                    if let Err(error) = append_shadow_record(&record) {
+                        tracing::warn!(error = %error, "could not persist universal shadow record");
+                    }
+                }
+                if let Some(production) = outcome.production {
+                    // Universal inference may only add an AI grade.  A weak/unknown
+                    // proposal must never overwrite a producer's existing actor
+                    // decision and accidentally turn a valid native event into an
+                    // unknown heartbeat.
+                    if matches!(
+                        production.verdict,
+                        AiVerdict::AiVerified | AiVerdict::AiInferred
+                    ) {
+                        apply_verdict(&mut event, production.verdict);
+                    }
+                }
+                observe_pipeline(
+                    &mut runtime.tracker,
+                    &event.agent,
+                    PipelineStage::Correlated,
+                    event.occurred_at,
+                );
+            }
+        }
+
+        match process_record(config, api_client, &event).await {
+            Ok(send_report) => {
+                observe_pipeline(
+                    &mut runtime.tracker,
+                    &event.agent,
+                    PipelineStage::AcceptedLocally,
+                    event.occurred_at,
+                );
+                if send_report.queued > 0 {
+                    observe_pipeline(
+                        &mut runtime.tracker,
+                        &event.agent,
+                        PipelineStage::QueuedForDelivery,
+                        event.occurred_at,
+                    );
+                }
+                if send_report.sent > 0 || send_report.deduped > 0 || send_report.flushed > 0 {
+                    observe_pipeline(
+                        &mut runtime.tracker,
+                        &event.agent,
+                        PipelineStage::Delivered,
+                        event.occurred_at,
+                    );
+                }
                 if BrokerStore::open()?
                     .mark_processed_for_attempt(&record.event_id, record.attempt_count)?
                 {
@@ -250,6 +734,12 @@ pub(crate) async fn process_pending(
                 }
             }
             Err(error) => {
+                reject_pipeline(
+                    &mut runtime.tracker,
+                    &event.agent,
+                    error_code(&error),
+                    event.occurred_at,
+                );
                 let status = BrokerStore::open()?.mark_retry_for_attempt(
                     &record.event_id,
                     record.attempt_count,
@@ -267,8 +757,225 @@ pub(crate) async fn process_pending(
         }
     }
 
+    // Filesystem changes are not broker events until the correlation engine has
+    // enough corroborating session evidence.  In infer mode enqueue one canonical
+    // event per candidate; observe-only mode records a shadow row but leaves the
+    // old heartbeat stream byte-for-byte untouched.
+    let mut inferred_events = std::collections::BTreeMap::<String, BrokerEventV1>::new();
+    for candidate in candidates {
+        if !input_is_live(&runtime.config, &candidate.file_input) {
+            continue;
+        }
+        // Use the same pass that already contains pending native/transcript/MCP
+        // records and every filesystem/session input from this tick.  Building a
+        // fresh engine here would make a filesystem notification that belongs to a
+        // native hook look like an independent `ai_inferred` edit and emit a second
+        // heartbeat on the next retry.  The shared pass lets direct evidence win and
+        // leaves only genuinely unproven filesystem changes eligible for inference.
+        let verdict = engine.verdict_for_within(
+            &candidate.file_input.entity,
+            candidate.file_input.occurred_at,
+            ClipBounds::utc_day(candidate.file_input.occurred_at),
+        );
+        observe_pipeline(
+            &mut runtime.tracker,
+            &candidate.agent,
+            PipelineStage::Correlated,
+            candidate.file_input.occurred_at,
+        );
+        let mut outcome = wakaclock_core::ai::shadow::observe(
+            &runtime.config,
+            &candidate.file_input.entity,
+            Some(&candidate.workspace),
+            &verdict,
+            None,
+            candidate.file_input.occurred_at,
+        );
+        if let Some(record) = outcome.record.take() {
+            let mut record = record;
+            if let Some(fingerprint) = candidate.fingerprint.as_deref() {
+                record = record.with_canonical_fingerprint(fingerprint.to_string());
+            }
+            if let Err(error) = append_shadow_record(&record) {
+                tracing::warn!(error = %error, "could not persist universal shadow record");
+            }
+        }
+        if outcome
+            .production
+            .is_some_and(|value| value.verdict == AiVerdict::AiInferred)
+        {
+            if let Ok(event) = event_from_filesystem_candidate(&candidate) {
+                // Multiple live processes (or duplicate notify records from an
+                // atomic-save burst) may explain the same file change.  Keep one
+                // deterministic canonical event before it reaches the durable
+                // inbox; the inbox's event-id uniqueness is a retry guard, not a
+                // substitute for logical-activity deduplication.
+                inferred_events
+                    .entry(canonical_key(&event))
+                    .or_insert(event);
+            }
+        }
+    }
+    if !inferred_events.is_empty() {
+        let mut store = BrokerStore::open()?;
+        let normalized = inferred_events
+            .into_values()
+            .map(BrokerEventV1::normalize)
+            .collect::<Result<Vec<_>, _>>()?;
+        let outcomes = store.ingest_normalized_batch(&normalized)?;
+        for (event, outcome) in normalized.iter().zip(outcomes.iter()) {
+            if *outcome == BrokerIngestOutcome::Accepted {
+                observe_pipeline(
+                    &mut runtime.tracker,
+                    &event.agent,
+                    PipelineStage::AcceptedLocally,
+                    event.occurred_at,
+                );
+                report.processed += 1;
+            }
+        }
+    }
+
+    persist_pipeline_snapshot(&runtime.tracker);
     BrokerStore::open()?.compact()?;
     Ok(report)
+}
+
+fn apply_verdict(event: &mut BrokerEventV1, verdict: AiVerdict) {
+    let (actor_type, confidence) = match verdict {
+        AiVerdict::AiVerified => (ActorType::AiVerified, 1.0),
+        AiVerdict::AiInferred => (ActorType::AiInferred, 0.6),
+        AiVerdict::Human => (ActorType::Human, 1.0),
+        AiVerdict::Unknown => (ActorType::Unknown, 0.0),
+    };
+    event.actor_type = Some(actor_type);
+    event.actor_confidence = Some(confidence);
+}
+
+fn canonical_fingerprint(event: &BrokerEventV1) -> Result<CanonicalFingerprint, AppError> {
+    let workspace = event
+        .project_root
+        .as_deref()
+        .map(Path::new)
+        .unwrap_or_else(|| Path::new("/unknown-workspace"));
+    let content_fingerprint = fingerprint_changed_file(Path::new(&event.entity));
+    Ok(CanonicalFingerprint::v1(&CanonicalIdentity {
+        workspace,
+        entity: Path::new(&event.entity),
+        change_kind: event.change_kind,
+        occurred_at_unix: event.occurred_at.timestamp(),
+        content_fingerprint: content_fingerprint.as_deref(),
+        line_delta: match (event.lines_added, event.lines_deleted) {
+            (None, None) => None,
+            (added, deleted) => Some((added.unwrap_or(0), deleted.unwrap_or(0))),
+        },
+        // The tool/session identity is intentionally omitted here.  It is useful
+        // for producer-local replay, but a hook and a transcript for the same edit
+        // often carry different IDs and must still collapse into one activity.
+        session_or_tool_id: None,
+    }))
+}
+
+fn canonical_key(event: &BrokerEventV1) -> String {
+    canonical_fingerprint(event)
+        .map(|fingerprint| fingerprint.to_string())
+        .unwrap_or_else(|_| format!("event:{}", event.event_id))
+}
+
+fn dedup_observation(event: &BrokerEventV1) -> Result<DedupObservation, AppError> {
+    let input = wakaclock_core::ai::intake_broker_event(event)
+        .map_err(|diagnostic| AppError::Validation(diagnostic.reason))?;
+    Ok(DedupObservation {
+        event_id: event.event_id.clone(),
+        payload_hash: event.payload_hash()?,
+        fingerprint: canonical_fingerprint(event)?,
+        kind: input.kind,
+        lineage_id: input.lineage_id,
+        active_seconds: event
+            .active_seconds
+            .unwrap_or_default()
+            .min(MAX_ACTIVITY_GAP_SECONDS),
+        transport: event.transport.clone(),
+        source: event.source.clone(),
+        confidence: event.confidence.clone(),
+        occurred_at: event.occurred_at,
+    })
+}
+
+fn canonical_winners(
+    records: &[wakaclock_core::broker::BrokerRecord],
+) -> std::collections::HashMap<String, String> {
+    let mut winners = std::collections::HashMap::new();
+    for record in records {
+        let key = canonical_key(&record.event);
+        match winners.get(&key) {
+            None => {
+                winners.insert(key, record.event_id.clone());
+            }
+            Some(existing_id) => {
+                let Some(existing) = records
+                    .iter()
+                    .find(|candidate| candidate.event_id == *existing_id)
+                else {
+                    winners.insert(key, record.event_id.clone());
+                    continue;
+                };
+                if evidence_rank_key(
+                    record.event.transport.as_deref(),
+                    &record.event.source,
+                    &record.event.confidence,
+                    record.event.occurred_at,
+                ) < evidence_rank_key(
+                    existing.event.transport.as_deref(),
+                    &existing.event.source,
+                    &existing.event.confidence,
+                    existing.event.occurred_at,
+                ) {
+                    winners.insert(key, record.event_id.clone());
+                }
+            }
+        }
+    }
+    winners
+}
+
+fn event_from_filesystem_candidate(
+    candidate: &FilesystemCandidate,
+) -> Result<BrokerEventV1, AppError> {
+    let change_kind = candidate
+        .file_input
+        .change_kind
+        .unwrap_or(BrokerChangeKind::Modify);
+    Ok(BrokerEventV1 {
+        schema_version: BROKER_SCHEMA_VERSION,
+        producer_version: Some(wakaclock_core::ai::PRODUCER_CONTRACT_VERSION),
+        event_type: wakaclock_core::broker::BrokerEventType::FileChange,
+        event_id: candidate.file_input.lineage_id.clone(),
+        occurred_at: candidate.file_input.occurred_at,
+        entity: candidate.file_input.entity.to_string_lossy().into_owned(),
+        project_root: Some(candidate.workspace.to_string_lossy().into_owned()),
+        change_kind,
+        previous_entity: None,
+        agent: candidate.agent.clone(),
+        provider: None,
+        model: None,
+        session_id: candidate.file_input.session_id.clone(),
+        source: wakaclock_core::ai::AiEventSource::IdeTelemetry,
+        confidence: wakaclock_core::ai::AiConfidence::Inferred,
+        actor_type: Some(ActorType::AiInferred),
+        actor_confidence: Some(0.6),
+        lines_added: None,
+        lines_deleted: None,
+        // A filesystem observer proves that a file changed, but it does not
+        // measure coding time.  Do not turn the lifetime of an open agent process
+        // into 120 seconds of editor activity for every inferred file; preserving
+        // `0.0` keeps the duration stream identical until a producer supplies a
+        // measured interval.
+        active_seconds: Some(0.0),
+        transport: Some("filesystem_observer".to_string()),
+        tool: None,
+        tool_event_id: None,
+    })
 }
 
 fn error_code(error: &AppError) -> &'static str {
@@ -289,7 +996,7 @@ async fn process_record(
     config: &Config,
     api_client: &ApiClient,
     event: &BrokerEventV1,
-) -> Result<(), AppError> {
+) -> Result<wakaclock_core::api_client::SendReport, AppError> {
     let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
 
     // Write correlation evidence as soon as the durable inbox has handed the event to
@@ -318,7 +1025,13 @@ async fn process_record(
         let state = AiAttributionState::open()?;
         if state.has_fingerprint(&event.entity, event_time, added, deleted)? {
             state.mark_delivered(&event.event_id, "broker_fingerprint")?;
-            return Ok(());
+            return Ok(wakaclock_core::api_client::SendReport {
+                sent: 0,
+                deduped: 1,
+                queued: 0,
+                flushed: 0,
+                error: None,
+            });
         }
     }
 
@@ -384,7 +1097,7 @@ async fn process_record(
         )?;
     }
     agent_service::record_heartbeat();
-    Ok(())
+    Ok(report)
 }
 
 fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
@@ -534,6 +1247,7 @@ async fn worker_loop(
     mut stop_rx: watch::Receiver<bool>,
 ) {
     let mut api_client = api_client;
+    let mut inference_runtime = BrokerInferenceRuntime::new();
     let mut interval = tokio::time::interval(Duration::from_secs(
         interval_seconds.max(BROKER_POLL_SECONDS),
     ));
@@ -559,7 +1273,18 @@ async fn worker_loop(
                 // cross-process lock and timeout; a slow/failed parser cannot stop
                 // inbox delivery or ordinary heartbeat processing.
                 crate::run_bounded_ai_sync(&config, &api_client).await;
-                match process_pending(&config, &api_client, MAX_BATCH_EVENTS).await {
+                // The observer is deliberately polled before claiming inbox rows:
+                // filesystem/session evidence from this tick can then correlate
+                // with a native/transcript event that arrived just before it.
+                inference_runtime.poll();
+                match process_pending_with_runtime(
+                    &config,
+                    &api_client,
+                    MAX_BATCH_EVENTS,
+                    &mut inference_runtime,
+                )
+                .await
+                {
                     Ok(report) if report.claimed > 0 => agent_service::append_log(&format!(
                         "broker processed={} retried={} dead_lettered={}",
                         report.processed, report.retried, report.dead_lettered
@@ -652,6 +1377,7 @@ fn status_json(
         "last_delivery_at": last_delivery_at,
         "inbox": stats,
         "outbound_queue_count": queue_count,
+        "pipeline": pipeline_snapshot_json(),
     })
 }
 
@@ -1287,5 +2013,139 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("db-wal"));
         let _ = fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn canonical_winners_prefer_native_evidence_for_the_same_logical_edit() {
+        let mut hook = event("hook");
+        hook.transport = Some("native_plugin".to_string());
+        hook.source = AiEventSource::AgentHook;
+        hook.confidence = AiConfidence::Verified;
+        let mut filesystem = hook.clone();
+        filesystem.event_id = "filesystem".to_string();
+        filesystem.transport = Some("filesystem_observer".to_string());
+        filesystem.source = AiEventSource::IdeTelemetry;
+        filesystem.confidence = AiConfidence::Inferred;
+
+        let records = vec![
+            wakaclock_core::broker::BrokerRecord {
+                event_id: filesystem.event_id.clone(),
+                event: filesystem,
+                status: BrokerEventStatus::Pending,
+                attempt_count: 1,
+            },
+            wakaclock_core::broker::BrokerRecord {
+                event_id: hook.event_id.clone(),
+                event: hook,
+                status: BrokerEventStatus::Pending,
+                attempt_count: 1,
+            },
+        ];
+        let winners = canonical_winners(&records);
+        assert_eq!(winners.len(), 1);
+        assert_eq!(winners.values().next().map(String::as_str), Some("hook"));
+    }
+
+    #[test]
+    fn inferred_filesystem_events_do_not_invent_coding_duration() {
+        let occurred_at = Utc::now();
+        let candidate = FilesystemCandidate {
+            file_input: CorrelationInput::new(
+                "fs-lineage",
+                EvidenceKind::FilesystemObserver,
+                "/workspace/src/lib.rs",
+                occurred_at,
+            )
+            .with_workspace("/workspace")
+            .with_agent("codex")
+            .with_change_kind(BrokerChangeKind::Modify),
+            session_inputs: Vec::new(),
+            agent: "codex".to_string(),
+            workspace: PathBuf::from("/workspace"),
+            fingerprint: None,
+        };
+        let event = event_from_filesystem_candidate(&candidate).unwrap();
+        assert_eq!(event.actor_type, Some(ActorType::AiInferred));
+        assert_eq!(event.active_seconds, Some(0.0));
+    }
+
+    #[test]
+    fn filesystem_inferred_heartbeat_is_delivered_without_an_agent_name() {
+        // The envelope keeps `agent` — it is the broker's private correlation record and
+        // drives per-agent `PipelineTracker` diagnostics. The published heartbeat must
+        // not, because filesystem+session evidence never proves *which* agent acted.
+        let occurred_at = Utc::now();
+        let candidate = FilesystemCandidate {
+            file_input: CorrelationInput::new(
+                "fs-lineage",
+                EvidenceKind::FilesystemObserver,
+                "/workspace/src/lib.rs",
+                occurred_at,
+            )
+            .with_workspace("/workspace")
+            .with_agent("codex")
+            .with_change_kind(BrokerChangeKind::Modify),
+            session_inputs: Vec::new(),
+            agent: "codex".to_string(),
+            workspace: PathBuf::from("/workspace"),
+            fingerprint: None,
+        };
+        let event = event_from_filesystem_candidate(&candidate).unwrap();
+        assert_eq!(event.agent, "codex", "envelope keeps the agent");
+
+        let mut heartbeat = wakaclock_core::heartbeat::Heartbeat::new(
+            uuid::Uuid::nil(),
+            event.entity.clone(),
+            wakaclock_core::heartbeat::EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        heartbeat.ai_agent = Some(event.agent.clone());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_model = Some("gpt-5.6-sol".to_string());
+        heartbeat.actor_type = event.actor_type.unwrap_or(ActorType::Unknown);
+        heartbeat.actor_confidence = 0.6;
+        heartbeat.is_ai_generated = heartbeat.actor_type.is_ai();
+        heartbeat.redact_inferred_agent_identity();
+
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert!(heartbeat.validate().is_ok());
+    }
+
+    #[test]
+    fn pipeline_observation_is_monotonic_and_bootstraps_detection() {
+        let mut tracker = PipelineTracker::new();
+        let now = Utc::now();
+        observe_pipeline(&mut tracker, "codex", PipelineStage::Correlated, now);
+        observe_pipeline(
+            &mut tracker,
+            "codex",
+            PipelineStage::AgentDetected,
+            now + chrono::Duration::seconds(1),
+        );
+        let state = tracker.snapshot().pop().unwrap();
+        assert_eq!(state.stage, PipelineStage::Correlated);
+        assert_eq!(state.history[0].stage, PipelineStage::AgentDetected);
+        assert_eq!(state.history[1].stage, PipelineStage::Correlated);
+    }
+
+    #[test]
+    fn observer_source_and_workspace_kill_switches_stop_intake() {
+        let mut config = ObserverConfig::observe_only_rollout_start();
+        let input = CorrelationInput::new(
+            "lineage",
+            EvidenceKind::FilesystemObserver,
+            "/workspace/src/lib.rs",
+            Utc::now(),
+        )
+        .with_workspace("/workspace")
+        .with_agent("codex");
+        assert!(input_is_live(&config, &input));
+        config.disable_source(EvidenceKind::FilesystemObserver);
+        assert!(!input_is_live(&config, &input));
+        config.enable_source(EvidenceKind::FilesystemObserver);
+        config.disable_workspace(Path::new("/workspace"));
+        assert!(!input_is_live(&config, &input));
     }
 }

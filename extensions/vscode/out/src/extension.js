@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
+const os = __importStar(require("node:os"));
 const agentSetup_1 = require("./agentSetup");
 const buffer_1 = require("./buffer");
 const cli_1 = require("./cli");
@@ -82,7 +83,18 @@ function activate(context) {
             });
         }
     };
-    context.subscriptions.push(configService, statusBar);
+    context.subscriptions.push(configService, statusBar, configService.onDidChange((snapshot) => {
+        void (0, agentSetup_1.writeHookAutoInstallPolicy)(os.homedir(), snapshot.autoInstallAgentHooks ?? true).catch((error) => logger.debug("agentSetup: could not persist automatic hook policy", {
+            error: error instanceof Error ? error.message : String(error),
+        }));
+    }));
+    // The broker is a separate process and may start before VS Code emits its
+    // first configuration-change event. Persist the initial setting as well so a
+    // user who has disabled automatic hook installation is protected immediately
+    // on activation, including after an extension update or broker restart.
+    void (0, agentSetup_1.writeHookAutoInstallPolicy)(os.homedir(), configService.getSnapshot().autoInstallAgentHooks ?? true).catch((error) => logger.debug("agentSetup: could not persist initial automatic hook policy", {
+        error: error instanceof Error ? error.message : String(error),
+    }));
     void (async () => {
         const key = (await (0, secrets_1.getStoredApiKey)(context.secrets)) ??
             (await (0, secrets_1.getPendingApiKey)(context.secrets));
@@ -174,6 +186,9 @@ function delay(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 async function maybeOfferAiSetup(context, aiIntegrations, logger) {
+    if (!vscode.workspace.getConfiguration("wakaclock").get("autoInstallAgentHooks", true)) {
+        return;
+    }
     const lastPromptedAt = context.globalState.get("atoaxis.aiSetupPromptedAt");
     const promptSnoozeMs = 7 * 24 * 60 * 60 * 1000;
     if (lastPromptedAt && Date.now() - lastPromptedAt < promptSnoozeMs) {

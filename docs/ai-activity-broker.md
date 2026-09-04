@@ -97,9 +97,11 @@ call and one metadata event per changed file. Transcript sync also submits throu
 broker. The old flat `wakaclock ai emit` JSON shape remains accepted and is normalized
 before durable ingestion.
 
-Human/editor and LSP heartbeats deliberately remain on their existing path in Phase 2.
-Filesystem/process observers, native Tan middleware, and the full cross-producer
-canonical evidence engine remain later Phase 3–5 and Phase 8–10 work.
+Human/editor and LSP heartbeats deliberately remain on their existing path. The
+cross-producer filesystem/process observer and canonical correlation engine are now
+wired into the local broker, but remain disabled until `observer.toml` is explicitly
+enabled and the shadow precision gate is met. Native Tan middleware is still a
+separate producer rollout; it is not silently installed by the broker.
 
 ## Diagnostics and privacy
 
@@ -114,3 +116,25 @@ compacted after seven days while event IDs/hashes remain for thirty-day duplicat
 detection. Dead-letter records are metadata-only and retained for thirty days. Logs,
 status, and sidecar correlation records never contain prompts, responses, patch bodies,
 source text, command arguments, or bearer tokens.
+
+## Universal observer rollout
+
+The always-on broker can correlate native/transcript events with bounded filesystem
+and process/session evidence. It registers only Git roots discovered from a detected
+agent's current working directory; `$HOME`, `/`, `/tmp`, and non-Git directories are
+never watched. Observer leases expire after three minutes without a process refresh.
+
+The rollout is fail-closed by default. Create `~/.wakaclock/observer.toml` to enable
+shadow capture first:
+
+```toml
+enabled = true
+attribution_mode = "observe_only"
+```
+
+After an independently labelled shadow corpus reaches the documented precision gate,
+change only `attribution_mode` to `"infer"`. This is a reversible config change and
+does not migrate or delete heartbeat data. `wakaclock ai shadow-report --json` reads
+the bounded metadata-only corpus and reports universal inference precision separately
+from native adapter recall. Pipeline states are available in
+`wakaclock broker status --json` and `wakaclock doctor ai --json`.

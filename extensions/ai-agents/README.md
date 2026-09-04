@@ -38,6 +38,7 @@ The same setup is available without VS Code:
 ```sh
 wakaclock ai setup --all          # configure every detected client
 wakaclock ai setup codex          # configure one client (aliases are accepted)
+wakaclock ai setup --all --yes    # explicit consent for terminal automation
 wakaclock ai setup --all --json   # machine-readable health and remediation report
 ```
 

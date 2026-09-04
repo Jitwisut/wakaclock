@@ -10,13 +10,17 @@
 
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     error::Error,
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use wakaclock_core::ai::{
-    normalize_client_id, AdapterManifest, AdapterRegistry, VerificationStatus,
+    normalize_client_id, AdapterManifest, AdapterRegistry, DetectedAiProcess, VerificationStatus,
 };
 
 const SETUP_CLIENTS: &[&str] = &[
@@ -32,6 +36,24 @@ const BUNDLE_ENV: &str = "WAKACLOCK_AGENT_BUNDLE";
 /// local kill switch: it turns off an adapter's capture path without stopping
 /// the broker or the ordinary heartbeat stream.
 pub(crate) const DISABLED_ADAPTERS_ENV: &str = "WAKACLOCK_DISABLED_AI_ADAPTERS";
+const HOOK_CONSENT_FILENAME: &str = "agent-hook-consent.json";
+const HOOK_AUDIT_FILENAME: &str = "agent-hook-audit.jsonl";
+const AUTO_INSTALL_POLICY_FILENAME: &str = "agent-hook-autoinstall.json";
+const AUTO_INSTALL_ENV: &str = "WAKACLOCK_AUTO_INSTALL_AGENT_HOOKS";
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum HookConsent {
+    Enabled,
+    Denied,
+}
+
+type HookConsentFile = BTreeMap<String, HookConsent>;
+
+#[derive(Debug, serde::Deserialize)]
+struct AutoInstallPolicy {
+    enabled: bool,
+}
 
 #[derive(Debug, Serialize)]
 struct SetupAgentReport {
@@ -69,6 +91,7 @@ pub(crate) fn run(
     requested_agent: Option<&str>,
     all: bool,
     json: bool,
+    yes: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !all && requested_agent.is_none() {
         return Err("choose an adapter id or pass --all".into());
@@ -119,7 +142,40 @@ pub(crate) fn run(
         let manifest = registry
             .get(&id)
             .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
-        agents.push(setup_adapter(manifest, bundle.as_deref(), &home));
+        if hook_consent(&home, &id) == Some(HookConsent::Denied) {
+            agents.push(SetupAgentReport {
+                id,
+                status: "opted_out".into(),
+                executable: None,
+                verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                detail: Some(
+                    "auto-install is disabled for this agent; remove the local consent record before re-enabling"
+                        .into(),
+                ),
+            });
+            continue;
+        }
+        // A first write must be an explicit, non-interactive consent action. The
+        // extension records consent after its confirmation dialog; terminal
+        // installers use `--yes`. An ordinary `ai setup` invocation must not
+        // silently rewrite another tool's configuration just because the agent
+        // executable happens to be present. A persisted opt-out always wins.
+        if hook_consent(&home, &id).is_none() && !yes {
+            agents.push(SetupAgentReport {
+                id,
+                status: "consent_required".into(),
+                executable: None,
+                verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                detail: Some(
+                    "first hook write requires explicit consent; rerun with `wakaclock ai setup --yes` or approve in the editor".into(),
+                ),
+            });
+            continue;
+        }
+        set_hook_consent(&home, &id, HookConsent::Enabled)?;
+        let report = setup_adapter(manifest, bundle.as_deref(), &home);
+        append_hook_audit(&home, &id, "setup", &report.status);
+        agents.push(report);
     }
 
     let report = SetupReport {
@@ -134,6 +190,129 @@ pub(crate) fn run(
         print_text_report(&report);
     }
     Ok(())
+}
+
+/// Install hooks for detected agents only after an explicit consent record exists.
+/// The broker calls this on a throttled cadence; a missing record is fail-closed,
+/// so merely launching an agent can never mutate its configuration.
+pub(crate) fn auto_setup_detected_agents(detected: &[DetectedAiProcess]) {
+    if !auto_install_enabled() {
+        return;
+    }
+    let Ok(home) = dirs::home_dir().ok_or("could not resolve home directory") else {
+        return;
+    };
+    let registry = AdapterRegistry::builtin();
+    let mut ids: Vec<String> = detected
+        .iter()
+        .map(|process| process.agent.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    let consented: Vec<String> = ids
+        .iter()
+        .filter(|id| {
+            SETUP_CLIENTS.contains(&id.as_str())
+                && hook_consent(&home, id) == Some(HookConsent::Enabled)
+        })
+        .cloned()
+        .collect();
+    if consented.is_empty() {
+        return;
+    }
+    let bundle = ensure_managed_bundle(&home).ok().flatten();
+    for id in consented {
+        let Some(manifest) = registry.get(&id) else {
+            continue;
+        };
+        if is_adapter_disabled(&id) {
+            continue;
+        }
+        let report = setup_adapter(manifest, bundle.as_deref(), &home);
+        append_hook_audit(&home, &id, "auto_setup", &report.status);
+    }
+}
+
+fn auto_install_enabled() -> bool {
+    let env_value = std::env::var(AUTO_INSTALL_ENV)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    if matches!(
+        env_value.as_deref(),
+        Some("0") | Some("false") | Some("no") | Some("off")
+    ) {
+        return false;
+    }
+    if matches!(
+        env_value.as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    ) {
+        return true;
+    }
+
+    let Some(home) = dirs::home_dir() else {
+        return true;
+    };
+    fs::read_to_string(home.join(".wakaclock").join(AUTO_INSTALL_POLICY_FILENAME))
+        .ok()
+        .and_then(|text| serde_json::from_str::<AutoInstallPolicy>(&text).ok())
+        .map(|policy| policy.enabled)
+        .unwrap_or(true)
+}
+
+fn consent_path(home: &Path) -> PathBuf {
+    home.join(".wakaclock").join(HOOK_CONSENT_FILENAME)
+}
+
+fn audit_path(home: &Path) -> PathBuf {
+    home.join(".wakaclock").join(HOOK_AUDIT_FILENAME)
+}
+
+fn hook_consent(home: &Path, id: &str) -> Option<HookConsent> {
+    fs::read_to_string(consent_path(home))
+        .ok()
+        .and_then(|text| serde_json::from_str::<HookConsentFile>(&text).ok())
+        .and_then(|file| file.get(id).copied())
+}
+
+fn set_hook_consent(home: &Path, id: &str, consent: HookConsent) -> Result<(), Box<dyn Error>> {
+    let path = consent_path(home);
+    let mut file = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<HookConsentFile>(&text).ok())
+        .unwrap_or_default();
+    file.insert(id.to_string(), consent);
+    write_text_atomically(
+        &path,
+        &format!("{}\n", serde_json::to_string_pretty(&file)?),
+    )?;
+    set_private_permissions(&path)?;
+    Ok(())
+}
+
+fn append_hook_audit(home: &Path, agent: &str, action: &str, result: &str) {
+    let path = audit_path(home);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "at": at,
+        "agent": agent,
+        "action": action,
+        "result": result,
+    });
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(file, "{payload}");
+        let _ = set_private_permissions(&path);
+    }
 }
 
 /// Return whether policy has disabled this adapter.  Unknown aliases are
@@ -601,9 +780,19 @@ fn configure_gemini(
     home: &Path,
 ) -> Result<Option<String>, String> {
     let extension = bundle.join("gemini-cli");
+    // `--consent` skips Gemini's interactive "do you trust this folder? [y/N]" prompt.
+    // Safe to pass here and nowhere earlier: `run` only reaches an adapter's configure
+    // step after AtoAxis's own per-agent consent gate has recorded `HookConsent::Enabled`
+    // (an explicit `--yes`, or a prior stored opt-in). Without it the child blocks on a
+    // prompt that a null stdin can never answer — see `EXTERNAL_INSTALL_TIMEOUT`.
     run_external(
         executable,
-        &["extensions", "install", &extension.display().to_string()],
+        &[
+            "extensions",
+            "install",
+            &extension.display().to_string(),
+            "--consent",
+        ],
         home,
     )?;
     Ok(None)
@@ -622,13 +811,69 @@ fn configure_script(bundle: &Path, adapter: &str, home: &Path) -> Result<Option<
     Ok(None)
 }
 
+/// How long an agent's own installer may run before setup gives up on it.
+///
+/// Not a nicety: Gemini CLI 0.58.0 answers `extensions install` with an interactive
+/// "do you trust this folder? [y/N]" prompt, and a null stdin does not make it exit —
+/// it simply waits. Without a deadline `wakaclock ai setup` hangs forever, and
+/// `--all` hangs on the first such agent and never reaches the rest.
+const EXTERNAL_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String> {
-    let output = Command::new(program)
+    let mut child = Command::new(program)
         .args(args)
         .env("HOME", home)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("could not run {}: {error}", program.display()))?;
+
+    // Drain both pipes on their own threads. Polling `try_wait` while the child fills a
+    // 64 KiB pipe buffer would deadlock the child instead of timing it out.
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out_reader = thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(pipe) = stdout.as_mut() {
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        buffer
+    });
+    let err_reader = thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(pipe) = stderr.as_mut() {
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        buffer
+    });
+
+    let deadline = Instant::now() + EXTERNAL_INSTALL_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{} did not finish within {}s",
+                        program.display(),
+                        EXTERNAL_INSTALL_TIMEOUT.as_secs()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                return Err(format!("could not wait for {}: {error}", program.display()))
+            }
+        }
+    };
+    let output = std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    };
     if output.status.success() {
         return Ok(());
     }
@@ -849,6 +1094,15 @@ fn write_text_atomically(path: &Path, content: &str) -> io::Result<()> {
     fs::rename(staging, path)
 }
 
+fn set_private_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,5 +1207,24 @@ command = "/keep/me.sh"
     fn codex_uninstall_is_idempotent_for_user_only_config() {
         let config = "# user-owned\n[features]\nhooks = true\n";
         assert_eq!(remove_codex_managed_hooks(config), config);
+    }
+
+    #[test]
+    fn hook_consent_is_persisted_per_agent_and_audit_has_metadata_only_fields() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-consent-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        set_hook_consent(&home, "codex", HookConsent::Denied).unwrap();
+        assert_eq!(hook_consent(&home, "codex"), Some(HookConsent::Denied));
+        assert_eq!(hook_consent(&home, "claude-code"), None);
+        append_hook_audit(&home, "codex", "setup", "opted_out");
+        let audit = fs::read_to_string(audit_path(&home)).unwrap();
+        assert!(audit.contains("\"agent\":\"codex\""));
+        assert!(audit.contains("\"action\":\"setup\""));
+        assert!(!audit.contains("prompt"));
+        assert!(!audit.contains("content"));
+        let _ = fs::remove_dir_all(home);
     }
 }

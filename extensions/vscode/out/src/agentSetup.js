@@ -42,6 +42,8 @@ exports.assertStableManagedHookPath = assertStableManagedHookPath;
 exports.ensureCodexHooksFeature = ensureCodexHooksFeature;
 exports.refreshManagedCodexHookCommands = refreshManagedCodexHookCommands;
 exports.ensureCodexHook = ensureCodexHook;
+exports.writeHookConsentState = writeHookConsentState;
+exports.writeHookAutoInstallPolicy = writeHookAutoInstallPolicy;
 const fs = __importStar(require("node:fs/promises"));
 const node_child_process_1 = require("node:child_process");
 const os = __importStar(require("node:os"));
@@ -253,6 +255,9 @@ async function setupDetectedAiAgents(options) {
         }
     }
     await writeSetupState(homeDir, configured);
+    if (configured.length > 0) {
+        await writeHookConsentState(homeDir, configured, "enabled");
+    }
     const refreshed = await detectAiAgents({ homeDir });
     return { statuses: refreshed, configured, failed };
 }
@@ -596,6 +601,43 @@ async function writeSetupState(homeDir, configured) {
         state[id] = true;
     }
     await writeTextAtomically(target, `${JSON.stringify(state, null, 2)}\n`);
+}
+/**
+ * Keep the one-time hook consent in the same per-user state area as the managed
+ * setup marker. The broker reads this metadata-only file before any automatic
+ * repair, so launching an agent can never silently rewrite its configuration.
+ */
+async function writeHookConsentState(homeDir, ids, state) {
+    const target = path.join(homeDir, ".wakaclock", "agent-hook-consent.json");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const previous = await readTextIfExists(target);
+    let values = {};
+    if (previous) {
+        try {
+            values = JSON.parse(previous);
+        }
+        catch {
+            values = {};
+        }
+    }
+    for (const id of ids) {
+        values[id] = state;
+    }
+    await writeTextAtomically(target, `${JSON.stringify(values, null, 2)}\n`);
+    await fs.chmod(target, 0o600).catch(() => undefined);
+}
+/**
+ * Persist the extension-level automatic hook policy for the standalone broker.
+ * The broker is a separate process, so an in-memory VS Code setting would not
+ * stop its ten-minute repair pass. This file carries one boolean only; it never
+ * contains an agent path, command, prompt, or hook payload.
+ */
+async function writeHookAutoInstallPolicy(homeDir, enabled) {
+    const target = path.join(homeDir, ".wakaclock", "agent-hook-autoinstall.json");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const state = { enabled };
+    await writeTextAtomically(target, `${JSON.stringify(state, null, 2)}\n`);
+    await fs.chmod(target, 0o600).catch(() => undefined);
 }
 async function writeCliPath(homeDir, cliPath) {
     const trimmed = cliPath?.trim();

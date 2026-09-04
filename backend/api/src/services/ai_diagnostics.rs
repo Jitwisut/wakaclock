@@ -86,6 +86,7 @@ mod tests {
                 last_evidence_unix: None,
                 ..Default::default()
             }],
+            pipeline: Vec::new(),
         }
     }
 

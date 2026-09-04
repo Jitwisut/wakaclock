@@ -28,6 +28,17 @@ use sysinfo::System;
 /// documentation/community reports as of 2026-08-31, not from inspecting a real
 /// process list with one of these tools actually running.
 const KNOWN_AI_PROCESS_PATTERNS: &[(&str, &str)] = &[
+    // Terminal clients are included alongside editor forks.  The whole-word
+    // matcher below prevents generic names such as `codex-helper` or
+    // `geminiary` from becoming false positives while still accepting the
+    // platform-specific helper suffixes these CLIs/apps use.
+    ("codex", "codex"),
+    ("claude", "claude-code"),
+    ("kilo-code", "kilo-code"),
+    ("kilo", "kilo-code"),
+    ("kimi", "kimi-code-cli"),
+    ("deepseek", "deep-code"),
+    ("gemini", "gemini-cli"),
     ("cursor", "cursor"),
     ("windsurf", "windsurf"),
     ("antigravity", "antigravity"),
@@ -123,6 +134,12 @@ mod tests {
 
     #[test]
     fn matches_known_agents_case_insensitively() {
+        assert_eq!(match_agent("codex"), Some("codex"));
+        assert_eq!(match_agent("Claude Code"), Some("claude-code"));
+        assert_eq!(match_agent("kilo-code"), Some("kilo-code"));
+        assert_eq!(match_agent("kimi"), Some("kimi-code-cli"));
+        assert_eq!(match_agent("deepseek"), Some("deep-code"));
+        assert_eq!(match_agent("gemini"), Some("gemini-cli"));
         assert_eq!(match_agent("Cursor"), Some("cursor"));
         assert_eq!(match_agent("CURSOR"), Some("cursor"));
         assert_eq!(match_agent("Windsurf"), Some("windsurf"));

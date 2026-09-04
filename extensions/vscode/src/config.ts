@@ -47,7 +47,8 @@ export class WakaclockConfigService implements vscode.Disposable {
       debugLogging: config.get<boolean>("debugLogging", false),
       trackDebugSessions: config.get<boolean>("trackDebugSessions", true),
       trackBuildTasks: config.get<boolean>("trackBuildTasks", true),
-      trackClipboardActions: config.get<boolean>("trackClipboardActions", true)
+      trackClipboardActions: config.get<boolean>("trackClipboardActions", true),
+      autoInstallAgentHooks: config.get<boolean>("autoInstallAgentHooks", true)
     };
   }
 
