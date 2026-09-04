@@ -36,20 +36,58 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
       <HeroSection locale={locale} />
       <EditorWallSection locale={locale} />
       <div className="mx-auto max-w-3xl px-4 md:px-6">
+        {/*
+          Headings are phrased as questions on purpose. They are the questions a visitor
+          actually arrives with, and they are also what an answer engine matches a query
+          against before quoting the paragraph underneath.
+        */}
+        <Section
+          heading={locale === 'th' ? 'สรุปสั้น ๆ' : 'Key takeaways'}
+          id="key-takeaways"
+          reveal={false}
+        >
+          <Bullets items={copy.keyTakeaways} />
+        </Section>
         <Section
           heading={locale === 'th' ? `${SITE_NAME} คืออะไร?` : `What is ${SITE_NAME}?`}
           id="what-is-atoaxis"
           reveal={false}
         >
-          <p className="text-base leading-relaxed">{copy.whatIs}</p>
+          {copy.whatIs.map((paragraph) => (
+            <p className="text-base leading-relaxed" key={paragraph}>
+              {paragraph}
+            </p>
+          ))}
         </Section>
-        <Section heading={locale === 'th' ? 'การทำงาน' : 'How it works'} reveal={false}>
-          <p style={MUTED_TEXT}>{copy.howItWorks}</p>
+        <Section
+          heading={
+            locale === 'th'
+              ? `${SITE_NAME} ติดตามเวลาเขียนโค้ดอย่างไร?`
+              : `How does ${SITE_NAME} track your coding time?`
+          }
+          id="how-it-works"
+          reveal={false}
+        >
+          {copy.howItWorks.map((paragraph) => (
+            <p key={paragraph} style={MUTED_TEXT}>
+              {paragraph}
+            </p>
+          ))}
         </Section>
-        <Section heading={locale === 'th' ? 'กรณีใช้งาน' : 'Use cases'}>
+        <Section
+          heading={locale === 'th' ? 'ใช้ทำอะไรได้บ้าง?' : 'What can you do with it?'}
+          id="use-cases"
+        >
           <Bullets items={copy.useCases} />
         </Section>
-        <Section heading={locale === 'th' ? 'ข้อจำกัด' : 'Limitations'}>
+        <Section
+          heading={
+            locale === 'th'
+              ? `${SITE_NAME} ยังทำอะไรไม่ได้บ้าง?`
+              : `What does ${SITE_NAME} not do yet?`
+          }
+          id="limitations"
+        >
           <p style={MUTED_TEXT}>{copy.limitationsIntro}</p>
           <Bullets items={copy.limitations} />
         </Section>
@@ -64,6 +102,18 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         heading={locale === 'th' ? 'คำถามที่พบบ่อย' : 'Frequently asked questions'}
         locale={locale}
       />
+      {/*
+        The verdict sits after the FAQ and before the CTA: a reader who has got this far
+        is deciding, and the honest form of that is naming who should not buy as clearly
+        as who should.
+      */}
+      <div className="mx-auto max-w-3xl px-4 md:px-6">
+        <Section heading={copy.verdict.heading} id="verdict">
+          <p className="text-base leading-relaxed">{copy.verdict.fits}</p>
+          <p style={MUTED_TEXT}>{copy.verdict.doesNotFit}</p>
+          <p style={MUTED_TEXT}>{copy.verdict.closing}</p>
+        </Section>
+      </div>
       <CtaSection locale={locale} />
       {/*
         JSON-LD is rendered last, after the visible content, and that position is load

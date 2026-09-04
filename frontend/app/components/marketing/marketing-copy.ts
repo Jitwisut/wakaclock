@@ -98,9 +98,34 @@ export const EN_HOME = {
   // Kept under ~155 characters so search engines show it whole rather than truncating
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
   description: `${SITE_NAME} records your coding time by project, language, branch and editor. It implements the WakaTime API and keeps your complete coding history.`,
-  whatIs: `${SITE_NAME} is a developer time tracking service. It receives editor heartbeats and turns them into dashboards for coding time, projects, programming languages, branches and editors without storing source code or conversation content.`,
-  howItWorks:
-    'An editor sends a heartbeat when you type, switch to or save a file. Each event carries metadata such as file path, project, branch, language, editor and operating system. Consecutive events become duration blocks; idle gaps are not counted.',
+  /**
+   * The homepage's summary block. Every line restates a claim already made and verified
+   * elsewhere on this page — nothing here introduces a capability the product does not
+   * ship, and nothing from IN_DEVELOPMENT belongs in it.
+   */
+  keyTakeaways: [
+    `${SITE_NAME} records your coding time from editor heartbeats — metadata only, never your source code.`,
+    'It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it, and a WakaTime export can be imported.',
+    'Every account keeps its complete coding history instead of a limited recent window.',
+    'AI, human and Unattributed line changes are separated, with the coverage behind each total reported rather than guessed.',
+    `Early Access: planned pricing is $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year, and checkout is not open yet.`,
+  ],
+  /**
+   * Split into paragraphs rather than held as one block of prose. The section as a whole
+   * is meant to stand on its own — a reader or an answer engine arriving here cold gets
+   * the definition, the compatibility story and the privacy boundary without reading
+   * anything above it — while each paragraph stays short enough to quote by itself.
+   */
+  whatIs: [
+    `${SITE_NAME} is a developer time tracking service. Your editor sends it heartbeats — small metadata events describing what you are working on — and it turns them into dashboards for coding time, projects, programming languages, branches and editors.`,
+    'It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window.',
+    'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, not file contents.',
+  ],
+  howItWorks: [
+    'Your editor sends a heartbeat when you type, switch to or save a file. Each event carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
+    'The server groups consecutive events into duration blocks, and a long gap closes a block rather than padding it, so idle time is not counted as coding time.',
+    'Line changes are split three ways: AI, human and Unattributed. Work we cannot prove either way stays Unattributed instead of being credited to you, and the coverage behind every total is reported as a percentage rather than guessed.',
+  ],
   useCases: [
     'See coding hours today, this week or across a custom range',
     'Break time down by project, language, editor and branch',
@@ -110,7 +135,10 @@ export const EN_HOME = {
     'Group several checkouts with project rules and merges',
     'Import a WakaTime export into the same dashboard',
   ],
-  limitationsIntro: `What ${SITE_NAME} does not do today, stated plainly:`,
+  // Deliberately framed as the other side of the case above rather than a disclaimer
+  // buried at the bottom: a reader deciding against the product early costs less than one
+  // who discovers the gap after switching.
+  limitationsIntro: `That is the case for ${SITE_NAME}. On the other hand, here is what we have not built yet — stated plainly, because we would rather you rule us out now than find the gap after you switch:`,
   limitations: [
     'Only the VS Code plugin is first-party; other editors use the WakaTime protocol',
     'AI hooks cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need adapters',
@@ -119,6 +147,18 @@ export const EN_HOME = {
     'Analytics are single-account; goals, leaderboards and a presence prototype are available where the server runs PostgreSQL, but full team and organisation dashboards remain in development',
     'The planned hosted product has no free tier',
   ],
+  /**
+   * A verdict, not a second sales pitch. It names who the product is a poor fit for, in
+   * the same words the limitations list uses, because a recommendation that only points
+   * one way is not a recommendation.
+   */
+  verdict: {
+    heading: `Is ${SITE_NAME} right for you?`,
+    fits: `${SITE_NAME} fits you best if you already code in a WakaTime-compatible editor, you want your complete history rather than a rolling window, and you care how much of the work an AI agent actually did.`,
+    doesNotFit:
+      'It is a weaker fit today if you need a desktop or browser client, if your team needs shared organisation dashboards, or if you work mainly in Cursor or Copilot — those still need adapters.',
+    closing: `We plan to charge $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year, but our checkout is not open during Early Access, so joining the list now costs you nothing.`,
+  },
   faq: [
     {
       question: `What is ${SITE_NAME}?`,
@@ -176,9 +216,23 @@ export const TH_HOME = {
   tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
   // Same length budget as the English description above.
   description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
-  whatIs: `${SITE_NAME} คือเครื่องมือและบริการติดตามเวลาการเขียนโค้ด (โปรแกรมนับเวลาเขียนโค้ด) สำหรับนักพัฒนา รับ editor heartbeat แล้วเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor โดยไม่เก็บ source code หรือเนื้อหาการสนทนา`,
-  howItWorks:
-    'editor จะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ระบบรวม heartbeat ที่เกิดใกล้กันเป็น duration block และไม่นับ idle gap',
+  keyTakeaways: [
+    `${SITE_NAME} บันทึกเวลาเขียนโค้ดของคุณจาก editor heartbeat โดยเก็บเฉพาะ metadata ไม่เก็บ source code`,
+    'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้ และนำเข้า WakaTime export ได้',
+    'ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงเวลาล่าสุด',
+    'แยกบรรทัดที่มาจาก AI, มนุษย์ และ Unattributed ออกจากกัน พร้อมรายงาน coverage จริงแทนการเดา',
+    `Early Access: ราคาที่วางแผนไว้คือ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี และยังไม่เปิดให้ชำระเงิน`,
+  ],
+  whatIs: [
+    `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา editor ของคุณจะส่ง heartbeat ซึ่งเป็น metadata ขนาดเล็กที่บอกว่าคุณกำลังทำอะไรอยู่ แล้วระบบเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor`,
+    'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้โดยไม่ต้องติดตั้งอะไรใหม่ และนำเข้า WakaTime export มาดูใน dashboard เดียวกันได้ ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงล่าสุด',
+    'ส่วน source code, prompt และคำตอบของ AI จะไม่ออกจาก editor ของคุณเลย เพราะ heartbeat มีแค่ metadata ของไฟล์และตัวเลข ไม่มีเนื้อหาในไฟล์',
+  ],
+  howItWorks: [
+    'editor ของคุณจะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยแต่ละครั้งมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ไม่มีเนื้อหาในไฟล์',
+    'ระบบจะรวม heartbeat ที่เกิดต่อเนื่องกันเป็น duration block และเมื่อเว้นช่วงนานพอ block นั้นจะถูกปิดแทนที่จะนับต่อ เวลาที่ไม่ได้ทำงานจึงไม่ถูกนับเป็นเวลาเขียนโค้ด',
+    'ส่วนบรรทัดที่เปลี่ยนจะถูกแยกเป็นสามทาง คือ AI, มนุษย์ และ Unattributed งานที่เราพิสูจน์ไม่ได้ว่ามาจากทางไหนจะคงสถานะ Unattributed แทนที่จะยกให้คุณ และทุกยอดรวมจะรายงาน coverage เป็นเปอร์เซ็นต์แทนการเดา',
+  ],
   useCases: [
     'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง',
     'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch',
@@ -188,7 +242,7 @@ export const TH_HOME = {
     'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge',
     'นำเข้า WakaTime export เพื่อดู history เดิมใน dashboard เดียวกัน',
   ],
-  limitationsIntro: `สิ่งที่ ${SITE_NAME} ยังไม่ทำในวันนี้:`,
+  limitationsIntro: `นั่นคือข้อดีของ ${SITE_NAME} ในทางกลับกัน นี่คือสิ่งที่เรายังไม่ได้ทำ บอกไว้ตรง ๆ เพราะเราอยากให้คุณตัดสินใจไม่เลือกเราตั้งแต่ตอนนี้ ดีกว่ามาเจอทีหลังตอนย้ายมาแล้ว:`,
   limitations: [
     'มี first-party plugin สำหรับ VS Code เท่านั้น editor อื่นเชื่อมต่อผ่าน WakaTime protocol',
     'AI hooks รองรับ Claude Code, Codex CLI และ Gemini CLI ส่วน Cursor/Copilot ต้องมี adapter',
@@ -197,6 +251,13 @@ export const TH_HOME = {
     'analytics อยู่ในขอบเขตบัญชีเดียว goals, leaderboards และ presence prototype ใช้ได้เมื่อ server รัน PostgreSQL แต่ team และ organisation dashboard เต็มรูปแบบยังอยู่ระหว่างพัฒนา',
     'แผน hosted ที่วางไว้ยังไม่มี free tier',
   ],
+  verdict: {
+    heading: `${SITE_NAME} เหมาะกับคุณไหม?`,
+    fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร`,
+    doesNotFit:
+      'แต่ยังไม่เหมาะถ้าคุณต้องการ desktop หรือ browser client ถ้าทีมต้องการ organisation dashboard ร่วมกัน หรือถ้าคุณทำงานกับ Cursor หรือ Copilot เป็นหลัก เพราะสองตัวนี้ยังต้องมี adapter',
+    closing: `เราวางแผนคิดราคา $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แต่ยังไม่เปิดให้ชำระเงินในช่วง Early Access การเข้าร่วมรายชื่อตอนนี้จึงไม่มีค่าใช้จ่ายกับคุณ`,
+  },
   faq: [
     {
       question: `${SITE_NAME} คืออะไร?`,
