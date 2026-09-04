@@ -294,7 +294,11 @@ impl DashboardAnalyticsService {
     /// editor breakdown (plan.md 9.0).
     async fn model_breakdown(&self, user_id: Uuid, range: &ResolvedRange) -> Result<Breakdown> {
         let (start_epoch, end_epoch) = range.unix_bounds();
-        let name_expression = normalized_dimension("ai_model");
+        // An inferred/legacy AI row may still carry provider/model fields from an old
+        // client.  Those fields are deliberately ignored unless the agent identity is
+        // present; otherwise the dashboard would turn unattributed work into a named
+        // model.  Keep the bucket explicit so it cannot be mistaken for a human row.
+        let name_expression = normalized_ai_model_dimension();
         let sql = format!(
             "
                 SELECT {name_expression} AS name,
@@ -334,6 +338,10 @@ impl DashboardAnalyticsService {
 /// deliberately removes the nullable wrapper from the result type.
 fn normalized_dimension(column: &str) -> String {
     format!("ifNull(nullIf({column}, ''), 'Unknown')")
+}
+
+fn normalized_ai_model_dimension() -> &'static str {
+    "if(is_ai_generated AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
 }
 
 /// Group daily totals into Monday–Sunday, always emitting all seven days.
@@ -491,6 +499,14 @@ mod tests {
         assert_eq!(
             normalized_dimension("language"),
             "ifNull(nullIf(language, ''), 'Unknown')"
+        );
+    }
+
+    #[test]
+    fn inferred_ai_models_are_grouped_as_unattributed() {
+        assert_eq!(
+            normalized_ai_model_dimension(),
+            "if(is_ai_generated AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
         );
     }
 

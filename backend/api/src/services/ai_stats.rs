@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::ai_stats::{
-    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse,
-    AiTotalsRow, AiUsageMetricsRow,
+    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
+    AiUsageMetricsRow,
 };
 
 pub struct AiStatsService {
@@ -117,17 +117,49 @@ impl AiStatsService {
             .query(
                 "
                 SELECT
-                    if(is_ai_generated, coalesce(ai_agent, 'unknown'), 'human') AS agent,
-                    ai_provider AS provider,
-                    ai_model AS model,
+                    agent,
+                    provider,
+                    model,
                     sumIf(coalesce(ai_lines_added, 0), is_ai_generated) AS ai_lines_added,
                     sumIf(coalesce(ai_lines_deleted, 0), is_ai_generated) AS ai_lines_deleted,
                     sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
                     sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
                     count() AS heartbeat_count
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                GROUP BY is_ai_generated, ai_agent, ai_provider, ai_model
+                FROM (
+                    SELECT
+                        is_ai_generated,
+                        if(
+                            is_ai_generated
+                                AND NOT empty(ifNull(ai_agent, ''))
+                                AND lower(ifNull(ai_confidence, '')) = 'verified'
+                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                            ai_agent,
+                            if(is_ai_generated, 'Unattributed AI', 'human')
+                        ) AS agent,
+                        if(
+                            is_ai_generated
+                                AND NOT empty(ifNull(ai_agent, ''))
+                                AND lower(ifNull(ai_confidence, '')) = 'verified'
+                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                            ai_provider,
+                            NULL
+                        ) AS provider,
+                        if(
+                            is_ai_generated
+                                AND NOT empty(ifNull(ai_agent, ''))
+                                AND lower(ifNull(ai_confidence, '')) = 'verified'
+                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                            ai_model,
+                            NULL
+                        ) AS model,
+                        ai_lines_added,
+                        ai_lines_deleted,
+                        human_lines_added,
+                        human_lines_deleted
+                    FROM wakaclock.heartbeats
+                    WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                )
+                GROUP BY agent, provider, model, is_ai_generated
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
             )

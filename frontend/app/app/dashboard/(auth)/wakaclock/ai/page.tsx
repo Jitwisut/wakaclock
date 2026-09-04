@@ -21,13 +21,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getAiStats } from '@/lib/wakaclock/endpoints';
+import { getAiDiagnostics, getAiStats } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -54,6 +55,10 @@ function AiStatsPanel() {
   });
 
   const stats = data?.data;
+  const namedAgents =
+    stats?.agents.filter((agent) => agent.agent !== 'Unattributed AI' && agent.agent !== 'human') ??
+    [];
+  const unattributedAgent = stats?.agents.find((agent) => agent.agent === 'Unattributed AI');
   const aiPct = stats?.ai_heartbeat_percentage ?? 0;
   const pieData = stats
     ? [
@@ -189,39 +194,54 @@ function AiStatsPanel() {
               </DashboardPanel>
 
               <div>
-                <h3 className="mb-2 text-sm font-medium">Agents</h3>
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Agent</TableHead>
-                        <TableHead>Provider / model</TableHead>
-                        <TableHead>AI added</TableHead>
-                        <TableHead>AI deleted</TableHead>
-                        <TableHead>Human added</TableHead>
-                        <TableHead className="text-right">Heartbeats</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {stats.agents.map((agent) => (
-                        <TableRow
-                          key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
-                        >
-                          <TableCell className="font-medium">{agent.agent}</TableCell>
-                          <TableCell>
-                            {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
-                          </TableCell>
-                          <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
-                          <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
-                          <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
-                          <TableCell className="text-right">
-                            {formatCompactNumber(agent.heartbeat_count)}
-                          </TableCell>
+                <h3 className="mb-2 text-sm font-medium">Which AI?</h3>
+                {namedAgents.length > 0 ? (
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Agent</TableHead>
+                          <TableHead>Provider / model</TableHead>
+                          <TableHead>AI added</TableHead>
+                          <TableHead>AI deleted</TableHead>
+                          <TableHead>Human added</TableHead>
+                          <TableHead className="text-right">Heartbeats</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {namedAgents.map((agent) => (
+                          <TableRow
+                            key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
+                          >
+                            <TableCell className="font-medium">{agent.agent}</TableCell>
+                            <TableCell>
+                              {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
+                            </TableCell>
+                            <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
+                            <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
+                            <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
+                            <TableCell className="text-right">
+                              {formatCompactNumber(agent.heartbeat_count)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <p className="rounded-md border p-4 text-sm text-muted-foreground">
+                    No verified AI identity is available for this range.
+                  </p>
+                )}
+                {unattributedAgent && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Unattributed AI: {formatCompactNumber(unattributedAgent.ai_lines_added)} lines
+                    added, {formatCompactNumber(unattributedAgent.ai_lines_deleted)} deleted across{' '}
+                    {formatCompactNumber(unattributedAgent.heartbeat_count)} heartbeat(s). It is
+                    excluded from this named-agent table because the source did not prove which
+                    AI made the edit.
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -229,6 +249,17 @@ function AiStatsPanel() {
       </CardContent>
     </Card>
   );
+}
+
+function AiDiagnosticsPanelContainer() {
+  const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const { data, isLoading, error } = useQuery({
+    queryKey: wakaclockKeys.aiDiagnostics(userId),
+    queryFn: () => getAiDiagnostics(userId),
+    enabled: Boolean(userId),
+  });
+
+  return <AiDiagnosticsPanel error={error} isLoading={isLoading} report={data?.report} />;
 }
 
 export default function AiStatsPage() {
@@ -240,6 +271,7 @@ export default function AiStatsPage() {
       />
       <RequireUser>
         <AiStatsPanel />
+        <AiDiagnosticsPanelContainer />
       </RequireUser>
     </div>
   );

@@ -1,4 +1,7 @@
-# Wakaclock — Reverse-Engineer WakaTime & Build Better
+# LEGACY / SUPERSEDED — Wakaclock — Reverse-Engineer WakaTime & Build Better
+
+> This broad original plan is retained for historical architecture context. The
+> active AI implementation roadmap is [`plans/ROADMAP.md`](plans/ROADMAP.md).
 
 ## Context
 

@@ -317,6 +317,94 @@ impl Heartbeat {
         dt.format("%Y-%m-%d").to_string()
     }
 
+    /// Enforce the accuracy-first attribution boundary at every client/server
+    /// transport boundary.
+    ///
+    /// A name is publishable only when the payload identifies a verified edit
+    /// transport.  Filesystem/process observation, editor telemetry, and legacy
+    /// clients may still prove that *some* AI activity happened, but they do not
+    /// prove which tool made the change.  Keep that activity in the AI totals as
+    /// an unattributed/inferred row while removing the identity fields that would
+    /// otherwise turn a guess into a dashboard fact.
+    ///
+    /// The method is deliberately idempotent so it can run in the CLI, API client,
+    /// and server ingestion service without changing already-sanitized payloads.
+    pub fn enforce_attribution_policy(&mut self) {
+        let has_identity =
+            self.ai_agent.is_some() || self.ai_provider.is_some() || self.ai_model.is_some();
+        let verified_source = self
+            .ai_source
+            .as_deref()
+            .map(|source| source.trim().to_ascii_lowercase())
+            .is_some_and(|source| {
+                matches!(
+                    source.as_str(),
+                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                )
+            });
+        let verified_confidence = self
+            .ai_confidence
+            .as_deref()
+            .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"));
+
+        // A provider/model without a client name is not an identity either. Keep
+        // those fields coupled to the named agent so a malformed legacy payload
+        // cannot expose partial attribution metadata.
+        let verified_identity = self
+            .ai_agent
+            .as_deref()
+            .is_some_and(|agent| !agent.trim().is_empty())
+            && verified_source
+            && verified_confidence;
+
+        if has_identity && !verified_identity {
+            // The identity itself is evidence that the heartbeat is AI activity;
+            // stripping it must never reclassify the work as human.
+            self.is_ai_generated = true;
+            self.ai_agent = None;
+            self.ai_provider = None;
+            self.ai_model = None;
+            self.ai_confidence = Some("inferred".to_string());
+            self.attribution_confidence = None;
+            // Keep only a generic, non-identifying provenance label.  Raw observer
+            // evidence (paths, process names, prompts and diffs) is local-only.
+            self.ai_source = Some("observer".to_string());
+            self.attribution_source = None;
+        } else if has_identity {
+            // A verified identity is authoritative even when an old client forgot
+            // the redundant boolean flag.
+            self.is_ai_generated = true;
+        } else if self.is_ai_generated && self.ai_agent.is_none() {
+            // Historical/observer rows may arrive already unattributed.  Normalize
+            // their label without inventing an agent identity.
+            self.ai_provider = None;
+            self.ai_model = None;
+            self.ai_confidence = Some("inferred".to_string());
+            self.attribution_confidence = None;
+        }
+    }
+
+    /// Whether this heartbeat carries an identity that passed the verified-tier
+    /// source and confidence checks.  This is useful to response serializers that
+    /// must hide identity on historical rows written before the policy existed.
+    pub fn has_verified_ai_identity(&self) -> bool {
+        self.is_ai_generated
+            && self
+                .ai_agent
+                .as_deref()
+                .is_some_and(|agent| !agent.trim().is_empty())
+            && self
+                .ai_confidence
+                .as_deref()
+                .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"))
+            && self.ai_source.as_deref().is_some_and(|source| {
+                matches!(
+                    source.trim().to_ascii_lowercase().as_str(),
+                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                )
+            })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.entity.trim().is_empty() {
             return Err("entity cannot be empty".to_string());
@@ -555,5 +643,96 @@ mod tests {
             Category::from_str("debugging").unwrap(),
             Category::Debugging
         );
+    }
+
+    #[test]
+    fn unverified_identity_becomes_unattributed_ai() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.ai_agent = Some("codex".to_string());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_model = Some("gpt-test".to_string());
+        heartbeat.ai_source = Some("ide_telemetry".to_string());
+        heartbeat.ai_confidence = Some("correlated".to_string());
+
+        heartbeat.enforce_attribution_policy();
+
+        assert!(heartbeat.is_ai_generated);
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+    }
+
+    #[test]
+    fn verified_hook_identity_survives_policy() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.ai_agent = Some("codex".to_string());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_model = Some("gpt-test".to_string());
+        heartbeat.ai_source = Some("agent_hook".to_string());
+        heartbeat.ai_confidence = Some("verified".to_string());
+
+        heartbeat.enforce_attribution_policy();
+
+        assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
+        assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        assert_eq!(heartbeat.ai_model.as_deref(), Some("gpt-test"));
+    }
+
+    #[test]
+    fn provider_only_identity_is_unattributed_even_with_verified_labels() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.is_ai_generated = true;
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_model = Some("gpt-test".to_string());
+        heartbeat.ai_source = Some("agent_hook".to_string());
+        heartbeat.ai_confidence = Some("verified".to_string());
+
+        heartbeat.enforce_attribution_policy();
+
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+    }
+
+    #[test]
+    fn policy_is_idempotent_for_unattributed_rows() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.is_ai_generated = true;
+        heartbeat.ai_confidence = Some("inferred".to_string());
+        heartbeat.ai_source = Some("observer".to_string());
+
+        heartbeat.enforce_attribution_policy();
+        let first = heartbeat.clone();
+        heartbeat.enforce_attribution_policy();
+
+        assert_eq!(heartbeat.ai_agent, first.ai_agent);
+        assert_eq!(heartbeat.ai_provider, first.ai_provider);
+        assert_eq!(heartbeat.ai_model, first.ai_model);
+        assert_eq!(heartbeat.ai_source, first.ai_source);
+        assert_eq!(heartbeat.ai_confidence, first.ai_confidence);
     }
 }

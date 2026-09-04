@@ -17,6 +17,7 @@
 pub mod claude;
 pub mod codex;
 pub mod correlation;
+pub mod diagnostics;
 pub mod event;
 pub mod follow_up;
 pub mod gemini;
@@ -31,6 +32,11 @@ pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
+};
+pub use diagnostics::{
+    build_report as build_ai_diagnostics_report, AdapterFreshness, AiDiagnosticsReport,
+    AttributionMode, BrokerHealth, ObserverConfig, ParserLagSummary, VerificationStatus,
+    AI_DIAGNOSTICS_SCHEMA_VERSION,
 };
 pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};

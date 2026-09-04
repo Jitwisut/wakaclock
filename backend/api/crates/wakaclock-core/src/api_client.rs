@@ -1,5 +1,5 @@
 use crate::{
-    ai::{AiUsageIngestReport, AiUsageRecord},
+    ai::{AiDiagnosticsReport, AiUsageIngestReport, AiUsageRecord},
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -7,6 +7,7 @@ use crate::{
 };
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +118,10 @@ impl ApiClient {
         // durable queue. This makes a retry/restart indistinguishable from the original
         // request at the backend even for older callers that did not know the field yet.
         for heartbeat in &mut heartbeats {
+            // Apply the accuracy-first boundary before the payload can be queued or
+            // retried. Verified hook/MCP/transcript events keep their identity; all
+            // observer/editor-telemetry claims become unattributed AI activity.
+            heartbeat.enforce_attribution_policy();
             if heartbeat.heartbeat_id.is_none() {
                 heartbeat.heartbeat_id = Some(uuid::Uuid::new_v4().to_string());
             }
@@ -268,6 +273,13 @@ impl ApiClient {
         Ok(response.json::<AiUsageIngestReport>().await?)
     }
 
+    /// Upload a metadata-only AI diagnostics snapshot.  Diagnostics are optional
+    /// health telemetry; callers should treat a failed upload as non-fatal and keep
+    /// local setup/doctor output available.
+    pub async fn send_ai_diagnostics(&self, report: &AiDiagnosticsReport) -> AppResult<()> {
+        self.post_json("/api/v1/ai/diagnostics", report).await
+    }
+
     pub async fn repair_day(
         &self,
         date: &str,
@@ -328,6 +340,10 @@ impl ApiClient {
         let mut stopped_because = None;
 
         for (id, payload) in pending {
+            // Queue entries may have been written by a pre-policy client. Reapply the
+            // boundary at the broker flush so an upgrade cannot publish a stale inferred
+            // name simply because it was already offline when the client was upgraded.
+            let payload = sanitize_queued_heartbeat_payload(payload);
             match self.post_json("/api/v1/heartbeats", &payload).await {
                 Ok(()) => {
                     queue.remove(id)?;
@@ -432,6 +448,78 @@ impl ApiClient {
             dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
         Ok(home.join(".wakaclock").join("last_heartbeat.json"))
     }
+}
+
+/// Apply the transport-level attribution boundary to a JSON payload that predates the
+/// current client binary. The normal path works with the typed [`Heartbeat`] value; a
+/// queue flush intentionally works with JSON because old queue rows may omit fields that
+/// were added after they were written. Only identity/provenance labels are changed.
+fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
+    let Some(object) = payload.as_object_mut() else {
+        return payload;
+    };
+
+    let is_ai = object
+        .get("is_ai_generated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let string_value = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let has_identity = ["ai_agent", "ai_provider", "ai_model"]
+        .iter()
+        .any(|key| string_value(key).is_some());
+    let source = string_value("ai_source").map(|value| value.to_ascii_lowercase());
+    let confidence = string_value("ai_confidence");
+    let verified = string_value("ai_agent").is_some()
+        && confidence.is_some_and(|value| value.eq_ignore_ascii_case("verified"))
+        && source.as_deref().is_some_and(|value| {
+            matches!(
+                value,
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            )
+        });
+    let legacy_inferred = string_value("actor_type").is_some_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "ai_inferred" | "inferred" | "correlated"
+        )
+    });
+    let legacy_unknown = string_value("actor_type").is_some_and(|value| {
+        matches!(value.to_ascii_lowercase().as_str(), "unknown" | "unattributed")
+    });
+
+    if (has_identity && !verified) || legacy_inferred || (legacy_unknown && (has_identity || is_ai))
+    {
+        object.insert("is_ai_generated".to_string(), Value::Bool(true));
+        for key in ["ai_agent", "ai_provider", "ai_model"] {
+            object.insert(key.to_string(), Value::Null);
+        }
+        object.insert(
+            "ai_confidence".to_string(),
+            Value::String("inferred".to_string()),
+        );
+        object.insert(
+            "ai_source".to_string(),
+            Value::String("observer".to_string()),
+        );
+        object.insert("attribution_source".to_string(), Value::Null);
+        object.insert("attribution_confidence".to_string(), Value::Null);
+    } else if is_ai && string_value("ai_agent").is_none() {
+        for key in ["ai_provider", "ai_model"] {
+            object.insert(key.to_string(), Value::Null);
+        }
+        object.insert(
+            "ai_confidence".to_string(),
+            Value::String("inferred".to_string()),
+        );
+    }
+
+    payload
 }
 
 struct FilteredHeartbeats {
@@ -555,5 +643,43 @@ mod tests {
             "cannot match again, so dropped"
         );
         assert!(cache.contains_key("fresh.rs"));
+    }
+
+    #[test]
+    fn queued_legacy_inference_is_sanitized_before_flush() {
+        let payload = serde_json::json!({
+            "is_ai_generated": false,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "ide_telemetry",
+            "ai_confidence": "correlated",
+            "actor_type": "ai_inferred"
+        });
+
+        let sanitized = sanitize_queued_heartbeat_payload(payload);
+        assert_eq!(sanitized["is_ai_generated"], true);
+        assert!(sanitized["ai_agent"].is_null());
+        assert!(sanitized["ai_provider"].is_null());
+        assert!(sanitized["ai_model"].is_null());
+        assert_eq!(sanitized["ai_source"], "observer");
+        assert_eq!(sanitized["ai_confidence"], "inferred");
+    }
+
+    #[test]
+    fn queued_verified_hook_identity_is_preserved() {
+        let payload = serde_json::json!({
+            "is_ai_generated": true,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified"
+        });
+
+        let sanitized = sanitize_queued_heartbeat_payload(payload);
+        assert_eq!(sanitized["ai_agent"], "codex");
+        assert_eq!(sanitized["ai_provider"], "openai");
+        assert_eq!(sanitized["ai_model"], "gpt-test");
     }
 }

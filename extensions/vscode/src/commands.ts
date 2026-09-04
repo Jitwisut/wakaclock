@@ -320,7 +320,7 @@ async function chooseAiAgents(
       label: status.label,
       description: status.id,
       detail:
-        "Adds an AtoAxis hook when supported and enables the background transcript watcher. Prompts and source code are never uploaded.",
+        "Adds an AtoAxis hook when supported and enables the background transcript watcher. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
       id: status.id,
     })),
     {
@@ -360,7 +360,7 @@ async function showAiStatus(statuses: AiAgentStatus[]): Promise<void> {
     label: `${status.detected ? "$(check)" : "$(circle-slash)"} ${status.label}`,
     description: status.detected
       ? status.enabled
-        ? "detected · tracking enabled"
+        ? "detected · capture configured (live certification shown separately)"
         : "detected · setup required"
       : "not detected",
     detail: status.reason

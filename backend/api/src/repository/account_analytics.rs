@@ -497,8 +497,14 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         FROM (
             SELECT
                 user_id, date,
-                ifNull(ai_provider, 'Unknown') AS provider,
-                ifNull(ai_model, 'Unknown') AS model,
+                if(NOT empty(ifNull(ai_agent, ''))
+                       AND lower(ifNull(ai_confidence, '')) = 'verified'
+                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                   ifNull(ai_provider, 'Unknown'), 'Unattributed AI') AS provider,
+                if(NOT empty(ifNull(ai_agent, ''))
+                       AND lower(ifNull(ai_confidence, '')) = 'verified'
+                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                   ifNull(ai_model, 'Unknown'), 'Unattributed AI') AS model,
                 toUInt64(1) AS ai_events,
                 toUInt64(ifNull(ai_lines_added, 0)) AS ai_lines_added,
                 toUInt64(ifNull(ai_lines_deleted, 0)) AS ai_lines_deleted,
@@ -544,8 +550,16 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         FROM (
             SELECT
                 user_id, date,
-                ifNull(ai_agent, 'Unknown') AS ai_agent,
-                if(empty(editor) OR editor = 'wakaclock-ai-sync', ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)) AS ai_client,
+                if(NOT empty(ifNull(ai_agent, ''))
+                       AND lower(ifNull(ai_confidence, '')) = 'verified'
+                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                   ai_agent, 'Unattributed AI') AS ai_agent,
+                if(NOT empty(ifNull(ai_agent, ''))
+                       AND lower(ifNull(ai_confidence, '')) = 'verified'
+                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                   if(empty(editor) OR editor = 'wakaclock-ai-sync',
+                      ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)),
+                   'Unattributed AI') AS ai_client,
                 if(empty(editor), 'Unknown', editor) AS editor,
                 toFloat64(ifNull(active_seconds, 0.0)) AS active_seconds,
                 toUInt64(1) AS ai_events,
@@ -712,9 +726,12 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             date,
             assumeNotNull(project_id) AS project_id,
             if(empty(editor), 'Unknown', editor) AS editor,
-            if(is_ai_generated,
-                if(empty(editor), ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)),
-                'Human') AS ai_client,
+            if(is_ai_generated
+                  AND NOT empty(ifNull(ai_agent, ''))
+                  AND lower(ifNull(ai_confidence, '')) = 'verified'
+                  AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+               if(empty(editor), ai_agent, concat(ai_agent, ' ', editor)),
+               if(is_ai_generated, 'Unattributed AI', 'Human')) AS ai_client,
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::Error,
     fs,
     io::{self, Read},
@@ -14,9 +14,11 @@ mod agent_service;
 use wakaclock_ast::detect;
 use wakaclock_core::{
     ai::{
-        parse_claude_usage, parse_codex_usage, parse_gemini_usage, AiActivityParser,
-        AiAttributionState, AiEditEvent, ClaudeCodeParser, CodexParser, DiscoveryContext,
-        DiscoveryResult, DiscoveryState, GeminiCliParser, ParseContext, ParserCursor,
+        build_ai_diagnostics_report, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
+        AdapterFreshness, AiActivityParser, AiAttributionState, AiEditEvent, BrokerHealth,
+        ClaudeCodeParser, CodexParser, DiscoveryContext, DiscoveryResult, DiscoveryState,
+        GeminiCliParser, ObserverConfig, ParseContext, ParserCursor, ParserLagSummary,
+        VerificationStatus,
     },
     api_client::ApiClient,
     config::Config,
@@ -230,7 +232,44 @@ enum AgentAction {
 enum AiAction {
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
-    Status,
+    Status {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Register detected adapters and, after explicit consent, install the
+    /// per-user transcript watcher. This command never infers authorship and
+    /// never overwrites an agent-owned configuration file.
+    Setup {
+        /// Adapter id (`claude-code`, `codex`, or `gemini-cli`).
+        agent: Option<String>,
+        /// Register every adapter supported by this CLI.
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        /// Explicitly consent to the first local setup write.
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Remove the CLI-owned adapter registration/consent records and, when no
+    /// adapters remain, the AtoAxis-owned watcher service. Agent configuration
+    /// files are preserved.
+    Uninstall {
+        agent: Option<String>,
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Print a metadata-only integration health snapshot.  This command never
+    /// attributes a heartbeat and omits transcript paths, prompts and source data.
+    Doctor {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Upload the sanitized snapshot to the authenticated diagnostics endpoint.
+        #[arg(long, default_value_t = false)]
+        upload: bool,
+    },
     /// Parse new events from each agent's local transcript since the last sync and
     /// send one AI-attributed heartbeat per event. There is no editor buffer to
     /// correlate against here (this reads transcripts directly, not via an IDE
@@ -418,8 +457,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
             json,
         } => {
             // Hook-originated AI heartbeats are already attributed. Running transcript
-            // sync from inside them would create a second event for the same patch.
-            let should_auto_sync_ai = ai_agent.is_none();
+            // sync from inside them would create a second event for the same patch. A
+            // background transcript read is also consent-gated: installing the watcher
+            // alone must never open a production attribution path.
+            let observer_enabled = load_observer_config().enabled;
+            let setup_consented = load_ai_setup_state()
+                .map(|state| state.adapters.values().any(|adapter| adapter.consented))
+                .unwrap_or(false);
+            let should_auto_sync_ai = ai_agent.is_none() && observer_enabled && setup_consented;
             let entity_type = EntityType::from_str(&entity_type)?;
             let category = Category::from_str(&category)?;
             let mut ai_activity_state = if ai_agent.is_some() {
@@ -832,7 +877,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::Ai { action } => match action {
-            AiAction::Status => print_ai_status()?,
+            AiAction::Status { json } => print_ai_status(json)?,
+            AiAction::Setup {
+                agent,
+                all,
+                yes,
+                json,
+            } => run_ai_setup(agent.as_deref(), all, yes, json)?,
+            AiAction::Uninstall { agent, all, json } => {
+                run_ai_uninstall(agent.as_deref(), all, json)?
+            }
+            AiAction::Doctor { json, upload } => run_ai_doctor(&api_client, json, upload).await?,
             AiAction::Sync {
                 agent,
                 dry_run,
@@ -931,13 +986,23 @@ async fn run_agent_loop(
     loop {
         let started = std::time::Instant::now();
         let mut cycle_error: Option<String> = None;
-        match run_ai_sync(config, api_client, None, false, false, false, None).await {
-            Ok(()) => agent_service::append_log("scan completed"),
-            Err(error) => {
-                let message = error.to_string();
-                agent_service::append_log(&format!("scan failed: {message}"));
-                cycle_error = Some(message);
+        let observer_enabled = load_observer_config().enabled;
+        let setup_consented = load_ai_setup_state()
+            .map(|state| state.adapters.values().any(|adapter| adapter.consented))
+            .unwrap_or(false);
+        if observer_enabled && setup_consented {
+            match run_ai_sync(config, api_client, None, false, false, false, None).await {
+                Ok(()) => agent_service::append_log("scan completed"),
+                Err(error) => {
+                    let message = error.to_string();
+                    agent_service::append_log(&format!("scan failed: {message}"));
+                    cycle_error = Some(message);
+                }
             }
+        } else {
+            // Installing the service is harmless, but transcript reads and production
+            // writes wait for explicit `ai setup` consent plus observe_only enablement.
+            agent_service::append_log("observer disabled; transcript scan skipped");
         }
 
         // The watcher also owns the durable offline queue. This keeps retries flowing
@@ -1025,6 +1090,295 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
     ]
 }
 
+const AI_SETUP_STATE_VERSION: u8 = 1;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct AiSetupState {
+    #[serde(default = "default_ai_setup_state_version")]
+    version: u8,
+    #[serde(default)]
+    adapters: BTreeMap<String, AiSetupAdapterState>,
+    #[serde(default)]
+    observer_config_owned: bool,
+}
+
+fn default_ai_setup_state_version() -> u8 {
+    AI_SETUP_STATE_VERSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct AiSetupAdapterState {
+    consented: bool,
+    detected: bool,
+    verification: VerificationStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct AiSetupAdapterReport {
+    agent: String,
+    consented: bool,
+    detected: bool,
+    status: String,
+    verification: VerificationStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct AiSetupReport {
+    adapters: Vec<AiSetupAdapterReport>,
+    observer_mode: &'static str,
+    service_error: Option<String>,
+    service_installed: bool,
+    service_running: bool,
+}
+
+fn ai_setup_state_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    Ok(home.join(".wakaclock").join("ai-setup.json"))
+}
+
+fn load_ai_setup_state() -> Result<AiSetupState, Box<dyn Error>> {
+    let path = ai_setup_state_path()?;
+    if !path.exists() {
+        return Ok(AiSetupState {
+            version: AI_SETUP_STATE_VERSION,
+            ..Default::default()
+        });
+    }
+    let content = fs::read_to_string(path)?;
+    let state: AiSetupState = serde_json::from_str(&content)?;
+    if state.version != AI_SETUP_STATE_VERSION {
+        return Err(format!("unsupported AI setup state version {}", state.version).into());
+    }
+    Ok(state)
+}
+
+fn save_ai_setup_state(state: &AiSetupState) -> Result<(), Box<dyn Error>> {
+    let path = ai_setup_state_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    fs::write(
+        &temporary,
+        format!("{}\n", serde_json::to_string_pretty(state)?),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn canonical_ai_setup_id(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "claude" | "claude-code" => Some("claude-code"),
+        "codex" | "codex-cli" => Some("codex"),
+        "gemini" | "gemini-cli" => Some("gemini-cli"),
+        _ => None,
+    }
+}
+
+fn selected_ai_setup_ids(
+    agent: Option<&str>,
+    all: bool,
+) -> Result<Vec<&'static str>, Box<dyn Error>> {
+    if all && agent.is_some() {
+        return Err("choose one adapter id or --all, not both".into());
+    }
+    if all || agent.is_none() {
+        return Ok(vec!["claude-code", "codex", "gemini-cli"]);
+    }
+    let value = agent.expect("checked above");
+    canonical_ai_setup_id(value)
+        .map(|id| vec![id])
+        .ok_or_else(|| {
+            format!("unsupported adapter '{value}' (supported: claude-code, codex, gemini-cli)")
+                .into()
+        })
+}
+
+fn run_ai_setup(
+    agent: Option<&str>,
+    all: bool,
+    yes: bool,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let ids = selected_ai_setup_ids(agent, all)?;
+    let context = ai_discovery_context()?;
+    let mut state = load_ai_setup_state()?;
+    let mut changed = false;
+    let mut reports = Vec::with_capacity(ids.len());
+
+    for id in ids {
+        let detected = supported_ai_parsers()
+            .into_iter()
+            .find(|(parser_id, _)| *parser_id == id)
+            .map(|(_, parser)| {
+                parser
+                    .discover_sources(&context)
+                    .iter()
+                    .any(|result| !matches!(result.state, DiscoveryState::NotInstalled))
+            })
+            .unwrap_or(false);
+        let previous = state.adapters.get(id).cloned();
+        let already_consented = previous.as_ref().is_some_and(|value| value.consented);
+        let consented = already_consented || yes;
+        let status = if !consented {
+            "consent_required"
+        } else if detected {
+            "registered"
+        } else {
+            "not_detected"
+        };
+        if consented {
+            let next = AiSetupAdapterState {
+                consented: true,
+                detected,
+                verification: VerificationStatus::Scaffold,
+            };
+            if previous.as_ref() != Some(&next) {
+                state.adapters.insert(id.to_string(), next);
+                changed = true;
+            }
+        }
+        reports.push(AiSetupAdapterReport {
+            agent: id.to_string(),
+            consented,
+            detected,
+            status: status.to_string(),
+            verification: VerificationStatus::Scaffold,
+        });
+    }
+
+    let should_reconcile_service = yes || reports.iter().any(|adapter| adapter.consented);
+    if reports.iter().any(|adapter| adapter.consented) {
+        changed |= ensure_observer_config_after_consent(&mut state)?;
+    }
+    let (service_installed, service_running, service_error) = if should_reconcile_service {
+        match agent_service::install() {
+            Ok(report) => (report.installed, report.running, None),
+            Err(error) => (false, false, Some(error)),
+        }
+    } else {
+        (false, false, None)
+    };
+    if changed {
+        save_ai_setup_state(&state)?;
+    }
+    let report = AiSetupReport {
+        adapters: reports,
+        observer_mode: "observe_only",
+        service_error,
+        service_installed,
+        service_running,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Observer mode: observe_only (production attribution disabled)");
+        for adapter in &report.adapters {
+            println!(
+                "{}: {} · detected={} · consented={} · verification={:?}",
+                adapter.agent,
+                adapter.status,
+                adapter.detected,
+                adapter.consented,
+                adapter.verification
+            );
+        }
+        if should_reconcile_service {
+            println!(
+                "Watcher service: {}",
+                if report.service_running {
+                    "running"
+                } else {
+                    "not running"
+                }
+            );
+        }
+        if let Some(error) = &report.service_error {
+            println!("Watcher setup warning: {error}");
+        }
+        if report
+            .adapters
+            .iter()
+            .any(|adapter| adapter.status == "consent_required")
+        {
+            println!("No agent configuration was changed; rerun with --yes or use VS Code onboarding to grant consent.");
+        }
+    }
+    Ok(())
+}
+
+fn run_ai_uninstall(agent: Option<&str>, all: bool, json: bool) -> Result<(), Box<dyn Error>> {
+    let ids = selected_ai_setup_ids(agent, all)?;
+    let mut state = load_ai_setup_state()?;
+    let mut reports = Vec::with_capacity(ids.len());
+    for id in ids {
+        let removed = state.adapters.remove(id).is_some();
+        reports.push(serde_json::json!({
+            "agent": id,
+            "status": if removed { "removed" } else { "not_configured" },
+        }));
+    }
+    let observer_config_removed = if state.observer_config_owned && state.adapters.is_empty() {
+        let path = observer_config_path()?;
+        let removed = match fs::remove_file(path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        state.observer_config_owned = false;
+        removed
+    } else {
+        false
+    };
+    let (service_removed, service_error) = if state.adapters.is_empty() {
+        match agent_service::uninstall() {
+            Ok(_) => (true, None),
+            Err(error) => (false, Some(error)),
+        }
+    } else {
+        (false, None)
+    };
+    save_ai_setup_state(&state)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "adapters": reports,
+                "observer_config_removed": observer_config_removed,
+                "service_removed": service_removed,
+                "service_error": service_error,
+            }))?
+        );
+    } else {
+        for report in &reports {
+            println!(
+                "{}: {}",
+                report["agent"].as_str().unwrap_or("unknown"),
+                report["status"].as_str().unwrap_or("unknown")
+            );
+        }
+        println!(
+            "Only AtoAxis-owned registration/consent records were removed{}; agent configuration was preserved.",
+            if observer_config_removed {
+                " and the observer config"
+            } else {
+                ""
+            }
+        );
+        if service_removed {
+            println!("AtoAxis watcher service removed.");
+        } else if let Some(error) = service_error {
+            println!("Watcher removal warning: {error}");
+        }
+    }
+    Ok(())
+}
+
 fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     Ok(DiscoveryContext {
         home_dir: dirs::home_dir().ok_or("could not resolve home directory")?,
@@ -1032,8 +1386,9 @@ fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     })
 }
 
-fn print_ai_status() -> Result<(), Box<dyn Error>> {
+fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     let context = ai_discovery_context()?;
+    let mut reports = Vec::new();
     for (id, parser) in supported_ai_parsers() {
         let discoveries = parser.discover_sources(&context);
         let paths: Vec<PathBuf> = discoveries
@@ -1079,7 +1434,166 @@ fn print_ai_status() -> Result<(), Box<dyn Error>> {
                 )
             }
         };
-        println!("{id}: {description}");
+        reports.push(serde_json::json!({"agent": id, "status": description}));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else {
+        for report in reports {
+            println!(
+                "{}: {}",
+                report["agent"].as_str().unwrap_or("unknown"),
+                report["status"].as_str().unwrap_or("unknown")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn observer_config_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    Ok(home.join(".wakaclock").join("ai-observer.toml"))
+}
+
+fn ensure_observer_config_after_consent(
+    state: &mut AiSetupState,
+) -> Result<bool, Box<dyn Error>> {
+    let path = observer_config_path()?;
+    if path.exists() {
+        // A user-managed file wins. The compatibility parser still downgrades a
+        // legacy `infer` value, but setup must not overwrite a file it does not own.
+        return Ok(false);
+    }
+    let parent = path.parent().ok_or("observer config has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!("toml.tmp-{}", std::process::id()));
+    fs::write(
+        &temporary,
+        r#"# Managed by AtoAxis after explicit `ai setup` consent.
+enabled = true
+attribution_mode = "observe_only"
+"#,
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(temporary, path)?;
+    state.observer_config_owned = true;
+    Ok(true)
+}
+
+fn load_observer_config() -> ObserverConfig {
+    let Ok(path) = observer_config_path() else {
+        return ObserverConfig::default();
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return ObserverConfig::default();
+    };
+    let lower = contents.to_ascii_lowercase();
+    if lower.contains("attribution_mode") && lower.contains("infer") {
+        eprintln!(
+            "Warning: legacy attribution_mode=\"infer\" is compatibility-only and has been downgraded to observe_only; production inference is disabled."
+        );
+    }
+    ObserverConfig::from_toml(&contents).unwrap_or_default()
+}
+
+/// Produce and optionally upload the metadata-only diagnostics snapshot.  Discovery
+/// paths are used locally to count sources, but are never included in the JSON or
+/// sent to the API.
+async fn run_ai_doctor(
+    api_client: &ApiClient,
+    json: bool,
+    upload: bool,
+) -> Result<(), Box<dyn Error>> {
+    let context = ai_discovery_context()?;
+    let observer = load_observer_config();
+    let pending = match Queue::open() {
+        Ok(queue) => queue.len()? as u32,
+        Err(_) => 0,
+    };
+    let mut transcripts_watched = 0u32;
+    let mut adapters = Vec::new();
+
+    for (id, parser) in supported_ai_parsers() {
+        let discoveries = parser.discover_sources(&context);
+        let transcript_count = discoveries
+            .iter()
+            .filter(|result| matches!(result.state, DiscoveryState::TranscriptFound { .. }))
+            .count() as u32;
+        transcripts_watched += transcript_count;
+        let detected = !discoveries
+            .iter()
+            .all(|result| matches!(result.state, DiscoveryState::NotInstalled));
+        let diagnostic_code = if !detected {
+            Some("not_installed".to_string())
+        } else if transcript_count == 0 {
+            Some("transcript_missing".to_string())
+        } else {
+            None
+        };
+        // Discovery is intentionally never promoted to LiveTested or Verified.
+        // Those states require a fresh, privacy-reviewed live certification artifact;
+        // checked-in fixtures and local file presence are not sufficient evidence.
+        let verification = VerificationStatus::Scaffold;
+        adapters.push(AdapterFreshness {
+            agent: id.to_string(),
+            detected,
+            enabled: observer.enabled,
+            verification,
+            diagnostic_code,
+            ..Default::default()
+        });
+    }
+
+    let report = build_ai_diagnostics_report(
+        chrono::Utc::now(),
+        BrokerHealth {
+            running: false,
+            pending,
+            ..Default::default()
+        },
+        ParserLagSummary {
+            transcripts_watched,
+            transcripts_behind: 0,
+            max_lag_seconds: 0,
+        },
+        adapters,
+    );
+
+    if upload {
+        if let Err(error) = api_client.send_ai_diagnostics(&report).await {
+            eprintln!("Warning: diagnostics upload skipped: {error}");
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Observer: {} (production attribution: disabled)",
+            if observer.enabled {
+                "observe_only"
+            } else {
+                "off"
+            }
+        );
+        println!("Offline queue: {pending} pending heartbeat(s)");
+        for adapter in &report.adapters {
+            println!(
+                "{}: {} · verification={} · detected={} · enabled={}",
+                adapter.agent,
+                adapter.health_status(),
+                serde_json::to_string(&adapter.verification)?.trim_matches('"'),
+                adapter.detected,
+                adapter.enabled
+            );
+        }
+        if upload {
+            println!("Diagnostics upload attempted (metadata-only)");
+        }
     }
     Ok(())
 }
@@ -1542,6 +2056,10 @@ fn build_heartbeat(
         heartbeat.heartbeat_id = Some(Uuid::new_v4().to_string());
     }
 
+    // Keep local dry-runs and offline queue entries subject to the same
+    // accuracy-first rule as the server. Only verified hook/MCP/transcript
+    // evidence may publish a name; all other AI claims remain unattributed.
+    heartbeat.enforce_attribution_policy();
     heartbeat.validate().map_err(io::Error::other)?;
     Ok(heartbeat)
 }

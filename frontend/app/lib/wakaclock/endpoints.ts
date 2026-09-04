@@ -2,6 +2,7 @@ import { wakaclockClient } from './client';
 import { getCurrentToken } from './session';
 
 import type {
+  AiDiagnosticsResponse,
   AiStatsResponse,
   AllTimeResponse,
   AuthResponse,
@@ -135,6 +136,15 @@ export async function getAiStats(userId: string, start: string, end: string) {
   const { data } = await wakaclockClient.get<AiStatsResponse>('/users/current/ai_stats', {
     params: { user_id: userId, start, end },
   });
+  return data;
+}
+
+// GET /users/current/ai_diagnostics — only sanitized local health metadata.
+export async function getAiDiagnostics(userId: string) {
+  const { data } = await wakaclockClient.get<AiDiagnosticsResponse>(
+    '/users/current/ai_diagnostics',
+    { params: { user_id: userId } }
+  );
   return data;
 }
 

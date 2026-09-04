@@ -241,6 +241,56 @@ export interface AiStatsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// GET /users/current/ai_diagnostics — local, metadata-only observer health
+// ---------------------------------------------------------------------------
+export type AiVerificationStatus =
+  | 'installed'
+  | 'live_tested'
+  | 'scaffold'
+  | 'unsupported'
+  | 'verified';
+
+export interface AiDiagnosticsBroker {
+  dead_letter: number;
+  last_delivery_unix?: null | number;
+  last_error_code?: null | string;
+  pending: number;
+  retry: number;
+  running: boolean;
+}
+
+export interface AiDiagnosticsParser {
+  max_lag_seconds: number;
+  transcripts_behind: number;
+  transcripts_watched: number;
+}
+
+export interface AiAdapterFreshness {
+  agent: string;
+  dead_letter_events?: number;
+  detected: boolean;
+  diagnostic_code?: null | string;
+  enabled: boolean;
+  last_evidence_unix?: null | number;
+  pending_events?: number;
+  retry_events?: number;
+  transcript_lag_seconds?: null | number;
+  verification: AiVerificationStatus;
+}
+
+export interface AiDiagnosticsReport {
+  adapters: AiAdapterFreshness[];
+  broker: AiDiagnosticsBroker;
+  captured_at: string;
+  parser: AiDiagnosticsParser;
+  schema_version: number;
+}
+
+export interface AiDiagnosticsResponse {
+  report: AiDiagnosticsReport | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /users/current/keystroke_stats
 // ---------------------------------------------------------------------------
 export interface KeystrokeProjectItem {
@@ -592,6 +642,7 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  actor_type?: string;
   ai_agent?: null | string;
   ai_confidence?: null | string;
   ai_event_fingerprint?: null | string;
@@ -632,6 +683,7 @@ export interface HeartbeatListResponse {
 
 export interface HeartbeatPayload {
   active_seconds?: number;
+  actor_type?: string;
   ai_agent?: string;
   ai_confidence?: string;
   ai_event_id?: string;

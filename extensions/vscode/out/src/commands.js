@@ -233,7 +233,7 @@ async function chooseAiAgents(aiIntegrations, context) {
     const picked = await vscode.window.showQuickPick(candidates.map((status) => ({
         label: status.label,
         description: status.id,
-        detail: "Adds an AtoAxis hook when supported and enables the background transcript watcher. Prompts and source code are never uploaded.",
+        detail: "Adds an AtoAxis hook when supported and enables the background transcript watcher. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
         id: status.id,
     })), {
         title: "Choose AI tools for AtoAxis tracking",
@@ -267,7 +267,7 @@ async function showAiStatus(statuses) {
         label: `${status.detected ? "$(check)" : "$(circle-slash)"} ${status.label}`,
         description: status.detected
             ? status.enabled
-                ? "detected · tracking enabled"
+                ? "detected · capture configured (live certification shown separately)"
                 : "detected · setup required"
             : "not detected",
         detail: status.reason

@@ -1,4 +1,5 @@
 pub mod account_analytics;
+pub mod ai_diagnostics;
 pub mod authorization;
 pub mod billing;
 pub mod activity_timeline;

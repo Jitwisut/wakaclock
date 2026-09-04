@@ -35,6 +35,11 @@ impl HeartbeatService {
         heartbeats: Vec<Heartbeat>,
     ) -> Result<usize> {
         let mut heartbeats = heartbeats;
+        // Sanitize before deriving event/fingerprint identities so retries use the
+        // same canonical payload whether they came from a new or legacy client.
+        for heartbeat in &mut heartbeats {
+            heartbeat.enforce_attribution_policy();
+        }
         // Older clients did not send a transport ID. Derive a stable compatibility ID
         // from immutable marker fields so a retry of the same legacy payload cannot
         // create a second canonical interval. New clients always carry a random UUID.

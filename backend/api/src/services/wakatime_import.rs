@@ -120,7 +120,6 @@ fn map_heartbeat(
     let created_at = parse_created_at(heartbeat.created_at.as_deref());
     let category = normalize_category(heartbeat.category.as_deref());
     let is_ai_generated = is_ai_generated(&heartbeat);
-    let ai_agent = is_ai_generated.then(|| "wakatime".to_string());
     let ai_event_id = heartbeat.ai_session.clone();
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
@@ -168,11 +167,14 @@ fn map_heartbeat(
         active_seconds: None,
         activity_segments: "[]".to_string(),
         is_ai_generated,
-        ai_agent,
-        ai_provider: is_ai_generated.then(|| "wakatime".to_string()),
+        // A WakaTime export can tell us that a heartbeat was marked AI-assisted,
+        // but it cannot prove which local tool authored the edit. Preserve the
+        // AI totals while keeping the identity explicitly unattributed.
+        ai_agent: None,
+        ai_provider: None,
         ai_model: None,
-        ai_source: is_ai_generated.then(|| "wakatime_import".to_string()),
-        ai_confidence: is_ai_generated.then(|| "verified".to_string()),
+        ai_source: is_ai_generated.then(|| "observer".to_string()),
+        ai_confidence: is_ai_generated.then(|| "inferred".to_string()),
         ai_event_id,
         ai_change_id: None,
         prompt_character_count: None,
@@ -296,4 +298,30 @@ fn to_negative_u32(value: Option<i32>) -> Option<u32> {
     value
         .filter(|current| *current < 0)
         .and_then(|current| u32::try_from(current.unsigned_abs()).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_ai_activity_is_unattributed() {
+        let heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_000.0,
+            "category": "AI Coding",
+            "ai_line_changes": 3,
+            "ai_session": "session-1"
+        }))
+        .unwrap();
+        let row =
+            map_heartbeat(Uuid::nil(), heartbeat, "vscode", "macos", "wakatime-import").unwrap();
+
+        assert!(row.is_ai_generated);
+        assert!(row.ai_agent.is_none());
+        assert!(row.ai_provider.is_none());
+        assert_eq!(row.ai_source.as_deref(), Some("observer"));
+        assert_eq!(row.ai_confidence.as_deref(), Some("inferred"));
+    }
 }

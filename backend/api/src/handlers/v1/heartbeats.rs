@@ -62,6 +62,10 @@ pub struct HeartbeatPayload {
     pub active_seconds: Option<f64>,
     #[serde(default)]
     pub activity_segments: Vec<ActivitySegment>,
+    /// Compatibility label from actor-enum clients. It is never trusted to
+    /// promote an identity; inferred/unknown values force the safe bucket below.
+    #[serde(default)]
+    pub actor_type: Option<String>,
     pub is_ai_generated: Option<bool>,
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
@@ -159,6 +163,8 @@ pub struct HeartbeatItem {
     pub machine: String,
     pub heartbeat_id: Option<String>,
     pub activity_segments: Vec<ActivitySegment>,
+    /// Compatibility actor label retained for old API consumers.
+    pub actor_type: String,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -313,46 +319,85 @@ pub async fn list(
 
     let items: Vec<HeartbeatItem> = rows
         .into_iter()
-        .map(|r| HeartbeatItem {
-            // History is still owner-scoped, but the response must not become a path
-            // exfiltration endpoint. Keep project-relative names where possible and reduce
-            // legacy absolute/traversal rows to a safe basename.
-            entity: sanitize_entity(&r.entity),
-            entity_type: r.entity_type,
-            time: r.time,
-            project: r.project,
-            project_id: r.project_id,
-            branch: r.branch,
-            head_revision: r.head_revision,
-            repository_id: r.repository_id,
-            language: r.language,
-            is_write: r.is_write,
-            category: r.category,
-            lines: r.lines,
-            line_number: r.line_number,
-            cursor_position: r.cursor_position,
-            dependencies: r.dependencies,
-            ast_language: r.ast_language,
-            ast_confidence: r.ast_confidence,
-            active_seconds: r.active_seconds,
-            heartbeat_id: r.heartbeat_id,
-            activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
-            is_ai_generated: r.is_ai_generated,
-            ai_agent: r.ai_agent,
-            ai_provider: r.ai_provider,
-            ai_model: r.ai_model,
-            ai_source: r.ai_source,
-            ai_confidence: r.ai_confidence,
-            ai_event_id: r.ai_event_id,
-            ai_lines_added: r.ai_lines_added,
-            ai_lines_deleted: r.ai_lines_deleted,
-            human_lines_added: r.human_lines_added,
-            human_lines_deleted: r.human_lines_deleted,
-            unattributed_lines_added: r.unattributed_lines_added,
-            unattributed_lines_deleted: r.unattributed_lines_deleted,
-            editor: r.editor,
-            operating_system: r.operating_system,
-            machine: r.machine,
+        .map(|mut r| {
+            // Historical rows may predate the accuracy-first boundary. Apply the
+            // same source/confidence check at read time so an old inferred row can
+            // never reveal an agent name through the API.
+            let verified_identity = r.is_ai_generated
+                && r
+                    .ai_agent
+                    .as_deref()
+                    .is_some_and(|agent| !agent.trim().is_empty())
+                && r.ai_confidence
+                    .as_deref()
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
+                && r.ai_source.as_deref().is_some_and(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                    )
+                });
+            if !verified_identity {
+                if r.is_ai_generated {
+                    r.ai_confidence = Some("inferred".to_string());
+                    r.ai_source = Some("observer".to_string());
+                }
+                r.ai_agent = None;
+                r.ai_provider = None;
+                r.ai_model = None;
+            }
+            let actor_type = if r.is_ai_generated {
+                if verified_identity {
+                    "ai_verified"
+                } else {
+                    "ai_inferred"
+                }
+            } else {
+                "unknown"
+            }
+            .to_string();
+            HeartbeatItem {
+                // History is still owner-scoped, but the response must not become a path
+                // exfiltration endpoint. Keep project-relative names where possible and reduce
+                // legacy absolute/traversal rows to a safe basename.
+                entity: sanitize_entity(&r.entity),
+                entity_type: r.entity_type,
+                time: r.time,
+                project: r.project,
+                project_id: r.project_id,
+                branch: r.branch,
+                head_revision: r.head_revision,
+                repository_id: r.repository_id,
+                language: r.language,
+                is_write: r.is_write,
+                category: r.category,
+                lines: r.lines,
+                line_number: r.line_number,
+                cursor_position: r.cursor_position,
+                dependencies: r.dependencies,
+                ast_language: r.ast_language,
+                ast_confidence: r.ast_confidence,
+                active_seconds: r.active_seconds,
+                heartbeat_id: r.heartbeat_id,
+                activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
+                is_ai_generated: r.is_ai_generated,
+                ai_agent: r.ai_agent,
+                ai_provider: r.ai_provider,
+                ai_model: r.ai_model,
+                ai_source: r.ai_source,
+                ai_confidence: r.ai_confidence,
+                ai_event_id: r.ai_event_id,
+                ai_lines_added: r.ai_lines_added,
+                ai_lines_deleted: r.ai_lines_deleted,
+                human_lines_added: r.human_lines_added,
+                human_lines_deleted: r.human_lines_deleted,
+                unattributed_lines_added: r.unattributed_lines_added,
+                unattributed_lines_deleted: r.unattributed_lines_deleted,
+                editor: r.editor,
+                operating_system: r.operating_system,
+                machine: r.machine,
+                actor_type,
+            }
         })
         .collect();
 
@@ -412,12 +457,31 @@ async fn require_active_access(
 }
 
 fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
+    let legacy_actor = p
+        .actor_type
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let legacy_inferred = legacy_actor.as_deref().is_some_and(|value| {
+        matches!(value, "ai_inferred" | "inferred" | "correlated")
+    });
+    let legacy_unknown = legacy_actor
+        .as_deref()
+        .is_some_and(|value| matches!(value, "unknown" | "unattributed"));
+    let legacy_unattributed = legacy_inferred
+        || (legacy_unknown
+            && (p.ai_agent.is_some()
+                || p.ai_provider.is_some()
+                || p.ai_model.is_some()
+                || p.ai_event_id.is_some()
+                || p.is_ai_generated == Some(true)
+                || p.ai_lines_added.is_some_and(|value| value > 0)
+                || p.ai_lines_deleted.is_some_and(|value| value > 0)));
     let date = Heartbeat::date_from_time(p.time);
     let created_at = p
         .created_at
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    Heartbeat {
+    let mut heartbeat = Heartbeat {
         user_id,
         entity: p.entity,
         entity_type: p.entity_type,
@@ -480,7 +544,25 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
         created_at,
+    };
+    // Actor-enum clients may send an explicit inferred/unknown label. Honor that
+    // compatibility signal before applying the generic source/confidence policy so
+    // an old row cannot keep a stale name merely because it also carried
+    // verified-looking strings from a pre-policy client.
+    if legacy_unattributed {
+        heartbeat.is_ai_generated = true;
+        heartbeat.ai_agent = None;
+        heartbeat.ai_provider = None;
+        heartbeat.ai_model = None;
+        heartbeat.ai_confidence = Some("inferred".to_string());
+        heartbeat.ai_source = Some("observer".to_string());
+        heartbeat.attribution_source = None;
+        heartbeat.attribution_confidence = None;
     }
+    // Apply the same policy before validation and project resolution so old clients
+    // cannot persist an unverified agent name through either single or bulk ingest.
+    heartbeat.enforce_attribution_policy();
+    heartbeat
 }
 
 async fn resolve_heartbeat_project(
@@ -509,7 +591,9 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_entity;
+    use super::{payload_to_heartbeat, sanitize_entity, HeartbeatPayload};
+    use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn history_entity_redacts_absolute_and_traversal_paths() {
@@ -523,5 +607,74 @@ mod tests {
         );
         assert_eq!(sanitize_entity("../../secrets.env"), "secrets.env");
         assert_eq!(sanitize_entity("src/main.rs"), "src/main.rs");
+    }
+
+    #[test]
+    fn legacy_unverified_ai_payload_is_stored_as_unattributed() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "ide_telemetry",
+            "ai_confidence": "correlated",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        assert!(heartbeat.is_ai_generated);
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+    }
+
+    #[test]
+    fn verified_hook_payload_keeps_identity() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
+        assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn legacy_actor_enum_cannot_override_the_identity_boundary() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "actor_type": "ai_inferred",
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        assert!(heartbeat.is_ai_generated);
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
     }
 }
