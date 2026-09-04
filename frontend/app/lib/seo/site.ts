@@ -181,8 +181,18 @@ export interface PublicRouteDefinition {
  * entry when you change that page's words, not when you touch its component.
  */
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
+  '/': '2026-09-04',
   '/ai-cost-tracking': '2026-08-23',
 };
+
+/**
+ * The newest date above, used as the site-wide `dateModified` in structured data.
+ *
+ * Deliberately derived rather than hand-written: a second literal would be a second thing
+ * to forget. Answer engines read `dateModified` as the freshness signal for the entity,
+ * not for one URL, so the most recent editorial change on the site is the honest value.
+ */
+export const SITE_MODIFIED = Object.values(ROUTE_CONTENT_DATES).sort().at(-1) as string;
 
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
 export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [

@@ -8,9 +8,17 @@ import {
   SOCIAL_IMAGE_PATH,
 } from '@/lib/seo/site';
 
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 
 import './globals.css';
+
+/**
+ * `theme-color` tints the mobile browser chrome; it carries no ranking weight. The value
+ * is the same slate the PWA manifest declares, so the two never drift apart.
+ */
+export const viewport: Viewport = {
+  themeColor: '#0f172a',
+};
 
 /**
  * Cookie-backed dashboard theme state and authenticated providers live under /dashboard,
@@ -52,6 +60,26 @@ export const metadata: Metadata = {
     title: `${SITE_NAME} — Developer Time Tracking`,
     description: SITE_TAGLINE,
     images: [SOCIAL_IMAGE_PATH],
+  },
+  /**
+   * Without `max-image-preview: large`, Google caps the preview it will show for this
+   * site at a thumbnail, which rules the pages out of Discover and shrinks the image in
+   * a normal result. The other two are Google's own defaults, restated so the directive
+   * reads as a complete policy rather than a single override.
+   *
+   * Per-page `noindex` still wins over this: the private surfaces set their own robots
+   * metadata in their layouts, and a page-level directive overrides the root one.
+   */
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+      'max-video-preview': -1,
+    },
   },
   verification: {
     google: 'RA0nx3aI674qLp5GwkgzJPk3-7a7ulAAaDNcBgvtLs4',

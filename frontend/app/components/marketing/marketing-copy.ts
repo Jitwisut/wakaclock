@@ -95,7 +95,9 @@ export const EN_HOME = {
   badge: 'Complete history, and it works with the WakaTime API',
   title: 'Developer time tracking\nwith your full history.',
   tagline: 'One timeline for everything you do.',
-  description: `${SITE_NAME} records coding time across projects, languages, branches and editors. It implements the WakaTime API, so an existing plugin can point at it and every account keeps complete coding history.`,
+  // Kept under ~155 characters so search engines show it whole rather than truncating
+  // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
+  description: `${SITE_NAME} records your coding time by project, language, branch and editor. It implements the WakaTime API and keeps your complete coding history.`,
   whatIs: `${SITE_NAME} is a developer time tracking service. It receives editor heartbeats and turns them into dashboards for coding time, projects, programming languages, branches and editors without storing source code or conversation content.`,
   howItWorks:
     'An editor sends a heartbeat when you type, switch to or save a file. Each event carries metadata such as file path, project, branch, language, editor and operating system. Consecutive events become duration blocks; idle gaps are not counted.',
@@ -172,7 +174,8 @@ export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
   title: 'ติดตามเวลาการเขียนโค้ด\nพร้อมประวัติของคุณครบถ้วน',
   tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
-  description: `${SITE_NAME} คือเครื่องมือติดตามเวลาการเขียนโค้ด (โปรแกรมจับเวลา coding) สำหรับนักพัฒนา บันทึกเวลาแยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API เพื่อเชื่อม plugin เดิม และเก็บประวัติการเขียนโค้ดของบัญชีไว้อย่างครบถ้วน`,
+  // Same length budget as the English description above.
+  description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
   whatIs: `${SITE_NAME} คือเครื่องมือและบริการติดตามเวลาการเขียนโค้ด (โปรแกรมนับเวลาเขียนโค้ด) สำหรับนักพัฒนา รับ editor heartbeat แล้วเปลี่ยนเป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor โดยไม่เก็บ source code หรือเนื้อหาการสนทนา`,
   howItWorks:
     'editor จะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ระบบรวม heartbeat ที่เกิดใกล้กันเป็น duration block และไม่นับ idle gap',

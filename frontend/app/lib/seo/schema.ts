@@ -2,6 +2,7 @@ import {
   absoluteUrl,
   ORGANIZATION,
   PRODUCT_ANSWER,
+  SITE_MODIFIED,
   SITE_NAME,
   SITE_TAGLINE,
   SITE_URL,
@@ -50,12 +51,21 @@ export function organizationSchema(): JsonLdValue {
   };
 }
 
+/**
+ * The site is written and maintained by the company, not by individual bylined authors,
+ * so `author` points at the Organization entity rather than a Person. Schema.org permits
+ * either, and naming a person who does not actually write these pages would be a
+ * fabricated credential — the same reason there is no `Review` or `aggregateRating` here.
+ */
 export function websiteSchema(): JsonLdValue {
   return {
     '@type': 'WebSite',
     '@id': absoluteUrl('/#website'),
     name: SITE_NAME,
     url: SITE_URL,
+    inLanguage: ['en', 'th'],
+    dateModified: SITE_MODIFIED,
+    author: { '@id': absoluteUrl('/#organization') },
     publisher: { '@id': absoluteUrl('/#organization') },
   };
 }
@@ -85,6 +95,8 @@ export function softwareApplicationSchema(): JsonLdValue {
     applicationSubCategory: 'Time tracking and developer analytics',
     operatingSystem: 'Linux, macOS, Windows',
     slogan: SITE_TAGLINE,
+    dateModified: SITE_MODIFIED,
+    author: { '@id': absoluteUrl('/#organization') },
     featureList: [
       'Coding time tracking derived from editor heartbeats',
       'Breakdown by project, programming language, editor, branch and operating system',
