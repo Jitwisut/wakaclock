@@ -13,14 +13,7 @@ import {
   ChartTooltipContent,
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { AiAgentsTable } from '@/components/wakaclock/ai-agents-table';
 import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
 import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { AiIntegrationsPanel } from '@/components/wakaclock/ai-integrations-panel';
@@ -256,47 +249,7 @@ function AiStatsPanel() {
               <AiDiagnosticsPanel report={diagnostics?.report ?? null} />
               <AiIntegrationsPanel report={diagnostics?.report ?? null} />
 
-              <div>
-                <h3 className="mb-2 text-sm font-medium">Agents</h3>
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Actor</TableHead>
-                        <TableHead>Agent</TableHead>
-                        <TableHead>Provider / model</TableHead>
-                        <TableHead>AI added</TableHead>
-                        <TableHead>AI deleted</TableHead>
-                        <TableHead>Human added</TableHead>
-                        <TableHead>Unknown</TableHead>
-                        <TableHead className="text-right">Heartbeats</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {stats.agents.map((agent) => (
-                        <TableRow
-                          key={`${agent.actor_type}:${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
-                        >
-                          <TableCell className="capitalize">
-                            {agent.actor_type.replaceAll('_', ' ')}
-                          </TableCell>
-                          <TableCell className="font-medium">{agent.agent}</TableCell>
-                          <TableCell>
-                            {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
-                          </TableCell>
-                          <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
-                          <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
-                          <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
-                          <TableCell>{formatCompactNumber(agent.unknown_lines_added)}</TableCell>
-                          <TableCell className="text-right">
-                            {formatCompactNumber(agent.heartbeat_count)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
+              <AiAgentsTable agents={stats.agents} />
             </div>
           )}
         </QueryState>

@@ -55,7 +55,10 @@ impl AnalyticsRepository {
     /// Returns whether the drop ran, so the caller can publish the marker only after
     /// the recreate has succeeded. `ai_daily` is a separate table and keeps every row
     /// it holds; the historical rows already keyed `'human'` stay wrong until
-    /// `POST /api/v1/analytics/rebuild` rewrites the range.
+    /// `POST /api/v1/reprocess` rewrites the range — that is `ReprocessService`, whose
+    /// `AGGREGATE_TABLES` includes `ai_daily`. Not `POST /api/v1/analytics/rebuild`,
+    /// which is `AccountAnalyticsService::rebuild` over the account-projection tables
+    /// only and never touches this one.
     async fn drop_stale_ai_summary_views(&self) -> Result<bool> {
         let client = self.client.get_client();
         client

@@ -348,6 +348,12 @@ async fn process_record(
             .default_confidence(Some(event.source.as_str()), Some(event.confidence.as_str()))
     });
     heartbeat.is_ai_generated = heartbeat.actor_type.is_ai();
+    // Must come after the actor override above, not inside `build_ai_heartbeat`: that
+    // runs before this line, so it would test the actor `resolve_attribution` derived
+    // rather than the one the correlation verdict actually landed on. The broker event
+    // keeps its own `agent` — the envelope is the private correlation record and drives
+    // per-agent pipeline diagnostics; the heartbeat is the published fact.
+    heartbeat.redact_inferred_agent_identity();
     heartbeat.activity_segments = if active_seconds > 0.0 {
         vec![ActivitySegment {
             segment_id: format!("{}:segment", event.heartbeat_id()),

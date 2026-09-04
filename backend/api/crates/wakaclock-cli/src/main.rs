@@ -4361,6 +4361,11 @@ fn build_heartbeat(
         heartbeat.heartbeat_id = Some(Uuid::new_v4().to_string());
     }
 
+    // Before `validate()`, which refuses an `ai_inferred` heartbeat that still names an
+    // agent. `resolve_attribution` has already consumed the name above, so this only
+    // drops the stored identity.
+    heartbeat.redact_inferred_agent_identity();
+
     heartbeat.validate().map_err(io::Error::other)?;
     Ok(heartbeat)
 }

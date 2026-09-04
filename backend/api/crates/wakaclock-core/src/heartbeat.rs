@@ -621,6 +621,34 @@ impl Heartbeat {
         dt.format("%Y-%m-%d").to_string()
     }
 
+    /// Strip the AI's *identity* from a heartbeat that only reached `ai_inferred`.
+    ///
+    /// `ai_inferred` means the filesystem/process observers saw a file change near a
+    /// live agent — evidence that *an* AI acted, never proof of *which* one. Naming a
+    /// tool on that basis is a guess presented as fact: with two agents running, or one
+    /// running while a formatter rewrites the file, the name is simply whichever session
+    /// happened to be alive. `plans/decision-accuracy-over-coverage.md` chose precision
+    /// over coverage here, matching WakaTime's native-hook-only model.
+    ///
+    /// `ai_provider` and `ai_model` go with `ai_agent`: a surviving
+    /// `ai_model = "claude-sonnet-4"` identifies the tool exactly as well as its name.
+    ///
+    /// `ai_event_id` and `ai_source` are deliberately **kept** — they carry the AI
+    /// evidence and its lineage without naming anything, and `has_ai_evidence` still
+    /// sees them, so redaction can never downgrade an AI heartbeat to Human/Unknown.
+    ///
+    /// Idempotent, and a no-op for every actor type other than `AiInferred`. An
+    /// all-whitespace agent is cleared too, so `""` cannot survive as a name through a
+    /// SQL `coalesce`.
+    pub fn redact_inferred_agent_identity(&mut self) {
+        if self.actor_type != ActorType::AiInferred {
+            return;
+        }
+        self.ai_agent = None;
+        self.ai_provider = None;
+        self.ai_model = None;
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.entity.trim().is_empty() {
             return Err("entity cannot be empty".to_string());
@@ -643,6 +671,14 @@ impl Heartbeat {
         }
         if self.is_ai_generated != self.actor_type.is_ai() {
             return Err("is_ai_generated must match actor_type".to_string());
+        }
+        // Inference proves *an* AI acted, never *which* one — see
+        // `redact_inferred_agent_identity`. Stated unconditionally on the stored struct:
+        // conditioning on `ai_source` would reintroduce exactly the provenance reasoning
+        // this rule exists to remove. Every ingest path redacts before reaching here, so
+        // this is a tripwire for a future path that forgets, not client policing.
+        if self.actor_type == ActorType::AiInferred && self.ai_agent.is_some() {
+            return Err("ai_inferred heartbeats cannot name an ai_agent".to_string());
         }
         if let Some(heartbeat_id) = self.heartbeat_id.as_deref() {
             if heartbeat_id.trim().is_empty() {
@@ -950,6 +986,73 @@ mod tests {
         assert!(heartbeat.validate().is_err());
         heartbeat.is_ai_generated = true;
         assert!(heartbeat.validate().is_ok());
+    }
+
+    fn ai_heartbeat(actor_type: ActorType) -> Heartbeat {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        heartbeat.actor_type = actor_type;
+        heartbeat.actor_confidence = 0.6;
+        heartbeat.is_ai_generated = true;
+        heartbeat.ai_agent = Some("codex".to_string());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_model = Some("gpt-5.6-sol".to_string());
+        heartbeat.ai_source = Some("ide_telemetry".to_string());
+        heartbeat.ai_event_id = Some("evt-1".to_string());
+        heartbeat
+    }
+
+    #[test]
+    fn inferred_heartbeat_cannot_name_an_agent() {
+        let mut heartbeat = ai_heartbeat(ActorType::AiInferred);
+        let error = heartbeat.validate().unwrap_err();
+        assert!(error.contains("ai_inferred"), "{error}");
+
+        heartbeat.redact_inferred_agent_identity();
+        assert!(heartbeat.validate().is_ok());
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        // The evidence and its lineage survive — only the identity is dropped.
+        assert_eq!(heartbeat.ai_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("ide_telemetry"));
+        assert!(heartbeat.is_ai_generated);
+
+        // Idempotent.
+        heartbeat.redact_inferred_agent_identity();
+        assert!(heartbeat.validate().is_ok());
+    }
+
+    #[test]
+    fn verified_heartbeat_keeps_its_agent_name() {
+        let mut heartbeat = ai_heartbeat(ActorType::AiVerified);
+        heartbeat.actor_confidence = 1.0;
+        assert!(heartbeat.validate().is_ok());
+
+        heartbeat.redact_inferred_agent_identity();
+        assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
+        assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        assert_eq!(heartbeat.ai_model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn redacting_the_agent_does_not_downgrade_ai_evidence() {
+        // The regression guard for the whole design: `ai_agent` is AI evidence for
+        // `has_ai_evidence`, so if it were the *only* signal, redacting it would
+        // silently reclassify the heartbeat as Human or Unknown. `ai_event_id` and
+        // `ai_source` are retained precisely so it stays AI.
+        let resolved = resolve_attribution(AttributionInput {
+            ai_agent: None,
+            ai_event_id: Some("evt-1"),
+            ai_source: Some("ide_telemetry"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(resolved.actor_type, ActorType::AiInferred);
     }
 
     #[test]

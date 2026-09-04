@@ -576,7 +576,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         positive_editor_evidence,
     })?;
 
-    Ok(Heartbeat {
+    let mut heartbeat = Heartbeat {
         user_id,
         entity: p.entity,
         entity_type: p.entity_type,
@@ -648,7 +648,14 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
         created_at,
-    })
+    };
+
+    // Runs *after* `resolve_attribution` above, never before: the resolver consumes
+    // `ai_agent` as AI evidence, so redacting first could reclassify the heartbeat.
+    // Here classification is already decided and only the stored identity is dropped.
+    heartbeat.redact_inferred_agent_identity();
+
+    Ok(heartbeat)
 }
 
 async fn resolve_heartbeat_project(
@@ -791,6 +798,57 @@ mod tests {
         assert_eq!(heartbeat.actor_type, ActorType::AiVerified);
         assert_eq!(heartbeat.actor_confidence, 0.95);
         assert!(heartbeat.is_ai_generated);
+    }
+
+    #[test]
+    fn inferred_payload_loses_its_agent_name_but_keeps_ai_classification() {
+        // Pins the ordering inside `payload_to_heartbeat`: `resolve_attribution` must
+        // run while `ai_agent` is still present (it is AI evidence), and the redaction
+        // must happen after. Move the redaction above the resolver and this fails —
+        // the heartbeat would come back Unknown instead of AiInferred.
+        let payload: super::HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "gpt-5.6-sol",
+            "ai_source": "ide_telemetry",
+            "ai_event_id": "evt-1",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
+        assert!(heartbeat.is_ai_generated);
+        assert!(heartbeat.ai_agent.is_none(), "agent name must not be stored");
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        // Evidence and lineage survive so the row is still explainable.
+        assert_eq!(heartbeat.ai_event_id.as_deref(), Some("evt-1"));
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("ide_telemetry"));
+        assert!(heartbeat.validate().is_ok());
+    }
+
+    #[test]
+    fn verified_payload_keeps_its_agent_name() {
+        let payload: super::HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "claude-code",
+            "ai_provider": "anthropic",
+            "ai_source": "agent_hook",
+            "ai_event_id": "evt-2",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, ActorType::AiVerified);
+        assert_eq!(heartbeat.ai_agent.as_deref(), Some("claude-code"));
+        assert_eq!(heartbeat.ai_provider.as_deref(), Some("anthropic"));
     }
 
     #[test]
