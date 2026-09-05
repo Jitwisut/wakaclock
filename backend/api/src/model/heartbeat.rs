@@ -90,6 +90,10 @@ pub struct HeartbeatRow {
     pub paste_same_file_actions: Option<u32>,
     pub paste_same_workspace_actions: Option<u32>,
     pub paste_external_or_unknown_actions: Option<u32>,
+    /// Attribution correction revision. Existing rows and first observations are
+    /// revision 0; later full-value corrections append a higher revision for the same
+    /// canonical operation and readers must select the max revision before summing.
+    pub revision: u32,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat

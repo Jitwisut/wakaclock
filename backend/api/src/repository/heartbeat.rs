@@ -107,7 +107,8 @@ impl HeartbeatRepository {
                     pasted_lines Nullable(UInt32),
                     paste_same_file_actions Nullable(UInt32),
                     paste_same_workspace_actions Nullable(UInt32),
-                    paste_external_or_unknown_actions Nullable(UInt32)
+                    paste_external_or_unknown_actions Nullable(UInt32),
+                    revision UInt32 DEFAULT 0
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -215,6 +216,7 @@ impl HeartbeatRepository {
             "paste_same_file_actions Nullable(UInt32)",
             "paste_same_workspace_actions Nullable(UInt32)",
             "paste_external_or_unknown_actions Nullable(UInt32)",
+            "revision UInt32 DEFAULT 0",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -342,6 +344,7 @@ impl HeartbeatRepository {
             "paste_same_file_actions Nullable(UInt32)",
             "paste_same_workspace_actions Nullable(UInt32)",
             "paste_external_or_unknown_actions Nullable(UInt32)",
+            "revision UInt32 DEFAULT 0",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -636,7 +639,7 @@ impl HeartbeatRepository {
                     clipboard_tracking_version, copy_actions, paste_actions,
                     copied_chars, copied_lines, pasted_chars, pasted_lines,
                     paste_same_file_actions, paste_same_workspace_actions,
-                    paste_external_or_unknown_actions
+                    paste_external_or_unknown_actions, revision
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND time >= ? AND time < ?
                 ORDER BY time ASC",

@@ -1,6 +1,6 @@
 # Wire/schema compatibility inventory
 
-วันที่: 2026-09-05 · Task: [F0-06](ai-coverage-task-ledger.md) · สถานะ: inventory + sequencing decision, ไม่ใช่ implementation
+วันที่: 2026-09-05 · Task: [F0-06](ai-coverage-task-ledger.md) · สถานะ: inventory + sequencing decision; local F1 storage slice now implemented
 
 Depends on [F0-05](design-canonical-operation-and-revision-protocol.md).
 Covers every wire/schema surface F0's work touched or that F1 will touch, per
@@ -104,18 +104,15 @@ rule in [.context/data/migrations.md](../.context/data/migrations.md).
 | `BrokerEventV1.editor: Option<String>` | A | Shipped (`c4d36f5`, on `main`) | Nullable/`#[serde(default)]`, so *content*-wise additive — but Boundary A's strictness (§2) makes it **not** deploy-order-safe until hook/CLI/broker are all rebuilt together | client/core | `build_ai_heartbeat`/`broker_event_from_heartbeat` (editor attribution) | Same as the heartbeat row it rides on — no separate retention; not yet documented anywhere as a distinct policy |
 | `GenericAiEventInput.editor` / `LegacyAiEventInput` (`into_generic`) | A | Shipped (`c4d36f5`) | Same caveat as above | client/core | Same | Same |
 | `ALLOWED_EVENT_FIELDS` allowlist (+`"editor"`) | A (quarantine diagnostic) | Shipped (`c4d36f5`) | Yes — allowlist-only change, quarantine still correctly flags truly-unknown fields | client/core | `QuarantineDiagnostic::inspect` | N/A — compiled-in constant, not stored data |
-| `heartbeats.revision` (proposed, F1-06) | C | Not built | Yes, if `Nullable(UInt32) DEFAULT 0` or similar — matches the `IF NOT EXISTS`/nullable convention | backend | Canonical-winner read path (F1-08) | **Not decided** — F0-05 doesn't set a retention policy for superseded (non-max) revisions; this is an open question for F1-06, not answered by this inventory |
-| `event_aliases` table (proposed, F1-05) | C | Not built | Yes — new table, `CREATE TABLE IF NOT EXISTS`, no existing table touched | backend | Canonical operation ID resolution (F1-05) | **Not decided** — same gap as above |
+| `heartbeats.revision` | C | Additive column implemented on `features/ai-coverage-f0-baseline` | Yes — trailing `UInt32 DEFAULT 0` with `ADD COLUMN IF NOT EXISTS`; old rows are implicitly revision 0 | backend | `HeartbeatRow`/reprocess readers now carry it; canonical-winner projection is F1-08 | 30 days for superseded rows; keep the current max revision — [retention policy](ai-coverage-retention-policy.md) |
+| `event_aliases` table | C/local ledger slice | Local SQLite table and one-hop writer implemented; server table remains F1-05 | Yes — new table, additive create | `AiAttributionState::record_event_alias`; server canonical operation resolution remains | 30 days after `last_seen_at` — [retention policy](ai-coverage-retention-policy.md) |
 | Materialized views summing `ai_lines_added`/`human_lines_added` (`mv_ai_summary`, `mv_inc_*`, per [.context/data/overview.md](../.context/data/overview.md)) | C | Existing | **Not yet additive-safe against revisions** — per F0-05 §4, once `revision` exists these must filter to `max(revision)` per canonical operation before summing, or they silently double-count corrected rows. This is the concrete instance of F0-05's named F1-08 consequence. | backend | Dashboard analytics (F6) | Follows existing rollup retention (undocumented here — out of this inventory's scope) |
 | Postgres (`001_phase10_foundation.sql`) | — | N/A | **No F0/F1 field in this design lands in Postgres.** Postgres owns identity/access/org/OAuth/billing state ([.context/data/overview.md](../.context/data/overview.md)); attribution/revision data is ClickHouse-only. Sequence and downgrade semantics for Postgres are therefore **unchanged by this work** — stated explicitly so this isn't mistaken for an unreviewed gap. | — | — | — |
 
-**Retention is the one column this inventory cannot close.** F0-05's design
-introduced `revision` and `event_aliases` without specifying how long a
-superseded (non-max) revision row is kept, or whether it's ever pruned. This
-is a genuine open item for F1-06, not something F0-06 can answer by reading
-existing code — no revision concept exists yet to have a retention policy
-copied from. Flagging this explicitly matters for F0's own exit gate (§8
-below).
+Retention is now explicit for the first implementation: 15 seconds of late
+reconciliation grace, 24 hours for pending observations, and 30 days for superseded
+revisions and aliases. The server projection and writer are still F1 work, but their
+retention owner and default are no longer implicit.
 
 ## 4. Server-first sequence (Boundary B/C — the case it actually applies to)
 
@@ -200,8 +197,10 @@ API response field:
 
 ## 7. Non-goals
 
-- Does not implement the `revision` column, `event_aliases` table, or any
-  parsing-strictness change — all F1 (F1-05/F1-06/F1-07/F1-08).
+- Does not implement the server-side correction writer, `event_aliases` ClickHouse
+  table, canonical-winner projections, or any parsing-strictness change — these remain
+  F1 (F1-05/F1-06/F1-07/F1-08). The additive `revision` column and local SQLite
+  alias/revision ledger are the first implementation slice and are documented above.
 - Does not decide tolerant-parsing vs. negotiation for Boundary A — flagged
   as an open F1-07 decision, not resolved here.
 - Does not audit every existing field on `BrokerEventV1` for historical
@@ -216,13 +215,7 @@ API response field:
 
 F0's own closing criterion (execution-plan §7) requires *"ทุก planned schema
 field มี consumer/owner/retention"* — every planned schema field has a
-consumer, owner, and retention policy. Checked against §3's table: every
-field has an owner and a consumer. **Retention does not** — `revision` and
-`event_aliases` are both marked "not decided" in §3, because F0-05's design
-never set one and no prior art exists to infer one from. **F0's phase exit
-gate is therefore not met by this document alone.** Closing it requires
-F1-06 to pick a retention policy for superseded revisions (keep forever for
-audit? prune after N days once a canonical winner is stable?) before F0 can
-be considered done in the sense the execution plan's own gate demands — not
-just "F0-01 through F0-06 have documents," which is a weaker claim this
-inventory does not want to be mistaken for.
+consumer, owner, and retention policy. The retention decision is now recorded and
+enforced by the local ledger, so this specific F0 gate is reviewable. F0 still has no
+live ground-truth certification; implementation and server projection work continues
+under F1.

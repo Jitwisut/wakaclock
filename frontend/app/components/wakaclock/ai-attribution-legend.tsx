@@ -57,7 +57,7 @@ export function AiAttributionLegend({
       evidence:
         'The file changed but authorship could not be proven, or human and AI evidence conflicted. Never counted as AI.',
       key: 'unknown',
-      label: 'Unknown',
+      label: 'Unknown authorship',
       percent: unknownPercent,
     },
   ];
@@ -70,11 +70,11 @@ export function AiAttributionLegend({
           <div className="rounded-md border p-3" key={row.key}>
             <dt className="flex items-baseline justify-between gap-2">
               <span className="text-sm font-medium">{row.label}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">
+              <span className="text-muted-foreground text-xs tabular-nums">
                 {formatPercent(row.percent, 0)} of heartbeats
               </span>
             </dt>
-            <dd className="mt-1 text-xs text-muted-foreground">{row.evidence}</dd>
+            <dd className="text-muted-foreground mt-1 text-xs">{row.evidence}</dd>
           </div>
         ))}
       </dl>

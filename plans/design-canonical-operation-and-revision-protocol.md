@@ -1,6 +1,13 @@
 # Design — canonical operation, aliases, revision and correction protocol
 
-วันที่: 2026-09-05 · Task: [F0-05](ai-coverage-task-ledger.md) · สถานะ: design record, ไม่ใช่ implementation
+วันที่: 2026-09-05 · Task: [F0-05](ai-coverage-task-ledger.md) · สถานะ: design record; F1 local storage slice now implements the core rules
+
+The design record below remains the protocol decision and worked-example source of
+truth. F1 has since selected initial operational defaults (15-second grace, 24-hour
+pending observations, 30-day superseded-revision and alias retention) and implemented
+the local SQLite ledger in [`ai/revision.rs`](../backend/api/crates/wakaclock-core/src/ai/revision.rs)
+and [`ai/state.rs`](../backend/api/crates/wakaclock-core/src/ai/state.rs). Those values
+are still benchmark-tunable; the server writer and projections remain F1 work.
 
 Depends on [F0-03](decision-unknown-authorship-vs-unattributed-ai.md) and
 [F0-04](../docs/vscode-human-input-capability-spike-2026-09-05.md), both closed.

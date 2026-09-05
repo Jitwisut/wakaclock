@@ -46,13 +46,10 @@ describe('AiAgentsTable', () => {
     // Hiding the row would stop these counts reconciling with the "AI inferred"
     // share rendered above the table.
     render(
-      <AiAgentsTable
-        agents={[agent('ai_inferred', { ai_lines_added: 42, heartbeat_count: 7 })]}
-      />
+      <AiAgentsTable agents={[agent('ai_inferred', { ai_lines_added: 42, heartbeat_count: 7 })]} />
     );
 
-    // `capitalize` is CSS only, so the accessible text stays lower-case.
-    expect(screen.getByText('ai inferred')).toBeInTheDocument();
+    expect(screen.getByText('AI inferred')).toBeInTheDocument();
     expect(screen.getByText('42')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
   });
@@ -60,9 +57,42 @@ describe('AiAgentsTable', () => {
   it('leaves human rows untouched', () => {
     render(<AiAgentsTable agents={[agent('human', { agent: 'human' })]} />);
 
-    // "human" is both the actor and the agent label here, so assert on the count
+    // "Human" is both the actor and the agent label here, so assert on the count
     // rather than a single match.
-    expect(screen.getAllByText('human')).toHaveLength(2);
+    expect(screen.getAllByText('Human')).toHaveLength(2);
     expect(screen.queryByText('Unattributed AI')).not.toBeInTheDocument();
+  });
+
+  it('labels unknown authorship and does not render an unknown identity pair', () => {
+    render(
+      <AiAgentsTable
+        agents={[
+          agent('unknown', {
+            agent: 'unknown',
+            provider: 'unknown',
+            model: 'unknown',
+            heartbeat_count: 2,
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.getAllByText('Unknown authorship')).toHaveLength(2);
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(screen.queryByText('unknown / unknown')).not.toBeInTheDocument();
+  });
+
+  it('keeps verified provider and model labels independent when one is missing', () => {
+    render(
+      <AiAgentsTable
+        agents={[
+          agent('ai_verified', { provider: null, model: 'gpt-5.6-sol' }),
+          agent('ai_verified', { provider: 'openai', model: null }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Provider not reported / gpt-5.6-sol')).toBeInTheDocument();
+    expect(screen.getByText('openai / Model not reported')).toBeInTheDocument();
   });
 });

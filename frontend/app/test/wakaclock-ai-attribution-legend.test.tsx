@@ -22,7 +22,7 @@ describe('AiAttributionLegend', () => {
     expect(screen.getByText('AI verified')).toBeInTheDocument();
     expect(screen.getByText('AI inferred')).toBeInTheDocument();
     expect(screen.getByText('Human')).toBeInTheDocument();
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getByText('Unknown authorship')).toBeInTheDocument();
 
     expect(screen.getByText(/native agent hook or MCP tool/i)).toBeInTheDocument();
     expect(screen.getByText(/inside the correlation window/i)).toBeInTheDocument();

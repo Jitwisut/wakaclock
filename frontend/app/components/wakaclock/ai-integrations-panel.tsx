@@ -3,6 +3,10 @@
 import type { ReactNode } from 'react';
 
 import { Badge } from '@/components/ui/badge';
+import {
+  formatIntegrationAgentName,
+  formatIntegrationProviderModel,
+} from '@/lib/wakaclock/ai-display';
 import type { AdapterFreshness, AiDiagnosticsReport } from '@/lib/wakaclock/types';
 
 export interface AiIntegrationsPanelProps {
@@ -60,7 +64,9 @@ const statusLabels: Record<IntegrationStatus, string> = {
   unverified: 'Unverified',
 };
 
-function statusVariant(status: IntegrationStatus): 'default' | 'destructive' | 'outline' | 'secondary' {
+function statusVariant(
+  status: IntegrationStatus
+): 'default' | 'destructive' | 'outline' | 'secondary' {
   if (status === 'healthy') return 'default';
   if (status === 'degraded' || status === 'needs_trust') return 'destructive';
   if (status === 'disabled') return 'secondary';
@@ -70,7 +76,7 @@ function statusVariant(status: IntegrationStatus): 'default' | 'destructive' | '
 
 export function AiIntegrationsPanel({ report }: AiIntegrationsPanelProps) {
   let integrationsBody: ReactNode = (
-    <p className="text-xs text-muted-foreground">
+    <p className="text-muted-foreground text-xs">
       No integration health snapshot received. Run <code>wakaclock doctor ai</code> on a machine
       with the broker active.
     </p>
@@ -78,13 +84,13 @@ export function AiIntegrationsPanel({ report }: AiIntegrationsPanelProps) {
   if (report) {
     if (report.adapters.length === 0) {
       integrationsBody = (
-        <p className="text-xs text-muted-foreground">No adapters have been detected yet.</p>
+        <p className="text-muted-foreground text-xs">No adapters have been detected yet.</p>
       );
     } else {
       integrationsBody = (
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full min-w-[860px] text-xs">
-            <thead className="border-b bg-muted/30 text-left">
+            <thead className="bg-muted/30 border-b text-left">
               <tr>
                 <th className="px-3 py-2 font-medium">Agent</th>
                 <th className="px-3 py-2 font-medium">Provider / model</th>
@@ -104,23 +110,23 @@ export function AiIntegrationsPanel({ report }: AiIntegrationsPanelProps) {
                 return (
                   <tr className="border-b last:border-0" key={adapter.agent}>
                     <td className="px-3 py-2 font-medium">
-                      <div>{adapter.agent}</div>
+                      <div>{formatIntegrationAgentName(adapter.agent)}</div>
                       <Badge className="mt-1" variant={statusVariant(status)}>
                         {statusLabels[status]}
                       </Badge>
                     </td>
                     <td className="px-3 py-2">
-                      {adapter.provider_id ?? 'unknown'} / {adapter.model_id ?? 'unknown'}
+                      {formatIntegrationProviderModel(adapter.provider_id, adapter.model_id)}
                     </td>
                     <td className="px-3 py-2">
                       {adapter.detected ? 'detected' : 'not detected'} ·{' '}
                       {adapter.enabled ? 'enabled' : 'disabled'}
                     </td>
                     <td className="px-3 py-2">{adapter.verification}</td>
-                    <td className="px-3 py-2">{adapter.transport ?? 'unknown'}</td>
+                    <td className="px-3 py-2">{adapter.transport ?? 'Transport not reported'}</td>
                     <td className="px-3 py-2">{relativeAge(adapter.last_evidence_unix)}</td>
                     <td className="px-3 py-2">
-                      <div>{adapter.last_delivery_result ?? 'unknown'}</div>
+                      <div>{adapter.last_delivery_result ?? 'Delivery status not reported'}</div>
                       <div className="text-muted-foreground">
                         {pending} pending · {retry} retry · {deadLetter} dead-letter
                       </div>
@@ -139,13 +145,13 @@ export function AiIntegrationsPanel({ report }: AiIntegrationsPanelProps) {
     <section aria-label="AI integrations" className="space-y-3">
       <div>
         <h3 className="text-sm font-medium">AI integrations</h3>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-muted-foreground text-xs">
           Detection, verification, and delivery are shown separately. Provider/model are the
           explicit labels reported by each client; unknown values are not inferred.
         </p>
       </div>
       {integrationsBody}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-muted-foreground text-[11px]">
         Health data contains metadata only. Prompts, responses, patches, source text, and file
         contents are never sent in this snapshot.
       </p>

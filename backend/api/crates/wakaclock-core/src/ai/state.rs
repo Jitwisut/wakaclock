@@ -1,5 +1,9 @@
 use crate::ai::follow_up::HumanFollowUpLedger;
 use crate::ai::parser::ParserCursor;
+use crate::ai::revision::{
+    prove_alias, AliasEvidence, AttributionRetentionPolicy, AttributionRevision, RevisionCandidate,
+    RevisionWriteOutcome,
+};
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -96,6 +100,29 @@ impl AiAttributionState {
                 snapshot_json TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            -- Append-only local attribution decisions. Every correction repeats the
+            -- full measured activity and increments revision; readers must select the
+            -- greatest revision for one operation before summing any bucket.
+            CREATE TABLE IF NOT EXISTS attribution_revisions (
+                operation_id       TEXT NOT NULL,
+                revision           INTEGER NOT NULL,
+                payload_hash       TEXT NOT NULL,
+                decision_json      TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                PRIMARY KEY (operation_id, revision),
+                UNIQUE (operation_id, payload_hash)
+            );
+
+            -- Cross-producer identity is additive. An alias always points directly to
+            -- a canonical producer event; insertion rejects alias chains.
+            CREATE TABLE IF NOT EXISTS event_aliases (
+                alias_event_id     TEXT PRIMARY KEY,
+                canonical_event_id TEXT NOT NULL,
+                proof_kind         TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                last_seen_at       INTEGER NOT NULL
             );
             ",
         )?;
@@ -381,6 +408,234 @@ impl AiAttributionState {
         Ok(())
     }
 
+    /// Append one full-value attribution decision and return whether a new revision
+    /// was written. The payload hash is checked across the entire operation history,
+    /// not only against the latest row, so a delayed retry of an older decision cannot
+    /// create a spurious revision after a stronger correction has already landed.
+    pub fn append_attribution_revision(
+        &mut self,
+        candidate: RevisionCandidate,
+    ) -> Result<RevisionWriteOutcome, AppError> {
+        candidate.validate().map_err(AppError::Validation)?;
+        let operation_id = candidate.operation_id.clone();
+        let payload_hash = candidate.payload_hash.clone();
+        let tx = self.conn.transaction()?;
+
+        let existing_revision: Option<i64> = tx
+            .query_row(
+                "SELECT revision FROM attribution_revisions
+                 WHERE operation_id = ?1 AND payload_hash = ?2
+                 LIMIT 1",
+                params![&operation_id, &payload_hash],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(revision) = existing_revision {
+            let revision = u32::try_from(revision).map_err(|_| {
+                AppError::Validation("stored attribution revision is out of range".to_string())
+            })?;
+            tx.commit()?;
+            return Ok(RevisionWriteOutcome::Unchanged { revision });
+        }
+
+        let latest: Option<(i64, String)> = tx
+            .query_row(
+                "SELECT revision, decision_json FROM attribution_revisions
+                 WHERE operation_id = ?1
+                 ORDER BY revision DESC LIMIT 1",
+                params![&operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let revision = match latest {
+            Some((value, decision_json)) => {
+                let previous: AttributionRevision = serde_json::from_str(&decision_json)?;
+                if !previous.preserves_measurement(&candidate) {
+                    return Err(AppError::Conflict(
+                        "attribution revision cannot change measured time or line totals"
+                            .to_string(),
+                    ));
+                }
+                u32::try_from(value)
+                    .map_err(|_| {
+                        AppError::Validation(
+                            "stored attribution revision is out of range".to_string(),
+                        )
+                    })?
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        AppError::Validation("attribution revision overflow".to_string())
+                    })?
+            }
+            None => 0,
+        };
+        let stored = AttributionRevision::from_candidate(candidate, revision)
+            .map_err(AppError::Validation)?;
+        let decision_json = serde_json::to_string(&stored)?;
+        tx.execute(
+            "INSERT INTO attribution_revisions
+             (operation_id, revision, payload_hash, decision_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                stored.operation_id,
+                i64::from(stored.revision),
+                stored.payload_hash,
+                decision_json,
+                stored.created_at
+            ],
+        )?;
+        tx.commit()?;
+        Ok(RevisionWriteOutcome::Inserted { revision })
+    }
+
+    /// Read the canonical-winner row for one operation. This is the only valid local
+    /// read shape once correction rows exist: summing every revision would double
+    /// count the same measured activity.
+    pub fn latest_attribution_revision(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<AttributionRevision>, AppError> {
+        let decision_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT decision_json FROM attribution_revisions
+                 WHERE operation_id = ?1
+                 ORDER BY revision DESC LIMIT 1",
+                params![operation_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        decision_json
+            .map(|json| serde_json::from_str(&json).map_err(AppError::from))
+            .transpose()
+    }
+
+    /// Record a cross-producer alias only when [`prove_alias`] finds direct proof.
+    /// Returns `true` for a new mapping and `false` when the same mapping was already
+    /// present and only its last-seen timestamp was refreshed.
+    pub fn record_event_alias(
+        &self,
+        left: &AliasEvidence,
+        right: &AliasEvidence,
+        canonical_event_id: &str,
+        now: i64,
+    ) -> Result<bool, AppError> {
+        let proof_kind = prove_alias(left, right).ok_or_else(|| {
+            AppError::Validation(
+                "event alias requires matching entity plus tool-event or content-version proof"
+                    .to_string(),
+            )
+        })?;
+        if !crate::ai::event::is_safe_event_id(&left.event_id)
+            || !crate::ai::event::is_safe_event_id(&right.event_id)
+            || !crate::ai::event::is_safe_event_id(canonical_event_id)
+        {
+            return Err(AppError::Validation(
+                "event alias IDs must be safe event IDs".to_string(),
+            ));
+        }
+        if canonical_event_id != left.event_id && canonical_event_id != right.event_id {
+            return Err(AppError::Validation(
+                "canonical_event_id must be one of the proven producer event IDs".to_string(),
+            ));
+        }
+        let alias_event_id = if canonical_event_id == left.event_id {
+            &right.event_id
+        } else {
+            &left.event_id
+        };
+
+        // An alias must never point at another alias. This keeps resolution one hop
+        // and makes canonical-winner reads deterministic.
+        let canonical_is_alias: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM event_aliases WHERE alias_event_id = ?1 LIMIT 1",
+                params![canonical_event_id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if canonical_is_alias {
+            return Err(AppError::Conflict(
+                "canonical event is already an alias".to_string(),
+            ));
+        }
+
+        let existing: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT canonical_event_id, proof_kind FROM event_aliases
+                 WHERE alias_event_id = ?1",
+                params![alias_event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_canonical, existing_proof)) = existing {
+            if existing_canonical != canonical_event_id || existing_proof != proof_kind.as_str() {
+                return Err(AppError::Conflict(
+                    "alias event is already bound to a different canonical operation".to_string(),
+                ));
+            }
+            self.conn.execute(
+                "UPDATE event_aliases SET last_seen_at = ?2 WHERE alias_event_id = ?1",
+                params![alias_event_id, now],
+            )?;
+            return Ok(false);
+        }
+
+        self.conn.execute(
+            "INSERT INTO event_aliases
+             (alias_event_id, canonical_event_id, proof_kind, created_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![alias_event_id, canonical_event_id, proof_kind.as_str(), now],
+        )?;
+        Ok(true)
+    }
+
+    /// Resolve one event ID through at most one alias hop. The insertion guard above
+    /// guarantees that a returned canonical ID is always a real producer event.
+    pub fn resolve_canonical_event_id(&self, event_id: &str) -> Result<String, AppError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT canonical_event_id FROM event_aliases
+                 WHERE alias_event_id = ?1",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| event_id.to_string()))
+    }
+
+    /// Remove only superseded revision rows and stale alias mappings. The current
+    /// max-revision row for every operation is retained even when it is old, so a
+    /// later read never loses the operation's canonical decision.
+    pub fn prune_attribution_history(
+        &self,
+        now: i64,
+        policy: AttributionRetentionPolicy,
+    ) -> Result<usize, AppError> {
+        policy.validate().map_err(AppError::Validation)?;
+        let revision_cutoff = now.saturating_sub(policy.revision_retention_seconds);
+        let alias_cutoff = now.saturating_sub(policy.alias_retention_seconds);
+        let removed_revisions = self.conn.execute(
+            "DELETE FROM attribution_revisions
+             WHERE created_at < ?1
+               AND EXISTS (
+                   SELECT 1 FROM attribution_revisions newer
+                   WHERE newer.operation_id = attribution_revisions.operation_id
+                     AND newer.revision > attribution_revisions.revision
+               )",
+            params![revision_cutoff],
+        )?;
+        let removed_aliases = self.conn.execute(
+            "DELETE FROM event_aliases WHERE last_seen_at < ?1",
+            params![alias_cutoff],
+        )?;
+        Ok(removed_revisions + removed_aliases)
+    }
+
     /// Abandoned BeforeTool snapshots are metadata-only but still bounded. Twenty-four
     /// hours is intentionally much longer than a normal tool call so an AfterTool retry
     /// after a CLI/editor restart can still close the original session.
@@ -652,5 +907,200 @@ mod tests {
             .filter_undelivered(&["recent".to_string()])
             .unwrap()
             .contains("recent"));
+    }
+
+    fn revision_candidate(
+        operation_id: &str,
+        payload_hash: &str,
+        actor_type: crate::heartbeat::ActorType,
+        created_at: i64,
+    ) -> RevisionCandidate {
+        RevisionCandidate {
+            operation_id: operation_id.to_string(),
+            payload_hash: payload_hash.to_string(),
+            actor_type,
+            actor_confidence: 0.8,
+            active_seconds: 30.0,
+            human_lines_added: 10,
+            human_lines_deleted: 2,
+            ai_lines_added: 0,
+            ai_lines_deleted: 0,
+            unattributed_lines_added: 0,
+            unattributed_lines_deleted: 0,
+            created_at,
+        }
+    }
+
+    #[test]
+    fn attribution_revision_ledger_is_idempotent_and_survives_reopen() {
+        let path = temp_db_path("attribution-revisions");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut state = AiAttributionState::open_at(&path).unwrap();
+            assert_eq!(
+                state
+                    .append_attribution_revision(revision_candidate(
+                        "event-revision-1",
+                        "payload-1",
+                        crate::heartbeat::ActorType::Unknown,
+                        100,
+                    ))
+                    .unwrap(),
+                RevisionWriteOutcome::Inserted { revision: 0 }
+            );
+            assert_eq!(
+                state
+                    .append_attribution_revision(revision_candidate(
+                        "event-revision-1",
+                        "payload-1",
+                        crate::heartbeat::ActorType::Unknown,
+                        100,
+                    ))
+                    .unwrap(),
+                RevisionWriteOutcome::Unchanged { revision: 0 }
+            );
+            assert_eq!(
+                state
+                    .append_attribution_revision(revision_candidate(
+                        "event-revision-1",
+                        "payload-2",
+                        crate::heartbeat::ActorType::AiVerified,
+                        110,
+                    ))
+                    .unwrap(),
+                RevisionWriteOutcome::Inserted { revision: 1 }
+            );
+            let latest = state
+                .latest_attribution_revision("event-revision-1")
+                .unwrap()
+                .unwrap();
+            assert_eq!(latest.revision, 1);
+            assert_eq!(latest.actor_type, crate::heartbeat::ActorType::AiVerified);
+            assert_eq!(latest.active_seconds, 30.0);
+            assert_eq!(latest.human_lines_added, 10);
+        }
+        let state = AiAttributionState::open_at(&path).unwrap();
+        assert_eq!(
+            state
+                .latest_attribution_revision("event-revision-1")
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn event_alias_ledger_requires_direct_proof_and_resolves_one_hop() {
+        let path = temp_db_path("event-aliases");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let canonical =
+            AliasEvidence::new("canonical-event-1", "entity-1").with_tool_event_id("call-1");
+        let alias = AliasEvidence::new("alias-event-1", "entity-1")
+            .with_tool_event_id("call-1")
+            .with_session_id("session-1");
+
+        assert!(state
+            .record_event_alias(&canonical, &alias, "canonical-event-1", 100)
+            .unwrap());
+        assert!(!state
+            .record_event_alias(&canonical, &alias, "canonical-event-1", 101)
+            .unwrap());
+        assert_eq!(
+            state.resolve_canonical_event_id("alias-event-1").unwrap(),
+            "canonical-event-1"
+        );
+
+        let session_only_left =
+            AliasEvidence::new("alias-event-2", "entity-1").with_session_id("session-1");
+        let session_only_right =
+            AliasEvidence::new("canonical-event-2", "entity-1").with_session_id("session-1");
+        assert!(state
+            .record_event_alias(
+                &session_only_left,
+                &session_only_right,
+                "canonical-event-2",
+                102,
+            )
+            .is_err());
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn attribution_history_prune_keeps_current_revision_and_recent_aliases() {
+        let path = temp_db_path("attribution-history-prune");
+        let _ = std::fs::remove_file(&path);
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+        state
+            .append_attribution_revision(revision_candidate(
+                "event-prune-1",
+                "payload-old",
+                crate::heartbeat::ActorType::Unknown,
+                700,
+            ))
+            .unwrap();
+        state
+            .append_attribution_revision(revision_candidate(
+                "event-prune-1",
+                "payload-current",
+                crate::heartbeat::ActorType::AiVerified,
+                900,
+            ))
+            .unwrap();
+        let old_alias_left =
+            AliasEvidence::new("canonical-prune-old", "entity-old").with_tool_event_id("call-old");
+        let old_alias_right =
+            AliasEvidence::new("alias-prune-old", "entity-old").with_tool_event_id("call-old");
+        state
+            .record_event_alias(
+                &old_alias_left,
+                &old_alias_right,
+                "canonical-prune-old",
+                800,
+            )
+            .unwrap();
+        let recent_alias_left = AliasEvidence::new("canonical-prune-new", "entity-new")
+            .with_content_version("version-new");
+        let recent_alias_right =
+            AliasEvidence::new("alias-prune-new", "entity-new").with_content_version("version-new");
+        state
+            .record_event_alias(
+                &recent_alias_left,
+                &recent_alias_right,
+                "canonical-prune-new",
+                950,
+            )
+            .unwrap();
+
+        let policy = AttributionRetentionPolicy {
+            late_reconciliation_grace_seconds: 10,
+            revision_retention_seconds: 100,
+            alias_retention_seconds: 100,
+            pending_observation_retention_seconds: 100,
+        };
+        let removed = state.prune_attribution_history(1_000, policy).unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(
+            state
+                .latest_attribution_revision("event-prune-1")
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+        assert_eq!(
+            state.resolve_canonical_event_id("alias-prune-old").unwrap(),
+            "alias-prune-old"
+        );
+        assert_eq!(
+            state.resolve_canonical_event_id("alias-prune-new").unwrap(),
+            "canonical-prune-new"
+        );
+        drop(state);
+        let _ = std::fs::remove_file(path);
     }
 }

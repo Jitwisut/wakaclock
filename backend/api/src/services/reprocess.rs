@@ -294,7 +294,7 @@ impl ReprocessService {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at, actor_type, actor_confidence
+                    created_at, actor_type, actor_confidence, revision
                 FROM wakaclock.heartbeats AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC

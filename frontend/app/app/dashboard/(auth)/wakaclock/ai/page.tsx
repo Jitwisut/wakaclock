@@ -13,14 +13,7 @@ import {
   ChartTooltipContent,
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { AiAgentsTable } from '@/components/wakaclock/ai-agents-table';
 import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
@@ -35,8 +28,10 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 const attributionConfig = {
   heartbeats: { label: 'Heartbeats' },
-  ai: { label: 'AI-assisted', color: 'var(--chart-1)' },
+  ai_verified: { label: 'AI verified', color: 'var(--chart-1)' },
+  ai_inferred: { label: 'AI inferred', color: 'var(--chart-2)' },
   human: { label: 'Human', color: 'var(--chart-3)' },
+  unknown: { label: 'Unknown authorship', color: 'var(--chart-4)' },
 } satisfies ChartConfig;
 
 const dailyConfig = {
@@ -55,18 +50,32 @@ function AiStatsPanel() {
   });
 
   const stats = data?.data;
-  const namedAgents =
-    stats?.agents.filter((agent) => agent.agent !== 'Unattributed AI' && agent.agent !== 'human') ??
-    [];
-  const unattributedAgent = stats?.agents.find((agent) => agent.agent === 'Unattributed AI');
   const aiPct = stats?.ai_heartbeat_percentage ?? 0;
+  const aiVerifiedPct = stats?.ai_verified_heartbeat_percentage ?? 0;
+  const aiInferredPct = stats?.ai_inferred_heartbeat_percentage ?? 0;
+  const humanPct = stats?.human_heartbeat_percentage ?? 0;
+  const unknownPct = stats?.unknown_heartbeat_percentage ?? 0;
   const pieData = stats
     ? [
-        { key: 'ai', heartbeats: Math.round(aiPct * 10) / 10, fill: 'var(--color-ai)' },
+        {
+          key: 'ai_verified',
+          heartbeats: Math.round(aiVerifiedPct * 10) / 10,
+          fill: 'var(--color-ai_verified)',
+        },
+        {
+          key: 'ai_inferred',
+          heartbeats: Math.round(aiInferredPct * 10) / 10,
+          fill: 'var(--color-ai_inferred)',
+        },
         {
           key: 'human',
-          heartbeats: Math.round((100 - aiPct) * 10) / 10,
+          heartbeats: Math.round(humanPct * 10) / 10,
           fill: 'var(--color-human)',
+        },
+        {
+          key: 'unknown',
+          heartbeats: Math.round(unknownPct * 10) / 10,
+          fill: 'var(--color-unknown)',
         },
       ]
     : [];
@@ -114,7 +123,7 @@ function AiStatsPanel() {
               <DashboardPanel id="ai.charts">
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
-                    <h3 className="mb-2 text-sm font-medium">AI vs. human heartbeats</h3>
+                    <h3 className="mb-2 text-sm font-medium">Heartbeats by authorship evidence</h3>
                     <ChartContainer
                       className="mx-auto aspect-square max-h-64"
                       config={attributionConfig}
@@ -195,51 +204,11 @@ function AiStatsPanel() {
 
               <div>
                 <h3 className="mb-2 text-sm font-medium">Which AI?</h3>
-                {namedAgents.length > 0 ? (
-                  <div className="overflow-x-auto rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Agent</TableHead>
-                          <TableHead>Provider / model</TableHead>
-                          <TableHead>AI added</TableHead>
-                          <TableHead>AI deleted</TableHead>
-                          <TableHead>Human added</TableHead>
-                          <TableHead className="text-right">Heartbeats</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {namedAgents.map((agent, index) => (
-                          <TableRow
-                            key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}:${index}`}
-                          >
-                            <TableCell className="font-medium">{agent.agent}</TableCell>
-                            <TableCell>
-                              {agent.provider ?? 'unknown'} / {agent.model ?? 'unknown'}
-                            </TableCell>
-                            <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
-                            <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
-                            <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
-                            <TableCell className="text-right">
-                              {formatCompactNumber(agent.heartbeat_count)}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                {stats.agents.length > 0 ? (
+                  <AiAgentsTable agents={stats.agents} title={null} />
                 ) : (
-                  <p className="rounded-md border p-4 text-sm text-muted-foreground">
-                    No verified AI identity is available for this range.
-                  </p>
-                )}
-                {unattributedAgent && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Unattributed AI: {formatCompactNumber(unattributedAgent.ai_lines_added)} lines
-                    added, {formatCompactNumber(unattributedAgent.ai_lines_deleted)} deleted across{' '}
-                    {formatCompactNumber(unattributedAgent.heartbeat_count)} heartbeat(s). It is
-                    excluded from this named-agent table because the source did not prove which
-                    AI made the edit.
+                  <p className="text-muted-foreground rounded-md border p-4 text-sm">
+                    No AI activity is available for this range.
                   </p>
                 )}
               </div>

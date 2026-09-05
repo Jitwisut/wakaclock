@@ -6,34 +6,34 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow
+  TableRow,
 } from '@/components/ui/table';
+import {
+  formatActorType,
+  formatAiAgentName,
+  formatAiProviderModel,
+} from '@/lib/wakaclock/ai-display';
 import { formatCompactNumber } from '@/lib/wakaclock/format';
 import type { AiAgentItem } from '@/lib/wakaclock/types';
 
 /**
  * Per-agent AI attribution breakdown.
  *
- * An `ai_inferred` row is real activity with real line counts, so it is rendered
- * rather than hidden — dropping it would stop the heartbeat counts here from
- * reconciling with the "AI inferred" share shown above. What it must not do is
- * name a tool: inference proves *an* AI acted, never *which* one, so the identity
- * columns read "Unattributed AI" instead of a guess. See
- * `plans/decision-accuracy-over-coverage.md`.
- *
- * The guard keys off `actor_type`, never the literal string `'unknown'`: the
- * backend's `fetch_agents` coalesces a NULL agent to `'unknown'` for *both* an
- * unnamed inferred row and a genuinely unattributed one, and those two must read
- * differently.
+ * Every row is kept so the table reconciles with the attribution totals. Identity
+ * labels come from `actor_type`, never from the literal string `'unknown'`: an
+ * inferred AI row and an unknown-authorship row can both have missing metadata,
+ * but they represent different evidence states. The display helpers also handle
+ * legacy placeholder values and partial provider/model metadata consistently.
  */
 export interface AiAgentsTableProps {
   agents: AiAgentItem[];
+  title?: null | string;
 }
 
-export function AiAgentsTable({ agents }: AiAgentsTableProps) {
+export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) {
   return (
     <div>
-      <h3 className="mb-2 text-sm font-medium">Agents</h3>
+      {title && <h3 className="mb-2 text-sm font-medium">{title}</h3>}
       <div className="overflow-x-auto rounded-md border">
         <Table>
           <TableHeader>
@@ -50,23 +50,17 @@ export function AiAgentsTable({ agents }: AiAgentsTableProps) {
           </TableHeader>
           <TableBody>
             {agents.map((agent) => {
-              const isInferred = agent.actor_type === 'ai_inferred';
+              const isUnattributed = agent.actor_type === 'ai_inferred';
               return (
                 <TableRow
                   key={`${agent.actor_type}:${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
                 >
-                  <TableCell className="capitalize">
-                    {agent.actor_type.replaceAll('_', ' ')}
+                  <TableCell>{formatActorType(agent.actor_type)}</TableCell>
+                  <TableCell className={isUnattributed ? 'text-muted-foreground' : 'font-medium'}>
+                    {formatAiAgentName(agent)}
                   </TableCell>
-                  <TableCell
-                    className={isInferred ? 'text-muted-foreground' : 'font-medium'}
-                  >
-                    {isInferred ? 'Unattributed AI' : agent.agent}
-                  </TableCell>
-                  <TableCell className={isInferred ? 'text-muted-foreground' : undefined}>
-                    {isInferred
-                      ? '—'
-                      : `${agent.provider ?? 'unknown'} / ${agent.model ?? 'unknown'}`}
+                  <TableCell className={isUnattributed ? 'text-muted-foreground' : undefined}>
+                    {formatAiProviderModel(agent.provider, agent.model, agent.actor_type)}
                   </TableCell>
                   <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
                   <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>

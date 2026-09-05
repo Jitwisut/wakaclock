@@ -48,6 +48,7 @@ pub mod patch;
 pub mod path;
 pub mod producer;
 pub mod provider;
+pub mod revision;
 pub mod state;
 pub mod usage;
 
@@ -83,6 +84,12 @@ pub use producer::{
 pub use provider::{
     canonical_provider_alias, is_known_provider_id, provider_aliases, provider_for_endpoint,
     KNOWN_PROVIDER_IDS,
+};
+pub use revision::{
+    prove_alias, AliasEvidence, AliasProofKind, AttributionRetentionPolicy, AttributionRevision,
+    RevisionCandidate, RevisionWriteOutcome, ATTRIBUTION_REVISION_RETENTION_SECONDS,
+    EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
+    PENDING_OBSERVATION_RETENTION_SECONDS,
 };
 pub use state::AiAttributionState;
 pub use usage::{
