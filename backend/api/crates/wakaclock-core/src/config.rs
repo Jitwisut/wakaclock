@@ -31,8 +31,12 @@ impl Config {
         if parsed.path() != "" && parsed.path() != "/" {
             return Err("server URL must be an origin without an API path".to_string());
         }
-        if parsed.query().is_some() || parsed.fragment().is_some() || !parsed.username().is_empty() {
-            return Err("server URL must not contain credentials, query parameters or fragments".to_string());
+        if parsed.query().is_some() || parsed.fragment().is_some() || !parsed.username().is_empty()
+        {
+            return Err(
+                "server URL must not contain credentials, query parameters or fragments"
+                    .to_string(),
+            );
         }
         Ok(trimmed.to_string())
     }
@@ -55,6 +59,14 @@ impl Config {
             default.save();
             default
         }
+    }
+
+    /// Non-panicking counterpart to [`Config::load`], for callers that re-read the file
+    /// while running. The always-on agent must survive a missing or half-written
+    /// config.toml by keeping the identity it already has, not by aborting the process.
+    pub fn try_load() -> Option<Self> {
+        let content = fs::read_to_string(Self::config_path()).ok()?;
+        toml::from_str(&content).ok()
     }
 
     pub fn save(&self) {

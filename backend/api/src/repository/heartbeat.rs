@@ -62,7 +62,52 @@ impl HeartbeatRepository {
                     human_lines_deleted Nullable(UInt32),
                     unattributed_lines_added Nullable(UInt32),
                     unattributed_lines_deleted Nullable(UInt32),
-                    created_at UInt32
+                    created_at UInt32,
+                    actor_type LowCardinality(String) DEFAULT multiIf(
+                        (
+                            is_ai_generated = 1
+                            OR ifNull(ai_agent, '') != ''
+                            OR ifNull(ai_event_id, '') != ''
+                            OR coalesce(ai_lines_added, 0) > 0
+                            OR coalesce(ai_lines_deleted, 0) > 0
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                        ) AND (
+                            lower(ifNull(ai_confidence, '')) = 'verified'
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                        ), 'ai_verified',
+                        is_ai_generated = 1
+                            OR ifNull(ai_agent, '') != ''
+                            OR ifNull(ai_event_id, '') != ''
+                            OR coalesce(ai_lines_added, 0) > 0
+                            OR coalesce(ai_lines_deleted, 0) > 0
+                            OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                        coalesce(human_lines_added, 0) > 0
+                            OR coalesce(human_lines_deleted, 0) > 0
+                            OR coalesce(keystrokes, 0) > 0
+                            OR coalesce(chars_added, 0) > 0
+                            OR coalesce(chars_deleted, 0) > 0, 'human',
+                        'unknown'
+                    ),
+                    actor_confidence Float32 DEFAULT multiIf(
+                        actor_type = 'human', 1.0,
+                        actor_type = 'ai_verified'
+                            AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                        actor_type = 'ai_verified', 1.0,
+                        actor_type = 'ai_inferred'
+                            AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                        actor_type = 'ai_inferred', 0.6,
+                        0.0
+                    ),
+                    clipboard_tracking_version Nullable(UInt8),
+                    copy_actions Nullable(UInt32),
+                    paste_actions Nullable(UInt32),
+                    copied_chars Nullable(UInt32),
+                    copied_lines Nullable(UInt32),
+                    pasted_chars Nullable(UInt32),
+                    pasted_lines Nullable(UInt32),
+                    paste_same_file_actions Nullable(UInt32),
+                    paste_same_workspace_actions Nullable(UInt32),
+                    paste_external_or_unknown_actions Nullable(UInt32)
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -84,6 +129,10 @@ impl HeartbeatRepository {
         for column in [
             "heartbeat_id Nullable(String)",
             "activity_segments String DEFAULT '[]'",
+            // `active_seconds` is clamped at ingest so the MV path and the canonical
+            // timeline measure the same thing; the raw claim lands here instead of
+            // being overwritten, so nothing a client sent is lost.
+            "active_seconds_claimed Nullable(Float64)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -121,6 +170,51 @@ impl HeartbeatRepository {
             "token_source Nullable(String)",
             "attribution_source Nullable(String)",
             "attribution_confidence Nullable(Float32)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                (
+                    is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ) AND (
+                    lower(ifNull(ai_confidence, '')) = 'verified'
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ), 'ai_verified',
+                is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                coalesce(human_lines_added, 0) > 0
+                    OR coalesce(human_lines_deleted, 0) > 0
+                    OR coalesce(keystrokes, 0) > 0
+                    OR coalesce(chars_added, 0) > 0
+                    OR coalesce(chars_deleted, 0) > 0, 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified'
+                    AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred'
+                    AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
+            "clipboard_tracking_version Nullable(UInt8)",
+            "copy_actions Nullable(UInt32)",
+            "paste_actions Nullable(UInt32)",
+            "copied_chars Nullable(UInt32)",
+            "copied_lines Nullable(UInt32)",
+            "pasted_chars Nullable(UInt32)",
+            "pasted_lines Nullable(UInt32)",
+            "paste_same_file_actions Nullable(UInt32)",
+            "paste_same_workspace_actions Nullable(UInt32)",
+            "paste_external_or_unknown_actions Nullable(UInt32)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -153,13 +247,74 @@ impl HeartbeatRepository {
                     project Nullable(String),
                     language Nullable(String),
                     category String,
-                    created_at UInt32
+                    editor String DEFAULT '',
+                    operating_system String DEFAULT '',
+                    created_at UInt32,
+                    actor_type LowCardinality(String) DEFAULT multiIf(
+                        source = 'ai', 'ai_inferred',
+                        source = 'editor', 'human',
+                        'unknown'
+                    ),
+                    actor_confidence Float32 DEFAULT multiIf(
+                        actor_type = 'human', 1.0,
+                        actor_type = 'ai_verified', 1.0,
+                        actor_type = 'ai_inferred', 0.6,
+                        0.0
+                    )
                  ) ENGINE = ReplacingMergeTree(created_at)
                  ORDER BY (user_id, segment_id)",
             )
             .execute()
             .await
             .context("Failed to create activity_intervals table")?;
+
+        // Additive: an activity_intervals table created before the editor/OS breakdowns
+        // moved onto the canonical timeline has neither column. Both default to '',
+        // which groups as "unknown" rather than losing the interval.
+        for column in [
+            "editor String DEFAULT ''",
+            "operating_system String DEFAULT ''",
+            // Same reason, one release later: the project pages key on the stable id, so
+            // the timeline has to carry it to be able to serve them.
+            "project_id Nullable(UUID)",
+            "branch Nullable(String)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                source = 'ai', 'ai_inferred',
+                source = 'editor', 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
+        ] {
+            let sql = format!(
+                "ALTER TABLE wakaclock.activity_intervals ADD COLUMN IF NOT EXISTS {column}"
+            );
+            ch_client
+                .query(&sql)
+                .execute()
+                .await
+                .with_context(|| format!("Failed to add activity_intervals column: {column}"))?;
+        }
+
+        // Keep existing installations on the same actor default as the checked-in
+        // migration. This changes only the default for future rows; it does not rewrite
+        // historical intervals.
+        ch_client
+            .query(
+                "ALTER TABLE wakaclock.activity_intervals
+                 MODIFY COLUMN actor_type LowCardinality(String) DEFAULT multiIf(
+                     source = 'ai', 'ai_inferred',
+                     source = 'editor', 'human',
+                     'unknown'
+                 )",
+            )
+            .execute()
+            .await
+            .context("Failed to align activity_intervals.actor_type default")?;
 
         ch_client
             .query(
@@ -174,6 +329,19 @@ impl HeartbeatRepository {
         for column in [
             "heartbeat_id Nullable(String)",
             "activity_segments String DEFAULT '[]'",
+            // The Null replay table is long-lived, so columns added to raw heartbeats
+            // after its first CREATE ... AS must be mirrored explicitly.
+            "active_seconds_claimed Nullable(Float64)",
+            "clipboard_tracking_version Nullable(UInt8)",
+            "copy_actions Nullable(UInt32)",
+            "paste_actions Nullable(UInt32)",
+            "copied_chars Nullable(UInt32)",
+            "copied_lines Nullable(UInt32)",
+            "pasted_chars Nullable(UInt32)",
+            "pasted_lines Nullable(UInt32)",
+            "paste_same_file_actions Nullable(UInt32)",
+            "paste_same_workspace_actions Nullable(UInt32)",
+            "paste_external_or_unknown_actions Nullable(UInt32)",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -213,6 +381,41 @@ impl HeartbeatRepository {
             "token_source Nullable(String)",
             "attribution_source Nullable(String)",
             "attribution_confidence Nullable(Float32)",
+            "actor_type LowCardinality(String) DEFAULT multiIf(
+                (
+                    is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ) AND (
+                    lower(ifNull(ai_confidence, '')) = 'verified'
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp')
+                ), 'ai_verified',
+                is_ai_generated = 1
+                    OR ifNull(ai_agent, '') != ''
+                    OR ifNull(ai_event_id, '') != ''
+                    OR coalesce(ai_lines_added, 0) > 0
+                    OR coalesce(ai_lines_deleted, 0) > 0
+                    OR lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp'), 'ai_inferred',
+                coalesce(human_lines_added, 0) > 0
+                    OR coalesce(human_lines_deleted, 0) > 0
+                    OR coalesce(keystrokes, 0) > 0
+                    OR coalesce(chars_added, 0) > 0
+                    OR coalesce(chars_deleted, 0) > 0, 'human',
+                'unknown'
+            )",
+            "actor_confidence Float32 DEFAULT multiIf(
+                actor_type = 'human', 1.0,
+                actor_type = 'ai_verified'
+                    AND lower(ifNull(ai_source, '')) = 'mcp', 0.95,
+                actor_type = 'ai_verified', 1.0,
+                actor_type = 'ai_inferred'
+                    AND lower(ifNull(ai_confidence, '')) = 'correlated', 0.8,
+                actor_type = 'ai_inferred', 0.6,
+                0.0
+            )",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -418,7 +621,8 @@ impl HeartbeatRepository {
                     machine, user_agent, machine_name_hash, hostname_hash, timezone,
                     feature_id, feature_name,
                     heartbeat_id, ast_language, ast_confidence,
-                    keystrokes, chars_added, chars_deleted, active_seconds, activity_segments,
+                    keystrokes, chars_added, chars_deleted,
+                    active_seconds, active_seconds_claimed, activity_segments,
                     is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
                     ai_confidence, ai_event_id, ai_change_id,
                     prompt_character_count, input_tokens, output_tokens,
@@ -428,7 +632,11 @@ impl HeartbeatRepository {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at
+                    created_at, actor_type, actor_confidence,
+                    clipboard_tracking_version, copy_actions, paste_actions,
+                    copied_chars, copied_lines, pasted_chars, pasted_lines,
+                    paste_same_file_actions, paste_same_workspace_actions,
+                    paste_external_or_unknown_actions
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND time >= ? AND time < ?
                 ORDER BY time ASC",
@@ -441,5 +649,32 @@ impl HeartbeatRepository {
             .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))?;
 
         Ok(rows)
+    }
+
+    /// Returns only the caller's own project labels overlapping a co-working session.
+    /// This is intentionally kept separate from participant data so the history endpoint
+    /// cannot accidentally disclose another user's project or branch.
+    pub async fn projects_for_window(
+        &self,
+        user_id: uuid::Uuid,
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<String>> {
+        self.client
+            .get_client()
+            .query(
+                "SELECT DISTINCT project
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND time >= ? AND time <= ?
+                   AND project IS NOT NULL AND project != ''
+                 ORDER BY project
+                 LIMIT 100",
+            )
+            .bind(user_id)
+            .bind(from as f64)
+            .bind(to as f64)
+            .fetch_all::<String>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
     }
 }

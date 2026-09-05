@@ -53,6 +53,7 @@ function config() {
         debugLogging: false,
         trackDebugSessions: true,
         trackBuildTasks: true,
+        trackClipboardActions: true,
     };
 }
 async function fixture() {
@@ -97,6 +98,28 @@ async function fixture() {
         await fs.appendFile(path.join(root, "resources", "bin", process.platform === "win32" ? "wakaclock.exe" : "wakaclock"), "tampered");
         const manager = new managedCli_1.ManagedCliManager({ extensionPath: root, globalStoragePath: path.join(root, "global") }, config, new logging_1.Logger(() => false));
         await (0, vitest_1.expect)(manager.ensureReady()).rejects.toThrow(/checksum/i);
+    });
+    (0, vitest_1.it)("rejects manifest versions that could escape the managed CLI directory", async () => {
+        const { root } = await fixture();
+        const manifestPath = path.join(root, "resources", "cli-manifest.json");
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        manifest.cliVersion = "../../outside";
+        await fs.writeFile(manifestPath, JSON.stringify(manifest));
+        await (0, vitest_1.expect)(managedCli_1.managedCliInternals.readManifest(manifestPath)).rejects.toThrow(/required fields/i);
+    });
+    (0, vitest_1.it)("rejects unsupported CLI protocol versions before execution", async () => {
+        const { root } = await fixture();
+        const manifestPath = path.join(root, "resources", "cli-manifest.json");
+        const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+        manifest.protocolVersion = 999;
+        await fs.writeFile(manifestPath, JSON.stringify(manifest));
+        const manager = new managedCli_1.ManagedCliManager({ extensionPath: root, globalStoragePath: path.join(root, "global") }, config, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(manager.ensureReady()).rejects.toThrow(/protocol/i);
+    });
+    (0, vitest_1.it)("rejects a bundled CLI version that does not match the Extension version", async () => {
+        const { root } = await fixture();
+        const manager = new managedCli_1.ManagedCliManager({ extensionPath: root, globalStoragePath: path.join(root, "global"), extensionVersion: "9.9.9" }, config, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(manager.ensureReady()).rejects.toThrow(/does not match Extension/i);
     });
 });
 //# sourceMappingURL=managedCli.test.js.map

@@ -27,16 +27,6 @@ fn default_private() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct VcsConnection {
-    pub id: Uuid,
-    pub organization_id: Uuid,
-    pub provider: String,
-    pub external_account_id: String,
-    pub created_at: DateTime<Utc>,
-    pub disconnected_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct Repository {
     pub id: Uuid,
     pub connection_id: Uuid,
@@ -105,4 +95,3 @@ pub struct PullRequestAnalytics {
     pub ai_lines: Option<u64>,
     pub coverage: String,
 }
-

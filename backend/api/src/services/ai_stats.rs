@@ -31,11 +31,17 @@ impl AiStatsService {
         let agents = self.fetch_agents(user_id, start, end).await?;
         let daily = self.fetch_daily(user_id, start, end).await?;
 
-        let ai_heartbeat_percentage = if totals.total_heartbeats > 0 {
-            (totals.ai_heartbeats as f64 / totals.total_heartbeats as f64) * 100.0
-        } else {
-            0.0
-        };
+        let ai_heartbeat_percentage = percentage(totals.ai_heartbeats, totals.total_heartbeats);
+        let ai_verified_heartbeat_percentage =
+            percentage(totals.ai_verified_heartbeats, totals.total_heartbeats);
+        let ai_inferred_heartbeat_percentage =
+            percentage(totals.ai_inferred_heartbeats, totals.total_heartbeats);
+        let human_heartbeat_percentage =
+            percentage(totals.human_heartbeats, totals.total_heartbeats);
+        let unknown_heartbeat_percentage =
+            percentage(totals.unattributed_heartbeats, totals.total_heartbeats);
+        let unattributed_heartbeat_percentage =
+            percentage(totals.unattributed_heartbeats, totals.total_heartbeats);
 
         Ok(AiStatsResponse {
             start: start.to_string(),
@@ -43,8 +49,16 @@ impl AiStatsService {
             data: AiStatsData {
                 total_ai_lines_added: totals.total_ai_lines_added,
                 total_ai_lines_deleted: totals.total_ai_lines_deleted,
+                total_ai_verified_lines_added: totals.total_ai_verified_lines_added,
+                total_ai_verified_lines_deleted: totals.total_ai_verified_lines_deleted,
+                total_ai_inferred_lines_added: totals.total_ai_inferred_lines_added,
+                total_ai_inferred_lines_deleted: totals.total_ai_inferred_lines_deleted,
                 total_human_lines_added: totals.total_human_lines_added,
                 total_human_lines_deleted: totals.total_human_lines_deleted,
+                total_unknown_lines_added: totals.total_unattributed_lines_added,
+                total_unknown_lines_deleted: totals.total_unattributed_lines_deleted,
+                total_unattributed_lines_added: totals.total_unattributed_lines_added,
+                total_unattributed_lines_deleted: totals.total_unattributed_lines_deleted,
                 total_human_keystrokes: totals.total_human_keystrokes,
                 total_human_chars_added: totals.total_human_chars_added,
                 total_heartbeats: totals.total_heartbeats,
@@ -55,16 +69,26 @@ impl AiStatsService {
                 total_cache_write_tokens: usage.cache_write_tokens,
                 total_estimated_cost_microusd: usage.estimated_cost_microusd,
                 ai_heartbeat_percentage,
+                ai_verified_heartbeat_percentage,
+                ai_inferred_heartbeat_percentage,
+                human_heartbeat_percentage,
+                unknown_heartbeat_percentage,
+                unattributed_heartbeat_percentage,
                 agents: agents
                     .into_iter()
                     .map(|row| AiAgentItem {
                         agent: row.agent,
+                        actor_type: row.actor_type,
                         provider: row.provider,
                         model: row.model,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
                         human_lines_added: row.human_lines_added,
                         human_lines_deleted: row.human_lines_deleted,
+                        unknown_lines_added: row.unattributed_lines_added,
+                        unknown_lines_deleted: row.unattributed_lines_deleted,
+                        unattributed_lines_added: row.unattributed_lines_added,
+                        unattributed_lines_deleted: row.unattributed_lines_deleted,
                         heartbeat_count: row.heartbeat_count,
                     })
                     .collect(),
@@ -74,8 +98,16 @@ impl AiStatsService {
                         date: row.date,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
+                        ai_verified_lines_added: row.ai_verified_lines_added,
+                        ai_verified_lines_deleted: row.ai_verified_lines_deleted,
+                        ai_inferred_lines_added: row.ai_inferred_lines_added,
+                        ai_inferred_lines_deleted: row.ai_inferred_lines_deleted,
                         human_lines_added: row.human_lines_added,
                         human_lines_deleted: row.human_lines_deleted,
+                        unknown_lines_added: row.unattributed_lines_added,
+                        unknown_lines_deleted: row.unattributed_lines_deleted,
+                        unattributed_lines_added: row.unattributed_lines_added,
+                        unattributed_lines_deleted: row.unattributed_lines_deleted,
                         human_keystrokes: row.human_keystrokes,
                         human_chars_added: row.human_chars_added,
                         heartbeat_count: row.heartbeat_count,
@@ -91,14 +123,26 @@ impl AiStatsService {
             .query(
                 "
                 SELECT
-                    coalesce(sum(ai_lines_added), 0) AS total_ai_lines_added,
-                    coalesce(sum(ai_lines_deleted), 0) AS total_ai_lines_deleted,
-                    coalesce(sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated), 0) AS total_human_lines_added,
-                    coalesce(sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated), 0) AS total_human_lines_deleted,
-                    coalesce(sumIf(coalesce(keystrokes, 0), NOT is_ai_generated), 0) AS total_human_keystrokes,
-                    coalesce(sumIf(coalesce(chars_added, 0), NOT is_ai_generated), 0) AS total_human_chars_added,
+                    coalesce(sumIf(ai_lines_added, actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_added,
+                    coalesce(sumIf(ai_lines_deleted, actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_deleted,
+                    coalesce(sumIf(ai_lines_added, actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_added,
+                    coalesce(sumIf(ai_lines_deleted, actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_deleted,
+                    coalesce(sumIf(ai_lines_added, actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_added,
+                    coalesce(sumIf(ai_lines_deleted, actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_deleted,
+                    coalesce(sumIf(coalesce(human_lines_added, 0), actor_type = 'human'), 0) AS total_human_lines_added,
+                    coalesce(sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human'), 0) AS total_human_lines_deleted,
+                    coalesce(sum(coalesce(unattributed_lines_added, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(ai_lines_added, 0) + coalesce(human_lines_added, 0)), actor_type = 'unknown'), 0) AS total_unattributed_lines_added,
+                    coalesce(sum(coalesce(unattributed_lines_deleted, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(ai_lines_deleted, 0) + coalesce(human_lines_deleted, 0)), actor_type = 'unknown'), 0) AS total_unattributed_lines_deleted,
+                    coalesce(sumIf(coalesce(keystrokes, 0), actor_type = 'human'), 0) AS total_human_keystrokes,
+                    coalesce(sumIf(coalesce(chars_added, 0), actor_type = 'human'), 0) AS total_human_chars_added,
                     count() AS total_heartbeats,
-                    countIf(is_ai_generated) AS ai_heartbeats
+                    countIf(actor_type IN ('ai_verified', 'ai_inferred')) AS ai_heartbeats,
+                    countIf(actor_type = 'ai_verified') AS ai_verified_heartbeats,
+                    countIf(actor_type = 'ai_inferred') AS ai_inferred_heartbeats,
+                    countIf(actor_type = 'human') AS human_heartbeats,
+                    countIf(actor_type = 'unknown') AS unattributed_heartbeats
                 FROM wakaclock.heartbeats
                 WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
                 ",
@@ -117,49 +161,26 @@ impl AiStatsService {
             .query(
                 "
                 SELECT
-                    agent,
-                    provider,
-                    model,
-                    sumIf(coalesce(ai_lines_added, 0), is_ai_generated) AS ai_lines_added,
-                    sumIf(coalesce(ai_lines_deleted, 0), is_ai_generated) AS ai_lines_deleted,
-                    sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-                    sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
+                    multiIf(
+                        h.actor_type IN ('ai_verified', 'ai_inferred'), coalesce(h.ai_agent, 'unknown'),
+                        h.actor_type = 'human', 'human',
+                        'unknown'
+                    ) AS agent,
+                    h.actor_type AS actor_type,
+                    h.ai_provider AS provider,
+                    h.ai_model AS model,
+                    sumIf(coalesce(h.ai_lines_added, 0), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+                    sumIf(coalesce(h.ai_lines_deleted, 0), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+                    sumIf(coalesce(h.human_lines_added, 0), h.actor_type = 'human') AS human_lines_added,
+                    sumIf(coalesce(h.human_lines_deleted, 0), h.actor_type = 'human') AS human_lines_deleted,
+                    sum(coalesce(h.unattributed_lines_added, 0))
+                        + sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_lines_added,
+                    sum(coalesce(h.unattributed_lines_deleted, 0))
+                        + sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
                     count() AS heartbeat_count
-                FROM (
-                    SELECT
-                        is_ai_generated,
-                        if(
-                            is_ai_generated
-                                AND NOT empty(ifNull(ai_agent, ''))
-                                AND lower(ifNull(ai_confidence, '')) = 'verified'
-                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                            ai_agent,
-                            if(is_ai_generated, 'Unattributed AI', 'human')
-                        ) AS agent,
-                        if(
-                            is_ai_generated
-                                AND NOT empty(ifNull(ai_agent, ''))
-                                AND lower(ifNull(ai_confidence, '')) = 'verified'
-                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                            ai_provider,
-                            NULL
-                        ) AS provider,
-                        if(
-                            is_ai_generated
-                                AND NOT empty(ifNull(ai_agent, ''))
-                                AND lower(ifNull(ai_confidence, '')) = 'verified'
-                                AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                            ai_model,
-                            NULL
-                        ) AS model,
-                        ai_lines_added,
-                        ai_lines_deleted,
-                        human_lines_added,
-                        human_lines_deleted
-                    FROM wakaclock.heartbeats
-                    WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                )
-                GROUP BY agent, provider, model, is_ai_generated
+                FROM wakaclock.heartbeats AS h
+                WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                GROUP BY agent, actor_type, h.ai_provider, h.ai_model
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
             )
@@ -204,16 +225,24 @@ impl AiStatsService {
             .query(
                 "
                 SELECT
-                    toString(date) AS day,
-                    coalesce(sum(ai_lines_added), 0) AS ai_lines_added,
-                    coalesce(sum(ai_lines_deleted), 0) AS ai_lines_deleted,
-                    sumIf(coalesce(human_lines_added, 0), NOT is_ai_generated) AS human_lines_added,
-                    sumIf(coalesce(human_lines_deleted, 0), NOT is_ai_generated) AS human_lines_deleted,
-                    sumIf(coalesce(keystrokes, 0), NOT is_ai_generated) AS human_keystrokes,
-                    sumIf(coalesce(chars_added, 0), NOT is_ai_generated) AS human_chars_added,
+                    toString(h.date) AS day,
+                    coalesce(sumIf(h.ai_lines_added, h.actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.actor_type = 'ai_verified'), 0) AS ai_verified_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type = 'ai_verified'), 0) AS ai_verified_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_deleted,
+                    sumIf(coalesce(h.human_lines_added, 0), h.actor_type = 'human') AS human_lines_added,
+                    sumIf(coalesce(h.human_lines_deleted, 0), h.actor_type = 'human') AS human_lines_deleted,
+                    coalesce(sum(coalesce(h.unattributed_lines_added, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.actor_type = 'unknown'), 0) AS unattributed_lines_added,
+                    coalesce(sum(coalesce(h.unattributed_lines_deleted, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.actor_type = 'unknown'), 0) AS unattributed_lines_deleted,
+                    sumIf(coalesce(h.keystrokes, 0), h.actor_type = 'human') AS human_keystrokes,
+                    sumIf(coalesce(h.chars_added, 0), h.actor_type = 'human') AS human_chars_added,
                     count() AS heartbeat_count
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
+                FROM wakaclock.heartbeats AS h
+                WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
                 GROUP BY day
                 ORDER BY day ASC
                 ",
@@ -224,6 +253,14 @@ impl AiStatsService {
             .fetch_all::<AiDailyRow>()
             .await
             .map_err(|error| anyhow::anyhow!("ClickHouse ai_stats daily query error: {error}"))
+    }
+}
+
+fn percentage(part: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        (part as f64 / total as f64) * 100.0
     }
 }
 

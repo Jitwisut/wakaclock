@@ -35,13 +35,19 @@ impl ProjectAnalyticsRepository {
                     i.repository AS repository,
                     max(h.time) AS last_activity,
                     sum(ifNull(h.active_seconds, 0.0)) AS total_seconds,
-                    sum(toUInt64(ifNull(h.ai_lines_added, 0))) AS ai_added,
-                    sum(toUInt64(ifNull(h.ai_lines_deleted, 0))) AS ai_deleted,
-                    sum(toUInt64(ifNull(h.human_lines_added, 0))) AS human_added,
-                    sum(toUInt64(ifNull(h.human_lines_deleted, 0))) AS human_deleted,
-                    sum(toUInt64(ifNull(h.unattributed_lines_added, 0))) AS unattributed_added,
-                    sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0))) AS unattributed_deleted,
-                    countIf(isNull(h.unattributed_lines_added) OR isNull(h.unattributed_lines_deleted)) AS unattributed_unknown,
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type = 'ai_verified') AS ai_verified_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type = 'ai_verified') AS ai_verified_deleted,
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type = 'ai_inferred') AS ai_inferred_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type = 'ai_inferred') AS ai_inferred_deleted,
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_deleted,
+                    sumIf(toUInt64(ifNull(h.human_lines_added, 0)), h.actor_type = 'human') AS human_added,
+                    sumIf(toUInt64(ifNull(h.human_lines_deleted, 0)), h.actor_type = 'human') AS human_deleted,
+                    sum(toUInt64(ifNull(h.unattributed_lines_added, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_added,
+                    sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_deleted,
+                    countIf(h.actor_type = 'unknown') AS unattributed_unknown,
                     ifNull(any(u.prompts), 0) AS prompts,
                     ifNull(any(u.sessions), 0) AS sessions,
                     ifNull(any(u.input_tokens), 0) AS input_tokens,
@@ -123,13 +129,19 @@ impl ProjectAnalyticsRepository {
         let (sql, has_branch) = scoped_sql(
             "SELECT toString(toDate(toDateTime(toUInt32(h.time), ?))) AS date,
                     sum(ifNull(h.active_seconds, 0.0)) AS total_seconds,
-                    sum(toUInt64(ifNull(h.ai_lines_added, 0))) AS ai_added,
-                    sum(toUInt64(ifNull(h.ai_lines_deleted, 0))) AS ai_deleted,
-                    sum(toUInt64(ifNull(h.human_lines_added, 0))) AS human_added,
-                    sum(toUInt64(ifNull(h.human_lines_deleted, 0))) AS human_deleted,
-                    sum(toUInt64(ifNull(h.unattributed_lines_added, 0))) AS unattributed_added,
-                    sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0))) AS unattributed_deleted,
-                    countIf(isNull(h.unattributed_lines_added) OR isNull(h.unattributed_lines_deleted)) AS unattributed_unknown
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type = 'ai_verified') AS ai_verified_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type = 'ai_verified') AS ai_verified_deleted,
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type = 'ai_inferred') AS ai_inferred_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type = 'ai_inferred') AS ai_inferred_deleted,
+                    sumIf(toUInt64(ifNull(h.ai_lines_added, 0)), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_added,
+                    sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0)), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_deleted,
+                    sumIf(toUInt64(ifNull(h.human_lines_added, 0)), h.actor_type = 'human') AS human_added,
+                    sumIf(toUInt64(ifNull(h.human_lines_deleted, 0)), h.actor_type = 'human') AS human_deleted,
+                    sum(toUInt64(ifNull(h.unattributed_lines_added, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_added,
+                    sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0)))
+                        + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_deleted,
+                    countIf(h.actor_type = 'unknown') AS unattributed_unknown
              FROM wakaclock.heartbeats AS h
              WHERE h.user_id = ? AND h.project_id = ?
                AND h.time >= ? AND h.time < ?",
@@ -214,10 +226,13 @@ impl ProjectAnalyticsRepository {
                 "SELECT if(empty(ifNull(branch, '')), 'Unknown', ifNull(branch, '')) AS branch,
                         sum(ifNull(active_seconds, 0.0)) AS total_seconds,
                         count() AS heartbeat_count,
-                        sum(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0))) AS ai_changes,
-                        sum(toUInt64(ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0))) AS human_changes,
-                        sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0))) AS unattributed_changes,
-                        countIf(isNull(unattributed_lines_added) OR isNull(unattributed_lines_deleted)) AS unattributed_unknown
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type = 'ai_verified') AS ai_verified_changes,
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type = 'ai_inferred') AS ai_inferred_changes,
+                        sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_changes,
+                        sumIf(toUInt64(ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_changes,
+                        sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0)))
+                            + sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0) + ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'unknown') AS unattributed_changes,
+                        countIf(actor_type = 'unknown') AS unattributed_unknown
                  FROM wakaclock.heartbeats
                  WHERE user_id = ? AND project_id = ?
                    AND time >= ? AND time < ?
@@ -247,10 +262,13 @@ impl ProjectAnalyticsRepository {
                        replaceRegexpOne(entity, '^.*/', ''), entity) AS path,
                     if(empty(ifNull(language, '')), 'Unknown', ifNull(language, '')) AS language,
                     sum(ifNull(active_seconds, 0.0)) AS total_seconds,
-                    sum(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0))) AS ai_changes,
-                    sum(toUInt64(ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0))) AS human_changes,
-                    sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0))) AS unattributed_changes,
-                    countIf(isNull(unattributed_lines_added) OR isNull(unattributed_lines_deleted)) AS unattributed_unknown
+                    sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type = 'ai_verified') AS ai_verified_changes,
+                    sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type = 'ai_inferred') AS ai_inferred_changes,
+                    sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)), actor_type IN ('ai_verified', 'ai_inferred')) AS ai_changes,
+                    sumIf(toUInt64(ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'human') AS human_changes,
+                    sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0)))
+                        + sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0) + ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'unknown') AS unattributed_changes,
+                    countIf(actor_type = 'unknown') AS unattributed_unknown
              FROM wakaclock.heartbeats
              WHERE user_id = ? AND project_id = ?
                AND time >= ? AND time < ?",
@@ -274,26 +292,6 @@ impl ProjectAnalyticsRepository {
             .fetch_all::<ProjectFileRow>()
             .await
             .map_err(|error| anyhow::anyhow!("Project files query failed: {error}"))
-    }
-
-    pub async fn all_projects_seconds(
-        &self,
-        user_id: Uuid,
-        start_epoch: f64,
-        end_epoch: f64,
-    ) -> Result<f64> {
-        self.client
-            .get_client()
-            .query(
-                "SELECT sum(ifNull(active_seconds, 0.0)) FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND time >= ? AND time < ?",
-            )
-            .bind(user_id)
-            .bind(start_epoch)
-            .bind(end_epoch)
-            .fetch_one::<f64>()
-            .await
-            .map_err(|error| anyhow::anyhow!("All-project duration query failed: {error}"))
     }
 }
 
@@ -323,6 +321,10 @@ pub struct ProjectAggregateRow {
     pub repository: String,
     pub last_activity: f64,
     pub total_seconds: f64,
+    pub ai_verified_added: u64,
+    pub ai_verified_deleted: u64,
+    pub ai_inferred_added: u64,
+    pub ai_inferred_deleted: u64,
     pub ai_added: u64,
     pub ai_deleted: u64,
     pub human_added: u64,
@@ -347,6 +349,10 @@ pub struct ProjectAggregateRow {
 pub struct ProjectDailyRow {
     pub date: String,
     pub total_seconds: f64,
+    pub ai_verified_added: u64,
+    pub ai_verified_deleted: u64,
+    pub ai_inferred_added: u64,
+    pub ai_inferred_deleted: u64,
     pub ai_added: u64,
     pub ai_deleted: u64,
     pub human_added: u64,
@@ -367,6 +373,8 @@ pub struct ProjectBranchRow {
     pub branch: String,
     pub total_seconds: f64,
     pub heartbeat_count: u64,
+    pub ai_verified_changes: u64,
+    pub ai_inferred_changes: u64,
     pub ai_changes: u64,
     pub human_changes: u64,
     pub unattributed_changes: u64,
@@ -379,6 +387,8 @@ pub struct ProjectFileRow {
     pub path: String,
     pub language: String,
     pub total_seconds: f64,
+    pub ai_verified_changes: u64,
+    pub ai_inferred_changes: u64,
     pub ai_changes: u64,
     pub human_changes: u64,
     pub unattributed_changes: u64,
@@ -408,11 +418,13 @@ mod tests {
         let heartbeat_repo = HeartbeatRepository::new(clickhouse.clone());
         let identity_repo = ProjectIdentityRepository::new(clickhouse.clone());
         let usage_repo = AiUsageRepository::new(clickhouse.clone());
-        AnalyticsRepository::new(clickhouse.clone())
+        heartbeat_repo.migrate().await.unwrap();
+        let analytics_repo = AnalyticsRepository::new(clickhouse.clone());
+        analytics_repo.migrate().await.unwrap();
+        analytics_repo
             .migrate()
             .await
-            .unwrap();
-        heartbeat_repo.migrate().await.unwrap();
+            .expect("analytics schema migration should be repeatable");
         identity_repo.migrate().await.unwrap();
         usage_repo.migrate().await.unwrap();
 
@@ -441,68 +453,94 @@ mod tests {
             .await
             .unwrap();
 
+        let human_row = HeartbeatRow {
+            user_id,
+            entity: "src/main.rs".to_string(),
+            entity_type: "file".to_string(),
+            time: (event_base + 180) as f64,
+            date: unix_day as u16,
+            project: Some("demo".to_string()),
+            project_id: Some(project_id),
+            branch: Some("main".to_string()),
+            head_revision: Some("abc123".to_string()),
+            repository_id: None,
+            language: Some("Rust".to_string()),
+            dependencies: Vec::new(),
+            lines: Some(10),
+            line_number: None,
+            cursor_position: None,
+            is_write: false,
+            category: "coding".to_string(),
+            editor: "vscode".to_string(),
+            operating_system: "macos".to_string(),
+            machine: "test".to_string(),
+            user_agent: "test".to_string(),
+            machine_name_hash: None,
+            hostname_hash: None,
+            timezone: Some("UTC".to_string()),
+            feature_id: None,
+            feature_name: None,
+            heartbeat_id: Some("project-regression-heartbeat".to_string()),
+            ast_language: None,
+            ast_confidence: None,
+            keystrokes: None,
+            chars_added: None,
+            chars_deleted: None,
+            active_seconds: Some(60.0),
+            active_seconds_claimed: Some(60.0),
+            activity_segments: "[]".to_string(),
+            is_ai_generated: false,
+            ai_agent: None,
+            ai_provider: None,
+            ai_model: None,
+            ai_source: None,
+            ai_confidence: None,
+            ai_event_id: None,
+            ai_change_id: None,
+            prompt_character_count: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            ai_subscription_plan: None,
+            token_source: None,
+            attribution_source: None,
+            attribution_confidence: None,
+            ai_event_fingerprint: None,
+            ai_lines_added: Some(2),
+            ai_lines_deleted: Some(1),
+            human_lines_added: Some(3),
+            human_lines_deleted: Some(1),
+            unattributed_lines_added: Some(0),
+            unattributed_lines_deleted: Some(0),
+            created_at: event_base,
+            actor_type: "human".to_string(),
+            actor_confidence: 1.0,
+            clipboard_tracking_version: None,
+            copy_actions: None,
+            paste_actions: None,
+            copied_chars: None,
+            copied_lines: None,
+            pasted_chars: None,
+            pasted_lines: None,
+            paste_same_file_actions: None,
+            paste_same_workspace_actions: None,
+            paste_external_or_unknown_actions: None,
+        };
+        let mut unknown_row = human_row.clone();
+        unknown_row.time = (event_base + 240) as f64;
+        unknown_row.heartbeat_id = Some("project-regression-unknown".to_string());
+        unknown_row.actor_type = "unknown".to_string();
+        unknown_row.actor_confidence = 0.0;
+        unknown_row.ai_lines_added = None;
+        unknown_row.ai_lines_deleted = None;
+        unknown_row.human_lines_added = Some(5);
+        unknown_row.human_lines_deleted = Some(2);
+        unknown_row.unattributed_lines_added = Some(4);
+        unknown_row.unattributed_lines_deleted = Some(1);
+
         heartbeat_repo
-            .insert_batch(vec![HeartbeatRow {
-                user_id,
-                entity: "src/main.rs".to_string(),
-                entity_type: "file".to_string(),
-                time: (event_base + 180) as f64,
-                date: unix_day as u16,
-                project: Some("demo".to_string()),
-                project_id: Some(project_id),
-                branch: Some("main".to_string()),
-                head_revision: Some("abc123".to_string()),
-                repository_id: None,
-                language: Some("Rust".to_string()),
-                dependencies: Vec::new(),
-                lines: Some(10),
-                line_number: None,
-                cursor_position: None,
-                is_write: false,
-                category: "coding".to_string(),
-                editor: "vscode".to_string(),
-                operating_system: "macos".to_string(),
-                machine: "test".to_string(),
-                user_agent: "test".to_string(),
-                machine_name_hash: None,
-                hostname_hash: None,
-                timezone: Some("UTC".to_string()),
-                feature_id: None,
-                feature_name: None,
-                heartbeat_id: Some("project-regression-heartbeat".to_string()),
-                ast_language: None,
-                ast_confidence: None,
-                keystrokes: None,
-                chars_added: None,
-                chars_deleted: None,
-                active_seconds: Some(60.0),
-                activity_segments: "[]".to_string(),
-                is_ai_generated: false,
-                ai_agent: None,
-                ai_provider: None,
-                ai_model: None,
-                ai_source: None,
-                ai_confidence: None,
-                ai_event_id: None,
-                ai_change_id: None,
-                prompt_character_count: None,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_tokens: None,
-                cache_write_tokens: None,
-                ai_subscription_plan: None,
-                token_source: None,
-                attribution_source: None,
-                attribution_confidence: None,
-                ai_event_fingerprint: None,
-                ai_lines_added: Some(2),
-                ai_lines_deleted: Some(1),
-                human_lines_added: Some(3),
-                human_lines_deleted: Some(1),
-                unattributed_lines_added: Some(0),
-                unattributed_lines_deleted: Some(0),
-                created_at: event_base,
-            }])
+            .insert_batch(vec![human_row, unknown_row])
             .await
             .unwrap();
 
@@ -564,6 +602,20 @@ mod tests {
             .unwrap();
         let row = rows.first().expect("the seeded project should be returned");
 
+        // The raw row deliberately carries both legacy-looking counter families while
+        // its canonical actor is Human. Project analytics must follow actor_type and
+        // must not resurrect the old boolean/counter heuristic.
+        assert_eq!(row.ai_verified_added, 0);
+        assert_eq!(row.ai_verified_deleted, 0);
+        assert_eq!(row.ai_inferred_added, 0);
+        assert_eq!(row.ai_inferred_deleted, 0);
+        assert_eq!(row.ai_added, 0);
+        assert_eq!(row.ai_deleted, 0);
+        assert_eq!(row.human_added, 3);
+        assert_eq!(row.human_deleted, 1);
+        assert_eq!(row.unattributed_added, 9);
+        assert_eq!(row.unattributed_deleted, 3);
+        assert_eq!(row.unattributed_unknown, 1);
         assert_eq!(row.prompts, 5);
         assert_eq!(row.sessions, 2);
         assert_eq!(row.input_tokens, 150);

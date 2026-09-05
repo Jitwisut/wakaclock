@@ -33,10 +33,45 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.ensureBrokerRunning = ensureBrokerRunning;
 exports.registerCommands = registerCommands;
 const vscode = __importStar(require("vscode"));
+const aiDetectionSelfTest_1 = require("./aiDetectionSelfTest");
 const secrets_1 = require("./secrets");
-function registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations) {
+const utils_1 = require("./utils");
+async function ensureBrokerRunning(deps) {
+    let installError;
+    try {
+        await deps.installAgent();
+    }
+    catch (error) {
+        installError = error instanceof Error ? error.message : String(error);
+    }
+    if (!installError) {
+        try {
+            const status = await deps.getBrokerStatus();
+            if (status.running === true) {
+                return { running: true, viaFallback: false };
+            }
+        }
+        catch {
+            // Status unreadable — treat exactly like "not running" and fall back.
+        }
+    }
+    try {
+        const disposable = await deps.startExtensionOwnedAgent();
+        return { running: true, viaFallback: true, disposable, error: installError };
+    }
+    catch (fallbackError) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        return {
+            running: false,
+            viaFallback: false,
+            error: [installError, fallbackMessage].filter(Boolean).join("; "),
+        };
+    }
+}
+function registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations, onVerifiedApiKey) {
     function workspaceProject(editor) {
         if (!editor) {
             return undefined;
@@ -55,7 +90,10 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await vscode.window.showInformationMessage("Wakaclock CLI path updated.");
     }), vscode.commands.registerCommand("wakaclock.showToday", async () => {
         try {
-            const today = await cliService.getToday();
+            // Must match the timezone the status bar passes, or the popup and the
+            // status bar describe two different 24-hour windows — which is how the
+            // bar could read "0s" while this popup read "11m 46s".
+            const today = await cliService.getToday((0, utils_1.localTimezone)());
             await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`);
         }
         catch (error) {
@@ -121,7 +159,11 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
         await (0, secrets_1.clearPendingApiKey)(context.secrets);
         await statusBar.refresh();
-        void cliService.getStatus().catch(() => undefined);
+        // The activation bootstrap may already have returned because no key was
+        // available at startup. Re-run it after verification so an existing AI
+        // consent immediately refreshes the broker service, and a newly eligible
+        // integration can receive the normal consent prompt.
+        onVerifiedApiKey?.();
         await vscode.window.showInformationMessage("AtoAxis API key verified and saved securely. Time tracking is now active.");
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
@@ -147,15 +189,45 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         catch (error) {
             await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect AI integrations.");
         }
+    }), vscode.commands.registerCommand("wakaclock.showBrokerStatus", async () => {
+        try {
+            const status = await cliService.getBrokerStatus();
+            const inbox = status.inbox;
+            const lastError = inbox?.last_error_message;
+            await vscode.window.showInformationMessage(`Broker ${status.running ? "running" : "stopped"}; ` +
+                `pending ${inbox?.pending ?? 0}, retry ${inbox?.retry ?? 0}, ` +
+                `dead-letter ${inbox?.dead_letter ?? 0}, outbound ${status.outbound_queue_count ?? 0}.` +
+                (lastError ? ` Last error: ${lastError}` : ""));
+        }
+        catch (error) {
+            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect the local AI broker.");
+        }
     }), vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
         return setupAiTracking(aiIntegrations, cliService, context);
     }), vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
         return setupAiTracking(aiIntegrations, cliService, context, true);
+    }), vscode.commands.registerCommand("wakaclock.testAiDetection", async () => {
+        try {
+            const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)({
+                getBrokerStatus: () => cliService.getBrokerStatus(),
+                getAiAgentStatuses: () => aiIntegrations.getStatus(),
+            });
+            const body = (0, aiDetectionSelfTest_1.formatAiDetectionReport)(report);
+            if (report.verdict === "ok") {
+                await vscode.window.showInformationMessage(body, { modal: false });
+            }
+            else {
+                await vscode.window.showWarningMessage(body, { modal: false });
+            }
+        }
+        catch (error) {
+            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to run the AI detection self-test.");
+        }
     }));
 }
 async function setupAiTracking(aiIntegrations, cliService, context, repairing = false) {
     try {
-        const selectedIds = await chooseAiAgents(aiIntegrations, context);
+        const selectedIds = await chooseAiAgents(aiIntegrations, context, repairing);
         if (!selectedIds || selectedIds.length === 0) {
             return false;
         }
@@ -176,32 +248,20 @@ async function setupAiTracking(aiIntegrations, cliService, context, repairing = 
         const failed = result.failed.length;
         const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
         if (configured > 0) {
-            let serviceInstalled = true;
-            try {
-                const key = await (0, secrets_1.getStoredApiKey)(context.secrets);
-                if (key) {
-                    await cliService.persistApiKey(key);
-                }
-                await cliService.installAgent();
+            const key = await (0, secrets_1.getStoredApiKey)(context.secrets);
+            if (key) {
+                await cliService.persistApiKey(key).catch(() => undefined);
             }
-            catch (error) {
-                serviceInstalled = false;
-                if (vscode.env.remoteName || process.platform === "linux") {
-                    try {
-                        const owned = await cliService.startExtensionOwnedAgent();
-                        context.subscriptions.push(owned);
-                        serviceInstalled = true;
-                    }
-                    catch (fallbackError) {
-                        await vscode.window.showWarningMessage(`AtoAxis could not install a service or start the remote watcher: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
-                    }
-                }
-                if (serviceInstalled) {
-                    await vscode.window.showInformationMessage(`${prefix}; the Extension Host will keep the transcript watcher running while this remote workspace is open.`);
-                }
-                if (!serviceInstalled) {
-                    await vscode.window.showWarningMessage(`${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${error instanceof Error ? error.message : String(error)}`);
-                }
+            const broker = await ensureBrokerRunning(cliService);
+            const serviceInstalled = broker.running;
+            if (broker.disposable) {
+                context.subscriptions.push(broker.disposable);
+            }
+            if (broker.running && broker.viaFallback) {
+                await vscode.window.showInformationMessage(`${prefix}; the Extension Host will keep the transcript watcher running while this workspace is open.`);
+            }
+            if (!broker.running) {
+                await vscode.window.showWarningMessage(`${prefix}, but the always-on transcript agent could not be started. Upgrade wakaclock-cli if this persists: ${broker.error ?? "unknown error"}`);
             }
             if (failed > 0) {
                 await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed.${serviceInstalled ? "" : " The always-on agent also needs an upgrade or repair."} Run “AtoAxis: Show AI Tracking Status” for details.`);
@@ -213,7 +273,7 @@ async function setupAiTracking(aiIntegrations, cliService, context, repairing = 
             return serviceInstalled;
         }
         else {
-            await vscode.window.showInformationMessage("No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+            await vscode.window.showInformationMessage("No supported AI CLI was detected. Install a supported integration and run setup again.");
             return false;
         }
     }
@@ -223,11 +283,13 @@ async function setupAiTracking(aiIntegrations, cliService, context, repairing = 
     }
 }
 /** Ask per detected tool; no integration is changed until the user confirms. */
-async function chooseAiAgents(aiIntegrations, context) {
+async function chooseAiAgents(aiIntegrations, context, repairing = false) {
     const statuses = await aiIntegrations.getStatus();
-    const candidates = statuses.filter((status) => status.detected && !status.enabled);
+    const candidates = statuses.filter((status) => status.detected && (repairing || !status.enabled));
     if (candidates.length === 0) {
-        await vscode.window.showInformationMessage("No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.");
+        await vscode.window.showInformationMessage(repairing
+            ? "No configured supported AI coding tool was detected. Install a supported integration and run repair again."
+            : "No new supported AI coding tool was detected. Install a supported integration and run setup again.");
         return undefined;
     }
     const picked = await vscode.window.showQuickPick(candidates.map((status) => ({
@@ -236,7 +298,9 @@ async function chooseAiAgents(aiIntegrations, context) {
         detail: "Adds an AtoAxis hook when supported and enables the background transcript watcher. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
         id: status.id,
     })), {
-        title: "Choose AI tools for AtoAxis tracking",
+        title: repairing
+            ? "Choose AI tools to repair for AtoAxis"
+            : "Choose AI tools for AtoAxis tracking",
         placeHolder: "Select one or more detected tools",
         canPickMany: true,
         ignoreFocusOut: true,
@@ -244,12 +308,19 @@ async function chooseAiAgents(aiIntegrations, context) {
     if (!picked || picked.length === 0) {
         return undefined;
     }
-    const action = await vscode.window.showQuickPick(["Enable selected", "Not now", "Don't ask again"], {
-        title: "Confirm AI tracking setup",
-        placeHolder: "Choose when to install the selected integrations",
+    const action = await vscode.window.showQuickPick(repairing
+        ? ["Repair selected", "Cancel"]
+        : ["Enable selected", "Not now", "Don't ask again"], {
+        title: repairing ? "Confirm AI integration repair" : "Confirm AI tracking setup",
+        placeHolder: repairing
+            ? "Reinstall hooks, broker service and token permissions"
+            : "Choose when to install the selected integrations",
         ignoreFocusOut: true,
     });
-    if (action !== "Enable selected") {
+    if (action !== (repairing ? "Repair selected" : "Enable selected")) {
+        if (repairing) {
+            return undefined;
+        }
         const state = action === "Don't ask again" ? "denied" : "deferred";
         for (const item of picked) {
             await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {

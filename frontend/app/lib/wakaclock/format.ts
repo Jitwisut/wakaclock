@@ -34,6 +34,29 @@ export function formatDurationShort(totalSeconds: number): string {
   return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
 }
 
+/**
+ * Flip a value to the negative half of a diverging chart.
+ *
+ * `null` is preserved rather than negated. Several attribution fields are nullable
+ * because the API reports "cannot be determined" instead of a measured zero, and
+ * `-null` is `-0` while `-undefined` is `NaN` — either one silently turns an unknown
+ * into a drawn bar.
+ */
+export function toDivergingNegative(value: null | number | undefined): null | number {
+  return value === null || value === undefined ? null : -value;
+}
+
+/**
+ * Axis ticks and tooltips on a diverging chart show magnitudes: the sign is already
+ * carried by which side of the zero line the bar sits on, so repeating it as a minus
+ * reads as negative code rather than as deleted code.
+ */
+export function formatMagnitude(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.abs(value).toLocaleString()
+    : '—';
+}
+
 /** durations.start/end are epoch seconds (f64), not ISO strings. */
 export function formatEpochTime(epochSeconds: number): string {
   return format(new Date(epochSeconds * 1000), 'HH:mm');

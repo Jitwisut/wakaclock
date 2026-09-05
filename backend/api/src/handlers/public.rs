@@ -9,11 +9,18 @@ use std::sync::Arc;
 
 use crate::infrastructure::app::AppState;
 
+/// Mounted at `/public` (see `main.rs`).
+///
+/// The badge routes put the extension in its own path segment rather than suffixing the
+/// parameter. `/embed/:token.svg` looks natural but axum's `:param` captures a whole
+/// segment, so `:token.json` and `:token.svg` are the same route and registering both
+/// panics at startup. Keeping `badge.svg` as a literal trailing segment preserves the
+/// extension a README image link expects while leaving the token its own segment.
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/share/:token", axum::routing::get(share))
-        .route("/embed/:token.json", axum::routing::get(embed_json))
-        .route("/embed/:token.svg", axum::routing::get(embed_svg))
+        .route("/embed/:token/badge.json", axum::routing::get(embed_json))
+        .route("/embed/:token/badge.svg", axum::routing::get(embed_svg))
         .with_state(app_state)
 }
 
@@ -64,7 +71,10 @@ async fn embed_svg(
     );
     Ok((
         [
-            (header::CONTENT_TYPE, HeaderValue::from_static("image/svg+xml")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/svg+xml"),
+            ),
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
         ],
         body,

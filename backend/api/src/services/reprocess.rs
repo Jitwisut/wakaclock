@@ -9,12 +9,14 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::MAX_RANGE_DAYS;
-use crate::model::heartbeat::HeartbeatRow;
+use crate::model::heartbeat::{ActivityIntervalRow, HeartbeatRow};
 use crate::model::project_rule::ProjectRuleRow;
 use crate::model::reprocess::ReprocessData;
 use crate::services::account_analytics::AccountAnalyticsService;
+use crate::services::heartbeat::clamp_to_evidence_window;
 use crate::services::project_identity::ProjectIdentityService;
 use crate::services::project_rule::ProjectRuleService;
+use wakaclock_core::heartbeat::ActivitySegment;
 
 const AGGREGATE_TABLES: &[&str] = &[
     "daily_totals",
@@ -24,6 +26,7 @@ const AGGREGATE_TABLES: &[&str] = &[
     "os_daily",
     "insights_agg",
     "ai_daily",
+    "actor_daily_v2",
     "keystroke_daily",
 ];
 
@@ -93,13 +96,31 @@ impl ReprocessService {
         for row in &mut rows {
             row.project = resolve_project_with_rules(&rules, &row.entity, row.project.clone());
         }
+        // A rule can legitimately recover a heartbeat whose original project was NULL.
+        // That row cannot participate in the source-project backfill map (there is no
+        // source label to key by), but it is still resolved and apply-mode persists the
+        // correction by entity regex below. Keep dry-run accounting aligned with what
+        // apply will actually do instead of reporting every recovered NULL as unresolved.
+        let rule_resolved_without_source = rows
+            .iter()
+            .zip(&source_projects)
+            .filter(|(row, source_project)| source_project.is_none() && row.project.is_some())
+            .count() as u64;
         let (project_counts, unresolved_mappings) = project_mappings(&rows, &source_projects);
         let reprocessed_heartbeats = rows.len();
         let mut backfill = self
             .project_identity_service
             .backfill_historical_projects(user_id, start, end, &project_counts, dry_run)
             .await?;
+        backfill.resolved_heartbeats += rule_resolved_without_source;
         backfill.unresolved_heartbeats += unresolved_mappings;
+
+        if !dry_run {
+            let rule_project_ids = self
+                .persist_rule_project_corrections(user_id, start, end, &rules)
+                .await?;
+            backfill.resolved_ids.extend(rule_project_ids);
+        }
 
         if dry_run {
             let data = ReprocessData {
@@ -127,8 +148,10 @@ impl ReprocessService {
                 row.project_id = backfill.resolved_ids.get(project).copied();
             }
         }
+        let interval_rows = rebuild_activity_intervals(&rows);
         let result = async {
             self.delete_aggregate_range(user_id, start, end).await?;
+            self.insert_activity_intervals(interval_rows).await?;
             self.insert_incoming(rows).await?;
             let projection = self
                 .account_analytics_service
@@ -248,50 +271,30 @@ impl ReprocessService {
         self.clickhouse
             .get_client()
             .query(
+                // Keep this column order exactly aligned with `HeartbeatRow` and
+                // `HeartbeatRepository::get_by_date`; clickhouse decodes rows positionally.
                 "
                 SELECT
-                    user_id,
-                    entity,
-                    toString(entity_type) AS entity_type,
-                    time,
-                    toUInt16(date) AS date,
-                    project,
-                    project_id,
-                    branch,
-                    language,
-                    dependencies,
-                    lines,
-                    line_number,
-                    cursor_position,
-                    is_write,
-                    toString(category) AS category,
-                    toString(editor) AS editor,
-                    toString(operating_system) AS operating_system,
-                    machine,
-                    user_agent,
-                    heartbeat_id,
-                    ast_language,
-                    ast_confidence,
-                    keystrokes,
-                    chars_added,
-                    chars_deleted,
-                    active_seconds,
-                    activity_segments,
-                    is_ai_generated,
-                    ai_agent,
-                    ai_provider,
-                    ai_model,
-                    ai_source,
-                    ai_confidence,
-                    ai_event_id,
+                    user_id, entity, entity_type, time, date,
+                    project, project_id, branch, head_revision, repository_id,
+                    language, dependencies,
+                    lines, line_number, cursor_position,
+                    is_write, category, editor, operating_system,
+                    machine, user_agent, machine_name_hash, hostname_hash, timezone,
+                    feature_id, feature_name,
+                    heartbeat_id, ast_language, ast_confidence,
+                    keystrokes, chars_added, chars_deleted,
+                    active_seconds, active_seconds_claimed, activity_segments,
+                    is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
+                    ai_confidence, ai_event_id, ai_change_id,
+                    prompt_character_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, ai_subscription_plan,
+                    token_source, attribution_source, attribution_confidence,
                     ai_event_fingerprint,
-                    ai_lines_added,
-                    ai_lines_deleted,
-                    human_lines_added,
-                    human_lines_deleted,
-                    unattributed_lines_added,
-                    unattributed_lines_deleted,
-                    toUInt32(created_at) AS created_at
+                    ai_lines_added, ai_lines_deleted,
+                    human_lines_added, human_lines_deleted,
+                    unattributed_lines_added, unattributed_lines_deleted,
+                    created_at, actor_type, actor_confidence
                 FROM wakaclock.heartbeats AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC
@@ -320,6 +323,78 @@ impl ReprocessService {
         Ok(compiled)
     }
 
+    async fn persist_rule_project_corrections(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        rules: &[CompiledRule],
+    ) -> Result<HashMap<String, Uuid>> {
+        let mut ids = HashMap::new();
+
+        // Rules are compiled in descending priority. Apply them low-to-high so a
+        // higher-priority rule is the final mutation when patterns overlap, matching
+        // `resolve_project_with_rules` exactly.
+        for rule in rules.iter().rev() {
+            let Some(project_id) = self
+                .project_identity_service
+                .resolve_project_id(user_id, Some(&rule.project_name), None)
+                .await?
+            else {
+                continue;
+            };
+            self.clickhouse
+                .get_client()
+                .query(
+                    "ALTER TABLE wakaclock.heartbeats
+                     UPDATE project = ?, project_id = ?
+                     WHERE user_id = ?
+                       AND toDate(date) BETWEEN toDate(?) AND toDate(?)
+                       AND match(entity, ?)
+                     SETTINGS mutations_sync = 1",
+                )
+                .bind(&rule.project_name)
+                .bind(project_id)
+                .bind(user_id)
+                .bind(start)
+                .bind(end)
+                .bind(rule.regex.as_str())
+                .execute()
+                .await
+                .map_err(|error| {
+                    anyhow!("ClickHouse project-rule history mutation failed: {error}")
+                })?;
+            ids.insert(rule.project_name.clone(), project_id);
+        }
+
+        Ok(ids)
+    }
+
+    async fn insert_activity_intervals(&self, rows: Vec<ActivityIntervalRow>) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self
+            .clickhouse
+            .get_client()
+            .insert("wakaclock.activity_intervals")
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse activity interval rebuild init failed: {error}")
+            })?;
+
+        for row in rows {
+            insert.write(&row).await.map_err(|error| {
+                anyhow::anyhow!("ClickHouse activity interval rebuild write failed: {error}")
+            })?;
+        }
+        insert.end().await.map_err(|error| {
+            anyhow::anyhow!("ClickHouse activity interval rebuild finalize failed: {error}")
+        })?;
+
+        Ok(())
+    }
+
     async fn insert_incoming(&self, rows: Vec<HeartbeatRow>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
@@ -345,6 +420,57 @@ impl ReprocessService {
     }
 }
 
+fn rebuild_activity_intervals(rows: &[HeartbeatRow]) -> Vec<ActivityIntervalRow> {
+    // `activity_intervals` is ReplacingMergeTree(created_at) keyed by segment_id. Use a
+    // fresh version so a reprocess can correct project/project_id on an existing segment
+    // without deleting the canonical timeline first.
+    let projection_created_at = chrono::Utc::now().timestamp().max(0) as u32;
+    let mut projected = Vec::new();
+
+    for row in rows {
+        let heartbeat_id = row
+            .heartbeat_id
+            .clone()
+            .unwrap_or_else(|| format!("legacy:{}:{:.6}", row.entity, row.time));
+        let segments = serde_json::from_str::<Vec<ActivitySegment>>(&row.activity_segments)
+            .unwrap_or_default();
+        let evidence = clamp_to_evidence_window(
+            &segments,
+            row.active_seconds_claimed.or(row.active_seconds),
+            row.time,
+            &heartbeat_id,
+        );
+
+        for segment in evidence.segments {
+            projected.push(ActivityIntervalRow {
+                user_id: row.user_id,
+                segment_id: segment.segment_id,
+                heartbeat_id: heartbeat_id.clone(),
+                start: segment.start,
+                end: segment.end,
+                source: wakaclock_core::heartbeat::normalize_activity_source(
+                    segment.source.as_deref(),
+                    &row.actor_type,
+                )
+                .to_string(),
+                entity: row.entity.clone(),
+                project: row.project.clone(),
+                project_id: row.project_id,
+                branch: row.branch.clone(),
+                language: row.language.clone(),
+                category: row.category.clone(),
+                editor: row.editor.clone(),
+                operating_system: row.operating_system.clone(),
+                actor_type: row.actor_type.clone(),
+                actor_confidence: row.actor_confidence,
+                created_at: projection_created_at,
+            });
+        }
+    }
+
+    projected
+}
+
 fn project_mappings(
     rows: &[HeartbeatRow],
     source_projects: &[Option<String>],
@@ -353,8 +479,14 @@ fn project_mappings(
     let mut ambiguous_sources = HashSet::new();
     let mut unresolved = 0;
     for (row, source_project) in rows.iter().zip(source_projects) {
-        let (Some(source_project), Some(resolved_project)) = (source_project, &row.project) else {
+        let Some(resolved_project) = &row.project else {
             unresolved += 1;
+            continue;
+        };
+        // Missing source + resolved target means a project rule recovered this row.
+        // There is no source label to backfill by, so apply-mode persists it through
+        // `persist_rule_project_corrections`; it must not be counted as unresolved here.
+        let Some(source_project) = source_project else {
             continue;
         };
         if ambiguous_sources.contains(source_project) {

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { AiAgentId, AiAgentSetupResult, AiAgentStatus } from "./agentSetup";
+import { formatAiDetectionReport, runAiDetectionSelfTest } from "./aiDetectionSelfTest";
 import type { HeartbeatBufferManager } from "./buffer";
 import type { WakaclockCliService } from "./cli";
 import type { WakaclockConfigService } from "./config";
@@ -12,10 +13,72 @@ import {
   setStoredApiKey,
 } from "./secrets";
 import type { StatusBarController } from "./statusBar";
+import { localTimezone } from "./utils";
 
 export interface AiIntegrationController {
   getStatus(): Promise<AiAgentStatus[]>;
   setup(selectedIds?: AiAgentId[]): Promise<AiAgentSetupResult>;
+}
+
+/**
+ * planai2.md Phase 0.2b: install the per-user OS service, then confirm it is
+ * *actually* running before trusting it. `broker install` can exit 0 while
+ * launchd / systemd / Task Scheduler silently declines to keep the process up
+ * (sandboxed hosts, a disabled user manager, a denied Task Scheduler policy) —
+ * previously only a thrown `installAgent()` triggered the Extension-Host-owned
+ * fallback, and only on remote or Linux. This checks `broker status` on every
+ * platform and falls back whenever the service is not up.
+ */
+export interface BrokerEnsureDeps {
+  installAgent(): Promise<unknown>;
+  getBrokerStatus(): Promise<{ running?: boolean }>;
+  startExtensionOwnedAgent(): Promise<{ dispose(): void }>;
+}
+
+export interface BrokerEnsureOutcome {
+  /** A watcher is up — either the OS service or the extension-owned child. */
+  running: boolean;
+  /** The extension-owned child is what is keeping it up. */
+  viaFallback: boolean;
+  /** Present only when `viaFallback` — push onto `context.subscriptions`. */
+  disposable?: { dispose(): void };
+  /** Why the OS service was not usable, when a fallback was needed or failed. */
+  error?: string;
+}
+
+export async function ensureBrokerRunning(
+  deps: BrokerEnsureDeps,
+): Promise<BrokerEnsureOutcome> {
+  let installError: string | undefined;
+  try {
+    await deps.installAgent();
+  } catch (error) {
+    installError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (!installError) {
+    try {
+      const status = await deps.getBrokerStatus();
+      if (status.running === true) {
+        return { running: true, viaFallback: false };
+      }
+    } catch {
+      // Status unreadable — treat exactly like "not running" and fall back.
+    }
+  }
+
+  try {
+    const disposable = await deps.startExtensionOwnedAgent();
+    return { running: true, viaFallback: true, disposable, error: installError };
+  } catch (fallbackError) {
+    const fallbackMessage =
+      fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+    return {
+      running: false,
+      viaFallback: false,
+      error: [installError, fallbackMessage].filter(Boolean).join("; "),
+    };
+  }
 }
 
 export function registerCommands(
@@ -32,10 +95,12 @@ export function registerCommands(
     | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
+    | "getBrokerStatus"
   >,
   bufferManager: Pick<HeartbeatBufferManager, "flushCurrentEditor">,
   statusBar: Pick<StatusBarController, "applyVisibility" | "refresh">,
-  aiIntegrations: AiIntegrationController
+  aiIntegrations: AiIntegrationController,
+  onVerifiedApiKey?: () => void,
 ): void {
   function workspaceProject(editor?: vscode.TextEditor): string | undefined {
     if (!editor) {
@@ -60,7 +125,10 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.showToday", async () => {
       try {
-        const today = await cliService.getToday();
+        // Must match the timezone the status bar passes, or the popup and the
+        // status bar describe two different 24-hour windows — which is how the
+        // bar could read "0s" while this popup read "11m 46s".
+        const today = await cliService.getToday(localTimezone());
         await vscode.window.showInformationMessage(
           `Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`
         );
@@ -155,7 +223,11 @@ export function registerCommands(
       await setStoredApiKey(context.secrets, trimmed);
       await clearPendingApiKey(context.secrets);
       await statusBar.refresh();
-      void cliService.getStatus().catch(() => undefined);
+      // The activation bootstrap may already have returned because no key was
+      // available at startup. Re-run it after verification so an existing AI
+      // consent immediately refreshes the broker service, and a newly eligible
+      // integration can receive the normal consent prompt.
+      onVerifiedApiKey?.();
 
       await vscode.window.showInformationMessage(
         "AtoAxis API key verified and saved securely. Time tracking is now active."
@@ -195,11 +267,46 @@ export function registerCommands(
         );
       }
     }),
+    vscode.commands.registerCommand("wakaclock.showBrokerStatus", async () => {
+      try {
+        const status = await cliService.getBrokerStatus();
+        const inbox = status.inbox;
+        const lastError = inbox?.last_error_message;
+        await vscode.window.showInformationMessage(
+          `Broker ${status.running ? "running" : "stopped"}; ` +
+            `pending ${inbox?.pending ?? 0}, retry ${inbox?.retry ?? 0}, ` +
+            `dead-letter ${inbox?.dead_letter ?? 0}, outbound ${status.outbound_queue_count ?? 0}.` +
+            (lastError ? ` Last error: ${lastError}` : "")
+        );
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : "Unable to inspect the local AI broker."
+        );
+      }
+    }),
     vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
       return setupAiTracking(aiIntegrations, cliService, context);
     }),
     vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
       return setupAiTracking(aiIntegrations, cliService, context, true);
+    }),
+    vscode.commands.registerCommand("wakaclock.testAiDetection", async () => {
+      try {
+        const report = await runAiDetectionSelfTest({
+          getBrokerStatus: () => cliService.getBrokerStatus(),
+          getAiAgentStatuses: () => aiIntegrations.getStatus(),
+        });
+        const body = formatAiDetectionReport(report);
+        if (report.verdict === "ok") {
+          await vscode.window.showInformationMessage(body, { modal: false });
+        } else {
+          await vscode.window.showWarningMessage(body, { modal: false });
+        }
+      } catch (error) {
+        await vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : "Unable to run the AI detection self-test."
+        );
+      }
     })
   );
 }
@@ -213,12 +320,13 @@ async function setupAiTracking(
     | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
+    | "getBrokerStatus"
   >,
   context: vscode.ExtensionContext,
   repairing = false
 ): Promise<boolean> {
   try {
-    const selectedIds = await chooseAiAgents(aiIntegrations, context);
+    const selectedIds = await chooseAiAgents(aiIntegrations, context, repairing);
     if (!selectedIds || selectedIds.length === 0) {
       return false;
     }
@@ -241,40 +349,26 @@ async function setupAiTracking(
     const failed = result.failed.length;
     const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
     if (configured > 0) {
-      let serviceInstalled = true;
-      try {
-        const key = await getStoredApiKey(context.secrets);
-        if (key) {
-          await cliService.persistApiKey(key);
-        }
-        await cliService.installAgent();
-      } catch (error) {
-        serviceInstalled = false;
-        if (vscode.env.remoteName || process.platform === "linux") {
-          try {
-            const owned = await cliService.startExtensionOwnedAgent();
-            context.subscriptions.push(owned);
-            serviceInstalled = true;
-          } catch (fallbackError) {
-            await vscode.window.showWarningMessage(
-              `AtoAxis could not install a service or start the remote watcher: ${
-                fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-              }`,
-            );
-          }
-        }
-        if (serviceInstalled) {
-          await vscode.window.showInformationMessage(
-            `${prefix}; the Extension Host will keep the transcript watcher running while this remote workspace is open.`,
-          );
-        }
-        if (!serviceInstalled) {
-        await vscode.window.showWarningMessage(
-          `${prefix}, but the always-on transcript agent could not be installed. Upgrade wakaclock-cli if this command is unavailable: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+      const key = await getStoredApiKey(context.secrets);
+      if (key) {
+        await cliService.persistApiKey(key).catch(() => undefined);
+      }
+      const broker = await ensureBrokerRunning(cliService);
+      const serviceInstalled = broker.running;
+      if (broker.disposable) {
+        context.subscriptions.push(broker.disposable);
+      }
+      if (broker.running && broker.viaFallback) {
+        await vscode.window.showInformationMessage(
+          `${prefix}; the Extension Host will keep the transcript watcher running while this workspace is open.`,
         );
-        }
+      }
+      if (!broker.running) {
+        await vscode.window.showWarningMessage(
+          `${prefix}, but the always-on transcript agent could not be started. Upgrade wakaclock-cli if this persists: ${
+            broker.error ?? "unknown error"
+          }`,
+        );
       }
       if (failed > 0) {
         await vscode.window.showWarningMessage(
@@ -290,7 +384,7 @@ async function setupAiTracking(
       return serviceInstalled;
     } else {
       await vscode.window.showInformationMessage(
-        "No supported AI CLI was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again."
+        "No supported AI CLI was detected. Install a supported integration and run setup again."
       );
       return false;
     }
@@ -306,12 +400,17 @@ async function setupAiTracking(
 async function chooseAiAgents(
   aiIntegrations: AiIntegrationController,
   context: vscode.ExtensionContext,
+  repairing = false,
 ): Promise<AiAgentId[] | undefined> {
   const statuses = await aiIntegrations.getStatus();
-  const candidates = statuses.filter((status) => status.detected && !status.enabled);
+  const candidates = statuses.filter(
+    (status) => status.detected && (repairing || !status.enabled),
+  );
   if (candidates.length === 0) {
     await vscode.window.showInformationMessage(
-      "No new supported AI coding tool was detected. Install Claude Code, Codex CLI or Gemini CLI and run setup again.",
+      repairing
+        ? "No configured supported AI coding tool was detected. Install a supported integration and run repair again."
+        : "No new supported AI coding tool was detected. Install a supported integration and run setup again.",
     );
     return undefined;
   }
@@ -324,7 +423,9 @@ async function chooseAiAgents(
       id: status.id,
     })),
     {
-      title: "Choose AI tools for AtoAxis tracking",
+      title: repairing
+        ? "Choose AI tools to repair for AtoAxis"
+        : "Choose AI tools for AtoAxis tracking",
       placeHolder: "Select one or more detected tools",
       canPickMany: true,
       ignoreFocusOut: true,
@@ -334,14 +435,21 @@ async function chooseAiAgents(
     return undefined;
   }
   const action = await vscode.window.showQuickPick(
-    ["Enable selected", "Not now", "Don't ask again"],
+    repairing
+      ? ["Repair selected", "Cancel"]
+      : ["Enable selected", "Not now", "Don't ask again"],
     {
-      title: "Confirm AI tracking setup",
-      placeHolder: "Choose when to install the selected integrations",
+      title: repairing ? "Confirm AI integration repair" : "Confirm AI tracking setup",
+      placeHolder: repairing
+        ? "Reinstall hooks, broker service and token permissions"
+        : "Choose when to install the selected integrations",
       ignoreFocusOut: true,
     },
   );
-  if (action !== "Enable selected") {
+  if (action !== (repairing ? "Repair selected" : "Enable selected")) {
+    if (repairing) {
+      return undefined;
+    }
     const state = action === "Don't ask again" ? "denied" : "deferred";
     for (const item of picked) {
       await context.globalState.update(`atoaxis.aiConsent.${item.id}`, {

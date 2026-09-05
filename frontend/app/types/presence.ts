@@ -24,6 +24,7 @@ export interface PresenceUser {
   username: string;
   x: number;
   y: number;
+  zoneId?: null | string;
 }
 
 export interface PresenceRoom {
@@ -53,5 +54,6 @@ export function toPresenceUser(entry: PresenceRosterEntry, currentUserId: string
     isCurrentUser: entry.user_id === currentUserId,
     x: entry.position?.x ?? DEFAULT_SPAWN_POSITION.x,
     y: entry.position?.y ?? DEFAULT_SPAWN_POSITION.y,
+    zoneId: entry.zone_id,
   };
 }

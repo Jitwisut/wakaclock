@@ -1,4 +1,15 @@
 export type HeartbeatCategory = "coding" | "building" | "debugging";
+export type ActorType = "human" | "ai_verified" | "ai_inferred" | "unknown";
+export type PasteOrigin = "same_file" | "same_workspace" | "external_or_unknown";
+
+export interface ClipboardCopyMetrics {
+    copiedChars: number;
+    copiedLines: number;
+}
+
+export interface ClipboardPasteMetrics {
+    origin: PasteOrigin;
+}
 
 export type FlushReason =
     | "save"
@@ -36,9 +47,34 @@ export interface BufferedFileState {
     humanLinesDeleted: number;
     unattributedLinesAdded: number;
     unattributedLinesDeleted: number;
+    copyActions: number;
+    pasteActions: number;
+    copiedChars: number;
+    copiedLines: number;
+    pastedChars: number;
+    pastedLines: number;
+    pasteSameFileActions: number;
+    pasteSameWorkspaceActions: number;
+    pasteExternalOrUnknownActions: number;
     lineNumber?: number;
     cursorPosition?: number;
     pendingWrite: boolean;
+    /**
+     * Set only when the pending edit was matched against a broker sidecar event
+     * (`AiAttributionStore.classify`). Its presence, not `write`, is what should decide
+     * whether the next payload reports AI or Human attribution — a save immediately
+     * after an agent-owned edit must not fall back to Human just because `write` is true.
+     */
+    aiEventId?: string;
+    aiAgent?: string;
+    aiProvider?: string;
+    aiModel?: string;
+    aiSource?: string;
+    aiConfidence?: string;
+    aiActorType?: ActorType;
+    aiActorConfidence?: number;
+    aiLinesAdded?: number;
+    aiLinesDeleted?: number;
 }
 
 export interface ExtraHeartbeatPayload {
@@ -55,6 +91,8 @@ export interface ExtraHeartbeatPayload {
     active_seconds?: number;
     heartbeat_id?: string;
     activity_segments?: ActivitySegment[];
+    actor_type?: ActorType;
+    actor_confidence?: number;
     ai_agent?: string;
     ai_provider?: string;
     ai_model?: string;
@@ -67,6 +105,16 @@ export interface ExtraHeartbeatPayload {
     human_lines_deleted?: number;
     unattributed_lines_added?: number;
     unattributed_lines_deleted?: number;
+    clipboard_tracking_version?: number;
+    copy_actions?: number;
+    paste_actions?: number;
+    copied_chars?: number;
+    copied_lines?: number;
+    pasted_chars?: number;
+    pasted_lines?: number;
+    paste_same_file_actions?: number;
+    paste_same_workspace_actions?: number;
+    paste_external_or_unknown_actions?: number;
 }
 
 export interface CliResult {
@@ -129,6 +177,12 @@ export interface StatusBarSnapshot {
     lastIncrementSeconds?: number;
     lastIncrementSource?: string;
     discardedSeconds?: number;
+    /** Heartbeats the server has not accepted yet, across every day — see cli.ts. */
+    queuedHeartbeats?: number;
+    /** The CLI's one-line delivery verdict. Starts with "REFUSED" when the server is
+     *  turning heartbeats away (an expired trial, a revoked key), which is otherwise
+     *  indistinguishable from a quiet day. */
+    delivery?: string;
     legacyCli?: boolean;
 }
 
@@ -138,6 +192,32 @@ export interface StatusSnapshot {
     userId?: string;
     queuedHeartbeats?: number;
     flushedNow?: number;
+    capabilities?: string[];
+}
+
+export interface BrokerStatusSnapshot {
+    running?: boolean;
+    pid?: number | null;
+    endpoint?: string | null;
+    protocol?: number;
+    started_at?: number | null;
+    uptime_seconds?: number;
+    last_received_at?: number | null;
+    last_processed_at?: number | null;
+    last_delivery_at?: number | null;
+    inbox?: {
+        pending?: number;
+        processing?: number;
+        processed?: number;
+        retry?: number;
+        dead_letter?: number;
+        last_received_at?: number | null;
+        last_processed_at?: number | null;
+        last_delivery_at?: number | null;
+        last_error_code?: string | null;
+        last_error_message?: string | null;
+    };
+    outbound_queue_count?: number;
 }
 
 export interface WakaclockConfigSnapshot {
@@ -152,6 +232,7 @@ export interface WakaclockConfigSnapshot {
     debugLogging: boolean;
     trackDebugSessions: boolean;
     trackBuildTasks: boolean;
+    trackClipboardActions: boolean;
 }
 
 export interface FlushOverrides {

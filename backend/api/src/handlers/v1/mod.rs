@@ -3,6 +3,7 @@ pub mod ai_diagnostics;
 pub mod ai_stats;
 pub mod ai_usage;
 pub mod all_time;
+pub mod analytics_explorer;
 pub mod api_key;
 pub mod auth;
 pub mod catalog;
@@ -219,6 +220,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         )
         .route("/users/:user/ai_diagnostics", get(ai_diagnostics::get))
         .route("/dashboard/analytics", get(dashboard_analytics::overview))
+        .route("/dashboard/explorer", get(analytics_explorer::get))
         .route(
             "/users/current/api_key",
             get(api_key::current)
@@ -246,6 +248,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route(
             "/presence/rooms/:room_id/sessions/leave",
             post(presence::leave_session),
+        )
+        .route(
+            "/presence/rooms/:room_id/stream-ticket",
+            post(presence::create_stream_ticket),
         )
         .route(
             "/presence/rooms/:room_id/stream",

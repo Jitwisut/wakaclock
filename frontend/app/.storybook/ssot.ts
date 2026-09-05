@@ -6,6 +6,8 @@ import { DEFAULT_THEME, THEMES } from '../lib/themes';
 
 import { en, ja } from './languages';
 
+import type { Preview } from '@storybook/nextjs-vite';
+
 // =============================================================================
 // Storybook SSOT (Single Source of Truth)
 //
@@ -244,7 +246,7 @@ export const STORYBOOK_LOCALE_ITEMS = [
   { value: 'ja', title: '日本語', right: '🇯🇵' },
 ] as const;
 
-export const STORYBOOK_GLOBAL_TYPES = {
+export const STORYBOOK_GLOBAL_TYPES: NonNullable<Preview['globalTypes']> = {
   // Theme mode (light/dark) - explicit registration for URL params
   theme: {
     name: 'Theme',
@@ -266,7 +268,7 @@ export const STORYBOOK_GLOBAL_TYPES = {
     toolbar: {
       title: 'Locale',
       icon: 'globe',
-      items: STORYBOOK_LOCALE_ITEMS,
+      items: [...STORYBOOK_LOCALE_ITEMS],
       dynamicTitle: true,
     },
   },
@@ -276,7 +278,7 @@ export const STORYBOOK_GLOBAL_TYPES = {
     toolbar: {
       title: 'Preset',
       icon: 'paintbrush',
-      items: STORYBOOK_THEME_PRESET_ITEMS,
+      items: [...STORYBOOK_THEME_PRESET_ITEMS],
       dynamicTitle: true,
     },
   },
@@ -286,7 +288,7 @@ export const STORYBOOK_GLOBAL_TYPES = {
     toolbar: {
       title: 'Radius',
       icon: 'circle',
-      items: STORYBOOK_THEME_RADIUS_ITEMS,
+      items: [...STORYBOOK_THEME_RADIUS_ITEMS],
       dynamicTitle: true,
     },
   },
@@ -296,7 +298,7 @@ export const STORYBOOK_GLOBAL_TYPES = {
     toolbar: {
       title: 'Scale',
       icon: 'paragraph',
-      items: STORYBOOK_THEME_SCALE_ITEMS,
+      items: [...STORYBOOK_THEME_SCALE_ITEMS],
       dynamicTitle: true,
     },
   },
@@ -306,11 +308,11 @@ export const STORYBOOK_GLOBAL_TYPES = {
     toolbar: {
       title: 'Content',
       icon: 'sidebar',
-      items: STORYBOOK_THEME_CONTENT_LAYOUT_ITEMS,
+      items: [...STORYBOOK_THEME_CONTENT_LAYOUT_ITEMS],
       dynamicTitle: true,
     },
   },
-} as const;
+};
 
 export const STORYBOOK_MANAGER_LAYOUT_CUSTOMISATIONS = {
   showPanel: () => true,

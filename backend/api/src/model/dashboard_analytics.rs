@@ -7,8 +7,8 @@ use crate::model::date_range::RangeInfo;
 use crate::model::metrics::{Breakdown, DailyAverages, PeriodComparison};
 
 /// Schema version, so the frontend can migrate without guessing which shape it received
-/// (plan.md 9.8). Bump on any breaking change to this response.
-pub const DASHBOARD_SCHEMA_VERSION: u32 = 1;
+/// (plan.md 9.8). Bump on any breaking or semantic contract change to this response.
+pub const DASHBOARD_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardAnalyticsResponse {
@@ -52,9 +52,15 @@ pub struct DashboardEstimatedSpend {
 pub struct DailyAttribution {
     pub ai_added: u64,
     pub ai_deleted: u64,
+    pub ai_verified_added: u64,
+    pub ai_verified_deleted: u64,
+    pub ai_inferred_added: u64,
+    pub ai_inferred_deleted: u64,
     pub date: String,
     pub human_added: u64,
     pub human_deleted: u64,
+    pub unknown_added: u64,
+    pub unknown_deleted: u64,
     /// Historical heartbeats do not carry explicit unknown provenance. `null` protects
     /// the UI from presenting that absence as a measured zero.
     pub unattributed_added: Option<u64>,
@@ -62,9 +68,26 @@ pub struct DailyAttribution {
     pub unit: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttributionCoverageStatus {
+    Complete,
+    Partial,
+    NoActivity,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DashboardCoverage {
+    /// Share of measured code changes attributed to either AI or Human. This remains
+    /// meaningful for partial historical data, while `attribution_status` and
+    /// `attribution_data_coverage_percent` disclose the completeness of that evidence.
     pub attribution_percent: Option<f64>,
+    pub attribution_status: AttributionCoverageStatus,
+    pub attribution_data_coverage_percent: Option<f64>,
+    pub attributed_changes: u64,
+    pub unattributed_changes: u64,
+    pub attribution_relevant_rows: u64,
+    pub incomplete_attribution_rows: u64,
     pub cost_percent: Option<f64>,
     pub token_percent: Option<f64>,
 }
@@ -118,11 +141,17 @@ pub struct DailyAttributionRow {
     pub day: String,
     pub ai_added: u64,
     pub ai_deleted: u64,
+    pub ai_verified_added: u64,
+    pub ai_verified_deleted: u64,
+    pub ai_inferred_added: u64,
+    pub ai_inferred_deleted: u64,
     pub human_added: u64,
     pub human_deleted: u64,
-    pub unattributed_added: u64,
-    pub unattributed_deleted: u64,
+    pub unknown_added: u64,
+    pub unknown_deleted: u64,
     pub unknown_attribution_rows: u64,
+    pub attribution_relevant_rows: u64,
+    pub complete_attribution_rows: u64,
 }
 
 #[derive(Debug, Deserialize, Row)]

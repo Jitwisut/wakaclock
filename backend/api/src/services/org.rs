@@ -47,12 +47,6 @@ impl OrgService {
         self.repo.list_for_user(user_id).await
     }
 
-    /// `None` means "not a member at all" — distinct from having a low-privilege role,
-    /// so callers can tell "not in this org" apart from "in it, but not allowed to do X".
-    pub async fn role_of(&self, org_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
-        self.repo.member_role(org_id, user_id).await
-    }
-
     /// Used by `TeamService::create` — creating a team requires being an org
     /// owner/admin, not just any member.
     pub async fn require_admin(&self, org_id: Uuid, user_id: Uuid) -> Result<()> {

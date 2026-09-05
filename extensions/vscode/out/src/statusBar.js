@@ -36,15 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatusBarController = void 0;
 const vscode = __importStar(require("vscode"));
 const activity_1 = require("./activity");
+const utils_1 = require("./utils");
 const STATUS_REFRESH_MS = 15_000;
-function localTimezone() {
-    try {
-        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    }
-    catch {
-        return "UTC";
-    }
-}
 function formatLiveDuration(seconds) {
     const total = Math.max(0, Math.floor(seconds));
     const hours = Math.floor(total / 3600);
@@ -75,8 +68,10 @@ class StatusBarController {
     item;
     interval;
     authFailureReported = false;
+    deliveryFailureReported = false;
     legacyCliReported = false;
     lastSnapshot;
+    lastBrokerStatus;
     getBufferedSeconds = () => 0;
     getBufferedSegments = () => [];
     connectionState = "connecting";
@@ -142,18 +137,42 @@ class StatusBarController {
                 return;
             }
         }
+        // Broker status is local and remains useful while the hosted API is offline.
+        // Older test/embedded CLI adapters may not expose it, so this is deliberately
+        // additive and never blocks the regular total refresh.
+        await this.refreshBrokerStatus();
         try {
-            const snapshot = await this.cli.getToday(localTimezone());
+            const snapshot = await this.cli.getToday((0, utils_1.localTimezone)());
             this.lastSnapshot = snapshot;
-            this.connectionState = snapshot.queuedSeconds && snapshot.queuedSeconds > 0
-                ? "offline-queued"
-                : "verified";
+            // A refusal is not an outage and must not be reported as one. Reading today's
+            // total is a GET and keeps working while POST /heartbeats returns 402, so this
+            // branch is the *success* path even when nothing is being recorded — which is
+            // exactly how an expired trial spent a day and a half looking like an idle one.
+            // `queuedSeconds` cannot catch it either: it is scoped to today, so yesterday's
+            // refused backlog reads zero.
+            const refused = snapshot.delivery?.startsWith("REFUSED") ?? false;
+            const backlog = snapshot.queuedHeartbeats ?? 0;
+            this.connectionState = refused
+                ? "subscription-required"
+                : (snapshot.queuedSeconds && snapshot.queuedSeconds > 0) || backlog > 0
+                    ? "offline-queued"
+                    : "verified";
+            if (refused && !this.deliveryFailureReported) {
+                this.deliveryFailureReported = true;
+                void vscode.window.showWarningMessage(`AtoAxis is not recording your time: ${snapshot.delivery}. ` +
+                    `${backlog} heartbeat(s) are held locally and will be sent once the server accepts them.`);
+            }
+            if (!refused) {
+                this.deliveryFailureReported = false;
+            }
             this.render(snapshot);
             if (snapshot.legacyCli && !this.legacyCliReported) {
                 this.legacyCliReported = true;
                 void vscode.window.showWarningMessage("wakaclock-cli is too old for timezone-aware status totals. Upgrade the CLI to the current workspace version.");
             }
-            this.item.backgroundColor = undefined;
+            this.item.backgroundColor = refused
+                ? new vscode.ThemeColor("statusBarItem.warningBackground")
+                : undefined;
             this.item.command = "wakaclock.showToday";
             this.authFailureReported = false;
             this.item.show();
@@ -203,20 +222,27 @@ class StatusBarController {
         }
     }
     render(snapshot) {
-        const bufferedSeconds = Math.max(this.getBufferedSeconds(), snapshot.bufferedSeconds ?? 0);
+        // Keep the number shown in the status bar on the same contract as the
+        // `Show Today` command and the dashboard: `snapshot.totalSeconds` is the
+        // CLI's authoritative total for this timezone/day. Local editor activity
+        // has not been accepted by the CLI yet, so it belongs in the tooltip as a
+        // pending amount rather than silently changing the meaning of "Today".
+        const bufferedSeconds = Math.max(this.getBufferedSeconds(), (0, activity_1.unionSeconds)(this.getBufferedSegments()), snapshot.bufferedSeconds ?? 0);
         const queued = snapshot.queuedSeconds ?? 0;
         const confirmed = snapshot.confirmedSeconds ?? Math.max(0, snapshot.totalSeconds - queued);
-        const bufferedSegments = this.getBufferedSegments();
-        const serverIntervals = snapshot.coveredIntervals ?? [];
-        const totalSeconds = serverIntervals.length > 0
-            ? (0, activity_1.unionSeconds)([...serverIntervals, ...bufferedSegments])
-            : confirmed + queued + bufferedSeconds;
+        const totalSeconds = Math.max(0, snapshot.totalSeconds ?? 0);
         const humanReadable = formatLiveDuration(totalSeconds);
         const agentState = snapshot.agentHealth &&
             typeof snapshot.agentHealth === "object" &&
             "state" in snapshot.agentHealth
             ? String(snapshot.agentHealth.state)
             : undefined;
+        const brokerState = this.lastBrokerStatus
+            ? this.lastBrokerStatus.running
+                ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+                : "stopped"
+            : undefined;
+        const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
         if (this.connectionState === "needs-api-key") {
             this.item.text = "$(plug) AtoAxis: Connect";
             this.item.command = "wakaclock.setApiKey";
@@ -235,14 +261,33 @@ class StatusBarController {
             `Today: ${humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}` +
                 `\nConfirmed: ${formatLiveDuration(confirmed)}` +
                 `\nOffline queued: ${formatLiveDuration(queued)}` +
-                `\nLocal buffer: ${formatLiveDuration(bufferedSeconds)}` +
+                `\nLocal pending: ${formatLiveDuration(bufferedSeconds)}` +
                 (snapshot.lastIncrementSeconds === undefined
                     ? ""
                     : `\nLast increment: ${formatLiveDuration(snapshot.lastIncrementSeconds)}${snapshot.lastIncrementSource ? ` (${snapshot.lastIncrementSource})` : ""}`) +
                 (snapshot.discardedSeconds && snapshot.discardedSeconds > 0
                     ? `\nDiscarded overlap/idle: ${formatLiveDuration(snapshot.discardedSeconds)}`
                     : "") +
-                (agentState ? `\nAgent: ${agentState}` : "");
+                (snapshot.queuedHeartbeats
+                    ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
+                    : "") +
+                (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
+                (agentState ? `\nAgent: ${agentState}` : "") +
+                (brokerState ? `\nBroker: ${brokerState}` : "") +
+                (brokerError ? `\nBroker last error: ${brokerError}` : "");
+    }
+    async refreshBrokerStatus() {
+        if (!this.cli.getBrokerStatus) {
+            return;
+        }
+        try {
+            this.lastBrokerStatus = await this.cli.getBrokerStatus();
+        }
+        catch (error) {
+            this.logger.debug("failed to read local broker status", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
     }
     /**
      * Notify on the transition into the failed state only. The refresh runs every

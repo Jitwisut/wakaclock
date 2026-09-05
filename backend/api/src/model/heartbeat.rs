@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// ClickHouse Row Type สำหรับ heartbeat
-#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
+#[derive(Clone, Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct HeartbeatRow {
     #[serde(with = "clickhouse::serde::uuid")]
     pub user_id: Uuid,
@@ -42,7 +42,14 @@ pub struct HeartbeatRow {
     pub keystrokes: Option<u32>,
     pub chars_added: Option<u32>,
     pub chars_deleted: Option<u32>,
+    /// Clamped to `MAX_ACTIVITY_GAP_SECONDS` at ingest, so it means the same thing as
+    /// the evidence written to `activity_intervals`. The `mv_*_summary` views sum this
+    /// column; before the clamp moved here they summed a raw client claim that the
+    /// canonical timeline had already rejected, and no MV-backed surface could agree
+    /// with a duration endpoint. The unclamped claim is kept in `active_seconds_claimed`.
     pub active_seconds: Option<f64>,
+    /// What the client actually claimed, retained for audit. Never summed into a total.
+    pub active_seconds_claimed: Option<f64>,
     pub activity_segments: String,
     pub is_ai_generated: bool,
     pub ai_agent: Option<String>,
@@ -69,6 +76,20 @@ pub struct HeartbeatRow {
     pub unattributed_lines_added: Option<u32>,
     pub unattributed_lines_deleted: Option<u32>,
     pub created_at: u32,
+    /// Canonical attribution state. Kept at the end so the additive ClickHouse
+    /// migration remains compatible with the existing column order.
+    pub actor_type: String,
+    pub actor_confidence: f32,
+    pub clipboard_tracking_version: Option<u8>,
+    pub copy_actions: Option<u32>,
+    pub paste_actions: Option<u32>,
+    pub copied_chars: Option<u32>,
+    pub copied_lines: Option<u32>,
+    pub pasted_chars: Option<u32>,
+    pub pasted_lines: Option<u32>,
+    pub paste_same_file_actions: Option<u32>,
+    pub paste_same_workspace_actions: Option<u32>,
+    pub paste_external_or_unknown_actions: Option<u32>,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat
@@ -84,7 +105,21 @@ pub struct ActivityIntervalRow {
     pub source: String,
     pub entity: String,
     pub project: Option<String>,
+    /// Carried alongside the display name so a project breakdown can group by the stable
+    /// identity the project pages key on. Without it those pages could not be built from
+    /// this timeline at all and had to keep summing `active_seconds`.
+    #[serde(with = "clickhouse::serde::uuid::option")]
+    pub project_id: Option<Uuid>,
+    /// Carried so a branch-filtered project view can be served from this timeline instead
+    /// of falling back to `sum(active_seconds)` and disagreeing with every other surface.
+    pub branch: Option<String>,
     pub language: Option<String>,
     pub category: String,
+    pub editor: String,
+    pub operating_system: String,
     pub created_at: u32,
+    /// Canonical actor state for the projected interval. `source` remains a legacy
+    /// duration dimension and is derived from this value on new writes.
+    pub actor_type: String,
+    pub actor_confidence: f32,
 }

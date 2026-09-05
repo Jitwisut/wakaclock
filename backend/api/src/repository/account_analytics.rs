@@ -20,6 +20,40 @@ impl AccountAnalyticsRepository {
     }
 
     pub async fn migrate(&self) -> Result<()> {
+        // `ai_model_daily` existed before account snapshots became versioned. That
+        // legacy SummingMergeTree has only 11 columns and cannot safely represent
+        // multiple data_version snapshots. It is a derived table, so discard only the
+        // incompatible projection and rebuild it from authoritative raw facts.
+        let has_versioned_ai_model_schema: u64 = self
+            .client
+            .get_client()
+            .query(
+                "SELECT count() FROM system.columns
+                 WHERE database = 'wakaclock' AND table = 'ai_model_daily'
+                   AND name = 'data_version'",
+            )
+            .fetch_one()
+            .await
+            .context("Failed to inspect ai_model_daily projection schema")?;
+        let ai_model_table_exists: u64 = self
+            .client
+            .get_client()
+            .query(
+                "SELECT count() FROM system.tables
+                 WHERE database = 'wakaclock' AND name = 'ai_model_daily'",
+            )
+            .fetch_one()
+            .await
+            .context("Failed to inspect ai_model_daily projection table")?;
+        if ai_model_table_exists > 0 && has_versioned_ai_model_schema == 0 {
+            self.client
+                .get_client()
+                .query("DROP TABLE wakaclock.ai_model_daily")
+                .execute()
+                .await
+                .context("Failed to replace legacy ai_model_daily projection schema")?;
+        }
+
         for (name, statement) in TABLES {
             self.client
                 .get_client()
@@ -479,6 +513,10 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         "ai_model_daily",
         r#"
         INSERT INTO wakaclock.ai_model_daily
+            (user_id, date, provider, model, ai_events, ai_lines_added, ai_lines_deleted,
+             prompts, sessions, input_tokens, output_tokens, cache_read_tokens,
+             cache_write_tokens, estimated_cost_microusd, priced_tokens,
+             total_reported_tokens, data_version)
         SELECT
             source.user_id, source.date, source.provider, source.model,
             sum(source.ai_events) AS ai_events,
@@ -497,14 +535,8 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         FROM (
             SELECT
                 user_id, date,
-                if(NOT empty(ifNull(ai_agent, ''))
-                       AND lower(ifNull(ai_confidence, '')) = 'verified'
-                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                   ifNull(ai_provider, 'Unknown'), 'Unattributed AI') AS provider,
-                if(NOT empty(ifNull(ai_agent, ''))
-                       AND lower(ifNull(ai_confidence, '')) = 'verified'
-                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                   ifNull(ai_model, 'Unknown'), 'Unattributed AI') AS model,
+                ifNull(ai_provider, 'Unknown') AS provider,
+                ifNull(ai_model, 'Unknown') AS model,
                 toUInt64(1) AS ai_events,
                 toUInt64(ifNull(ai_lines_added, 0)) AS ai_lines_added,
                 toUInt64(ifNull(ai_lines_deleted, 0)) AS ai_lines_deleted,
@@ -515,7 +547,8 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(0) AS cost_microusd, toUInt64(0) AS priced_tokens,
                 toUInt64(0) AS total_reported_tokens, toUInt64(0) AS unpriced_tokens
             FROM wakaclock.heartbeats AS heartbeat
-            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.is_ai_generated
+            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?)
+              AND heartbeat.actor_type IN ('ai_verified', 'ai_inferred')
             UNION ALL
             SELECT
                 usage.user_id, usage.date,
@@ -550,23 +583,16 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
         FROM (
             SELECT
                 user_id, date,
-                if(NOT empty(ifNull(ai_agent, ''))
-                       AND lower(ifNull(ai_confidence, '')) = 'verified'
-                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                   ai_agent, 'Unattributed AI') AS ai_agent,
-                if(NOT empty(ifNull(ai_agent, ''))
-                       AND lower(ifNull(ai_confidence, '')) = 'verified'
-                       AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-                   if(empty(editor) OR editor = 'wakaclock-ai-sync',
-                      ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)),
-                   'Unattributed AI') AS ai_client,
+                ifNull(ai_agent, 'Unknown') AS ai_agent,
+                if(empty(editor) OR editor = 'wakaclock-ai-sync', ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)) AS ai_client,
                 if(empty(editor), 'Unknown', editor) AS editor,
                 toFloat64(ifNull(active_seconds, 0.0)) AS active_seconds,
                 toUInt64(1) AS ai_events,
                 '' AS ai_session_id,
                 toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)) AS ai_lines_changed
             FROM wakaclock.heartbeats AS heartbeat
-            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.is_ai_generated
+            WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?)
+              AND heartbeat.actor_type IN ('ai_verified', 'ai_inferred')
             UNION ALL
             SELECT
                 usage.user_id, usage.date,
@@ -610,12 +636,14 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             SELECT
                 user_id, date, project_id,
                 toFloat64(ifNull(active_seconds, 0.0)) AS total_seconds,
-                toUInt64(ifNull(ai_lines_added, 0)) AS ai_lines_added,
-                toUInt64(ifNull(ai_lines_deleted, 0)) AS ai_lines_deleted,
-                toUInt64(ifNull(human_lines_added, 0)) AS human_lines_added,
-                toUInt64(ifNull(human_lines_deleted, 0)) AS human_lines_deleted,
-                toUInt64(ifNull(unattributed_lines_added, 0)) AS unattributed_lines_added,
-                toUInt64(ifNull(unattributed_lines_deleted, 0)) AS unattributed_lines_deleted,
+                toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_added, 0), 0)) AS ai_lines_added,
+                toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_deleted, 0), 0)) AS ai_lines_deleted,
+                toUInt64(if(actor_type = 'human', ifNull(human_lines_added, 0), 0)) AS human_lines_added,
+                toUInt64(if(actor_type = 'human', ifNull(human_lines_deleted, 0), 0)) AS human_lines_deleted,
+                toUInt64(ifNull(unattributed_lines_added, 0))
+                    + toUInt64(if(actor_type = 'unknown', ifNull(ai_lines_added, 0) + ifNull(human_lines_added, 0), 0)) AS unattributed_lines_added,
+                toUInt64(ifNull(unattributed_lines_deleted, 0))
+                    + toUInt64(if(actor_type = 'unknown', ifNull(ai_lines_deleted, 0) + ifNull(human_lines_deleted, 0), 0)) AS unattributed_lines_deleted,
                 toUInt64(0) AS has_usage, toUInt64(0) AS prompts, '' AS ai_session_id,
                 toUInt64(0) AS input_tokens, toUInt64(0) AS output_tokens,
                 toUInt64(0) AS cache_read_tokens, toUInt64(0) AS cache_write_tokens,
@@ -665,14 +693,16 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             if(empty(ifNull(branch, '')), 'Unknown', ifNull(branch, '')) AS branch,
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
-            sum(toUInt64(ifNull(ai_lines_added, 0))) AS ai_lines_added,
-            sum(toUInt64(ifNull(ai_lines_deleted, 0))) AS ai_lines_deleted,
-            sum(toUInt64(ifNull(human_lines_added, 0))) AS human_lines_added,
-            sum(toUInt64(ifNull(human_lines_deleted, 0))) AS human_lines_deleted,
-            sum(toUInt64(ifNull(unattributed_lines_added, 0))) AS unattributed_lines_added,
-            sum(toUInt64(ifNull(unattributed_lines_deleted, 0))) AS unattributed_lines_deleted,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_added, 0), 0))) AS ai_lines_added,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_deleted, 0), 0))) AS ai_lines_deleted,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_added, 0), 0))) AS human_lines_added,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_deleted, 0), 0))) AS human_lines_deleted,
+            sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_lines_added,
+            sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, entity_key, relative_path, language, branch
         "#,
@@ -688,14 +718,16 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             if(empty(ifNull(branch, '')), 'Unknown', ifNull(branch, '')) AS branch,
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
-            sum(toUInt64(ifNull(ai_lines_added, 0))) AS ai_lines_added,
-            sum(toUInt64(ifNull(ai_lines_deleted, 0))) AS ai_lines_deleted,
-            sum(toUInt64(ifNull(human_lines_added, 0))) AS human_lines_added,
-            sum(toUInt64(ifNull(human_lines_deleted, 0))) AS human_lines_deleted,
-            sum(toUInt64(ifNull(unattributed_lines_added, 0))) AS unattributed_lines_added,
-            sum(toUInt64(ifNull(unattributed_lines_deleted, 0))) AS unattributed_lines_deleted,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_added, 0), 0))) AS ai_lines_added,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_deleted, 0), 0))) AS ai_lines_deleted,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_added, 0), 0))) AS human_lines_added,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_deleted, 0), 0))) AS human_lines_deleted,
+            sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_lines_added,
+            sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, branch
         "#,
@@ -712,7 +744,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, language
         "#,
@@ -726,16 +758,13 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             date,
             assumeNotNull(project_id) AS project_id,
             if(empty(editor), 'Unknown', editor) AS editor,
-            if(is_ai_generated
-                  AND NOT empty(ifNull(ai_agent, ''))
-                  AND lower(ifNull(ai_confidence, '')) = 'verified'
-                  AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
-               if(empty(editor), ai_agent, concat(ai_agent, ' ', editor)),
-               if(is_ai_generated, 'Unattributed AI', 'Human')) AS ai_client,
+            if(actor_type IN ('ai_verified', 'ai_inferred'),
+                if(empty(editor), ifNull(ai_agent, 'Unknown'), concat(ifNull(ai_agent, 'Unknown'), ' ', editor)),
+                if(actor_type = 'human', 'Human', 'Unknown')) AS ai_client,
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, editor, ai_client
         "#,
@@ -751,14 +780,16 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             if(empty(ifNull(branch, '')), 'Unknown', ifNull(branch, '')) AS branch,
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
-            sum(toUInt64(ifNull(ai_lines_added, 0))) AS ai_lines_added,
-            sum(toUInt64(ifNull(ai_lines_deleted, 0))) AS ai_lines_deleted,
-            sum(toUInt64(ifNull(human_lines_added, 0))) AS human_lines_added,
-            sum(toUInt64(ifNull(human_lines_deleted, 0))) AS human_lines_deleted,
-            sum(toUInt64(ifNull(unattributed_lines_added, 0))) AS unattributed_lines_added,
-            sum(toUInt64(ifNull(unattributed_lines_deleted, 0))) AS unattributed_lines_deleted,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_added, 0), 0))) AS ai_lines_added,
+            sum(toUInt64(if(actor_type IN ('ai_verified', 'ai_inferred'), ifNull(ai_lines_deleted, 0), 0))) AS ai_lines_deleted,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_added, 0), 0))) AS human_lines_added,
+            sum(toUInt64(if(actor_type = 'human', ifNull(human_lines_deleted, 0), 0))) AS human_lines_deleted,
+            sum(toUInt64(ifNull(unattributed_lines_added, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_lines_added,
+            sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, branch
         "#,

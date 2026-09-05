@@ -1,6 +1,10 @@
 //! AtoAxis v2 version-control integration contracts.
 
-use axum::{extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, Json};
+use axum::{
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -87,7 +91,12 @@ pub async fn commits(
     let actor = require_scope(&state, &headers, "read_org_dashboards")?;
     let data = state
         .vcs_service
-        .commits(actor, query.organization_id, query.repository_id, query.limit.unwrap_or(100))
+        .commits(
+            actor,
+            query.organization_id,
+            query.repository_id,
+            query.limit.unwrap_or(100),
+        )
         .await
         .map_err(service_error)?;
     Ok(Json(envelope(data)))
@@ -101,7 +110,12 @@ pub async fn pull_requests(
     let actor = require_scope(&state, &headers, "read_org_dashboards")?;
     let data = state
         .vcs_service
-        .pull_requests(actor, query.organization_id, query.repository_id, query.limit.unwrap_or(100))
+        .pull_requests(
+            actor,
+            query.organization_id,
+            query.repository_id,
+            query.limit.unwrap_or(100),
+        )
         .await
         .map_err(service_error)?;
     Ok(Json(envelope(data)))
@@ -119,7 +133,12 @@ pub async fn pull_request_analytics(
         .pull_request_analytics(actor, query.organization_id, pull_request_id)
         .await
         .map_err(service_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({ "error": "pull request not found" }))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "pull request not found" })),
+            )
+        })?;
     Ok(Json(envelope(data)))
 }
 
@@ -171,4 +190,3 @@ fn client_or_service_error(error: anyhow::Error) -> (StatusCode, Json<Value>) {
     };
     (status, Json(json!({ "error": message })))
 }
-

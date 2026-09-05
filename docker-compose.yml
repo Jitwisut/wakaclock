@@ -1,5 +1,5 @@
 services:
-  # PostgreSQL transactional source of truth for AtoAxis product state.
+  # PostgreSQL transactional source of truth for AtoAxis identity and product state.
   postgres:
     image: postgres:16-alpine
     container_name: wakaclock_postgres

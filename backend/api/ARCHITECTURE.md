@@ -1,4 +1,10 @@
-# PlayField Backend Architecture
+# PlayField Backend Architecture (legacy template reference)
+
+> This document describes the historical e-commerce template and is retained
+> for archaeology only. The live AtoAxis architecture is documented in
+> [`README.md`](README.md), `CLAUDE.md` and `.context/backend/overview.md`.
+> Do not use the e-commerce routes, Qdrant services or product workers below
+> when implementing new AtoAxis functionality.
 
 > **E-commerce Connect API** - Rust-based multi-tenant e-commerce gateway and platform  
 > Version: 2.4.0 | Architecture: Clean Architecture / Layered Architecture

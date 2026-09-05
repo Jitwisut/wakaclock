@@ -8,26 +8,25 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::goal::{CreateGoalRequest, Goal, GoalProgress, UpdateGoalRequest};
+use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
+use wakaclock_core::heartbeat::ActorType;
 
 pub struct GoalService {
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickHouseClient>>,
+    /// Duration goals are measured against this, not `daily_totals`. See `progress`.
+    timeline: Option<ActivityTimelineService>,
 }
 
 impl GoalService {
-    pub fn new(postgres: Option<Arc<PostgresClient>>) -> Self {
-        Self {
-            postgres,
-            clickhouse: None,
-        }
-    }
-
     pub fn with_clickhouse(
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Arc<ClickHouseClient>,
+        bridge: impl Into<BridgeConfig>,
     ) -> Self {
         Self {
             postgres,
+            timeline: Some(ActivityTimelineService::new(clickhouse.clone(), bridge)),
             clickhouse: Some(clickhouse),
         }
     }
@@ -204,20 +203,52 @@ impl GoalService {
             samples: u64,
         }
 
-        let (query, bind_filter) = progress_query(&goal);
-        let mut request = clickhouse
-            .get_client()
-            .query(&query)
-            .bind(user_id)
-            .bind(start)
-            .bind(end);
-        if let Some(filter) = bind_filter {
-            request = request.bind(filter);
-        }
-        let row = request
-            .fetch_one::<ProgressRow>()
-            .await
-            .context("failed to calculate goal progress")?;
+        // Every duration metric comes from the canonical timeline. Reading `daily_totals`
+        // meant a "code 4 hours today" goal was measured against a `sum(active_seconds)`
+        // rollup — a different number from the one the dashboard showed the user, and one
+        // that a `SummingMergeTree` can leave permanently high after any repair. Only the
+        // heartbeat-count metric is still a genuine row count. See
+        // docs/duration-accuracy-audit.md, Finding 4.
+        let row = match goal.metric.as_str() {
+            "heartbeats" => {
+                let (query, bind_filter) = progress_query(&goal);
+                let mut request = clickhouse
+                    .get_client()
+                    .query(&query)
+                    .bind(user_id)
+                    .bind(start)
+                    .bind(end);
+                if let Some(filter) = bind_filter {
+                    request = request.bind(filter);
+                }
+                request
+                    .fetch_one::<ProgressRow>()
+                    .await
+                    .context("failed to calculate goal progress")?
+            }
+            _ => {
+                let (start_epoch, end_epoch) = goal_period_bounds(start, end)?;
+                let canonical = self
+                    .timeline
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("timeline is required to calculate goal progress"))?
+                    .canonical(user_id, start_epoch, end_epoch)
+                    .await?;
+                let mut value = 0.0;
+                let mut heartbeats = std::collections::HashSet::new();
+                for interval in &canonical {
+                    if !goal_matches(&goal, interval) {
+                        continue;
+                    }
+                    value += interval.end - interval.start;
+                    heartbeats.insert(interval.heartbeat_id.as_str());
+                }
+                ProgressRow {
+                    value,
+                    samples: heartbeats.len() as u64,
+                }
+            }
+        };
         let percentage = if goal.target_seconds > 0 {
             (row.value / goal.target_seconds as f64 * 100.0).min(100.0)
         } else if row.value > 0.0 {
@@ -266,10 +297,16 @@ fn validate_goal(input: &CreateGoalRequest) -> Result<()> {
     if input.name.trim().is_empty() || input.name.len() > 160 {
         return Err(anyhow!("goal name must contain 1-160 characters"));
     }
-    if !matches!(input.metric.as_str(), "time" | "manual_time" | "ai_time" | "heartbeats") {
+    if !matches!(
+        input.metric.as_str(),
+        "time" | "manual_time" | "ai_time" | "heartbeats"
+    ) {
         return Err(anyhow!("unsupported goal metric"));
     }
-    if !matches!(input.filter_kind.as_str(), "project" | "language" | "category" | "editor" | "all") {
+    if !matches!(
+        input.filter_kind.as_str(),
+        "project" | "language" | "category" | "editor" | "all"
+    ) {
         return Err(anyhow!("unsupported goal filter"));
     }
     if !matches!(input.period.as_str(), "daily" | "weekly" | "monthly") {
@@ -287,12 +324,57 @@ fn validate_goal(input: &CreateGoalRequest) -> Result<()> {
     Ok(())
 }
 
+/// Inclusive goal-period days as epoch bounds, matching the `date BETWEEN ? AND ?` the
+/// heartbeat-count metric still uses.
+fn goal_period_bounds(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Result<(f64, f64)> {
+    let to_epoch = |day: chrono::NaiveDate| -> Result<f64> {
+        day.and_hms_opt(0, 0, 0)
+            .map(|naive| naive.and_utc().timestamp() as f64)
+            .ok_or_else(|| anyhow!("invalid goal period boundary {day}"))
+    };
+    Ok((to_epoch(start)?, to_epoch(end + chrono::Duration::days(1))?))
+}
+
+/// Does this interval count towards the goal?
+///
+/// `ai_time` and `manual_time` split on the interval's canonical actor type, which is the same
+/// attribution the evidence split reports — a goal and the dashboard can no longer
+/// disagree about which seconds were the developer's.
+fn goal_matches(
+    goal: &Goal,
+    interval: &crate::services::activity_timeline::CanonicalInterval,
+) -> bool {
+    let metric_ok = match goal.metric.as_str() {
+        "ai_time" => interval.actor_type.is_ai(),
+        "manual_time" => interval.actor_type == ActorType::Human,
+        _ => true,
+    };
+    if !metric_ok {
+        return false;
+    }
+    let Some(wanted) = goal.filter_value.as_deref() else {
+        return goal.filter_kind == "all";
+    };
+    if goal.filter_kind == "all" {
+        return true;
+    }
+    let dimension = match goal.filter_kind.as_str() {
+        "language" => Dimension::Language,
+        "category" => Dimension::Category,
+        "editor" => Dimension::Editor,
+        _ => Dimension::Project,
+    };
+    dimension.value_of(interval) == wanted
+}
+
 fn progress_query(goal: &Goal) -> (String, Option<String>) {
     let filter = goal.filter_value.clone();
     let value_expression = match goal.metric.as_str() {
         "heartbeats" => "count()",
-        "ai_time" => "sumIf(ifNull(active_seconds, 0.0), is_ai_generated)",
-        "manual_time" => "sumIf(ifNull(active_seconds, 0.0), NOT is_ai_generated)",
+        "ai_time" => {
+            "sumIf(ifNull(active_seconds, 0.0), actor_type IN ('ai_verified', 'ai_inferred'))"
+        }
+        "manual_time" => "sumIf(ifNull(active_seconds, 0.0), actor_type = 'human')",
         _ => "sum(ifNull(active_seconds, 0.0))",
     };
     if goal.filter_kind == "all" {
@@ -300,15 +382,6 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
             return (
                 "SELECT count() AS value, count() AS samples
                  FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND date BETWEEN ? AND ?"
-                    .to_string(),
-                None,
-            );
-        }
-        if goal.metric == "time" {
-            return (
-                "SELECT sum(total_seconds) AS value, sum(heartbeat_count) AS samples
-                 FROM wakaclock.daily_totals
                  WHERE user_id = ? AND date BETWEEN ? AND ?"
                     .to_string(),
                 None,
@@ -353,8 +426,12 @@ fn goal_from_row(row: Row) -> Result<Goal> {
         ends_on: row.try_get::<_, Option<NaiveDate>>("ends_on")?,
         priority: row.try_get("priority")?,
         public: row.try_get("public")?,
-        created_at: row.try_get::<_, chrono::DateTime<chrono::Utc>>("created_at")?.naive_utc(),
-        updated_at: row.try_get::<_, chrono::DateTime<chrono::Utc>>("updated_at")?.naive_utc(),
+        created_at: row
+            .try_get::<_, chrono::DateTime<chrono::Utc>>("created_at")?
+            .naive_utc(),
+        updated_at: row
+            .try_get::<_, chrono::DateTime<chrono::Utc>>("updated_at")?
+            .naive_utc(),
     })
 }
 

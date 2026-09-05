@@ -39,6 +39,84 @@ pub struct StatusBarSnapshot {
     pub discarded_seconds: f64,
 }
 
+/// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
+/// process that saw it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryFailure {
+    pub at: f64,
+    pub message: String,
+}
+
+/// `wakaclock doctor ai` reports a delivery refusal split into `401` (bad/expired
+/// credential), `402` (entitlement — trial or subscription lapsed, *not* a detection
+/// failure), a network/transport problem, and a request the server rejected as
+/// malformed. Collapsing these hides the one case — 402 — where local capture is
+/// working perfectly and only billing is wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryFailureKind {
+    Auth401,
+    Payment402,
+    Network,
+    Validation,
+    Other,
+}
+
+impl DeliveryFailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auth401 => "auth_401",
+            Self::Payment402 => "payment_402",
+            Self::Network => "network",
+            Self::Validation => "validation",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Classify a recorded refusal message. The messages come from `AppError`'s
+/// `Display` (`"HTTP status <code>: <body>"`) and from `reqwest` transport errors,
+/// so this matches on the shapes those produce rather than parsing structured data.
+pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("402")
+        || lower.contains("trial expired")
+        || lower.contains("subscription inactive")
+    {
+        DeliveryFailureKind::Payment402
+    } else if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+    {
+        DeliveryFailureKind::Auth401
+    } else if lower.contains("400")
+        || lower.contains("422")
+        || lower.contains("validation")
+        || lower.contains("malformed")
+        || lower.contains("invalid heartbeat")
+    {
+        DeliveryFailureKind::Validation
+    } else if lower.contains("dns")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection")
+        || lower.contains("connect")
+        || lower.contains("network")
+        || lower.contains("unreachable")
+        || lower.contains("could not reach")
+    {
+        DeliveryFailureKind::Network
+    } else {
+        DeliveryFailureKind::Other
+    }
+}
+
+impl DeliveryFailure {
+    pub fn kind(&self) -> DeliveryFailureKind {
+        classify_delivery_failure(&self.message)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SendReport {
     pub sent: usize,
@@ -165,6 +243,7 @@ impl ApiClient {
 
         match send_result {
             Ok(()) => {
+                self.clear_delivery_failure();
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 // The server has accepted the current payload at this point. Cache and
@@ -198,6 +277,7 @@ impl ApiClient {
                 })
             }
             Err(error) => {
+                self.record_delivery_failure(&error.to_string());
                 for payload in &payloads {
                     queue.push(payload)?;
                 }
@@ -448,6 +528,48 @@ impl ApiClient {
             dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
         Ok(home.join(".wakaclock").join("last_heartbeat.json"))
     }
+
+    fn delivery_failure_path() -> AppResult<PathBuf> {
+        let home =
+            dirs::home_dir().ok_or_else(|| AppError::NotFound("home directory".to_string()))?;
+        Ok(home.join(".wakaclock").join("last-delivery-failure.json"))
+    }
+
+    /// The last recorded refusal, if the server has not accepted anything since.
+    pub fn last_delivery_failure() -> Option<DeliveryFailure> {
+        let path = Self::delivery_failure_path().ok()?;
+        let raw = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    /// Without this, a real 402 (trial/subscription lapsed) or 401 (bad key) shows up
+    /// only as a light day in the dashboard — the heartbeat is captured and durably
+    /// queued, so nothing looks broken locally, but the server keeps refusing it.
+    /// Writing the reason down is what lets `wakaclock status` and `doctor ai` say "the
+    /// server is refusing these" instead of nothing at all. Best-effort: failing to
+    /// record a failure must never turn into a second failure.
+    fn record_delivery_failure(&self, message: &str) {
+        let Ok(path) = Self::delivery_failure_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let failure = DeliveryFailure {
+            at: chrono::Utc::now().timestamp() as f64,
+            message: message.to_string(),
+        };
+        if let Ok(serialized) = serde_json::to_string(&failure) {
+            let _ = fs::write(&path, serialized);
+        }
+    }
+
+    /// A send got through, so whatever was wrong no longer is.
+    fn clear_delivery_failure(&self) {
+        if let Ok(path) = Self::delivery_failure_path() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// Apply the transport-level attribution boundary to a JSON payload that predates the
@@ -490,7 +612,10 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
         )
     });
     let legacy_unknown = string_value("actor_type").is_some_and(|value| {
-        matches!(value.to_ascii_lowercase().as_str(), "unknown" | "unattributed")
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "unknown" | "unattributed"
+        )
     });
 
     if (has_identity && !verified) || legacy_inferred || (legacy_unknown && (has_identity || is_ai))

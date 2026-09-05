@@ -42,6 +42,7 @@ function createConfig(overrides = {}) {
         debugLogging: false,
         trackDebugSessions: true,
         trackBuildTasks: true,
+        trackClipboardActions: true,
         ...overrides
     };
 }
@@ -107,7 +108,7 @@ function createConfig(overrides = {}) {
         (0, vitest_1.expect)(item.text).toBe("$(clock) 1h 0m 0s");
         (0, vitest_1.expect)(item.show).toHaveBeenCalled();
     });
-    (0, vitest_1.it)("unions server intervals with the local buffer instead of adding overlap", async () => {
+    (0, vitest_1.it)("keeps the status bar on the CLI total and reports local activity as pending", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig(), {
             getToday: vitest_1.vi.fn().mockResolvedValue({
                 humanReadable: "1m",
@@ -123,7 +124,27 @@ function createConfig(overrides = {}) {
             { segment_id: "local", start: 130, end: 190, source: "editor" }
         ]);
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(clock) 1m 30s");
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 1m 0s");
+        (0, vitest_1.expect)(item.tooltip).toContain("Local pending: 1m 0s");
+    });
+    (0, vitest_1.it)("never renders less than the CLI's own total for the day", async () => {
+        // The CLI reports 20m 3s (confirmed + queued, unioned), but the covered
+        // intervals it echoed only reconstruct to a few seconds — a mid-drain
+        // snapshot. The bar must follow the authoritative total, not the fragment.
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi.fn().mockResolvedValue({
+                humanReadable: "20m 3s",
+                totalSeconds: 1203,
+                confirmedSeconds: 1203,
+                queuedSeconds: 0,
+                heartbeatCount: 87,
+                coveredIntervals: [
+                    { segment_id: "server", start: 100, end: 116, source: "editor" }
+                ]
+            })
+        }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        (0, vitest_1.expect)(item.text).toBe("$(clock) 20m 3s");
     });
     (0, vitest_1.it)("hides when disabled", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig({ statusBarEnabled: false }), {

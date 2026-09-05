@@ -1,0 +1,11 @@
+id = "atoaxis-lsp"
+name = "AtoAxis"
+description = "Privacy-first developer time tracking for Zed, powered by the AtoAxis language server."
+version = "0.1.0"
+schema_version = 1
+authors = ["AtoAxis"]
+repository = "https://github.com/Jitwisut/wakaclock"
+
+[language_servers.atoaxis-lsp]
+name = "AtoAxis"
+languages = ["Rust", "Python", "TypeScript", "TSX", "JavaScript", "Go", "C", "C++"]

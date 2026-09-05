@@ -1,6 +1,6 @@
 {
   "name": "atoaxis-vscode",
-  "displayName": "AtoAxis \u2014 Developer Time Tracking",
+  "displayName": "AtoAxis — Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
   "version": "0.1.0",
   "publisher": "atoaxis",
@@ -40,7 +40,9 @@
     "onCommand:wakaclock.showToday",
     "onCommand:wakaclock.setupAiTracking",
     "onCommand:wakaclock.showAiTrackingStatus",
+    "onCommand:wakaclock.showBrokerStatus",
     "onCommand:wakaclock.repairAiIntegrations",
+    "onCommand:wakaclock.testAiDetection",
     "workspaceContains:**/*"
   ],
   "contributes": {
@@ -78,8 +80,16 @@
         "title": "AtoAxis: Show AI Tracking Status"
       },
       {
+        "command": "wakaclock.showBrokerStatus",
+        "title": "AtoAxis: Show AI Broker Status"
+      },
+      {
         "command": "wakaclock.repairAiIntegrations",
         "title": "AtoAxis: Repair AI Integrations"
+      },
+      {
+        "command": "wakaclock.testAiDetection",
+        "title": "AtoAxis: Test AI Detection"
       }
     ],
     "configuration": {
@@ -140,6 +150,11 @@
           "type": "boolean",
           "default": true,
           "description": "Send building heartbeats when VS Code tasks start and stop."
+        },
+        "wakaclock.trackClipboardActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track metadata-only copy and paste counts. Clipboard contents are never stored or sent."
         }
       }
     }
@@ -159,6 +174,6 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.2.1",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   }
 }

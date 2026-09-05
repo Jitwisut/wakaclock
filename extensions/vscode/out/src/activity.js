@@ -3,7 +3,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MAX_ACTIVITY_GAP_MS = exports.MAX_ACTIVITY_GAP_SECONDS = void 0;
 exports.unionSeconds = unionSeconds;
 exports.appendSegment = appendSegment;
-/** The strict activity window used by the editor and AI integrations. */
+/**
+ * The strict client-measured activity window: how long one wire segment may span
+ * before it must be split, so the backend never mistakes a long continuously-typed
+ * segment for a legacy long-gap heartbeat. This is not a correlation window and is
+ * unrelated to matching an edit against AI evidence — see `aiAttribution.ts`'s
+ * `CORRELATION_WINDOW_SECONDS` (editor-side AI match) and
+ * `wakaclock-core::ai::correlation::EXACT_MATCH_WINDOW` (server-side transcript
+ * match) for the two windows that do that job, each sized for what it measures.
+ * Do not unify these three constants — they answer different questions.
+ */
 exports.MAX_ACTIVITY_GAP_SECONDS = 120;
 exports.MAX_ACTIVITY_GAP_MS = exports.MAX_ACTIVITY_GAP_SECONDS * 1000;
 /** Return the length covered by the union of valid activity intervals. */

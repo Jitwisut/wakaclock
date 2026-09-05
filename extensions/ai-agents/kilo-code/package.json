@@ -1,0 +1,23 @@
+{
+  "name": "@atoaxis/kilo-code",
+  "version": "0.1.0",
+  "description": "Metadata-only AtoAxis producer for Kilo Code CLI and VS Code",
+  "type": "module",
+  "main": "./src/plugin.ts",
+  "exports": {
+    "./server": "./src/plugin.ts"
+  },
+  "engines": {
+    "opencode": ">=1.0.0"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:installer": "bash test/installer.test.sh"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "package.json",
+    "tsconfig.json"
+  ]
+}

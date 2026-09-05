@@ -1,6 +1,10 @@
-# ClickHouse Migrations
+# ClickHouse Migrations (legacy reference)
 
-This directory contains database migrations for the ClickHouse database used by the e-commerce connector platform.
+The live AtoAxis server applies ClickHouse schemas from its repository/service
+modules at startup, in the order documented in `backend/api/src/main.rs`.
+This directory is retained for historical SQL notes from the former template;
+it is not a source of truth for current AtoAxis migrations and must not be used
+to create e-commerce tables in a production database.
 
 ## Migration Files
 

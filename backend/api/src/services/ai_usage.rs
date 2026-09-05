@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ impl AiUsageService {
                 (record.provider.as_deref(), record.model.as_deref())
             {
                 let key = (provider.to_string(), model.to_string());
-                if !pricing_cache.contains_key(&key) {
+                if let Entry::Vacant(entry) = pricing_cache.entry(key) {
                     let windows = match self.repo.pricing_for_model(provider, model).await {
                         Ok(windows) => windows,
                         Err(error) => {
@@ -77,7 +77,7 @@ impl AiUsageService {
                             Vec::new()
                         }
                     };
-                    pricing_cache.insert(key, windows);
+                    entry.insert(windows);
                 }
             }
         }
@@ -212,7 +212,6 @@ impl AiUsageService {
                 );
             }
         }
-        let mut rows = rows;
         for row in &mut rows {
             if row.project_id.is_none() {
                 if let Some(project_id) =
@@ -347,6 +346,7 @@ impl AiUsageService {
                 // A session has no end until the agent reports one; the last event's time is not
                 // an end, only the latest thing seen so far.
                 ended_at: None,
+                last_event_at: rollup.last_event_at,
                 ai_agent: rollup.ai_agent,
                 ai_provider: primary_value(rollup.distinct_providers, rollup.latest_provider),
                 primary_model: primary_model(rollup.distinct_models, rollup.latest_model),

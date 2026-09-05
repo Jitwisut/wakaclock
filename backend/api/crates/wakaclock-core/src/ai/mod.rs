@@ -14,6 +14,7 @@
 //! plan.md 8.6 also calls for is not yet implemented (see state.rs's doc comment for
 //! why a single local writer is safe without it, just uncoordinated).
 
+pub mod adapter;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -25,9 +26,11 @@ mod jsonl;
 pub mod parser;
 pub mod patch;
 pub mod path;
+pub mod producer;
 pub mod state;
 pub mod usage;
 
+pub use adapter::{AdapterManifest, AdapterRegistry, InstallStrategy};
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
@@ -43,7 +46,7 @@ pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFoll
 pub use gemini::GeminiCliParser;
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    ParseContext, ParseWarning, ParserCursor, TranscriptLag,
 };
 pub use patch::{
     count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,
@@ -51,6 +54,9 @@ pub use patch::{
 };
 pub use path::{
     normalize_lexical, resolve_within_workspace, to_comparable_string, PathResolveError,
+};
+pub use producer::{
+    normalize_client_id, normalize_model_id, normalize_provider_id, PRODUCER_CONTRACT_VERSION,
 };
 pub use state::AiAttributionState;
 pub use usage::{

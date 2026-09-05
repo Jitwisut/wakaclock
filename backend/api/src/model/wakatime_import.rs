@@ -37,7 +37,6 @@ pub struct WakaTimeDumpUser {
 
 #[derive(Debug, Deserialize)]
 pub struct WakaTimeDumpDay {
-    pub date: String,
     #[serde(default)]
     pub heartbeats: Option<Vec<WakaTimeHeartbeat>>,
     #[serde(default)]

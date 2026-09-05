@@ -51,6 +51,9 @@ pub struct AiSessionRow {
     pub ai_session_id: String,
     pub started_at: u32,
     pub ended_at: Option<u32>,
+    /// Last event observed for this session. Open sessions use this as their safe
+    /// upper bound; it is never replaced with request time or projection refresh time.
+    pub last_event_at: u32,
     pub ai_agent: String,
     pub ai_provider: Option<String>,
     /// Null for a multi-model session unless a distribution is also available — plan.md 9.4

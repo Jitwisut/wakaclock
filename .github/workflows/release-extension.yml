@@ -1,4 +1,4 @@
-name: Release AtoAxis VS Code extension
+name: Release AtoAxis extensions
 
 on:
   push:
@@ -62,14 +62,49 @@ jobs:
       - name: Build signed CLI
         shell: bash
         run: |
-          manifest=backend/api/Cargo.toml
+          manifest=Cargo.toml
           if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.rust_target }}" == aarch64-* ]]; then
             cargo install cross --git https://github.com/cross-rs/cross --locked
             cross build --manifest-path "$manifest" -p wakaclock-cli --release --target ${{ matrix.rust_target }}
           else
             cargo build --manifest-path "$manifest" -p wakaclock-cli --release --target ${{ matrix.rust_target }}
           fi
-          test -f backend/api/target/${{ matrix.rust_target }}/release/wakaclock${{ runner.os == 'Windows' && '.exe' || '' }}
+          test -f target/${{ matrix.rust_target }}/release/wakaclock${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "${MACOS_CERTIFICATE_BASE64:-}" || { echo "macOS signing certificate is required"; exit 1; }
+          test -n "${MACOS_CERTIFICATE_PASSWORD:-}" || { echo "macOS signing certificate password is required"; exit 1; }
+          certificate="$RUNNER_TEMP/atoaxis-signing.p12"
+          keychain="$RUNNER_TEMP/atoaxis-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) { throw 'Windows signing certificate is required' }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) { throw 'Windows signing certificate password is required' }
+          $certificate = Join-Path $env:RUNNER_TEMP 'atoaxis-signing.pfx'
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $imported = Import-PfxCertificate -FilePath $certificate -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if ($null -eq $imported) { throw 'Windows signing certificate import failed' }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($imported.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install extension dependencies
         working-directory: extensions/vscode
         run: npm ci
@@ -78,13 +113,12 @@ jobs:
         shell: bash
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           version="$(node -p 'require("./package.json").version')"
-          if [[ "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
             echo "Git tag and Extension version must match ($GITHUB_REF_NAME vs $version)"
             exit 1
           fi
@@ -113,6 +147,154 @@ jobs:
         with:
           name: atoaxis-vscode-${{ matrix.target }}
           path: extensions/vscode/*.vsix
+
+  zed-language-server:
+    name: Package Zed language server ${{ matrix.asset }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - asset: darwin-x64
+            runner: macos-13
+            rust_target: x86_64-apple-darwin
+          - asset: darwin-arm64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+          - asset: windows-x64
+            runner: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+          - asset: windows-arm64
+            runner: windows-2022
+            rust_target: aarch64-pc-windows-msvc
+          - asset: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-musl
+          - asset: linux-arm64
+            runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux cross toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.rust_target }}
+      - name: Build language server
+        shell: bash
+        run: |
+          manifest=backend/api/Cargo.toml
+          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.rust_target }}" == aarch64-* ]]; then
+            cargo install cross --git https://github.com/cross-rs/cross --locked
+            cross build --manifest-path "$manifest" -p wakaclock-ls --release --target ${{ matrix.rust_target }}
+          else
+            cargo build --manifest-path "$manifest" -p wakaclock-ls --release --target ${{ matrix.rust_target }}
+          fi
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "${MACOS_CERTIFICATE_BASE64:-}" || { echo "macOS signing certificate is required"; exit 1; }
+          test -n "${MACOS_CERTIFICATE_PASSWORD:-}" || { echo "macOS signing certificate password is required"; exit 1; }
+          certificate="$RUNNER_TEMP/atoaxis-signing.p12"
+          keychain="$RUNNER_TEMP/atoaxis-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) { throw 'Windows signing certificate is required' }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) { throw 'Windows signing certificate password is required' }
+          $certificate = Join-Path $env:RUNNER_TEMP 'atoaxis-signing.pfx'
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $imported = Import-PfxCertificate -FilePath $certificate -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if ($null -eq $imported) { throw 'Windows signing certificate import failed' }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($imported.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Sign, verify and create checksum
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          binary="backend/api/target/${{ matrix.rust_target }}/release/wakaclock-ls"
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            binary="${binary}.exe"
+            extension=".exe"
+          fi
+          test -f "$binary"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            test -n "${MACOS_SIGNING_IDENTITY:-}" || { echo "macOS signing identity is required"; exit 1; }
+            codesign --force --options runtime --sign "$MACOS_SIGNING_IDENTITY" "$binary"
+            test -n "${APPLE_ID:-}" -a -n "${APPLE_TEAM_ID:-}" -a -n "${APPLE_APP_PASSWORD:-}" || { echo "Apple notarization credentials are required"; exit 1; }
+            ditto -c -k --keepParent "$binary" "/tmp/atoaxis-ls-${{ matrix.asset }}.zip"
+            xcrun notarytool submit "/tmp/atoaxis-ls-${{ matrix.asset }}.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          fi
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            test -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" || { echo "Windows Authenticode certificate is required"; exit 1; }
+            signtool sign /sha1 "$WINDOWS_CERTIFICATE_THUMBPRINT" /fd SHA256 "$binary"
+          fi
+          mkdir -p release-assets
+          asset="release-assets/wakaclock-ls-${{ matrix.asset }}${extension}"
+          cp "$binary" "$asset"
+          python -c 'import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); digest=hashlib.sha256(p.read_bytes()).hexdigest(); p.with_name(p.name+".sha256").write_text(f"{digest}  {p.name}\n")' "$asset"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atoaxis-zed-ls-${{ matrix.asset }}
+          path: release-assets/*
+
+  publish-language-server:
+    needs: zed-language-server
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: atoaxis-zed-ls-*
+          merge-multiple: true
+      - name: Verify release asset set
+        run: |
+          test "$(find dist -maxdepth 1 -type f ! -name '*.sha256' | wc -l)" -eq 6
+          test "$(find dist -maxdepth 1 -type f -name '*.sha256' | wc -l)" -eq 6
+          for checksum in dist/*.sha256; do
+            (cd dist && sha256sum -c "$(basename "$checksum")")
+          done
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "AtoAxis $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          fi
 
   publish:
     needs: package

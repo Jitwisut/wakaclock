@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod api_client;
+pub mod broker;
 pub mod config;
 pub mod error;
 pub mod git;

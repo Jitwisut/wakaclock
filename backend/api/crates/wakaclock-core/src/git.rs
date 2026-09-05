@@ -41,10 +41,8 @@ pub fn discover(entity_path: &str) -> Option<GitInfo> {
         }
 
         // ขึ้นไป parent
-        match current.parent() {
-            Some(parent) => current = parent,
-            None => return None, // ถึง root แล้วไม่เจอ .git
-        }
+        let parent = current.parent()?;
+        current = parent;
     }
 }
 

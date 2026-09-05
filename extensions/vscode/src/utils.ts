@@ -5,6 +5,19 @@ import type {
   TextEditor
 } from "vscode";
 
+/**
+ * The IANA timezone the CLI must scope "today" to. Every caller that reads or
+ * displays today's total has to pass the *same* value — the status bar and the
+ * "Show Today" command disagreed on the day boundary when only one of them did.
+ */
+export function localTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export function normalizeFsPath(fsPath: string): string {
   return fsPath.replace(/\\/g, "/");
 }

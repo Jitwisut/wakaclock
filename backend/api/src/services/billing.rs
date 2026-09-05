@@ -28,7 +28,12 @@ impl BillingService {
         organization_id: Uuid,
     ) -> Result<OrganizationBilling> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageBilling, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageBilling,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let row = postgres
@@ -81,7 +86,12 @@ impl BillingService {
 
     pub async fn invoices(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<Invoice>> {
         self.authorization
-            .require(actor, organization_id, OrganizationAction::ManageBilling, None)
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageBilling,
+                None,
+            )
             .await?;
         let postgres = self.required()?;
         let rows = postgres

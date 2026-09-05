@@ -42,6 +42,7 @@ function createConfig(overrides: Partial<WakaclockConfigSnapshot> = {}): Wakaclo
     debugLogging: false,
     trackDebugSessions: true,
     trackBuildTasks: true,
+    trackClipboardActions: true,
     ...overrides
   };
 }
@@ -137,7 +138,7 @@ describe("StatusBarController", () => {
     expect(item.show).toHaveBeenCalled();
   });
 
-  it("unions server intervals with the local buffer instead of adding overlap", async () => {
+  it("keeps the status bar on the CLI total and reports local activity as pending", async () => {
     const controller = new StatusBarController(
       () => createConfig(),
       {
@@ -159,7 +160,34 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(clock) 1m 30s");
+    expect(item.text).toBe("$(clock) 1m 0s");
+    expect(item.tooltip).toContain("Local pending: 1m 0s");
+  });
+
+  it("never renders less than the CLI's own total for the day", async () => {
+    // The CLI reports 20m 3s (confirmed + queued, unioned), but the covered
+    // intervals it echoed only reconstruct to a few seconds — a mid-drain
+    // snapshot. The bar must follow the authoritative total, not the fragment.
+    const controller = new StatusBarController(
+      () => createConfig(),
+      {
+        getToday: vi.fn().mockResolvedValue({
+          humanReadable: "20m 3s",
+          totalSeconds: 1203,
+          confirmedSeconds: 1203,
+          queuedSeconds: 0,
+          heartbeatCount: 87,
+          coveredIntervals: [
+            { segment_id: "server", start: 100, end: 116, source: "editor" }
+          ]
+        })
+      },
+      new Logger(() => false)
+    );
+
+    await controller.refresh();
+
+    expect(item.text).toBe("$(clock) 20m 3s");
   });
 
   it("hides when disabled", async () => {

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "scripts/git-sweep-before.sh cursor anysphere"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "scripts/git-sweep-after.sh cursor anysphere"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "scripts/heartbeat-hook.sh"
+      }
+    ]
+  }
+}

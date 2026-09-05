@@ -165,6 +165,7 @@ fn map_heartbeat(
         chars_added: human_lines_added,
         chars_deleted: human_lines_deleted,
         active_seconds: None,
+        active_seconds_claimed: None,
         activity_segments: "[]".to_string(),
         is_ai_generated,
         // A WakaTime export can tell us that a heartbeat was marked AI-assisted,
@@ -194,6 +195,20 @@ fn map_heartbeat(
         unattributed_lines_added: Some(0),
         unattributed_lines_deleted: Some(0),
         created_at,
+        // A WakaTime import never carries a verified native-hook/MCP/transcript
+        // identity (see the comment above), so this is never "ai_verified".
+        actor_type: if is_ai_generated { "unknown" } else { "human" }.to_string(),
+        actor_confidence: if is_ai_generated { 0.0 } else { 1.0 },
+        clipboard_tracking_version: None,
+        copy_actions: None,
+        paste_actions: None,
+        copied_chars: None,
+        copied_lines: None,
+        pasted_chars: None,
+        pasted_lines: None,
+        paste_same_file_actions: None,
+        paste_same_workspace_actions: None,
+        paste_external_or_unknown_actions: None,
     })
 }
 
@@ -297,7 +312,7 @@ fn to_positive_u32(value: Option<i32>) -> Option<u32> {
 fn to_negative_u32(value: Option<i32>) -> Option<u32> {
     value
         .filter(|current| *current < 0)
-        .and_then(|current| u32::try_from(current.unsigned_abs()).ok())
+        .map(|current| current.unsigned_abs())
 }
 
 #[cfg(test)]

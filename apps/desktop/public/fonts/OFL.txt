@@ -1,0 +1,12 @@
+Copyright 2024 Vercel, Inc.
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+The license is reproduced at https://scripts.sil.org/OFL.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+the Font Software, to use, study, copy, merge, embed, modify, redistribute, and
+sell modified and unmodified copies of the Font Software, subject to the terms
+of the SIL Open Font License, Version 1.1.
+
+The Font Software may be bundled, embedded, redistributed and/or sold with any
+software, provided that the Font Software shall not be sold by itself.

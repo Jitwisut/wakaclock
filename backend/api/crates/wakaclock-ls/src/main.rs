@@ -32,7 +32,7 @@ use wakaclock_ast::detect;
 use wakaclock_core::api_client::ApiClient;
 use wakaclock_core::config::Config;
 use wakaclock_core::git;
-use wakaclock_core::heartbeat::{Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{ActorType, Category, EntityType, Heartbeat};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -94,7 +94,8 @@ struct Shared {
     /// uri -> current buffer contents, kept in sync by didOpen/didChange/didClose since
     /// tower-lsp does not track document text itself.
     documents: Arc<Mutex<HashMap<Url, String>>>,
-    /// URIs changed since the last periodic flush.
+    /// URIs with a didChange event not yet flushed. An edit can sit here for up to
+    /// `FLUSH_INTERVAL` before its heartbeat is built and the set is cleared.
     dirty: Arc<Mutex<HashSet<Url>>>,
 }
 
@@ -121,6 +122,12 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     heartbeat.project = git_info.as_ref().map(|g| g.project.clone());
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
+    // Zed is an editor producer with no AI-correlation signal of its own (no native
+    // hook, no sidecar heuristic — see plans/decision-accuracy-over-coverage.md), so
+    // its open/change/save telemetry is treated as ordinary Human evidence.
+    heartbeat.actor_type = ActorType::Human;
+    heartbeat.actor_confidence = 1.0;
+    heartbeat.is_ai_generated = false;
     heartbeat.category = Category::Coding;
     heartbeat.operating_system = std::env::consts::OS.to_string();
     heartbeat.machine = hostname::get()
@@ -138,66 +145,6 @@ fn build_heartbeat(config: &Config, uri: &Url, text: &str, is_write: bool) -> Op
     }
 
     Some(heartbeat)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_heartbeat_returns_none_for_a_non_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("untitled:Untitled-1").unwrap();
-
-        assert!(build_heartbeat(&config, &uri, "fn main() {}", false).is_none());
-    }
-
-    #[test]
-    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false)
-            .expect("a file:// URI should always produce a heartbeat");
-
-        assert_eq!(heartbeat.user_id, config.user_id);
-        assert_eq!(heartbeat.entity_type, EntityType::File);
-        assert_eq!(heartbeat.category, Category::Coding);
-        assert_eq!(heartbeat.editor, "Zed");
-        assert!(!heartbeat.is_write);
-        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
-    }
-
-    #[test]
-    fn build_heartbeat_marks_is_write_when_asked() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
-
-        assert!(heartbeat.is_write);
-    }
-
-    #[test]
-    fn build_heartbeat_detects_language_from_content() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
-        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
-    }
-
-    #[test]
-    fn build_heartbeat_result_passes_its_own_validation() {
-        let config = Config::default();
-        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
-
-        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
-
-        assert!(heartbeat.validate().is_ok());
-    }
 }
 
 impl Shared {
@@ -266,8 +213,14 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _params: InitializeParams) -> LspResult<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        will_save: Some(false),
+                        will_save_wait_until: Some(false),
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                    },
                 )),
                 ..ServerCapabilities::default()
             },
@@ -375,4 +328,94 @@ async fn main() {
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_heartbeat_returns_none_for_a_non_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("untitled:Untitled-1").unwrap();
+
+        assert!(build_heartbeat(&config, &uri, "fn main() {}", false).is_none());
+    }
+
+    #[test]
+    fn build_heartbeat_populates_core_fields_for_a_file_uri() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false)
+            .expect("a file:// URI should always produce a heartbeat");
+
+        assert_eq!(heartbeat.user_id, config.user_id);
+        assert_eq!(heartbeat.entity_type, EntityType::File);
+        assert_eq!(heartbeat.category, Category::Coding);
+        assert_eq!(heartbeat.editor, "Zed");
+        assert!(!heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+        assert_eq!(heartbeat.lines, Some(1)); // a single trailing '\n' is not a second line
+    }
+
+    #[test]
+    fn build_heartbeat_marks_is_write_when_asked() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", true).unwrap();
+
+        assert!(heartbeat.is_write);
+        assert_eq!(heartbeat.actor_type, ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+    }
+
+    #[test]
+    fn build_heartbeat_detects_language_from_content() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
+
+        assert_eq!(heartbeat.language.as_deref(), Some("Rust"));
+        assert_eq!(heartbeat.ast_language.as_deref(), Some("Rust"));
+    }
+
+    #[test]
+    fn build_heartbeat_uses_latest_unsaved_buffer_for_ast_dependencies() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.ts").unwrap();
+
+        let first = build_heartbeat(
+            &config,
+            &uri,
+            "import react from 'react';\nconst n: number = 1;",
+            false,
+        )
+        .unwrap();
+        let second = build_heartbeat(
+            &config,
+            &uri,
+            "import axios from 'axios';\nconst n: number = 2;",
+            false,
+        )
+        .unwrap();
+
+        assert!(first.dependencies.contains(&"react".to_string()));
+        assert!(!first.dependencies.contains(&"axios".to_string()));
+        assert!(second.dependencies.contains(&"axios".to_string()));
+        assert!(!second.dependencies.contains(&"react".to_string()));
+    }
+
+    #[test]
+    fn build_heartbeat_result_passes_its_own_validation() {
+        let config = Config::default();
+        let uri = Url::parse("file:///tmp/wakaclock-ls-test/example.rs").unwrap();
+
+        let heartbeat = build_heartbeat(&config, &uri, "fn main() {}\n", false).unwrap();
+
+        assert!(heartbeat.validate().is_ok());
+    }
 }

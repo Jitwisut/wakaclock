@@ -51,6 +51,9 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-scalar = "0.2"
 toml = "0.8"
 dirs = "5.0"
+sysinfo = "0.39"
+notify = "9.0.0-rc.5"
+fs2 = "0.4"
 
 
 [features]
@@ -84,6 +87,8 @@ governor = { workspace = true }
 
 # TLS/mTLS
 rustls = "0.23"
+tokio-rustls = "0.26"
+webpki-roots = "1.0"
 
 # HTTP Client
 reqwest = { workspace = true }
@@ -113,6 +118,8 @@ config = "0.14"
 futures = "0.3"
 lazy_static = "1.4"
 bytes = "1.5"
+parking_lot = "0.12"
+async-trait = "0.1"
 
 # Validation
 validator = { version = "0.18", features = ["derive"] }

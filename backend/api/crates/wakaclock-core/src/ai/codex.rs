@@ -1,10 +1,10 @@
-use crate::ai::event::{AiConfidence, AiEditEvent, AiEventSource};
+use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventSource};
 use crate::ai::jsonl::JsonlCursorReader;
 use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserCursor,
 };
-use crate::ai::patch::count_unified_diff_lines;
+use crate::ai::patch::{count_unified_diff_lines, parse_apply_patch};
 use crate::ai::path::resolve_within_workspace;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -167,6 +167,18 @@ impl AiActivityParser for CodexParser {
         let mut last_offset = cursor.byte_offset;
         let mut last_record_time: Option<DateTime<Utc>> = cursor.last_record_time;
         let mut last_record_id: Option<String> = cursor.last_record_id.clone();
+        // `response_item` records (the real apply_patch call/output pair — see below)
+        // carry no `turn_id` of their own, unlike `event_msg`/`patch_apply_end`. Each
+        // `turn_context` record precedes the response_items generated within that
+        // turn in the transcript's own timestamp order, so tracking "the most
+        // recently seen turn" is the correlation the format actually offers.
+        let mut current_turn_id: Option<String> = None;
+        // A `custom_tool_call` (the apply_patch call itself, carrying the patch text)
+        // is matched to its `custom_tool_call_output` (proof the call completed) by
+        // `call_id`. Known limitation: this map is local to one parse batch, so a
+        // call/output pair split across a batch boundary is lost rather than carried
+        // over — accepted for now as a rare edge case, not solved here.
+        let mut pending_apply_patch: HashMap<String, PendingApplyPatch> = HashMap::new();
 
         while events.len() < context.max_batch_records {
             let line = match reader.next_line(context.max_record_bytes) {
@@ -212,6 +224,7 @@ impl AiActivityParser for CodexParser {
                     let parsed: Result<TurnContextPayload, _> =
                         serde_json::from_value(record.payload);
                     if let Ok(turn) = parsed {
+                        current_turn_id = Some(turn.turn_id.clone());
                         turn_context.insert(
                             turn.turn_id,
                             TurnContext {
@@ -259,7 +272,7 @@ impl AiActivityParser for CodexParser {
                             .unwrap_or_default();
                         let entity = resolve_entity(&raw_path, project_root.as_deref());
                         events.push(AiEditEvent {
-                            event_id: format!("codex-v1:{}:{raw_path}", parsed.call_id),
+                            event_id: opaque_file_event_id("codex-v1", &parsed.call_id, &raw_path),
                             agent: "codex".to_string(),
                             provider: Some("openai".to_string()),
                             model: model.clone(),
@@ -274,6 +287,82 @@ impl AiActivityParser for CodexParser {
                             source: AiEventSource::Transcript,
                             confidence: AiConfidence::Verified,
                         });
+                    }
+                }
+                // Real Codex sessions carry the apply_patch call and its file edits
+                // here, not in `event_msg`/`patch_apply_end` above — confirmed against
+                // 156 real local session files on 2026-08-31, none of which contained
+                // a `patch_apply_end` record at all. The `event_msg` arm is kept
+                // rather than removed: it is still exercised by this module's fixture
+                // tests and may match an older or future Codex build's format: this
+                // parser accepts either shape rather than assuming the one currently
+                // observed is the only one that will ever exist.
+                "response_item" => {
+                    let parsed: Result<ResponseItemPayload, _> =
+                        serde_json::from_value(record.payload);
+                    let Ok(item) = parsed else {
+                        continue;
+                    };
+                    match item.item_type.as_str() {
+                        "custom_tool_call" if item.name.as_deref() == Some("apply_patch") => {
+                            if let (Some(call_id), Some(input)) = (item.call_id, item.input) {
+                                pending_apply_patch.insert(
+                                    call_id,
+                                    PendingApplyPatch {
+                                        input,
+                                        turn_id: current_turn_id.clone(),
+                                        timestamp: record.timestamp,
+                                    },
+                                );
+                            }
+                        }
+                        "custom_tool_call_output" => {
+                            let Some(call_id) = item.call_id else {
+                                continue;
+                            };
+                            // The output's own content is never inspected — only its
+                            // presence matters, as proof the call actually completed
+                            // rather than being interrupted mid-flight. Parsing a
+                            // free-text confirmation for a success/failure signal
+                            // would be brittle (the real shape varies: sometimes a
+                            // string, sometimes a content-block list) and risks
+                            // matching on text that is exactly the kind of content
+                            // this parser must never retain.
+                            let Some(pending) = pending_apply_patch.remove(&call_id) else {
+                                continue;
+                            };
+                            last_record_id = Some(call_id.clone());
+                            let turn = pending.turn_id.as_ref().and_then(|id| turn_context.get(id));
+                            let project_root = turn
+                                .and_then(|t| t.cwd.clone())
+                                .or_else(|| session_cwd.clone());
+                            let model = turn.and_then(|t| t.model.clone());
+
+                            for change in parse_apply_patch(&pending.input) {
+                                let entity = resolve_entity(&change.path, project_root.as_deref());
+                                events.push(AiEditEvent {
+                                    event_id: opaque_file_event_id(
+                                        "codex-v2",
+                                        &call_id,
+                                        &change.path,
+                                    ),
+                                    agent: "codex".to_string(),
+                                    provider: Some("openai".to_string()),
+                                    model: model.clone(),
+                                    session_id: session_id.clone(),
+                                    occurred_at: pending.timestamp,
+                                    entity,
+                                    project_root: project_root.clone(),
+                                    lines_added: Some(change.delta.added),
+                                    lines_deleted: Some(change.delta.deleted),
+                                    input_tokens: None,
+                                    output_tokens: None,
+                                    source: AiEventSource::Transcript,
+                                    confidence: AiConfidence::Verified,
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -309,6 +398,33 @@ struct TurnContext {
     model: Option<String>,
 }
 
+/// A `response_item` record's payload. Only the fields this parser actually reads —
+/// `custom_tool_call`/`custom_tool_call_output` share this shape with every other
+/// response item type (`message`, `reasoning`, `function_call`, ...), so everything
+/// else is intentionally left undeserialized rather than modeled.
+#[derive(Debug, Deserialize)]
+struct ResponseItemPayload {
+    #[serde(rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    call_id: Option<String>,
+    /// The apply_patch call's own patch-text argument. Present only on
+    /// `custom_tool_call`; deliberately not read at all for `custom_tool_call_output`,
+    /// whose `output` field is never deserialized here — see the call site's comment
+    /// on why that content is never inspected.
+    #[serde(default)]
+    input: Option<String>,
+}
+
+/// An apply_patch call waiting for its matching `custom_tool_call_output`.
+struct PendingApplyPatch {
+    input: String,
+    turn_id: Option<String>,
+    timestamp: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 struct CodexRecord {
     timestamp: DateTime<Utc>,
@@ -320,6 +436,12 @@ struct CodexRecord {
 
 #[derive(Debug, Deserialize)]
 struct SessionMetaPayload {
+    // Real current session_meta records use `id`, not `session_id` — confirmed
+    // against 156 real local Codex session files on 2026-08-31, none of which had
+    // a `session_id` key. `#[serde(alias)]` accepts either shape without knowing
+    // which Codex build produced which, since this parser has to be tolerant across
+    // versions it can't detect ahead of time.
+    #[serde(alias = "id")]
     session_id: String,
     cwd: Option<String>,
 }
@@ -368,6 +490,30 @@ mod tests {
         let path = dir.join("rollout-test.jsonl");
         let mut file = fs::File::create(&path).unwrap();
         for line in [&session_meta, &turn_context, &patch_apply_end] {
+            let compact: serde_json::Value = serde_json::from_str(line).unwrap();
+            writeln!(file, "{}", serde_json::to_string(&compact).unwrap()).unwrap();
+        }
+        path
+    }
+
+    /// The real-world shape, as opposed to `write_fixture_copy`'s `patch_apply_end`
+    /// shape — see `custom_tool_call.json`'s own comment history / the doc comment on
+    /// the `"response_item"` match arm for why both are kept.
+    fn write_response_item_fixture_copy(name: &str) -> PathBuf {
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let turn_context = fs::read_to_string(format!("{fixtures}turn_context.json")).unwrap();
+        let call = fs::read_to_string(format!("{fixtures}custom_tool_call.json")).unwrap();
+        let output = fs::read_to_string(format!("{fixtures}custom_tool_call_output.json")).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-response-item-test-{}-{name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-test.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for line in [&session_meta, &turn_context, &call, &output] {
             let compact: serde_json::Value = serde_json::from_str(line).unwrap();
             writeln!(file, "{}", serde_json::to_string(&compact).unwrap()).unwrap();
         }
@@ -471,6 +617,8 @@ mod tests {
         );
         assert_eq!(greeting.source, AiEventSource::Transcript);
         assert_eq!(greeting.confidence, AiConfidence::Verified);
+        assert!(!greeting.event_id.contains("greeting.rs"));
+        assert!(!greeting.event_id.contains("/workspace"));
 
         let new_module = batch
             .events
@@ -481,6 +629,95 @@ mod tests {
         assert_eq!(new_module.lines_deleted, Some(0));
 
         assert_ne!(greeting.event_id, new_module.event_id);
+    }
+
+    #[test]
+    fn parse_since_reads_the_real_response_item_apply_patch_shape() {
+        // Regression test: real Codex sessions never emit `event_msg`/
+        // `patch_apply_end` (confirmed against 156 real local session files on
+        // 2026-08-31) — every apply_patch call shows up as a `response_item` pair,
+        // `custom_tool_call` (name="apply_patch", carrying the patch text in `input`)
+        // followed by `custom_tool_call_output` (proof the call completed). Before
+        // this fix, `record_type` had no arm for `"response_item"` at all, so this
+        // exact real-world shape parsed to zero events, silently, on every session.
+        let path = write_response_item_fixture_copy("split");
+        let parser = CodexParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+        };
+
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 2);
+        assert!(batch.warnings.is_empty());
+
+        let greeting = batch
+            .events
+            .iter()
+            .find(|e| e.entity.ends_with("greeting.rs"))
+            .expect("greeting.rs event present");
+        assert_eq!(greeting.lines_added, Some(3));
+        assert_eq!(greeting.lines_deleted, Some(1));
+        assert_eq!(greeting.model.as_deref(), Some("example-model-id"));
+        assert_eq!(
+            greeting.session_id.as_deref(),
+            Some("018f0000-bbbb-7000-8000-000000000000")
+        );
+        assert_eq!(greeting.source, AiEventSource::Transcript);
+        assert_eq!(greeting.confidence, AiConfidence::Verified);
+        assert!(!greeting.event_id.contains("greeting.rs"));
+        assert!(!greeting.event_id.contains("/workspace"));
+
+        let new_module = batch
+            .events
+            .iter()
+            .find(|e| e.entity.ends_with("new_module.rs"))
+            .expect("new_module.rs event present");
+        assert_eq!(new_module.lines_added, Some(3));
+        assert_eq!(new_module.lines_deleted, Some(0));
+
+        assert_ne!(greeting.event_id, new_module.event_id);
+    }
+
+    #[test]
+    fn parse_since_ignores_a_custom_tool_call_output_with_no_matching_call() {
+        // A batch boundary (or a genuinely dropped call record) can leave an output
+        // with nothing to pair against — this must be skipped, not panic or emit a
+        // phantom event with no line data.
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let output = fs::read_to_string(format!("{fixtures}custom_tool_call_output.json")).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-orphan-output-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-test.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for line in [&session_meta, &output] {
+            let compact: serde_json::Value = serde_json::from_str(line).unwrap();
+            writeln!(file, "{}", serde_json::to_string(&compact).unwrap()).unwrap();
+        }
+
+        let parser = CodexParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+        };
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+        assert!(batch.events.is_empty());
+        assert!(batch.warnings.is_empty());
     }
 
     #[test]

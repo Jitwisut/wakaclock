@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
-use wakaclock_core::heartbeat::{ActivitySegment, Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{ActivitySegment, ActorType, Category, EntityType, Heartbeat};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Request / Response models
@@ -277,7 +277,10 @@ pub async fn delete_bulk(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     if payload.heartbeat_ids.len() > 1000 {
-        return Err(app_error(StatusCode::BAD_REQUEST, "at most 1000 heartbeat ids may be deleted"));
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "at most 1000 heartbeat ids may be deleted",
+        ));
     }
     let ids: Vec<String> = payload
         .heartbeat_ids
@@ -289,7 +292,9 @@ pub async fn delete_bulk(
         .delete_ids(user_id, &ids)
         .await
         .map_err(|error| app_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()))?;
-    Ok(Json(json!({ "status": "ok", "heartbeats_deleted": accepted })))
+    Ok(Json(
+        json!({ "status": "ok", "heartbeats_deleted": accepted }),
+    ))
 }
 
 /// GET /api/v1/heartbeats?date=2026-04-10&user_id=...
@@ -324,8 +329,7 @@ pub async fn list(
             // same source/confidence check at read time so an old inferred row can
             // never reveal an agent name through the API.
             let verified_identity = r.is_ai_generated
-                && r
-                    .ai_agent
+                && r.ai_agent
                     .as_deref()
                     .is_some_and(|agent| !agent.trim().is_empty())
                 && r.ai_confidence
@@ -461,9 +465,9 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         .actor_type
         .as_deref()
         .map(|value| value.trim().to_ascii_lowercase());
-    let legacy_inferred = legacy_actor.as_deref().is_some_and(|value| {
-        matches!(value, "ai_inferred" | "inferred" | "correlated")
-    });
+    let legacy_inferred = legacy_actor
+        .as_deref()
+        .is_some_and(|value| matches!(value, "ai_inferred" | "inferred" | "correlated"));
     let legacy_unknown = legacy_actor
         .as_deref()
         .is_some_and(|value| matches!(value, "unknown" | "unattributed"));
@@ -515,8 +519,23 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         keystrokes: p.keystrokes,
         chars_added: p.chars_added,
         chars_deleted: p.chars_deleted,
+        // Clipboard tracking has no wire representation in `HeartbeatPayload` yet.
+        clipboard_tracking_version: None,
+        copy_actions: None,
+        paste_actions: None,
+        copied_chars: None,
+        copied_lines: None,
+        pasted_chars: None,
+        pasted_lines: None,
+        paste_same_file_actions: None,
+        paste_same_workspace_actions: None,
+        paste_external_or_unknown_actions: None,
         active_seconds: p.active_seconds,
         activity_segments: p.activity_segments,
+        // Set below, after `enforce_attribution_policy` has normalized the legacy
+        // string fields this enum must agree with.
+        actor_type: ActorType::default(),
+        actor_confidence: 0.0,
         // An agent name is authoritative. This prevents a malformed client from
         // sending `ai_agent` with `is_ai_generated: false` and having the same edit
         // counted as human by the materialized view.
@@ -562,6 +581,21 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
     // Apply the same policy before validation and project resolution so old clients
     // cannot persist an unverified agent name through either single or bulk ingest.
     heartbeat.enforce_attribution_policy();
+    // `actor_type` is the canonical enum view of the legacy string fields above, which
+    // `enforce_attribution_policy` just normalized. It must only ever be `AiVerified`
+    // when the native-hook/MCP/transcript check passes — never a heuristic-inferred
+    // guess (plans/decision-accuracy-over-coverage.md).
+    heartbeat.actor_type = if heartbeat.has_verified_ai_identity() {
+        ActorType::AiVerified
+    } else if heartbeat.is_ai_generated {
+        ActorType::Unknown
+    } else {
+        ActorType::Human
+    };
+    heartbeat.actor_confidence = heartbeat.actor_type.default_confidence(
+        heartbeat.ai_source.as_deref(),
+        heartbeat.ai_confidence.as_deref(),
+    );
     heartbeat
 }
 

@@ -64,4 +64,3 @@ pub struct OrganizationAnalytics {
     pub team_count: i64,
     pub data_freshness: &'static str,
 }
-

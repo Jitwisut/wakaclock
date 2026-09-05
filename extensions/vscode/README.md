@@ -61,18 +61,29 @@ plugin can point its `api_url` at your AtoAxis server instead.
 
 ## AI tracking
 
-After the API key is verified, AtoAxis detects Claude Code, Codex CLI and Gemini CLI in
-the background. A multi-select consent dialog lets you enable each tool independently;
+After the API key is verified, AtoAxis detects Claude Code, Codex CLI, Gemini CLI, Kilo
+Code and Kimi Code CLI in the background. A multi-select consent dialog lets you enable
+each tool independently;
 `Not now` defers the prompt and `Don't ask again` disables it. Only after consent does
 the extension install hooks/transcript watching and write the key to the protected
-agent config. The agent scans transcripts every five seconds, so AI edits are still
-recorded when VS Code is closed. Windows and hosts without a service manager use the
-transcript watcher while the Extension Host is open.
+agent config. The local AI Activity Broker accepts these events durably before handing
+them to the existing heartbeat/outbound queue, and scans transcripts every five
+seconds, so AI edits are still recorded when VS Code is closed. Use
+`wakaclock broker status --json` or `AtoAxis: Show AI Broker Status` to inspect
+pending/retry/dead-letter work. Windows and hosts without a service manager use the
+broker as an Extension Host child while the remote workspace is open.
+Kilo Code is installed as a managed TypeScript plugin under
+`~/.config/kilo/plugin/` (one top-level entrypoint plus private helper modules);
+Kimi Code CLI uses a marker-bounded Beta hook block in `~/.kimi-code/config.toml`
+or the legacy `~/.kimi/config.toml`. Both adapters preserve user configuration and
+remain marked scaffold until a real tool run and broker row are inspected.
 
 The hooks send only metadata: agent/provider, optional model, file path, line deltas,
 timestamp and a stable event id. Claude Code is attributed to Anthropic, Codex to
-OpenAI, and Gemini CLI to Google. The dashboard aggregates AI lines separately from
-human lines and keystrokes.
+OpenAI, Gemini CLI to Google, and Kilo/Kimi preserve the provider selected for the
+request. The dashboard aggregates AI lines separately from human lines and keystrokes.
+Kilo inline autocomplete is not claimed as AI evidence without an explicit acceptance
+event.
 
 Run `AtoAxis: Repair AI Integrations` after changing an agent installation or if an
 agent reports that its hook path no longer exists. Cursor, Copilot and other IDE-only
@@ -100,6 +111,7 @@ ClickHouse database on infrastructure you control.
 | `wakaclock.trackDebugSessions`       | `true`  | Emit `debugging` heartbeats                             |
 | `wakaclock.trackBuildTasks`          | `true`  | Emit `building` heartbeats                              |
 | `wakaclock.debugLogging`             | `false` | Verbose logging in the extension host console           |
+| `wakaclock.trackClipboardActions`    | `true`  | Track metadata-only copy/paste counts; clipboard contents are never sent or stored |
 
 ## Commands
 
@@ -118,8 +130,8 @@ ClickHouse database on infrastructure you control.
 ## Limitations
 
 - Sends file activity only — no `app`, `domain` or `url` heartbeats
-- AI hooks currently cover Claude Code, Codex CLI and Gemini CLI; Cursor/Copilot need
-  provider-specific adapters
+- AI hooks currently cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code
+  CLI; Cursor/Copilot need provider-specific adapters
 - Native binaries are bundled per Marketplace target; unsupported platforms are
   rejected with a clear CLI-unavailable status rather than executing an unverified file
 

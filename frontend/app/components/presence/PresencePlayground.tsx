@@ -4,8 +4,16 @@ import * as React from 'react';
 
 import { PixelBush, PixelFlower, PixelRock, PixelTree } from '@/components/presence/PresenceDecoration';
 import { PresencePlayer } from '@/components/presence/PresencePlayer';
-import { findNearbyUsers } from '@/lib/presence/proximity';
 import type { PresenceUser } from '@/types/presence';
+
+interface PresenceZoneView {
+  center_x: number;
+  center_y: number;
+  height: number;
+  id: string;
+  label: string;
+  width: number;
+}
 
 /**
  * Corner clusters plus a light scatter of small decorations — enough for the field to
@@ -35,43 +43,77 @@ const DECORATIONS: { node: React.ReactNode; x: number; y: number }[] = [
 interface PresencePlaygroundProps {
   currentUserId: string;
   onMoveCurrentUser: (next: { x: number; y: number }) => void;
-  onNearbyChange?: (nearbyIds: string[]) => void;
+  onZoneChange?: (zoneId: null | string) => void;
   reducedMotion: boolean;
+  sessions?: { participantIds: string[]; zoneId: string }[];
   users: PresenceUser[];
+  zones?: PresenceZoneView[];
 }
 
 /**
  * The pixel-art field itself: grass texture + scenery + every roster member rendered as
- * a `PresencePlayer`. Proximity is re-evaluated whenever the roster changes (i.e. on
- * every SSE tick, since positions are server-synced — see `page.tsx`) using
- * `lib/presence/proximity.ts`; `onNearbyChange` is how the parent turns "who's close to
- * me right now" into an actual co-working session call, kept out of this component so
- * it stays presentational.
+ * a `PresencePlayer`. Shared-session highlighting is derived from the server snapshot;
+ * merely being nearby never starts or implies a session. The parent owns the
+ * `PUT /presence/rooms/:room_id/me` persistence call; this component stays presentational
+ * and only reports the authenticated avatar's next position.
  */
 export function PresencePlayground({
   currentUserId,
   onMoveCurrentUser,
-  onNearbyChange,
+  onZoneChange,
   reducedMotion,
+  sessions = [],
   users,
+  zones = [],
 }: PresencePlaygroundProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const me = users.find((u) => u.id === currentUserId);
 
-  React.useEffect(() => {
-    if (!me || !onNearbyChange) return;
-    const nearby = findNearbyUsers(me, users);
-    onNearbyChange(nearby.map((u) => u.id));
-    // `users` changes identity every SSE tick even when unrelated fields differ, which
-    // is exactly when proximity needs re-checking — including the whole array is
-    // intentional, not a missed-dependency oversight.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me?.x, me?.y, users]);
-
   const nearbyIds = React.useMemo(() => {
     if (!me) return new Set<string>();
-    return new Set(findNearbyUsers(me, users).map((u) => u.id));
-  }, [me, users]);
+    const activeSession = sessions.find((session) => session.participantIds.includes(me.id));
+    if (activeSession) return new Set(activeSession.participantIds.filter((id) => id !== me.id));
+    return new Set<string>();
+  }, [me, sessions]);
+
+  const handleMove = React.useCallback(
+    (next: { x: number; y: number }) => {
+      onMoveCurrentUser(next);
+      if (onZoneChange) {
+        const zone = zones.find(
+          (candidate) =>
+            next.x >= candidate.center_x - candidate.width / 2 &&
+            next.x <= candidate.center_x + candidate.width / 2 &&
+            next.y >= candidate.center_y - candidate.height / 2 &&
+            next.y <= candidate.center_y + candidate.height / 2
+        );
+        onZoneChange(zone?.id ?? null);
+      }
+    },
+    [onMoveCurrentUser, onZoneChange, zones]
+  );
+
+  const handleEnterZone = React.useCallback(() => {
+    if (!me) return;
+    const currentZone = zones.find(
+      (zone) =>
+        me.x >= zone.center_x - zone.width / 2 &&
+        me.x <= zone.center_x + zone.width / 2 &&
+        me.y >= zone.center_y - zone.height / 2 &&
+        me.y <= zone.center_y + zone.height / 2
+    );
+    if (currentZone) {
+      handleMove({ x: 50, y: 50 });
+      return;
+    }
+    const nearest = zones.reduce<null | PresenceZoneView>((candidate, zone) => {
+      if (!candidate) return zone;
+      const candidateDistance = (candidate.center_x - me.x) ** 2 + (candidate.center_y - me.y) ** 2;
+      const zoneDistance = (zone.center_x - me.x) ** 2 + (zone.center_y - me.y) ** 2;
+      return zoneDistance < candidateDistance ? zone : candidate;
+    }, null);
+    if (nearest) handleMove({ x: nearest.center_x, y: nearest.center_y });
+  }, [handleMove, me, zones]);
 
   return (
     <div
@@ -91,12 +133,40 @@ export function PresencePlayground({
         ))}
       </div>
 
+      {zones.map((zone) => {
+        const session = sessions.find((candidate) => candidate.zoneId === zone.id);
+        const occupantCount = users.filter((user) => user.zoneId === zone.id).length;
+        let availability = 'Available';
+        if (session) availability = `${session.participantIds.length} together`;
+        else if (occupantCount > 0) availability = 'Waiting';
+        return (
+          <div
+            aria-label={`${zone.label}, ${occupantCount} occupant${occupantCount === 1 ? '' : 's'}`}
+            className="presence-zone pointer-events-none absolute border-2 border-dashed px-2 py-1 text-[9px] font-bold"
+            key={zone.id}
+            style={{
+              left: `${zone.center_x - zone.width / 2}%`,
+              top: `${zone.center_y - zone.height / 2}%`,
+              width: `${zone.width}%`,
+              height: `${zone.height}%`,
+              borderColor: session ? 'var(--presence-live)' : 'var(--presence-border)',
+              background: session ? 'rgba(45, 213, 118, 0.12)' : 'rgba(255, 249, 233, 0.12)',
+            }}
+          >
+            <span style={{ color: session ? 'var(--presence-live)' : 'var(--presence-text-muted)' }}>
+              {zone.label} · {availability}
+            </span>
+          </div>
+        );
+      })}
+
       {users.map((user) => (
         <PresencePlayer
           containerRef={containerRef}
           isNearby={nearbyIds.has(user.id)}
-          key={`${user.id}-${user.x.toFixed(1)}-${user.y.toFixed(1)}`}
-          onMove={user.isCurrentUser ? onMoveCurrentUser : undefined}
+          key={user.id}
+          onEnterZone={user.isCurrentUser ? handleEnterZone : undefined}
+          onMove={user.isCurrentUser ? handleMove : undefined}
           reducedMotion={reducedMotion}
           user={user}
         />

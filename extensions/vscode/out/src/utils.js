@@ -1,10 +1,24 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.localTimezone = localTimezone;
 exports.normalizeFsPath = normalizeFsPath;
 exports.isFileDocument = isFileDocument;
 exports.getEditorEntity = getEditorEntity;
 exports.summarizeTextChanges = summarizeTextChanges;
 exports.getSelectionMetrics = getSelectionMetrics;
+/**
+ * The IANA timezone the CLI must scope "today" to. Every caller that reads or
+ * displays today's total has to pass the *same* value — the status bar and the
+ * "Show Today" command disagreed on the day boundary when only one of them did.
+ */
+function localTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    }
+    catch {
+        return "UTC";
+    }
+}
 function normalizeFsPath(fsPath) {
     return fsPath.replace(/\\/g, "/");
 }

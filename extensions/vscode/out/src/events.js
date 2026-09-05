@@ -35,9 +35,11 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerEventSubscriptions = registerEventSubscriptions;
 const vscode = __importStar(require("vscode"));
+const clipboardTracking_1 = require("./clipboardTracking");
 function registerEventSubscriptions(context, configService, bufferManager, logger) {
     let previousEditor = vscode.window.activeTextEditor;
     let timer = startFlushTimer();
+    const clipboardTracker = new clipboardTracking_1.ClipboardActivityTracker();
     function workspaceProject(document) {
         if (!document) {
             return undefined;
@@ -48,7 +50,34 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         const activeSelection = vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
             ? vscode.window.activeTextEditor.selection
             : undefined;
-        void bufferManager.recordTextChange(event.document, event.contentChanges, activeSelection, Date.now(), workspaceProject(event.document));
+        const paste = configService.getSnapshot().trackClipboardActions
+            ? clipboardTracker.consumePaste(event.document, event.contentChanges, event.reason, Date.now())
+            : undefined;
+        void bufferManager.recordTextChange(event.document, event.contentChanges, activeSelection, Date.now(), workspaceProject(event.document), event.reason, paste);
+    }), vscode.languages.registerDocumentPasteEditProvider({ scheme: "file" }, {
+        prepareDocumentPaste(document, ranges, dataTransfer) {
+            if (!configService.getSnapshot().trackClipboardActions) {
+                return;
+            }
+            const workspace = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+            const prepared = clipboardTracker.prepareCopy(document, ranges, workspace);
+            dataTransfer.set(clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME, new vscode.DataTransferItem(prepared.token));
+            void bufferManager.recordClipboardCopy(document, prepared.metrics, Date.now(), workspaceProject(document));
+        },
+        async provideDocumentPasteEdits(document, ranges, dataTransfer) {
+            if (!configService.getSnapshot().trackClipboardActions) {
+                return undefined;
+            }
+            const tokenItem = dataTransfer.get(clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME);
+            const token = tokenItem ? await tokenItem.asString() : undefined;
+            const workspace = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+            clipboardTracker.preparePaste(document, ranges, workspace, token);
+            return undefined;
+        }
+    }, {
+        providedPasteEditKinds: [],
+        copyMimeTypes: [clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME],
+        pasteMimeTypes: [clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME, "text/plain"]
     }), vscode.workspace.onDidSaveTextDocument((document) => {
         void bufferManager.recordSave(document, Date.now(), workspaceProject(document));
     }), vscode.window.onDidChangeActiveTextEditor((editor) => {

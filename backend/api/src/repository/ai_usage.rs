@@ -58,6 +58,7 @@ impl AiUsageRepository {
                     ai_session_id String,
                     started_at UInt32,
                     ended_at Nullable(UInt32),
+                    last_event_at UInt32 DEFAULT started_at,
                     ai_agent String,
                     ai_provider Nullable(String),
                     primary_model Nullable(String),
@@ -162,6 +163,17 @@ impl AiUsageRepository {
             .execute()
             .await
             .context("Failed to migrate ai_model_pricing.currency to String")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_sessions
+                 ADD COLUMN IF NOT EXISTS last_event_at UInt32 DEFAULT started_at
+                 AFTER ended_at",
+            )
+            .execute()
+            .await
+            .context("Failed to add ai_sessions.last_event_at")?;
 
         self.seed_pricing().await?;
         Ok(())
@@ -368,6 +380,7 @@ impl AiUsageRepository {
                 "SELECT
                     ai_session_id,
                     min(event_time) AS started_at,
+                    max(event_time) AS last_event_at,
                     sum(prompt_count) AS prompt_count,
                     argMax(ai_agent, event_time) AS ai_agent,
                     uniqExact(ifNull(ai_provider, '')) AS distinct_providers,
@@ -415,6 +428,7 @@ impl AiUsageRepository {
 pub struct SessionRollup {
     pub ai_session_id: String,
     pub started_at: u32,
+    pub last_event_at: u32,
     pub prompt_count: u64,
     pub ai_agent: String,
     pub distinct_providers: u64,

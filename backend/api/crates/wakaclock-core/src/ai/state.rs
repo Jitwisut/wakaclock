@@ -12,10 +12,9 @@ use std::path::{Path, PathBuf};
 /// `wakaclock ai sync` against the same transcript never re-attributes the same edit
 /// twice (plan.md 8.0's required outcome: "exactly one AI edit event for that patch").
 ///
-/// Not yet implemented: the cross-process `ai-sync.lock` plan.md 8.6 also calls for.
-/// A single local SQLite writer already serializes concurrent opens at the OS/SQLite
-/// level, so two overlapping `wakaclock ai sync` invocations won't corrupt state —
-/// they just aren't coordinated to skip redundant work, which the lock exists for.
+/// The CLI takes the companion cross-process `~/.wakaclock/ai-sync.lock` before it
+/// scans, delivers, and commits state. SQLite still protects this database if another
+/// integration writes directly, while the CLI lock prevents duplicate sync work.
 pub struct AiAttributionState {
     conn: Connection,
 }
@@ -89,6 +88,15 @@ impl AiAttributionState {
                 ledger_json TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+
+            -- Crash-safe BeforeTool snapshots. The payload contains only workspace
+            -- metadata/fingerprints, never source text, prompts, responses or commands.
+            CREATE TABLE IF NOT EXISTS ai_tool_sessions (
+                tool_event_id TEXT PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             ",
         )?;
         Ok(Self { conn })
@@ -109,10 +117,7 @@ impl AiAttributionState {
         }
     }
 
-    pub fn save_follow_up_ledger(
-        &self,
-        ledger: &HumanFollowUpLedger,
-    ) -> Result<(), AppError> {
+    pub fn save_follow_up_ledger(&self, ledger: &HumanFollowUpLedger) -> Result<(), AppError> {
         let json = serde_json::to_string(ledger)?;
         self.conn.execute(
             "INSERT INTO follow_up_ledger (ledger_id, ledger_json, updated_at)
@@ -169,7 +174,7 @@ impl AiAttributionState {
             None => 0.0,
         };
 
-        if previous.map_or(true, |last| timestamp > last) {
+        if previous.is_none_or(|last| timestamp > last) {
             tx.execute(
                 "INSERT INTO activity_cursors (stream_id, last_time) VALUES (?1, ?2)
                  ON CONFLICT(stream_id) DO UPDATE SET last_time = excluded.last_time",
@@ -335,6 +340,61 @@ impl AiAttributionState {
         Ok(found.is_some())
     }
 
+    /// Persist one BeforeTool workspace snapshot. Re-running the same stable tool id
+    /// replaces the snapshot atomically, which makes hook retries and process restarts
+    /// converge without accumulating source-derived state.
+    pub fn save_tool_session(
+        &self,
+        tool_event_id: &str,
+        snapshot_json: &str,
+        started_at: i64,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO ai_tool_sessions (tool_event_id, snapshot_json, started_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(tool_event_id) DO UPDATE SET
+                snapshot_json = excluded.snapshot_json,
+                started_at = excluded.started_at,
+                updated_at = excluded.updated_at",
+            params![tool_event_id, snapshot_json, started_at, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_tool_session(&self, tool_event_id: &str) -> Result<Option<String>, AppError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT snapshot_json FROM ai_tool_sessions WHERE tool_event_id = ?1",
+                params![tool_event_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn delete_tool_session(&self, tool_event_id: &str) -> Result<(), AppError> {
+        self.conn.execute(
+            "DELETE FROM ai_tool_sessions WHERE tool_event_id = ?1",
+            params![tool_event_id],
+        )?;
+        Ok(())
+    }
+
+    /// Abandoned BeforeTool snapshots are metadata-only but still bounded. Twenty-four
+    /// hours is intentionally much longer than a normal tool call so an AfterTool retry
+    /// after a CLI/editor restart can still close the original session.
+    pub fn prune_tool_sessions_older_than(
+        &self,
+        retention_seconds: i64,
+    ) -> Result<usize, AppError> {
+        let cutoff = chrono::Utc::now().timestamp() - retention_seconds.max(0);
+        Ok(self.conn.execute(
+            "DELETE FROM ai_tool_sessions WHERE updated_at < ?1",
+            params![cutoff],
+        )?)
+    }
+
     /// Bounded retention for the delivered-event dedup table — plan.md 8.6's "30 days
     /// or 50,000 IDs, whichever is smaller" default, applied here as a simple age cutoff.
     /// Returns the number of rows removed.
@@ -493,6 +553,28 @@ mod tests {
             .filter_undelivered_usage(&ids[..1])
             .unwrap()
             .contains("usage-1"));
+    }
+
+    #[test]
+    fn tool_session_snapshot_survives_reopen_and_can_be_deleted() {
+        let path = temp_db_path("tool-session");
+        let _ = std::fs::remove_file(&path);
+        {
+            let state = AiAttributionState::open_at(&path).unwrap();
+            state
+                .save_tool_session("tool-1", r#"{"files":3}"#, 123)
+                .unwrap();
+        }
+        {
+            let state = AiAttributionState::open_at(&path).unwrap();
+            assert_eq!(
+                state.load_tool_session("tool-1").unwrap().as_deref(),
+                Some(r#"{"files":3}"#)
+            );
+            state.delete_tool_session("tool-1").unwrap();
+            assert_eq!(state.load_tool_session("tool-1").unwrap(), None);
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

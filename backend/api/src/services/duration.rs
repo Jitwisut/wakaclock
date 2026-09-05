@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
 use crate::model::duration::DurationBlockRow;
-use crate::services::activity_timeline::ActivityTimelineService;
+use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
 
 /// Project durations from the canonical overlap-free timeline. The previous raw
 /// heartbeat/session-gap query could turn an idle switch into ten minutes of coding.
@@ -14,9 +14,9 @@ pub struct DurationService {
 }
 
 impl DurationService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, idle_timeout_seconds: f64) -> Self {
+    pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
-            timeline: ActivityTimelineService::new(clickhouse, idle_timeout_seconds),
+            timeline: ActivityTimelineService::new(clickhouse, bridge),
         }
     }
 

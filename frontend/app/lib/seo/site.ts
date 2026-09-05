@@ -94,12 +94,11 @@ export function absoluteUrl(path: string): string {
   return new URL(path, `${SITE_URL}/`).toString();
 }
 
-/** The legal entity behind the product, taken from the repository LICENSE. */
+/** Who builds the product — AtoAxis is developed by a team of fourth-year students. */
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
-  legalName: 'Lodash (Thailand) Co., Ltd.',
   logo: absoluteUrl('/atoaxis-logo.png'),
-  name: 'StandUpCode / Lodash (Thailand) Co., Ltd.',
+  name: SITE_NAME,
   url: SITE_URL,
 } as const;
 

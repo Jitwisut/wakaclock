@@ -3,7 +3,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
-use crate::model::external_duration::{ExternalDuration, ExternalDurationRequest, ExternalDurationRow};
+use crate::model::external_duration::{
+    ExternalDuration, ExternalDurationRequest, ExternalDurationRow,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ExternalDurationFilter {
@@ -184,7 +186,11 @@ impl ExternalDurationRepository {
             .collect())
     }
 
-    pub async fn delete_source(&self, user_id: Uuid, source: &str) -> Result<DeleteExternalDurationResult> {
+    pub async fn delete_source(
+        &self,
+        user_id: Uuid,
+        source: &str,
+    ) -> Result<DeleteExternalDurationResult> {
         if source.trim().is_empty() {
             return Err(anyhow!("source is required"));
         }
@@ -239,10 +245,18 @@ fn validate(request: &ExternalDurationRequest) -> Result<()> {
             return Err(anyhow!("duration_seconds must be between 0 and 86400"));
         }
     }
-    if request.description.as_ref().is_some_and(|value| value.len() > 2_000) {
+    if request
+        .description
+        .as_ref()
+        .is_some_and(|value| value.len() > 2_000)
+    {
         return Err(anyhow!("description is too long"));
     }
-    if request.source_url.as_ref().is_some_and(|value| value.len() > 2_000) {
+    if request
+        .source_url
+        .as_ref()
+        .is_some_and(|value| value.len() > 2_000)
+    {
         return Err(anyhow!("source_url is too long"));
     }
     Ok(())

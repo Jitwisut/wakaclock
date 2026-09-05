@@ -8,6 +8,14 @@ use std::path::PathBuf;
 /// AI attribution. The separate 2-minute "context window" that plan.md allows for
 /// tagging category `ai coding` without claiming line counts is not implemented here;
 /// that requires a first-class `Category::AiCoding` variant this pass didn't add.
+///
+/// This measures distance to an `EditorObservation`'s *window*
+/// (`window_start`/`window_end`), not to a single point — see [`distance_to_window`].
+/// `extensions/vscode/src/aiAttribution.ts`'s `CORRELATION_WINDOW_SECONDS` (15s) is
+/// the analogous check on the editor side, but measures point-to-point distance
+/// against one editor-change timestamp. A 5s-to-a-window match can be more permissive
+/// than a 15s-to-a-point match depending on the window's own width, so the two are
+/// not directly comparable numbers and must not be unified into one constant.
 const EXACT_MATCH_WINDOW: Duration = Duration::seconds(5);
 
 /// One editor-observed buffered change for a single file, as the CLI's flush logic
@@ -370,6 +378,31 @@ mod tests {
         assert!(
             pending.is_empty(),
             "matched event must be consumed from the pool"
+        );
+    }
+
+    #[test]
+    fn pins_exact_match_window_at_five_seconds_past_the_window_edge() {
+        // Pins EXACT_MATCH_WINDOW's actual value, unlike the "within the window" and
+        // "well outside" tests above/below: the event here is *outside*
+        // `[window_start, window_end]` by precisely 5s, one second inside by 6s. A
+        // change to the constant should make one of these two assertions fail.
+        let obs = observation("src/lib.rs", at(0), at(5), 3, 1);
+
+        let mut at_the_boundary = vec![ai_event("e1", "codex", "src/lib.rs", at(10), 3, 1)];
+        assert!(
+            matches!(
+                correlate(&mut at_the_boundary, &obs),
+                CorrelationOutcome::AiMatch(_)
+            ),
+            "an event exactly EXACT_MATCH_WINDOW past the window edge must still match"
+        );
+
+        let mut past_the_boundary = vec![ai_event("e1", "codex", "src/lib.rs", at(11), 3, 1)];
+        assert_eq!(
+            correlate(&mut past_the_boundary, &obs),
+            CorrelationOutcome::Unattributed,
+            "one second past EXACT_MATCH_WINDOW must not match"
         );
     }
 

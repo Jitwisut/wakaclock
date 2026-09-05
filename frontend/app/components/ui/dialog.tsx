@@ -69,11 +69,6 @@ export type DialogTitleProps = React.ComponentProps<typeof DialogPrimitive.Title
 /** DialogDescription component props */
 export type DialogDescriptionProps = React.ComponentProps<typeof DialogPrimitive.Description>;
 
-const DialogContext = React.createContext<{
-  titleId: string;
-  descriptionId: string;
-} | null>(null);
-
 /**
  * Dialog component - Modal dialog for displaying content
  *
@@ -134,14 +129,7 @@ const DialogContext = React.createContext<{
  * @see https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/
  */
 function Dialog({ ...props }: DialogProps) {
-  const titleId = React.useId();
-  const descriptionId = React.useId();
-
-  return (
-    <DialogContext.Provider value={{ titleId, descriptionId }}>
-      <DialogPrimitive.Root data-slot="dialog" {...props} />
-    </DialogContext.Provider>
-  );
+  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }
 Dialog.displayName = 'Dialog';
 
@@ -215,8 +203,6 @@ const DialogContent = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Content>,
   DialogContentProps
 >(({ showCloseIcon = true, className, children, testId = 'dialog-content', ...props }, ref) => {
-  const context = React.useContext(DialogContext);
-
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -225,8 +211,6 @@ const DialogContent = React.forwardRef<
         data-slot="dialog-content"
         data-testid={testId}
         aria-modal="true"
-        aria-labelledby={context?.titleId}
-        aria-describedby={context?.descriptionId}
         className={cn(
           'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg',
           className
@@ -283,12 +267,9 @@ const DialogTitle = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Title>,
   DialogTitleProps
 >(({ className, ...props }, ref) => {
-  const context = React.useContext(DialogContext);
-
   return (
     <DialogPrimitive.Title
       ref={ref}
-      id={context?.titleId}
       data-slot="dialog-title"
       data-testid="dialog-title"
       className={cn('text-lg leading-none font-semibold', className)}
@@ -303,12 +284,9 @@ const DialogDescription = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Description>,
   DialogDescriptionProps
 >(({ className, ...props }, ref) => {
-  const context = React.useContext(DialogContext);
-
   return (
     <DialogPrimitive.Description
       ref={ref}
-      id={context?.descriptionId}
       data-slot="dialog-description"
       data-testid="dialog-description"
       className={cn('text-muted-foreground text-sm', className)}

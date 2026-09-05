@@ -1,2 +1,12 @@
 .env
 target/
+scripts/duration-audit/*.jsonl
+!scripts/duration-audit/golden.jsonl
+.worktrees/
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+apps/desktop/src-tauri/gen/

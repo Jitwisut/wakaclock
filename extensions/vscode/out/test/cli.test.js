@@ -19,7 +19,8 @@ function createConfig() {
         statusBarEnabled: true,
         debugLogging: false,
         trackDebugSessions: true,
-        trackBuildTasks: true
+        trackBuildTasks: true,
+        trackClipboardActions: true
     };
 }
 function mockChild(result = {}) {
@@ -112,6 +113,39 @@ function mockChild(result = {}) {
             "--ai-lines-deleted",
             "3"
         ]));
+    });
+    (0, vitest_1.it)("passes clipboard metadata to a capable CLI", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+            clipboard_tracking_version: 1,
+            paste_actions: 1,
+            pasted_chars: 2_000,
+            paste_external_or_unknown_actions: 1
+        });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(vitest_1.expect.arrayContaining([
+            "--clipboard-tracking-version",
+            "1",
+            "--paste-actions",
+            "1",
+            "--pasted-chars",
+            "2000",
+            "--paste-external-or-unknown-actions",
+            "1"
+        ]));
+    });
+    (0, vitest_1.it)("retries without clipboard flags when the installed CLI is legacy", async () => {
+        spawnMock
+            .mockImplementationOnce(() => mockChild({ stderr: "error: unexpected argument '--clipboard-tracking-version'", exitCode: 2 }))
+            .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+            clipboard_tracking_version: 1,
+            copy_actions: 1
+        })).resolves.toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--copy-actions");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).not.toContain("--copy-actions");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).toContain("--entity");
     });
     (0, vitest_1.it)("passes stable heartbeat ids and explicit activity segments", async () => {
         spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));

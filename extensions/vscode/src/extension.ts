@@ -91,7 +91,15 @@ export function activate(context: vscode.ExtensionContext): void {
     statusBar.setConnectionState(key ? "connecting" : "needs-api-key");
   })();
   statusBar.start();
-  registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations);
+  registerCommands(
+    context,
+    configService,
+    cliService,
+    bufferManager,
+    statusBar,
+    aiIntegrations,
+    () => void initializeConnection(context, cliService, aiIntegrations, logger),
+  );
   registerEventSubscriptions(context, configService, bufferManager, logger);
   void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
 
