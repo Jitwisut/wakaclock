@@ -156,7 +156,9 @@ else
   # text. Keep the narrow broker alphabet; path-bearing and otherwise arbitrary
   # values remain retry-stable after hashing.
   if ! [[ "$EVENT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || [ "${#EVENT_ID}" -gt 128 ]; then
-    EVENT_ID="ape1:$(opaque_hash "${CLIENT_ID}|${SESSION_ID}|${TOOL_CALL_ID}|${EVENT_ID}")"
+    # Include the target entity/change kind so a malformed shared tool ID still
+    # yields one opaque identity per file in a multi-file operation.
+    EVENT_ID="ape1:$(opaque_hash "${CLIENT_ID}|${SESSION_ID}|${TOOL_CALL_ID}|${ENTITY}|${CHANGE_KIND}|${EVENT_ID}")"
   fi
 fi
 

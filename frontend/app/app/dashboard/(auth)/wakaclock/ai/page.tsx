@@ -209,9 +209,9 @@ function AiStatsPanel() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {namedAgents.map((agent) => (
+                        {namedAgents.map((agent, index) => (
                           <TableRow
-                            key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}`}
+                            key={`${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}:${index}`}
                           >
                             <TableCell className="font-medium">{agent.agent}</TableCell>
                             <TableCell>

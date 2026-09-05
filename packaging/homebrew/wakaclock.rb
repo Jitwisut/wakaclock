@@ -13,9 +13,9 @@ class Wakaclock < Formula
   end
 
   def post_install
-    # Only the AtoAxis-owned watcher service is reconciled here. AI adapter
-    # configuration still requires explicit CLI or VS Code consent.
-    system bin/"wakaclock", "agent", "install", "--json"
+    # Service registration is per-user and idempotent. It never edits an agent
+    # config; hook setup remains behind the CLI's explicit consent file.
+    system bin/"wakaclock", "broker", "install", "--json"
   end
 
   test do

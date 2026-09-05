@@ -97,7 +97,18 @@ impl WorkspaceRegistry {
     fn root_is_too_broad(&self, root: &Path) -> bool {
         // `root` is the filesystem root, is exactly `$HOME`, or is an ancestor of
         // `$HOME` (so watching it recursively would cover the whole home dir).
-        root.parent().is_none() || self.home_dir.starts_with(root)
+        // Temporary roots are also rejected: an agent running from `/tmp` is not
+        // a safe workspace lease because that tree may contain unrelated users'
+        // files and short-lived build artifacts.
+        let temp_dir = std::env::temp_dir();
+        let well_known_tmp = [Path::new("/tmp"), Path::new("/private/tmp")];
+        root.parent().is_none()
+            || self.home_dir.starts_with(root)
+            || well_known_tmp
+                .iter()
+                .any(|temp_root| root == *temp_root || root.starts_with(temp_root))
+            || root == temp_dir
+            || root.starts_with(&temp_dir)
     }
 
     /// Register (or, for the same `workspace_id` + `producer_id`, renew) a lease.
@@ -321,6 +332,23 @@ mod tests {
         assert!(reg
             .register("/home/dev/project", "vscode", None, None, vec![], now)
             .is_ok());
+    }
+
+    #[test]
+    fn the_broker_never_leases_a_temporary_root() {
+        let mut reg = registry();
+        let now = Utc::now();
+        assert!(matches!(
+            reg.register(
+                "/tmp/agent-worktree",
+                "process-observer",
+                Some(7),
+                None,
+                vec![],
+                now
+            ),
+            Err(LeaseError::RootTooBroad(_))
+        ));
     }
 
     #[test]

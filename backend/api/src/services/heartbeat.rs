@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
+use wakaclock_core::ai::fingerprint_for_heartbeat;
 use wakaclock_core::heartbeat::{
     normalize_activity_source, union_activity_seconds, ActivitySegment, Heartbeat,
     MAX_ACTIVITY_GAP_SECONDS,
@@ -82,8 +83,10 @@ impl HeartbeatService {
             .await?
             .into_iter()
             .collect();
-        let candidate_fingerprints: Vec<String> =
-            heartbeats.iter().filter_map(ai_event_fingerprint).collect();
+        let candidate_fingerprints: Vec<String> = heartbeats
+            .iter()
+            .flat_map(ai_event_fingerprint_candidates)
+            .collect();
         let existing_fingerprints: HashSet<String> = self
             .repo
             .existing_ai_fingerprints(user_id, &candidate_fingerprints)
@@ -113,7 +116,11 @@ impl HeartbeatService {
 
             let fingerprint = ai_event_fingerprint(&hb);
             if let Some(fingerprint) = fingerprint.as_ref() {
+                let legacy_fingerprint = legacy_ai_event_fingerprint(&hb);
                 if existing_fingerprints.contains(fingerprint)
+                    || legacy_fingerprint
+                        .as_ref()
+                        .is_some_and(|legacy| existing_fingerprints.contains(legacy))
                     || !batch_fingerprints.insert(fingerprint.clone())
                 {
                     continue;
@@ -331,10 +338,45 @@ fn parse_created_at(created_at: &str) -> u32 {
         .unwrap_or_else(|_| Utc::now().timestamp().max(0) as u32)
 }
 
-/// Stable privacy-safe bridge between hook and transcript transports. It contains only
-/// derived metadata (not a patch or source body) and uses a five-second bucket matching
-/// the editor correlation window. The file path is included only as a one-way hash input.
+/// Stable privacy-safe bridge between hook and transcript transports. The canonical
+/// fingerprint implementation is shared with the core dedup layer, so local
+/// ingestion, reprocess and future producers cannot silently drift to a second
+/// hashing scheme. It contains only derived metadata (not a patch or source body).
 fn ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
+    if !heartbeat.actor_type.is_ai() {
+        return None;
+    }
+    Some(
+        fingerprint_for_heartbeat(
+            heartbeat.project.as_deref(),
+            heartbeat.branch.as_deref(),
+            &heartbeat.entity,
+            wakaclock_core::broker::BrokerChangeKind::Modify,
+            heartbeat.time.floor() as i64,
+            heartbeat.ai_lines_added,
+            heartbeat.ai_lines_deleted,
+            heartbeat.ai_change_id.as_deref(),
+        )
+        .to_string(),
+    )
+}
+
+/// Candidate keys queried for an incoming row. `caf1` is the canonical scheme,
+/// while `v1` is retained only as a read-side compatibility key so rows written
+/// before the scheme bump cannot be replayed into a second activity. New rows
+/// always store the `caf1` value above.
+fn ai_event_fingerprint_candidates(heartbeat: &Heartbeat) -> Vec<String> {
+    let Some(canonical) = ai_event_fingerprint(heartbeat) else {
+        return Vec::new();
+    };
+    let mut candidates = vec![canonical];
+    if let Some(legacy) = legacy_ai_event_fingerprint(heartbeat) {
+        candidates.push(legacy);
+    }
+    candidates
+}
+
+fn legacy_ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
     if !heartbeat.actor_type.is_ai() {
         return None;
     }

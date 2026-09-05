@@ -432,10 +432,16 @@ fn codex_manifest() -> AdapterManifest {
             BrokerChangeKind::Delete,
             BrokerChangeKind::Rename,
         ],
-        // Real transcripts parsed (dry-run only); live delivery/dedup still open
-        // per VERIFICATION.md — not full live verification.
-        verification: Verification::scaffold(
-            "codex.rs verified against 156 real local sessions by dry-run; live delivery open",
+        // Promoted after a real codex-cli 0.151.0-alpha.7.1 run through the
+        // managed PostToolUse hook, broker/backend row inspection, and replay
+        // dedup verification recorded in ai/VERIFICATION.md. The legacy shell
+        // collision is a separate acceptance check and does not invalidate the
+        // native hook evidence represented by this status.
+        verification: Verification::verified(
+            DateTime::parse_from_rfc3339("2026-09-01T19:18:51Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            "codex-cli 0.151.0-alpha.7.1 (native hook + transcript dedup)",
         ),
         health_probe: HealthProbe::TranscriptFreshness {
             max_lag_seconds: 300,
@@ -584,6 +590,28 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
             health_probe: HealthProbe::HookEventRecency {
                 max_age_seconds: 900,
             },
+        },
+        AdapterManifest {
+            id: "deep-code".to_string(),
+            // DeepSeek's standalone coding client is a distinct client when a
+            // future native integration is available.  Do not collapse it into
+            // Kilo/Codex merely because the model provider is the same.
+            provider: "deepseek".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["deep-code".to_string(), "deepseek".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            install: InstallStrategy::Manual {
+                instruction: "standalone DeepSeek client has no supported metadata hook yet; use an explicit MCP/native producer".to_string(),
+            },
+            native_hooks: no_hooks(),
+            transcript_roots: vec![],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            // A model name or process presence cannot promote this adapter.  It
+            // stays unverified until a real client→broker→backend run exists.
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
         },
         AdapterManifest {
             id: "antigravity".to_string(),
@@ -839,10 +867,7 @@ mod tests {
         }
         // Trust is graded honestly.
         assert!(registry.get("claude-code").unwrap().is_live_verified());
-        assert_eq!(
-            registry.get("codex").unwrap().effective_status(),
-            VerificationStatus::Scaffold
-        );
+        assert!(registry.get("codex").unwrap().is_live_verified());
         assert_eq!(
             registry.get("gemini-cli").unwrap().effective_status(),
             VerificationStatus::Unverified
@@ -883,6 +908,7 @@ mod tests {
             "cursor",
             "kilo-code",
             "kimi-code-cli",
+            "deep-code",
             "antigravity",
             "copilot",
             "windsurf",
@@ -920,14 +946,14 @@ mod tests {
             registry.get("kimi-code-cli").unwrap().effective_status(),
             VerificationStatus::Scaffold
         );
-        // Not a single builtin adapter is verified except claude-code.
+        // Only adapters with recorded live evidence may be verified.
         let verified: Vec<&str> = registry
             .manifests()
             .iter()
             .filter(|m| m.is_live_verified())
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(verified, vec!["claude-code"]);
+        assert_eq!(verified, vec!["claude-code", "codex"]);
     }
 
     #[test]

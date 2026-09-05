@@ -10,7 +10,9 @@ import {
   parseAdapterList,
   pluginInstallCommand,
   refreshManagedCodexHookCommands,
-  syncAgentPluginsToStableDir
+  syncAgentPluginsToStableDir,
+  writeHookAutoInstallPolicy,
+  writeHookConsentState
 } from "../src/agentSetup";
 import { Logger } from "../src/logging";
 
@@ -134,6 +136,25 @@ describe("syncAgentPluginsToStableDir", () => {
     expect(first).not.toBe(second);
     await expect(fs.access(first as string)).resolves.toBeUndefined();
     await expect(fs.access(second as string)).resolves.toBeUndefined();
+  });
+});
+
+describe("shared broker consent policy", () => {
+  it("writes only the automatic setup boolean with private permissions", async () => {
+    const { homeDir } = setup();
+    await writeHookAutoInstallPolicy(homeDir, false);
+    const policyPath = path.join(homeDir, ".wakaclock", "agent-hook-autoinstall.json");
+    expect(JSON.parse(await fs.readFile(policyPath, "utf8"))).toEqual({ enabled: false });
+    expect((await fs.stat(policyPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("shares per-agent consent with the broker without storing content", async () => {
+    const { homeDir } = setup();
+    await writeHookConsentState(homeDir, ["codex", "claude-code"], "enabled");
+    const consentPath = path.join(homeDir, ".wakaclock", "agent-hook-consent.json");
+    const consent = JSON.parse(await fs.readFile(consentPath, "utf8")) as Record<string, string>;
+    expect(consent).toEqual({ codex: "enabled", "claude-code": "enabled" });
+    expect(JSON.stringify(consent)).not.toMatch(/prompt|content|path|command/);
   });
 });
 

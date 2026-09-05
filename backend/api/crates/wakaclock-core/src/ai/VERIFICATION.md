@@ -296,3 +296,54 @@ wire value. The shared shell emitter and Rust broker apply the same protection t
 older adapters that provide a path-bearing event ID. `filesystem_observer` maps to
 the existing weak filesystem bucket, while `process_observer` remains weakest
 (`Other`) because a running process alone cannot prove a file edit.
+
+## Universal adapter completion record (Phases 6–9, 2026-09-03)
+
+Phase 6 keeps provider identity separate from the coding client. The core provider
+map accepts explicit DeepSeek aliases and the first-party API host, while an
+arbitrary compatible gateway or a model display name remains unknown. Codex,
+Claude Code and Kilo therefore retain their own `client_id` when routed to
+DeepSeek. The registry contains a `deep-code` manifest only to report the
+unsupported standalone case; it is not promoted to a working client.
+
+Phase 7 uses the shared versioned `caf1` canonical fingerprint in local/server
+heartbeat ingestion. Transport, provider, model and retry identifiers are not
+fingerprint inputs, so native hook and transcript observations converge without
+transport-specific hashing. A read-side lookup of the previous `v1` fingerprint
+keeps existing rows replay-safe during the scheme upgrade. Explicit heartbeat and
+event IDs remain the first dedup layers. The live Codex native + transcript replay
+run stayed at one backend row; a separate legacy shell collision run is still an
+operational follow-up.
+
+Phase 8 ships the product surface: standalone setup and uninstall preserve
+user-owned agent configuration, `ai status --json` and `doctor ai` use the same
+adapter registry, and the doctor snapshot can be pushed to the backend with a
+bounded fail-open request. Backend validation accepts only bounded metadata and
+newer snapshots cannot be replaced by delayed reports. The dashboard integration
+panel separates detection, verification, capture and delivery health. The local
+kill switch `WAKACLOCK_DISABLED_AI_ADAPTERS` disables selected clients without
+stopping the broker or ordinary heartbeat stream; its diagnostic code is
+`disabled_by_policy`.
+
+Phase 9 artifacts are metadata-only and checked by
+`scripts/verify_ai_certification.py` in CI:
+
+| Adapter | Status | Artifact | Evidence boundary |
+|---|---|---|---|
+| Codex | `verified` | `certifications/ai-adapters/codex/2026-09-03.json` | real native single-/multi-file hook, backend row inspection and transcript replay dedup |
+| Claude Code | `verified` | `certifications/ai-adapters/claude-code/2026-09-03.json` | retained pre-migration live baseline and installed plugin wiring; fresh OAuth run remains required |
+| Kilo Code | `scaffold` | `certifications/ai-adapters/kilo-code/2026-09-03.json` | implementation and fixture tests; executable unavailable on this host |
+| Kimi Code CLI | `scaffold` | `certifications/ai-adapters/kimi-code-cli/2026-09-03.json` | implementation and fixture tests; executable unavailable on this host |
+| Deep Code | `unverified` | `certifications/ai-adapters/deep-code/2026-09-03.json` | no supported standalone hook/transcript contract; API/browser activity is not file evidence |
+
+Each artifact records only client/provider/model IDs, versions, contract and
+fingerprint versions, scenario IDs, bounded counters, timestamps, timezone, SHA,
+status and blockers. The verifier rejects paths, users, prompts, source, patches,
+commands, tokens, unknown fields, invalid counters, expired reports and false
+live claims. Rollout and rollback instructions, including the per-adapter kill
+switch, are in `docs/ai-adapter-rollout.md`.
+
+The remaining acceptance work is external rather than a fixture gap: re-authenticate
+Claude and run the live Kilo/Kimi matrices with broker/backend row inspection,
+exercise the legacy shell collision for Codex, and promote only artifacts backed by
+those runs. No scaffold or unverified adapter is represented as live-certified.

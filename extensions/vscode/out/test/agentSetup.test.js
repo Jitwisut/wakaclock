@@ -143,6 +143,23 @@ async function runHook(script, input, env) {
         await (0, vitest_1.expect)(fs.access(second)).resolves.toBeUndefined();
     });
 });
+(0, vitest_1.describe)("shared broker consent policy", () => {
+    (0, vitest_1.it)("writes only the automatic setup boolean with private permissions", async () => {
+        const { homeDir } = setup();
+        await (0, agentSetup_1.writeHookAutoInstallPolicy)(homeDir, false);
+        const policyPath = path.join(homeDir, ".wakaclock", "agent-hook-autoinstall.json");
+        (0, vitest_1.expect)(JSON.parse(await fs.readFile(policyPath, "utf8"))).toEqual({ enabled: false });
+        (0, vitest_1.expect)((await fs.stat(policyPath)).mode & 0o777).toBe(0o600);
+    });
+    (0, vitest_1.it)("shares per-agent consent with the broker without storing content", async () => {
+        const { homeDir } = setup();
+        await (0, agentSetup_1.writeHookConsentState)(homeDir, ["codex", "claude-code"], "enabled");
+        const consentPath = path.join(homeDir, ".wakaclock", "agent-hook-consent.json");
+        const consent = JSON.parse(await fs.readFile(consentPath, "utf8"));
+        (0, vitest_1.expect)(consent).toEqual({ codex: "enabled", "claude-code": "enabled" });
+        (0, vitest_1.expect)(JSON.stringify(consent)).not.toMatch(/prompt|content|path|command/);
+    });
+});
 (0, vitest_1.describe)("Codex hook config helpers", () => {
     (0, vitest_1.it)("adds the current hooks feature without duplicating an existing features table", () => {
         const config = "[features]\nother = true\n";

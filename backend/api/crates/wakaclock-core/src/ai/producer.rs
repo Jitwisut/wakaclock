@@ -15,7 +15,9 @@ use uuid::Uuid;
 use crate::{
     ai::{
         event::{is_safe_event_id, opaque_file_event_id},
-        normalize_agent_id, AiConfidence, AiEventSource,
+        normalize_agent_id,
+        provider::{canonical_provider_alias, provider_for_endpoint},
+        AiConfidence, AiEventSource,
     },
     broker::{BrokerChangeKind, BrokerEventType, BrokerEventV1, BROKER_SCHEMA_VERSION},
 };
@@ -112,21 +114,19 @@ pub fn normalize_client_id(raw: &str) -> Result<String, ProducerError> {
 /// Normalize a model provider without treating it as the coding client.
 pub fn normalize_provider_id(raw: &str) -> Result<String, ProducerError> {
     let lowered = raw.trim().to_ascii_lowercase();
-    // Match documented aliases even when a hook labels them with spaces or
-    // underscores, while retaining punctuation for unknown provider IDs.
-    let compact: String = lowered
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect();
-    let value = match compact.as_str() {
-        "openai" | "openaiapi" | "apiopenaicom" => "openai".to_string(),
-        "anthropic" | "anthropicapi" | "apianthropiccom" => "anthropic".to_string(),
-        "moonshot" | "moonshotai" | "kimi" | "kimiapi" | "apimoonshotcn" => "moonshot".to_string(),
-        "deepseek" | "deepseekapi" | "apideepseekcom" => "deepseek".to_string(),
-        "google" | "googleai" | "gemini" => "google".to_string(),
-        "github" | "githubcopilot" => "github".to_string(),
-        _ => lowered.replace([' ', '_'], "-"),
-    };
+    if lowered.contains("://") || lowered.contains('/') {
+        return provider_for_endpoint(&lowered).map(str::to_string).ok_or(
+            ProducerError::InvalidField {
+                field: "provider_id",
+            },
+        );
+    }
+    // Match documented aliases in the shared provider module. Unknown values
+    // remain bounded opaque labels; no model-name inference happens here.
+    let value = provider_for_endpoint(&lowered)
+        .or_else(|| canonical_provider_alias(&lowered))
+        .map(str::to_string)
+        .unwrap_or_else(|| lowered.replace([' ', '_'], "-"));
     validate_identifier("provider_id", &value, MAX_ID_BYTES)
 }
 
@@ -319,6 +319,7 @@ fn metadata_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::{canonical_provider_alias, provider_for_endpoint};
     use crate::heartbeat::ActorType;
     use std::path::Path;
 
@@ -453,6 +454,61 @@ mod tests {
     fn model_validation_rejects_whitespace_and_bounds_payload() {
         assert!(normalize_model_id("deepseek v4").is_err());
         assert!(normalize_model_id(&"x".repeat(MAX_MODEL_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn deepseek_endpoint_identity_is_explicit_and_provider_switches_do_not_change_client() {
+        assert_eq!(
+            provider_for_endpoint("https://api.deepseek.com/v1"),
+            Some("deepseek")
+        );
+        let codex_deepseek =
+            ProducerIdentity::new("codex", Some("api.deepseek.com"), Some("deepseek-chat"))
+                .unwrap();
+        let codex_openai =
+            ProducerIdentity::new("codex", Some("api.openai.com"), Some("gpt-5")).unwrap();
+        assert_eq!(codex_deepseek.client_id, codex_openai.client_id);
+        assert_eq!(codex_deepseek.provider_id.as_deref(), Some("deepseek"));
+        assert_eq!(canonical_provider_alias("DeepSeek API"), Some("deepseek"));
+        assert_eq!(provider_for_endpoint("https://proxy.example.test/v1"), None);
+        assert!(
+            ProducerIdentity::new("codex", Some("https://proxy.example.test/v1"), None).is_err()
+        );
+    }
+
+    #[test]
+    fn deepseek_metadata_stays_under_each_host_client_and_switches_per_turn() {
+        let kilo =
+            ProducerIdentity::new("kilo-code", Some("DeepSeek"), Some("deepseek-chat")).unwrap();
+        let claude = ProducerIdentity::new(
+            "claude-code",
+            Some("https://api.deepseek.com/v1"),
+            Some("deepseek-reasoner"),
+        )
+        .unwrap();
+        let kilo_other_provider =
+            ProducerIdentity::new("kilo-code", Some("moonshot"), Some("kimi-k2")).unwrap();
+        assert_eq!(kilo.client_id, "kilo-code");
+        assert_eq!(claude.client_id, "claude-code");
+        assert_eq!(kilo.provider_id.as_deref(), Some("deepseek"));
+        // A provider/model fallback is metadata on the individual turn, not a
+        // permanent client identity or a reason to merge two different turns.
+        assert_eq!(kilo_other_provider.client_id, kilo.client_id);
+        assert_ne!(kilo_other_provider.provider_id, kilo.provider_id);
+    }
+
+    #[test]
+    fn a_process_or_api_label_never_creates_file_evidence_by_itself() {
+        let mut value = input();
+        value.source = AiEventSource::Mcp;
+        value.confidence = AiConfidence::Unknown;
+        value.lines_added = None;
+        value.lines_deleted = None;
+        let event = build_file_change_event(value).unwrap();
+        assert_eq!(event.source, AiEventSource::Mcp);
+        assert_eq!(event.confidence, AiConfidence::Unknown);
+        assert_eq!(event.lines_added, None);
+        assert_eq!(event.lines_deleted, None);
     }
 
     #[test]

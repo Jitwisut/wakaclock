@@ -46,6 +46,18 @@ test("stable IDs differ by file but remain deterministic", () => {
   assert.equal(a, stableEventId({ sessionId: "s", toolCallId: "t", entity: "/a", changeKind: "modify", occurredAt: "2026-01-01T00:00:00Z" }));
 });
 
+test("free-form event IDs are replaced with opaque stable IDs", () => {
+  const event = extractFileChange({
+    event_id: "/repo/src/main.ts prompt=do-not-forward",
+    session_id: "s3",
+    tool_call_id: "call3",
+    file_path: "/repo/src/main.ts",
+    change_kind: "modify"
+  });
+  assert.match(event?.event_id ?? "", /^ape1:[0-9a-f]{40}$/);
+  assert.doesNotMatch(event?.event_id ?? "", /repo|prompt/);
+});
+
 test("provider/model normalization rejects content-like values", () => {
   assert.equal(normalizeProvider("Moonshot AI"), "moonshot");
   assert.equal(normalizeProvider("DeepSeek"), "deepseek");

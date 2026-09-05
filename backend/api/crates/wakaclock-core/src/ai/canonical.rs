@@ -6,16 +6,15 @@
 //! fingerprint identically; a formatter pass and an agent's edit to the same
 //! file a minute apart must not collide.
 //!
-//! p6.2: a [`CanonicalActivity`] per logical edit, keyed by that fingerprint,
-//! holding the child evidence ids it was folded from (native hook / transcript /
-//! filesystem / editor) — ids and kinds only, never content.
+//! p6.2's `CanonicalActivity` (one per logical edit, keyed by this fingerprint,
+//! folding in child evidence ids) lives in `dedup.rs` — the only module that
+//! builds one — so this file stays limited to the fingerprint hash itself.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::ai::correlation_engine::EvidenceKind;
 use crate::ai::path::normalize_lexical;
 use crate::broker::BrokerChangeKind;
 
@@ -108,122 +107,70 @@ impl CanonicalFingerprint {
     }
 }
 
+/// Build the shared canonical identity used by heartbeat ingestion when the
+/// caller has only the metadata fields present on a raw heartbeat.  Transport,
+/// event id, provider and model are deliberately excluded; `ai_change_id` is
+/// accepted only as an optional logical tool identity so one multi-file tool
+/// call can keep independent files separate without making retries transport
+/// specific.
+pub fn fingerprint_for_heartbeat(
+    project: Option<&str>,
+    branch: Option<&str>,
+    entity: &str,
+    change_kind: BrokerChangeKind,
+    occurred_at_unix: i64,
+    lines_added: Option<u32>,
+    lines_deleted: Option<u32>,
+    ai_change_id: Option<&str>,
+) -> CanonicalFingerprint {
+    let workspace = PathBuf::from(format!(
+        "{}|{}",
+        project.unwrap_or("unknown"),
+        branch.unwrap_or_default()
+    ));
+    let normalized_entity = comparable_entity_tail(entity);
+    CanonicalFingerprint::v1(&CanonicalIdentity {
+        workspace: &workspace,
+        entity: &normalized_entity,
+        change_kind,
+        occurred_at_unix,
+        content_fingerprint: None,
+        line_delta: lines_added.or(lines_deleted).map(|_| {
+            (
+                lines_added.unwrap_or_default(),
+                lines_deleted.unwrap_or_default(),
+            )
+        }),
+        session_or_tool_id: ai_change_id,
+    })
+}
+
+fn comparable_entity_tail(entity: &str) -> PathBuf {
+    let normalized = entity.replace('\\', "/");
+    let mut tail = normalized
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>();
+    tail.reverse();
+    if tail.is_empty() {
+        PathBuf::from("unknown")
+    } else {
+        PathBuf::from(tail.join("/"))
+    }
+}
+
 impl std::fmt::Display for CanonicalFingerprint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-/// One child evidence pointer inside a [`CanonicalActivity`]: which producer,
-/// and that producer's own `lineage_id`. No content, no timestamps — those live
-/// on the original `CorrelationInput`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChildEvidence {
-    pub kind: EvidenceKind,
-    pub lineage_id: String,
-}
-
-/// planai2.md §6: one canonical activity per logical edit. It is keyed by the
-/// p6.1 [`CanonicalFingerprint`] and aggregates the child evidence ids that were
-/// folded into it — native hook, transcript, filesystem, editor (and any other
-/// [`EvidenceKind`]). p6.3 uses this as the single point a final heartbeat is
-/// generated from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CanonicalActivity {
-    fingerprint: CanonicalFingerprint,
-    children: Vec<ChildEvidence>,
-    /// The child whose producer evidence ranks strongest (p6.3: verified
-    /// supersedes inferred). Set by [`crate::ai::dedup::dedup`]; `None` for a
-    /// hand-assembled activity that has not been ranked.
-    #[serde(default)]
-    strongest_evidence: Option<ChildEvidence>,
-}
-
-impl CanonicalActivity {
-    pub fn new(fingerprint: CanonicalFingerprint) -> Self {
-        Self {
-            fingerprint,
-            children: Vec::new(),
-            strongest_evidence: None,
-        }
-    }
-
-    /// Fold in one child evidence pointer. Idempotent — a `(kind, lineage_id)`
-    /// pair already present is not added again. Returns `true` if it was new.
-    pub fn add_child(&mut self, kind: EvidenceKind, lineage_id: impl Into<String>) -> bool {
-        let lineage_id = lineage_id.into();
-        if self
-            .children
-            .iter()
-            .any(|c| c.kind == kind && c.lineage_id == lineage_id)
-        {
-            return false;
-        }
-        self.children.push(ChildEvidence { kind, lineage_id });
-        true
-    }
-
-    /// Builder form of [`add_child`](Self::add_child).
-    pub fn with_child(mut self, kind: EvidenceKind, lineage_id: impl Into<String>) -> Self {
-        self.add_child(kind, lineage_id);
-        self
-    }
-
-    pub fn fingerprint(&self) -> &CanonicalFingerprint {
-        &self.fingerprint
-    }
-
-    pub fn children(&self) -> &[ChildEvidence] {
-        &self.children
-    }
-
-    /// The strongest-ranked child, once [`crate::ai::dedup::dedup`] has set it.
-    pub fn strongest_evidence(&self) -> Option<&ChildEvidence> {
-        self.strongest_evidence.as_ref()
-    }
-
-    /// Record which child carries the strongest producer evidence. `child` must
-    /// already be one of this activity's children.
-    pub fn set_strongest_evidence(&mut self, child: ChildEvidence) {
-        debug_assert!(
-            self.children.contains(&child),
-            "strongest_evidence must be one of the activity's children",
-        );
-        self.strongest_evidence = Some(child);
-    }
-
-    /// Child `lineage_id`s in fold order.
-    pub fn child_lineage_ids(&self) -> Vec<&str> {
-        self.children
-            .iter()
-            .map(|c| c.lineage_id.as_str())
-            .collect()
-    }
-
-    /// Distinct producer kinds that contributed evidence, in first-seen order.
-    pub fn evidence_kinds(&self) -> Vec<EvidenceKind> {
-        let mut seen: Vec<EvidenceKind> = Vec::new();
-        for c in &self.children {
-            if !seen.contains(&c.kind) {
-                seen.push(c.kind);
-            }
-        }
-        seen
-    }
-
-    /// Merge another activity's children into this one (planai2.md §6:
-    /// "different `event_id` + same fingerprint must merge"). Panics if the
-    /// fingerprints differ — the caller must have grouped by fingerprint first.
-    pub fn merge(&mut self, other: &CanonicalActivity) {
-        assert_eq!(
-            self.fingerprint, other.fingerprint,
-            "merge requires the same canonical fingerprint",
-        );
-        for c in &other.children {
-            self.add_child(c.kind, c.lineage_id.clone());
-        }
-    }
-}
+// `ChildEvidence` / `CanonicalActivity` (multi-producer evidence folding) live
+// in `dedup.rs`, the only consumer — that keeps this file's dependency graph
+// limited to the pure fingerprint hash production code actually calls, with
+// no path to `correlation_engine`'s `EvidenceKind` ranking table.
 
 #[cfg(test)]
 mod tests {
@@ -350,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_fingerprint_bridges_absolute_and_relative_transport_metadata() {
+        let hook = fingerprint_for_heartbeat(
+            Some("wakaclock"),
+            Some("main"),
+            "/workspace/src/main.rs",
+            BrokerChangeKind::Modify,
+            104,
+            Some(3),
+            Some(1),
+            None,
+        );
+        let transcript = fingerprint_for_heartbeat(
+            Some("wakaclock"),
+            Some("main"),
+            "src/main.rs",
+            BrokerChangeKind::Modify,
+            109,
+            Some(3),
+            Some(1),
+            None,
+        );
+        assert_eq!(hook, transcript);
+        assert_eq!(hook.scheme(), FINGERPRINT_SCHEME_V1);
+    }
+
+    #[test]
     fn entity_path_is_normalised_before_hashing() {
         let plain = CanonicalIdentity {
             occurred_at_unix: 1_000_000,
@@ -363,90 +336,5 @@ mod tests {
             CanonicalFingerprint::v1(&plain),
             CanonicalFingerprint::v1(&dotted)
         );
-    }
-
-    // ---- p6.2: canonical activity aggregates child evidence ids ----------
-
-    fn fp() -> CanonicalFingerprint {
-        CanonicalFingerprint::v1(&base(Path::new("/w/src/main.rs")))
-    }
-
-    #[test]
-    fn a_canonical_activity_built_from_three_evidence_sources_lists_all_three_child_ids() {
-        let activity = CanonicalActivity::new(fp())
-            .with_child(EvidenceKind::NativeHook, "hook-evt-1")
-            .with_child(
-                EvidenceKind::CompletedTranscriptToolCall,
-                "transcript-evt-9",
-            )
-            .with_child(EvidenceKind::FilesystemObserver, "fs-evt-42");
-
-        assert_eq!(
-            activity.child_lineage_ids(),
-            vec!["hook-evt-1", "transcript-evt-9", "fs-evt-42"]
-        );
-        assert_eq!(
-            activity.evidence_kinds(),
-            vec![
-                EvidenceKind::NativeHook,
-                EvidenceKind::CompletedTranscriptToolCall,
-                EvidenceKind::FilesystemObserver,
-            ]
-        );
-        assert_eq!(activity.fingerprint(), &fp());
-    }
-
-    #[test]
-    fn folding_the_same_child_twice_is_idempotent() {
-        let mut activity = CanonicalActivity::new(fp());
-        assert!(activity.add_child(EvidenceKind::NativeHook, "hook-1"));
-        assert!(!activity.add_child(EvidenceKind::NativeHook, "hook-1"));
-        // A different lineage id from the same producer is still a new child.
-        assert!(activity.add_child(EvidenceKind::NativeHook, "hook-2"));
-        assert_eq!(activity.children().len(), 2);
-    }
-
-    #[test]
-    fn merging_two_activities_for_one_fingerprint_unions_their_children() {
-        let mut a = CanonicalActivity::new(fp())
-            .with_child(EvidenceKind::NativeHook, "hook-1")
-            .with_child(EvidenceKind::EditorInput, "editor-1");
-        let b = CanonicalActivity::new(fp())
-            .with_child(EvidenceKind::EditorInput, "editor-1") // overlap
-            .with_child(EvidenceKind::FilesystemObserver, "fs-1");
-        a.merge(&b);
-        assert_eq!(a.child_lineage_ids(), vec!["hook-1", "editor-1", "fs-1"]);
-    }
-
-    #[test]
-    #[should_panic(expected = "same canonical fingerprint")]
-    fn merging_activities_with_different_fingerprints_panics() {
-        let mut a = CanonicalActivity::new(fp());
-        let other_fp = CanonicalFingerprint::v1(&base(Path::new("/w/src/other.rs")));
-        let b = CanonicalActivity::new(other_fp);
-        a.merge(&b);
-    }
-
-    #[test]
-    fn a_canonical_activity_serializes_to_ids_and_kinds_only() {
-        let activity = CanonicalActivity::new(fp())
-            .with_child(EvidenceKind::NativeHook, "hook-1")
-            .with_child(EvidenceKind::FilesystemObserver, "fs-1");
-        let json = serde_json::to_string(&activity).unwrap();
-        for forbidden in [
-            "\"content",
-            "\"diff",
-            "\"patch",
-            "\"prompt",
-            "\"source",
-            "\"text",
-        ] {
-            assert!(
-                !json.contains(forbidden),
-                "canonical activity leaked: {json}"
-            );
-        }
-        let back: CanonicalActivity = serde_json::from_str(&json).unwrap();
-        assert_eq!(activity, back);
     }
 }

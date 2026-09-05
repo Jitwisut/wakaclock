@@ -135,7 +135,13 @@ export function extractFileChange(
     context.model
   ));
   const changeKind = kind(firstString(root.change_kind, root.changeKind, root.operation, root.kind, toolInput.operation));
-  const eventId = bounded(firstString(root.event_id, root.eventId)) ?? stableEventId({
+  // Event IDs are opaque identities, never a transport for prompts, commands,
+  // or path-bearing values. Keep the shared broker alphabet at this adapter
+  // boundary so malformed/free-form IDs remain retry-stable after hashing.
+  const suppliedEventId = bounded(firstString(root.event_id, root.eventId));
+  const eventId = suppliedEventId && /^[A-Za-z0-9._:-]+$/.test(suppliedEventId)
+    ? suppliedEventId
+    : stableEventId({
     sessionId,
     toolCallId,
     entity,

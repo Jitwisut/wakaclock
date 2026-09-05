@@ -13,8 +13,28 @@
 //! a re-run doesn't re-attribute the same edit twice; the cross-process `ai-sync.lock`
 //! plan.md 8.6 also calls for is not yet implemented (see state.rs's doc comment for
 //! why a single local writer is safe without it, just uncoordinated).
+//!
+//! Several modules from the wider universal-adapter research line
+//! (`correlation_engine`, `dedup`, `filesystem_observer`, `intake`, `pipeline`,
+//! `process_observer`, `session`, `shadow`, `shadow_corpus`, `shadow_report`,
+//! `sidecar`, `workspace`) exist on disk as reference material but are
+//! deliberately not declared here — see `plans/decision-accuracy-over-coverage.md`.
+//! `intake.rs` is the producer→correlation_engine bridge for that research line and
+//! has no other caller, so it stays excluded alongside the engine it feeds.
+//! Identity may only come from a native hook, a structured MCP event, or a completed
+//! transcript tool call; filesystem/process correlation stays a diagnostics-only
+//! research line, never a production attribution source.
+//!
+//! `canonical.rs` is declared — unlike its research-line siblings — because
+//! `fingerprint_for_heartbeat` is a real, needed dependency of the server's
+//! heartbeat dedup key (`backend/api/src/services/heartbeat.rs`) and is pure
+//! hashing over already-known metadata, never identity inference. Its
+//! multi-producer evidence-folding types (`CanonicalActivity`/`ChildEvidence`,
+//! which do need `correlation_engine::EvidenceKind`) live in `dedup.rs`
+//! instead, so `canonical.rs` itself has no path to the excluded engine.
 
 pub mod adapter;
+pub mod canonical;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -27,10 +47,12 @@ pub mod parser;
 pub mod patch;
 pub mod path;
 pub mod producer;
+pub mod provider;
 pub mod state;
 pub mod usage;
 
 pub use adapter::{AdapterManifest, AdapterRegistry, InstallStrategy};
+pub use canonical::fingerprint_for_heartbeat;
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
@@ -57,6 +79,10 @@ pub use path::{
 };
 pub use producer::{
     normalize_client_id, normalize_model_id, normalize_provider_id, PRODUCER_CONTRACT_VERSION,
+};
+pub use provider::{
+    canonical_provider_alias, is_known_provider_id, provider_aliases, provider_for_endpoint,
+    KNOWN_PROVIDER_IDS,
 };
 pub use state::AiAttributionState;
 pub use usage::{

@@ -233,6 +233,7 @@ export interface WakaclockConfigSnapshot {
     trackDebugSessions: boolean;
     trackBuildTasks: boolean;
     trackClipboardActions: boolean;
+    autoInstallAgentHooks?: boolean;
 }
 
 export interface FlushOverrides {

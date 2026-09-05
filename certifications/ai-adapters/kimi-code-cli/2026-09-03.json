@@ -1,0 +1,37 @@
+{
+  "blockers": [
+    "Kimi Code CLI executable is not installed on the certification host",
+    "live hook, restart, replay and backend inspection run is still required"
+  ],
+  "canonical_activities": 0,
+  "captured_events": 0,
+  "checked_at_utc": "2026-09-02T18:00:00Z",
+  "client_id": "kimi-code-cli",
+  "client_version": null,
+  "contract_version": "producer-v1",
+  "correlated_events": 0,
+  "delivered_events": 0,
+  "delivery_result": "not_observed",
+  "duplicate_events": 0,
+  "expires_at_utc": "2026-10-02T18:00:00Z",
+  "fingerprint_version": "caf1",
+  "live_e2e": false,
+  "model_id": null,
+  "plugin_version": "scaffold",
+  "provider_id": "moonshot",
+  "replayed_events": 0,
+  "scenario_ids": [
+    "write-file",
+    "replace-file",
+    "shell-failure",
+    "session-recovery"
+  ],
+  "schema_version": 1,
+  "status": "scaffold",
+  "tested_commit_sha": "c7e78373d8f0d3c757d6b26d8ac6de14e903829a",
+  "timezone": "Asia/Bangkok",
+  "tolerance": {
+    "delivery_loss_max": 0.0,
+    "duplicate_rate_max": 0.05
+  }
+}

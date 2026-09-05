@@ -271,11 +271,30 @@ export interface AiAdapterFreshness {
   detected: boolean;
   diagnostic_code?: null | string;
   enabled: boolean;
+  last_delivery_result?: null | string;
   last_evidence_unix?: null | number;
   pending_events?: number;
   retry_events?: number;
   transcript_lag_seconds?: null | number;
   verification: AiVerificationStatus;
+}
+
+export type AiPipelineStage =
+  | 'accepted_locally'
+  | 'adapter_installed'
+  | 'agent_detected'
+  | 'correlated'
+  | 'delivered'
+  | 'evidence_received'
+  | 'queued_for_delivery'
+  | 'rejected';
+
+export interface AiPipelineState {
+  agent: string;
+  entered_stage_at: string;
+  history: Array<{ at: string; stage: AiPipelineStage }>;
+  rejection_reason?: null | string;
+  stage: AiPipelineStage;
 }
 
 export interface AiDiagnosticsReport {
@@ -724,6 +743,9 @@ export interface HeartbeatPayload {
 
 export interface HeartbeatResponse {
   heartbeats_inserted: number;
+  /** Bulk only, and only when non-zero: payloads the server could not accept. */
+  heartbeats_rejected?: number;
+  /** `"ok"`, or `"partial"` when a bulk batch had rejections. */
   status: string;
 }
 

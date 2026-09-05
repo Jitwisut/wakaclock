@@ -1,0 +1,36 @@
+{
+  "blockers": [
+    "no supported standalone DeepSeek coding-client hook or transcript contract is available",
+    "DeepSeek API and browser activity cannot prove an editor file edit"
+  ],
+  "canonical_activities": 0,
+  "captured_events": 0,
+  "checked_at_utc": "2026-09-02T18:00:00Z",
+  "client_id": "deep-code",
+  "client_version": null,
+  "contract_version": "producer-v1",
+  "correlated_events": 0,
+  "delivered_events": 0,
+  "delivery_result": "blocked",
+  "duplicate_events": 0,
+  "expires_at_utc": "2026-10-02T18:00:00Z",
+  "fingerprint_version": "caf1",
+  "live_e2e": false,
+  "model_id": null,
+  "plugin_version": "manifest-only",
+  "provider_id": "deepseek",
+  "replayed_events": 0,
+  "scenario_ids": [
+    "standalone-client-detection",
+    "api-only-no-file-evidence",
+    "browser-copy-external-unknown"
+  ],
+  "schema_version": 1,
+  "status": "unverified",
+  "tested_commit_sha": "c7e78373d8f0d3c757d6b26d8ac6de14e903829a",
+  "timezone": "Asia/Bangkok",
+  "tolerance": {
+    "delivery_loss_max": 0.0,
+    "duplicate_rate_max": 0.05
+  }
+}

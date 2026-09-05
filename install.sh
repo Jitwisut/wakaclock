@@ -1,20 +1,26 @@
 #!/usr/bin/env sh
-# AtoAxis terminal bootstrap installer. Repeatable and consent-gated.
+# AtoAxis terminal-only bootstrap installer.
+#
+# The release host can be overridden for self-hosted deployments. The script is
+# intentionally idempotent: it installs one binary, asks the CLI to reconcile its
+# per-user broker service, and records explicit hook consent before any agent
+# configuration can be touched. No prompts, source code, or tool arguments are
+# collected by this installer.
 set -eu
 
-VERSION=${WAKACLOCK_VERSION:-latest}
-PREFIX=${WAKACLOCK_PREFIX:-${HOME}/.local/bin}
-RELEASE_BASE=${WAKACLOCK_RELEASE_BASE_URL:-https://get.atoaxis.com/releases}
-ARCHIVE_URL=${WAKACLOCK_ARCHIVE_URL:-${RELEASE_BASE}/wakaclock-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m).tar.gz}
-BINARY_OVERRIDE=${WAKACLOCK_BINARY:-}
-SETUP_YES=${WAKACLOCK_SETUP_YES:-0}
+VERSION="${WAKACLOCK_VERSION:-latest}"
+PREFIX="${WAKACLOCK_PREFIX:-${HOME}/.local/bin}"
+RELEASE_BASE="${WAKACLOCK_RELEASE_BASE_URL:-https://get.atoaxis.com/releases}"
+ARCHIVE_URL="${WAKACLOCK_ARCHIVE_URL:-${RELEASE_BASE}/wakaclock-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m).tar.gz}"
+BINARY_OVERRIDE="${WAKACLOCK_BINARY:-}"
+SETUP_YES="${WAKACLOCK_SETUP_YES:-0}"
 
 case "$(uname -s)" in
-  Darwin|Linux) ;;
+  Darwin|Linux) : ;;
   *) echo "wakaclock installer: unsupported operating system" >&2; exit 2 ;;
 esac
 
-TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/wakaclock-install.XXXXXX")
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wakaclock-install.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 mkdir -p "$PREFIX"
 
@@ -35,8 +41,10 @@ else
     fi
   fi
   tar -xzf "$ARCHIVE" -C "$TMP_DIR"
-  if [ ! -f "$TMP_DIR/wakaclock" ]; then
-    FOUND=$(find "$TMP_DIR" -type f -name wakaclock -perm -111 -print -quit)
+  if [ -f "$TMP_DIR/wakaclock" ]; then
+    :
+  else
+    FOUND="$(find "$TMP_DIR" -type f -name wakaclock -perm -111 -print -quit)"
     [ -n "$FOUND" ] || { echo "release archive does not contain wakaclock" >&2; exit 1; }
     cp "$FOUND" "$TMP_DIR/wakaclock"
   fi
@@ -45,9 +53,10 @@ fi
 chmod 0755 "$TMP_DIR/wakaclock"
 install -m 0755 "$TMP_DIR/wakaclock" "$PREFIX/wakaclock"
 
-# Only the AtoAxis-owned watcher service is reconciled. Adapter setup requires
-# explicit consent via WAKACLOCK_SETUP_YES=1.
-"$PREFIX/wakaclock" agent install --json >/dev/null
+# The per-user broker service is always reconciled; it is safe to repeat. Adapter
+# hook setup requires explicit consent via WAKACLOCK_SETUP_YES=1 — without it, the
+# CLI still detects adapters but does not write any agent-owned configuration.
+"$PREFIX/wakaclock" broker install --json >/dev/null
 if [ "$SETUP_YES" = "1" ]; then
   "$PREFIX/wakaclock" ai setup --all --yes --json >/dev/null
 else

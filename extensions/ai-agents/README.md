@@ -33,6 +33,21 @@ transcripts at their tail (only the last 24 hours are replayed on first discover
 Use `wakaclock broker status --json` to inspect process, inbox, outbound queue and
 delivery error state. `wakaclock agent status --json` remains a compatibility alias.
 
+The same setup is available without VS Code:
+
+```sh
+wakaclock ai setup --all          # configure every detected client
+wakaclock ai setup codex          # configure one client (aliases are accepted)
+wakaclock ai setup --all --yes    # explicit consent for terminal automation
+wakaclock ai setup --all --json   # machine-readable health and remediation report
+```
+
+The CLI copies this tested bundle to a versioned directory below
+`~/.wakaclock/agent-plugins/` before registering paths. Missing clients are reported
+as `not_detected`, and a service-manager failure does not prevent another adapter
+from being configured. Run `wakaclock doctor ai --json` afterward to inspect the
+actual broker and transcript state.
+
 ## Claude Code (`plugins/atoaxis-heartbeat/`)
 
 The one with real plugin-marketplace support, so installation genuinely is one command

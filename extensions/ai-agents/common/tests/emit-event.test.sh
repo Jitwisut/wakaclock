@@ -59,4 +59,12 @@ if jq -e '.event_id | contains("src/raw.ts")' "$CAPTURE" >/dev/null; then
   echo "privacy failure: path-bearing event_id reached broker" >&2
   exit 1
 fi
+FIRST_OPAQUE_ID="$(jq -r '.event_id' "$CAPTURE")"
+printf '%s' '{"client_id":"codex","event_id":"prompt:shared-call","entity":"/repo/src/other.ts","project_root":"/repo"}' \
+  | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+SECOND_OPAQUE_ID="$(jq -r '.event_id' "$CAPTURE")"
+if [ "$FIRST_OPAQUE_ID" = "$SECOND_OPAQUE_ID" ]; then
+  echo "identity failure: malformed multi-file IDs collided" >&2
+  exit 1
+fi
 echo "common emitter ok"
