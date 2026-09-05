@@ -82,27 +82,45 @@ This is backwards relative to this ADR's own definition in §1: a WakaTime
 export that positively asserted AI involvement is exactly the "Unattributed
 AI" case (`AiInferred`, `ai_agent: None`), not "Unknown". As written today:
 
-- The row's `actor_type` is `'unknown'`, so `is_ai()` is `false` for it.
-- Its `ai_lines_added`/`ai_lines_deleted` are real, non-zero values, but no
-  ClickHouse query counts them as AI lines (every AI sum requires `actor_type
-  IN ('ai_verified','ai_inferred')`).
-- Those same `ai_lines_added`/`ai_lines_deleted` get folded into
-  `unattributed_lines_added`/`_deleted` instead, by the exact `sumIf(...,
-  actor_type = 'unknown')` clauses documented safe in §3 — safe *because* they
-  assume `actor_type = 'unknown'` rows never carry real AI line evidence. This
-  row breaks that assumption.
-- It also bypasses validation entirely: `wakatime_import.rs` builds a
-  `HeartbeatRow` and inserts it directly through `HeartbeatRepository`, never
-  calling `resolve_attribution` (`heartbeat.rs:175`) — which would have
-  rejected this exact combination (`explicit == Unknown` with `ai_evidence ==
-  true` and `ambiguous_lines == false` fails the check at
-  `heartbeat.rs:207`), had it gone through that path instead.
+`is_ai_generated()` (`wakatime_import.rs:294-303`) is `true` on any of four
+independent triggers: `category == "AI Coding"`, `ai_line_changes.is_some()`,
+`ai_session.is_some()`, or a positive token count. `map_heartbeat` derives
+`ai_lines_added`/`ai_lines_deleted` from `ai_line_changes` only
+(`to_positive_u32`/`to_negative_u32`, both `None` unless that field is
+present and non-zero) and `ai_event_id` from `ai_session` only. So the actual
+effect on a given row depends on *which* trigger fired:
 
-**Effect**: historical WakaTime-imported heartbeats that were positively
-marked AI-assisted are counted today as ambiguous/unattributed activity rather
-than "Unattributed AI" — an undercount of AI, not an overcount, but still a
-concrete instance of the exact confusion D02 was written to prevent, on
-imported (not live) data.
+- The row's `actor_type` is `'unknown'` in every case, so `is_ai()` is `false`
+  for all of them — this part is unconditional and is the core of the finding:
+  per §1, a row with positive AI evidence should never read `is_ai() == false`.
+- **Only when `ai_line_changes` was present and non-zero** in the source
+  export does this row also carry real, non-zero `ai_lines_added`/
+  `ai_lines_deleted` — and only then do those values get folded into
+  `unattributed_lines_added`/`_deleted` instead of the AI bucket, by the exact
+  `sumIf(..., actor_type = 'unknown')` clauses documented safe in §3 (safe
+  *because* they assume an `'unknown'` row never carries real AI line
+  evidence — this specific row shape breaks that assumption). For the
+  `category`-only or token-only triggers, `ai_lines_added`/`_deleted` are
+  `None`, `coalesce(..., 0)` makes them `0` in the SQL, and no line count is
+  affected — only the row's own `actor_type` label is wrong.
+- **Only when `ai_session` was present** (setting `ai_event_id`) or
+  `ai_line_changes` was positive (setting `ai_lines_added`/`_deleted`) would
+  `has_ai_evidence()` (`heartbeat.rs:138-149`) actually return `true` for this
+  row's inputs. Note `ai_source: Some("observer")` (set whenever
+  `is_ai_generated`) does **not** trip `has_ai_evidence()`'s `ai_source`
+  branch, which only matches `"agent_hook"`/`"mcp"` — so `category`-only or
+  token-only rows would *not* be flagged by `resolve_attribution` even if this
+  path called it. It doesn't: `wakatime_import.rs` builds a `HeartbeatRow` and
+  inserts it directly through `HeartbeatRepository`, never calling
+  `resolve_attribution` (`heartbeat.rs:175`) for any row.
+
+**Effect**: every historical WakaTime-imported heartbeat that was positively
+marked AI-assisted reads as `actor_type: unknown` (should be `ai_inferred`)
+regardless of which signal triggered it. On top of that mislabel, the subset
+triggered via `ai_line_changes` also has its AI line counts folded into the
+unattributed bucket instead of the AI bucket. Both are undercounts of AI, not
+overcounts, but both are concrete instances of the exact confusion D02 was
+written to prevent, on imported (not live) data.
 
 **Not fixed here.** F0 is reproduction/decision-recording only (see
 [ai-coverage-progress.md](ai-coverage-progress.md)'s own rule: "เขียน code แล้ว
