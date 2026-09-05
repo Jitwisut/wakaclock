@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "contract": "canonical_attribution_decision",
+  "cases": [
+    {
+      "id": "no_evidence",
+      "input": {},
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "positive_human_keystrokes",
+      "input": { "keystrokes": 3 },
+      "expected": { "kind": "resolved", "actor_type": "human", "confidence": 1 }
+    },
+    {
+      "id": "ambiguous_editor_lines",
+      "input": { "unattributed_lines_added": 3 },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "verified_agent_hook",
+      "input": {
+        "ai_agent": "codex",
+        "known_agent_id": true,
+        "ai_source": "agent_hook",
+        "ai_confidence": "verified"
+      },
+      "expected": { "kind": "resolved", "actor_type": "ai_verified", "confidence": 1 }
+    },
+    {
+      "id": "verified_mcp",
+      "input": {
+        "ai_agent": "chatgpt-mcp",
+        "known_agent_id": true,
+        "ai_source": "mcp"
+      },
+      "expected": { "kind": "resolved", "actor_type": "ai_verified", "confidence": 0.95 }
+    },
+    {
+      "id": "verified_transcript",
+      "input": {
+        "ai_agent": "claude-code",
+        "known_agent_id": true,
+        "ai_source": "transcript",
+        "ai_confidence": "verified"
+      },
+      "expected": { "kind": "resolved", "actor_type": "ai_verified", "confidence": 1 }
+    },
+    {
+      "id": "unknown_declared_agent",
+      "input": {
+        "ai_agent": "verify-declared",
+        "known_agent_id": false,
+        "ai_source": "agent_hook",
+        "ai_confidence": "verified"
+      },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "unverified_agent_name",
+      "input": {
+        "ai_agent": "codex",
+        "known_agent_id": true,
+        "ai_confidence": "correlated"
+      },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "legacy_boolean_only",
+      "input": { "legacy_is_ai_generated": true },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "explicit_legacy_inferred",
+      "input": { "explicit_actor_type": "ai_inferred" },
+      "expected": { "kind": "resolved", "actor_type": "ai_inferred", "confidence": 0.6 }
+    },
+    {
+      "id": "explicit_unknown_ambiguous_editor",
+      "input": {
+        "explicit_actor_type": "unknown",
+        "unattributed_lines_added": 1,
+        "keystrokes": 2
+      },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "ai_event_without_named_identity",
+      "input": { "ai_event_id": "event-1" },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "invalid_confidence",
+      "input": { "explicit_actor_type": "human", "explicit_confidence": 1.1 },
+      "expected": { "kind": "rejected" }
+    },
+    {
+      "id": "conflicting_ai_and_human_evidence",
+      "input": { "ai_agent": "codex", "human_lines_added": 1 },
+      "expected": { "kind": "rejected" }
+    },
+    {
+      "id": "explicit_human_with_legacy_ai",
+      "input": { "explicit_actor_type": "human", "legacy_is_ai_generated": true },
+      "expected": { "kind": "rejected" }
+    }
+  ]
+}

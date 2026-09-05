@@ -35,6 +35,7 @@ certification are complete.
 
 | Task | Status | Evidence / remaining caveat |
 | --- | --- | --- |
+| F1-01 pure attribution decision + conformance fixture | in_progress | [docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md](../docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md) — versioned JSON truth table is exercised by the Rust resolver and a pure VS Code mirror. API `payload_to_heartbeat` still has a separate compatibility mapping and must be migrated before client/server conformance is claimed. |
 | F1-03 sidecar version/sequence/resume | implemented | [docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md](../docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md) — broker SQLite cursor allocates a durable opaque stream and monotonic sequence; retries reuse the event mapping; VS Code reads bounded byte ranges, handles partial lines and rotation, skips future schemas, and persists pending/consumed metadata across extension restart. Focused transport tests pass. F1-10 crash/concurrency integration and the downstream reconciliation work remain. |
 | F1-05 canonical IDs/aliases | in_progress | `ai/revision.rs` enforces direct tool-event/entity or content-version/entity proof; `AiAttributionState::record_event_alias` persists one-hop aliases and rejects session-only/time-only guesses. Server alias storage and producer wiring remain. |
 | F1-06 revision storage/read semantics | in_progress | `attribution_revisions` SQLite table, idempotent payload-hash append, full-value correction rows, max-revision read, and retention pruning are implemented and tested. The ClickHouse `heartbeats`/`heartbeats_incoming` schemas and `HeartbeatRow` now carry additive `revision` (default `0`), including reprocess reads; correction writers, canonical-winner projections, and client revision input remain. |
@@ -53,6 +54,15 @@ or replay ownership evidence. The full evidence and test matrix is in
 This slice intentionally leaves attribution policy unchanged. The unmatched
 `human` fallback, mixed-batch split, late correction, canonical revision
 projection, and rollout control remain owned by later F1 tasks.
+
+### F1-01a attribution decision slice
+
+The next F1 slice adds the shared `decision-v1` fixture and pure Rust/TypeScript
+implementations for canonical actor resolution. It deliberately does not wire
+the server adapter yet: `payload_to_heartbeat` still contains a separate legacy
+mapping that must be migrated with explicit old-client rejection semantics.
+Until that server work lands, F1-01 remains `in_progress` and this fixture is
+conformance evidence rather than a claim that all production boundaries agree.
 
 ## Codex Desktop detection repair (2026-09-05)
 
@@ -78,9 +88,10 @@ attribution.
 
 ## Gates run locally for what's implemented so far
 
-- `cargo test -p wakaclock-core` (backend/api) — 207 passed, including the
-  revision/alias/retention ledger tests and the invariant that corrections cannot
-  add measured time or line totals.
+- `cargo test -p wakaclock-core` (backend/api) — 207 unit tests plus 1 shared
+  attribution conformance integration test passed, including the revision/
+  alias/retention ledger tests and the invariant that corrections cannot add
+  measured time or line totals.
 - `cargo test -p wakaclock-cli --bin wakaclock` (backend/api) — 40 passed.
 - `cargo test -p wakaclock-cli --test broker_process` (backend/api) — 6 passed,
   1 ignored. The ignored F0 doctor reproducer still intentionally fails with
@@ -88,9 +99,12 @@ attribution.
   when run explicitly with `--ignored`; a sandboxed run that could not bind
   localhost is an environment limitation, not the recorded result.
 - `bash extensions/ai-agents/common/tests/emit-event.test.sh` — passed.
-- `npm test` (extensions/vscode) — 100 passed, 3 expected failures (unmatched,
+- `npm test` (extensions/vscode) — 101 passed, 3 expected failures (unmatched,
   delayed-sidecar, and mixed human+AI F0-02 reproducers via `it.fails`).
 - `npm run lint` (extensions/vscode) — passed.
+- `cargo test -p wakaclock-server handlers::v1::heartbeats` (backend/api) — 5
+  handler tests passed. These are existing compatibility tests; the server
+  resolver migration is intentionally still open under F1-01/F1-07.
 - `npm run validate` (frontend/app) — **not green**, but confirmed pre-existing
   on `main` before this branch (reproduced against commit `98e2455`); unrelated
   to AI coverage, flagged separately, not fixed here.
