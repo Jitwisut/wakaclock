@@ -83,4 +83,75 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
       expect(result.attribution).toBe("unattributed");
     }
   );
+
+  it.fails(
+    "a sidecar that arrives after the editor flush is retained for late reconciliation",
+    async () => {
+      const entity = "/project/delayed.ts";
+      const editorTimeMs = 100_000;
+      const store = new AiAttributionStore(homeDir);
+
+      // The editor flushes before the producer has appended its sidecar event. F0's
+      // expected contract is to keep this observation pending/unattributed so a
+      // later exact event can revise it; the current store has no pending ledger and
+      // immediately calls it human.
+      const initial = await store.classify(entity, editorTimeMs, 3, 1);
+
+      const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          event_id: "delayed-event",
+          entity,
+          time: editorTimeMs / 1000,
+          lines_added: 3,
+          lines_deleted: 1
+        }) + "\n"
+      );
+
+      const late = await store.classify(entity, editorTimeMs, 3, 1);
+      expect({ initial: initial.attribution, late: late.attribution }).toEqual({
+        initial: "unattributed",
+        late: "ai"
+      });
+    }
+  );
+
+  it.fails(
+    "a mixed human+AI editor batch is split by change ownership instead of one scalar verdict",
+    async () => {
+      const entity = "/project/mixed.ts";
+      const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          event_id: "mixed-ai-event",
+          entity,
+          time: 200,
+          lines_added: 4,
+          lines_deleted: 0
+        }) + "\n"
+      );
+
+      const result = await new AiAttributionStore(homeDir).classify(
+        entity,
+        200_000,
+        10,
+        0
+      );
+      const actual =
+        result.attribution === "ai"
+          ? { ai_added: 10, human_added: 0, unattributed_added: 0 }
+          : result.attribution === "human"
+            ? { ai_added: 0, human_added: 10, unattributed_added: 0 }
+            : { ai_added: 0, human_added: 0, unattributed_added: 10 };
+
+      // Four lines have direct AI evidence and six are human editor input. The
+      // current batch classifier has no per-change ownership model, so it cannot
+      // produce this expected split and falls back to one unattributed verdict.
+      expect(actual).toEqual({ ai_added: 4, human_added: 6, unattributed_added: 0 });
+    }
+  );
 });
