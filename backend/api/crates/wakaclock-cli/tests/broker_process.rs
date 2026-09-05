@@ -82,6 +82,7 @@ fn event(id: &str) -> BrokerEventV1 {
         transport: Some("test".to_string()),
         tool: Some("test".to_string()),
         tool_event_id: Some("tool-process".to_string()),
+        editor: None,
     }
 }
 

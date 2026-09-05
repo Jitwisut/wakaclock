@@ -248,6 +248,7 @@ pub fn build_file_change_event(input: ProducerFileChange) -> Result<BrokerEventV
         transport,
         tool,
         tool_event_id: tool_call_id,
+        editor: None,
     };
     event
         .normalize()

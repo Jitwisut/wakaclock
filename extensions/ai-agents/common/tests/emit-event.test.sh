@@ -67,4 +67,15 @@ if [ "$FIRST_OPAQUE_ID" = "$SECOND_OPAQUE_ID" ]; then
   echo "identity failure: malformed multi-file IDs collided" >&2
   exit 1
 fi
+# The editor field is self-declared via env var at hook-fire time, not detected —
+# WAKACLOCK_EDITOR wins over TERM_PROGRAM, and neither being set means null (the
+# CLI/daemon decides the fallback later, not this boundary).
+printf '%s' '{"client_id":"claude-code","entity":"/repo/src/declared.ts","project_root":"/repo"}' \
+  | WAKACLOCK_EDITOR=vscode TERM_PROGRAM=Apple_Terminal ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+grep -q '"editor":"vscode"' "$CAPTURE"
+
+printf '%s' '{"client_id":"claude-code","entity":"/repo/src/undeclared.ts","project_root":"/repo"}' \
+  | env -u WAKACLOCK_EDITOR -u TERM_PROGRAM ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+grep -q '"editor":null' "$CAPTURE"
+
 echo "common emitter ok"

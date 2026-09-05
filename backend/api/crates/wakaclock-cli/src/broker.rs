@@ -91,6 +91,10 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         transport: None,
         tool: None,
         tool_event_id: None,
+        // Transcript discovery is async/replayed, minutes or longer after the edit, so
+        // there is no live env to declare an editor from — let `build_ai_heartbeat`'s
+        // fallback (env, else agent name) decide when this is eventually processed.
+        editor: None,
     }
 }
 
@@ -339,6 +343,17 @@ async fn process_record(
         confidence: event.confidence.clone(),
     };
     let mut heartbeat = crate::build_ai_heartbeat(config, &ai_event, active_seconds);
+    // The hook declared its own editor context (env var, captured at fire time) when
+    // one exists — that beats `build_ai_heartbeat`'s own env/agent-name fallback,
+    // which only sees *this* daemon process's (editor-less) environment.
+    if let Some(editor) = event
+        .editor
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        heartbeat.editor = editor.to_string();
+    }
     heartbeat.heartbeat_id = Some(event.heartbeat_id());
     heartbeat.ai_change_id = event.tool_event_id.clone();
     heartbeat.actor_type = event.actor_type.unwrap_or(ActorType::Unknown);
@@ -970,6 +985,7 @@ mod tests {
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),
             tool_event_id: Some("tool".to_string()),
+            editor: None,
         }
     }
 

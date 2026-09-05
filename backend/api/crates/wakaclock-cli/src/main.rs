@@ -648,6 +648,11 @@ struct GenericAiEventInput {
     /// Old path for a one-to-one inferred rename. No file content is retained.
     #[serde(default)]
     previous_entity: Option<PathBuf>,
+    /// Editor the producer declared itself as running inside (e.g. `vscode`), read
+    /// from `WAKACLOCK_EDITOR`/`TERM_PROGRAM` by the hook script at fire time. `None`
+    /// means the producer had no editor context — an agent host that isn't an editor.
+    #[serde(default)]
+    editor: Option<String>,
 }
 
 /// Lifecycle metadata emitted by SessionStart/SessionEnd hooks. This is a local
@@ -814,6 +819,7 @@ impl LegacyAiEventInput {
             tool_event_id: self.tool_event_id,
             change_kind: self.change_kind,
             previous_entity: self.previous_entity,
+            editor: None,
         })
     }
 }
@@ -3696,6 +3702,7 @@ fn tool_change_input(
         tool_event_id: Some(before.tool_event_id.clone()),
         change_kind: Some(change.kind.as_str().to_string()),
         previous_entity: change.previous_entity.clone(),
+        editor: None,
     }
 }
 
@@ -3947,6 +3954,7 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         transport: input.transport.clone(),
         tool: input.tool.clone(),
         tool_event_id: input.tool_event_id.clone(),
+        editor: input.editor.clone(),
     })
 }
 
@@ -4037,6 +4045,11 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         transport: Some("cli_compat".to_string()),
         tool: None,
         tool_event_id: heartbeat.ai_change_id.clone(),
+        // `heartbeat.editor` was already set by `build_heartbeat`'s `detect_editor()`
+        // in this same process — a real declaration unless it's just that call's own
+        // generic fallback, which carries no information worth forwarding.
+        editor: Some(heartbeat.editor.clone())
+            .filter(|value| !value.trim().is_empty() && value != GENERIC_EDITOR_FALLBACK),
     })
 }
 
@@ -4091,10 +4104,11 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
 }
 
 /// Builds an AI-attributed heartbeat directly from a parsed transcript event, with no
-/// editor buffer to correlate against (see `AiAction::Sync`'s doc comment). `ai_source`
-/// is always `"transcript"` here — never `"agent_hook"` — because the value must
-/// describe how *this* event was obtained, not how some other integration might have
-/// reported the same file.
+/// editor buffer to correlate against (see `AiAction::Sync`'s doc comment) — `editor`
+/// is therefore best-effort via `detect_editor()` (the same env-var heuristic ordinary
+/// heartbeats use), not a real correlation. `ai_source` is always `"transcript"` here —
+/// never `"agent_hook"` — because the value must describe how *this* event was
+/// obtained, not how some other integration might have reported the same file.
 pub(crate) fn build_ai_heartbeat(
     config: &Config,
     event: &AiEditEvent,
@@ -4122,7 +4136,12 @@ pub(crate) fn build_ai_heartbeat(
         .ok()
         .and_then(|value| value.into_string().ok())
         .unwrap_or_else(|| "unknown".to_string());
-    heartbeat.editor = "wakaclock-ai-sync".to_string();
+    // No editor buffer to correlate against here — prefer whatever editor this
+    // process's own environment declares (see `detect_editor_env`), but when there is
+    // none, name the actual source honestly (the AI agent itself) rather than a
+    // meaningless generic fallback: an agent host that isn't an editor (a headless
+    // hook runner, a desktop AI app) simply has no editor to report.
+    heartbeat.editor = detect_editor_env().unwrap_or_else(|| event.agent.clone());
     heartbeat.heartbeat_id = Some(format!("ai:{}", event.event_id));
     heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
     heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
@@ -4520,13 +4539,25 @@ fn identity_line(config: &Config) -> String {
     }
 }
 
-fn detect_editor() -> String {
+/// Generic fallback when no client (editor or AI agent host) declared itself. Kept as
+/// a named constant, not just a literal, so `broker_event_from_heartbeat` can compare
+/// against exactly the value `detect_editor()` produces when nothing was declared.
+const GENERIC_EDITOR_FALLBACK: &str = "wakaclock-cli";
+
+/// Self-declared editor from this process's own environment — `WAKACLOCK_EDITOR` is
+/// set by a client that spawns the CLI on its own behalf (e.g. the VS Code extension);
+/// `TERM_PROGRAM`/`EDITOR` cover an editor's integrated terminal or a shell default.
+/// Returns `None` when nothing was declared, rather than guessing.
+fn detect_editor_env() -> Option<String> {
     std::env::var("WAKACLOCK_EDITOR")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("TERM_PROGRAM").ok())
         .or_else(|| std::env::var("EDITOR").ok())
-        .unwrap_or_else(|| "wakaclock-cli".to_string())
+}
+
+fn detect_editor() -> String {
+    detect_editor_env().unwrap_or_else(|| GENERIC_EDITOR_FALLBACK.to_string())
 }
 
 fn format_duration(seconds: f64) -> String {
@@ -4620,6 +4651,7 @@ mod generic_ai_ingress_tests {
             tool_event_id: None,
             change_kind: None,
             previous_entity: None,
+            editor: None,
         }
     }
 

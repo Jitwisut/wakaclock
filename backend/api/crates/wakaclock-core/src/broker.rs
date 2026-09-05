@@ -172,6 +172,7 @@ pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
     "transport",
     "tool",
     "tool_event_id",
+    "editor",
 ];
 
 /// Field names that carry model or user content and must never reach the broker.
@@ -312,6 +313,12 @@ pub struct BrokerEventV1 {
     pub tool: Option<String>,
     #[serde(default)]
     pub tool_event_id: Option<String>,
+    /// Editor the producer declared itself as running inside (e.g. `vscode`), captured
+    /// at hook-fire time from `WAKACLOCK_EDITOR`/`TERM_PROGRAM`. This is self-declaration
+    /// carried as data across the queue boundary, not a later OS/focus guess — `None`
+    /// means the producer had no editor context to declare (a headless agent host).
+    #[serde(default)]
+    pub editor: Option<String>,
 }
 
 /// planai2.md Phase 2 (p2.1): producer priority. When several broker events are
@@ -1307,6 +1314,7 @@ mod tests {
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),
             tool_event_id: Some("tool-1".to_string()),
+            editor: None,
         }
     }
 

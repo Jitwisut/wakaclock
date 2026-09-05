@@ -43,6 +43,11 @@ TOOL_NAME="$(read_field '.tool // .tool_name')"
 ENTITY="$(read_field '.entity // .file_path // .path')"
 PROJECT_ROOT="$(read_field '.project_root // .workspace_root // .cwd')"
 PREVIOUS_ENTITY="$(read_field '.previous_entity // .old_path')"
+# Self-declaration, not detection: whichever editor spawned *this* hook's parent
+# process said so via its own env var (the VS Code extension sets WAKACLOCK_EDITOR;
+# an editor's integrated terminal sets TERM_PROGRAM). Captured here, at hook-fire
+# time, because it is gone by the time the daemon dequeues this event later.
+EDITOR_ID="${WAKACLOCK_EDITOR:-${TERM_PROGRAM:-}}"
 OCCURRED_AT="$(read_field '.occurred_at // .timestamp')"
 OCCURRED_AT="${OCCURRED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 SOURCE="$(read_field '.source')"
@@ -81,7 +86,7 @@ safe_metadata_value() {
 }
 for metadata_value in "$CLIENT_ID" "$PROVIDER_ID" "$MODEL_ID" "$SESSION_ID" \
   "$TOOL_CALL_ID" "$TOOL_NAME" "$ENTITY" "$PROJECT_ROOT" "$PREVIOUS_ENTITY" \
-  "$OCCURRED_AT" "$SOURCE" "$CONFIDENCE" "$TRANSPORT" "$CHANGE_KIND"; do
+  "$OCCURRED_AT" "$SOURCE" "$CONFIDENCE" "$TRANSPORT" "$CHANGE_KIND" "$EDITOR_ID"; do
   safe_metadata_value "$metadata_value" || exit 0
 done
 
@@ -182,10 +187,11 @@ jq -cn \
   --arg transport "$TRANSPORT" \
   --arg tool "$TOOL_NAME" \
   --arg tool_event_id "$TOOL_EVENT_ID" \
+  --arg editor "$EDITOR_ID" \
   --argjson lines_added "$LINES_ADDED" \
   --argjson lines_deleted "$LINES_DELETED" \
   --argjson active_seconds "$ACTIVE_SECONDS" \
-  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end)}' \
+  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end),editor:(if $editor=="" then null else $editor end)}' \
   | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
 
 # Hooks must always fail open so telemetry cannot block an agent's edit.

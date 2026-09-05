@@ -1101,6 +1101,7 @@ mod tests {
                     transport: Some("native_plugin".to_string()),
                     tool: Some("apply_patch".to_string()),
                     tool_event_id: Some("t1".to_string()),
+                    editor: None,
                 };
                 let normalized = event.normalize().expect("every adapter's event normalizes");
                 let json = serde_json::to_string(&normalized).unwrap();
