@@ -35,7 +35,7 @@ certification are complete.
 
 | Task | Status | Evidence / remaining caveat |
 | --- | --- | --- |
-| F1-01 pure attribution decision + conformance fixture | implemented | [docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md](../docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md) — versioned JSON truth table passes the Rust resolver, pure VS Code mirror, and v1 heartbeat ingestion adapter. Read-side actor reconstruction and analytics projection alignment remain follow-up work under F1-07/F1-08. |
+| F1-01 pure attribution decision + conformance fixture | implemented | [docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md](../docs/ai-coverage-f1-01a-attribution-conformance-2026-09-05.md) — versioned JSON truth table passes the Rust resolver, pure VS Code mirror, v1 heartbeat ingestion adapter, and the canonical v1 history projection. Revision winner selection and remaining analytics surfaces remain follow-up work under F1-07/F1-08. |
 | F1-03 sidecar version/sequence/resume | implemented | [docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md](../docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md) — broker SQLite cursor allocates a durable opaque stream and monotonic sequence; retries reuse the event mapping; VS Code reads bounded byte ranges, handles partial lines and rotation, skips future schemas, and persists pending/consumed metadata across extension restart. Focused transport tests pass. F1-10 crash/concurrency integration and the downstream reconciliation work remain. |
 | F1-05 canonical IDs/aliases | in_progress | `ai/revision.rs` enforces direct tool-event/entity or content-version/entity proof; `AiAttributionState::record_event_alias` persists one-hop aliases and rejects session-only/time-only guesses. Server alias storage and producer wiring remain. |
 | F1-06 revision storage/read semantics | in_progress | `attribution_revisions` SQLite table, idempotent payload-hash append, full-value correction rows, max-revision read, and retention pruning are implemented and tested. The ClickHouse `heartbeats`/`heartbeats_incoming` schemas and `HeartbeatRow` now carry additive `revision` (default `0`), including reprocess reads; correction writers, canonical-winner projections, and client revision input remain. |
@@ -62,9 +62,21 @@ tests and the v1 heartbeat ingestion adapter. The adapter accepts legacy actor
 aliases, validates canonical `actor_confidence` (while preserving the older
 `attribution_confidence` field), returns HTTP 400 for contradictory evidence,
 and derives `actor_type`, `actor_confidence`, and `is_ai_generated` from one
-resolution. The history serializer and analytics read projections still need
-the same canonical winner semantics before F1-07/F1-08 can close the full
-server boundary.
+resolution. The v1 history serializer now uses the stored actor as its
+canonical read value and the AI stats SQL no longer promotes `unknown` from
+legacy evidence. Revision winner selection and the remaining analytics read
+surfaces still belong to F1-07/F1-08.
+
+### F1-01b canonical read projection slice
+
+The v1 heartbeat list response now projects all three compatibility fields from
+one actor decision. Invalid verified identity is downgraded and scrubbed, while
+explicit human/unknown/inferred buckets are preserved; an additive
+`actor_confidence` field is exposed to the frontend type. The shared AI stats
+actor expression applies the same downgrade rule and never promotes an
+explicit unknown row. This closes the basic transport/read boundary without
+claiming revision winner selection, WakaTime import repair, or the other
+analytics services that still need F1-07/F1-08 work.
 
 ## Codex Desktop detection repair (2026-09-05)
 
@@ -104,11 +116,11 @@ attribution.
 - `npm test` (extensions/vscode) — 101 passed, 3 expected failures (unmatched,
   delayed-sidecar, and mixed human+AI F0-02 reproducers via `it.fails`).
 - `npm run lint` (extensions/vscode) — passed.
-- `cargo test -p wakaclock-server handlers::v1::heartbeats::tests` (backend/api) — 8
-  handler tests passed, including every shared attribution fixture case and
-  validation of the normalized heartbeat invariant.
-- `cargo test -p wakaclock-server` (backend/api) — 170 passed, 7 ignored
-  database-backed tests.
+- `cargo test -p wakaclock-server handlers::v1::heartbeats::tests` (backend/api) — 10
+  handler tests passed, including every shared attribution fixture case,
+  projection cases, and validation of the normalized heartbeat invariant.
+- `cargo test -p wakaclock-server` (backend/api) — 175 passed, 7 ignored
+  database-backed tests without ClickHouse/PostgreSQL configuration.
 - `npm run validate` (frontend/app) — **not green**, but confirmed pre-existing
   on `main` before this branch (reproduced against commit `98e2455`); unrelated
   to AI coverage, flagged separately, not fixed here.

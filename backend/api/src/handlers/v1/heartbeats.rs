@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
+use crate::model::heartbeat::HeartbeatRow;
 use wakaclock_core::ai::is_known_agent_id;
 use wakaclock_core::heartbeat::{
     resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
@@ -174,6 +175,10 @@ pub struct HeartbeatItem {
     pub activity_segments: Vec<ActivitySegment>,
     /// Compatibility actor label retained for old API consumers.
     pub actor_type: String,
+    /// Confidence for the projected actor state. This is additive so older clients
+    /// can continue to consume the response while newer clients stop inferring it
+    /// from the legacy boolean and string fields.
+    pub actor_confidence: f32,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -336,41 +341,40 @@ pub async fn list(
     let items: Vec<HeartbeatItem> = rows
         .into_iter()
         .map(|mut r| {
-            // Historical rows may predate the accuracy-first boundary. Apply the
-            // same source/confidence check at read time so an old inferred row can
-            // never reveal an agent name through the API.
-            let verified_identity = r.is_ai_generated
-                && r.ai_agent
-                    .as_deref()
-                    .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
-                && r.ai_confidence
-                    .as_deref()
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
-                && r.ai_source.as_deref().is_some_and(|value| {
-                    matches!(
-                        value.trim().to_ascii_lowercase().as_str(),
-                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                    )
-                });
-            if !verified_identity {
-                if r.is_ai_generated {
+            // The stored actor enum is canonical for reads. Legacy booleans and
+            // metadata are used only to validate a verified identity or to safely
+            // downgrade a malformed verified row; they never promote `unknown`.
+            let stored_actor_type = r.actor_type.parse().unwrap_or_default();
+            let verified_identity = row_has_verified_identity(&r);
+            let projection = project_history_attribution(
+                stored_actor_type,
+                r.actor_confidence,
+                row_has_ai_evidence(&r),
+                verified_identity,
+                r.ai_source.as_deref(),
+                r.ai_confidence.as_deref(),
+            );
+
+            // Only a verified actor may expose identity. Inferred rows retain a
+            // useful compatibility marker without leaking an arbitrary label;
+            // human/unknown rows do not carry stale AI labels into the response.
+            match projection.actor_type {
+                ActorType::AiVerified => {}
+                ActorType::AiInferred => {
+                    r.ai_agent = None;
+                    r.ai_provider = None;
+                    r.ai_model = None;
                     r.ai_confidence = Some("inferred".to_string());
                     r.ai_source = Some("observer".to_string());
                 }
-                r.ai_agent = None;
-                r.ai_provider = None;
-                r.ai_model = None;
-            }
-            let actor_type = if r.is_ai_generated {
-                if verified_identity {
-                    "ai_verified"
-                } else {
-                    "ai_inferred"
+                ActorType::Human | ActorType::Unknown => {
+                    r.ai_agent = None;
+                    r.ai_provider = None;
+                    r.ai_model = None;
+                    r.ai_confidence = None;
+                    r.ai_source = None;
                 }
-            } else {
-                "unknown"
             }
-            .to_string();
             HeartbeatItem {
                 // History is still owner-scoped, but the response must not become a path
                 // exfiltration endpoint. Keep project-relative names where possible and reduce
@@ -395,7 +399,7 @@ pub async fn list(
                 active_seconds: r.active_seconds,
                 heartbeat_id: r.heartbeat_id,
                 activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
-                is_ai_generated: r.is_ai_generated,
+                is_ai_generated: projection.is_ai_generated,
                 ai_agent: r.ai_agent,
                 ai_provider: r.ai_provider,
                 ai_model: r.ai_model,
@@ -411,7 +415,8 @@ pub async fn list(
                 editor: r.editor,
                 operating_system: r.operating_system,
                 machine: r.machine,
-                actor_type,
+                actor_type: projection.actor_type.as_str().to_string(),
+                actor_confidence: projection.actor_confidence,
             }
         })
         .collect();
@@ -444,6 +449,94 @@ fn sanitize_entity(entity: &str) -> String {
     } else {
         sanitized
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HistoryAttributionProjection {
+    actor_type: ActorType,
+    actor_confidence: f32,
+    is_ai_generated: bool,
+}
+
+/// Project a stored heartbeat into the public history contract.
+///
+/// `actor_type` is intentionally authoritative here. The legacy AI fields are
+/// evidence for validating a verified identity and for downgrading a spoofed
+/// `ai_verified` row, but they cannot turn an explicit `unknown` row into AI.
+fn project_history_attribution(
+    stored_actor_type: ActorType,
+    stored_confidence: f32,
+    has_ai_evidence: bool,
+    verified_identity: bool,
+    ai_source: Option<&str>,
+    ai_confidence: Option<&str>,
+) -> HistoryAttributionProjection {
+    let actor_type = match stored_actor_type {
+        ActorType::AiVerified if verified_identity => ActorType::AiVerified,
+        ActorType::AiVerified if has_ai_evidence => ActorType::AiInferred,
+        ActorType::AiVerified => ActorType::Unknown,
+        actor_type => actor_type,
+    };
+
+    // A confidence value belongs to the projected actor. Do not carry a verified
+    // value across a downgrade, and treat zero/non-finite legacy defaults as
+    // missing for actors that have positive confidence by definition.
+    let stored_confidence_is_usable = stored_actor_type == actor_type
+        && stored_confidence.is_finite()
+        && (0.0..=1.0).contains(&stored_confidence)
+        && (stored_confidence > 0.0 || actor_type == ActorType::Unknown);
+    let actor_confidence = if actor_type == ActorType::Unknown {
+        0.0
+    } else if stored_confidence_is_usable {
+        stored_confidence
+    } else {
+        actor_type.default_confidence(ai_source, ai_confidence)
+    };
+
+    HistoryAttributionProjection {
+        actor_type,
+        actor_confidence,
+        is_ai_generated: actor_type.is_ai(),
+    }
+}
+
+fn row_has_verified_identity(row: &HeartbeatRow) -> bool {
+    row.is_ai_generated
+        && row
+            .ai_agent
+            .as_deref()
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
+        && row
+            .ai_confidence
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
+        && row.ai_source.as_deref().is_some_and(is_verified_ai_source)
+}
+
+fn row_has_ai_evidence(row: &HeartbeatRow) -> bool {
+    row.is_ai_generated
+        || row.ai_agent.as_deref().is_some_and(has_non_sentinel_value)
+        || row
+            .ai_event_id
+            .as_deref()
+            .is_some_and(has_non_sentinel_value)
+        || row.ai_lines_added.is_some_and(|value| value > 0)
+        || row.ai_lines_deleted.is_some_and(|value| value > 0)
+        || row.ai_source.as_deref().is_some_and(is_verified_ai_source)
+}
+
+fn has_non_sentinel_value(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "unknown" | "<unknown>" | "null" | "undefined"
+    )
+}
+
+fn is_verified_ai_source(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+    )
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -700,9 +793,13 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 
 #[cfg(test)]
 mod tests {
-    use super::{payload_to_heartbeat, sanitize_entity, HeartbeatPayload};
+    use super::{
+        payload_to_heartbeat, project_history_attribution, sanitize_entity, HeartbeatItem,
+        HeartbeatPayload,
+    };
     use serde_json::{json, Value};
     use uuid::Uuid;
+    use wakaclock_core::heartbeat::ActorType;
 
     const DECISION_FIXTURE: &str =
         include_str!("../../../../../fixtures/ai-attribution/decision-v1.json");
@@ -856,6 +953,158 @@ mod tests {
 
         let error = payload_to_heartbeat(payload, Uuid::nil()).unwrap_err();
         assert!(error.contains("conflicts"));
+    }
+
+    #[test]
+    fn history_projection_keeps_canonical_actor_buckets() {
+        struct Case {
+            name: &'static str,
+            stored_actor_type: ActorType,
+            stored_confidence: f32,
+            has_ai_evidence: bool,
+            verified_identity: bool,
+            expected_actor_type: ActorType,
+            expected_confidence: f32,
+            expected_is_ai_generated: bool,
+        }
+
+        let cases = [
+            Case {
+                name: "unknown does not get promoted by stale AI evidence",
+                stored_actor_type: ActorType::Unknown,
+                stored_confidence: 0.0,
+                has_ai_evidence: true,
+                verified_identity: true,
+                expected_actor_type: ActorType::Unknown,
+                expected_confidence: 0.0,
+                expected_is_ai_generated: false,
+            },
+            Case {
+                name: "verified identity survives",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 0.95,
+                has_ai_evidence: true,
+                verified_identity: true,
+                expected_actor_type: ActorType::AiVerified,
+                expected_confidence: 0.95,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "spoofed verified identity downgrades to inferred",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 1.0,
+                has_ai_evidence: true,
+                verified_identity: false,
+                expected_actor_type: ActorType::AiInferred,
+                expected_confidence: 0.6,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "verified row without evidence becomes unknown",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 1.0,
+                has_ai_evidence: false,
+                verified_identity: false,
+                expected_actor_type: ActorType::Unknown,
+                expected_confidence: 0.0,
+                expected_is_ai_generated: false,
+            },
+            Case {
+                name: "stored inferred actor remains inferred",
+                stored_actor_type: ActorType::AiInferred,
+                stored_confidence: 0.0,
+                has_ai_evidence: false,
+                verified_identity: false,
+                expected_actor_type: ActorType::AiInferred,
+                expected_confidence: 0.6,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "stored human actor gets its legacy default confidence",
+                stored_actor_type: ActorType::Human,
+                stored_confidence: 0.0,
+                has_ai_evidence: true,
+                verified_identity: false,
+                expected_actor_type: ActorType::Human,
+                expected_confidence: 1.0,
+                expected_is_ai_generated: false,
+            },
+        ];
+
+        for case in cases {
+            let projection = project_history_attribution(
+                case.stored_actor_type,
+                case.stored_confidence,
+                case.has_ai_evidence,
+                case.verified_identity,
+                Some("mcp"),
+                Some("verified"),
+            );
+            assert_eq!(
+                projection.actor_type, case.expected_actor_type,
+                "actor for {}",
+                case.name
+            );
+            assert_eq!(
+                projection.actor_confidence, case.expected_confidence,
+                "confidence for {}",
+                case.name
+            );
+            assert_eq!(
+                projection.is_ai_generated, case.expected_is_ai_generated,
+                "legacy boolean for {}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn history_item_serializes_projected_actor_confidence() {
+        let item = HeartbeatItem {
+            entity: "src/main.rs".to_string(),
+            entity_type: "file".to_string(),
+            time: 1_700_000_000.0,
+            project: None,
+            project_id: None,
+            branch: None,
+            head_revision: None,
+            repository_id: None,
+            language: Some("Rust".to_string()),
+            is_write: true,
+            category: "coding".to_string(),
+            lines: None,
+            line_number: None,
+            cursor_position: None,
+            dependencies: Vec::new(),
+            ast_language: None,
+            ast_confidence: None,
+            active_seconds: None,
+            is_ai_generated: false,
+            ai_agent: None,
+            ai_provider: None,
+            ai_model: None,
+            ai_source: None,
+            ai_confidence: None,
+            ai_event_id: None,
+            ai_lines_added: None,
+            ai_lines_deleted: None,
+            human_lines_added: None,
+            human_lines_deleted: None,
+            unattributed_lines_added: None,
+            unattributed_lines_deleted: None,
+            editor: "vscode".to_string(),
+            operating_system: "macos".to_string(),
+            machine: "dev".to_string(),
+            heartbeat_id: None,
+            activity_segments: Vec::new(),
+            actor_type: "human".to_string(),
+            actor_confidence: 1.0,
+        };
+
+        let serialized = serde_json::to_value(item).unwrap();
+        assert_eq!(serialized["actor_type"], "human");
+        assert_eq!(serialized["actor_confidence"], 1.0);
+        assert_eq!(serialized["is_ai_generated"], false);
     }
 
     #[test]

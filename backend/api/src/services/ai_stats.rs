@@ -12,8 +12,8 @@ use wakaclock_core::ai::KNOWN_AGENT_IDS;
 // Keep the dashboard conservative when reading rows written by older clients. The
 // raw heartbeat remains the audit record, while this projection prevents arbitrary
 // labels (for example integration-test names) from becoming named verified agents.
-// Unknown labels can still contribute to the unattributed AI bucket when the row has
-// positive AI evidence.
+// Unknown labels can still contribute to the unattributed bucket, but a legacy
+// evidence field must never promote the canonical `unknown` actor to AI.
 fn known_agent_ids_sql() -> String {
     KNOWN_AGENT_IDS
         .iter()
@@ -48,8 +48,6 @@ fn effective_actor_type_expr() -> String {
         "multiIf(
             h.actor_type = 'ai_verified' AND NOT ({verified_identity}),
             if(({ai_evidence}), 'ai_inferred', 'unknown'),
-            h.actor_type = 'unknown' AND ({ai_evidence}),
-            if(({verified_identity}), 'ai_verified', 'ai_inferred'),
             h.actor_type
         )",
         ai_evidence = ai_evidence_expr(),
@@ -338,4 +336,16 @@ fn validate_date(date: &str) -> Result<()> {
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .context("Invalid date format, expected YYYY-MM-DD")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_actor_type_expr;
+
+    #[test]
+    fn effective_actor_projection_does_not_promote_unknown_rows() {
+        let expression = effective_actor_type_expr();
+        assert!(expression.contains("h.actor_type = 'ai_verified' AND NOT"));
+        assert!(!expression.contains("h.actor_type = 'unknown' AND"));
+    }
 }

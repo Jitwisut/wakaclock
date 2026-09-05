@@ -693,6 +693,7 @@ export interface RevokeApiKeyResponse {
 // ---------------------------------------------------------------------------
 export interface HeartbeatItem {
   active_seconds: null | number;
+  actor_confidence?: null | number;
   actor_type?: string;
   ai_agent?: null | string;
   ai_confidence?: null | string;
@@ -734,6 +735,7 @@ export interface HeartbeatListResponse {
 
 export interface HeartbeatPayload {
   active_seconds?: number;
+  actor_confidence?: number;
   actor_type?: string;
   ai_agent?: string;
   ai_confidence?: string;

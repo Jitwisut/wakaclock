@@ -1,7 +1,7 @@
 # F1-01a attribution decision conformance — 2026-09-05
 
-Status: **implemented for heartbeat ingestion; read/projection alignment remains
-open**.
+Status: **implemented for heartbeat ingestion and the v1 history read
+projection; analytics/revision projections remain open**.
 
 F1-01 needs one deterministic answer for the same evidence shape before F1-02
 can split editor changes and F1-07 can migrate legacy server fields. The shared
@@ -50,14 +50,22 @@ All three ingestion consumers match every resolved and rejected case. The mirror
 registry decision as input, so it cannot silently grow a second list of agent
 names.
 
-## Remaining read-side gap
+## Read projection covered by this slice
 
-The server write path now has ingestion/storage conformance. The GET history
-serializer still reconstructs its compatibility `actor_type` from the legacy
-boolean, and the AI analytics effective-actor projection has its own legacy
-normalization. Those read paths need a follow-up so a stored `human` or
-`ai_verified` row cannot be relabeled while it is being returned or aggregated.
-This slice therefore does not claim full API response/projection conformance.
+The v1 GET history serializer now treats the stored `actor_type` as canonical.
+It derives `is_ai_generated` and the additive `actor_confidence` field from the
+same projected actor, preserves explicit `human`/`unknown`/`ai_inferred` rows,
+and only exposes an agent identity when the known-agent, source, and verified
+confidence checks all pass. A malformed or spoofed `ai_verified` row downgrades
+to `ai_inferred` only when it still has explicit AI evidence; an explicit
+`unknown` row is never promoted by stale legacy fields. The projection has
+table-driven tests and a JSON serialization check.
+
+The AI stats service now applies the same rule for its effective actor SQL: an
+invalid `ai_verified` row can be downgraded, while legacy evidence cannot
+promote a canonical `unknown` row. Revision winner selection and the remaining
+analytics surfaces still need their own F1 follow-up, so this slice does not
+claim full read-side conformance.
 
 The adapter intentionally keeps legacy inferred/unknown identity scrubbing and
 maps the canonical result back to the invariant trio
@@ -68,9 +76,11 @@ observations, and revision/projection behavior remain separate F1 work.
 ## Validation
 
 - `cargo test -p wakaclock-core --test attribution_conformance` — 1 passed.
-- `cargo test -p wakaclock-server handlers::v1::heartbeats::tests` — 8 passed,
-  including all shared fixture cases and `Heartbeat::validate()` invariants.
-- `cargo test -p wakaclock-server` — 170 passed, 7 ignored (database-backed).
+- `cargo test -p wakaclock-server handlers::v1::heartbeats::tests` — 10 passed,
+  including all shared fixture cases, projection cases, and `Heartbeat::validate()`
+  invariants.
+- `cargo test -p wakaclock-server` — 175 passed, 7 ignored (database-backed
+  without ClickHouse/PostgreSQL configuration).
 - `npm run lint` in `extensions/vscode` — passed.
 - `npm test -- test/attributionDecision.test.ts` — 1 passed.
 
