@@ -453,6 +453,15 @@ pub async fn leave_room(
         .map_err(PresenceApiError::unavailable)?;
     if let Ok(repo) = repo(&state) {
         if let Ok(Some(room)) = repo.get(room_id).await {
+            if room.kind == PresenceRoomKind::Team {
+                // An explicit leave from a team's always-available home room must stick
+                // for a while, or the next presence-heartbeat tick (as soon as ~30s
+                // later, since the user is presumably still coding) silently undoes it.
+                // Ad-hoc rooms have no auto-join path, so nothing to suppress there.
+                if let Err(error) = redis.snooze_auto_join(room_id, user_id).await {
+                    tracing::warn!(room_id = %room_id, user_id = %user_id, error = %error, "could not snooze presence auto-join after leave");
+                }
+            }
             if let Ok(live) = redis.snapshot(room_id).await {
                 checkpoint_live_sessions(&state, room.team_id, room_id, &live).await;
             }
@@ -471,6 +480,9 @@ pub async fn leave_room(
 /// team room they belong to, creating membership (via `join`) the first time and just
 /// refreshing the lease (via `renew`) afterward, without disturbing their last position.
 /// One team room failing to renew (closed/full) does not fail the others.
+///
+/// Skips auto-join for a room the caller explicitly left recently — see
+/// `snooze_auto_join` — so leaving does not just get silently undone by the next tick.
 pub async fn heartbeat(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -496,6 +508,14 @@ pub async fn heartbeat(
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat renew failed");
+                continue;
+            }
+        }
+        match redis.is_auto_join_snoozed(room.id, user_id).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat could not check auto-join snooze");
                 continue;
             }
         }

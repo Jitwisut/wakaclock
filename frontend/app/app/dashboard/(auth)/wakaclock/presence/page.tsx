@@ -243,6 +243,13 @@ function PresenceApp() {
       window.localStorage.removeItem(ROOM_STORAGE_KEY);
       window.localStorage.removeItem(INVITE_TOKEN_KEY);
       await refreshRooms();
+      // A team room re-admits its members automatically as they keep coding (see the
+      // presence-heartbeat route); without this the leave would otherwise look like it
+      // silently failed a few seconds later. Ad-hoc rooms have no such path, so only say
+      // this for the case where it is actually true.
+      if (activeRoom.kind === 'team') {
+        toast.success("You left the room. You won't be re-added automatically for 1 hour.");
+      }
     } catch (requestError) {
       toast.error(requestError instanceof Error ? requestError.message : 'Could not leave room');
     } finally {
