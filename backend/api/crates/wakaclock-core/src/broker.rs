@@ -1471,7 +1471,7 @@ mod tests {
         assert!(TransportKind::Mcp.priority() < TransportKind::Transcript.priority());
         assert_eq!(
             sample_event("t").transport_kind(),
-            TransportKind::ToolSnapshot // sample uses "shell_hook"
+            TransportKind::ToolSnapshot // sample uses "shell_hook", now ranked with tool snapshots
         );
     }
 
