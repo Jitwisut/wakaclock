@@ -24,10 +24,18 @@ const LINE_MATCH_SLACK = 2;
  * correlation match.
  */
 const CORRELATION_WINDOW_SECONDS = 15;
+const MAX_SIDECAR_READ_BYTES = 256 * 1024;
+const MAX_SIDECAR_EVENTS = 500;
+const MAX_SIDECAR_LINE_BYTES = 64 * 1024;
+const SIDECAR_CURSOR_SCHEMA_VERSION = 1;
 
 export type RecentEditAttribution = "ai" | "human" | "unattributed";
 
 export interface AiEditEvent {
+  /** v2 sidecars carry a schema, stream identity and transport sequence. */
+  schema_version?: number;
+  stream_id?: string;
+  sequence?: number;
   event_id: string;
   entity: string;
   time: number;
@@ -58,18 +66,42 @@ export interface AiClassificationResult {
   event?: AiEditEvent;
 }
 
+interface PersistedSidecarCursor {
+  schema_version: number;
+  file_identity?: string;
+  read_offset: number;
+  stream_id?: string;
+  last_sequence?: number;
+  seen_transport_keys: string[];
+  events: AiEditEvent[];
+  consumed_event_ids: string[];
+}
+
 /**
  * Reads the tiny metadata-only sidecar written by the local BrokerProcessor. It lets the
  * editor extension avoid counting the same external AI edit as human typing when the
- * edited file is open in VS Code. No source text or prompt is ever written here.
+ * edited file is open in VS Code. No source text or prompt is ever written here. V2
+ * records carry a durable stream/sequence pair; the reader advances by byte offset,
+ * keeps an incomplete trailing line out of attribution, and still accepts legacy v1
+ * rows for upgrades.
  */
 export class AiAttributionStore {
   private readonly logPath: string;
-  private events: AiEditEvent[] = [];
+  private readonly cursorPath: string;
+  private readonly events = new Map<string, AiEditEvent>();
   private consumed = new Set<string>();
+  private readOffset = 0;
+  private partialLine = Buffer.alloc(0);
+  private fileIdentity?: string;
+  private streamId?: string;
+  private lastSequence?: number;
+  private readonly seenTransportKeys = new Set<string>();
+  private cursorLoaded = false;
+  private refreshInFlight?: Promise<void>;
 
   public constructor(homeDir = os.homedir()) {
     this.logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+    this.cursorPath = path.join(homeDir, ".wakaclock", "ai-events.cursor.json");
   }
 
   /**
@@ -107,20 +139,20 @@ export class AiAttributionStore {
     await this.refresh();
     const normalizedEntity = normalizeEntity(entity);
     const nowSeconds = timeMs / 1000;
-    const candidates = this.events
+    const candidates = Array.from(this.events.values())
       .map((event, index) => ({ event, index }))
       .filter(({ event }) => {
-      if (this.consumed.has(event.event_id)) {
-        return false;
-      }
-      if (normalizeEntity(event.entity) !== normalizedEntity) {
-        return false;
-      }
-      if (Math.abs(event.time - nowSeconds) > CORRELATION_WINDOW_SECONDS) {
-        return false;
-      }
-      return true;
-    });
+        if (this.consumed.has(event.event_id)) {
+          return false;
+        }
+        if (normalizeEntity(event.entity) !== normalizedEntity) {
+          return false;
+        }
+        if (Math.abs(event.time - nowSeconds) > CORRELATION_WINDOW_SECONDS) {
+          return false;
+        }
+        return true;
+      });
 
     if (candidates.length === 0) {
       // No nearby AI evidence exists for this file after the correlation window, so
@@ -158,43 +190,293 @@ export class AiAttributionStore {
     }
 
     this.consumed.add(event.event_id);
+    await this.persistCursor();
     return { attribution: "ai", event };
   }
 
   private async refresh(): Promise<void> {
-    let raw: string;
+    if (this.refreshInFlight) {
+      return this.refreshInFlight;
+    }
+    const operation = this.readNewSidecarBytes();
+    this.refreshInFlight = operation;
     try {
-      raw = await fs.readFile(this.logPath, "utf8");
+      await operation;
+    } finally {
+      if (this.refreshInFlight === operation) {
+        this.refreshInFlight = undefined;
+      }
+    }
+  }
+
+  private async readNewSidecarBytes(): Promise<void> {
+    await this.loadCursor();
+    let handle: import("node:fs/promises").FileHandle;
+    try {
+      handle = await fs.open(this.logPath, "r");
     } catch {
       return;
     }
 
-    const parsed: AiEditEvent[] = [];
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
+    try {
+      const stat = await handle.stat();
+      const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+      if (
+        (this.fileIdentity !== undefined && this.fileIdentity !== identity) ||
+        stat.size < this.readOffset
+      ) {
+        // A truncate/rename starts a new byte stream. Keep the bounded event cache so
+        // already-consumed ownership is not replayed, but resync from byte zero.
+        this.readOffset = 0;
+        this.partialLine = Buffer.alloc(0);
+        // Keep the stream cursor across a file replacement when the broker keeps
+        // its durable stream identity. A new stream_id below resets it safely.
       }
-      try {
-        const candidate = JSON.parse(line) as Partial<AiEditEvent>;
-        if (
-          typeof candidate.event_id === "string" &&
-          typeof candidate.entity === "string" &&
-          typeof candidate.time === "number" &&
-          (typeof candidate.lines_added === "number" || candidate.lines_added === null) &&
-          (typeof candidate.lines_deleted === "number" || candidate.lines_deleted === null)
-        ) {
-          parsed.push(candidate as AiEditEvent);
+      this.fileIdentity = identity;
+      if (stat.size <= this.readOffset) {
+        await this.persistCursor();
+        return;
+      }
+
+      const requested = Math.min(
+        MAX_SIDECAR_READ_BYTES,
+        Math.max(0, stat.size - this.readOffset)
+      );
+      const buffer = Buffer.alloc(requested);
+      const result = await handle.read(buffer, 0, requested, this.readOffset);
+      this.readOffset += result.bytesRead;
+      const combined = Buffer.concat([this.partialLine, buffer.subarray(0, result.bytesRead)]);
+      const newline = combined.lastIndexOf(0x0a);
+      if (newline < 0) {
+        if (combined.length <= MAX_SIDECAR_LINE_BYTES) {
+          this.partialLine = combined;
+        } else {
+          // Do not let one unterminated producer line grow without bound. It is
+          // discarded until a later newline arrives, and never becomes evidence.
+          this.partialLine = Buffer.alloc(0);
         }
-      } catch {
-        // A hook may be in the middle of appending a line. The next refresh will retry it.
+        await this.persistCursor();
+        return;
+      }
+
+      this.partialLine = combined.subarray(newline + 1);
+      if (this.partialLine.length > MAX_SIDECAR_LINE_BYTES) {
+        // The next refresh starts after the oversized unterminated line. It cannot
+        // become evidence, even if a producer later appends a newline.
+        this.partialLine = Buffer.alloc(0);
+      }
+      const complete = combined.subarray(0, newline).toString("utf8");
+      for (const line of complete.split("\n")) {
+        this.acceptSidecarLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+      }
+      await this.persistCursor();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private acceptSidecarLine(line: string): void {
+    if (!line.trim() || Buffer.byteLength(line, "utf8") > MAX_SIDECAR_LINE_BYTES) {
+      return;
+    }
+    let candidate: Partial<AiEditEvent>;
+    try {
+      candidate = JSON.parse(line) as Partial<AiEditEvent>;
+    } catch {
+      // A malformed or half-written line is not attribution evidence.
+      return;
+    }
+    const schemaVersion = candidate.schema_version ?? 1;
+    if (schemaVersion !== 1 && schemaVersion !== 2) {
+      return;
+    }
+    if (
+      typeof candidate.event_id !== "string" ||
+      typeof candidate.entity !== "string" ||
+      typeof candidate.time !== "number" ||
+      !Number.isFinite(candidate.time) ||
+      (typeof candidate.lines_added !== "number" && candidate.lines_added !== null) ||
+      (typeof candidate.lines_deleted !== "number" && candidate.lines_deleted !== null)
+    ) {
+      return;
+    }
+    if (candidate.sequence !== undefined &&
+        (!Number.isSafeInteger(candidate.sequence) || candidate.sequence < 1)) {
+      return;
+    }
+    if (
+      schemaVersion === 2 &&
+      (typeof candidate.stream_id !== "string" ||
+        candidate.stream_id.trim() === "" ||
+        candidate.sequence === undefined)
+    ) {
+      return;
+    }
+    if (candidate.stream_id !== undefined && candidate.stream_id !== this.streamId) {
+      this.streamId = candidate.stream_id;
+      this.lastSequence = undefined;
+    }
+    if (
+      candidate.sequence !== undefined &&
+      this.lastSequence !== undefined &&
+      candidate.sequence <= this.lastSequence
+    ) {
+      return;
+    }
+    if (candidate.sequence !== undefined) {
+      this.lastSequence = candidate.sequence;
+    }
+    const transportKey =
+      candidate.stream_id !== undefined && candidate.sequence !== undefined
+        ? `${candidate.stream_id}:${candidate.sequence}`
+        : `legacy:${candidate.event_id}`;
+    if (this.seenTransportKeys.has(transportKey)) {
+      return;
+    }
+    this.seenTransportKeys.add(transportKey);
+    this.trimState();
+    const event = candidate as AiEditEvent;
+    const existing = this.events.get(event.event_id);
+    if (
+      existing &&
+      event.sequence !== undefined &&
+      existing.sequence !== undefined &&
+      event.sequence <= existing.sequence
+    ) {
+      return;
+    }
+    this.events.set(event.event_id, event);
+  }
+
+  private async loadCursor(): Promise<void> {
+    if (this.cursorLoaded) {
+      return;
+    }
+    this.cursorLoaded = true;
+    let snapshot: Partial<PersistedSidecarCursor>;
+    try {
+      const decoded: unknown = JSON.parse(await fs.readFile(this.cursorPath, "utf8"));
+      if (!decoded || typeof decoded !== "object") {
+        return;
+      }
+      snapshot = decoded as Partial<PersistedSidecarCursor>;
+    } catch {
+      return;
+    }
+    const readOffset = snapshot.read_offset;
+    if (
+      snapshot.schema_version !== SIDECAR_CURSOR_SCHEMA_VERSION ||
+      typeof readOffset !== "number" ||
+      !Number.isSafeInteger(readOffset) ||
+      readOffset < 0
+    ) {
+      return;
+    }
+    this.readOffset = readOffset;
+    this.fileIdentity =
+      typeof snapshot.file_identity === "string" ? snapshot.file_identity : undefined;
+    this.streamId = typeof snapshot.stream_id === "string" ? snapshot.stream_id : undefined;
+    this.lastSequence =
+      snapshot.last_sequence !== undefined &&
+      Number.isSafeInteger(snapshot.last_sequence) &&
+      snapshot.last_sequence >= 1
+        ? snapshot.last_sequence
+        : undefined;
+    for (const key of Array.isArray(snapshot.seen_transport_keys)
+      ? snapshot.seen_transport_keys
+      : []) {
+      if (typeof key === "string" && key.length <= MAX_SIDECAR_LINE_BYTES) {
+        this.seenTransportKeys.add(key);
       }
     }
+    for (const event of Array.isArray(snapshot.events) ? snapshot.events : []) {
+      if (this.isValidEvent(event)) {
+        this.events.set(event.event_id, event);
+      }
+    }
+    for (const eventId of Array.isArray(snapshot.consumed_event_ids)
+      ? snapshot.consumed_event_ids
+      : []) {
+      if (typeof eventId === "string") {
+        this.consumed.add(eventId);
+      }
+    }
+    this.trimState();
+  }
 
-    this.events = parsed.slice(-500);
-    const activeIds = new Set(this.events.map((event) => event.event_id));
-    for (const eventId of this.consumed) {
-      if (!activeIds.has(eventId)) {
-        this.consumed.delete(eventId);
+  private isValidEvent(candidate: Partial<AiEditEvent>): candidate is AiEditEvent {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    const schemaVersion = candidate.schema_version ?? 1;
+    return (
+      (schemaVersion === 1 || schemaVersion === 2) &&
+      typeof candidate.event_id === "string" &&
+      typeof candidate.entity === "string" &&
+      typeof candidate.time === "number" &&
+      Number.isFinite(candidate.time) &&
+      (typeof candidate.lines_added === "number" || candidate.lines_added === null) &&
+      (typeof candidate.lines_deleted === "number" || candidate.lines_deleted === null) &&
+      (candidate.sequence === undefined ||
+        (Number.isSafeInteger(candidate.sequence) && candidate.sequence >= 1)) &&
+      (schemaVersion !== 2 ||
+        (typeof candidate.stream_id === "string" &&
+          candidate.stream_id.trim() !== "" &&
+          candidate.sequence !== undefined))
+    );
+  }
+
+  private trimState(): void {
+    while (this.seenTransportKeys.size > MAX_SIDECAR_EVENTS * 2) {
+      const oldest = this.seenTransportKeys.values().next().value as string | undefined;
+      if (oldest === undefined) {
+        break;
+      }
+      this.seenTransportKeys.delete(oldest);
+    }
+    while (this.events.size > MAX_SIDECAR_EVENTS) {
+      const oldest = this.events.keys().next().value as string | undefined;
+      if (oldest === undefined) {
+        break;
+      }
+      this.events.delete(oldest);
+      this.consumed.delete(oldest);
+    }
+  }
+
+  private async persistCursor(): Promise<void> {
+    if (!this.cursorLoaded) {
+      return;
+    }
+    const partialBytes = this.partialLine.length;
+    const stableOffset = Math.max(0, this.readOffset - partialBytes);
+    const snapshot: PersistedSidecarCursor = {
+      schema_version: SIDECAR_CURSOR_SCHEMA_VERSION,
+      file_identity: this.fileIdentity,
+      read_offset: stableOffset,
+      stream_id: this.streamId,
+      last_sequence: this.lastSequence,
+      seen_transport_keys: Array.from(this.seenTransportKeys),
+      events: Array.from(this.events.values()),
+      consumed_event_ids: Array.from(this.consumed)
+    };
+    const temporaryPath = `${this.cursorPath}.${process.pid}.tmp`;
+    try {
+      await fs.mkdir(path.dirname(this.cursorPath), { recursive: true });
+      await fs.writeFile(temporaryPath, `${JSON.stringify(snapshot)}\n`, {
+        encoding: "utf8",
+        mode: 0o600
+      });
+      await fs.rename(temporaryPath, this.cursorPath);
+      await fs.chmod(this.cursorPath, 0o600);
+    } catch {
+      // The sidecar remains usable if a read-only home or an interrupted atomic
+      // replace prevents checkpoint persistence; the in-memory reader still applies
+      // the same bounded, ordered rules for this extension process.
+      try {
+        await fs.rm(temporaryPath, { force: true });
+      } catch {
+        // Ignore cleanup failures on the best-effort metadata checkpoint.
       }
     }
   }

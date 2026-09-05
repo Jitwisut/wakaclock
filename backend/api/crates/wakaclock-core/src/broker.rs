@@ -31,6 +31,10 @@ pub const BROKER_LEASE_SECONDS: i64 = 60;
 pub const BROKER_MAX_ATTEMPTS: i64 = 20;
 pub const BROKER_PAYLOAD_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
 pub const BROKER_ID_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+/// Version for the metadata-only editor sidecar. Legacy rows omitted this field and
+/// remain readable as v1; new rows carry a stream identity and sequence.
+pub const AI_SIDECAR_SCHEMA_VERSION: u8 = 2;
+const AI_SIDECAR_STREAM_KEY: &str = "ai-events";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -578,6 +582,16 @@ pub struct BrokerStoreStats {
     pub last_error_message: Option<String>,
 }
 
+/// Durable identity allocated for one sidecar event. The sequence is reserved in the
+/// same SQLite database as the broker inbox, so a retry or broker restart cannot reset
+/// the stream or assign a second sequence to the same event ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerSidecarCursor {
+    pub stream_id: String,
+    pub sequence: i64,
+    pub already_written: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerDiscovery {
     pub endpoint: String,
@@ -797,6 +811,19 @@ impl BrokerStore {
                 ON broker_events(status, next_attempt_at, lease_until, received_at);
             CREATE INDEX IF NOT EXISTS broker_events_retention_idx
                 ON broker_events(status, updated_at);
+            CREATE TABLE IF NOT EXISTS broker_sidecar_state (
+                stream_key TEXT PRIMARY KEY NOT NULL,
+                stream_id TEXT NOT NULL,
+                next_sequence INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS broker_sidecar_events (
+                event_id TEXT PRIMARY KEY NOT NULL,
+                stream_key TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                written_at INTEGER
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS broker_sidecar_events_sequence_idx
+                ON broker_sidecar_events(stream_key, sequence);
             ",
         )?;
         // `event_json` was the pre-release name used by the first local broker
@@ -821,6 +848,93 @@ impl BrokerStore {
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
         }
         Ok(Self { conn })
+    }
+
+    /// Reserve the stable sidecar sequence for an event ID. The mapping is durable
+    /// before the JSONL append, so a crash between those two operations leaves a gap
+    /// that a retry can safely fill with the same `(stream_id, sequence)` pair.
+    pub fn reserve_sidecar_cursor(
+        &mut self,
+        event_id: &str,
+    ) -> Result<BrokerSidecarCursor, AppError> {
+        if event_id.trim().is_empty() {
+            return Err(AppError::Validation(
+                "sidecar event_id cannot be empty".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO broker_sidecar_state
+             (stream_key, stream_id, next_sequence)
+             VALUES (?1, ?2, 1)",
+            params![AI_SIDECAR_STREAM_KEY, Uuid::new_v4().to_string()],
+        )?;
+
+        if let Some((stream_id, sequence, written_at)) = tx
+            .query_row(
+                "SELECT s.stream_id, e.sequence, e.written_at
+                 FROM broker_sidecar_events AS e
+                 JOIN broker_sidecar_state AS s ON s.stream_key = e.stream_key
+                 WHERE e.stream_key = ?1 AND e.event_id = ?2",
+                params![AI_SIDECAR_STREAM_KEY, event_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+        {
+            tx.commit()?;
+            return Ok(BrokerSidecarCursor {
+                stream_id,
+                sequence,
+                already_written: written_at.is_some(),
+            });
+        }
+
+        let (stream_id, next_sequence): (String, i64) = tx.query_row(
+            "SELECT stream_id, next_sequence
+             FROM broker_sidecar_state WHERE stream_key = ?1",
+            params![AI_SIDECAR_STREAM_KEY],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let sequence = next_sequence;
+        let next = sequence
+            .checked_add(1)
+            .ok_or_else(|| AppError::Validation("AI sidecar sequence exhausted".to_string()))?;
+        tx.execute(
+            "INSERT INTO broker_sidecar_events
+             (event_id, stream_key, sequence, written_at)
+             VALUES (?1, ?2, ?3, NULL)",
+            params![event_id, AI_SIDECAR_STREAM_KEY, sequence],
+        )?;
+        tx.execute(
+            "UPDATE broker_sidecar_state SET next_sequence = ?2 WHERE stream_key = ?1",
+            params![AI_SIDECAR_STREAM_KEY, next],
+        )?;
+        tx.commit()?;
+        Ok(BrokerSidecarCursor {
+            stream_id,
+            sequence,
+            already_written: false,
+        })
+    }
+
+    /// Mark the JSONL append complete. This is deliberately separate from reservation
+    /// so a process crash before the append leaves the same sequence available for the
+    /// next retry instead of allocating a second identity.
+    pub fn mark_sidecar_written(&self, event_id: &str) -> Result<(), AppError> {
+        self.conn.execute(
+            "UPDATE broker_sidecar_events SET written_at = ?3
+             WHERE stream_key = ?1 AND event_id = ?2 AND written_at IS NULL",
+            params![AI_SIDECAR_STREAM_KEY, event_id, Utc::now().timestamp()],
+        )?;
+        Ok(())
     }
 
     pub fn ingest(&self, event: &BrokerEventV1) -> Result<BrokerIngestOutcome, AppError> {
@@ -1762,6 +1876,35 @@ mod tests {
             BrokerIngestOutcome::Conflict
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sidecar_cursor_is_monotonic_idempotent_and_survives_reopen() {
+        let path = temp_db("sidecar-cursor");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let first = store.reserve_sidecar_cursor("sidecar-one").unwrap();
+        assert_eq!(first.sequence, 1);
+        assert!(!first.already_written);
+        store.mark_sidecar_written("sidecar-one").unwrap();
+
+        let retry = store.reserve_sidecar_cursor("sidecar-one").unwrap();
+        assert_eq!(retry.stream_id, first.stream_id);
+        assert_eq!(retry.sequence, first.sequence);
+        assert!(retry.already_written);
+
+        let second = store.reserve_sidecar_cursor("sidecar-two").unwrap();
+        assert_eq!(second.stream_id, first.stream_id);
+        assert_eq!(second.sequence, 2);
+        assert!(!second.already_written);
+        drop(store);
+
+        let mut reopened = BrokerStore::open_at(&path).unwrap();
+        let third = reopened.reserve_sidecar_cursor("sidecar-three").unwrap();
+        assert_eq!(third.stream_id, first.stream_id);
+        assert_eq!(third.sequence, 3);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("db-wal"));
+        let _ = fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]

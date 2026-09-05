@@ -31,7 +31,8 @@ use wakaclock_core::{
         broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
         BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck, BrokerEventStatus,
         BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, QuarantineDiagnostic,
-        BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
+        AI_SIDECAR_SCHEMA_VERSION, BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
+        MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
@@ -397,26 +398,22 @@ async fn process_record(
 }
 
 fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
+    // The sequence is reserved in the broker's durable inbox database before this
+    // append. A retry therefore reuses the same stream/sequence pair without an
+    // O(n) scan of the JSONL file; the reader deduplicates a crash-boundary duplicate.
     let state_dir = broker_runtime_dir();
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join("ai-events.jsonl");
-    if fs::read_to_string(&path).ok().is_some_and(|content| {
-        content.lines().any(|line| {
-            serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("event_id")
-                        .and_then(|id| id.as_str())
-                        .map(str::to_string)
-                })
-                .is_some_and(|event_id| event_id == event.event_id)
-        })
-    }) {
+    let mut store = BrokerStore::open()?;
+    let cursor = store.reserve_sidecar_cursor(&event.event_id)?;
+    if cursor.already_written {
         return Ok(());
     }
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     let payload = serde_json::json!({
+        "schema_version": AI_SIDECAR_SCHEMA_VERSION,
+        "stream_id": cursor.stream_id,
+        "sequence": cursor.sequence,
         "event_id": event.event_id,
         "entity": event.entity,
         "time": event.occurred_at.timestamp_millis() as f64 / 1000.0,
@@ -438,6 +435,7 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     });
     writeln!(file, "{}", serde_json::to_string(&payload)?)?;
     drop(file);
+    store.mark_sidecar_written(&event.event_id)?;
     set_private_permissions(&path)?;
     Ok(())
 }

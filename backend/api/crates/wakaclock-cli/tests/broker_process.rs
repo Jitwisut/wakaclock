@@ -487,10 +487,24 @@ async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
         recorded.contains("402"),
         "recorded failure should name the 402"
     );
+    let sidecar_path = home.join(".wakaclock/ai-events.jsonl");
     assert!(
-        home.join(".wakaclock/ai-events.jsonl").exists(),
+        sidecar_path.exists(),
         "correlation sidecar is written even when delivery fails"
     );
+    let sidecar_row = fs::read_to_string(&sidecar_path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .next()
+        .expect("sidecar should contain one valid metadata row");
+    assert_eq!(sidecar_row["schema_version"], 2);
+    assert!(sidecar_row["stream_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert!(sidecar_row["sequence"]
+        .as_i64()
+        .is_some_and(|sequence| sequence >= 1));
     assert!(
         home.join(".wakaclock/queue.db").exists(),
         "the heartbeat is durably queued for later delivery"

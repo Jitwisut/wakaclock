@@ -53,6 +53,107 @@ describe("AiAttributionStore.classify — correlation window", () => {
   });
 });
 
+describe("AiAttributionStore — sidecar v2 incremental transport", () => {
+  let homeDir: string;
+
+  beforeEach(async () => {
+    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-sidecar-v2-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
+  function record(
+    eventId: string,
+    timeSeconds: number,
+    sequence: number,
+    streamId = "stream-a"
+  ): string {
+    return JSON.stringify({
+      schema_version: 2,
+      stream_id: streamId,
+      sequence,
+      event_id: eventId,
+      entity: "/project/a.ts",
+      time: timeSeconds,
+      lines_added: 3,
+      lines_deleted: 1
+    });
+  }
+
+  async function writeRaw(value: string) {
+    const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.writeFile(logPath, value);
+    return logPath;
+  }
+
+  it("does not parse a partial line until the producer writes its newline", async () => {
+    const logPath = await writeRaw(record("partial", 100, 1));
+    const store = new AiAttributionStore(homeDir);
+
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("human");
+
+    await fs.appendFile(logPath, "\n");
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+    // The same transport record is consumed once, even though the reader resumed from
+    // a byte offset instead of rereading the entire file.
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("human");
+  });
+
+  it("reads appended bytes and resynchronizes after a truncation with a new stream", async () => {
+    const logPath = await writeRaw(`${record("first", 100, 1)}\n`);
+    const store = new AiAttributionStore(homeDir);
+
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+
+    await fs.appendFile(logPath, `${record("second", 101, 2)}\n`);
+    expect((await store.classify("/project/a.ts", 101_000, 3, 1)).attribution).toBe("ai");
+
+    await fs.writeFile(logPath, `${record("rotated", 102, 1, "stream-b")}\n`);
+    expect((await store.classify("/project/a.ts", 102_000, 3, 1)).attribution).toBe("ai");
+  });
+
+  it("keeps legacy v1 rows readable and ignores future schemas", async () => {
+    const legacy = JSON.stringify({
+      event_id: "legacy",
+      entity: "/project/a.ts",
+      time: 100,
+      lines_added: 3,
+      lines_deleted: 1
+    });
+    const future = JSON.stringify({
+      ...JSON.parse(record("future", 101, 2)),
+      schema_version: 99
+    });
+    await writeRaw(`${legacy}\n${future}\n`);
+    const store = new AiAttributionStore(homeDir);
+
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+    expect((await store.classify("/project/a.ts", 101_000, 3, 1)).attribution).toBe("human");
+  });
+
+  it("persists pending evidence and consumed ownership across reader restarts", async () => {
+    await writeRaw(`${record("restart", 100, 1)}\n`);
+
+    const firstReader = new AiAttributionStore(homeDir);
+    // The event is retained as pending because the line delta is ambiguous.
+    expect((await firstReader.classify("/project/a.ts", 100_000, 20, 1)).attribution).toBe(
+      "unattributed"
+    );
+
+    const secondReader = new AiAttributionStore(homeDir);
+    expect((await secondReader.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+
+    const thirdReader = new AiAttributionStore(homeDir);
+    // The same event cannot be replayed as ownership after the extension restarts.
+    expect((await thirdReader.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe(
+      "human"
+    );
+  });
+});
+
 describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () => {
   let homeDir: string;
 

@@ -1,9 +1,10 @@
-# AI coverage — implementation ledger (F0)
+# AI coverage — implementation ledger (F0/F1)
 
 Updated 2026-09-05. Tracks actual status against [ai-coverage-task-ledger.md](ai-coverage-task-ledger.md);
 this file records what is wired/tested in `features/ai-coverage-f0-baseline`, it
-is not a claim of merge or live certification. Statuses use the ledger's own
-vocabulary: `planned → in_progress → implemented → validated`.
+is not a claim of merge or live certification. F0 is closed; F1 has started with
+the transport slice below. Statuses use the ledger's own vocabulary:
+`planned → in_progress → implemented → validated`.
 
 | Task | Status | Evidence / remaining caveat |
 | --- | --- | --- |
@@ -34,8 +35,24 @@ certification are complete.
 
 | Task | Status | Evidence / remaining caveat |
 | --- | --- | --- |
+| F1-03 sidecar version/sequence/resume | implemented | [docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md](../docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md) — broker SQLite cursor allocates a durable opaque stream and monotonic sequence; retries reuse the event mapping; VS Code reads bounded byte ranges, handles partial lines and rotation, skips future schemas, and persists pending/consumed metadata across extension restart. Focused transport tests pass. F1-10 crash/concurrency integration and the downstream reconciliation work remain. |
 | F1-05 canonical IDs/aliases | in_progress | `ai/revision.rs` enforces direct tool-event/entity or content-version/entity proof; `AiAttributionState::record_event_alias` persists one-hop aliases and rejects session-only/time-only guesses. Server alias storage and producer wiring remain. |
 | F1-06 revision storage/read semantics | in_progress | `attribution_revisions` SQLite table, idempotent payload-hash append, full-value correction rows, max-revision read, and retention pruning are implemented and tested. The ClickHouse `heartbeats`/`heartbeats_incoming` schemas and `HeartbeatRow` now carry additive `revision` (default `0`), including reprocess reads; correction writers, canonical-winner projections, and client revision input remain. |
+
+### F1-03 sidecar transport slice
+
+The first F1 implementation slice is deliberately limited to transport
+reliability. New sidecar rows are v2 metadata records with a durable
+`stream_id` and monotonic `sequence`; v1 rows remain readable and future schema
+versions are ignored. The broker reservation is durable before JSONL append,
+while the extension reader uses a bounded byte cursor and a private checkpoint
+file so partial writes, rotation, retries, and extension restarts do not discard
+or replay ownership evidence. The full evidence and test matrix is in
+[docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md](../docs/ai-coverage-f1-03-sidecar-transport-2026-09-05.md).
+
+This slice intentionally leaves attribution policy unchanged. The unmatched
+`human` fallback, mixed-batch split, late correction, canonical revision
+projection, and rollout control remain owned by later F1 tasks.
 
 ## Codex Desktop detection repair (2026-09-05)
 
@@ -45,7 +62,7 @@ The live Codex Desktop transcript shape was added to `wakaclock-core::ai::codex`
 requires the matching `custom_tool_call_output` before emitting verified file events.
 `run_ai_sync` validates each transcript event before batching so an unsafe historical
 Claude path is skipped without aborting later agents. Automatic sync now gives each
-agent its own bounded pass and scans newest transcripts first. Core tests (202 passed),
+agent its own bounded pass and scans newest transcripts first. Core tests (207 passed),
 CLI integration tests (6 passed, 1 ignored), and a replay of the real Codex Desktop
 session all pass; the replay grew from `0` to `44` parsed events, and the live broker
 processed Codex rows while keeping new retries at zero.
@@ -61,18 +78,17 @@ attribution.
 
 ## Gates run locally for what's implemented so far
 
-- `cargo test -p wakaclock-core` (backend/api) — 206 passed, including the
+- `cargo test -p wakaclock-core` (backend/api) — 207 passed, including the
   revision/alias/retention ledger tests and the invariant that corrections cannot
   add measured time or line totals.
 - `cargo test -p wakaclock-cli --bin wakaclock` (backend/api) — 40 passed.
-- `cargo test -p wakaclock-cli --test broker_process
-  f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state -- --ignored
-  --nocapture` — intentionally fails with the documented assertion
-  (`left: false, right: true` on `broker.running`) after the broker binds
-  successfully. A sandboxed run that could not bind localhost is an environment
-  limitation, not the recorded result.
+- `cargo test -p wakaclock-cli --test broker_process` (backend/api) — 6 passed,
+  1 ignored. The ignored F0 doctor reproducer still intentionally fails with
+  the documented assertion (`left: false, right: true` on `broker.running`)
+  when run explicitly with `--ignored`; a sandboxed run that could not bind
+  localhost is an environment limitation, not the recorded result.
 - `bash extensions/ai-agents/common/tests/emit-event.test.sh` — passed.
-- `npm test` (extensions/vscode) — 96 passed, 3 expected failures (unmatched,
+- `npm test` (extensions/vscode) — 100 passed, 3 expected failures (unmatched,
   delayed-sidecar, and mixed human+AI F0-02 reproducers via `it.fails`).
 - `npm run lint` (extensions/vscode) — passed.
 - `npm run validate` (frontend/app) — **not green**, but confirmed pre-existing
