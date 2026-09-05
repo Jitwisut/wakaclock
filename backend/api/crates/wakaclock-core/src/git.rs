@@ -23,11 +23,7 @@ pub fn discover(entity_path: &str) -> Option<GitInfo> {
     let path = Path::new(entity_path);
 
     // ถ้า entity เป็นไฟล์ ให้เริ่มจาก parent folder
-    let start = if path.is_file() {
-        path.parent()?
-    } else {
-        path
-    };
+    let start = if path.is_file() { path.parent()? } else { path };
 
     let repo = gix::discover(start).ok()?;
 

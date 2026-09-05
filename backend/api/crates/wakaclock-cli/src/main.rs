@@ -252,6 +252,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Ping presence so a coworking room shows this user as active without a dashboard
+    /// tab open. Best-effort like Verify: always exits successfully for an HTTP outcome
+    /// so a periodic editor call never surfaces as a process error.
+    PresenceHeartbeat {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     Ai {
         #[command(subcommand)]
         action: AiAction,
@@ -1455,6 +1462,40 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 if let Some(error) = error {
                     println!("Error: {error}");
                 }
+            }
+        }
+        Commands::PresenceHeartbeat { json } => {
+            let (status, error) = match api_client.presence_heartbeat().await {
+                Ok(()) => ("sent", None),
+                Err(AppError::Auth(message)) => ("invalid_key", Some(message)),
+                Err(AppError::Http(error)) => {
+                    let outcome = match error.status().map(|value| value.as_u16()) {
+                        Some(401) => "invalid_key",
+                        Some(value) if value >= 500 => "server_error",
+                        Some(_) => "server_error",
+                        None => "unreachable",
+                    };
+                    (outcome, Some(error.to_string()))
+                }
+                Err(AppError::HttpStatus { status, message }) => {
+                    let outcome = match status {
+                        401 => "invalid_key",
+                        value if value >= 500 => "server_error",
+                        _ => "server_error",
+                    };
+                    (outcome, Some(message))
+                }
+                Err(error) => ("server_error", Some(error.to_string())),
+            };
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": status, "error": error })
+                );
+            } else if let Some(error) = error {
+                println!("Presence heartbeat: {status} ({error})");
+            } else {
+                println!("Presence heartbeat: {status}");
             }
         }
         Commands::Ai { action } => match action {

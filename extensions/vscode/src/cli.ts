@@ -359,6 +359,22 @@ export class WakaclockCliService {
         };
     }
 
+    /**
+     * Best-effort presence liveness ping (see `PresenceHeartbeat` in wakaclock-cli).
+     * Callers must never let this affect the heartbeat pipeline: presence is a social
+     * feature, time tracking is not, so every failure is swallowed here rather than
+     * thrown.
+     */
+    public async sendPresenceHeartbeat(): Promise<void> {
+        try {
+            await this.runCli(["presence-heartbeat"]);
+        } catch (error) {
+            this.logger.debug("presence heartbeat ping failed", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
     public async installAgent(): Promise<CliResult> {
         return this.runCli(["broker", "install", "--json"]);
     }

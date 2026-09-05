@@ -320,6 +320,24 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Pings `POST /api/v2/me/presence/heartbeat` so a coworking room shows this user as
+    /// active without requiring the dashboard tab to be open (an open tab already renews
+    /// its own presence lease via the SSE stream). Best-effort: the caller decides how to
+    /// treat a failure, since a missed presence ping should never affect time tracking.
+    pub async fn presence_heartbeat(&self) -> AppResult<()> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/v2/me/presence/heartbeat",
+                self.config.server_url
+            ))
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        Self::error_for_status_with_body(response).await?;
+        Ok(())
+    }
+
     pub async fn today_with_timezone(
         &self,
         timezone: Option<&str>,

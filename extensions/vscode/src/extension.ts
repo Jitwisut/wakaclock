@@ -52,11 +52,15 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
     async () => (await getStoredApiKey(context.secrets)) ?? (await getPendingApiKey(context.secrets))
   );
+  const presenceHeartbeat = createPresenceHeartbeatPing(configService, cliService);
   const bufferManager = new HeartbeatBufferManager(
     () => configService.getSnapshot(),
     cliService,
     logger,
-    () => statusBar.handleHeartbeatSent(),
+    () => {
+      statusBar.handleHeartbeatSent();
+      presenceHeartbeat();
+    },
     undefined,
     () => statusBar.handleActivity()
   );
@@ -226,6 +230,32 @@ async function initializeConnection(
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/**
+ * Throttles presence liveness pings to piggyback on real heartbeat sends rather than
+ * running its own timer. A heartbeat only fires when the buffer actually flushes
+ * accumulated activity, so this naturally pings only while the user is coding and never
+ * while idle. The throttle keeps it well under the 45-second room lease
+ * (`VIEWER_LEASE_SECONDS` in redis_presence.rs) without sending on every single flush.
+ */
+function createPresenceHeartbeatPing(
+  configService: WakaclockConfigService,
+  cliService: Pick<WakaclockCliService, "sendPresenceHeartbeat">
+): () => void {
+  const throttleMs = 30_000;
+  let lastSentAt = 0;
+  return () => {
+    if (!configService.getSnapshot().presenceAutoJoinEnabled) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastSentAt < throttleMs) {
+      return;
+    }
+    lastSentAt = now;
+    void cliService.sendPresenceHeartbeat();
+  };
 }
 
 async function maybeOfferAiSetup(
