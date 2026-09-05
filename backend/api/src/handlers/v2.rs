@@ -177,6 +177,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             get(crate::handlers::presence_v2::list_rooms),
         )
         .route(
+            "/me/presence/heartbeat",
+            post(crate::handlers::presence_v2::heartbeat),
+        )
+        .route(
             "/me/coworking-sessions",
             get(crate::handlers::presence_v2::history),
         )

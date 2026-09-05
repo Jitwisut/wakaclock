@@ -189,9 +189,11 @@ impl RedisPresenceStore {
         self.command("PING", &[]).await.map(|_| ())
     }
 
-    // Not yet called by any handler — the presence-v2 heartbeat submission route ships
-    // with `phase7/presence-v2-hardening`, which is a separate, still-unmerged branch.
-    #[allow(dead_code)]
+    /// Marks `user_id` as actively coding for `derive_state_at`'s coding/idle split.
+    /// Deliberately keyed by user, not by room: a user's coding activity is the same
+    /// fact regardless of which of their team rooms is asking, and one client process
+    /// (desktop, CLI, editor) can refresh it on behalf of every room they belong to.
+    /// Room *membership* (the lease in `member_key`) is separate — see `join`/`renew`.
     pub async fn heartbeat(&self, user_id: Uuid) -> Result<()> {
         self.command(
             "SET",

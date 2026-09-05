@@ -461,6 +461,58 @@ pub async fn leave_room(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Keeps a user present without requiring the dashboard tab to stay open. A viewer with
+/// an active SSE stream already gets this for free (`stream_presence` calls `redis.renew`
+/// on every tick); this route exists for the case that motivated it — a CLI/editor client
+/// that is still emitting heartbeats with no browser tab watching the room at all, which
+/// would otherwise fall off the roster after `VIEWER_LEASE_SECONDS`.
+///
+/// User-scoped rather than room-scoped: it marks the caller as actively coding for every
+/// team room they belong to, creating membership (via `join`) the first time and just
+/// refreshing the lease (via `renew`) afterward, without disturbing their last position.
+/// One team room failing to renew (closed/full) does not fail the others.
+pub async fn heartbeat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, PresenceApiError> {
+    let user_id = user(&state, &headers)?;
+    let repo = repo(&state)?;
+    let redis = redis(&state)?;
+    redis
+        .heartbeat(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+
+    let rooms = repo
+        .list_for_user(user_id)
+        .await
+        .map_err(PresenceApiError::internal)?;
+    let team_rooms = rooms
+        .into_iter()
+        .filter(|room| room.kind == PresenceRoomKind::Team);
+    for room in team_rooms {
+        match redis.renew(room.id, user_id).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat renew failed");
+                continue;
+            }
+        }
+        let username = match state.user_service.get_current(user_id).await {
+            Ok(current) => current.data.username,
+            Err(error) => {
+                tracing::warn!(user_id = %user_id, error = %error, "presence heartbeat could not resolve username for auto-join");
+                continue;
+            }
+        };
+        if let Err(error) = redis.join(room.id, user_id, username, None).await {
+            tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat auto-join failed");
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn end_room(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
