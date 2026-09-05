@@ -263,5 +263,8 @@
   },
   "engines": {
     "node": "20.x"
+  },
+  "overrides": {
+    "handlebars": "^4.7.9"
   }
 }
