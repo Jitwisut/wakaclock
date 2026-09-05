@@ -304,8 +304,21 @@ impl AiActivityParser for CodexParser {
                         continue;
                     };
                     match item.item_type.as_str() {
-                        "custom_tool_call" if item.name.as_deref() == Some("apply_patch") => {
-                            if let (Some(call_id), Some(input)) = (item.call_id, item.input) {
+                        "custom_tool_call" => {
+                            let input = match item.name.as_deref() {
+                                // Older/current CLI transcripts expose the native tool
+                                // directly as `name = "apply_patch"`.
+                                Some("apply_patch") => item.input,
+                                // Codex Desktop executes the same tool through its
+                                // `exec` bridge. Its input is JavaScript-like text such
+                                // as `text(await tools.apply_patch("..."))`, or a
+                                // `const patch = "..."; ... apply_patch(patch)` wrapper.
+                                Some("exec") => {
+                                    item.input.as_deref().and_then(extract_apply_patch_input)
+                                }
+                                _ => None,
+                            };
+                            if let (Some(call_id), Some(input)) = (item.call_id, input) {
                                 pending_apply_patch.insert(
                                     call_id,
                                     PendingApplyPatch {
@@ -391,6 +404,62 @@ fn resolve_entity(raw_path: &str, project_root: Option<&Path>) -> PathBuf {
         }
         None => candidate.to_path_buf(),
     }
+}
+
+/// Extract the apply_patch DSL from Codex Desktop's `exec` bridge input.
+///
+/// The bridge is not itself a source of file evidence: only a successfully paired
+/// `custom_tool_call_output` is emitted below. This helper therefore only unwraps the
+/// string argument and deliberately ignores shell commands or unrelated text that merely
+/// mentions `apply_patch`.
+fn extract_apply_patch_input(input: &str) -> Option<String> {
+    const MARKER: &str = "tools.apply_patch(";
+    let marker_start = input.find(MARKER)?;
+    let argument = input[marker_start + MARKER.len()..].trim_start();
+
+    if argument.starts_with('"') {
+        return parse_json_string_prefix(argument).map(|(value, _)| value);
+    }
+
+    // The desktop wrapper often binds the patch first and passes the variable to the
+    // tool: `const patch = "..."; text(await tools.apply_patch(patch));`.
+    let variable_end =
+        argument.find(|character: char| !character.is_ascii_alphanumeric() && character != '_')?;
+    let variable = &argument[..variable_end];
+    if variable.is_empty() {
+        return None;
+    }
+    let assignment_marker = format!("{variable} =");
+    let assignment_start = input[..marker_start].rfind(&assignment_marker)?;
+    let assigned = input[assignment_start + assignment_marker.len()..].trim_start();
+    parse_json_string_prefix(assigned).map(|(value, _)| value)
+}
+
+/// Parse one JSON/JavaScript-compatible double-quoted string at the start of `input`.
+/// Codex serializes the bridge input as JSON, so JSON string escaping covers the observed
+/// `\\n`, `\\t`, `\\"`, and Unicode forms while avoiding an eval-like parser.
+fn parse_json_string_prefix(input: &str) -> Option<(String, usize)> {
+    if !input.starts_with('"') {
+        return None;
+    }
+
+    let mut escaped = false;
+    for (index, character) in input.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '"' => {
+                let literal = &input[..index + character.len_utf8()];
+                let value = serde_json::from_str::<String>(literal).ok()?;
+                return Some((value, index + character.len_utf8()));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 struct TurnContext {
@@ -508,6 +577,28 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!(
             "wakaclock-core-codex-response-item-test-{}-{name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-test.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for line in [&session_meta, &turn_context, &call, &output] {
+            let compact: serde_json::Value = serde_json::from_str(line).unwrap();
+            writeln!(file, "{}", serde_json::to_string(&compact).unwrap()).unwrap();
+        }
+        path
+    }
+
+    fn write_exec_response_item_fixture_copy(name: &str) -> PathBuf {
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let turn_context = fs::read_to_string(format!("{fixtures}turn_context.json")).unwrap();
+        let call = fs::read_to_string(format!("{fixtures}custom_tool_call_exec.json")).unwrap();
+        let output =
+            fs::read_to_string(format!("{fixtures}custom_tool_call_exec_output.json")).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-exec-response-item-test-{}-{name}",
             std::process::id()
         ));
         fs::create_dir_all(&dir).unwrap();
@@ -683,6 +774,50 @@ mod tests {
         assert_eq!(new_module.lines_deleted, Some(0));
 
         assert_ne!(greeting.event_id, new_module.event_id);
+    }
+
+    #[test]
+    fn parse_since_reads_codex_desktop_exec_apply_patch_shape() {
+        // Codex Desktop routes the native apply_patch tool through an `exec` bridge;
+        // the patch is the quoted argument to `tools.apply_patch`, rather than the
+        // response item's `input` value itself. This is the shape emitted by the
+        // current desktop session writer.
+        let path = write_exec_response_item_fixture_copy("desktop-wrapper");
+        let parser = CodexParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+        };
+
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert!(batch.warnings.is_empty());
+        let event = &batch.events[0];
+        assert!(event.entity.ends_with("desktop_wrapper.rs"));
+        assert_eq!(event.lines_added, Some(1));
+        assert_eq!(event.lines_deleted, Some(0));
+        assert_eq!(event.confidence, AiConfidence::Verified);
+    }
+
+    #[test]
+    fn extract_apply_patch_input_accepts_desktop_literal_and_variable_wrappers() {
+        let direct = r#"text(await tools.apply_patch("*** Begin Patch\n*** Add File: src/direct.rs\n+one\n*** End Patch"));"#;
+        assert_eq!(
+            extract_apply_patch_input(direct).as_deref(),
+            Some("*** Begin Patch\n*** Add File: src/direct.rs\n+one\n*** End Patch")
+        );
+
+        let variable = r#"const patch = "*** Begin Patch\n*** Add File: src/variable.rs\n+one\n*** End Patch";\ntext(await tools.apply_patch(patch));"#;
+        assert_eq!(
+            extract_apply_patch_input(variable).as_deref(),
+            Some("*** Begin Patch\n*** Add File: src/variable.rs\n+one\n*** End Patch")
+        );
     }
 
     #[test]

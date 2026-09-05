@@ -34,6 +34,19 @@ editor/sidecar reconciliation path.
 | F1-05 canonical IDs/aliases | in_progress | `ai/revision.rs` enforces direct tool-event/entity or content-version/entity proof; `AiAttributionState::record_event_alias` persists one-hop aliases and rejects session-only/time-only guesses. Server alias storage and producer wiring remain. |
 | F1-06 revision storage/read semantics | in_progress | `attribution_revisions` SQLite table, idempotent payload-hash append, full-value correction rows, max-revision read, and retention pruning are implemented and tested. The ClickHouse `heartbeats`/`heartbeats_incoming` schemas and `HeartbeatRow` now carry additive `revision` (default `0`), including reprocess reads; correction writers, canonical-winner projections, and client revision input remain. |
 
+## Codex Desktop detection repair (2026-09-05)
+
+The live Codex Desktop transcript shape was added to `wakaclock-core::ai::codex`: a
+`custom_tool_call` named `exec` now unwraps both literal
+`tools.apply_patch("...")` and `const patch = "..."` variable wrappers, then still
+requires the matching `custom_tool_call_output` before emitting verified file events.
+`run_ai_sync` validates each transcript event before batching so an unsafe historical
+Claude path is skipped without aborting later agents. Automatic sync now gives each
+agent its own bounded pass and scans newest transcripts first. Core tests (202 passed),
+CLI integration tests (6 passed, 1 ignored), and a replay of the real Codex Desktop
+session all pass; the replay grew from `0` to `44` parsed events, and the live broker
+processed Codex rows while keeping new retries at zero.
+
 ## Why two of the four F0-02 scenarios are deferred
 
 The ledger's F0-02 closing criterion is "มี expected/actual และ failing assertion
