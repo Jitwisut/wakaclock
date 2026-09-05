@@ -64,7 +64,10 @@ pub use diagnostics::{
     AttributionMode, BrokerHealth, ObserverConfig, ParserLagSummary, VerificationStatus,
     AI_DIAGNOSTICS_SCHEMA_VERSION,
 };
-pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
+pub use event::{
+    is_known_agent_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
+    KNOWN_AGENT_IDS,
+};
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
 pub use parser::{

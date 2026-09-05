@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+use crate::ai::is_known_agent_id;
+
 pub const CLIPBOARD_TRACKING_VERSION: u8 = 1;
 pub const MAX_CLIPBOARD_COUNTER: u32 = 10_000_000;
 
@@ -246,7 +248,10 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
             || input.ai_source.is_some_and(|source| {
                 source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
             });
-        if verified {
+        let named_agent_is_known = input
+            .ai_agent
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent));
+        if verified && named_agent_is_known {
             ActorType::AiVerified
         } else {
             // Accuracy-over-coverage (plans/decision-accuracy-over-coverage.md): identity
@@ -663,7 +668,7 @@ impl Heartbeat {
         let verified_identity = self
             .ai_agent
             .as_deref()
-            .is_some_and(|agent| !agent.trim().is_empty())
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && verified_source
             && verified_confidence;
 
@@ -702,7 +707,7 @@ impl Heartbeat {
             && self
                 .ai_agent
                 .as_deref()
-                .is_some_and(|agent| !agent.trim().is_empty())
+                .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && self
                 .ai_confidence
                 .as_deref()
@@ -954,6 +959,19 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.actor_type, ActorType::Unknown);
         assert_eq!(legacy.confidence, 0.0);
+    }
+
+    #[test]
+    fn unknown_agent_labels_are_not_promoted_to_verified() {
+        let resolved = resolve_attribution(AttributionInput {
+            ai_agent: Some("verify-declared"),
+            ai_source: Some("agent_hook"),
+            ai_confidence: Some("verified"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(resolved.actor_type, ActorType::Unknown);
+        assert_eq!(resolved.confidence, 0.0);
     }
 
     #[test]

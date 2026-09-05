@@ -16,6 +16,40 @@ pub fn is_safe_event_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
+/// Agent identifiers that this build can attribute by name.
+///
+/// An arbitrary client supplied string is still useful as evidence that some AI
+/// activity may have happened, but it must not become a named verified agent in
+/// analytics. Keeping this list beside the normalizer gives the CLI, API and
+/// dashboard the same identity boundary and prevents test labels or typos from
+/// appearing as real integrations.
+pub const KNOWN_AGENT_IDS: &[&str] = &[
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "cursor",
+    "cursor-agent",
+    "kilo-code",
+    "kimi-code-cli",
+    "deep-code",
+    "antigravity",
+    "copilot",
+    "windsurf",
+    "cline",
+    "roo-code",
+    "opencode",
+    "generic-mcp",
+    "chatgpt-mcp",
+];
+
+/// Return whether `raw` resolves to an adapter identifier that can be named in
+/// verified attribution. Unknown integrations remain eligible for an unattributed
+/// AI bucket, but never for a named row.
+pub fn is_known_agent_id(raw: &str) -> bool {
+    let normalized = normalize_agent_id(raw);
+    KNOWN_AGENT_IDS.contains(&normalized.as_str())
+}
+
 /// Build a stable producer event ID without putting a file path (or any other
 /// path-bearing identity) in the value sent across the machine boundary.  The
 /// complete identity is still part of the UUIDv5 input, so two files touched by
@@ -158,6 +192,14 @@ mod tests {
     #[test]
     fn normalize_agent_id_passes_through_unknown_agents() {
         assert_eq!(normalize_agent_id("Cursor Agent"), "cursor-agent");
+    }
+
+    #[test]
+    fn only_canonical_adapter_ids_can_be_named() {
+        assert!(is_known_agent_id("Codex CLI"));
+        assert!(is_known_agent_id("Cursor Agent"));
+        assert!(!is_known_agent_id("verify-declared"));
+        assert!(!is_known_agent_id("unknown-agent"));
     }
 
     #[test]

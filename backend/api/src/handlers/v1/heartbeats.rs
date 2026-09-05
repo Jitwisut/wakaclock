@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
+use wakaclock_core::ai::is_known_agent_id;
 use wakaclock_core::heartbeat::{ActivitySegment, ActorType, Category, EntityType, Heartbeat};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -331,7 +332,7 @@ pub async fn list(
             let verified_identity = r.is_ai_generated
                 && r.ai_agent
                     .as_deref()
-                    .is_some_and(|agent| !agent.trim().is_empty())
+                    .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
                 && r.ai_confidence
                     .as_deref()
                     .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
@@ -686,6 +687,30 @@ mod tests {
         assert!(heartbeat.is_ai_generated);
         assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn unknown_verified_label_is_stored_as_unattributed_ai() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "verify-declared",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        assert!(heartbeat.is_ai_generated);
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
     }
 
     #[test]
