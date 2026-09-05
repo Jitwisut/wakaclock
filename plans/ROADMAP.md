@@ -111,6 +111,14 @@ they are not production attribution code.
 
 ## Related records
 
+- [`ai-coverage-execution-plan.md`](ai-coverage-execution-plan.md) — detailed
+  execution plan derived from the 2026-09-05 coverage audit, including contracts,
+  dependencies, rollout and rollback. It elaborates this roadmap; it is not a
+  claim that the planned implementation or live certification is complete.
+- [`ai-coverage-task-ledger.md`](ai-coverage-task-ledger.md) — actionable work
+  packages and acceptance criteria, initially all planned.
+- [`ai-coverage-validation-plan.md`](ai-coverage-validation-plan.md) — scenario
+  matrix, proposed measurement targets and real-runtime certification procedure.
 - [`decision-accuracy-over-coverage.md`](decision-accuracy-over-coverage.md) —
   rationale/ADR.
 - [`plan-accuracy-first-coverage.md`](plan-accuracy-first-coverage.md) —
