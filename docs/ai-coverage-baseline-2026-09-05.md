@@ -5,14 +5,20 @@
 ## 1. Branch/commit
 
 - Branch งานนี้: `features/ai-coverage-f0-baseline`
-- แตกจาก `main` @ `98e24552a2ac4e79ab5c92f04b72d2891dd48eb8` (`Merge branch 'phase8/production-wiring'`)
-- ไม่ได้ reset/stash อะไรก่อนแตก branch — working tree ที่ dirty อยู่แล้วบน `main` ถูกพาไปพร้อม branch ใหม่ตามปกติของ `git checkout -b`
+- แตกจาก `main` @ `98e24552a2ac4e79ab5c92f04b72d2891dd48eb8` (`Merge branch 'phase8/production-wiring'`) — จุดแตก branch เดิม ยังเป็นข้อเท็จจริงทางประวัติศาสตร์
+- **อัปเดต (เดียวกันวันนี้):** ผู้ใช้สั่งให้ commit+push งานที่ dirty ก่อนแตก branch เข้า `main` แล้วเริ่ม F0 ต่อ ลำดับที่เกิดขึ้นจริง:
+  1. Commit งาน "editor self-declaration" (10 ไฟล์ code, ไม่รวม ROADMAP.md/plan docs) → `main` @ `c4d36f5`
+  2. Commit งาน frontend analytics query-keys/endpoint (2 ไฟล์) → `main` @ `04077bf`
+  3. `git push origin main` — สอง commit นี้อยู่บน `origin/main` แล้ว
+  4. กลับมาที่ branch นี้ แล้ว `git merge main --ff-only` → tip ของ branch นี้ตอนนี้คือ `04077bf`
+  5. Commit ROADMAP.md + เอกสารแผนทั้งหมด (รวมไฟล์นี้) → branch นี้ @ `a1e32c7`
+- **Branch tip ปัจจุบัน: `a1e32c7`** (บน `features/ai-coverage-f0-baseline`, ยังไม่ push/merge กลับ `main`)
 
-## 2. Dirty-tree boundary ตอนแตก branch
+## 2. Dirty-tree boundary ตอนแตก branch (ประวัติศาสตร์ ณ เวลาที่เขียน §1 เดิม)
 
-งานเหล่านี้มีอยู่ก่อน F0 เริ่ม (ไม่ใช่ผลจาก F0), ยังไม่ commit:
+งานเหล่านี้มีอยู่ก่อน F0 เริ่ม (ไม่ใช่ผลจาก F0) — **ตอนนี้ commit แล้วทั้งหมด ไม่ได้ค้างเป็น dirty tree อีกต่อไป**:
 
-Modified:
+Modified → commit แล้วที่ `c4d36f5` (`main`, feature "editor self-declaration"):
 - `backend/api/crates/wakaclock-cli/src/broker.rs`
 - `backend/api/crates/wakaclock-cli/src/main.rs`
 - `backend/api/crates/wakaclock-cli/tests/broker_process.rs`
@@ -21,17 +27,20 @@ Modified:
 - `backend/api/crates/wakaclock-core/src/broker.rs`
 - `extensions/ai-agents/common/emit-event.sh`
 - `extensions/ai-agents/common/tests/emit-event.test.sh`
+
+Modified → commit แล้วที่ `04077bf` (`main`, frontend analytics query-keys):
 - `frontend/app/lib/wakaclock/endpoints.ts`
 - `frontend/app/lib/wakaclock/query-keys.ts`
-- `plans/ROADMAP.md`
 
-Untracked (เอกสารแผนที่เพิ่งเขียนก่อน F0 เริ่ม):
-- `docs/ai-coverage-gap-audit-2026-09-05.md`
-- `plans/ai-coverage-execution-plan.md`
-- `plans/ai-coverage-task-ledger.md`
-- `plans/ai-coverage-validation-plan.md`
+Modified/new → commit แล้วที่ `a1e32c7` (branch นี้เท่านั้น ยังไม่อยู่บน `main`):
+- `plans/ROADMAP.md` (modified)
+- `docs/ai-coverage-gap-audit-2026-09-05.md` (new)
+- `plans/ai-coverage-execution-plan.md` (new)
+- `plans/ai-coverage-task-ledger.md` (new)
+- `plans/ai-coverage-validation-plan.md` (new)
+- `docs/ai-coverage-baseline-2026-09-05.md` (new, ไฟล์นี้เอง)
 
-หมายเหตุ: ยังไม่ได้ commit รายการข้างบน — ไฟล์นี้บันทึกไว้เป็นเส้นแบ่งเพื่อไม่ให้งาน F0 เป็นต้นไปถูกปนกับ diff ที่มีอยู่ก่อนหน้า ไม่ได้แปลว่า accepted หรือ reviewed แล้ว
+หมายเหตุ: working tree ของ branch นี้สะอาดแล้ว (`git status` ไม่มี pending change) commit ทั้งหมดข้างบนยังไม่ผ่านการรัน `cargo test`/`npm run validate`/shell test suite แบบเต็มหลัง commit — ดู §6 สำหรับสถานะการตรวจสอบ
 
 ## 3. Component versions ณ จุดนี้
 
