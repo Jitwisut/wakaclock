@@ -1,0 +1,11 @@
+{
+  "type": "response_item",
+  "timestamp": "2026-08-14T09:19:42.000Z",
+  "payload": {
+    "type": "custom_tool_call",
+    "status": "completed",
+    "call_id": "call_exec_wrapper0000000000000000",
+    "name": "exec",
+    "input": "text(await tools.apply_patch(\"*** Begin Patch\\n*** Add File: src/desktop_wrapper.rs\\n+pub fn from_desktop_wrapper() {}\\n*** End Patch\"));\\n"
+  }
+}

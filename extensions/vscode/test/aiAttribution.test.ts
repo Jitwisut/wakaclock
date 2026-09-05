@@ -52,3 +52,35 @@ describe("AiAttributionStore.classify — correlation window", () => {
     expect(result.attribution).toBe("human");
   });
 });
+
+describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () => {
+  let homeDir: string;
+
+  beforeEach(async () => {
+    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-unmatched-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
+  // `classify` has zero candidates whenever no sidecar event exists for this
+  // entity/window — which is exactly the shape of an AI edit with no adapter
+  // installed for that tool, or one whose sidecar write simply hasn't landed yet
+  // (a delayed sidecar, gap #4's other named scenario). There is no positive
+  // evidence of human keystrokes here either: only that no AI event was found.
+  // Per execution-plan decision D06 ("absence of AI evidence is not proof of human
+  // origin"), the correct verdict is `unattributed`, not a silent promotion to
+  // `human`. `classify`'s empty-candidates branch (aiAttribution.ts) returns
+  // `human` unconditionally, so this currently fails.
+  it.fails(
+    "an edit with no sidecar candidate at all is not silently attributed to a human (D06)",
+    async () => {
+      const store = new AiAttributionStore(homeDir);
+
+      const result = await store.classify("/project/never-seen.ts", Date.now(), 12, 0);
+
+      expect(result.attribution).toBe("unattributed");
+    }
+  );
+});

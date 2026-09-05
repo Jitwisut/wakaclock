@@ -555,3 +555,67 @@ async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+/// F0-02 reproducer for ai-coverage-gap-audit-2026-09-05.md gap #4: `wakaclock ai
+/// doctor` and `wakaclock doctor ai` are two independent code paths reading the
+/// same broker state, but only `doctor ai` (`broker::status_for_cli`, exercised by
+/// `p0_a4_doctor_ai_identifies_pipeline_gaps` above) actually probes the running
+/// process. `ai doctor` (`run_ai_doctor` in `src/main.rs`) hardcodes
+/// `BrokerHealth { running: false, ..Default::default() }` and
+/// `ParserLagSummary { transcripts_behind: 0, max_lag_seconds: 0, .. }`
+/// regardless of reality. This spawns a real broker, confirms it is alive via the
+/// `doctor ai` path, then shows `ai doctor` denies that same broker is running.
+/// Expected once F1-03/F2-02 wire a shared collector: both commands agree.
+/// Actual today: `ai doctor` always reports `running: false`. Left `#[ignore]`
+/// so `cargo test` stays green until F2-03 fixes it — run explicitly with
+/// `cargo test -- --ignored f0_02_ai_doctor` to reproduce the gap.
+#[ignore = "F0-02 known-gap reproducer for audit gap #4; fails until F2-03 unifies ai doctor / doctor ai on one collector"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state() {
+    let home = temp_home("f0-02-doctor-mismatch");
+    let (server_url, server_task) = holding_server().await;
+    let mut broker = spawn_broker(&home, &server_url);
+    let _ = wait_for_discovery(&home).await;
+
+    let binary = env!("CARGO_BIN_EXE_wakaclock");
+
+    // Ground truth: `doctor ai` (the real collector) sees the broker we just spawned.
+    let doctor_ai_output = Command::new(binary)
+        .args(["doctor", "ai", "--json"])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output()
+        .expect("run doctor ai");
+    let doctor_ai_report: serde_json::Value =
+        serde_json::from_slice(&doctor_ai_output.stdout).expect("doctor ai emitted valid json");
+    assert_eq!(
+        doctor_ai_report["broker"]["running"],
+        serde_json::json!(true),
+        "test setup invalid: doctor ai should see the broker this test just spawned"
+    );
+
+    // Same broker, same HOME, the other command: `ai doctor`.
+    let ai_doctor_output = Command::new(binary)
+        .args(["ai", "doctor", "--json"])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output()
+        .expect("run ai doctor");
+    let ai_doctor_report: serde_json::Value =
+        serde_json::from_slice(&ai_doctor_output.stdout).expect("ai doctor emitted valid json");
+
+    // Gap: this is expected to be `true` (same broker, same host) but the
+    // hardcoded `BrokerHealth::default()` fallback in `run_ai_doctor` makes it
+    // `false` every time, which is exactly gap #4 in the audit.
+    assert_eq!(
+        ai_doctor_report["broker"]["running"],
+        serde_json::json!(true),
+        "ai doctor and doctor ai must agree on whether the broker is running; \
+         ai doctor hardcodes `running: false` in run_ai_doctor (src/main.rs)"
+    );
+
+    broker.kill();
+    server_task.abort();
+    let _ = server_task.await;
+    let _ = fs::remove_dir_all(&home);
+}

@@ -120,7 +120,12 @@ fn map_heartbeat(
     let created_at = parse_created_at(heartbeat.created_at.as_deref());
     let category = normalize_category(heartbeat.category.as_deref());
     let is_ai_generated = is_ai_generated(&heartbeat);
-    let ai_event_id = heartbeat.ai_session.clone();
+    let ai_event_id = heartbeat
+        .ai_session
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
     let human_lines_added = to_positive_u32(heartbeat.human_line_changes);
@@ -195,10 +200,16 @@ fn map_heartbeat(
         unattributed_lines_added: Some(0),
         unattributed_lines_deleted: Some(0),
         created_at,
-        // A WakaTime import never carries a verified native-hook/MCP/transcript
-        // identity (see the comment above), so this is never "ai_verified".
-        actor_type: if is_ai_generated { "unknown" } else { "human" }.to_string(),
-        actor_confidence: if is_ai_generated { 0.0 } else { 1.0 },
+        // WakaTime's AI fields are positive evidence that an AI was involved, but do
+        // not identify the local tool. Keep that distinction explicit: this is
+        // unattributed/inferred AI, not genuinely unknown authorship.
+        actor_type: if is_ai_generated {
+            "ai_inferred"
+        } else {
+            "human"
+        }
+        .to_string(),
+        actor_confidence: if is_ai_generated { 0.6 } else { 1.0 },
         clipboard_tracking_version: None,
         copy_actions: None,
         paste_actions: None,
@@ -209,6 +220,7 @@ fn map_heartbeat(
         paste_same_file_actions: None,
         paste_same_workspace_actions: None,
         paste_external_or_unknown_actions: None,
+        revision: 0,
     })
 }
 
@@ -295,10 +307,13 @@ fn is_ai_generated(heartbeat: &WakaTimeHeartbeat) -> bool {
     heartbeat
         .category
         .as_deref()
-        .map(|value| value.eq_ignore_ascii_case("AI Coding"))
+        .map(|value| value.trim().eq_ignore_ascii_case("AI Coding"))
         .unwrap_or(false)
-        || heartbeat.ai_line_changes.is_some()
-        || heartbeat.ai_session.is_some()
+        || heartbeat.ai_line_changes.is_some_and(|value| value != 0)
+        || heartbeat
+            .ai_session
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
         || heartbeat.ai_input_tokens.unwrap_or_default() > 0
         || heartbeat.ai_output_tokens.unwrap_or_default() > 0
 }
@@ -338,5 +353,49 @@ mod tests {
         assert!(row.ai_provider.is_none());
         assert_eq!(row.ai_source.as_deref(), Some("observer"));
         assert_eq!(row.ai_confidence.as_deref(), Some("inferred"));
+        assert_eq!(row.actor_type, "ai_inferred");
+        assert_eq!(row.actor_confidence, 0.6);
+    }
+
+    #[test]
+    fn empty_or_zero_ai_fields_do_not_create_ai_evidence() {
+        let heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_000.0,
+            "category": "Coding",
+            "ai_line_changes": 0,
+            "ai_session": "  ",
+            "ai_input_tokens": 0,
+            "ai_output_tokens": 0
+        }))
+        .unwrap();
+        let row =
+            map_heartbeat(Uuid::nil(), heartbeat, "vscode", "macos", "wakatime-import").unwrap();
+
+        assert!(!row.is_ai_generated);
+        assert_eq!(row.actor_type, "human");
+        assert_eq!(row.actor_confidence, 1.0);
+        assert!(row.ai_source.is_none());
+        assert!(row.ai_event_id.is_none());
+    }
+
+    #[test]
+    fn mixed_import_keeps_both_line_counters_with_inferred_actor() {
+        let heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_000.0,
+            "category": "AI Coding",
+            "ai_line_changes": 3,
+            "human_line_changes": 4
+        }))
+        .unwrap();
+        let row =
+            map_heartbeat(Uuid::nil(), heartbeat, "vscode", "macos", "wakatime-import").unwrap();
+
+        assert_eq!(row.actor_type, "ai_inferred");
+        assert_eq!(row.ai_lines_added, Some(3));
+        assert_eq!(row.human_lines_added, Some(4));
     }
 }

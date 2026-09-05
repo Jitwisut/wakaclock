@@ -40,7 +40,9 @@ function report(adapters: AdapterFreshness[]): AiDiagnosticsReport {
 
 describe('AiIntegrationsPanel', () => {
   it('renders client/provider/model and a healthy delivered adapter', () => {
-    render(<AiIntegrationsPanel report={report([adapter({ last_delivery_result: 'delivered' })])} />);
+    render(
+      <AiIntegrationsPanel report={report([adapter({ last_delivery_result: 'delivered' })])} />
+    );
 
     expect(screen.getByRole('region', { name: 'AI integrations' })).toBeInTheDocument();
     expect(screen.getByText('codex')).toBeInTheDocument();
@@ -71,7 +73,9 @@ describe('AiIntegrationsPanel', () => {
     expect(screen.getByText('Needs setup')).toBeInTheDocument();
     expect(screen.getByText('Unsupported')).toBeInTheDocument();
     expect(screen.getByText('Degraded')).toBeInTheDocument();
-    expect(screen.getAllByText(/unknown \/ unknown/).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('Provider not reported / Model not reported').length
+    ).toBeGreaterThan(0);
   });
 
   it('shows a policy kill switch separately from trust/setup failures', () => {

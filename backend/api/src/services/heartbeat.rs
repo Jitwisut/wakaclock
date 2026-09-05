@@ -297,6 +297,7 @@ impl HeartbeatService {
                 paste_same_file_actions: hb.paste_same_file_actions,
                 paste_same_workspace_actions: hb.paste_same_workspace_actions,
                 paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
+                revision: 0,
             };
 
             rows.push(row);

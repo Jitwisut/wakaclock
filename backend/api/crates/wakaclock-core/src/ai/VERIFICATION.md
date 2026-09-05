@@ -88,6 +88,19 @@ Fixed by:
   of real sessions (older Codex builds, by session date) do still use it, confirmed by
   the dry-run output.
 
+## Phase 8 Codex Desktop wrapper verification (2026-09-05)
+
+The current Codex Desktop session on the verification workspace uses a second wrapper:
+the `custom_tool_call` name is `"exec"`, and its input contains
+`text(await tools.apply_patch("..."))` (with some calls using a `patch` variable).
+Before this fix, the parser ignored those calls and a replay of the session reported
+`0 event(s) parsed`. The parser now unwraps both literal and variable forms, preserves
+the existing completion proof from `custom_tool_call_output`, and replays the same
+session as `42 event(s) parsed` in the first dry-run (the captured session later grew to
+44 events as this work continued). One oversized non-tool transcript record still
+produces the expected bounded-reader warning; it does not contain the file-edit calls
+and does not suppress the parsed events.
+
 Re-running the same dry-run after the fix against the same 156 real sessions: **2,642
 events found** (up from 0), of which 649 came from the new `response_item` path this
 fix added. No content was sent anywhere — `--dry-run` only.

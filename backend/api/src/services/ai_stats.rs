@@ -8,6 +8,29 @@ use crate::model::ai_stats::{
     AiUsageMetricsRow,
 };
 
+// A small compatibility projection for rows written before `actor_type` became the
+// canonical field. Some WakaTime imports explicitly stored `actor_type = 'unknown'`
+// while also carrying positive AI evidence. Project those rows for reporting only; the
+// raw heartbeat remains unchanged and can be repaired separately once its provenance is
+// audited. This keeps old data from disappearing from AI totals after the import fix.
+const EFFECTIVE_ACTOR_TYPE_EXPR: &str = "multiIf(
+    h.actor_type = 'unknown' AND (
+        h.is_ai_generated = 1
+        OR lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+        OR lower(ifNull(h.ai_event_id, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+        OR coalesce(h.ai_lines_added, 0) > 0
+        OR coalesce(h.ai_lines_deleted, 0) > 0
+        OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp')
+    ),
+    multiIf(
+        lower(ifNull(h.ai_confidence, '')) = 'verified'
+            OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp'),
+        'ai_verified',
+        'ai_inferred'
+    ),
+    h.actor_type
+)";
+
 pub struct AiStatsService {
     clickhouse: Arc<ClickHouseClient>,
 }
@@ -118,35 +141,41 @@ impl AiStatsService {
     }
 
     async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiTotalsRow> {
+        let query = format!(
+            "
+                SELECT
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_deleted,
+                    coalesce(sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human'), 0) AS total_human_lines_added,
+                    coalesce(sumIf(coalesce(h.human_lines_deleted, 0), h.effective_actor_type = 'human'), 0) AS total_human_lines_deleted,
+                    coalesce(sum(coalesce(h.unattributed_lines_added, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.effective_actor_type = 'unknown'), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.human_lines_added, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_unattributed_lines_added,
+                    coalesce(sum(coalesce(h.unattributed_lines_deleted, 0)), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.effective_actor_type = 'unknown'), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.human_lines_deleted, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_unattributed_lines_deleted,
+                    coalesce(sumIf(coalesce(h.keystrokes, 0), h.effective_actor_type = 'human'), 0) AS total_human_keystrokes,
+                    coalesce(sumIf(coalesce(h.chars_added, 0), h.effective_actor_type = 'human'), 0) AS total_human_chars_added,
+                    count() AS total_heartbeats,
+                    countIf(h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_heartbeats,
+                    countIf(h.effective_actor_type = 'ai_verified') AS ai_verified_heartbeats,
+                    countIf(h.effective_actor_type = 'ai_inferred') AS ai_inferred_heartbeats,
+                    countIf(h.effective_actor_type = 'human') AS human_heartbeats,
+                    countIf(h.effective_actor_type = 'unknown') AS unattributed_heartbeats
+                FROM (
+                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
+                    FROM wakaclock.heartbeats AS h
+                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                ) AS h
+                ",
+        );
         self.clickhouse
             .get_client()
-            .query(
-                "
-                SELECT
-                    coalesce(sumIf(ai_lines_added, actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_added,
-                    coalesce(sumIf(ai_lines_deleted, actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_deleted,
-                    coalesce(sumIf(ai_lines_added, actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_added,
-                    coalesce(sumIf(ai_lines_deleted, actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_deleted,
-                    coalesce(sumIf(ai_lines_added, actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_added,
-                    coalesce(sumIf(ai_lines_deleted, actor_type = 'ai_inferred'), 0) AS total_ai_inferred_lines_deleted,
-                    coalesce(sumIf(coalesce(human_lines_added, 0), actor_type = 'human'), 0) AS total_human_lines_added,
-                    coalesce(sumIf(coalesce(human_lines_deleted, 0), actor_type = 'human'), 0) AS total_human_lines_deleted,
-                    coalesce(sum(coalesce(unattributed_lines_added, 0)), 0)
-                        + coalesce(sumIf(toUInt64(coalesce(ai_lines_added, 0) + coalesce(human_lines_added, 0)), actor_type = 'unknown'), 0) AS total_unattributed_lines_added,
-                    coalesce(sum(coalesce(unattributed_lines_deleted, 0)), 0)
-                        + coalesce(sumIf(toUInt64(coalesce(ai_lines_deleted, 0) + coalesce(human_lines_deleted, 0)), actor_type = 'unknown'), 0) AS total_unattributed_lines_deleted,
-                    coalesce(sumIf(coalesce(keystrokes, 0), actor_type = 'human'), 0) AS total_human_keystrokes,
-                    coalesce(sumIf(coalesce(chars_added, 0), actor_type = 'human'), 0) AS total_human_chars_added,
-                    count() AS total_heartbeats,
-                    countIf(actor_type IN ('ai_verified', 'ai_inferred')) AS ai_heartbeats,
-                    countIf(actor_type = 'ai_verified') AS ai_verified_heartbeats,
-                    countIf(actor_type = 'ai_inferred') AS ai_inferred_heartbeats,
-                    countIf(actor_type = 'human') AS human_heartbeats,
-                    countIf(actor_type = 'unknown') AS unattributed_heartbeats
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND date BETWEEN toDate(?) AND toDate(?)
-                ",
-            )
+            .query(&query)
             .bind(user_id)
             .bind(start)
             .bind(end)
@@ -156,34 +185,40 @@ impl AiStatsService {
     }
 
     async fn fetch_agents(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiAgentRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
+        let query = format!(
+            "
                 SELECT
                     multiIf(
-                        h.actor_type IN ('ai_verified', 'ai_inferred'), coalesce(h.ai_agent, 'unknown'),
-                        h.actor_type = 'human', 'human',
+                        h.effective_actor_type IN ('ai_verified', 'ai_inferred'), coalesce(h.ai_agent, 'unknown'),
+                        h.effective_actor_type = 'human', 'human',
                         'unknown'
                     ) AS agent,
-                    h.actor_type AS actor_type,
+                    h.effective_actor_type AS actor_type,
                     h.ai_provider AS provider,
                     h.ai_model AS model,
-                    sumIf(coalesce(h.ai_lines_added, 0), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
-                    sumIf(coalesce(h.ai_lines_deleted, 0), h.actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
-                    sumIf(coalesce(h.human_lines_added, 0), h.actor_type = 'human') AS human_lines_added,
-                    sumIf(coalesce(h.human_lines_deleted, 0), h.actor_type = 'human') AS human_lines_deleted,
+                    sumIf(coalesce(h.ai_lines_added, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
+                    sumIf(coalesce(h.ai_lines_deleted, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
+                    sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
+                    sumIf(coalesce(h.human_lines_deleted, 0), h.effective_actor_type = 'human') AS human_lines_deleted,
                     sum(coalesce(h.unattributed_lines_added, 0))
-                        + sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.actor_type = 'unknown') AS unattributed_lines_added,
+                        + sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.effective_actor_type = 'unknown')
+                        + sumIf(toUInt64(coalesce(h.human_lines_added, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS unattributed_lines_added,
                     sum(coalesce(h.unattributed_lines_deleted, 0))
-                        + sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
+                        + sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.effective_actor_type = 'unknown')
+                        + sumIf(toUInt64(coalesce(h.human_lines_deleted, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS unattributed_lines_deleted,
                     count() AS heartbeat_count
-                FROM wakaclock.heartbeats AS h
-                WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                FROM (
+                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
+                    FROM wakaclock.heartbeats AS h
+                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                ) AS h
                 GROUP BY agent, actor_type, h.ai_provider, h.ai_model
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
-            )
+        );
+        self.clickhouse
+            .get_client()
+            .query(&query)
             .bind(user_id)
             .bind(start)
             .bind(end)
@@ -220,33 +255,39 @@ impl AiStatsService {
     }
 
     async fn fetch_daily(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiDailyRow>> {
-        self.clickhouse
-            .get_client()
-            .query(
-                "
+        let query = format!(
+            "
                 SELECT
                     toString(h.date) AS day,
-                    coalesce(sumIf(h.ai_lines_added, h.actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_added,
-                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_deleted,
-                    coalesce(sumIf(h.ai_lines_added, h.actor_type = 'ai_verified'), 0) AS ai_verified_lines_added,
-                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type = 'ai_verified'), 0) AS ai_verified_lines_deleted,
-                    coalesce(sumIf(h.ai_lines_added, h.actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_added,
-                    coalesce(sumIf(h.ai_lines_deleted, h.actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_deleted,
-                    sumIf(coalesce(h.human_lines_added, 0), h.actor_type = 'human') AS human_lines_added,
-                    sumIf(coalesce(h.human_lines_deleted, 0), h.actor_type = 'human') AS human_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_verified'), 0) AS ai_verified_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type = 'ai_verified'), 0) AS ai_verified_lines_deleted,
+                    coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_added,
+                    coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type = 'ai_inferred'), 0) AS ai_inferred_lines_deleted,
+                    sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
+                    sumIf(coalesce(h.human_lines_deleted, 0), h.effective_actor_type = 'human') AS human_lines_deleted,
                     coalesce(sum(coalesce(h.unattributed_lines_added, 0)), 0)
-                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.actor_type = 'unknown'), 0) AS unattributed_lines_added,
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_added, 0) + coalesce(h.human_lines_added, 0)), h.effective_actor_type = 'unknown'), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.human_lines_added, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS unattributed_lines_added,
                     coalesce(sum(coalesce(h.unattributed_lines_deleted, 0)), 0)
-                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.actor_type = 'unknown'), 0) AS unattributed_lines_deleted,
-                    sumIf(coalesce(h.keystrokes, 0), h.actor_type = 'human') AS human_keystrokes,
-                    sumIf(coalesce(h.chars_added, 0), h.actor_type = 'human') AS human_chars_added,
+                        + coalesce(sumIf(toUInt64(coalesce(h.ai_lines_deleted, 0) + coalesce(h.human_lines_deleted, 0)), h.effective_actor_type = 'unknown'), 0)
+                        + coalesce(sumIf(toUInt64(coalesce(h.human_lines_deleted, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS unattributed_lines_deleted,
+                    sumIf(coalesce(h.keystrokes, 0), h.effective_actor_type = 'human') AS human_keystrokes,
+                    sumIf(coalesce(h.chars_added, 0), h.effective_actor_type = 'human') AS human_chars_added,
                     count() AS heartbeat_count
-                FROM wakaclock.heartbeats AS h
-                WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                FROM (
+                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
+                    FROM wakaclock.heartbeats AS h
+                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                ) AS h
                 GROUP BY day
                 ORDER BY day ASC
                 ",
-            )
+        );
+        self.clickhouse
+            .get_client()
+            .query(&query)
             .bind(user_id)
             .bind(start)
             .bind(end)

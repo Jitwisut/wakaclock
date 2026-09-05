@@ -5,6 +5,9 @@
 
 export type EntityType = 'app' | 'domain' | 'file' | 'url';
 
+/** Canonical authorship state returned by the AI statistics endpoint. */
+export type ActorType = 'ai_inferred' | 'ai_verified' | 'human' | 'unknown';
+
 export type Category =
   | 'building'
   | 'coding'
@@ -201,11 +204,16 @@ export interface InsightsResponse {
 // ---------------------------------------------------------------------------
 export interface AiAgentItem {
   agent: string;
+  actor_type: ActorType;
   ai_lines_added: number;
   ai_lines_deleted: number;
   heartbeat_count: number;
   human_lines_added: number;
   human_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
   model?: null | string;
   provider?: null | string;
 }
@@ -213,6 +221,10 @@ export interface AiAgentItem {
 export interface AiDailyItem {
   ai_lines_added: number;
   ai_lines_deleted: number;
+  ai_verified_lines_added?: number;
+  ai_verified_lines_deleted?: number;
+  ai_inferred_lines_added?: number;
+  ai_inferred_lines_deleted?: number;
   date: string;
   heartbeat_count: number;
   human_chars_added: number;
@@ -224,10 +236,20 @@ export interface AiDailyItem {
 export interface AiStatsData {
   agents: AiAgentItem[];
   ai_heartbeat_percentage: number;
+  ai_verified_heartbeat_percentage: number;
+  ai_inferred_heartbeat_percentage: number;
+  human_heartbeat_percentage: number;
+  unknown_heartbeat_percentage: number;
   daily: AiDailyItem[];
   total_ai_lines_added: number;
   total_ai_lines_deleted: number;
+  total_ai_verified_lines_added: number;
+  total_ai_verified_lines_deleted: number;
+  total_ai_inferred_lines_added: number;
+  total_ai_inferred_lines_deleted: number;
   total_heartbeats: number;
+  total_unknown_lines_added: number;
+  total_unknown_lines_deleted: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
   total_human_lines_added: number;
@@ -248,14 +270,18 @@ export type AiVerificationStatus =
   | 'live_tested'
   | 'scaffold'
   | 'unsupported'
+  | 'unverified'
   | 'verified';
 
 export interface AiDiagnosticsBroker {
-  dead_letter: number;
+  dead_letter?: number;
+  inbox_dead_letter?: number;
+  inbox_pending?: number;
+  inbox_retry?: number;
   last_delivery_unix?: null | number;
   last_error_code?: null | string;
-  pending: number;
-  retry: number;
+  pending?: number;
+  retry?: number;
   running: boolean;
 }
 
@@ -273,11 +299,17 @@ export interface AiAdapterFreshness {
   enabled: boolean;
   last_delivery_result?: null | string;
   last_evidence_unix?: null | number;
+  model_id?: null | string;
   pending_events?: number;
+  provider_id?: null | string;
   retry_events?: number;
   transcript_lag_seconds?: null | number;
+  transport?: null | string;
   verification: AiVerificationStatus;
 }
+
+/** Backward-compatible name used by the first AI diagnostics UI. */
+export type AdapterFreshness = AiAdapterFreshness;
 
 export type AiPipelineStage =
   | 'accepted_locally'

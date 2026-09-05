@@ -3145,6 +3145,20 @@ async fn run_ai_sync(
             paths
         };
 
+        // A bounded automatic pass must reach the active transcript before walking
+        // months of historical sessions. Discovery order is lexical for deterministic
+        // CLI output, so reorder the actual scan by mtime (newest first) and use the
+        // path as a stable tie-breaker. This keeps Codex's current Desktop session
+        // visible even when an older Claude/Codex archive is large.
+        let mut transcript_paths = transcript_paths;
+        transcript_paths.sort_by(|left, right| {
+            let left_modified = fs::metadata(left).and_then(|meta| meta.modified()).ok();
+            let right_modified = fs::metadata(right).and_then(|meta| meta.modified()).ok();
+            right_modified
+                .cmp(&left_modified)
+                .then_with(|| right.cmp(left))
+        });
+
         for transcript_path in transcript_paths {
             // Resume from the saved cursor only if it still points at the same file — a
             // new session file (Claude Code starts one per session) means byte offset 0
@@ -3283,11 +3297,10 @@ async fn run_ai_sync(
             if !new_events.is_empty() {
                 let mut broker_events = Vec::with_capacity(new_events.len());
                 for event in &new_events {
-                    let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
                     let fingerprint_entity = normalize_entity(&event.entity.to_string_lossy())?;
                     if state.has_fingerprint(
                         &fingerprint_entity,
-                        event_time,
+                        event.occurred_at.timestamp_millis() as f64 / 1000.0,
                         event.lines_added.unwrap_or(0),
                         event.lines_deleted.unwrap_or(0),
                     )? {
@@ -3296,6 +3309,23 @@ async fn run_ai_sync(
                         state.mark_delivered(&event.event_id, &cursor_key)?;
                         continue;
                     }
+
+                    // One malformed historical transcript record must not abort the
+                    // whole sync pass. In particular, Claude can report a file in a
+                    // repository parent or a temporary scratch directory while its
+                    // record cwd remains a nested workspace. The broker correctly
+                    // rejects that event, but validating it here lets later events —
+                    // including Codex events — continue through the same pass.
+                    let candidate = broker::event_from_ai_edit(event, 0.0);
+                    if let Err(error) = candidate.normalize() {
+                        eprintln!(
+                            "  {id}: skipping transcript event {} ({error})",
+                            event.event_id
+                        );
+                        continue;
+                    }
+
+                    let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
                     let active_seconds = state.record_activity(
                         AI_ACTIVITY_STREAM,
                         event_time,
@@ -4086,20 +4116,32 @@ async fn run_ai_emit(
 }
 
 /// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
-/// are not dependent on a user remembering to run `wakaclock ai sync`. The bound keeps
-/// extension heartbeat latency predictable; any timeout/error leaves the ordinary
-/// heartbeat path untouched and the transcript cursor replayable on the next call.
+/// are not dependent on a user remembering to run `wakaclock ai sync`. Each agent gets
+/// its own bounded pass: a large or malformed Claude history must not consume the whole
+/// budget before Codex gets a chance to scan its current session. A timeout/error leaves
+/// the ordinary heartbeat path untouched and the transcript cursor replayable on the
+/// next call.
 pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
-    const AUTO_SYNC_BUDGET: Duration = Duration::from_secs(2);
-    match tokio::time::timeout(
-        AUTO_SYNC_BUDGET,
-        run_ai_sync(config, api_client, None, false, false, false, None),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => eprintln!("Warning: automatic AI sync skipped: {error}"),
-        Err(_) => eprintln!("Warning: automatic AI sync exceeded 2 seconds; will retry later"),
+    const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
+
+    // Keep this order stable and put the low-latency active-session parser first. The
+    // calls remain sequential because AiSyncLock protects the shared attribution state;
+    // the independent timeout is what prevents one parser from starving the others.
+    for agent in ["codex", "claude-code", "gemini-cli"] {
+        match tokio::time::timeout(
+            AUTO_SYNC_AGENT_BUDGET,
+            run_ai_sync(config, api_client, Some(agent), false, false, false, None),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                eprintln!("Warning: automatic {agent} sync skipped: {error}")
+            }
+            Err(_) => {
+                eprintln!("Warning: automatic {agent} sync exceeded 2 seconds; will retry later")
+            }
+        }
     }
 }
 
