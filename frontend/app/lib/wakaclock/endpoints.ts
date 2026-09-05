@@ -1,6 +1,7 @@
 import { wakaclockClient } from './client';
 import { getCurrentToken } from './session';
 
+import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from './analytics';
 import type {
   AiDiagnosticsResponse,
   AiStatsResponse,
@@ -145,6 +146,15 @@ export async function getAiDiagnostics(userId: string) {
     '/users/current/ai_diagnostics',
     { params: { user_id: userId } }
   );
+  return data;
+}
+
+// GET /dashboard/explorer — user_id comes from the session (Authorization header),
+// not a query param.
+export async function getAnalyticsExplorer(params: AnalyticsExplorerParams) {
+  const { data } = await wakaclockClient.get<AnalyticsExplorerResponse>('/dashboard/explorer', {
+    params,
+  });
   return data;
 }
 
