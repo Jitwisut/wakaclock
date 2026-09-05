@@ -19,6 +19,49 @@ export type Category =
 
 export type StatsRange = 'all_time' | 'last_30_days' | 'last_7_days' | 'today';
 
+// ---------------------------------------------------------------------------
+// API v2 — stable data/meta envelope, mirrors V2Envelope/V2Meta in
+// backend/api/src/handlers/v2.rs. Everything under /api/v2 responds in this shape;
+// presence v2's own RoomEnvelope/RoomMeta (handlers/presence_v2.rs) are structurally
+// identical and reuse the same TS types rather than duplicating them.
+// ---------------------------------------------------------------------------
+export interface V2Meta {
+  coverage?: unknown;
+  data_freshness: string;
+  generated_at: string;
+  request_id: string;
+  timezone: string;
+}
+
+export interface V2Envelope<T> {
+  data: T;
+  meta: V2Meta;
+}
+
+// GET /capabilities
+export interface V2Capabilities {
+  analytics_store: string;
+  api_version: string;
+  clients: {
+    browser_extensions: string;
+    desktop_tracker: string;
+    vscode: string;
+    wakatime_protocol: string;
+  };
+  features: Array<{ api: string; key: string; status: string }>;
+  postgres_enabled: boolean;
+  presence_v2_available: boolean;
+  privacy: {
+    stores_prompt_lengths: boolean;
+    stores_prompts: boolean;
+    stores_responses: boolean;
+    stores_source_code: boolean;
+  };
+  product: string;
+  transactional_store: string;
+  wakatime_routes: Array<{ method: string; route: string; section: string; status: string }>;
+}
+
 export const STATS_RANGES: StatsRange[] = ['today', 'last_7_days', 'last_30_days', 'all_time'];
 
 export type InsightType = 'branches' | 'editors' | 'languages' | 'operating_systems' | 'projects';
@@ -87,13 +130,30 @@ export interface BestDay {
   total_seconds: number;
 }
 
+/** How much of a total was measured versus inferred, and attended by a human versus
+ * an agent — see EvidenceSplit in backend/api/src/services/activity_timeline.rs.
+ * `attended + agent + other === proven + inferred` (both partitions of the same total);
+ * `ai_coding`/`ai_session` are additive diagnostics with their own union semantics and
+ * may legitimately exceed that total. */
+export interface EvidenceSplit {
+  agent_seconds: number;
+  ai_coding_seconds: number;
+  ai_session_seconds: number;
+  attended_seconds: number;
+  inferred_seconds: number;
+  other_seconds: number;
+  proven_seconds: number;
+}
+
 export interface StatsData {
   best_day: BestDay | null;
+  categories: StatsBreakdownItem[];
   daily_average_seconds: number;
   daily_average_text: string;
   days_included: number;
   days_with_activity: number;
   editors: StatsBreakdownItem[];
+  evidence: EvidenceSplit;
   hours: number;
   languages: StatsBreakdownItem[];
   operating_systems: StatsBreakdownItem[];
@@ -203,28 +263,28 @@ export interface InsightsResponse {
 // GET /users/current/ai_stats
 // ---------------------------------------------------------------------------
 export interface AiAgentItem {
-  agent: string;
   actor_type: ActorType;
+  agent: string;
   ai_lines_added: number;
   ai_lines_deleted: number;
   heartbeat_count: number;
   human_lines_added: number;
   human_lines_deleted: number;
-  unknown_lines_added: number;
-  unknown_lines_deleted: number;
-  unattributed_lines_added: number;
-  unattributed_lines_deleted: number;
   model?: null | string;
   provider?: null | string;
+  unattributed_lines_added: number;
+  unattributed_lines_deleted: number;
+  unknown_lines_added: number;
+  unknown_lines_deleted: number;
 }
 
 export interface AiDailyItem {
+  ai_inferred_lines_added?: number;
+  ai_inferred_lines_deleted?: number;
   ai_lines_added: number;
   ai_lines_deleted: number;
   ai_verified_lines_added?: number;
   ai_verified_lines_deleted?: number;
-  ai_inferred_lines_added?: number;
-  ai_inferred_lines_deleted?: number;
   date: string;
   heartbeat_count: number;
   human_chars_added: number;
@@ -236,24 +296,24 @@ export interface AiDailyItem {
 export interface AiStatsData {
   agents: AiAgentItem[];
   ai_heartbeat_percentage: number;
-  ai_verified_heartbeat_percentage: number;
   ai_inferred_heartbeat_percentage: number;
-  human_heartbeat_percentage: number;
-  unknown_heartbeat_percentage: number;
+  ai_verified_heartbeat_percentage: number;
   daily: AiDailyItem[];
+  human_heartbeat_percentage: number;
+  total_ai_inferred_lines_added: number;
+  total_ai_inferred_lines_deleted: number;
   total_ai_lines_added: number;
   total_ai_lines_deleted: number;
   total_ai_verified_lines_added: number;
   total_ai_verified_lines_deleted: number;
-  total_ai_inferred_lines_added: number;
-  total_ai_inferred_lines_deleted: number;
   total_heartbeats: number;
-  total_unknown_lines_added: number;
-  total_unknown_lines_deleted: number;
   total_human_chars_added: number;
   total_human_keystrokes: number;
   total_human_lines_added: number;
   total_human_lines_deleted: number;
+  total_unknown_lines_added: number;
+  total_unknown_lines_deleted: number;
+  unknown_heartbeat_percentage: number;
 }
 
 export interface AiStatsResponse {
@@ -344,27 +404,59 @@ export interface AiDiagnosticsResponse {
 // ---------------------------------------------------------------------------
 // GET /users/current/keystroke_stats
 // ---------------------------------------------------------------------------
-export interface KeystrokeProjectItem {
+/** Shared by daily/project rows and the aggregate totals — see
+ * backend/api/src/model/keystroke_stats.rs, whose *Item/*Row structs all carry the
+ * same clipboard fields under an un-prefixed name (`copy_actions`) while
+ * `KeystrokeStatsData`'s totals carry the `total_` prefix (`total_copy_actions`). */
+interface KeystrokeClipboardCounts {
+  copied_chars: number;
+  copied_lines: number;
+  copy_actions: number;
+  paste_actions: number;
+  paste_external_or_unknown_actions: number;
+  paste_same_file_actions: number;
+  paste_same_workspace_actions: number;
+  pasted_chars: number;
+  pasted_lines: number;
+}
+
+export interface KeystrokeProjectItem extends KeystrokeClipboardCounts {
   chars_added: number;
   chars_deleted: number;
   keystrokes: number;
   name: string;
 }
 
-export interface KeystrokeDailyItem {
+export interface KeystrokeDailyItem extends KeystrokeClipboardCounts {
   chars_added: number;
   chars_deleted: number;
   date: string;
   keystrokes: number;
 }
 
+export interface ClipboardCoverage {
+  percent: number;
+  supported_vscode_heartbeats: number;
+  total_vscode_heartbeats: number;
+}
+
 export interface KeystrokeStatsData {
+  clipboard_coverage: ClipboardCoverage;
   daily: KeystrokeDailyItem[];
   days_with_activity: number;
   projects: KeystrokeProjectItem[];
   total_chars_added: number;
   total_chars_deleted: number;
+  total_copied_chars: number;
+  total_copied_lines: number;
+  total_copy_actions: number;
   total_keystrokes: number;
+  total_paste_actions: number;
+  total_paste_external_or_unknown_actions: number;
+  total_paste_same_file_actions: number;
+  total_paste_same_workspace_actions: number;
+  total_pasted_chars: number;
+  total_pasted_lines: number;
 }
 
 export interface KeystrokeStatsResponse {
@@ -468,19 +560,33 @@ export interface DashboardAnalyticsResponse {
     weekdays: Breakdown;
   };
   coverage: {
+    attributed_changes: number;
+    attribution_data_coverage_percent: null | number;
     attribution_percent: null | number;
+    attribution_relevant_rows: number;
+    attribution_status: 'complete' | 'no_activity' | 'partial';
     cost_percent: null | number;
+    incomplete_attribution_rows: number;
     token_percent: null | number;
+    unattributed_changes: number;
   };
   daily_attribution: Array<{
     ai_added: number;
     ai_deleted: number;
+    ai_inferred_added: number;
+    ai_inferred_deleted: number;
+    ai_verified_added: number;
+    ai_verified_deleted: number;
     date: string;
     human_added: number;
     human_deleted: number;
+    /** Historical heartbeats predate explicit unknown provenance — null protects the
+     * UI from presenting that absence as a measured zero. Deprecated alias of `unknown_*`. */
     unattributed_added: null | number;
     unattributed_deleted: null | number;
     unit: 'lines';
+    unknown_added: number;
+    unknown_deleted: number;
   }>;
   data_version: number;
   generated_at: string;
@@ -518,46 +624,59 @@ export interface DashboardAnalyticsResponse {
 // PR 9.10; keeping these contracts beside the dashboard client prevents it guessing
 // about absent coverage or parsing formatted strings.
 // ---------------------------------------------------------------------------
+/** Shared by `ai`/`ai_inferred`/`ai_verified`/`human` — see AttributionTotals in
+ * backend/api/src/model/project_analytics.rs. */
+export interface AttributionTotals {
+  changes: number;
+  lines_added: number;
+  lines_deleted: number;
+  percentage: null | number;
+}
+
+/** The Unknown-authorship bucket. `unattributed` fields elsewhere are a deprecated
+ * response alias for the same `unknown` data, not a distinct bucket. */
+export interface UnattributedTotals {
+  changes: number;
+  lines_added: number;
+  lines_deleted: number;
+  percentage_of_observed: null | number;
+}
+
+export interface TokenTotals {
+  cache_read: null | number;
+  cache_write: null | number;
+  coverage_percent: null | number;
+  input: null | number;
+  output: null | number;
+  total: null | number;
+}
+
+export interface EstimatedSpend {
+  amount_microusd: null | number;
+  coverage_percent: null | number;
+  currency: 'USD';
+}
+
 export interface ProjectAnalyticsCard {
-  ai: {
-    changes: number;
-    lines_added: number;
-    lines_deleted: number;
-    percentage: null | number;
-  };
+  /** Compatibility aggregate for both AI actor states (ai_inferred + ai_verified). */
+  ai: AttributionTotals;
+  ai_inferred: AttributionTotals;
+  ai_verified: AttributionTotals;
   attribution_coverage_percent: null | number;
-  estimated_spend: {
-    amount_microusd: null | number;
-    coverage_percent: null | number;
-    currency: 'USD';
-  };
-  human: {
-    changes: number;
-    lines_added: number;
-    lines_deleted: number;
-    percentage: null | number;
-  };
+  estimated_spend: EstimatedSpend;
+  human: AttributionTotals;
   last_activity_at: null | string;
   name: string;
   project_id: string;
   prompts: null | number;
   repository: null | string;
   sessions: null | number;
-  tokens: {
-    cache_read: null | number;
-    cache_write: null | number;
-    coverage_percent: null | number;
-    input: null | number;
-    output: null | number;
-    total: null | number;
-  };
+  tokens: TokenTotals;
   total_seconds: number;
-  unattributed: {
-    changes: number;
-    lines_added: number;
-    lines_deleted: number;
-    percentage_of_observed: null | number;
-  };
+  /** Deprecated compatibility alias for `unknown`. */
+  unattributed: UnattributedTotals;
+  /** Canonical Unknown bucket. */
+  unknown: UnattributedTotals;
 }
 
 export interface ProjectAnalyticsListResponse {
@@ -570,37 +689,59 @@ export interface ProjectAnalyticsListResponse {
   totals: { project_count: number; total_seconds: number };
 }
 
+export interface ProjectAiSummary {
+  ai_inferred_lines: number;
+  ai_lines: number;
+  ai_percentage: null | number;
+  ai_verified_lines: number;
+  attribution_coverage_percent: null | number;
+  estimated_spend: EstimatedSpend;
+  human_lines: number;
+  prompts: null | number;
+  prompts_per_session: null | number;
+  sessions: null | number;
+  tokens: TokenTotals;
+  /** Deprecated compatibility alias for `unknown_lines`. */
+  unattributed_lines: null | number;
+  /** Canonical Unknown bucket. */
+  unknown_lines: null | number;
+}
+
+export interface ProjectBranchItem {
+  ai_changes: number;
+  ai_inferred_changes: number;
+  ai_verified_changes: number;
+  branch: string;
+  heartbeat_count: number;
+  human_changes: number;
+  total_seconds: number;
+  /** Deprecated compatibility alias for `unknown_changes`. */
+  unattributed_changes: null | number;
+  unknown_changes: null | number;
+}
+
+export interface ProjectDailyItem {
+  ai_added: number;
+  ai_deleted: number;
+  ai_inferred_added: number;
+  ai_inferred_deleted: number;
+  ai_verified_added: number;
+  ai_verified_deleted: number;
+  date: string;
+  human_added: number;
+  human_deleted: number;
+  total_seconds: number;
+  /** Deprecated compatibility aliases for the Unknown bucket. */
+  unattributed_added: null | number;
+  unattributed_deleted: null | number;
+  unknown_added: null | number;
+  unknown_deleted: null | number;
+}
+
 export interface ProjectAnalyticsDetailResponse {
-  ai: {
-    ai_lines: number;
-    ai_percentage: null | number;
-    attribution_coverage_percent: null | number;
-    estimated_spend: ProjectAnalyticsCard['estimated_spend'];
-    human_lines: number;
-    prompts: null | number;
-    prompts_per_session: null | number;
-    sessions: null | number;
-    tokens: ProjectAnalyticsCard['tokens'];
-    unattributed_lines: null | number;
-  };
-  branches: Array<{
-    ai_changes: number;
-    branch: string;
-    heartbeat_count: number;
-    human_changes: number;
-    total_seconds: number;
-    unattributed_changes: null | number;
-  }>;
-  daily_activity: Array<{
-    ai_added: number;
-    ai_deleted: number;
-    date: string;
-    human_added: number;
-    human_deleted: number;
-    total_seconds: number;
-    unattributed_added: null | number;
-    unattributed_deleted: null | number;
-  }>;
+  ai: ProjectAiSummary;
+  branches: ProjectBranchItem[];
+  daily_activity: ProjectDailyItem[];
   data_version: number;
   editors: Array<{ name: string; percentage: number; total_seconds: number }>;
   generated_at: string;
@@ -619,6 +760,8 @@ export interface ProjectAnalyticsDetailResponse {
 
 export interface ProjectFileItem {
   ai_changes: number;
+  ai_inferred_changes: number;
+  ai_verified_changes: number;
   display_name: string;
   entity_key: string;
   human_changes: number;
@@ -626,7 +769,9 @@ export interface ProjectFileItem {
   path: string;
   percentage_of_project: number;
   total_seconds: number;
+  /** Deprecated compatibility alias for `unknown_changes`. */
   unattributed_changes: null | number;
+  unknown_changes: null | number;
 }
 
 export interface ProjectFilesResponse {
@@ -894,9 +1039,10 @@ export interface WakaTimeImportResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Presence (plan.md Phase 7) — prototype. Backed by an in-memory, single-process
-// store on the server; does not survive a server restart. See
-// backend/api/src/infrastructure/presence_store.rs for what that means.
+// Presence v1 (plan.md Phase 7) — legacy prototype, still used by endpoints.ts.
+// Backed by an in-memory, single-process store on the server; does not survive a
+// server restart. See backend/api/src/infrastructure/presence_store.rs. Superseded
+// for the actual presence page by the Presence v2 section below.
 // ---------------------------------------------------------------------------
 export type PresenceState = 'coding' | 'idle' | 'offline';
 
@@ -905,11 +1051,14 @@ export interface PresencePoint {
   y: number;
 }
 
+/** Also doubles as presence v2's roster entry shape (RosterItem in
+ * handlers/presence_v2.rs) — the two happen to be identical. */
 export interface PresenceRosterEntry {
   position: null | PresencePoint;
   state: PresenceState;
   user_id: string;
   username: string;
+  zone_id: null | string;
 }
 
 /** What the SSE stream at /presence/rooms/:roomId/stream delivers on every tick. */
@@ -925,6 +1074,213 @@ export interface CreatePresenceRoomResponse {
 
 export interface PresenceActionResponse {
   status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Presence v2 (plan.md Phase 7 hardening) — Redis-backed rooms, mirrors
+// backend/api/src/handlers/presence_v2.rs and model/presence.rs. This is what the
+// actual /dashboard/wakaclock/presence page is wired to.
+// ---------------------------------------------------------------------------
+export interface PresenceZone {
+  center_x: number;
+  center_y: number;
+  height: number;
+  id: string;
+  label: string;
+  room_id: string;
+  sort_order: number;
+  width: number;
+}
+
+/** RoomListItem in handlers/presence_v2.rs — the shape returned by the room list and
+ * embedded in a snapshot's `room` field. */
+export interface PresenceV2Room {
+  ended_at: null | string;
+  expires_at: null | string;
+  id: string;
+  kind: 'adhoc' | 'team';
+  name: string;
+  team_id: null | string;
+}
+
+/** RoomData in handlers/presence_v2.rs — a single room fetched/created/previewed,
+ * with its zone layout but no live roster (that comes from a snapshot). */
+export interface PresenceV2RoomData {
+  ended_at: null | string;
+  expires_at: null | string;
+  id: string;
+  kind: 'adhoc' | 'team';
+  name: string;
+  owner_user_id: null | string;
+  team_id: null | string;
+  zones: PresenceZone[];
+}
+
+export interface PresenceV2SessionParticipant {
+  user_id: string;
+  username: string;
+}
+
+/** SessionItem in handlers/presence_v2.rs — an active table/zone co-working session. */
+export interface PresenceV2Session {
+  leaving_deadlines: Record<string, number>;
+  participants: PresenceV2SessionParticipant[];
+  session_id: string;
+  started_at: number;
+  zone_id: string;
+}
+
+/** SnapshotData in handlers/presence_v2.rs — what join/move and the SSE `snapshot`
+ * event both deliver. `version` is monotonic per room; a viewer only ever applies a
+ * snapshot whose version is >= the one it already has. */
+export interface PresenceV2Snapshot {
+  room: PresenceV2Room;
+  roster: PresenceRosterEntry[];
+  server_time: number;
+  sessions: PresenceV2Session[];
+  version: number;
+  zones: PresenceZone[];
+}
+
+/** InviteData in handlers/presence_v2.rs. `invite_url_token` is only present on the
+ * response to the creating call — listing invites later never re-exposes the token. */
+export interface PresenceV2Invite {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  invite_url_token: null | string;
+  revoked_at: null | string;
+  room_id: string;
+  used_count: number;
+}
+
+/** TicketData in handlers/presence_v2.rs — a short-lived, single-use credential for
+ * the SSE stream URL (EventSource cannot send an Authorization header). */
+export interface PresenceV2Ticket {
+  expires_in_seconds: number;
+  ticket: string;
+}
+
+export interface PresenceHistoryParticipant {
+  user_id: string;
+  username: string;
+}
+
+/** HistoryItem in handlers/presence_v2.rs — one past co-working session from the
+ * caller's own point of view (`your_*` fields are this user's window within the
+ * session, which can be shorter than the session itself). */
+export interface PresenceHistoryItem {
+  duration_seconds: number;
+  ended_at: null | number;
+  ended_reason: string;
+  participants: PresenceHistoryParticipant[];
+  room_id: string;
+  room_name: string;
+  session_id: string;
+  source: string;
+  started_at: number;
+  team_id: null | string;
+  your_joined_at: number;
+  your_left_at: null | number;
+  your_projects: string[];
+  zone_id: null | string;
+}
+
+export interface PresenceHistoryData {
+  items: PresenceHistoryItem[];
+  next_cursor: null | string;
+}
+
+/** PresenceSummaryData in handlers/presence_v2.rs. Suppressed (all fields null) below
+ * a distinct-participant floor so a 1-2 person team's individual activity is never
+ * reconstructable from an "org-wide" aggregate. */
+export interface PresenceSummaryData {
+  active_days: null | number;
+  average_group_size: null | number;
+  session_count: null | number;
+  suppressed: boolean;
+  total_collaboration_seconds: null | number;
+}
+
+// ---------------------------------------------------------------------------
+// Goals — Phase 10, Postgres-backed. Mirrors backend/api/src/model/goal.rs. Only
+// present in a deployment where useCapabilities().postgresEnabled is true.
+// ---------------------------------------------------------------------------
+export interface Goal {
+  created_at: string;
+  direction: string;
+  ends_on: null | string;
+  filter_kind: string;
+  filter_value: null | string;
+  id: string;
+  metric: string;
+  name: string;
+  period: string;
+  priority: number;
+  public: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone: string;
+  updated_at: string;
+}
+
+export interface CreateGoalPayload {
+  direction: string;
+  ends_on?: null | string;
+  filter_kind: string;
+  filter_value: null | string;
+  metric: string;
+  name: string;
+  period: string;
+  priority?: number;
+  public?: boolean;
+  starts_on: string;
+  target_seconds: number;
+  timezone?: string;
+}
+
+export interface GoalProgress {
+  coverage: number;
+  current_seconds: number;
+  direction: string;
+  goal_id: string;
+  on_track: boolean;
+  percentage: number;
+  period: string;
+  target_seconds: number;
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboards — Phase 10, Postgres-backed. Mirrors
+// backend/api/src/model/leaderboard.rs.
+// ---------------------------------------------------------------------------
+export interface Leaderboard {
+  anonymous: boolean;
+  country: null | string;
+  created_at: string;
+  id: string;
+  language: null | string;
+  metric: string;
+  organization_id: null | string;
+  owner_user_id: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface CreateLeaderboardPayload {
+  anonymous?: boolean;
+  country?: null | string;
+  language?: null | string;
+  metric: string;
+  organization_id?: null | string;
+  period: string;
+  visibility: string;
+}
+
+export interface LeaderboardMember {
+  joined_at: string;
+  user_id: string;
+  username: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -961,8 +1317,12 @@ export interface TeamsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Error shape — every handler returns this on failure
+// Error shape — every handler returns this on failure. v1 handlers emit a plain
+// string (`{"error": "message"}`); v2's `ApiError` (handlers/v2.rs) and presence's
+// `PresenceApiError` both emit a structured object (`{"error": {"code", "message"}}`).
+// Both clients (client.ts, client-v2.ts) already branch on `typeof payload`, so the
+// type just needs to admit both shapes rather than picking one.
 // ---------------------------------------------------------------------------
 export interface ApiErrorBody {
-  error: string;
+  error: { code?: number; message: string } | string;
 }
