@@ -97,6 +97,9 @@ export function absoluteUrl(path: string): string {
 /** Who builds the product — AtoAxis is developed by a team of fourth-year students. */
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
+  // No separate registered entity exists yet (student project) — the product name
+  // doubles as the legal/publisher name in structured data until that changes.
+  legalName: SITE_NAME,
   logo: absoluteUrl('/atoaxis-logo.png'),
   name: SITE_NAME,
   url: SITE_URL,
