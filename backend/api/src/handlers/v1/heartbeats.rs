@@ -7,14 +7,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
 use wakaclock_core::ai::is_known_agent_id;
-use wakaclock_core::heartbeat::{ActivitySegment, ActorType, Category, EntityType, Heartbeat};
+use wakaclock_core::heartbeat::{
+    resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
+    Heartbeat,
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Request / Response models
@@ -92,6 +95,11 @@ pub struct HeartbeatPayload {
     pub token_source: Option<String>,
     #[serde(default)]
     pub attribution_source: Option<String>,
+    /// Canonical numeric actor confidence. Older clients used
+    /// `attribution_confidence`; both are accepted at the transport boundary,
+    /// but a conflicting pair is rejected.
+    #[serde(default)]
+    pub actor_confidence: Option<f32>,
     #[serde(default)]
     pub attribution_confidence: Option<f32>,
     pub ai_lines_added: Option<u32>,
@@ -183,10 +191,11 @@ pub async fn create(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     require_active_access(&state, user_id).await?;
-    let heartbeat =
-        resolve_heartbeat_project(&state, user_id, payload_to_heartbeat(payload, user_id))
-            .await
-            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let heartbeat = payload_to_heartbeat(payload, user_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     heartbeat
         .validate()
@@ -226,7 +235,8 @@ pub async fn create_bulk(
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
         .map(|p| payload_to_heartbeat(p, user_id))
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
 
     let mut resolved = Vec::with_capacity(heartbeats.len());
     for heartbeat in heartbeats.drain(..) {
@@ -461,26 +471,71 @@ async fn require_active_access(
     }
 }
 
-fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
-    let legacy_actor = p
+fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
+    let explicit_actor_type = p
         .actor_type
         .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase());
-    let legacy_inferred = legacy_actor
+        .map(ActorType::from_str)
+        .transpose()?;
+    let legacy_inferred = explicit_actor_type == Some(ActorType::AiInferred);
+    let legacy_unknown = explicit_actor_type == Some(ActorType::Unknown);
+    let legacy_is_ai_generated = p.is_ai_generated;
+    let explicit_confidence = match (p.actor_confidence, p.attribution_confidence) {
+        (Some(actor), Some(attribution)) if actor.to_bits() != attribution.to_bits() => {
+            return Err("actor_confidence conflicts with attribution_confidence".to_string());
+        }
+        (Some(actor), _) => Some(actor),
+        (_, attribution) => attribution,
+    };
+    let has_legacy_ai_claim = p.ai_agent.is_some()
+        || p.ai_provider.is_some()
+        || p.ai_model.is_some()
+        || p.ai_event_id.is_some()
+        || p.ai_source
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.ai_confidence
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.is_ai_generated == Some(true)
+        || p.ai_lines_added.is_some_and(|value| value > 0)
+        || p.ai_lines_deleted.is_some_and(|value| value > 0);
+    let legacy_unattributed = legacy_inferred || (legacy_unknown && has_legacy_ai_claim);
+
+    // `unknown` was used by older clients as a compatibility label for an AI
+    // observation whose identity was not proven. Keep that safe interpretation,
+    // but do not feed the explicit enum back into the resolver alongside the
+    // positive AI evidence (the canonical contract correctly rejects that
+    // contradiction). Explicit `ai_verified` is accepted only when the payload
+    // itself carries the same proof that the resolver would require.
+    let has_verified_resolver_evidence = p
+        .ai_agent
         .as_deref()
-        .is_some_and(|value| matches!(value, "ai_inferred" | "inferred" | "correlated"));
-    let legacy_unknown = legacy_actor
-        .as_deref()
-        .is_some_and(|value| matches!(value, "unknown" | "unattributed"));
-    let legacy_unattributed = legacy_inferred
-        || (legacy_unknown
-            && (p.ai_agent.is_some()
-                || p.ai_provider.is_some()
-                || p.ai_model.is_some()
-                || p.ai_event_id.is_some()
-                || p.is_ai_generated == Some(true)
-                || p.ai_lines_added.is_some_and(|value| value > 0)
-                || p.ai_lines_deleted.is_some_and(|value| value > 0)));
+        .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
+        && p.ai_source.as_deref().is_some_and(|source| {
+            let normalized = source.trim().to_ascii_lowercase();
+            matches!(
+                normalized.as_str(),
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            ) && (p
+                .ai_confidence
+                .as_deref()
+                .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"))
+                || matches!(normalized.as_str(), "agent_hook" | "mcp"))
+        });
+    let resolver_actor_type = match explicit_actor_type {
+        Some(ActorType::Unknown) if legacy_unattributed => None,
+        Some(ActorType::AiVerified) if !has_verified_resolver_evidence => None,
+        actor => actor,
+    };
+    let has_ai_metadata = has_legacy_ai_claim || explicit_actor_type.is_some_and(ActorType::is_ai);
+    let positive_editor_evidence = !has_ai_metadata
+        && (p.is_write == Some(true)
+            || p.activity_segments.iter().any(|segment| {
+                segment.source.as_deref().is_some_and(|source| {
+                    source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor")
+                })
+            }));
     let date = Heartbeat::date_from_time(p.time);
     let created_at = p
         .created_at
@@ -579,25 +634,44 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         heartbeat.attribution_source = None;
         heartbeat.attribution_confidence = None;
     }
+
+    let resolution = resolve_attribution(AttributionInput {
+        explicit_actor_type: resolver_actor_type,
+        explicit_confidence,
+        legacy_is_ai_generated,
+        ai_agent: heartbeat.ai_agent.as_deref(),
+        ai_source: heartbeat.ai_source.as_deref(),
+        ai_confidence: heartbeat.ai_confidence.as_deref(),
+        ai_event_id: heartbeat.ai_event_id.as_deref(),
+        ai_lines_added: heartbeat.ai_lines_added,
+        ai_lines_deleted: heartbeat.ai_lines_deleted,
+        human_lines_added: heartbeat.human_lines_added,
+        human_lines_deleted: heartbeat.human_lines_deleted,
+        unattributed_lines_added: heartbeat.unattributed_lines_added,
+        unattributed_lines_deleted: heartbeat.unattributed_lines_deleted,
+        keystrokes: heartbeat.keystrokes,
+        chars_added: heartbeat.chars_added,
+        chars_deleted: heartbeat.chars_deleted,
+        positive_editor_evidence,
+    })?;
+
+    // The resolver treats an agent_hook/MCP source as verified evidence even when
+    // an older client omitted the redundant confidence label. Populate that label
+    // before the shared policy runs so the identity is retained consistently.
+    if resolution.actor_type == ActorType::AiVerified && heartbeat.ai_confidence.is_none() {
+        heartbeat.ai_confidence = Some("verified".to_string());
+    }
+
     // Apply the same policy before validation and project resolution so old clients
     // cannot persist an unverified agent name through either single or bulk ingest.
     heartbeat.enforce_attribution_policy();
-    // `actor_type` is the canonical enum view of the legacy string fields above, which
-    // `enforce_attribution_policy` just normalized. It must only ever be `AiVerified`
-    // when the native-hook/MCP/transcript check passes — never a heuristic-inferred
-    // guess (plans/decision-accuracy-over-coverage.md).
-    heartbeat.actor_type = if heartbeat.has_verified_ai_identity() {
-        ActorType::AiVerified
-    } else if heartbeat.is_ai_generated {
-        ActorType::Unknown
-    } else {
-        ActorType::Human
-    };
-    heartbeat.actor_confidence = heartbeat.actor_type.default_confidence(
-        heartbeat.ai_source.as_deref(),
-        heartbeat.ai_confidence.as_deref(),
-    );
-    heartbeat
+    heartbeat.actor_type = resolution.actor_type;
+    heartbeat.actor_confidence = resolution.confidence;
+    // Unknown is deliberately separate from inferred AI. Keeping this legacy flag
+    // derived from the canonical enum prevents `validate()` from accepting a row
+    // whose dashboard bucket disagrees with its transport boolean.
+    heartbeat.is_ai_generated = resolution.actor_type.is_ai();
+    Ok(heartbeat)
 }
 
 async fn resolve_heartbeat_project(
@@ -627,8 +701,11 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::{payload_to_heartbeat, sanitize_entity, HeartbeatPayload};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use uuid::Uuid;
+
+    const DECISION_FIXTURE: &str =
+        include_str!("../../../../../fixtures/ai-attribution/decision-v1.json");
 
     #[test]
     fn history_entity_redacts_absolute_and_traversal_paths() {
@@ -659,13 +736,16 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
-        assert!(heartbeat.is_ai_generated);
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert!(!heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::Unknown);
+        assert_eq!(heartbeat.actor_confidence, 0.0);
         assert!(heartbeat.ai_agent.is_none());
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]
@@ -683,10 +763,13 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
         assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::AiVerified);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
         assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]
@@ -704,13 +787,16 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
-        assert!(heartbeat.is_ai_generated);
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert!(!heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::Unknown);
+        assert_eq!(heartbeat.actor_confidence, 0.0);
         assert!(heartbeat.ai_agent.is_none());
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]
@@ -729,11 +815,106 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
         assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::AiInferred);
+        assert_eq!(heartbeat.actor_confidence, 0.6);
         assert!(heartbeat.ai_agent.is_none());
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn positive_editor_write_resolves_human_without_ai_metadata() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "is_write": true
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, super::ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+        assert!(!heartbeat.is_ai_generated);
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn conflicting_confidence_fields_are_rejected() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "actor_confidence": 1.0,
+            "attribution_confidence": 0.5
+        }))
+        .unwrap();
+
+        let error = payload_to_heartbeat(payload, Uuid::nil()).unwrap_err();
+        assert!(error.contains("conflicts"));
+    }
+
+    #[test]
+    fn server_adapter_matches_shared_decision_fixture() {
+        let fixture: Value = serde_json::from_str(DECISION_FIXTURE).unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["contract"], "canonical_attribution_decision");
+
+        for case in fixture["cases"].as_array().unwrap() {
+            let mut payload = json!({
+                "entity": "src/main.rs",
+                "entity_type": "file",
+                "time": 1_700_000_000.0
+            });
+            for (key, value) in case["input"].as_object().unwrap() {
+                let Some(wire_key) = (match key.as_str() {
+                    "explicit_actor_type" => Some("actor_type"),
+                    "explicit_confidence" => Some("actor_confidence"),
+                    "legacy_is_ai_generated" => Some("is_ai_generated"),
+                    // This is adapter metadata used by the fixture's pure
+                    // implementation; the server derives it from its registry.
+                    "known_agent_id" | "positive_editor_evidence" => None,
+                    other => Some(other),
+                }) else {
+                    continue;
+                };
+                payload[wire_key] = value.clone();
+            }
+
+            let id = case["id"].as_str().unwrap();
+            let expected_kind = case["expected"]["kind"].as_str().unwrap();
+            let result = serde_json::from_value::<HeartbeatPayload>(payload)
+                .map_err(|error| format!("{id} payload: {error}"))
+                .and_then(|payload| payload_to_heartbeat(payload, Uuid::nil()));
+
+            match expected_kind {
+                "rejected" => assert!(result.is_err(), "{id} should be rejected"),
+                "resolved" => {
+                    let heartbeat = result.unwrap_or_else(|error| {
+                        panic!("{id} should resolve, got rejection: {error}")
+                    });
+                    assert_eq!(
+                        heartbeat.actor_type.as_str(),
+                        case["expected"]["actor_type"].as_str().unwrap(),
+                        "actor for {id}"
+                    );
+                    let expected_confidence = case["expected"]["confidence"].as_f64().unwrap();
+                    assert!(
+                        (f64::from(heartbeat.actor_confidence) - expected_confidence).abs()
+                            < 0.00001,
+                        "confidence for {id}: got {}, expected {expected_confidence}",
+                        heartbeat.actor_confidence
+                    );
+                    heartbeat.validate().unwrap_or_else(|error| {
+                        panic!("{id} violates heartbeat invariant: {error}")
+                    });
+                }
+                other => panic!("unsupported expected result kind {other} in {id}"),
+            }
+        }
     }
 }

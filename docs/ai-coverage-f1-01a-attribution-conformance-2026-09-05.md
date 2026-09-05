@@ -1,7 +1,7 @@
 # F1-01a attribution decision conformance — 2026-09-05
 
-Status: **implemented as a contract slice; production server wiring remains
-in progress**.
+Status: **implemented for heartbeat ingestion; read/projection alignment remains
+open**.
 
 F1-01 needs one deterministic answer for the same evidence shape before F1-02
 can split editor changes and F1-07 can migrate legacy server fields. The shared
@@ -20,6 +20,8 @@ The cases pin these boundaries:
 - a known agent with verified hook, MCP, or transcript evidence is
   `ai_verified`;
 - MCP verified confidence is `0.95`, other verified sources are `1.0`;
+- a `verified` label from an untrusted source such as editor telemetry remains
+  `unknown`;
 - an unknown or unverified agent name cannot become a named actor;
 - a legacy AI boolean or event ID alone does not name an agent;
 - explicit legacy `ai_inferred` remains readable;
@@ -38,31 +40,37 @@ The VS Code side has a pure mirror in
 [`extensions/vscode/src/attributionDecision.ts`](../extensions/vscode/src/attributionDecision.ts)
 and runs the same fixture in
 [`extensions/vscode/test/attributionDecision.test.ts`](../extensions/vscode/test/attributionDecision.test.ts).
+The v1 heartbeat ingestion adapter now parses legacy actor aliases, accepts the
+canonical `actor_confidence` field (with a conflict check against the older
+`attribution_confidence` field), calls the same resolver, and exercises every
+fixture case in
+`backend/api/src/handlers/v1/heartbeats.rs`.
 
-Both consumers match every resolved and rejected case. The mirror accepts the
+All three ingestion consumers match every resolved and rejected case. The mirror accepts the
 registry decision as input, so it cannot silently grow a second list of agent
 names.
 
-## Known server gap
+## Remaining read-side gap
 
-The API helper
-`backend/api/src/handlers/v1/heartbeats.rs::payload_to_heartbeat` still
-reconstructs `actor_type` with a separate compatibility mapping after calling
-`Heartbeat::enforce_attribution_policy`; it does not call
-`resolve_attribution`. Therefore this slice does **not** claim full
-client/server conformance yet. In particular, the server can turn a payload
-with no positive evidence into `human`, and its legacy inferred/unknown path
-does not preserve the same canonical decision shape as the fixture.
+The server write path now has ingestion/storage conformance. The GET history
+serializer still reconstructs its compatibility `actor_type` from the legacy
+boolean, and the AI analytics effective-actor projection has its own legacy
+normalization. Those read paths need a follow-up so a stored `human` or
+`ai_verified` row cannot be relabeled while it is being returned or aggregated.
+This slice therefore does not claim full API response/projection conformance.
 
-The next server step is to make payload normalization call the shared resolver,
-return stable rejection responses for contradictory input, and add the same
-fixture to the server handler tests. That work is intentionally left separate
-from this contract slice so old-client compatibility can be reviewed without
-changing the editor fallback or revision/projection behavior at the same time.
+The adapter intentionally keeps legacy inferred/unknown identity scrubbing and
+maps the canonical result back to the invariant trio
+`actor_type`/`actor_confidence`/`is_ai_generated`. Contradictory input is a
+stable HTTP 400 before project resolution; editor fallback, pending
+observations, and revision/projection behavior remain separate F1 work.
 
 ## Validation
 
 - `cargo test -p wakaclock-core --test attribution_conformance` — 1 passed.
+- `cargo test -p wakaclock-server handlers::v1::heartbeats::tests` — 8 passed,
+  including all shared fixture cases and `Heartbeat::validate()` invariants.
+- `cargo test -p wakaclock-server` — 170 passed, 7 ignored (database-backed).
 - `npm run lint` in `extensions/vscode` — passed.
 - `npm test -- test/attributionDecision.test.ts` — 1 passed.
 

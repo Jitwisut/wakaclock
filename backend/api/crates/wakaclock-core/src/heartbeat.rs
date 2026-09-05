@@ -242,12 +242,19 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
         }
         explicit
     } else if ai_evidence {
-        let verified = input
-            .ai_confidence
-            .is_some_and(|confidence| confidence.eq_ignore_ascii_case("verified"))
-            || input.ai_source.is_some_and(|source| {
-                source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
-            });
+        let verified_source = input.ai_source.is_some_and(|source| {
+            matches!(
+                source.trim().to_ascii_lowercase().as_str(),
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            )
+        });
+        let verified = verified_source
+            && (input
+                .ai_confidence
+                .is_some_and(|confidence| confidence.eq_ignore_ascii_case("verified"))
+                || input.ai_source.is_some_and(|source| {
+                    source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
+                }));
         let named_agent_is_known = input
             .ai_agent
             .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent));

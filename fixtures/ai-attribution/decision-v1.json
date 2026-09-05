@@ -66,6 +66,16 @@
       "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
     },
     {
+      "id": "verified_label_from_untrusted_source",
+      "input": {
+        "ai_agent": "codex",
+        "known_agent_id": true,
+        "ai_source": "ide_telemetry",
+        "ai_confidence": "verified"
+      },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
       "id": "legacy_boolean_only",
       "input": { "legacy_is_ai_generated": true },
       "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }

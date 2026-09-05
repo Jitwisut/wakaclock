@@ -123,10 +123,17 @@ export function decideAttribution(input: AttributionDecisionInput): AttributionD
     }
     actorType = explicit;
   } else if (aiEvidence) {
+    const source = input.ai_source?.trim().toLowerCase();
+    const verifiedSource =
+      source === "agent_hook" ||
+      source === "mcp" ||
+      source === "structured_mcp" ||
+      source === "transcript";
     const verified =
-      (input.ai_confidence?.toLowerCase() === "verified" ||
-        input.ai_source?.toLowerCase() === "agent_hook" ||
-        input.ai_source?.toLowerCase() === "mcp") &&
+      verifiedSource &&
+      (input.ai_confidence?.trim().toLowerCase() === "verified" ||
+        source === "agent_hook" ||
+        source === "mcp") &&
       input.known_agent_id === true;
     actorType = verified ? "ai_verified" : "unknown";
   } else if (ambiguousLines) {
