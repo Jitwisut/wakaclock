@@ -670,6 +670,10 @@ mod tests {
             1
         );
         assert!(a.contains("/opt/atoaxis/wakaclock"));
+        // launchd does not reliably inherit HOME, so only the macOS plist pins it
+        // explicitly (see manifest_content's macOS branch); systemd and Windows
+        // manifests have no equivalent key.
+        #[cfg(target_os = "macos")]
         assert!(a.contains(
             "<key>EnvironmentVariables</key><dict><key>HOME</key><string>/home/u</string>"
         ));
