@@ -129,7 +129,7 @@ export function SendHeartbeatDialog({
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="single">
-          <TabsList className="w-full">
+          <TabsList className="w-full max-w-full justify-start overflow-x-auto no-scrollbar">
             <TabsTrigger className="flex-1" value="single">
               Single
             </TabsTrigger>
