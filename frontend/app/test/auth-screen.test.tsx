@@ -26,6 +26,16 @@ vi.mock('@/lib/wakaclock/endpoints', () => ({
   registerAccount: (...args: unknown[]) => register(...args),
 }));
 
+/** A JWT-shaped (but unsigned) token with the given `exp` claim. `isTokenExpired` in
+ * user-store.tsx only ever decodes the middle segment, but it requires the token to
+ * actually have three dot-separated segments first — a bare string like `'t-1'` has none,
+ * so it is treated as expired by design (see that function's docstring) rather than as a
+ * still-valid session. Session-hydration tests need a token shaped like the real thing. */
+function fakeJwt(expSecondsFromNow: number): string {
+  const payload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + expSecondsFromNow }));
+  return `header.${payload}.signature`;
+}
+
 function renderScreen(mode: 'login' | 'register' = 'login') {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 
@@ -126,7 +136,7 @@ describe('AuthScreen', () => {
   it('bounces a visitor who is already signed in', async () => {
     window.localStorage.setItem(
       'wakaclock-session',
-      JSON.stringify({ userId: 'u-1', username: 'demo', token: 't-1' })
+      JSON.stringify({ userId: 'u-1', username: 'demo', token: fakeJwt(3600) })
     );
 
     renderScreen('login');
