@@ -17,7 +17,11 @@ export default function SettingsPage() {
       />
       <RequireUser>
         <Tabs defaultValue="api-key">
-          <TabsList>
+          {/*
+            Five triggers do not fit a phone in one row. Scrolling the rail keeps every tab
+            reachable, which wrapping to a second row would not do as tidily.
+          */}
+          <TabsList className="no-scrollbar max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="api-key">API key</TabsTrigger>
             <TabsTrigger value="rules">Project rules</TabsTrigger>
             <TabsTrigger value="merges">Project merges</TabsTrigger>

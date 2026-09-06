@@ -64,11 +64,11 @@ function InsightsPanel() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Skill trials</CardTitle>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Select onValueChange={(v) => setType(v as InsightType)} value={type}>
               <SelectTrigger className="w-44">
                 <SelectValue />
@@ -81,8 +81,12 @@ function InsightsPanel() {
                 ))}
               </SelectContent>
             </Select>
-            <Tabs onValueChange={(v) => setRange(v as StatsRange)} value={range}>
-              <TabsList>
+            <Tabs
+              className="max-w-full min-w-0"
+              onValueChange={(v) => setRange(v as StatsRange)}
+              value={range}
+            >
+              <TabsList className="no-scrollbar max-w-full justify-start overflow-x-auto">
                 {STATS_RANGES.map((r) => (
                   <TabsTrigger key={r} value={r}>
                     {RANGE_LABELS[r]}

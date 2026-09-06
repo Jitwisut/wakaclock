@@ -208,7 +208,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
               so lazy loading is correct; preloading it would compete with the content that
               really is above the fold.
             */}
-            <figure className="shrink-0 text-center">
+            <figure className="w-16 shrink-0 text-center">
               <Image
                 alt={`${SITE_NAME} product mark`}
                 className="size-16 border-2 object-cover"

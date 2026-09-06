@@ -50,11 +50,11 @@ function HeartbeatsPanel() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Quest journal — {data?.total ?? 0} entries today</CardTitle>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Popover>
               <PopoverTrigger asChild>
                 <Button className="gap-1.5" size="sm" variant="outline">

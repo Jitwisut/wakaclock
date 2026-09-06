@@ -72,6 +72,11 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
           <LinkPending indicatorClassName="mkt-blink" label={copy.loading} />
         </Link>
 
+        {/*
+          Seven links, a language switcher and two buttons only just clear 1024px, which is
+          exactly where this nav appears. The links run at the tighter `px-2` through the lg
+          range and relax to `px-3` at xl, where there is room to spare.
+        */}
         <nav aria-label={copy.primary} className="hidden items-center gap-1 lg:flex">
           {NAV_LINKS.map((link) => {
             const active = isNavLinkActive(pathname, link.href);
@@ -79,7 +84,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
             return (
               <Link
                 aria-current={active ? 'page' : undefined}
-                className="border-b-[3px] px-3 py-2 text-sm font-medium transition-colors duration-150 hover:text-[var(--mkt-accent)]"
+                className="border-b-[3px] px-2 py-2 text-sm font-medium transition-colors duration-150 hover:text-[var(--mkt-accent)] xl:px-3"
                 href={localizedPath(locale, link.href)}
                 key={link.href}
                 style={{

@@ -39,7 +39,7 @@ export function CharacterSheetHero() {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <div className="border-border bg-card flex flex-col justify-center gap-3 border-2 p-4 lg:col-span-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <XpBar isLoading={allTime.isLoading} totalSeconds={allTime.data?.data.total_seconds ?? 0} />
           <ActiveDaysBadge
             days={allTime.data?.data.days_with_activity ?? 0}

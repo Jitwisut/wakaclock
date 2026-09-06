@@ -95,17 +95,33 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
           >
             <PanelLeftIcon />
           </Button>
-          <Separator className="mx-2 data-[orientation=vertical]:h-4" orientation="vertical" />
+          <Separator
+            className="mx-2 hidden data-[orientation=vertical]:h-4 sm:block"
+            orientation="vertical"
+          />
           <Search labels={searchLabels} />
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
             <SubscriptionBadge />
             <UserSwitcher />
-            <Separator className="mx-2 data-[orientation=vertical]:h-4" orientation="vertical" />
+            <Separator
+              className="mx-2 hidden data-[orientation=vertical]:h-4 sm:block"
+              orientation="vertical"
+            />
             <Notifications labels={notificationsLabels} />
             <ThemeSwitch />
-            <ThemeCustomizerPanel />
-            <Separator className="mx-2 data-[orientation=vertical]:h-4" orientation="vertical" />
+            {/*
+              The theme customiser is a design-time affordance, not something anyone reaches
+              for on a phone. It is the first thing to give up its width so the controls that
+              matter — notifications, theme, account — stay on one row at 320px.
+            */}
+            <div className="hidden md:contents">
+              <ThemeCustomizerPanel />
+            </div>
+            <Separator
+              className="mx-2 hidden data-[orientation=vertical]:h-4 sm:block"
+              orientation="vertical"
+            />
             <UserMenu onLogout={logout} />
           </div>
         </div>
