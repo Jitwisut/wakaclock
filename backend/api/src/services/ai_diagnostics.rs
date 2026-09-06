@@ -14,10 +14,12 @@ use wakaclock_core::ai::{AiDiagnosticsReport, AiDiagnosticsReportV2};
 
 use crate::infrastructure::postgres::PostgresClient;
 
+/// `(report, received_at, expires_at)` for one device's latest in-memory diagnostics report.
+type LatestV2Entry = (AiDiagnosticsReportV2, DateTime<Utc>, DateTime<Utc>);
+
 pub struct AiDiagnosticsService {
     latest: RwLock<HashMap<Uuid, AiDiagnosticsReport>>,
-    latest_v2:
-        RwLock<HashMap<(Uuid, String), (AiDiagnosticsReportV2, DateTime<Utc>, DateTime<Utc>)>>,
+    latest_v2: RwLock<HashMap<(Uuid, String), LatestV2Entry>>,
     postgres: Option<Arc<PostgresClient>>,
 }
 
@@ -102,9 +104,7 @@ impl AiDiagnosticsService {
         if let Some((current, _, expires_at)) = latest.get(&key) {
             if *expires_at <= received_at {
                 latest.remove(&key);
-            } else if current.boot_id == report.boot_id && current.sequence > report.sequence {
-                return Ok(false);
-            } else if current.boot_id == report.boot_id && current.sequence == report.sequence {
+            } else if current.boot_id == report.boot_id && current.sequence >= report.sequence {
                 return Ok(false);
             }
         }
