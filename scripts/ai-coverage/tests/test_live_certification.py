@@ -100,6 +100,70 @@ class LiveCertificationHarnessTest(unittest.TestCase):
             self.assertEqual(artifact["stages"][0]["status"], "failed")
             self.assertNotIn("/Users/private", output.read_text(encoding="utf-8"))
 
+    def test_empty_driver_never_defaults_to_a_passed_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "artifact.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--adapter-id",
+                    "codex",
+                    "--client-id",
+                    "codex",
+                    "--provider-id",
+                    "openai",
+                    "--driver",
+                    command_for({}),
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["blockers"], ["driver_empty"])
+            self.assertNotIn("live-driver", {row["id"] for row in artifact["scenarios"]})
+            self.assertTrue(all(row["status"] == "not_run" for row in artifact["scenarios"]))
+
+    def test_driver_blockers_are_preserved_as_bounded_codes(self) -> None:
+        payload = {
+            "stages": {},
+            "scenarios": {"single-file": "not_run"},
+            "metrics": {},
+            "blockers": ["auth_unavailable"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "artifact.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--adapter-id",
+                    "codex",
+                    "--client-id",
+                    "codex",
+                    "--provider-id",
+                    "openai",
+                    "--scenario-id",
+                    "single-file",
+                    "--driver",
+                    command_for(payload),
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(artifact["blockers"], ["auth_unavailable"])
+
 
 if __name__ == "__main__":
     unittest.main()

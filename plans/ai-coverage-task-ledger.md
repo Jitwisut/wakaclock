@@ -136,6 +136,11 @@ F5-02 อยู่สถานะ `implemented` ในส่วน local parser/
 
 รายละเอียดและ local gates อยู่ใน [F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md)
 
+เพิ่ม campaign driver แบบ metadata-only ใน
+[F5-02 campaign driver record](../docs/ai-coverage-f5-02-campaign-driver-2026-09-06.md)
+แล้ว แต่สถานะยังเป็น `implemented` จนกว่าจะมี authenticated shipped-bundle
+campaign, broker/API/dashboard readback และ human review จริง
+
 ### สถานะการลงมือ F5-01 และ F5-03 (2026-09-06)
 
 - F5-01 Claude Code อยู่สถานะ `validated locally`: executable `2.1.246` และ

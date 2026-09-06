@@ -108,7 +108,10 @@ evidence is not used as a CLI certificate.
 The parser, patch, and broker regression gates pass. The remaining F5-02 gate is
 a fresh authenticated `codex exec` campaign with the shipped bundle, backend and
 dashboard metadata readback, followed by a pending artifact and human review.
-See the [F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md).
+The adapter-specific campaign driver and generic harness hardening are now
+implemented locally; they do not claim that the live gate passed. See the
+[F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md) and
+[campaign driver record](../docs/ai-coverage-f5-02-campaign-driver-2026-09-06.md).
 
 F5-03 Gemini CLI is survey-blocked on this machine. `gemini 0.58.0` is installed,
 but no JSON/JSONL session payload is present under the local Gemini history/tmp

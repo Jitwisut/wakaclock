@@ -30,6 +30,15 @@ SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_COUNT = 10_000_000
 MAX_DRIVER_OUTPUT = 64 * 1024
+DEFAULT_SCENARIO_IDS = (
+    "single-file",
+    "multi-file",
+    "create-delete-rename",
+    "failure-no-op",
+    "retry-dedup",
+    "nested-execution",
+)
+DRIVER_ALLOWED_KEYS = {"stages", "scenarios", "metrics", "blockers"}
 
 
 def bounded_id(value: str, field: str) -> str:
@@ -58,6 +67,19 @@ def row_map(value: Any, field: str, allowed: set[str]) -> dict[str, str]:
     return result
 
 
+def bounded_blockers(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > len(DEFAULT_SCENARIO_IDS) * 2:
+        raise ValueError("driver blockers must be a bounded list")
+    blockers = []
+    for item in value:
+        if not isinstance(item, str) or not ID_RE.fullmatch(item):
+            raise ValueError("driver blockers must be lowercase identifiers")
+        blockers.append(item)
+    return blockers
+
+
 def digest_summary(value: dict[str, Any]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -70,7 +92,11 @@ def git_commit(repo: Path) -> str:
     return value
 
 
-def run_driver(command: str, sandbox: Path) -> tuple[dict[str, Any], str | None]:
+def run_driver(
+    command: str,
+    sandbox: Path,
+    scenario_ids: list[str],
+) -> tuple[dict[str, Any], str | None]:
     if not command:
         return {}, "driver_not_run"
     try:
@@ -82,6 +108,7 @@ def run_driver(command: str, sandbox: Path) -> tuple[dict[str, Any], str | None]
                 "HOME": str(sandbox / "home"),
                 "WAKACLOCK_CERTIFICATION_SANDBOX": str(sandbox),
                 "WAKACLOCK_CERTIFICATION_METADATA_ONLY": "1",
+                "WAKACLOCK_CERTIFICATION_SCENARIOS": ",".join(sorted(scenario_ids)),
             },
             capture_output=True,
             text=True,
@@ -102,17 +129,27 @@ def run_driver(command: str, sandbox: Path) -> tuple[dict[str, Any], str | None]
         return {}, "driver_output_invalid"
     if not isinstance(value, dict):
         return {}, "driver_output_invalid"
+    if not value:
+        return {}, "driver_empty"
+    unknown = set(value) - DRIVER_ALLOWED_KEYS
+    if unknown:
+        return {}, "driver_output_unknown_fields"
     return value, None
 
 
-def build_artifact(args: argparse.Namespace, repo: Path, driver: dict[str, Any], driver_error: str | None) -> dict[str, Any]:
+def build_artifact(
+    args: argparse.Namespace,
+    repo: Path,
+    driver: dict[str, Any],
+    driver_error: str | None,
+) -> dict[str, Any]:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     completed = now
     stages = row_map(driver.get("stages"), "stages", set(MANDATORY_STAGES))
     scenarios_raw = driver.get("scenarios", {})
-    scenarios = row_map(scenarios_raw, "scenarios", set(scenarios_raw) if isinstance(scenarios_raw, dict) else set())
-    if not scenarios:
-        scenarios = {"live-driver": "not_run" if driver_error else "passed"}
+    allowed_scenarios = set(args.scenario_ids or DEFAULT_SCENARIO_IDS)
+    scenarios = row_map(scenarios_raw, "scenarios", allowed_scenarios)
+    scenarios = {scenario: scenarios.get(scenario, "not_run") for scenario in sorted(allowed_scenarios)}
     stages = {stage: stages.get(stage, "not_run") for stage in MANDATORY_STAGES}
     if driver_error:
         stages["source_capture"] = "failed"
@@ -128,6 +165,9 @@ def build_artifact(args: argparse.Namespace, repo: Path, driver: dict[str, Any],
         "duplicates": bounded_count(metrics_input.get("duplicates", 0), "metrics.duplicates"),
         "replayed": bounded_count(metrics_input.get("replayed", 0), "metrics.replayed"),
     }
+    blockers = bounded_blockers(driver.get("blockers"))
+    if driver_error:
+        blockers.insert(0, driver_error)
     summary = {
         "adapter_id": args.adapter_id,
         "client_id": args.client_id,
@@ -135,7 +175,7 @@ def build_artifact(args: argparse.Namespace, repo: Path, driver: dict[str, Any],
         "stages": stages,
         "scenarios": scenarios,
         "metrics": metrics,
-        "driver_error": driver_error,
+        "blockers": blockers,
     }
     artifact = {
         "artifact_kind": "adapter_certification",
@@ -168,7 +208,7 @@ def build_artifact(args: argparse.Namespace, repo: Path, driver: dict[str, Any],
         "stages": [{"id": key, "status": stages[key]} for key in MANDATORY_STAGES],
         "scenarios": [{"id": key, "status": status} for key, status in sorted(scenarios.items())],
         "metrics": metrics,
-        "blockers": [driver_error] if driver_error else [],
+        "blockers": blockers,
         "limitations": ["pending human review; this artifact is never a catalog promotion by itself"],
     }
     errors = validate_artifact(artifact, now=completed)
@@ -198,6 +238,12 @@ def main() -> int:
     parser.add_argument("--corpus-version")
     parser.add_argument("--tested-commit-sha")
     parser.add_argument("--build-sha256")
+    parser.add_argument(
+        "--scenario-id",
+        action="append",
+        dest="scenario_ids",
+        help="Expected scenario id; repeat to replace the default Codex campaign set",
+    )
     args = parser.parse_args()
     try:
         args.adapter_id = bounded_id(args.adapter_id, "adapter-id")
@@ -205,6 +251,7 @@ def main() -> int:
         args.provider_id = bounded_id(args.provider_id, "provider-id")
         args.contract_version = bounded_id(args.contract_version, "contract-version")
         args.fingerprint_version = bounded_id(args.fingerprint_version, "fingerprint-version")
+        args.scenario_ids = [bounded_id(value, "scenario-id") for value in (args.scenario_ids or [])]
         if args.tested_commit_sha and not SHA1_RE.fullmatch(args.tested_commit_sha):
             raise ValueError("tested-commit-sha must be a full lowercase SHA")
         if args.build_sha256 and not SHA256_RE.fullmatch(args.build_sha256):
@@ -212,7 +259,11 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="wakaclock-cert-") as temporary:
             sandbox = Path(temporary)
             (sandbox / "home").mkdir()
-            driver, driver_error = run_driver(args.driver or "", sandbox)
+            driver, driver_error = run_driver(
+                args.driver or "",
+                sandbox,
+                args.scenario_ids or list(DEFAULT_SCENARIO_IDS),
+            )
             artifact = build_artifact(args, args.repo, driver, driver_error)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
