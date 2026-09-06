@@ -151,7 +151,7 @@ async fn distinct_telemetry_values(
     // Column names are selected from a closed list above; never interpolate client input.
     let query = format!(
         "SELECT DISTINCT {column} AS value
-         FROM wakaclock.heartbeats
+         FROM wakaclock.heartbeats_canonical
          WHERE user_id = ? AND {column} != ''
          ORDER BY value ASC LIMIT 1000"
     );

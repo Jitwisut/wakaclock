@@ -20,6 +20,7 @@ export const wakaclockKeys = {
   aiStats: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'ai-stats', userId, start, end] as const,
   aiDiagnostics: (userId: string) => [...wakaclockKeys.all, 'ai-diagnostics', userId] as const,
+  aiDiagnosticsV2: (userId: string) => [...wakaclockKeys.all, 'ai-diagnostics-v2', userId] as const,
   keystrokeStats: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'keystroke-stats', userId, start, end] as const,
   currentUser: (userId: string) => [...wakaclockKeys.all, 'user', userId] as const,

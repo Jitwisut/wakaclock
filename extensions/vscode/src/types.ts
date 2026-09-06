@@ -75,6 +75,17 @@ export interface BufferedFileState {
     aiActorConfidence?: number;
     aiLinesAdded?: number;
     aiLinesDeleted?: number;
+    /** Individual editor deltas retained until attribution runs; aggregate counters
+     * remain for backwards-compatible heartbeat fields. */
+    pendingEditorChanges: EditorChangeObservation[];
+}
+
+export interface EditorChangeObservation {
+    timeMs: number;
+    linesAdded: number;
+    linesDeleted: number;
+    contentFingerprint?: string;
+    toolEventId?: string;
 }
 
 export interface ExtraHeartbeatPayload {

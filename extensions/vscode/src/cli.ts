@@ -13,6 +13,7 @@ import type {
 } from "./types";
 import { Logger } from "./logging";
 import type { CliPathResolver } from "./managedCli";
+import type { AiDiagnosticsSnapshot } from "./aiDetectionSelfTest";
 
 export class WakaclockCliService {
     private clipboardCapability: boolean | undefined;
@@ -386,6 +387,16 @@ export class WakaclockCliService {
             throw new Error("wakaclock broker status returned invalid JSON");
         }
         return status;
+    }
+
+    /** Read the same typed runtime snapshot used by `wakaclock ai doctor`. */
+    public async getAiDiagnosticsSnapshot(): Promise<AiDiagnosticsSnapshot> {
+        const result = await this.runCli(["ai", "doctor", "--json"]);
+        const snapshot = this.parseJson<AiDiagnosticsSnapshot>(result.stdout.trim());
+        if (!snapshot || snapshot.schema_version !== 2) {
+            throw new Error("wakaclock ai doctor returned an unsupported diagnostics snapshot");
+        }
+        return snapshot;
     }
 
     /**

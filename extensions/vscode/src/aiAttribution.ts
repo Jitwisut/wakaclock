@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -8,8 +9,6 @@ import * as path from "node:path";
  * trailing-newline and replacement-counting differences, not to let a large agent
  * rewrite swallow an unrelated human edit in the same file.
  */
-const LINE_MATCH_SLACK = 2;
-
 /**
  * How far a broker sidecar event's own timestamp may sit from this editor change's
  * timestamp and still be considered a candidate for the same edit — a point-to-point
@@ -28,6 +27,8 @@ const MAX_SIDECAR_READ_BYTES = 256 * 1024;
 const MAX_SIDECAR_EVENTS = 500;
 const MAX_SIDECAR_LINE_BYTES = 64 * 1024;
 const SIDECAR_CURSOR_SCHEMA_VERSION = 1;
+const PENDING_OBSERVATION_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_PENDING_OBSERVATIONS = 500;
 
 export type RecentEditAttribution = "ai" | "human" | "unattributed";
 
@@ -57,6 +58,10 @@ export interface AiEditEvent {
   confidence?: string;
   actor_type?: string;
   actor_confidence?: number;
+  tool_event_id?: string;
+  canonical_operation_id?: string;
+  content_fingerprint?: string;
+  change_kind?: string;
 }
 
 /** Result of matching an editor-side change against the broker sidecar. */
@@ -64,6 +69,24 @@ export interface AiClassificationResult {
   attribution: RecentEditAttribution;
   /** Present only when `attribution === "ai"`. */
   event?: AiEditEvent;
+  ai_lines_added?: number;
+  ai_lines_deleted?: number;
+  unattributed_lines_added?: number;
+  unattributed_lines_deleted?: number;
+  observation_id?: string;
+  proof?: "identity" | "exact_shape" | "partial_shape" | "none";
+}
+
+interface PendingEditorObservation {
+  observation_id: string;
+  entity: string;
+  time_ms: number;
+  lines_added: number;
+  lines_deleted: number;
+  content_fingerprint?: string;
+  tool_event_id?: string;
+  created_at_ms: number;
+  expires_at_ms: number;
 }
 
 interface PersistedSidecarCursor {
@@ -73,8 +96,10 @@ interface PersistedSidecarCursor {
   stream_id?: string;
   last_sequence?: number;
   seen_transport_keys: string[];
+  seen_operation_keys?: string[];
   events: AiEditEvent[];
   consumed_event_ids: string[];
+  pending_observations?: PendingEditorObservation[];
 }
 
 /**
@@ -89,6 +114,7 @@ export class AiAttributionStore {
   private readonly logPath: string;
   private readonly cursorPath: string;
   private readonly events = new Map<string, AiEditEvent>();
+  private readonly pendingObservations = new Map<string, PendingEditorObservation>();
   private consumed = new Set<string>();
   private readOffset = 0;
   private partialLine = Buffer.alloc(0);
@@ -96,6 +122,7 @@ export class AiAttributionStore {
   private streamId?: string;
   private lastSequence?: number;
   private readonly seenTransportKeys = new Set<string>();
+  private readonly seenOperationKeys = new Set<string>();
   private cursorLoaded = false;
   private refreshInFlight?: Promise<void>;
 
@@ -130,7 +157,10 @@ export class AiAttributionStore {
     entity: string,
     timeMs: number,
     linesAdded: number,
-    linesDeleted: number
+    linesDeleted: number,
+    contentFingerprint?: string,
+    toolEventId?: string,
+    _allowPartial = false
   ): Promise<AiClassificationResult> {
     if (linesAdded === 0 && linesDeleted === 0) {
       return { attribution: "human" };
@@ -138,6 +168,14 @@ export class AiAttributionStore {
 
     await this.refresh();
     const normalizedEntity = normalizeEntity(entity);
+    const observation = this.rememberPendingObservation(
+      normalizedEntity,
+      timeMs,
+      linesAdded,
+      linesDeleted,
+      contentFingerprint,
+      toolEventId
+    );
     const nowSeconds = timeMs / 1000;
     const candidates = Array.from(this.events.values())
       .map((event, index) => ({ event, index }))
@@ -155,43 +193,144 @@ export class AiAttributionStore {
       });
 
     if (candidates.length === 0) {
-      // No nearby AI evidence exists for this file after the correlation window, so
-      // preserve ordinary editor activity as Human. `unattributed` is reserved for a
-      // genuinely ambiguous case where an AI event is nearby but its line delta does
-      // not prove that it owns this exact editor change.
-      return { attribution: "human" };
+      // Absence of a sidecar record is not positive human evidence. Keep the
+      // observation durable so a delayed producer can reconcile it later.
+      await this.persistCursor();
+      return {
+        attribution: "unattributed",
+        unattributed_lines_added: linesAdded,
+        unattributed_lines_deleted: linesDeleted,
+        observation_id: observation.observation_id,
+        proof: "none"
+      };
     }
 
-    // Prefer the closest event in time so an old nearby event cannot claim a newer
-    // edit when several agent activities are present in the sidecar.
+    // Prefer the closest event in time, but reject a tie. A same-time/same-shape
+    // event from another producer is ambiguity, not ownership.
     candidates.sort(
       (left, right) =>
         Math.abs(left.event.time - nowSeconds) - Math.abs(right.event.time - nowSeconds)
     );
+    const bestDistance = Math.abs(candidates[0].event.time - nowSeconds);
+    const equallyClose = candidates.filter(
+      ({ event }) => Math.abs(Math.abs(event.time - nowSeconds) - bestDistance) < 0.001
+    );
+    if (equallyClose.length > 1) {
+      await this.persistCursor();
+      return {
+        attribution: "unattributed",
+        unattributed_lines_added: linesAdded,
+        unattributed_lines_deleted: linesDeleted,
+        observation_id: observation.observation_id,
+        proof: "none"
+      };
+    }
     const { event } = candidates[0];
     if (event.lines_added === null || event.lines_deleted === null) {
       // The broker has evidence that an AI producer touched this entity, but the
       // producer did not provide line counters. It is unsafe to call the editor's
       // change Human merely because an exact delta cannot be proven.
-      return { attribution: "unattributed" };
+      await this.persistCursor();
+      return {
+        attribution: "unattributed",
+        unattributed_lines_added: linesAdded,
+        unattributed_lines_deleted: linesDeleted,
+        observation_id: observation.observation_id,
+        proof: "none"
+      };
     }
-    const linesAddedMatch = Math.abs(event.lines_added - linesAdded) <= LINE_MATCH_SLACK;
-    const linesDeletedMatch = Math.abs(event.lines_deleted - linesDeleted) <= LINE_MATCH_SLACK;
-    // Agent `Write` calls on a file that already existed have no prior content to
-    // diff, so the hook can only report `lines_deleted: 0` even though the file was
-    // fully replaced. VS Code sees that replacement as a delete of the old file's
-    // entire line count, which is never within LINE_MATCH_SLACK of 0 for anything
-    // but a tiny file. Recognize that specific shape — the hook's added-lines count
-    // matches, but it reported zero deletions on what the editor saw as a large
-    // deletion — as the same whole-file overwrite rather than an unrelated edit.
-    const wholeFileOverwrite = linesAddedMatch && event.lines_deleted === 0 && linesDeleted > 0;
-    if (!linesAddedMatch || !(linesDeletedMatch || wholeFileOverwrite)) {
-      return { attribution: "unattributed" };
+    const identityProof =
+      (toolEventId !== undefined && event.tool_event_id === toolEventId) ||
+      (isContentFingerprint(contentFingerprint) &&
+        isContentFingerprint(event.content_fingerprint) &&
+        event.content_fingerprint === contentFingerprint);
+    // Time plus line shape is deliberately insufficient identity. Two producers (or
+    // a human and an agent) can make the same sized edit in the same window. Only a
+    // shared tool ID or post-edit content version can claim ownership; otherwise keep
+    // the measured lines in the unknown bucket for late reconciliation.
+    if (!identityProof) {
+      await this.persistCursor();
+      return {
+        attribution: "unattributed",
+        unattributed_lines_added: linesAdded,
+        unattributed_lines_deleted: linesDeleted,
+        observation_id: observation.observation_id,
+        proof: "none"
+      };
     }
 
-    this.consumed.add(event.event_id);
+    this.consumeEvent(event.event_id, observation.observation_id);
     await this.persistCursor();
-    return { attribution: "ai", event };
+    return {
+      attribution: "ai",
+      event,
+      ai_lines_added: Math.min(event.lines_added, linesAdded),
+      ai_lines_deleted: Math.min(event.lines_deleted, linesDeleted),
+      unattributed_lines_added: Math.max(0, linesAdded - event.lines_added),
+      unattributed_lines_deleted: Math.max(0, linesDeleted - event.lines_deleted),
+      observation_id: observation.observation_id,
+      proof: "identity"
+    };
+  }
+
+  private rememberPendingObservation(
+    entity: string,
+    timeMs: number,
+    linesAdded: number,
+    linesDeleted: number,
+    contentFingerprint?: string,
+    toolEventId?: string
+  ): PendingEditorObservation {
+    const digest = createHash("sha256")
+      .update(entity)
+      .update("\0")
+      .update(String(timeMs))
+      .update("\0")
+      .update(String(linesAdded))
+      .update("\0")
+      .update(String(linesDeleted))
+      .update("\0")
+      .update(contentFingerprint ?? "")
+      .digest("hex");
+    const now = Date.now();
+    const existing = this.pendingObservations.get(digest);
+    const observation =
+      existing ?? {
+        observation_id: `editor:${digest}`,
+        entity,
+        time_ms: timeMs,
+        lines_added: linesAdded,
+        lines_deleted: linesDeleted,
+        content_fingerprint: contentFingerprint,
+        tool_event_id: toolEventId,
+        created_at_ms: now,
+        expires_at_ms: now + PENDING_OBSERVATION_TTL_MS
+      };
+    this.pendingObservations.set(digest, observation);
+    this.trimPendingObservations(now);
+    return observation;
+  }
+
+  private consumeEvent(eventId: string, observationId: string): void {
+    this.consumed.add(eventId);
+    for (const [key, observation] of this.pendingObservations) {
+      if (observation.observation_id === observationId) {
+        this.pendingObservations.delete(key);
+      }
+    }
+  }
+
+  private trimPendingObservations(now = Date.now()): void {
+    for (const [key, observation] of this.pendingObservations) {
+      if (observation.expires_at_ms <= now) {
+        this.pendingObservations.delete(key);
+      }
+    }
+    while (this.pendingObservations.size > MAX_PENDING_OBSERVATIONS) {
+      const oldest = this.pendingObservations.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.pendingObservations.delete(oldest);
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -300,6 +439,12 @@ export class AiAttributionStore {
     ) {
       return;
     }
+    if (
+      candidate.content_fingerprint !== undefined &&
+      !isContentFingerprint(candidate.content_fingerprint)
+    ) {
+      return;
+    }
     if (candidate.sequence !== undefined &&
         (!Number.isSafeInteger(candidate.sequence) || candidate.sequence < 1)) {
       return;
@@ -336,6 +481,13 @@ export class AiAttributionStore {
     this.seenTransportKeys.add(transportKey);
     this.trimState();
     const event = candidate as AiEditEvent;
+    const operationKey = proofOperationKey(event);
+    if (operationKey !== undefined && this.seenOperationKeys.has(operationKey)) {
+      return;
+    }
+    if (operationKey !== undefined) {
+      this.seenOperationKeys.add(operationKey);
+    }
     const existing = this.events.get(event.event_id);
     if (
       existing &&
@@ -389,9 +541,20 @@ export class AiAttributionStore {
         this.seenTransportKeys.add(key);
       }
     }
+    for (const key of Array.isArray(snapshot.seen_operation_keys)
+      ? snapshot.seen_operation_keys
+      : []) {
+      if (typeof key === "string" && key.length <= MAX_SIDECAR_LINE_BYTES) {
+        this.seenOperationKeys.add(key);
+      }
+    }
     for (const event of Array.isArray(snapshot.events) ? snapshot.events : []) {
       if (this.isValidEvent(event)) {
         this.events.set(event.event_id, event);
+        const operationKey = proofOperationKey(event);
+        if (operationKey !== undefined) {
+          this.seenOperationKeys.add(operationKey);
+        }
       }
     }
     for (const eventId of Array.isArray(snapshot.consumed_event_ids)
@@ -401,6 +564,24 @@ export class AiAttributionStore {
         this.consumed.add(eventId);
       }
     }
+    for (const observation of Array.isArray(snapshot.pending_observations)
+      ? snapshot.pending_observations
+      : []) {
+      if (
+        observation &&
+        typeof observation.observation_id === "string" &&
+        typeof observation.entity === "string" &&
+        typeof observation.time_ms === "number" &&
+        Number.isFinite(observation.time_ms) &&
+        typeof observation.lines_added === "number" &&
+        typeof observation.lines_deleted === "number" &&
+        typeof observation.created_at_ms === "number" &&
+        typeof observation.expires_at_ms === "number"
+      ) {
+        this.pendingObservations.set(observation.observation_id, observation);
+      }
+    }
+    this.trimPendingObservations();
     this.trimState();
   }
 
@@ -417,6 +598,8 @@ export class AiAttributionStore {
       Number.isFinite(candidate.time) &&
       (typeof candidate.lines_added === "number" || candidate.lines_added === null) &&
       (typeof candidate.lines_deleted === "number" || candidate.lines_deleted === null) &&
+      (candidate.content_fingerprint === undefined ||
+        isContentFingerprint(candidate.content_fingerprint)) &&
       (candidate.sequence === undefined ||
         (Number.isSafeInteger(candidate.sequence) && candidate.sequence >= 1)) &&
       (schemaVersion !== 2 ||
@@ -433,6 +616,13 @@ export class AiAttributionStore {
         break;
       }
       this.seenTransportKeys.delete(oldest);
+    }
+    while (this.seenOperationKeys.size > MAX_SIDECAR_EVENTS * 2) {
+      const oldest = this.seenOperationKeys.values().next().value as string | undefined;
+      if (oldest === undefined) {
+        break;
+      }
+      this.seenOperationKeys.delete(oldest);
     }
     while (this.events.size > MAX_SIDECAR_EVENTS) {
       const oldest = this.events.keys().next().value as string | undefined;
@@ -457,8 +647,10 @@ export class AiAttributionStore {
       stream_id: this.streamId,
       last_sequence: this.lastSequence,
       seen_transport_keys: Array.from(this.seenTransportKeys),
+      seen_operation_keys: Array.from(this.seenOperationKeys),
       events: Array.from(this.events.values()),
-      consumed_event_ids: Array.from(this.consumed)
+      consumed_event_ids: Array.from(this.consumed),
+      pending_observations: Array.from(this.pendingObservations.values())
     };
     const temporaryPath = `${this.cursorPath}.${process.pid}.tmp`;
     try {
@@ -484,4 +676,19 @@ export class AiAttributionStore {
 
 function normalizeEntity(entity: string): string {
   return path.normalize(path.resolve(entity)).replace(/\\/g, "/");
+}
+
+function isContentFingerprint(value: string | undefined): value is string {
+  return /^sha256:[0-9a-f]{64}$/i.test(value ?? "");
+}
+
+function proofOperationKey(event: AiEditEvent): string | undefined {
+  if (
+    typeof event.tool_event_id !== "string" ||
+    event.tool_event_id.trim() === "" ||
+    !isContentFingerprint(event.content_fingerprint)
+  ) {
+    return undefined;
+  }
+  return `${normalizeEntity(event.entity)}:${event.tool_event_id}:${event.content_fingerprint}`;
 }

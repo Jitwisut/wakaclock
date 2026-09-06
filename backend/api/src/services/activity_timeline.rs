@@ -290,7 +290,7 @@ impl ActivityTimelineService {
                 "SELECT entity, time, project, project_id, branch, language, category,
                         heartbeat_id, active_seconds, activity_segments, editor, operating_system,
                         actor_type, actor_confidence
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  -- A legacy heartbeat stores only its end timestamp plus
                  -- `active_seconds`. Include one strict window on either side so an
                  -- interval crossing a day/range boundary is still recovered before
@@ -307,14 +307,17 @@ impl ActivityTimelineService {
                 anyhow::anyhow!("ClickHouse activity timeline query error: {error}")
             })?;
 
-        for row in rows {
+        for (row_index, row) in rows.into_iter().enumerate() {
+            let has_stable_heartbeat_id = row.heartbeat_id.is_some();
             let heartbeat_id = row
                 .heartbeat_id
                 .clone()
-                .unwrap_or_else(|| format!("legacy:{}:{:.6}", row.entity, row.time));
-            // Stable heartbeat IDs make retries idempotent. For old rows without one, the
-            // deterministic entity/time identity still removes exact retry copies.
-            let already_projected = !seen_heartbeats.insert(heartbeat_id.clone());
+                .unwrap_or_else(|| format!("legacy-row:{row_index}"));
+            // Stable heartbeat IDs make retries idempotent. An old row without one has
+            // no safe identity, so keep it as its own row rather than merging it with a
+            // different observation that happens to share entity/time metadata.
+            let already_projected =
+                has_stable_heartbeat_id && !seen_heartbeats.insert(heartbeat_id.clone());
 
             // A heartbeat proves the developer was present at *its own* timestamp, and
             // that is true whatever its segments happen to cover.

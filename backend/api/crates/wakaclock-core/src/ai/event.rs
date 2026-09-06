@@ -127,6 +127,11 @@ pub struct AiEditEvent {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub session_id: Option<String>,
+    /// Stable producer operation identity when the source exposes one. This is the
+    /// proof-bearing alias key shared by hook/transcript observations; it is never
+    /// synthesized from path, time, or line counts.
+    #[serde(default)]
+    pub tool_event_id: Option<String>,
     pub occurred_at: DateTime<Utc>,
     pub entity: PathBuf,
     pub project_root: Option<PathBuf>,
@@ -210,6 +215,7 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("src/lib.rs"),
             project_root: None,

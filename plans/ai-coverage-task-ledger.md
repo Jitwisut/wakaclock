@@ -31,18 +31,18 @@ Owner: client/core + backend · Effort รวม: 3–5 วันทำงาน
 
 Owner: client/core + backend · Effort รวม: 8–15 วันทำงาน
 
-| ID | งานและผลส่งมอบ | ขึ้นกับ | เกณฑ์ปิด |
-| --- | --- | --- | --- |
-| F1-01 | Pure attribution decision function + shared conformance fixtures | F0-03, F0-06 | attribution truth table ผ่านทั้ง Rust/client/server |
-| F1-02 | Per-change editor pending observations แยก time/input/line ownership | F0-04, F1-01 | mixed edits ไม่เหมาทั้ง batch; input time ไม่หาย |
-| F1-03 | Sidecar version/sequence/resume และ bounded incremental reader | F0-06 | partial append/rotation/restart ไม่ drop หรือ replay ownership ซ้ำ |
-| F1-04 | Exact editor↔agent reconciliation; ambiguous result เป็น unknown | F1-02, F1-03 | same-time/same-lines negative case ไม่ขโมย attribution |
-| F1-05 | Canonical IDs/aliases ข้าม producer; operation/file/sequence/worktree identity | F0-05 | hook+transcript duplicate รวมได้เฉพาะมี proof; independent edits ไม่ถูกรวม |
-| F1-06 | Canonical revision storage/read semantics และ durable reconciliation state | F1-05, F0-06 | late evidence เปลี่ยน classification แต่ไม่เพิ่ม event/time/lines ซ้ำ |
-| F1-07 | Broker/server policy boundary และ compatibility projection ของ legacy fields | F1-01, F1-06 | source string ปลอม/unknown schema ไม่ได้ named attribution; legacy reads ใช้ได้ |
-| F1-08 | API/ClickHouse projection/reprocess รองรับ canonical winner และ unknown bucket | F1-06, F1-07 | revision replay/rebuild สองครั้งได้ผลเดียวกัน |
-| F1-09 | เปลี่ยน unmatched fallback หลัง correction path พร้อม; feature rollout control | F1-04, F1-08 | ไม่มี unmatched=human โดยไร้ human proof; late case ไม่ duplicate |
-| F1-10 | Crash-boundary, offline, ordering และ concurrency integration suite | F1-03–F1-09 | relevant V-M/V-C/V-R tests ผ่าน; error ไม่ทำคิวหาย |
+| ID | งานและผลส่งมอบ | สถานะ | ขึ้นกับ | เกณฑ์ปิด |
+| --- | --- | --- | --- | --- |
+| F1-01 | Pure attribution decision function + shared conformance fixtures | validated | F0-03, F0-06 | attribution truth table ผ่านทั้ง Rust/client/server |
+| F1-02 | Per-change editor pending observations แยก time/input/line ownership | validated | F0-04, F1-01 | mixed edits ไม่เหมาทั้ง batch; input time ไม่หาย |
+| F1-03 | Sidecar version/sequence/resume และ bounded incremental reader | validated | F0-06 | partial append/rotation/restart ไม่ drop หรือ replay ownership ซ้ำ |
+| F1-04 | Exact editor↔agent reconciliation; ambiguous result เป็น unknown | validated | F1-02, F1-03 | same-time/same-lines negative case ไม่ขโมย attribution |
+| F1-05 | Canonical IDs/aliases ข้าม producer; operation/file/sequence/worktree identity | validated | F0-05 | hook+transcript duplicate รวมได้เฉพาะมี proof; independent edits ไม่ถูกรวม |
+| F1-06 | Canonical revision storage/read semantics และ durable reconciliation state | validated | F1-05, F0-06 | late evidence เปลี่ยน classification แต่ไม่เพิ่ม event/time/lines ซ้ำ |
+| F1-07 | Broker/server policy boundary และ compatibility projection ของ legacy fields | validated | F1-01, F1-06 | source string ปลอม/unknown schema ไม่ได้ named attribution; legacy reads ใช้ได้ |
+| F1-08 | API/ClickHouse projection/reprocess รองรับ canonical winner และ unknown bucket | validated | F1-06, F1-07 | revision replay/rebuild สองครั้งได้ผลเดียวกัน |
+| F1-09 | เปลี่ยน unmatched fallback หลัง correction path พร้อม; feature rollout control | validated | F1-04, F1-08 | ไม่มี unmatched=human โดยไร้ human proof; late case ไม่ duplicate |
+| F1-10 | Crash-boundary, offline, ordering และ concurrency integration suite | validated locally | F1-03–F1-09 | relevant V-M/V-C/V-R tests ผ่าน; error ไม่ทำคิวหาย |
 
 เสนอแยก PR: decision+fixtures → identity/schema/read path → broker/revisions → editor reconciliation → projections/rollout wiring ไม่รวมทุกส่วนเป็น PR เดียว
 
@@ -50,31 +50,31 @@ Owner: client/core + backend · Effort รวม: 8–15 วันทำงา�
 
 Owner: client/core + backend · Effort รวม: 4–7 วันทำงาน
 
-| ID | งานและผลส่งมอบ | ขึ้นกับ | เกณฑ์ปิด |
-| --- | --- | --- | --- |
-| F2-01 | Health DTO แบบ nullable measurement + availability + measured_at | F0-06 | measured-zero ต่าง unavailable; v1/v2 mapping documented |
-| F2-02 | Collector อ่าน process/service, queue, scan/cursor/delivery จริง | F2-01 | running/lag/error มาจาก probes; PID reused ไม่ healthy ปลอม |
-| F2-03 | รวม ai doctor/doctor ai/status/self-test ใช้ collector เดียว | F2-02 | snapshot เดียวกันได้ความหมายเดียวทุก command |
-| F2-04 | Separate adapter tracking consent / observer / diagnostics upload | F2-01 | observer off แต่ native hook ทำงานแสดงสถานะถูก |
-| F2-05 | Device-scoped diagnostics repository + receipt ordering/TTL | F2-01, F0-06 | API restart, two devices, delayed/future-clock report ผ่าน |
-| F2-06 | Wire repository/service/AppState และ old-mode degradation | F2-05 | PostgreSQL mode durable; absent-store mode แสดง ephemeral/unavailable จริง |
-| F2-07 | Schema validation/size/rate limits, safe error codes, auth scopes | F2-06 | malformed/tenant-mix/raw path cases ถูกป้องกันตาม tests |
-| F2-08 | Observer toggle noninterference + idle/stalled diagnostics suite | F2-03, F2-04, F2-07 | attribution bytes/time ไม่เปลี่ยนจาก diagnostics toggling |
+| ID | งานและผลส่งมอบ | สถานะ | ขึ้นกับ | เกณฑ์ปิด |
+| --- | --- | --- | --- | --- |
+| F2-01 | Health DTO แบบ nullable measurement + availability + measured_at | validated | F0-06 | measured-zero ต่าง unavailable; v1/v2 mapping documented |
+| F2-02 | Collector อ่าน process/service, queue, scan/cursor/delivery จริง | validated | F2-01 | running/lag/error มาจาก probes; PID reused ไม่ healthy ปลอม |
+| F2-03 | รวม ai doctor/doctor ai/status/self-test ใช้ collector เดียว | validated | F2-02 | snapshot เดียวกันได้ความหมายเดียวทุก command |
+| F2-04 | Separate adapter tracking consent / observer / diagnostics upload | validated | F2-01 | observer off แต่ native hook ทำงานแสดงสถานะถูก |
+| F2-05 | Device-scoped diagnostics repository + receipt ordering/TTL | validated | F2-01, F0-06 | API restart, two devices, delayed/future-clock report ผ่าน |
+| F2-06 | Wire repository/service/AppState และ old-mode degradation | validated | F2-05 | PostgreSQL mode durable; absent-store mode แสดง ephemeral/unavailable จริง |
+| F2-07 | Schema validation/size/rate limits, safe error codes, auth scopes | validated | F2-06 | malformed/tenant-mix/raw path cases ถูกป้องกันตาม tests |
+| F2-08 | Observer toggle noninterference + idle/stalled diagnostics suite | validated locally | F2-03, F2-04, F2-07 | attribution bytes/time ไม่เปลี่ยนจาก diagnostics toggling |
 
 ## 5. F3 — Registry, setup และ packaging
 
 Owner: client/core + integration/release · Effort รวม: 4–7 วันทำงาน
 
-| ID | งานและผลส่งมอบ | ขึ้นกับ | เกณฑ์ปิด |
-| --- | --- | --- | --- |
-| F3-01 | Registry contract สำหรับ aliases/runtimes/capabilities/install resources | F0-06 | ตรวจ uniqueness, resource existence, supported schema ได้ |
-| F3-02 | Registry-driven CLI parser factory/setup/status/uninstall dispatch | F3-01 | manifest ที่ไม่มี implementation ไม่แสดง installable/working |
-| F3-03 | Extension ลด duplicate AI lists ใช้ typed CLI contract | F3-02 | CLI/VS Code รายการและ outcomes ตรงกัน |
-| F3-04 | Structured config merge, ownership ledger, atomic transaction/lock | F3-02 | preserve hooks, corrupt config และ concurrent setup tests ผ่าน |
-| F3-05 | Stable bundle/version/checksum/update/rollback และ resource verification | F3-04 | VSIX update ไม่ทำ path ขาด; runtime ใช้ artifact ที่ผ่าน tests |
-| F3-06 | Per-OS service/hook dependencies และ restart outside-editor test | F3-05 | macOS/Linux/Windows เฉพาะ tuple ที่รับรองติดตั้งใช้งานจริงได้ |
-| F3-07 | Uninstall ref-count/ownership, repeat setup และ partial batch outcome | F3-04, F3-06 | ไม่ลบ user files/other adapters; failures ไม่ถูกกลบเป็น success |
-| F3-08 | Onboarding consent/health integration และ setup runbook | F2-03, F2-04, F3-03, F3-07 | first install/repair/update/uninstall flow ตรวจได้จาก UI/CLI |
+| ID | งานและผลส่งมอบ | สถานะ | ขึ้นกับ | เกณฑ์ปิด |
+| --- | --- | --- | --- | --- |
+| F3-01 | Registry contract สำหรับ aliases/runtimes/capabilities/install resources | implemented | F0-06 | ตรวจ uniqueness, resource existence, supported schema ได้ |
+| F3-02 | Registry-driven CLI parser factory/setup/status/uninstall dispatch | in_progress | F3-01 | manifest ที่ไม่มี implementation ไม่แสดง installable/working |
+| F3-03 | Extension ลด duplicate AI lists ใช้ typed CLI contract | in_progress | F3-02 | CLI/VS Code รายการและ outcomes ตรงกัน |
+| F3-04 | Structured config merge, ownership ledger, atomic transaction/lock | implemented | F3-02 | preserve hooks, corrupt config และ concurrent setup tests ผ่าน |
+| F3-05 | Stable bundle/version/checksum/update/rollback และ resource verification | in_progress | F3-04 | VSIX update ไม่ทำ path ขาด; runtime ใช้ artifact ที่ผ่าน tests |
+| F3-06 | Per-OS service/hook dependencies และ restart outside-editor test | planned | F3-05 | macOS/Linux/Windows เฉพาะ tuple ที่รับรองติดตั้งใช้งานจริงได้ |
+| F3-07 | Uninstall ref-count/ownership, repeat setup และ partial batch outcome | implemented | F3-04, F3-06 | ไม่ลบ user files/other adapters; failures ไม่ถูกกลบเป็น success |
+| F3-08 | Onboarding consent/health integration และ setup runbook | in_progress | F2-03, F2-04, F3-03, F3-07 | first install/repair/update/uninstall flow ตรวจได้จาก UI/CLI |
 
 ## 6. F4 — Certification infrastructure
 

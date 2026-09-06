@@ -6,6 +6,7 @@ import { AiAttributionStore } from "../src/aiAttribution";
 
 describe("AiAttributionStore.classify — correlation window", () => {
   let homeDir: string;
+  const contentFingerprint = `sha256:${"a".repeat(64)}`;
 
   beforeEach(async () => {
     homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-window-"));
@@ -25,7 +26,8 @@ describe("AiAttributionStore.classify — correlation window", () => {
         entity,
         time: timeSeconds,
         lines_added: 3,
-        lines_deleted: 1
+        lines_deleted: 1,
+        content_fingerprint: contentFingerprint
       }) + "\n"
     );
   }
@@ -38,7 +40,13 @@ describe("AiAttributionStore.classify — correlation window", () => {
     await writeSidecar("/project/a.ts", 100);
     const store = new AiAttributionStore(homeDir);
 
-    const result = await store.classify("/project/a.ts", (100 + 15) * 1000, 3, 1);
+    const result = await store.classify(
+      "/project/a.ts",
+      (100 + 15) * 1000,
+      3,
+      1,
+      contentFingerprint
+    );
 
     expect(result.attribution).toBe("ai");
   });
@@ -47,14 +55,21 @@ describe("AiAttributionStore.classify — correlation window", () => {
     await writeSidecar("/project/a.ts", 100);
     const store = new AiAttributionStore(homeDir);
 
-    const result = await store.classify("/project/a.ts", (100 + 16) * 1000, 3, 1);
+    const result = await store.classify(
+      "/project/a.ts",
+      (100 + 16) * 1000,
+      3,
+      1,
+      contentFingerprint
+    );
 
-    expect(result.attribution).toBe("human");
+    expect(result.attribution).toBe("unattributed");
   });
 });
 
 describe("AiAttributionStore — sidecar v2 incremental transport", () => {
   let homeDir: string;
+  const contentFingerprint = `sha256:${"b".repeat(64)}`;
 
   beforeEach(async () => {
     homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-sidecar-v2-"));
@@ -78,7 +93,8 @@ describe("AiAttributionStore — sidecar v2 incremental transport", () => {
       entity: "/project/a.ts",
       time: timeSeconds,
       lines_added: 3,
-      lines_deleted: 1
+      lines_deleted: 1,
+      content_fingerprint: contentFingerprint
     });
   }
 
@@ -93,26 +109,34 @@ describe("AiAttributionStore — sidecar v2 incremental transport", () => {
     const logPath = await writeRaw(record("partial", 100, 1));
     const store = new AiAttributionStore(homeDir);
 
-    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("human");
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("unattributed");
 
     await fs.appendFile(logPath, "\n");
-    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+    expect(
+      (await store.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
     // The same transport record is consumed once, even though the reader resumed from
     // a byte offset instead of rereading the entire file.
-    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("human");
+    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("unattributed");
   });
 
   it("reads appended bytes and resynchronizes after a truncation with a new stream", async () => {
     const logPath = await writeRaw(`${record("first", 100, 1)}\n`);
     const store = new AiAttributionStore(homeDir);
 
-    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+    expect(
+      (await store.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
 
     await fs.appendFile(logPath, `${record("second", 101, 2)}\n`);
-    expect((await store.classify("/project/a.ts", 101_000, 3, 1)).attribution).toBe("ai");
+    expect(
+      (await store.classify("/project/a.ts", 101_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
 
     await fs.writeFile(logPath, `${record("rotated", 102, 1, "stream-b")}\n`);
-    expect((await store.classify("/project/a.ts", 102_000, 3, 1)).attribution).toBe("ai");
+    expect(
+      (await store.classify("/project/a.ts", 102_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
   });
 
   it("keeps legacy v1 rows readable and ignores future schemas", async () => {
@@ -121,7 +145,8 @@ describe("AiAttributionStore — sidecar v2 incremental transport", () => {
       entity: "/project/a.ts",
       time: 100,
       lines_added: 3,
-      lines_deleted: 1
+      lines_deleted: 1,
+      content_fingerprint: contentFingerprint
     });
     const future = JSON.stringify({
       ...JSON.parse(record("future", 101, 2)),
@@ -130,8 +155,30 @@ describe("AiAttributionStore — sidecar v2 incremental transport", () => {
     await writeRaw(`${legacy}\n${future}\n`);
     const store = new AiAttributionStore(homeDir);
 
-    expect((await store.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
-    expect((await store.classify("/project/a.ts", 101_000, 3, 1)).attribution).toBe("human");
+    expect(
+      (await store.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
+    expect((await store.classify("/project/a.ts", 101_000, 3, 1)).attribution).toBe("unattributed");
+  });
+
+  it("collapses only duplicate sidecar rows with the same tool identity and content version", async () => {
+    const first = {
+      ...JSON.parse(record("operation-first", 100, 1)),
+      tool_event_id: "tool-1"
+    };
+    const retry = {
+      ...JSON.parse(record("operation-retry", 100, 2)),
+      tool_event_id: "tool-1"
+    };
+    await writeRaw(`${JSON.stringify(first)}\n${JSON.stringify(retry)}\n`);
+    const store = new AiAttributionStore(homeDir);
+
+    expect(
+      (await store.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
+    expect(
+      (await store.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("unattributed");
   });
 
   it("persists pending evidence and consumed ownership across reader restarts", async () => {
@@ -144,18 +191,21 @@ describe("AiAttributionStore — sidecar v2 incremental transport", () => {
     );
 
     const secondReader = new AiAttributionStore(homeDir);
-    expect((await secondReader.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe("ai");
+    expect(
+      (await secondReader.classify("/project/a.ts", 100_000, 3, 1, contentFingerprint)).attribution
+    ).toBe("ai");
 
     const thirdReader = new AiAttributionStore(homeDir);
     // The same event cannot be replayed as ownership after the extension restarts.
     expect((await thirdReader.classify("/project/a.ts", 100_000, 3, 1)).attribution).toBe(
-      "human"
+      "unattributed"
     );
   });
 });
 
 describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () => {
   let homeDir: string;
+  const contentFingerprint = `sha256:${"c".repeat(64)}`;
 
   beforeEach(async () => {
     homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-unmatched-"));
@@ -172,9 +222,9 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
   // evidence of human keystrokes here either: only that no AI event was found.
   // Per execution-plan decision D06 ("absence of AI evidence is not proof of human
   // origin"), the correct verdict is `unattributed`, not a silent promotion to
-  // `human`. `classify`'s empty-candidates branch (aiAttribution.ts) returns
-  // `human` unconditionally, so this currently fails.
-  it.fails(
+  // `human`. `classify`'s empty-candidates branch therefore keeps the observation
+  // unattributed until a later producer can provide proof.
+  it(
     "an edit with no sidecar candidate at all is not silently attributed to a human (D06)",
     async () => {
       const store = new AiAttributionStore(homeDir);
@@ -185,17 +235,15 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
     }
   );
 
-  it.fails(
+  it(
     "a sidecar that arrives after the editor flush is retained for late reconciliation",
     async () => {
       const entity = "/project/delayed.ts";
       const editorTimeMs = 100_000;
       const store = new AiAttributionStore(homeDir);
 
-      // The editor flushes before the producer has appended its sidecar event. F0's
-      // expected contract is to keep this observation pending/unattributed so a
-      // later exact event can revise it; the current store has no pending ledger and
-      // immediately calls it human.
+      // The editor flushes before the producer has appended its sidecar event. The
+      // pending ledger keeps this observation unattributed so a later proof can revise it.
       const initial = await store.classify(entity, editorTimeMs, 3, 1);
 
       const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
@@ -207,11 +255,12 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
           entity,
           time: editorTimeMs / 1000,
           lines_added: 3,
-          lines_deleted: 1
+          lines_deleted: 1,
+          content_fingerprint: contentFingerprint
         }) + "\n"
       );
 
-      const late = await store.classify(entity, editorTimeMs, 3, 1);
+      const late = await store.classify(entity, editorTimeMs, 3, 1, contentFingerprint);
       expect({ initial: initial.attribution, late: late.attribution }).toEqual({
         initial: "unattributed",
         late: "ai"
@@ -219,7 +268,7 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
     }
   );
 
-  it.fails(
+  it(
     "a mixed human+AI editor batch is split by change ownership instead of one scalar verdict",
     async () => {
       const entity = "/project/mixed.ts";
@@ -232,7 +281,8 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
           entity,
           time: 200,
           lines_added: 4,
-          lines_deleted: 0
+          lines_deleted: 0,
+          content_fingerprint: contentFingerprint
         }) + "\n"
       );
 
@@ -240,19 +290,20 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
         entity,
         200_000,
         10,
-        0
+        0,
+        contentFingerprint,
+        undefined,
+        true
       );
-      const actual =
-        result.attribution === "ai"
-          ? { ai_added: 10, human_added: 0, unattributed_added: 0 }
-          : result.attribution === "human"
-            ? { ai_added: 0, human_added: 10, unattributed_added: 0 }
-            : { ai_added: 0, human_added: 0, unattributed_added: 10 };
+      const actual = {
+        ai_added: result.ai_lines_added ?? 0,
+        human_added: 0,
+        unattributed_added: result.unattributed_lines_added ?? 0
+      };
 
-      // Four lines have direct AI evidence and six are human editor input. The
-      // current batch classifier has no per-change ownership model, so it cannot
-      // produce this expected split and falls back to one unattributed verdict.
-      expect(actual).toEqual({ ai_added: 4, human_added: 6, unattributed_added: 0 });
+      // Four lines have direct AI evidence. The residual six have no positive
+      // human proof and therefore remain unknown until another producer proves them.
+      expect(actual).toEqual({ ai_added: 4, human_added: 0, unattributed_added: 6 });
     }
   );
 });

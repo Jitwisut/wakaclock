@@ -98,6 +98,7 @@ export function registerCommands(
     | "verifyApiKey"
     | "getStatus"
     | "getBrokerStatus"
+    | "getAiDiagnosticsSnapshot"
   >,
   bufferManager: Pick<HeartbeatBufferManager, "flushCurrentEditor">,
   statusBar: Pick<StatusBarController, "applyVisibility" | "refresh">,
@@ -297,6 +298,7 @@ export function registerCommands(
         const report = await runAiDetectionSelfTest({
           getBrokerStatus: () => cliService.getBrokerStatus(),
           getAiAgentStatuses: () => aiIntegrations.getStatus(),
+          getDiagnosticsSnapshot: () => cliService.getAiDiagnosticsSnapshot(),
         });
         const body = formatAiDetectionReport(report);
         if (report.verdict === "ok") {

@@ -7,7 +7,7 @@ use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::rate_limiter::{
-    AnalyticsRateLimiter, AuthRateLimiter, PresenceRateLimiter,
+    AiDiagnosticsRateLimiter, AnalyticsRateLimiter, AuthRateLimiter, PresenceRateLimiter,
 };
 use crate::infrastructure::redis_presence::RedisPresenceStore;
 use crate::repository::account_analytics::AccountAnalyticsRepository;
@@ -74,6 +74,7 @@ pub struct AppState {
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     pub presence_rate_limiter: Arc<PresenceRateLimiter>,
+    pub ai_diagnostics_rate_limiter: Arc<AiDiagnosticsRateLimiter>,
     /// Live coding presence (plan.md Phase 7) — in-memory prototype, see
     /// `presence_store` module docs for what that does and does not mean.
     pub presence: Arc<PresenceStore>,
@@ -203,6 +204,7 @@ pub async fn create_app_state() -> Result<AppState> {
     let auth_rate_limiter = AuthRateLimiter::new();
     let analytics_rate_limiter = AnalyticsRateLimiter::new();
     let presence_rate_limiter = PresenceRateLimiter::new();
+    let ai_diagnostics_rate_limiter = AiDiagnosticsRateLimiter::new();
     let presence = PresenceStore::new();
     let (redis_presence, presence_repo) = if config.presence_v2_enabled {
         if postgres.is_none() {
@@ -240,7 +242,7 @@ pub async fn create_app_state() -> Result<AppState> {
 
     // Initialise Services
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
-    let ai_diagnostics_service = Arc::new(AiDiagnosticsService::new());
+    let ai_diagnostics_service = Arc::new(AiDiagnosticsService::with_postgres(postgres.clone()));
     let account_analytics_service =
         Arc::new(AccountAnalyticsService::new(account_analytics_repo.clone()));
     let authorization_service = Arc::new(AuthorizationService::new(postgres.clone()));
@@ -339,6 +341,7 @@ pub async fn create_app_state() -> Result<AppState> {
         auth_rate_limiter,
         analytics_rate_limiter,
         presence_rate_limiter,
+        ai_diagnostics_rate_limiter,
         presence,
         redis_presence,
         presence_repo,

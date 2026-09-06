@@ -56,6 +56,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         )
         .route("/ai/usage", post(ai_usage::ingest))
         .route("/ai/diagnostics", post(ai_diagnostics::ingest))
+        .route("/ai/diagnostics/v2", post(ai_diagnostics::ingest_v2))
         .route("/analytics/rebuild", post(account_analytics::rebuild))
         .route("/all_time_since_today", get(all_time::get))
         .route("/editors", get(catalog::editors))
@@ -218,7 +219,15 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             "/users/current/ai_diagnostics",
             get(ai_diagnostics::get),
         )
+        .route(
+            "/users/current/ai_diagnostics/v2",
+            get(ai_diagnostics::get_v2),
+        )
         .route("/users/:user/ai_diagnostics", get(ai_diagnostics::get))
+        .route(
+            "/users/:user/ai_diagnostics/v2",
+            get(ai_diagnostics::get_v2),
+        )
         .route("/dashboard/analytics", get(dashboard_analytics::overview))
         .route("/dashboard/explorer", get(analytics_explorer::get))
         .route(

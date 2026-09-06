@@ -21,7 +21,7 @@ import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getAiDiagnostics, getAiStats } from '@/lib/wakaclock/endpoints';
+import { getAiDiagnostics, getAiDiagnosticsV2, getAiStats } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -222,13 +222,24 @@ function AiStatsPanel() {
 
 function AiDiagnosticsPanelContainer() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
-  const { data, isLoading, error } = useQuery({
+  const legacy = useQuery({
     queryKey: wakaclockKeys.aiDiagnostics(userId),
     queryFn: () => getAiDiagnostics(userId),
     enabled: Boolean(userId),
   });
+  const v2 = useQuery({
+    queryKey: wakaclockKeys.aiDiagnosticsV2(userId),
+    queryFn: () => getAiDiagnosticsV2(userId),
+    enabled: Boolean(userId),
+  });
 
-  return <AiDiagnosticsPanel error={error} isLoading={isLoading} report={data?.report} />;
+  return (
+    <AiDiagnosticsPanel
+      error={legacy.error ?? v2.error}
+      isLoading={legacy.isLoading || v2.isLoading}
+      report={v2.data?.reports[0] ?? legacy.data?.report}
+    />
+  );
 }
 
 export default function AiStatsPage() {

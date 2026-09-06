@@ -1,7 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 use wakaclock_core::ai::fingerprint_for_heartbeat;
@@ -44,88 +43,141 @@ impl HeartbeatService {
         for heartbeat in &mut heartbeats {
             heartbeat.enforce_attribution_policy();
         }
-        // Older clients did not send a transport ID. Derive a stable compatibility ID
-        // from immutable marker fields so a retry of the same legacy payload cannot
-        // create a second canonical interval. New clients always carry a random UUID.
-        for heartbeat in &mut heartbeats {
-            if heartbeat.heartbeat_id.is_none() {
-                heartbeat.heartbeat_id = Some(format!(
-                    "legacy:{:.6}:{}:{}:{}",
-                    heartbeat.time, heartbeat.entity, heartbeat.is_write, heartbeat.category
-                ));
-            }
-        }
+        // Older clients may not send a transport ID. Keep that absence explicit: a
+        // path/time/category-derived ID would merge independent legacy observations
+        // and turn a weak compatibility guess into canonical attribution. New clients
+        // receive a random heartbeat ID in the API client before they are queued.
         let mut rows = Vec::with_capacity(heartbeats.len());
         let mut interval_rows = Vec::new();
         // Surfaced rather than swallowed: a client whose claims are being clamped is
         // reporting less time than it observed, and that used to be invisible.
         let mut clamped_claims = 0u32;
         let mut clamped_seconds = 0.0f64;
-        let mut batch_heartbeat_ids = HashSet::new();
-        let mut batch_event_ids = HashSet::new();
+        let mut batch_heartbeat_revisions = HashMap::new();
+        let mut batch_event_revisions = HashMap::new();
+        let mut batch_change_revisions = HashMap::new();
         let candidate_heartbeat_ids: Vec<String> = heartbeats
             .iter()
             .filter_map(|heartbeat| heartbeat.heartbeat_id.clone())
             .collect();
-        let existing_heartbeat_ids: HashSet<String> = self
+        let existing_heartbeat_revisions = self
             .repo
-            .existing_heartbeat_ids(user_id, &candidate_heartbeat_ids)
-            .await?
-            .into_iter()
-            .collect();
+            .existing_heartbeat_revisions(user_id, &candidate_heartbeat_ids)
+            .await?;
         let candidate_event_ids: Vec<String> = heartbeats
             .iter()
             .filter_map(|heartbeat| heartbeat.ai_event_id.clone())
             .collect();
-        let existing_event_ids: HashSet<String> = self
+        let existing_event_revisions = self
             .repo
-            .existing_ai_event_ids(user_id, &candidate_event_ids)
-            .await?
-            .into_iter()
-            .collect();
-        let candidate_fingerprints: Vec<String> = heartbeats
+            .existing_ai_event_revisions(user_id, &candidate_event_ids)
+            .await?;
+        let candidate_change_ids: Vec<String> = heartbeats
             .iter()
-            .flat_map(ai_event_fingerprint_candidates)
+            .filter_map(|heartbeat| heartbeat.ai_change_id.clone())
             .collect();
-        let existing_fingerprints: HashSet<String> = self
+        let existing_change_revisions = self
             .repo
-            .existing_ai_fingerprints(user_id, &candidate_fingerprints)
-            .await?
-            .into_iter()
-            .collect();
-        let mut batch_fingerprints = HashSet::new();
-
-        for mut hb in heartbeats {
+            .existing_change_revisions(user_id, &candidate_change_ids)
+            .await?;
+        for (batch_index, mut hb) in heartbeats.into_iter().enumerate() {
             if let Some(heartbeat_id) = hb.heartbeat_id.as_ref() {
-                if existing_heartbeat_ids.contains(heartbeat_id)
-                    || !batch_heartbeat_ids.insert(heartbeat_id.clone())
+                let stored_revision = existing_heartbeat_revisions.get(heartbeat_id).copied();
+                let batch_revision = batch_heartbeat_revisions.get(heartbeat_id).copied();
+                if stored_revision.is_some_and(|revision| hb.revision <= revision)
+                    || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
                     continue;
                 }
+                if hb.revision > 0
+                    && stored_revision.is_none()
+                    && hb.ai_event_id.is_none()
+                    && hb.ai_change_id.is_none()
+                {
+                    anyhow::bail!(
+                        "correction revision {} has no stored base for heartbeat_id {}",
+                        hb.revision,
+                        heartbeat_id
+                    );
+                }
+                if let Some(revision) = stored_revision {
+                    if hb.revision != revision.saturating_add(1) {
+                        anyhow::bail!(
+                            "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                            hb.revision,
+                            revision,
+                            heartbeat_id
+                        );
+                    }
+                }
+                batch_heartbeat_revisions.insert(heartbeat_id.clone(), hb.revision);
             }
             // Bulk retries can contain the same AI event twice. De-duplicate within
             // the request before it reaches ClickHouse; the opaque id is supplied by
             // the agent hook and is not derived from source content.
             if let Some(event_id) = hb.ai_event_id.as_ref() {
-                if existing_event_ids.contains(event_id)
-                    || !batch_event_ids.insert(event_id.clone())
+                let stored_revision = existing_event_revisions.get(event_id).copied();
+                let batch_revision = batch_event_revisions.get(event_id).copied();
+                if stored_revision.is_some_and(|revision| hb.revision <= revision)
+                    || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
                     continue;
                 }
+                if hb.revision > 0 && stored_revision.is_none() {
+                    anyhow::bail!(
+                        "correction revision {} has no stored base for ai_event_id {}",
+                        hb.revision,
+                        event_id
+                    );
+                }
+                if let Some(revision) = stored_revision {
+                    if hb.revision != revision.saturating_add(1) {
+                        anyhow::bail!(
+                            "correction revision {} must follow stored revision {} for ai_event_id {}",
+                            hb.revision,
+                            revision,
+                            event_id
+                        );
+                    }
+                }
+                batch_event_revisions.insert(event_id.clone(), hb.revision);
             }
 
-            let fingerprint = ai_event_fingerprint(&hb);
-            if let Some(fingerprint) = fingerprint.as_ref() {
-                let legacy_fingerprint = legacy_ai_event_fingerprint(&hb);
-                if existing_fingerprints.contains(fingerprint)
-                    || legacy_fingerprint
-                        .as_ref()
-                        .is_some_and(|legacy| existing_fingerprints.contains(legacy))
-                    || !batch_fingerprints.insert(fingerprint.clone())
+            if let Some(change_id) = hb.ai_change_id.as_ref() {
+                let stored_revision = existing_change_revisions.get(change_id).copied();
+                let batch_revision = batch_change_revisions.get(change_id).copied();
+                if stored_revision.is_some_and(|revision| hb.revision <= revision)
+                    || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
                     continue;
                 }
+                if hb.revision > 0 && stored_revision.is_none() {
+                    anyhow::bail!(
+                        "correction revision {} has no stored base for ai_change_id {}",
+                        hb.revision,
+                        change_id
+                    );
+                }
+                if let Some(revision) = stored_revision {
+                    if hb.revision != revision.saturating_add(1) {
+                        anyhow::bail!(
+                            "correction revision {} must follow stored revision {} for ai_change_id {}",
+                            hb.revision,
+                            revision,
+                            change_id
+                        );
+                    }
+                }
+                batch_change_revisions.insert(change_id.clone(), hb.revision);
             }
+
+            // Do not use a time/path/line fingerprint as authoritative identity. Those
+            // fields describe an edit but cannot prove that two observations are the
+            // same operation; using them here silently drops legitimate adjacent edits
+            // and was the source of false cross-agent deduplication. Retries are covered
+            // only by the opaque heartbeat/event/change IDs above. The derived
+            // fingerprint is retained on the row for audit and migration tooling.
+            let fingerprint = ai_event_fingerprint(&hb);
 
             if !machine.is_empty() {
                 hb.machine = machine.clone();
@@ -144,7 +196,7 @@ impl HeartbeatService {
             let interval_heartbeat_id = hb
                 .heartbeat_id
                 .clone()
-                .unwrap_or_else(|| format!("legacy:{}:{:.6}", hb.entity, hb.time));
+                .unwrap_or_else(|| format!("legacy-row:{batch_index}"));
             let evidence = clamp_to_evidence_window(
                 &hb.activity_segments,
                 hb.active_seconds,
@@ -297,7 +349,7 @@ impl HeartbeatService {
                 paste_same_file_actions: hb.paste_same_file_actions,
                 paste_same_workspace_actions: hb.paste_same_workspace_actions,
                 paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
-                revision: 0,
+                revision: hb.revision,
             };
 
             rows.push(row);
@@ -362,50 +414,12 @@ fn ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
     )
 }
 
-/// Candidate keys queried for an incoming row. `caf1` is the canonical scheme,
-/// while `v1` is retained only as a read-side compatibility key so rows written
-/// before the scheme bump cannot be replayed into a second activity. New rows
-/// always store the `caf1` value above.
-fn ai_event_fingerprint_candidates(heartbeat: &Heartbeat) -> Vec<String> {
-    let Some(canonical) = ai_event_fingerprint(heartbeat) else {
-        return Vec::new();
-    };
-    let mut candidates = vec![canonical];
-    if let Some(legacy) = legacy_ai_event_fingerprint(heartbeat) {
-        candidates.push(legacy);
-    }
-    candidates
-}
+/// `Heartbeat::ai_event_fingerprint` remains a privacy-safe audit field, but it is
+/// intentionally not used as an identity key. See the ingestion comment above.
 
-fn legacy_ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
-    if !heartbeat.actor_type.is_ai() {
-        return None;
-    }
-    let bucket = (heartbeat.time / 5.0).floor() as i64;
-    let mut hasher = Sha256::new();
-    let comparable_entity = comparable_entity_key(&heartbeat.entity);
-    let values = [
-        comparable_entity.as_str(),
-        heartbeat.project.as_deref().unwrap_or_default(),
-        heartbeat.branch.as_deref().unwrap_or_default(),
-        &bucket.to_string(),
-        &heartbeat.ai_lines_added.unwrap_or_default().to_string(),
-        &heartbeat.ai_lines_deleted.unwrap_or_default().to_string(),
-        heartbeat.ai_agent.as_deref().unwrap_or_default(),
-        heartbeat.ai_provider.as_deref().unwrap_or_default(),
-        heartbeat.ai_model.as_deref().unwrap_or_default(),
-    ];
-    for value in values {
-        hasher.update(value.as_bytes());
-        hasher.update([0]);
-    }
-    Some(format!("v1:{:x}", hasher.finalize()))
-}
-
-/// Hook payloads commonly carry an absolute path while transcript replay carries a
-/// workspace-relative path. Keep only the final two lexical components as a hash input so
-/// those transports can converge without storing or logging the path itself. The project and
-/// branch are included separately to keep same-named files in different workspaces apart.
+/// Normalize the lexical tail for the fingerprint conformance tests. The fingerprint
+/// is never used as authoritative ingestion identity.
+#[cfg(test)]
 fn comparable_entity_key(entity: &str) -> String {
     let normalized = entity.replace('\\', "/");
     let mut tail = normalized

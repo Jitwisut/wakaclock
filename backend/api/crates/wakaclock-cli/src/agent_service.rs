@@ -429,11 +429,7 @@ pub fn stop() -> Result<AgentServiceReport, String> {
 }
 
 pub fn status() -> AgentServiceReport {
-    let lock = fs::read_to_string(lock_path()).ok();
-    let running = lock
-        .as_deref()
-        .and_then(|pid| pid.trim().parse::<u32>().ok())
-        .is_some_and(process_is_running);
+    let running = running_probe().unwrap_or(false);
     let message = fs::read_to_string(log_path())
         .ok()
         .and_then(|content| content.lines().last().map(str::to_string));
@@ -459,6 +455,30 @@ pub fn status() -> AgentServiceReport {
         }
     }
     result
+}
+
+/// Probe the service lock without collapsing an unreadable or malformed lock
+/// into a real `false`. Diagnostics use the error to mark the measurement as
+/// unavailable; the legacy status report keeps its historical best-effort
+/// boolean through `status()`.
+pub fn running_probe() -> Result<bool, String> {
+    running_probe_at(lock_path())
+}
+
+fn running_probe_at(path: PathBuf) -> Result<bool, String> {
+    let lock = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("could not read agent lock: {error}")),
+    };
+    let pid = lock
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "agent lock does not contain a valid pid".to_string())?;
+    if pid == 0 {
+        return Ok(false);
+    }
+    process_is_running_probe(pid)
 }
 
 fn report(
@@ -567,28 +587,40 @@ fn uid() -> String {
 }
 
 fn process_is_running(pid: u32) -> bool {
+    process_is_running_probe(pid).unwrap_or(false)
+}
+
+fn process_is_running_probe(pid: u32) -> Result<bool, String> {
     if pid == 0 {
-        return false;
+        return Ok(false);
     }
     #[cfg(unix)]
     {
-        return Command::new("kill")
+        let output = Command::new("kill")
             .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+            .output()
+            .map_err(|error| format!("could not probe agent pid: {error}"))?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        // `kill -0` returns non-zero for both a missing PID and a live process
+        // that this user cannot inspect. The latter must remain unavailable.
+        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        if stderr.contains("permission") || stderr.contains("operation not permitted") {
+            return Err("agent pid probe was denied".to_string());
+        }
+        return Ok(false);
     }
     #[cfg(windows)]
     {
-        return Command::new("tasklist")
+        let output = Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}")])
             .output()
-            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
-            .unwrap_or(false);
+            .map_err(|error| format!("could not probe agent pid: {error}"))?;
+        return Ok(String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()));
     }
     #[allow(unreachable_code)]
-    false
+    Ok(false)
 }
 
 fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
@@ -627,7 +659,10 @@ fn shell_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_uses_legacy_alias, executable_in_manifest, manifest_content, AgentLock};
+    use super::{
+        content_uses_legacy_alias, executable_in_manifest, manifest_content, running_probe_at,
+        AgentLock,
+    };
     use std::fs;
 
     // Exact shape an old CLI wrote, per platform.
@@ -723,6 +758,25 @@ mod tests {
             AgentLock::acquire_at(lock.clone()).is_ok(),
             "a stale lock from a dead PID is reclaimed, not a permanent block"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diagnostics_probe_distinguishes_missing_and_malformed_lock_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-agentprobe-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("agent.lock");
+
+        assert_eq!(running_probe_at(lock.clone()).unwrap(), false);
+        fs::write(&lock, "not-a-pid\n").unwrap();
+        assert!(running_probe_at(lock.clone()).is_err());
+        fs::write(&lock, "0\n").unwrap();
+        assert_eq!(running_probe_at(lock).unwrap(), false);
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -295,6 +295,7 @@ impl AiActivityParser for ClaudeCodeParser {
                         provider: Some("anthropic".to_string()),
                         model,
                         session_id: record.session_id.clone(),
+                        tool_event_id: Some(tool_use_id.clone()),
                         occurred_at: timestamp,
                         entity,
                         project_root,

@@ -17,7 +17,7 @@ use crate::model::heartbeat::HeartbeatRow;
 use wakaclock_core::ai::is_known_agent_id;
 use wakaclock_core::heartbeat::{
     resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
-    Heartbeat,
+    Heartbeat, MAX_HEARTBEAT_REVISION,
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -80,6 +80,10 @@ pub struct HeartbeatPayload {
     pub ai_event_id: Option<String>,
     #[serde(default)]
     pub ai_change_id: Option<String>,
+    /// Append-only correction revision. The server accepts a bounded value and
+    /// canonical readers select the highest revision for the operation ID.
+    #[serde(default)]
+    pub revision: Option<u32>,
     #[serde(default)]
     pub prompt_character_count: Option<u64>,
     #[serde(default)]
@@ -565,6 +569,9 @@ async fn require_active_access(
 }
 
 fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
+    if p.revision.unwrap_or(0) > MAX_HEARTBEAT_REVISION {
+        return Err("revision exceeds the supported bound".to_string());
+    }
     let explicit_actor_type = p
         .actor_type
         .as_deref()
@@ -711,6 +718,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         human_lines_deleted: p.human_lines_deleted,
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
+        revision: p.revision.unwrap_or(0),
         created_at,
     };
     // Actor-enum clients may send an explicit inferred/unknown label. Honor that
@@ -795,7 +803,7 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 mod tests {
     use super::{
         payload_to_heartbeat, project_history_attribution, sanitize_entity, HeartbeatItem,
-        HeartbeatPayload,
+        HeartbeatPayload, MAX_HEARTBEAT_REVISION,
     };
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -867,6 +875,37 @@ mod tests {
         assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
         heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn correction_revision_is_preserved_and_bounded() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "heartbeat_id": "operation-1",
+            "ai_change_id": "change-1",
+            "revision": 2,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 4
+        }))
+        .unwrap();
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.revision, 2);
+        heartbeat.validate().unwrap();
+
+        let oversized: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "revision": MAX_HEARTBEAT_REVISION + 1
+        }))
+        .unwrap();
+        let error = payload_to_heartbeat(oversized, Uuid::nil()).unwrap_err();
+        assert!(error.contains("revision exceeds"));
     }
 
     #[test]

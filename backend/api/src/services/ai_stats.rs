@@ -7,6 +7,7 @@ use crate::model::ai_stats::{
     AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
     AiUsageMetricsRow,
 };
+use crate::repository::canonical::canonical_winner_relation;
 use wakaclock_core::ai::KNOWN_AGENT_IDS;
 
 // Keep the dashboard conservative when reading rows written by older clients. The
@@ -165,6 +166,10 @@ impl AiStatsService {
 
     async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiTotalsRow> {
         let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
@@ -192,8 +197,7 @@ impl AiStatsService {
                     countIf(h.effective_actor_type = 'unknown') AS unattributed_heartbeats
                 FROM (
                     SELECT h.*, {effective_actor_type} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    FROM {relation}
                 ) AS h
                 ",
         );
@@ -210,6 +214,10 @@ impl AiStatsService {
 
     async fn fetch_agents(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiAgentRow>> {
         let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
@@ -235,8 +243,7 @@ impl AiStatsService {
                     count() AS heartbeat_count
                 FROM (
                     SELECT h.*, {effective_actor_type} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    FROM {relation}
                 ) AS h
                 GROUP BY agent, actor_type, provider, model
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
@@ -282,6 +289,10 @@ impl AiStatsService {
 
     async fn fetch_daily(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiDailyRow>> {
         let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
@@ -305,8 +316,7 @@ impl AiStatsService {
                     count() AS heartbeat_count
                 FROM (
                     SELECT h.*, {effective_actor_type} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    FROM {relation}
                 ) AS h
                 GROUP BY day
                 ORDER BY day ASC

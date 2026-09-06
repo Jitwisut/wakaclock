@@ -4,6 +4,7 @@ import { getCurrentToken } from './session';
 import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from './analytics';
 import type {
   AiDiagnosticsResponse,
+  AiDiagnosticsV2Response,
   AiStatsResponse,
   AllTimeResponse,
   AuthResponse,
@@ -144,6 +145,15 @@ export async function getAiStats(userId: string, start: string, end: string) {
 export async function getAiDiagnostics(userId: string) {
   const { data } = await wakaclockClient.get<AiDiagnosticsResponse>(
     '/users/current/ai_diagnostics',
+    { params: { user_id: userId } }
+  );
+  return data;
+}
+
+// GET /users/current/ai_diagnostics/v2 — nullable, device-scoped health snapshots.
+export async function getAiDiagnosticsV2(userId: string) {
+  const { data } = await wakaclockClient.get<AiDiagnosticsV2Response>(
+    '/users/current/ai_diagnostics/v2',
     { params: { user_id: userId } }
   );
   return data;

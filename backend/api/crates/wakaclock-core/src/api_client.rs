@@ -1,5 +1,5 @@
 use crate::{
-    ai::{AiDiagnosticsReport, AiUsageIngestReport, AiUsageRecord},
+    ai::{AiDiagnosticsReport, AiDiagnosticsReportV2, AiUsageIngestReport, AiUsageRecord},
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -376,6 +376,13 @@ impl ApiClient {
     /// local setup/doctor output available.
     pub async fn send_ai_diagnostics(&self, report: &AiDiagnosticsReport) -> AppResult<()> {
         self.post_json("/api/v1/ai/diagnostics", report).await
+    }
+
+    /// Upload the typed diagnostics contract.  The v1 endpoint remains available
+    /// for older clients, while new collectors send v2 so the server can preserve
+    /// unavailable measurements as `null` and order snapshots by device sequence.
+    pub async fn send_ai_diagnostics_v2(&self, report: &AiDiagnosticsReportV2) -> AppResult<()> {
+        self.post_json("/api/v1/ai/diagnostics/v2", report).await
     }
 
     pub async fn repair_day(

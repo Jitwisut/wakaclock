@@ -2,12 +2,14 @@
 //!
 //! The VS Code extension has a richer consent UI, but the CLI must also be able
 //! to bootstrap an installation from a terminal.  This module intentionally
-//! shares the Rust adapter registry with `wakaclock adapter list`: setup never
-//! has a second hard-coded list of clients or providers.  It copies the tested
-//! adapter bundle into a managed, versioned directory and then performs only the
-//! adapter-owned configuration change.  User config outside the AtoAxis marker
-//! is left byte-for-byte unchanged.
+//! shares the Rust adapter registry with `wakaclock adapter list`: provider,
+//! verification and install metadata come from the manifest, while the small
+//! implementation dispatch only names adapters with a tested installer path. It
+//! copies the tested adapter bundle into a managed, versioned directory and then
+//! performs only the adapter-owned configuration change. User config outside the
+//! AtoAxis marker is left byte-for-byte unchanged.
 
+use fs2::FileExt;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -19,9 +21,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use wakaclock_core::ai::{
-    normalize_client_id, AdapterManifest, AdapterRegistry, DetectedAiProcess, VerificationStatus,
-};
+use wakaclock_core::ai::adapter::VerificationStatus;
+use wakaclock_core::ai::{normalize_client_id, AdapterManifest, AdapterRegistry};
 
 const SETUP_CLIENTS: &[&str] = &[
     "claude-code",
@@ -38,8 +39,9 @@ const BUNDLE_ENV: &str = "WAKACLOCK_AGENT_BUNDLE";
 pub(crate) const DISABLED_ADAPTERS_ENV: &str = "WAKACLOCK_DISABLED_AI_ADAPTERS";
 const HOOK_CONSENT_FILENAME: &str = "agent-hook-consent.json";
 const HOOK_AUDIT_FILENAME: &str = "agent-hook-audit.jsonl";
-const AUTO_INSTALL_POLICY_FILENAME: &str = "agent-hook-autoinstall.json";
-const AUTO_INSTALL_ENV: &str = "WAKACLOCK_AUTO_INSTALL_AGENT_HOOKS";
+const LEGACY_SETUP_STATE_FILENAME: &str = "ai-setup.json";
+const OBSERVER_CONFIG_FILENAME: &str = "ai-observer.toml";
+const OBSERVER_CONFIG_BODY: &str = "# Managed by AtoAxis after explicit ai setup consent.\nenabled = true\nattribution_mode = \"observe_only\"\n";
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -49,11 +51,6 @@ enum HookConsent {
 }
 
 type HookConsentFile = BTreeMap<String, HookConsent>;
-
-#[derive(Debug, serde::Deserialize)]
-struct AutoInstallPolicy {
-    enabled: bool,
-}
 
 #[derive(Debug, Serialize)]
 struct SetupAgentReport {
@@ -76,6 +73,7 @@ struct SetupReport {
     bundle: Option<String>,
     bundle_detail: Option<String>,
     broker: SetupBrokerReport,
+    observer_detail: Option<String>,
     agents: Vec<SetupAgentReport>,
 }
 
@@ -103,38 +101,29 @@ pub(crate) fn run(
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    let _setup_lock = acquire_setup_lock(&home)?;
 
-    // Broker installation is deliberately best-effort here.  A service manager
-    // may be unavailable in a container/SSH session, while the local adapters can
-    // still spool events and the report should tell the user how to repair it.
-    let broker = match crate::broker::ensure_token()
-        .map_err(|error| error.to_string())
-        .and_then(|_| crate::agent_service::install())
-    {
-        Ok(_) => {
-            let status = crate::agent_service::status();
-            SetupBrokerReport {
-                installed: status.installed,
-                running: status.running,
-                detail: if status.running {
-                    None
-                } else {
-                    Some(
-                        "service installed but is not running; run `wakaclock broker start`".into(),
-                    )
-                },
-            }
+    // Do not copy a bundle, create a token, or install a service until at least
+    // one adapter has an existing opt-in or the caller supplies `--yes`.  A
+    // discovery-only setup command must be side-effect free.
+    let setup_consented = selected.iter().any(|id| {
+        effective_consent(&home, id) == Some(HookConsent::Enabled)
+            || (yes
+                && (!all
+                    || registry.get(id).is_some_and(|manifest| {
+                        resolve_and_probe_executable(&manifest.executable.command_names).is_some()
+                    })))
+    });
+    let (bundle, bundle_detail) = if setup_consented {
+        match ensure_managed_bundle(&home) {
+            Ok(path) => (path, None),
+            Err(error) => (None, Some(error)),
         }
-        Err(error) => SetupBrokerReport {
-            installed: false,
-            running: false,
-            detail: Some(format!("broker setup unavailable: {error}")),
-        },
-    };
-
-    let (bundle, bundle_detail) = match ensure_managed_bundle(&home) {
-        Ok(path) => (path, None),
-        Err(error) => (None, Some(error)),
+    } else {
+        (
+            None,
+            Some("explicit consent is required before installing adapter resources".into()),
+        )
     };
 
     let mut agents = Vec::with_capacity(selected.len());
@@ -142,7 +131,19 @@ pub(crate) fn run(
         let manifest = registry
             .get(&id)
             .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
-        if hook_consent(&home, &id) == Some(HookConsent::Denied) {
+        if all && resolve_and_probe_executable(&manifest.executable.command_names).is_none() {
+            agents.push(SetupAgentReport {
+                id,
+                status: "not_detected".into(),
+                executable: None,
+                verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                detail: Some(
+                    "adapter executable was not detected; no configuration was changed".into(),
+                ),
+            });
+            continue;
+        }
+        if effective_consent(&home, &id) == Some(HookConsent::Denied) {
             agents.push(SetupAgentReport {
                 id,
                 status: "opted_out".into(),
@@ -160,7 +161,7 @@ pub(crate) fn run(
         // installers use `--yes`. An ordinary `ai setup` invocation must not
         // silently rewrite another tool's configuration just because the agent
         // executable happens to be present. A persisted opt-out always wins.
-        if hook_consent(&home, &id).is_none() && !yes {
+        if effective_consent(&home, &id).is_none() && !yes {
             agents.push(SetupAgentReport {
                 id,
                 status: "consent_required".into(),
@@ -178,10 +179,58 @@ pub(crate) fn run(
         agents.push(report);
     }
 
+    // Broker installation is deliberately best-effort here.  A service manager
+    // may be unavailable in a container/SSH session, while the local adapters can
+    // still spool events and the report should tell the user how to repair it.
+    let broker = if setup_consented {
+        match crate::broker::ensure_token()
+            .map_err(|error| error.to_string())
+            .and_then(|_| crate::agent_service::install())
+        {
+            Ok(_) => {
+                let status = crate::agent_service::status();
+                SetupBrokerReport {
+                    installed: status.installed,
+                    running: status.running,
+                    detail: if status.running {
+                        None
+                    } else {
+                        Some(
+                            "service installed but is not running; run `wakaclock broker start`"
+                                .into(),
+                        )
+                    },
+                }
+            }
+            Err(error) => SetupBrokerReport {
+                installed: false,
+                running: false,
+                detail: Some(format!("broker setup unavailable: {error}")),
+            },
+        }
+    } else {
+        SetupBrokerReport {
+            installed: false,
+            running: false,
+            detail: Some("consent_required".into()),
+        }
+    };
+
+    let observer_detail = if has_enabled_consent_at(&home) {
+        match ensure_observer_config(&home) {
+            Ok(None) => None,
+            Ok(Some(path)) => Some(format!("observer enabled at {}", path.display())),
+            Err(error) => Some(format!("observer setup unavailable: {error}")),
+        }
+    } else {
+        None
+    };
+
     let report = SetupReport {
         bundle: bundle.map(|path| path.display().to_string()),
         bundle_detail,
         broker,
+        observer_detail,
         agents,
     };
     if json {
@@ -192,76 +241,78 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Install hooks for detected agents only after an explicit consent record exists.
-/// The broker calls this on a throttled cadence; a missing record is fail-closed,
-/// so merely launching an agent can never mutate its configuration.
-pub(crate) fn auto_setup_detected_agents(detected: &[DetectedAiProcess]) {
-    if !auto_install_enabled() {
-        return;
-    }
-    let Ok(home) = dirs::home_dir().ok_or("could not resolve home directory") else {
-        return;
-    };
-    let registry = AdapterRegistry::builtin();
-    let mut ids: Vec<String> = detected
-        .iter()
-        .map(|process| process.agent.clone())
-        .collect();
-    ids.sort();
-    ids.dedup();
-    let consented: Vec<String> = ids
-        .iter()
-        .filter(|id| {
-            SETUP_CLIENTS.contains(&id.as_str())
-                && hook_consent(&home, id) == Some(HookConsent::Enabled)
-        })
-        .cloned()
-        .collect();
-    if consented.is_empty() {
-        return;
-    }
-    let bundle = ensure_managed_bundle(&home).ok().flatten();
-    for id in consented {
-        let Some(manifest) = registry.get(&id) else {
-            continue;
-        };
-        if is_adapter_disabled(&id) {
-            continue;
-        }
-        let report = setup_adapter(manifest, bundle.as_deref(), &home);
-        append_hook_audit(&home, &id, "auto_setup", &report.status);
-    }
+/// Return whether any adapter has an explicit local opt-in. This is used by the
+/// CLI heartbeat path to gate passive transcript scanning after setup.
+pub(crate) fn has_enabled_consent() -> bool {
+    dirs::home_dir()
+        .map(|home| has_enabled_consent_at(&home))
+        .unwrap_or(false)
 }
 
-fn auto_install_enabled() -> bool {
-    let env_value = std::env::var(AUTO_INSTALL_ENV)
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase());
-    if matches!(
-        env_value.as_deref(),
-        Some("0") | Some("false") | Some("no") | Some("off")
-    ) {
-        return false;
-    }
-    if matches!(
-        env_value.as_deref(),
-        Some("1") | Some("true") | Some("yes") | Some("on")
-    ) {
-        return true;
-    }
+fn has_enabled_consent_at(home: &Path) -> bool {
+    // A new per-adapter record overrides the legacy aggregate state. This is
+    // important after uninstall: a denied adapter must not be resurrected by a
+    // stale `ai-setup.json` entry left by an older CLI.
+    SETUP_CLIENTS
+        .iter()
+        .any(|id| effective_consent(home, id) == Some(HookConsent::Enabled))
+}
 
-    let Some(home) = dirs::home_dir() else {
-        return true;
-    };
-    fs::read_to_string(home.join(".wakaclock").join(AUTO_INSTALL_POLICY_FILENAME))
-        .ok()
-        .and_then(|text| serde_json::from_str::<AutoInstallPolicy>(&text).ok())
-        .map(|policy| policy.enabled)
-        .unwrap_or(true)
+fn effective_consent(home: &Path, id: &str) -> Option<HookConsent> {
+    hook_consent(home, id).or_else(|| {
+        fs::read_to_string(home.join(".wakaclock").join(LEGACY_SETUP_STATE_FILENAME))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get("adapters").cloned())
+            .and_then(|adapters| adapters.get(id).cloned())
+            .and_then(|adapter| {
+                adapter
+                    .get("consented")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .filter(|consented| *consented)
+            .map(|_| HookConsent::Enabled)
+    })
+}
+
+fn observer_config_path(home: &Path) -> PathBuf {
+    home.join(".wakaclock").join(OBSERVER_CONFIG_FILENAME)
+}
+
+fn ensure_observer_config(home: &Path) -> Result<Option<PathBuf>, String> {
+    let path = observer_config_path(home);
+    if path.exists() {
+        // A user-managed observer file wins. The parser still enforces
+        // observe-only mode for legacy `infer` values.
+        return Ok(None);
+    }
+    write_text_atomically(&path, OBSERVER_CONFIG_BODY).map_err(|error| error.to_string())?;
+    set_private_permissions(&path).map_err(|error| error.to_string())?;
+    Ok(Some(path))
 }
 
 fn consent_path(home: &Path) -> PathBuf {
     home.join(".wakaclock").join(HOOK_CONSENT_FILENAME)
+}
+
+fn acquire_setup_lock(home: &Path) -> Result<fs::File, Box<dyn Error>> {
+    let path = home.join(".wakaclock").join("ai-setup.lock");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(file),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err("another AI adapter setup is already running".into())
+        }
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 fn audit_path(home: &Path) -> PathBuf {
@@ -353,13 +404,19 @@ pub(crate) fn uninstall(
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    let _setup_lock = acquire_setup_lock(&home)?;
     let bundle = find_existing_managed_bundle(&home);
     let mut reports = Vec::with_capacity(selected.len());
     for id in selected {
         let manifest = registry
             .get(&id)
             .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
+        // Preserve an explicit opt-out so the broker cannot reinstall the hook
+        // on its next discovery pass. This record is metadata-only and does not
+        // touch the agent's own configuration.
+        set_hook_consent(&home, &id, HookConsent::Denied)?;
         let outcome = uninstall_adapter(manifest, bundle.as_deref(), &home);
+        append_hook_audit(&home, &id, "uninstall", &outcome.0);
         reports.push(UninstallReport {
             id: manifest.id.clone(),
             status: outcome.0,
@@ -625,6 +682,9 @@ fn print_text_report(report: &SetupReport) {
     if let Some(detail) = &report.broker.detail {
         println!("Broker note: {detail}");
     }
+    if let Some(detail) = &report.observer_detail {
+        println!("Observer note: {detail}");
+    }
     for agent in &report.agents {
         println!(
             "{}: {} (verification={}, executable={})",
@@ -864,9 +924,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
                 }
                 thread::sleep(Duration::from_millis(100));
             }
-            Err(error) => {
-                return Err(format!("could not wait for {}: {error}", program.display()))
-            }
+            Err(error) => return Err(format!("could not wait for {}: {error}", program.display())),
         }
     };
     let output = std::process::Output {
@@ -1225,6 +1283,71 @@ command = "/keep/me.sh"
         assert!(audit.contains("\"action\":\"setup\""));
         assert!(!audit.contains("prompt"));
         assert!(!audit.contains("content"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn observer_config_is_created_once_and_user_file_is_preserved() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-observer-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        set_hook_consent(&home, "codex", HookConsent::Enabled).unwrap();
+        let created = ensure_observer_config(&home).unwrap().unwrap();
+        assert_eq!(created, observer_config_path(&home));
+        assert_eq!(fs::read_to_string(&created).unwrap(), OBSERVER_CONFIG_BODY);
+        assert!(ensure_observer_config(&home).unwrap().is_none());
+
+        fs::write(
+            &created,
+            "enabled = false\nattribution_mode = \"observe_only\"\n",
+        )
+        .unwrap();
+        assert!(ensure_observer_config(&home).unwrap().is_none());
+        assert!(fs::read_to_string(&created)
+            .unwrap()
+            .contains("enabled = false"));
+        assert!(has_enabled_consent_at(&home));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn legacy_consent_is_reused_without_prompting_again() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-legacy-consent-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = home.join(".wakaclock").join(LEGACY_SETUP_STATE_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"version":1,"adapters":{"codex":{"consented":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            effective_consent(&home, "codex"),
+            Some(HookConsent::Enabled)
+        );
+        assert!(has_enabled_consent_at(&home));
+        set_hook_consent(&home, "codex", HookConsent::Denied).unwrap();
+        assert!(!has_enabled_consent_at(&home));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn setup_lock_serializes_cli_and_extension_writes() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-setup-lock-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let first = acquire_setup_lock(&home).unwrap();
+        let second = acquire_setup_lock(&home);
+        assert!(second.is_err());
+        drop(first);
+        assert!(acquire_setup_lock(&home).is_ok());
         let _ = fs::remove_dir_all(home);
     }
 }

@@ -237,7 +237,7 @@ impl DashboardAnalyticsService {
                             )
                             AND actor_type != 'unknown'
                         ) AS complete_attribution_rows
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND time >= ? AND time < ?
                  GROUP BY day ORDER BY day ASC",
             )
@@ -305,7 +305,7 @@ impl DashboardAnalyticsService {
             "
             SELECT {name_expression} AS name,
                    toInt64(round(sum(ifNull(active_seconds, 0.0)))) AS total
-            FROM wakaclock.heartbeats
+            FROM wakaclock.heartbeats_canonical
             WHERE user_id = ? AND time >= ? AND time < ?
             GROUP BY name
             HAVING total > 0
@@ -347,7 +347,7 @@ impl DashboardAnalyticsService {
             "
                 SELECT {name_expression} AS name,
                        toInt64(sum(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0))) AS total
-                FROM wakaclock.heartbeats
+                FROM wakaclock.heartbeats_canonical
                 WHERE user_id = ? AND time >= ? AND time < ?
                   AND actor_type IN ('ai_verified', 'ai_inferred')
                 GROUP BY name

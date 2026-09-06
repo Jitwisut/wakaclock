@@ -14,10 +14,11 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -44,6 +45,7 @@ use crate::agent_service;
 
 const BROKER_POLL_SECONDS: u64 = 1;
 const BROKER_AI_ACTIVITY_STREAM: &str = "broker-ai";
+const MAX_SIDECAR_FINGERPRINT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct BrokerProcessReport {
@@ -317,22 +319,13 @@ async fn process_record(
         )?
     };
 
-    // A hook and transcript can legitimately have different event IDs for one edit.
-    // The existing metadata-only fingerprint remains the cross-source safety net.
-    if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
-        let state = AiAttributionState::open()?;
-        if state.has_fingerprint(&event.entity, event_time, added, deleted)? {
-            state.mark_delivered(&event.event_id, "broker_fingerprint")?;
-            return Ok(());
-        }
-    }
-
     let ai_event = AiEditEvent {
         event_id: event.event_id.clone(),
         agent: event.agent.clone(),
         provider: event.provider.clone(),
         model: event.model.clone(),
         session_id: event.session_id.clone(),
+        tool_event_id: event.tool_event_id.clone(),
         occurred_at: event.occurred_at,
         entity: PathBuf::from(&event.entity),
         project_root: event.project_root.as_deref().map(PathBuf::from),
@@ -384,15 +377,6 @@ async fn process_record(
 
     let state = AiAttributionState::open()?;
     state.mark_delivered(&event.event_id, "broker")?;
-    if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
-        state.mark_fingerprint(
-            &event.entity,
-            event_time,
-            added,
-            deleted,
-            Some(&event.event_id),
-        )?;
-    }
     agent_service::record_heartbeat();
     Ok(())
 }
@@ -410,6 +394,12 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    // A post-edit content hash is the only editor↔producer identity proof currently
+    // available. Keep it local metadata, bounded by size, and only emit it for live
+    // producer paths; a delayed transcript replay may point at a newer file version.
+    let content_fingerprint = (event.source.as_str() != "transcript")
+        .then(|| content_fingerprint_for_path(Path::new(&event.entity)))
+        .flatten();
     let payload = serde_json::json!({
         "schema_version": AI_SIDECAR_SCHEMA_VERSION,
         "stream_id": cursor.stream_id,
@@ -430,6 +420,7 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         "transport": event.transport,
         "tool": event.tool,
         "tool_event_id": event.tool_event_id,
+        "content_fingerprint": content_fingerprint,
         "change_kind": event.change_kind.as_str(),
         "previous_entity": event.previous_entity,
     });
@@ -438,6 +429,23 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     store.mark_sidecar_written(&event.event_id)?;
     set_private_permissions(&path)?;
     Ok(())
+}
+
+fn content_fingerprint_for_path(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > MAX_SIDECAR_FINGERPRINT_BYTES {
+        return None;
+    }
+    let mut input = fs::File::open(path).ok()?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    input.read_to_end(&mut bytes).ok()?;
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(format!("sha256:{hex}"))
 }
 
 pub(crate) async fn run(config: Config, interval_seconds: u64) -> Result<(), Box<dyn Error>> {
@@ -995,6 +1003,7 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/lib.rs"),
             project_root: Some(PathBuf::from("/workspace")),

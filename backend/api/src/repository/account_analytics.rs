@@ -70,7 +70,7 @@ impl AccountAnalyticsRepository {
             .client
             .get_client()
             .query(
-                "SELECT count() FROM wakaclock.heartbeats
+                "SELECT count() FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)",
             )
             .bind(user_id)
@@ -239,7 +239,7 @@ impl AccountAnalyticsRepository {
             .get_client()
             .query(
                 "SELECT sum(ifNull(active_seconds, 0.0))
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)",
             )
             .bind(user_id)
@@ -504,7 +504,7 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(ifNull(active_seconds, 0.0)) AS active_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats
+        FROM wakaclock.heartbeats_canonical
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)
         GROUP BY user_id, date, machine_key, machine_display_name
         "#,
@@ -546,7 +546,7 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(0) AS cache_read_tokens, toUInt64(0) AS cache_write_tokens,
                 toUInt64(0) AS cost_microusd, toUInt64(0) AS priced_tokens,
                 toUInt64(0) AS total_reported_tokens, toUInt64(0) AS unpriced_tokens
-            FROM wakaclock.heartbeats AS heartbeat
+            FROM wakaclock.heartbeats_canonical AS heartbeat
             WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?)
               AND heartbeat.actor_type IN ('ai_verified', 'ai_inferred')
             UNION ALL
@@ -590,7 +590,7 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(1) AS ai_events,
                 '' AS ai_session_id,
                 toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0)) AS ai_lines_changed
-            FROM wakaclock.heartbeats AS heartbeat
+            FROM wakaclock.heartbeats_canonical AS heartbeat
             WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?)
               AND heartbeat.actor_type IN ('ai_verified', 'ai_inferred')
             UNION ALL
@@ -649,7 +649,7 @@ const SNAPSHOT_INSERTS: &[(&str, &str)] = &[
                 toUInt64(0) AS cache_read_tokens, toUInt64(0) AS cache_write_tokens,
                 toUInt64(0) AS cost_microusd, toUInt64(0) AS priced_tokens,
                 toUInt64(0) AS total_reported_tokens, toUInt64(0) AS unpriced_tokens
-            FROM wakaclock.heartbeats AS heartbeat
+            FROM wakaclock.heartbeats_canonical AS heartbeat
             WHERE heartbeat.user_id = ? AND toDate(heartbeat.date) BETWEEN toDate(?) AND toDate(?) AND heartbeat.project_id IS NOT NULL
             UNION ALL
             SELECT
@@ -702,7 +702,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
                 + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats AS h
+        FROM wakaclock.heartbeats_canonical AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, entity_key, relative_path, language, branch
         "#,
@@ -727,7 +727,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
                 + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats AS h
+        FROM wakaclock.heartbeats_canonical AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, branch
         "#,
@@ -744,7 +744,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats AS h
+        FROM wakaclock.heartbeats_canonical AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, language
         "#,
@@ -764,7 +764,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(ifNull(active_seconds, 0.0)) AS total_seconds,
             count() AS heartbeat_count,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats AS h
+        FROM wakaclock.heartbeats_canonical AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, editor, ai_client
         "#,
@@ -789,7 +789,7 @@ const PROJECT_DETAIL_SNAPSHOT_INSERTS: &[(&str, &str)] = &[
             sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
                 + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_lines_deleted,
             __DATA_VERSION__ AS data_version
-        FROM wakaclock.heartbeats AS h
+        FROM wakaclock.heartbeats_canonical AS h
         WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) AND project_id IS NOT NULL
         GROUP BY user_id, date, project_id, branch
         "#,

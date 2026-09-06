@@ -9,23 +9,25 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
+    sync::OnceLock,
     time::Duration,
 };
 use uuid::Uuid;
 mod agent_service;
+mod ai_setup;
 mod broker;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
 use wakaclock_core::{
     ai::{
-        build_ai_diagnostics_report, normalize_agent_id, normalize_client_id, normalize_model_id,
-        normalize_provider_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        AdapterFreshness, AiActivityParser, AiAttributionState, AiConfidence, AiEditEvent,
-        AiEventSource, BrokerHealth, ClaudeCodeParser, CodexParser, DiscoveryContext,
-        DiscoveryResult, DiscoveryState, GeminiCliParser, ObserverConfig, ParseContext,
-        ParserCursor, ParserLagSummary, TranscriptLag, VerificationStatus,
-        PRODUCER_CONTRACT_VERSION,
+        normalize_agent_id, normalize_client_id, normalize_model_id, normalize_provider_id,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, AdapterFreshnessV2,
+        AiActivityParser, AiAttributionState, AiConfidence, AiDiagnosticsReportV2, AiEditEvent,
+        AiEventSource, BrokerHealthV2, ClaudeCodeParser, CodexParser, DiagnosticMeasurement,
+        DiagnosticsConsent, DiscoveryContext, DiscoveryResult, DiscoveryState, GeminiCliParser,
+        MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
+        RuntimeHealth, TranscriptLag, VerificationStatus, PRODUCER_CONTRACT_VERSION,
     },
     api_client::ApiClient,
     broker::BrokerEventV1,
@@ -409,13 +411,13 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Register detected adapters and, after explicit consent, install the
-    /// per-user transcript watcher. This command never infers authorship and
-    /// never overwrites an agent-owned configuration file.
+    /// Configure one registry-supported adapter (or detected adapters with
+    /// `--all`) after explicit consent. This command never infers authorship
+    /// and never overwrites an agent-owned configuration file.
     Setup {
-        /// Adapter id (`claude-code`, `codex`, or `gemini-cli`).
+        /// Adapter id (for example `claude-code`, `codex`, `kilo-code`, or `kimi-code-cli`).
         agent: Option<String>,
-        /// Register every adapter supported by this CLI.
+        /// Configure every supported adapter selected by the registry path.
         #[arg(long, default_value_t = false)]
         all: bool,
         /// Explicitly consent to the first local setup write.
@@ -954,9 +956,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
             // background transcript read is also consent-gated: installing the watcher
             // alone must never open a production attribution path.
             let observer_enabled = load_observer_config().enabled;
-            let setup_consented = load_ai_setup_state()
-                .map(|state| state.adapters.values().any(|adapter| adapter.consented))
-                .unwrap_or(false);
+            // New registry-driven setup persists per-adapter hook consent. Keep
+            // the legacy state file as a compatibility fallback for installations
+            // upgraded from the pre-registry CLI.
+            let setup_consented = ai_setup::has_enabled_consent()
+                || load_ai_setup_state()
+                    .map(|state| state.adapters.values().any(|adapter| adapter.consented))
+                    .unwrap_or(false);
             let should_auto_sync_ai = ai_agent.is_none() && observer_enabled && setup_consented;
             let entity_type = EntityType::from_str(&entity_type)?;
             let category = Category::from_str(&category)?;
@@ -1505,9 +1511,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 all,
                 yes,
                 json,
-            } => run_ai_setup(agent.as_deref(), all, yes, json)?,
+            } => ai_setup::run(agent.as_deref(), all, json, yes)?,
             AiAction::Uninstall { agent, all, json } => {
-                run_ai_uninstall(agent.as_deref(), all, json)?
+                ai_setup::uninstall(agent.as_deref(), all, json)?
             }
             AiAction::Doctor { json, upload } => run_ai_doctor(&api_client, json, upload).await?,
             AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
@@ -1839,24 +1845,6 @@ struct AiSetupAdapterState {
     verification: VerificationStatus,
 }
 
-#[derive(Debug, Serialize)]
-struct AiSetupAdapterReport {
-    agent: String,
-    consented: bool,
-    detected: bool,
-    status: String,
-    verification: VerificationStatus,
-}
-
-#[derive(Debug, Serialize)]
-struct AiSetupReport {
-    adapters: Vec<AiSetupAdapterReport>,
-    observer_mode: &'static str,
-    service_error: Option<String>,
-    service_installed: bool,
-    service_running: bool,
-}
-
 fn ai_setup_state_path() -> Result<PathBuf, Box<dyn Error>> {
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
     Ok(home.join(".wakaclock").join("ai-setup.json"))
@@ -1878,233 +1866,6 @@ fn load_ai_setup_state() -> Result<AiSetupState, Box<dyn Error>> {
     Ok(state)
 }
 
-fn save_ai_setup_state(state: &AiSetupState) -> Result<(), Box<dyn Error>> {
-    let path = ai_setup_state_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    fs::write(
-        &temporary,
-        format!("{}\n", serde_json::to_string_pretty(state)?),
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-    }
-    fs::rename(temporary, path)?;
-    Ok(())
-}
-
-fn canonical_ai_setup_id(value: &str) -> Option<&'static str> {
-    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "claude" | "claude-code" => Some("claude-code"),
-        "codex" | "codex-cli" => Some("codex"),
-        "gemini" | "gemini-cli" => Some("gemini-cli"),
-        _ => None,
-    }
-}
-
-fn selected_ai_setup_ids(
-    agent: Option<&str>,
-    all: bool,
-) -> Result<Vec<&'static str>, Box<dyn Error>> {
-    if all && agent.is_some() {
-        return Err("choose one adapter id or --all, not both".into());
-    }
-    if all || agent.is_none() {
-        return Ok(vec!["claude-code", "codex", "gemini-cli"]);
-    }
-    let value = agent.expect("checked above");
-    canonical_ai_setup_id(value)
-        .map(|id| vec![id])
-        .ok_or_else(|| {
-            format!("unsupported adapter '{value}' (supported: claude-code, codex, gemini-cli)")
-                .into()
-        })
-}
-
-fn run_ai_setup(
-    agent: Option<&str>,
-    all: bool,
-    yes: bool,
-    json: bool,
-) -> Result<(), Box<dyn Error>> {
-    let ids = selected_ai_setup_ids(agent, all)?;
-    let context = ai_discovery_context()?;
-    let mut state = load_ai_setup_state()?;
-    let mut changed = false;
-    let mut reports = Vec::with_capacity(ids.len());
-
-    for id in ids {
-        let detected = supported_ai_parsers()
-            .into_iter()
-            .find(|(parser_id, _)| *parser_id == id)
-            .map(|(_, parser)| {
-                parser
-                    .discover_sources(&context)
-                    .iter()
-                    .any(|result| !matches!(result.state, DiscoveryState::NotInstalled))
-            })
-            .unwrap_or(false);
-        let previous = state.adapters.get(id).cloned();
-        let already_consented = previous.as_ref().is_some_and(|value| value.consented);
-        let consented = already_consented || yes;
-        let status = if !consented {
-            "consent_required"
-        } else if detected {
-            "registered"
-        } else {
-            "not_detected"
-        };
-        if consented {
-            let next = AiSetupAdapterState {
-                consented: true,
-                detected,
-                verification: VerificationStatus::Scaffold,
-            };
-            if previous.as_ref() != Some(&next) {
-                state.adapters.insert(id.to_string(), next);
-                changed = true;
-            }
-        }
-        reports.push(AiSetupAdapterReport {
-            agent: id.to_string(),
-            consented,
-            detected,
-            status: status.to_string(),
-            verification: VerificationStatus::Scaffold,
-        });
-    }
-
-    let should_reconcile_service = yes || reports.iter().any(|adapter| adapter.consented);
-    if reports.iter().any(|adapter| adapter.consented) {
-        changed |= ensure_observer_config_after_consent(&mut state)?;
-    }
-    let (service_installed, service_running, service_error) = if should_reconcile_service {
-        match agent_service::install() {
-            Ok(report) => (report.installed, report.running, None),
-            Err(error) => (false, false, Some(error)),
-        }
-    } else {
-        (false, false, None)
-    };
-    if changed {
-        save_ai_setup_state(&state)?;
-    }
-    let report = AiSetupReport {
-        adapters: reports,
-        observer_mode: "observe_only",
-        service_error,
-        service_installed,
-        service_running,
-    };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        println!("Observer mode: observe_only (production attribution disabled)");
-        for adapter in &report.adapters {
-            println!(
-                "{}: {} · detected={} · consented={} · verification={:?}",
-                adapter.agent,
-                adapter.status,
-                adapter.detected,
-                adapter.consented,
-                adapter.verification
-            );
-        }
-        if should_reconcile_service {
-            println!(
-                "Watcher service: {}",
-                if report.service_running {
-                    "running"
-                } else {
-                    "not running"
-                }
-            );
-        }
-        if let Some(error) = &report.service_error {
-            println!("Watcher setup warning: {error}");
-        }
-        if report
-            .adapters
-            .iter()
-            .any(|adapter| adapter.status == "consent_required")
-        {
-            println!("No agent configuration was changed; rerun with --yes or use VS Code onboarding to grant consent.");
-        }
-    }
-    Ok(())
-}
-
-fn run_ai_uninstall(agent: Option<&str>, all: bool, json: bool) -> Result<(), Box<dyn Error>> {
-    let ids = selected_ai_setup_ids(agent, all)?;
-    let mut state = load_ai_setup_state()?;
-    let mut reports = Vec::with_capacity(ids.len());
-    for id in ids {
-        let removed = state.adapters.remove(id).is_some();
-        reports.push(serde_json::json!({
-            "agent": id,
-            "status": if removed { "removed" } else { "not_configured" },
-        }));
-    }
-    let observer_config_removed = if state.observer_config_owned && state.adapters.is_empty() {
-        let path = observer_config_path()?;
-        let removed = match fs::remove_file(path) {
-            Ok(()) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        state.observer_config_owned = false;
-        removed
-    } else {
-        false
-    };
-    let (service_removed, service_error) = if state.adapters.is_empty() {
-        match agent_service::uninstall() {
-            Ok(_) => (true, None),
-            Err(error) => (false, Some(error)),
-        }
-    } else {
-        (false, None)
-    };
-    save_ai_setup_state(&state)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "adapters": reports,
-                "observer_config_removed": observer_config_removed,
-                "service_removed": service_removed,
-                "service_error": service_error,
-            }))?
-        );
-    } else {
-        for report in &reports {
-            println!(
-                "{}: {}",
-                report["agent"].as_str().unwrap_or("unknown"),
-                report["status"].as_str().unwrap_or("unknown")
-            );
-        }
-        println!(
-            "Only AtoAxis-owned registration/consent records were removed{}; agent configuration was preserved.",
-            if observer_config_removed {
-                " and the observer config"
-            } else {
-                ""
-            }
-        );
-        if service_removed {
-            println!("AtoAxis watcher service removed.");
-        } else if let Some(error) = service_error {
-            println!("Watcher removal warning: {error}");
-        }
-    }
-    Ok(())
-}
-
 fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     Ok(DiscoveryContext {
         home_dir: dirs::home_dir().ok_or("could not resolve home directory")?,
@@ -2113,6 +1874,11 @@ fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
 }
 
 fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
+    // Keep the human-friendly discovery details below, but take health/runtime
+    // state from the same typed collector used by `ai doctor` and the extension
+    // self-test. This prevents the three surfaces from disagreeing about an
+    // unavailable broker or parser probe.
+    let diagnostics = collect_ai_diagnostics_v2(false)?;
     let context = ai_discovery_context()?;
     let mut reports = Vec::new();
     for (id, parser) in supported_ai_parsers() {
@@ -2163,8 +1929,20 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
         reports.push(serde_json::json!({"agent": id, "status": description}));
     }
     if json {
-        println!("{}", serde_json::to_string_pretty(&reports)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "diagnostics": diagnostics,
+                "agents": reports,
+            }))?
+        );
     } else {
+        println!(
+            "Runtime: {:?} · broker pending={} · parser={:?}",
+            diagnostics.runtime_health,
+            format_diagnostic_measurement(&diagnostics.broker.pending),
+            diagnostics.parser.availability
+        );
         for report in reports {
             println!(
                 "{}: {}",
@@ -2179,33 +1957,6 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
 fn observer_config_path() -> Result<PathBuf, Box<dyn Error>> {
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
     Ok(home.join(".wakaclock").join("ai-observer.toml"))
-}
-
-fn ensure_observer_config_after_consent(state: &mut AiSetupState) -> Result<bool, Box<dyn Error>> {
-    let path = observer_config_path()?;
-    if path.exists() {
-        // A user-managed file wins. The compatibility parser still downgrades a
-        // legacy `infer` value, but setup must not overwrite a file it does not own.
-        return Ok(false);
-    }
-    let parent = path.parent().ok_or("observer config has no parent")?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("toml.tmp-{}", std::process::id()));
-    fs::write(
-        &temporary,
-        r#"# Managed by AtoAxis after explicit `ai setup` consent.
-enabled = true
-attribution_mode = "observe_only"
-"#,
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-    }
-    fs::rename(temporary, path)?;
-    state.observer_config_owned = true;
-    Ok(true)
 }
 
 fn load_observer_config() -> ObserverConfig {
@@ -2232,63 +1983,9 @@ async fn run_ai_doctor(
     json: bool,
     upload: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let context = ai_discovery_context()?;
-    let observer = load_observer_config();
-    let pending = match Queue::open() {
-        Ok(queue) => queue.len()? as u32,
-        Err(_) => 0,
-    };
-    let mut transcripts_watched = 0u32;
-    let mut adapters = Vec::new();
-
-    for (id, parser) in supported_ai_parsers() {
-        let discoveries = parser.discover_sources(&context);
-        let transcript_count = discoveries
-            .iter()
-            .filter(|result| matches!(result.state, DiscoveryState::TranscriptFound { .. }))
-            .count() as u32;
-        transcripts_watched += transcript_count;
-        let detected = !discoveries
-            .iter()
-            .all(|result| matches!(result.state, DiscoveryState::NotInstalled));
-        let diagnostic_code = if !detected {
-            Some("not_installed".to_string())
-        } else if transcript_count == 0 {
-            Some("transcript_missing".to_string())
-        } else {
-            None
-        };
-        // Discovery is intentionally never promoted to LiveTested or Verified.
-        // Those states require a fresh, privacy-reviewed live certification artifact;
-        // checked-in fixtures and local file presence are not sufficient evidence.
-        let verification = VerificationStatus::Scaffold;
-        adapters.push(AdapterFreshness {
-            agent: id.to_string(),
-            detected,
-            enabled: observer.enabled,
-            verification,
-            diagnostic_code,
-            ..Default::default()
-        });
-    }
-
-    let report = build_ai_diagnostics_report(
-        chrono::Utc::now(),
-        BrokerHealth {
-            running: false,
-            pending,
-            ..Default::default()
-        },
-        ParserLagSummary {
-            transcripts_watched,
-            transcripts_behind: 0,
-            max_lag_seconds: 0,
-        },
-        adapters,
-    );
-
+    let report = collect_ai_diagnostics_v2(upload)?;
     if upload {
-        if let Err(error) = api_client.send_ai_diagnostics(&report).await {
+        if let Err(error) = api_client.send_ai_diagnostics_v2(&report).await {
             eprintln!("Warning: diagnostics upload skipped: {error}");
         }
     }
@@ -2298,21 +1995,28 @@ async fn run_ai_doctor(
     } else {
         println!(
             "Observer: {} (production attribution: disabled)",
-            if observer.enabled {
+            if report.consent.observer {
                 "observe_only"
             } else {
                 "off"
             }
         );
-        println!("Offline queue: {pending} pending heartbeat(s)");
+        println!(
+            "Runtime: {:?} · device={} · sequence={}",
+            report.runtime_health, report.device_id, report.sequence
+        );
+        println!(
+            "Offline queue: {}",
+            format_diagnostic_measurement(&report.broker.pending)
+        );
         for adapter in &report.adapters {
             println!(
-                "{}: {} · verification={} · detected={} · enabled={}",
+                "{}: {:?} · verification={} · detected={} · enabled={}",
                 adapter.agent,
-                adapter.health_status(),
+                adapter.runtime_health,
                 serde_json::to_string(&adapter.verification)?.trim_matches('"'),
-                adapter.detected,
-                adapter.enabled
+                format_diagnostic_measurement(&adapter.detected),
+                format_diagnostic_measurement(&adapter.enabled)
             );
         }
         if upload {
@@ -2320,6 +2024,312 @@ async fn run_ai_doctor(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AiDiagnosticsIdentity {
+    device_id: String,
+    sequence: u64,
+}
+
+static AI_DIAGNOSTICS_BOOT_ID: OnceLock<String> = OnceLock::new();
+
+fn ai_diagnostics_state_path() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(dirs::home_dir()
+        .ok_or("could not resolve home directory")?
+        .join(".wakaclock")
+        .join("ai-diagnostics-identity.json"))
+}
+
+fn safe_diagnostics_code(value: Option<&str>, fallback: &'static str) -> Option<String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Some(fallback.to_string());
+    };
+    if value.len() <= 64
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+    {
+        Some(value.to_string())
+    } else {
+        Some(fallback.to_string())
+    }
+}
+
+fn next_ai_diagnostics_identity() -> Result<(String, String, u64), Box<dyn Error>> {
+    let path = ai_diagnostics_state_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = path.with_extension("lock");
+    let _lock = AiSyncLock::try_acquire_at(&lock_path)?;
+    let previous = fs::read_to_string(&path)
+        .ok()
+        .and_then(|value| serde_json::from_str::<AiDiagnosticsIdentity>(&value).ok())
+        .filter(|identity| {
+            !identity.device_id.is_empty()
+                && identity.device_id.len() <= 128
+                && identity.device_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+        });
+    let device_id = previous
+        .as_ref()
+        .map(|identity| identity.device_id.clone())
+        .unwrap_or_else(|| format!("device-{}", Uuid::new_v4().simple()));
+    let sequence = previous
+        .map(|identity| identity.sequence.saturating_add(1))
+        .unwrap_or(1);
+    let state = AiDiagnosticsIdentity {
+        device_id: device_id.clone(),
+        sequence,
+    };
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, serde_json::to_vec(&state)?)?;
+    fs::rename(&temporary, &path)?;
+    let boot_id = AI_DIAGNOSTICS_BOOT_ID
+        .get_or_init(|| format!("boot-{}", Uuid::new_v4().simple()))
+        .clone();
+    Ok((device_id, boot_id, sequence))
+}
+
+fn format_diagnostic_measurement<T: std::fmt::Display>(
+    measurement: &DiagnosticMeasurement<T>,
+) -> String {
+    match (measurement.availability, &measurement.value) {
+        (MeasurementAvailability::Available, Some(value)) => value.to_string(),
+        (MeasurementAvailability::Disabled, _) => "disabled".to_string(),
+        _ => "unavailable".to_string(),
+    }
+}
+
+fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<dyn Error>> {
+    let captured_at = chrono::Utc::now();
+    let measured_at = captured_at;
+    let (device_id, boot_id, sequence) = next_ai_diagnostics_identity()?;
+    let observer = load_observer_config();
+    let service_running_probe = agent_service::running_probe();
+    let service_running = service_running_probe.as_ref().ok().copied();
+    let broker_probe = wakaclock_core::broker::BrokerStore::open().and_then(|store| store.stats());
+    let queue_probe = Queue::open().and_then(|queue| queue.len());
+    let broker_available = broker_probe.is_ok();
+    let queue_available = queue_probe.is_ok();
+    let broker_stats = broker_probe.as_ref().ok();
+    let queue_count = queue_probe
+        .ok()
+        .map(|count| count.min(u32::MAX as usize) as u32);
+
+    let broker = BrokerHealthV2 {
+        availability: if broker_available {
+            MeasurementAvailability::Available
+        } else {
+            MeasurementAvailability::Unavailable
+        },
+        running: match service_running {
+            Some(running) => DiagnosticMeasurement::available(running, measured_at),
+            None => DiagnosticMeasurement::unavailable(),
+        },
+        pending: match (broker_stats, queue_count) {
+            (Some(stats), Some(queue)) => DiagnosticMeasurement::available(
+                stats.pending.min(u32::MAX as u64) as u32 + queue,
+                measured_at,
+            ),
+            _ => DiagnosticMeasurement::unavailable(),
+        },
+        retry: broker_stats
+            .map(|stats| {
+                DiagnosticMeasurement::available(
+                    stats.retry.min(u32::MAX as u64) as u32,
+                    measured_at,
+                )
+            })
+            .unwrap_or_else(DiagnosticMeasurement::unavailable),
+        dead_letter: broker_stats
+            .map(|stats| {
+                DiagnosticMeasurement::available(
+                    stats.dead_letter.min(u32::MAX as u64) as u32,
+                    measured_at,
+                )
+            })
+            .unwrap_or_else(DiagnosticMeasurement::unavailable),
+        last_delivery_at: broker_stats
+            .and_then(|stats| stats.last_delivery_at)
+            .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0)),
+        last_error_code: if broker_available {
+            broker_stats
+                .and_then(|stats| stats.last_error_code.as_deref())
+                .and_then(|code| safe_diagnostics_code(Some(code), "broker_error"))
+                .filter(|code| code != "broker_error")
+        } else {
+            safe_diagnostics_code(None, "broker_store_unavailable")
+        },
+    };
+
+    let (parser, adapters, parser_probe_failed) = match ai_discovery_context() {
+        Ok(context) => {
+            let state = AiAttributionState::open().ok();
+            let mut transcripts_watched = 0u32;
+            let mut transcripts_behind = 0u32;
+            let mut max_lag_seconds = 0u32;
+            let mut adapters = Vec::new();
+            for (id, parser) in supported_ai_parsers() {
+                let discoveries = parser.discover_sources(&context);
+                let transcript_paths: Vec<PathBuf> = discoveries
+                    .iter()
+                    .filter_map(|result| match &result.state {
+                        DiscoveryState::TranscriptFound { path } => Some(path.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let transcript_count = transcript_paths.len().min(u32::MAX as usize) as u32;
+                transcripts_watched = transcripts_watched.saturating_add(transcript_count);
+                let mut agent_lag_seconds = 0u32;
+                let mut last_evidence_at: Option<chrono::DateTime<chrono::Utc>> = None;
+                for path in &transcript_paths {
+                    let cursor_key = format!("{id}:{}", path.to_string_lossy());
+                    let cursor = state
+                        .as_ref()
+                        .and_then(|state| state.load_cursor(&cursor_key).ok().flatten());
+                    let file_size = fs::metadata(path).ok().map(|meta| meta.len());
+                    if let Some(lag) =
+                        file_size.map(|size| TranscriptLag::measure(size, cursor.as_ref()))
+                    {
+                        if lag.lag_bytes > 0 {
+                            transcripts_behind = transcripts_behind.saturating_add(1);
+                        }
+                    }
+                    let modified_at = fs::metadata(path)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_secs());
+                    let cursor_at = cursor
+                        .as_ref()
+                        .and_then(|cursor| cursor.last_record_time)
+                        .map(|time| time.timestamp().max(0) as u64);
+                    if let Some(recorded_at) =
+                        cursor.as_ref().and_then(|cursor| cursor.last_record_time)
+                    {
+                        last_evidence_at = Some(
+                            last_evidence_at
+                                .map(|current| current.max(recorded_at))
+                                .unwrap_or(recorded_at),
+                        );
+                    }
+                    if let (Some(modified), Some(scanned)) = (modified_at, cursor_at) {
+                        agent_lag_seconds = agent_lag_seconds
+                            .max(modified.saturating_sub(scanned).min(u32::MAX as u64) as u32);
+                    }
+                }
+                max_lag_seconds = max_lag_seconds.max(agent_lag_seconds);
+                let detected = !discoveries
+                    .iter()
+                    .all(|result| matches!(result.state, DiscoveryState::NotInstalled));
+                let diagnostic_code = if !detected {
+                    Some("not_installed".to_string())
+                } else if transcript_count == 0 {
+                    Some("transcript_missing".to_string())
+                } else if agent_lag_seconds > 300 {
+                    Some("transcript_lagging".to_string())
+                } else {
+                    None
+                };
+                let runtime_health = if !observer.enabled {
+                    RuntimeHealth::Disabled
+                } else if !detected {
+                    RuntimeHealth::Unavailable
+                } else if diagnostic_code.is_some() {
+                    RuntimeHealth::Degraded
+                } else if service_running == Some(true) {
+                    RuntimeHealth::Healthy
+                } else if service_running.is_none() {
+                    RuntimeHealth::Degraded
+                } else {
+                    RuntimeHealth::Idle
+                };
+                adapters.push(AdapterFreshnessV2 {
+                    agent: id.to_string(),
+                    availability: MeasurementAvailability::Available,
+                    detected: DiagnosticMeasurement::available(detected, measured_at),
+                    enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
+                    runtime_health,
+                    verification: VerificationStatus::Scaffold,
+                    last_evidence_at,
+                    diagnostic_code,
+                });
+            }
+            (
+                ParserLagSummaryV2 {
+                    availability: MeasurementAvailability::Available,
+                    transcripts_watched: DiagnosticMeasurement::available(
+                        transcripts_watched,
+                        measured_at,
+                    ),
+                    transcripts_behind: DiagnosticMeasurement::available(
+                        transcripts_behind,
+                        measured_at,
+                    ),
+                    max_lag_seconds: DiagnosticMeasurement::available(max_lag_seconds, measured_at),
+                },
+                adapters,
+                false,
+            )
+        }
+        Err(_) => {
+            let adapters = supported_ai_parsers()
+                .into_iter()
+                .map(|(id, _)| AdapterFreshnessV2 {
+                    agent: id.to_string(),
+                    availability: MeasurementAvailability::Unavailable,
+                    detected: DiagnosticMeasurement::unavailable(),
+                    enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
+                    runtime_health: RuntimeHealth::Unavailable,
+                    verification: VerificationStatus::Scaffold,
+                    last_evidence_at: None,
+                    diagnostic_code: Some("discovery_unavailable".to_string()),
+                })
+                .collect();
+            (
+                ParserLagSummaryV2 {
+                    availability: MeasurementAvailability::Unavailable,
+                    transcripts_watched: DiagnosticMeasurement::unavailable(),
+                    transcripts_behind: DiagnosticMeasurement::unavailable(),
+                    max_lag_seconds: DiagnosticMeasurement::unavailable(),
+                },
+                adapters,
+                true,
+            )
+        }
+    };
+
+    let runtime_health = if !observer.enabled {
+        RuntimeHealth::Disabled
+    } else if !broker_available || !queue_available || parser_probe_failed {
+        RuntimeHealth::Degraded
+    } else if service_running == Some(true) {
+        RuntimeHealth::Healthy
+    } else if service_running.is_none() {
+        RuntimeHealth::Degraded
+    } else {
+        RuntimeHealth::Idle
+    };
+    Ok(AiDiagnosticsReportV2 {
+        schema_version: wakaclock_core::ai::AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
+        captured_at,
+        device_id,
+        boot_id,
+        sequence,
+        measured_at,
+        runtime_health,
+        consent: DiagnosticsConsent {
+            adapter_tracking: observer.enabled,
+            observer: observer.enabled,
+            diagnostics_upload: upload,
+        },
+        broker,
+        parser,
+        adapters,
+    })
 }
 
 /// Build identity of the binary running this process (planai2.md Phase 0.1). The
@@ -2554,6 +2564,9 @@ mod ai_doctor_tests {
                 "at": 1.0, "message": "HTTP status 402", "category": "payment_402"
             })),
             configured_server_url: "http://localhost".to_string(),
+            diagnostics_v2: serde_json::json!({
+                "schema_version": wakaclock_core::ai::AI_DIAGNOSTICS_SCHEMA_VERSION_V2
+            }),
         });
         for key in ai_doctor_report_keys() {
             assert!(report.get(key).is_some(), "missing doctor key: {key}");
@@ -2742,6 +2755,15 @@ mod ai_sync_isolation_tests {
 /// subcommand at all, and a Codex transcript with backlog the running service's own
 /// aggregate `last_scan_at` could not localize to one agent.
 fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Error>> {
+    let diagnostics_v2 = collect_ai_diagnostics_v2(false)
+        .map(|report| serde_json::to_value(report).unwrap_or_else(|_| serde_json::json!({})))
+        .unwrap_or_else(|_| {
+            serde_json::json!({
+                "schema_version": wakaclock_core::ai::AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
+                "runtime_health": "unavailable",
+                "diagnostic_code": "collector_unavailable",
+            })
+        });
     let current_exe = std::env::current_exe().ok();
     let on_path = resolve_on_path();
     let cli_path_override = fs::read_to_string(
@@ -2894,6 +2916,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         outbound_queue_depth: queue_count(),
         last_delivery_failure: last_delivery_failure.clone(),
         configured_server_url: config.server_url.clone(),
+        diagnostics_v2,
     });
     // planai2.md Phase 0.5: the report must always carry every pipeline-stage key so
     // a reader never has to guess whether a missing field means "healthy" or "not
@@ -2964,6 +2987,8 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
         Some(failure) => println!("Last delivery failure: {failure}"),
         None => println!("Last delivery failure: none recorded"),
     }
+    println!("== Typed diagnostics snapshot ==");
+    println!("{}", report["diagnostics_v2"]);
     Ok(())
 }
 
@@ -2983,6 +3008,7 @@ fn ai_doctor_report_keys() -> &'static [&'static str] {
         "outbound_queue_depth",
         "last_delivery_failure",
         "configured_server_url",
+        "diagnostics_v2",
     ]
 }
 
@@ -2998,6 +3024,7 @@ struct AiDoctorReportParts {
     outbound_queue_depth: usize,
     last_delivery_failure: Option<serde_json::Value>,
     configured_server_url: String,
+    diagnostics_v2: serde_json::Value,
 }
 
 fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
@@ -3013,6 +3040,7 @@ fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
         "outbound_queue_depth": parts.outbound_queue_depth,
         "last_delivery_failure": parts.last_delivery_failure,
         "configured_server_url": parts.configured_server_url,
+        "diagnostics_v2": parts.diagnostics_v2,
     })
 }
 
@@ -3338,19 +3366,6 @@ async fn run_ai_sync(
             if !new_events.is_empty() {
                 let mut broker_events = Vec::with_capacity(new_events.len());
                 for event in &new_events {
-                    let fingerprint_entity = normalize_entity(&event.entity.to_string_lossy())?;
-                    if state.has_fingerprint(
-                        &fingerprint_entity,
-                        event.occurred_at.timestamp_millis() as f64 / 1000.0,
-                        event.lines_added.unwrap_or(0),
-                        event.lines_deleted.unwrap_or(0),
-                    )? {
-                        // The hook path already emitted this patch. Mark the transcript
-                        // event delivered so a future cursor replay remains idempotent.
-                        state.mark_delivered(&event.event_id, &cursor_key)?;
-                        continue;
-                    }
-
                     // One malformed historical transcript record must not abort the
                     // whole sync pass. In particular, Claude can report a file in a
                     // repository parent or a temporary scratch directory while its
@@ -3832,17 +3847,6 @@ async fn run_ai_tool_after(
         if !undelivered.contains(&event.event_id) {
             continue;
         }
-        // If a stronger native hook already reported the exact same file/time/line
-        // delta, suppress this inferred shell observer event. Unknown line deltas are
-        // deliberately not guessed into a fingerprint match.
-        if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
-            let entity = normalize_entity(&event.entity.to_string_lossy())?;
-            let time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
-            if state.has_fingerprint(&entity, time, added, deleted)? {
-                state.mark_delivered(&event.event_id, "tool_snapshot_shadowed")?;
-                continue;
-            }
-        }
         pending.push((event, event_input));
     }
     pending.sort_by(|(left, _), (right, _)| left.entity.cmp(&right.entity));
@@ -3956,6 +3960,7 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
         provider: normalize_optional_text(input.provider.clone()),
         model: normalize_optional_text(input.model.clone()),
         session_id: normalize_optional_text(input.session_id.clone()),
+        tool_event_id: normalize_optional_text(input.tool_event_id.clone()),
         occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
         entity,
         project_root,

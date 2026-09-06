@@ -297,6 +297,7 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
         provider: Some("google".to_string()),
         model: first_string(value, &["model", "model_name", "modelName"]),
         session_id: first_string(value, &["session_id", "sessionId", "session"]),
+        tool_event_id: Some(operation_id),
         occurred_at,
         entity,
         project_root: root,

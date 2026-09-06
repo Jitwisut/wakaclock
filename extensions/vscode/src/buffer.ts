@@ -4,8 +4,9 @@ import type {
   TextDocumentContentChangeEvent,
   TextEditor
 } from "vscode";
+import { createHash } from "node:crypto";
 import type { WakaclockCliService } from "./cli";
-import { AiAttributionStore } from "./aiAttribution";
+import { AiAttributionStore, type AiEditEvent } from "./aiAttribution";
 import { Logger } from "./logging";
 import type {
   ActivitySegment,
@@ -158,6 +159,19 @@ export class HeartbeatBufferManager {
     ) {
       state.humanLinesAdded += summary.linesAdded;
       state.humanLinesDeleted += summary.linesDeleted;
+    }
+    const contentFingerprint = fingerprintDocument(document);
+    for (const change of changes) {
+      const changeSummary = summarizeTextChanges([change]);
+      if (changeSummary.linesAdded === 0 && changeSummary.linesDeleted === 0) {
+        continue;
+      }
+      state.pendingEditorChanges.push({
+        timeMs: now,
+        linesAdded: changeSummary.linesAdded,
+        linesDeleted: changeSummary.linesDeleted,
+        contentFingerprint
+      });
     }
     this.updateSelectionState(state, selection);
 
@@ -360,6 +374,27 @@ export class HeartbeatBufferManager {
 
     try {
       await this.classifyPendingAttribution(state, now);
+      // A producer may prove only part of a whole-file overwrite (for example a
+      // Write hook reports added lines but VS Code observes the deleted old file).
+      // Keep the residual unknown counters attached to the AI event until save/timer
+      // gives us a durable heartbeat; an automatic gap flush must not emit a second
+      // editor heartbeat for an edit already owned by the broker.
+      if (
+        !force &&
+        reason === "gap" &&
+        state.aiEventId !== undefined &&
+        state.activitySegments.length === 0 &&
+        state.humanLinesAdded === 0 &&
+        state.humanLinesDeleted === 0 &&
+        state.keystrokes === 0 &&
+        state.charsAdded === 0 &&
+        state.charsDeleted === 0 &&
+        state.copyActions === 0 &&
+        state.pasteActions === 0 &&
+        !state.pendingWrite
+      ) {
+        return;
+      }
       if (!force && !this.hasPendingActivity(state) && retries.length === 0) {
         this.clearEmptyState(state);
         return;
@@ -427,7 +462,8 @@ export class HeartbeatBufferManager {
       pasteSameFileActions: 0,
       pasteSameWorkspaceActions: 0,
       pasteExternalOrUnknownActions: 0,
-      pendingWrite: false
+      pendingWrite: false,
+      pendingEditorChanges: []
     };
     this.states.set(entity, created);
     return created;
@@ -549,27 +585,58 @@ export class HeartbeatBufferManager {
     now: number
   ): Promise<void> {
     if (state.humanLinesAdded === 0 && state.humanLinesDeleted === 0) {
+      state.pendingEditorChanges = [];
       return;
     }
 
-    const { attribution, event } = await this.aiAttributionStore.classify(
-      state.entity,
-      state.lastEditAt ?? state.lastActivityAt ?? now,
-      state.humanLinesAdded,
-      state.humanLinesDeleted
-    );
-    if (attribution === "human") {
-      return;
+    const observations = state.pendingEditorChanges.length > 0
+      ? state.pendingEditorChanges.splice(0)
+      : [{
+          timeMs: state.lastEditAt ?? state.lastActivityAt ?? now,
+          linesAdded: state.humanLinesAdded,
+          linesDeleted: state.humanLinesDeleted
+        }];
+    let humanLinesAdded = 0;
+    let humanLinesDeleted = 0;
+    let aiLinesAdded = 0;
+    let aiLinesDeleted = 0;
+    let unattributedLinesAdded = 0;
+    let unattributedLinesDeleted = 0;
+    let matchedEvent: AiEditEvent | undefined;
+
+    for (const observation of observations) {
+      const result = await this.aiAttributionStore.classify(
+        state.entity,
+        observation.timeMs,
+        observation.linesAdded,
+        observation.linesDeleted,
+        observation.contentFingerprint,
+        observation.toolEventId,
+        observations.length > 1
+      );
+      if (result.attribution === "human") {
+        humanLinesAdded += observation.linesAdded;
+        humanLinesDeleted += observation.linesDeleted;
+      } else if (result.attribution === "ai") {
+        aiLinesAdded += result.ai_lines_added ?? observation.linesAdded;
+        aiLinesDeleted += result.ai_lines_deleted ?? observation.linesDeleted;
+        unattributedLinesAdded += result.unattributed_lines_added ?? 0;
+        unattributedLinesDeleted += result.unattributed_lines_deleted ?? 0;
+        matchedEvent ??= result.event;
+      } else {
+        unattributedLinesAdded +=
+          result.unattributed_lines_added ?? observation.linesAdded;
+        unattributedLinesDeleted +=
+          result.unattributed_lines_deleted ?? observation.linesDeleted;
+      }
     }
 
-    if (attribution === "unattributed") {
-      // A nearby agent event exists but its line delta is ambiguous. Keep the
-      // observed change visible without claiming it was human work; a later
-      // transcript retry can still prove the event and be deduplicated server-side.
-      state.unattributedLinesAdded += state.humanLinesAdded;
-      state.unattributedLinesDeleted += state.humanLinesDeleted;
-      state.humanLinesAdded = 0;
-      state.humanLinesDeleted = 0;
+    state.humanLinesAdded = humanLinesAdded;
+    state.humanLinesDeleted = humanLinesDeleted;
+    state.unattributedLinesAdded += unattributedLinesAdded;
+    state.unattributedLinesDeleted += unattributedLinesDeleted;
+
+    if (aiLinesAdded === 0 && aiLinesDeleted === 0) {
       return;
     }
 
@@ -582,8 +649,8 @@ export class HeartbeatBufferManager {
     state.charsDeleted = 0;
     state.humanLinesAdded = 0;
     state.humanLinesDeleted = 0;
-    state.unattributedLinesAdded = 0;
-    state.unattributedLinesDeleted = 0;
+    state.aiLinesAdded = aiLinesAdded;
+    state.aiLinesDeleted = aiLinesDeleted;
     // AI provenance changes who owns the edited lines, not who invoked the editor's
     // Copy/Paste interaction. Clipboard counters therefore survive correlation.
     // A transcript-confirmed AI patch is not evidence that the developer was actively
@@ -616,16 +683,14 @@ export class HeartbeatBufferManager {
     // Reporting `ai_verified` here on top of a surviving human segment would relabel
     // the developer's own earned seconds as AI activity server-side.
     if (state.activitySegments.length === 0) {
-      state.aiEventId = event?.event_id;
-      state.aiAgent = event?.agent;
-      state.aiProvider = event?.provider;
-      state.aiModel = event?.model;
-      state.aiSource = event?.source;
-      state.aiConfidence = event?.confidence;
-      state.aiActorType = event?.actor_type as BufferedFileState["aiActorType"];
-      state.aiActorConfidence = event?.actor_confidence;
-      state.aiLinesAdded = event?.lines_added ?? undefined;
-      state.aiLinesDeleted = event?.lines_deleted ?? undefined;
+      state.aiEventId = matchedEvent?.event_id;
+      state.aiAgent = matchedEvent?.agent;
+      state.aiProvider = matchedEvent?.provider;
+      state.aiModel = matchedEvent?.model;
+      state.aiSource = matchedEvent?.source;
+      state.aiConfidence = matchedEvent?.confidence;
+      state.aiActorType = matchedEvent?.actor_type as BufferedFileState["aiActorType"];
+      state.aiActorConfidence = matchedEvent?.actor_confidence;
     }
   }
 
@@ -699,6 +764,7 @@ export class HeartbeatBufferManager {
     state.aiActorConfidence = undefined;
     state.aiLinesAdded = undefined;
     state.aiLinesDeleted = undefined;
+    state.pendingEditorChanges = [];
   }
 
   private captureSnapshot(
@@ -787,5 +853,17 @@ export class HeartbeatBufferManager {
       return;
     }
     state.project = trimmed;
+  }
+}
+
+/** Metadata-only content identity used for exact cross-producer reconciliation. */
+function fingerprintDocument(document: Pick<TextDocument, "uri"> & { getText?: () => string }): string | undefined {
+  if (typeof document.getText !== "function") {
+    return undefined;
+  }
+  try {
+    return `sha256:${createHash("sha256").update(document.getText()).digest("hex")}`;
+  } catch {
+    return undefined;
   }
 }

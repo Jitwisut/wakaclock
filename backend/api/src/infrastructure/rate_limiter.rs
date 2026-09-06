@@ -33,6 +33,32 @@ pub struct PresenceRateLimiter {
     inner: Governor<Uuid, DefaultKeyedStateStore<Uuid>, DefaultClock>,
 }
 
+/// Per-user/device limiter for diagnostics snapshots. Diagnostics are metadata-only,
+/// but an authenticated client can still exhaust the API with a tight upload loop.
+/// Keeping the device in the key lets a user's legitimate machines report independently.
+pub struct AiDiagnosticsRateLimiter {
+    inner: Governor<(Uuid, String), DefaultKeyedStateStore<(Uuid, String)>, DefaultClock>,
+}
+
+impl AiDiagnosticsRateLimiter {
+    /// Twelve reports per minute with a small startup burst. The CLI normally uploads
+    /// only on an explicit doctor command, so this leaves room for retries without
+    /// allowing an accidental polling loop to become unbounded.
+    pub fn new() -> Arc<Self> {
+        let quota = Quota::per_minute(NonZeroU32::new(12).expect("12 is non-zero"))
+            .allow_burst(NonZeroU32::new(3).expect("3 is non-zero"));
+        Arc::new(Self {
+            inner: Governor::keyed(quota),
+        })
+    }
+
+    pub fn check(&self, user_id: Uuid, device_id: &str) -> Result<(), ()> {
+        self.inner
+            .check_key(&(user_id, device_id.to_string()))
+            .map_err(|_| ())
+    }
+}
+
 impl PresenceRateLimiter {
     pub fn new() -> Arc<Self> {
         let quota = Quota::per_second(NonZeroU32::new(10).expect("10 is non-zero"))
@@ -87,7 +113,7 @@ impl AuthRateLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::AnalyticsRateLimiter;
+    use super::{AiDiagnosticsRateLimiter, AnalyticsRateLimiter};
     use uuid::Uuid;
 
     #[test]
@@ -102,5 +128,17 @@ mod tests {
         // A different authenticated account must not be penalized by the first account's
         // expensive-query burst.
         assert!(limiter.check(Uuid::new_v4()).is_ok());
+    }
+
+    #[test]
+    fn diagnostics_limit_is_scoped_to_user_and_device() {
+        let limiter = AiDiagnosticsRateLimiter::new();
+        let user = Uuid::new_v4();
+        for _ in 0..3 {
+            assert!(limiter.check(user, "device-a").is_ok());
+        }
+        assert!(limiter.check(user, "device-a").is_err());
+        assert!(limiter.check(user, "device-b").is_ok());
+        assert!(limiter.check(Uuid::new_v4(), "device-a").is_ok());
     }
 }

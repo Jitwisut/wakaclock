@@ -696,6 +696,7 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: chrono::Utc::now(),
             entity: StdPathBuf::from("src/lib.rs"),
             project_root: None,

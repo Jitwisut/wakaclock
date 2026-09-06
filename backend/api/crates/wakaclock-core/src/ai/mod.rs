@@ -60,9 +60,11 @@ pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
 pub use diagnostics::{
-    build_report as build_ai_diagnostics_report, AdapterFreshness, AiDiagnosticsReport,
-    AttributionMode, BrokerHealth, ObserverConfig, ParserLagSummary, VerificationStatus,
-    AI_DIAGNOSTICS_SCHEMA_VERSION,
+    build_report as build_ai_diagnostics_report, AdapterFreshness, AdapterFreshnessV2,
+    AiDiagnosticsReport, AiDiagnosticsReportV2, AttributionMode, BrokerHealth, BrokerHealthV2,
+    DiagnosticMeasurement, DiagnosticsConsent, MeasurementAvailability, ObserverConfig,
+    ParserLagSummary, ParserLagSummaryV2, RuntimeHealth, VerificationStatus,
+    AI_DIAGNOSTICS_SCHEMA_VERSION, AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
 };
 pub use event::{
     is_known_agent_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,

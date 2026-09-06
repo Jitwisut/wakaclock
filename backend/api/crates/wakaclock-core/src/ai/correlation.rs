@@ -326,6 +326,7 @@ mod tests {
             provider: Some("test-provider".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at,
             entity: PathBuf::from(entity),
             project_root: Some(PathBuf::from("/home/dev/example-project")),

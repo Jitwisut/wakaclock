@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
 use crate::model::heartbeat::{ActivityIntervalRow, HeartbeatRow};
+use crate::repository::canonical::canonical_winner_relation;
 
 pub struct HeartbeatRepository {
     client: Arc<ClickHouseClient>,
@@ -430,6 +431,25 @@ impl HeartbeatRepository {
                 .with_context(|| format!("Failed to add heartbeats_incoming column: {column}"))?;
         }
 
+        // Every read-side consumer uses this projection so a correction revision
+        // replaces the original operation before durations or line counts are summed.
+        // Materialized views continue to consume revision 0 only; the canonical view
+        // is the authoritative path for interactive reads and rebuilds.
+        ch_client
+            .query("DROP VIEW IF EXISTS wakaclock.heartbeats_canonical")
+            .execute()
+            .await
+            .context("Failed to replace canonical heartbeat view")?;
+        let canonical_view = format!(
+            "CREATE VIEW wakaclock.heartbeats_canonical AS SELECT * FROM {}",
+            canonical_winner_relation("1 = 1", "h")
+        );
+        ch_client
+            .query(&canonical_view)
+            .execute()
+            .await
+            .context("Failed to create canonical heartbeat view")?;
+
         Ok(())
     }
 
@@ -481,97 +501,115 @@ impl HeartbeatRepository {
         Ok(())
     }
 
-    /// Returns AI event IDs already persisted for this user. The explicit ID check covers
-    /// retries whose timestamp changed enough to land in another date partition.
-    pub async fn existing_ai_event_ids(
+    /// Return the highest revision already stored for each transport heartbeat ID.
+    /// A correction may reuse the same opaque ID with the next revision; a retry of
+    /// the same revision remains idempotent.
+    pub async fn existing_heartbeat_revisions(
         &self,
         user_id: uuid::Uuid,
         candidates: &[String],
-    ) -> Result<Vec<String>> {
+    ) -> Result<HashMap<String, u32>> {
         if candidates.is_empty() {
-            return Ok(Vec::new());
+            return Ok(HashMap::new());
         }
         #[derive(serde::Deserialize, clickhouse::Row)]
-        struct IdRow {
-            ai_event_id: String,
-        }
-        let rows = self
-            .client
-            .get_client()
-            .query(
-                "SELECT assumeNotNull(ai_event_id) AS ai_event_id
-                 FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND ai_event_id IS NOT NULL AND ai_event_id IN ?",
-            )
-            .bind(user_id)
-            .bind(candidates)
-            .fetch_all::<IdRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse AI event id query failed: {error}"))?;
-        Ok(rows.into_iter().map(|row| row.ai_event_id).collect())
-    }
-
-    /// Returns transport heartbeat IDs already persisted. This makes an accepted
-    /// request safe to replay after an offline queue/remove failure.
-    pub async fn existing_heartbeat_ids(
-        &self,
-        user_id: uuid::Uuid,
-        candidates: &[String],
-    ) -> Result<Vec<String>> {
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-        #[derive(serde::Deserialize, clickhouse::Row)]
-        struct IdRow {
+        struct RevisionRow {
             heartbeat_id: String,
+            revision: u32,
         }
         let rows = self
             .client
             .get_client()
             .query(
-                "SELECT assumeNotNull(heartbeat_id) AS heartbeat_id
+                "SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, max(revision) AS revision
                  FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?",
+                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                 GROUP BY heartbeat_id",
             )
             .bind(user_id)
             .bind(candidates)
-            .fetch_all::<IdRow>()
+            .fetch_all::<RevisionRow>()
             .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse heartbeat ID query failed: {error}"))?;
-        Ok(rows.into_iter().map(|row| row.heartbeat_id).collect())
-    }
-
-    /// Returns fingerprints already persisted for this user. Fingerprints bridge two
-    /// transports (agent hook and transcript replay) that may not share an event ID.
-    pub async fn existing_ai_fingerprints(
-        &self,
-        user_id: uuid::Uuid,
-        candidates: &[String],
-    ) -> Result<Vec<String>> {
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-        #[derive(serde::Deserialize, clickhouse::Row)]
-        struct FingerprintRow {
-            ai_event_fingerprint: String,
-        }
-        let rows = self
-            .client
-            .get_client()
-            .query(
-                "SELECT assumeNotNull(ai_event_fingerprint) AS ai_event_fingerprint
-                 FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND ai_event_fingerprint IS NOT NULL
-                   AND ai_event_fingerprint IN ?",
-            )
-            .bind(user_id)
-            .bind(candidates)
-            .fetch_all::<FingerprintRow>()
-            .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse AI fingerprint query failed: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse heartbeat revision query failed: {error}")
+            })?;
         Ok(rows
             .into_iter()
-            .map(|row| row.ai_event_fingerprint)
+            .map(|row| (row.heartbeat_id, row.revision))
+            .collect())
+    }
+
+    /// Return the highest revision already stored for each AI event ID.
+    pub async fn existing_ai_event_revisions(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<HashMap<String, u32>> {
+        if candidates.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct RevisionRow {
+            ai_event_id: String,
+            revision: u32,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT assumeNotNull(ai_event_id) AS ai_event_id, max(revision) AS revision
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND ai_event_id IS NOT NULL AND ai_event_id IN ?
+                 GROUP BY ai_event_id",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<RevisionRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse AI event revision query failed: {error}")
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.ai_event_id, row.revision))
+            .collect())
+    }
+
+    /// Return the highest revision for each explicit canonical change ID. This lets
+    /// a correction keep the logical operation stable even when a producer rotates
+    /// its transport heartbeat ID.
+    pub async fn existing_change_revisions(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<HashMap<String, u32>> {
+        if candidates.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct RevisionRow {
+            ai_change_id: String,
+            revision: u32,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT assumeNotNull(ai_change_id) AS ai_change_id, max(revision) AS revision
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND ai_change_id IS NOT NULL AND ai_change_id IN ?
+                 GROUP BY ai_change_id",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<RevisionRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse AI change revision query failed: {error}")
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.ai_change_id, row.revision))
             .collect())
     }
 
@@ -610,12 +648,13 @@ impl HeartbeatRepository {
         let ch_client = self.client.get_client();
         let (start_epoch, end_epoch) = range.unix_bounds();
 
-        let rows = ch_client
-            .query(
-                // Column order must match `HeartbeatRow` field order exactly — the client
-                // decodes positionally, so an omitted or reordered column misaligns every
-                // field after it rather than failing cleanly.
-                "SELECT
+        let relation =
+            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
+        let query = format!(
+            // Column order must match `HeartbeatRow` field order exactly — the client
+            // decodes positionally, so an omitted or reordered column misaligns every
+            // field after it rather than failing cleanly.
+            "SELECT
                     user_id, entity, entity_type, time, date,
                     project, project_id, branch, head_revision, repository_id,
                     language, dependencies,
@@ -640,10 +679,11 @@ impl HeartbeatRepository {
                     copied_chars, copied_lines, pasted_chars, pasted_lines,
                     paste_same_file_actions, paste_same_workspace_actions,
                     paste_external_or_unknown_actions, revision
-                FROM wakaclock.heartbeats
-                WHERE user_id = ? AND time >= ? AND time < ?
-                ORDER BY time ASC",
-            )
+                FROM {relation}
+                ORDER BY time ASC"
+        );
+        let rows = ch_client
+            .query(&query)
             .bind(user_id)
             .bind(start_epoch)
             .bind(end_epoch)
@@ -667,7 +707,7 @@ impl HeartbeatRepository {
             .get_client()
             .query(
                 "SELECT DISTINCT project
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND time >= ? AND time <= ?
                    AND project IS NOT NULL AND project != ''
                  ORDER BY project
