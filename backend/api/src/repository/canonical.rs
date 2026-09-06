@@ -13,20 +13,20 @@
 /// because their line counts or timestamps are close.
 pub fn canonical_winner_relation(predicate: &str, alias: &str) -> String {
     format!(
-        "(SELECT * FROM (\
-            SELECT h.*,\
-                   row_number() OVER (\
-                       PARTITION BY h.user_id,\
-                         coalesce(\
-                           nullIf(h.ai_change_id, ''),\
-                           nullIf(h.ai_event_id, ''),\
-                           nullIf(h.heartbeat_id, ''),\
-                           concat('legacy:', toString(generateUUIDv4()))\
-                         )\
-                       ORDER BY h.revision DESC, h.created_at DESC, h.time DESC\
-                   ) AS canonical_rank\
-            FROM wakaclock.heartbeats AS h\
-            WHERE {predicate}\
+        "(SELECT * FROM ( \
+            SELECT h.*, \
+                   row_number() OVER ( \
+                       PARTITION BY h.user_id, \
+                         coalesce( \
+                           nullIf(h.ai_change_id, ''), \
+                           nullIf(h.ai_event_id, ''), \
+                           nullIf(h.heartbeat_id, ''), \
+                           concat('legacy:', toString(generateUUIDv4())) \
+                         ) \
+                       ORDER BY h.revision DESC, h.created_at DESC, h.time DESC \
+                   ) AS canonical_rank \
+            FROM wakaclock.heartbeats AS h \
+            WHERE {predicate} \
         ) AS ranked WHERE canonical_rank = 1) AS {alias}"
     )
 }
