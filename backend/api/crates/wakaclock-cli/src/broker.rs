@@ -29,11 +29,10 @@ use wakaclock_core::{
     ai::{AiAttributionState, AiEditEvent},
     api_client::ApiClient,
     broker::{
-        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
-        BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck, BrokerEventStatus,
-        BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, QuarantineDiagnostic,
-        AI_SIDECAR_SCHEMA_VERSION, BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
-        MAX_EVENT_BYTES,
+        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck, BrokerClient,
+        BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
+        BrokerStore, BrokerStoreStats, QuarantineDiagnostic, AI_SIDECAR_SCHEMA_VERSION,
+        BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
@@ -78,8 +77,11 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
             .project_root
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
-        change_kind: BrokerChangeKind::Modify,
-        previous_entity: None,
+        change_kind: event.change_kind,
+        previous_entity: event
+            .previous_entity
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
         agent: event.agent.clone(),
         provider: event.provider.clone(),
         model: event.model.clone(),
@@ -329,6 +331,8 @@ async fn process_record(
         occurred_at: event.occurred_at,
         entity: PathBuf::from(&event.entity),
         project_root: event.project_root.as_deref().map(PathBuf::from),
+        change_kind: event.change_kind,
+        previous_entity: event.previous_entity.as_deref().map(PathBuf::from),
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
         input_tokens: None,
@@ -965,6 +969,7 @@ mod tests {
     use std::path::PathBuf;
     use tower::ServiceExt;
     use wakaclock_core::ai::{AiConfidence, AiEventSource};
+    use wakaclock_core::broker::BrokerChangeKind;
 
     fn event(id: &str) -> BrokerEventV1 {
         BrokerEventV1 {
@@ -1007,6 +1012,8 @@ mod tests {
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/lib.rs"),
             project_root: Some(PathBuf::from("/workspace")),
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(2),
             lines_deleted: Some(1),
             input_tokens: None,
@@ -1022,6 +1029,36 @@ mod tests {
         assert_eq!(event.actor_type, Some(ActorType::Unknown));
         let value = serde_json::to_value(event).unwrap();
         assert!(!value.as_object().unwrap().contains_key("prompt"));
+    }
+
+    #[test]
+    fn event_from_parser_preserves_codex_rename_identity() {
+        let ai = AiEditEvent {
+            event_id: "rename-event".to_string(),
+            agent: "codex".to_string(),
+            provider: Some("openai".to_string()),
+            model: None,
+            session_id: Some("session".to_string()),
+            tool_event_id: Some("call-rename".to_string()),
+            occurred_at: Utc::now(),
+            entity: PathBuf::from("/workspace/src/new.rs"),
+            project_root: Some(PathBuf::from("/workspace")),
+            change_kind: BrokerChangeKind::Rename,
+            previous_entity: Some(PathBuf::from("/workspace/src/old.rs")),
+            lines_added: Some(1),
+            lines_deleted: Some(1),
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        };
+
+        let event = event_from_ai_edit(&ai, 0.0).normalize().unwrap();
+        assert_eq!(event.change_kind, BrokerChangeKind::Rename);
+        assert_eq!(
+            event.previous_entity.as_deref(),
+            Some("/workspace/src/old.rs")
+        );
     }
 
     #[test]

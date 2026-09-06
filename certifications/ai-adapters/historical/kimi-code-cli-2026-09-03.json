@@ -1,0 +1,59 @@
+{
+  "adapter_id": "kimi-code-cli",
+  "arch": null,
+  "artifact_kind": "historical_adapter_evidence",
+  "blockers": [
+    "legacy v1 evidence has no complete certification runtime tuple",
+    "Kimi Code CLI executable is not installed on the certification host",
+    "live hook, restart, replay and backend inspection run is still required"
+  ],
+  "build_sha256": null,
+  "certificate_id": "kimi-code-cli-historical-2026-09-03",
+  "client_id": "kimi-code-cli",
+  "completed_at_utc": "2026-09-02T18:00:00Z",
+  "contract_version": "producer-v1",
+  "corpus_version": null,
+  "edit_modes": [],
+  "evidence_digest": "b75f3267cec2a09f519bef8c0ce95bd4095da68a2efc800a6154b1e0e1a2ee15",
+  "evidence_kind": "historical",
+  "expires_at_utc": "2026-10-02T18:00:00Z",
+  "fingerprint_version": "caf1",
+  "legacy_artifact_sha256": "b75f3267cec2a09f519bef8c0ce95bd4095da68a2efc800a6154b1e0e1a2ee15",
+  "limitations": [
+    "historical v1 record is retained for audit and cannot promote an adapter"
+  ],
+  "metrics": {
+    "broker_accepted": 0,
+    "canonical": 0,
+    "captured": 0,
+    "delivered": 0,
+    "duplicates": 0,
+    "producer_events": 0,
+    "replayed": 0
+  },
+  "model_id": null,
+  "os": null,
+  "payload_schema_versions": [],
+  "producer_version": null,
+  "promotable": false,
+  "provider_id": "moonshot",
+  "review_status": "historical",
+  "runtime": null,
+  "scenarios": [
+    {
+      "id": "legacy-record",
+      "status": "not_run"
+    }
+  ],
+  "schema_version": 2,
+  "stages": [
+    {
+      "id": "historical_import",
+      "status": "passed"
+    }
+  ],
+  "started_at_utc": "2026-09-02T18:00:00Z",
+  "status": "scaffold",
+  "tested_commit_sha": "c7e78373d8f0d3c757d6b26d8ac6de14e903829a",
+  "tool_version": null
+}

@@ -8,7 +8,9 @@ use axum::{
     Json,
 };
 use serde_json::json;
-use wakaclock_core::ai::{AiDiagnosticsReport, AiDiagnosticsReportV2, VerificationStatus};
+use wakaclock_core::ai::{
+    AiDiagnosticsReport, AiDiagnosticsReportV2, CertificationTuple, VerificationStatus,
+};
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -57,7 +59,7 @@ pub async fn ingest_v2(
             "diagnostics upload rate limit exceeded",
         ));
     }
-    let report = sanitize_report_v2(report);
+    let report = sanitize_report_v2(report, &state.ai_certification_service);
     state
         .ai_diagnostics_service
         .record_v2(user_id, report)
@@ -202,6 +204,14 @@ fn validate_v2(
                 ));
             }
         }
+        if let Some(tuple) = adapter.certification.as_ref() {
+            if !is_safe_certification_tuple(tuple) {
+                return Err(app_error(
+                    StatusCode::BAD_REQUEST,
+                    "certification tuple contains an unsafe metadata label",
+                ));
+            }
+        }
     }
     if let Some(code) = report.broker.last_error_code.as_deref() {
         if !is_safe_code(code) {
@@ -232,6 +242,37 @@ fn is_safe_code(value: &str) -> bool {
             .all(|character| !character.is_whitespace() && !character.is_control())
 }
 
+fn is_safe_certification_tuple(tuple: &CertificationTuple) -> bool {
+    let required = [
+        tuple.adapter_id.as_str(),
+        tuple.client_id.as_str(),
+        tuple.provider_id.as_str(),
+        tuple.contract_version.as_str(),
+        tuple.fingerprint_version.as_str(),
+    ];
+    if required.iter().any(|value| !is_safe_opaque_id(value))
+        || tuple.edit_modes.len() > 64
+        || tuple.payload_schema_versions.len() > 64
+        || tuple
+            .edit_modes
+            .iter()
+            .chain(tuple.payload_schema_versions.iter())
+            .any(|value| !is_safe_code(value))
+    {
+        return false;
+    }
+    tuple
+        .model_id
+        .iter()
+        .chain(tuple.tool_version.iter())
+        .chain(tuple.producer_version.iter())
+        .chain(tuple.runtime.iter())
+        .chain(tuple.os.iter())
+        .chain(tuple.arch.iter())
+        .chain(tuple.corpus_version.iter())
+        .all(|value| is_safe_code(value))
+}
+
 /// A client can observe a real run, but it cannot self-certify a new adapter by
 /// uploading a fixture or unit-test result. Until a server-side certification artifact
 /// is attached, fail closed by keeping a claimed Verified adapter at Scaffold. Existing
@@ -248,13 +289,18 @@ fn sanitize_report(mut report: AiDiagnosticsReport) -> AiDiagnosticsReport {
     report
 }
 
-fn sanitize_report_v2(mut report: AiDiagnosticsReportV2) -> AiDiagnosticsReportV2 {
+fn sanitize_report_v2(
+    mut report: AiDiagnosticsReportV2,
+    certification_service: &crate::services::ai_certification::AiCertificationService,
+) -> AiDiagnosticsReportV2 {
     for adapter in &mut report.adapters {
-        if adapter.verification == VerificationStatus::Verified {
-            adapter.verification = VerificationStatus::Scaffold;
-            if adapter.diagnostic_code.is_none() {
-                adapter.diagnostic_code = Some("certification_required".to_string());
-            }
+        let (status, certificate_id, reason) = certification_service
+            .effective_status(adapter.verification, adapter.certification.as_ref());
+        adapter.verification = status;
+        adapter.certificate_id = certificate_id;
+        adapter.certification_status = reason.clone();
+        if let Some(reason) = reason {
+            adapter.diagnostic_code = Some(reason);
         }
     }
     report
@@ -369,6 +415,9 @@ mod tests {
                 enabled: DiagnosticMeasurement::available(true, now),
                 runtime_health: RuntimeHealth::Healthy,
                 verification: VerificationStatus::Verified,
+                certification: None,
+                certificate_id: None,
+                certification_status: None,
                 last_evidence_at: None,
                 diagnostic_code: None,
             }],
@@ -381,7 +430,8 @@ mod tests {
         assert!(validate_v2(&report).is_ok());
         report.adapters[0].verification = VerificationStatus::Verified;
         report.parser.max_lag_seconds = DiagnosticMeasurement::unavailable();
-        let sanitized = sanitize_report_v2(report);
+        let service = crate::services::ai_certification::AiCertificationService::builtin().unwrap();
+        let sanitized = sanitize_report_v2(report, &service);
         assert_eq!(
             sanitized.parser.max_lag_seconds.availability,
             MeasurementAvailability::Unavailable

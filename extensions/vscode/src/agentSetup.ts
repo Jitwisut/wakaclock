@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +12,9 @@ const execFileAsync = promisify(execFile);
 // extensions/ai-agents/ (a sibling of this extension's own package, so vsce won't
 // bundle it automatically) into resources/ai-agents/ before packaging.
 const BUNDLED_RESOURCE_SUBPATH = path.join("resources", "ai-agents");
+const BUNDLE_MANIFEST_FILENAME = "bundle-manifest.json";
+const ACTIVE_BUNDLE_FILENAME = "active-bundle.json";
+const BUNDLE_SCHEMA_VERSION = 1;
 
 export interface AgentPluginsSyncOptions {
   extensionPath: string;
@@ -19,7 +23,9 @@ export interface AgentPluginsSyncOptions {
   homeDir?: string;
 }
 
-export type AiAgentId = "claude-code" | "codex" | "gemini-cli" | "kilo-code" | "kimi-code-cli";
+/** Adapter ids are registry data; this type deliberately does not freeze the
+ * extension to the five adapters known when it was first shipped. */
+export type AiAgentId = string;
 
 export type AdapterVerificationStatus = "verified" | "scaffold" | "unverified";
 
@@ -39,6 +45,7 @@ export interface AiAgentStatus {
 export interface AdapterManifestLite {
   id: string;
   provider: string;
+  executable?: { command_names?: string[]; version_arg?: string };
   install:
     | { kind: "native_plugin"; install_args: string[] }
     | { kind: "config_hook_block"; config_path_from_home: string; marker: string }
@@ -46,22 +53,80 @@ export interface AdapterManifestLite {
     | { kind: "manual"; instruction: string };
   verification?: { status?: AdapterVerificationStatus };
   transcript_roots?: string[];
+  aliases?: string[];
+  supported_platforms?: string[];
+  runtime?: string;
+  resources?: string[];
+}
+
+export interface AdapterCatalogV1 {
+  schema_version: number;
+  adapters: AdapterManifestLite[];
+}
+
+export interface AiSetupAgentOutcome {
+  id: string;
+  status: string;
+  outcome_code?: string;
+  suggested_action?: string;
+  detail?: string;
+}
+
+export interface AiSetupReport {
+  schema_version: number;
+  overall: "success" | "partial" | "failed" | "skipped" | string;
+  suggested_action?: string;
+  bundle?: string;
+  bundle_detail?: string;
+  broker?: { installed: boolean; running: boolean; detail?: string };
+  agents: AiSetupAgentOutcome[];
 }
 
 /**
- * planai2.md Phase 1 (p1.5): the VS Code installer reads the agent set, its
- * install plan and its verification status from the Rust adapter registry via
+ * planai2.md Phase 1 (p1.5): the VS Code installer reads the versioned adapter
+ * catalog, install plan and verification status from the Rust registry via
  * `wakaclock adapter list --json`, instead of hard-coding them here. A parse
  * failure or an older CLI without the subcommand yields an empty map and the
- * installer falls back to its built-in defaults — never a failed setup.
+ * installer falls back to a bounded compatibility list — never a false success.
  */
 export function parseAdapterList(stdout: string): AdapterManifestLite[] {
   try {
     const parsed = JSON.parse(stdout);
-    return Array.isArray(parsed) ? (parsed as AdapterManifestLite[]) : [];
+    if (Array.isArray(parsed)) return parsed as AdapterManifestLite[];
+    if (parsed && Array.isArray(parsed.adapters)) {
+      return parsed.adapters as AdapterManifestLite[];
+    }
+    return [];
   } catch {
     return [];
   }
+}
+
+export function parseAdapterCatalog(stdout: string): AdapterCatalogV1 | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as AdapterCatalogV1 | AdapterManifestLite[];
+    if (Array.isArray(parsed)) {
+      return { schema_version: 0, adapters: parsed };
+    }
+    if (parsed && Array.isArray(parsed.adapters) && typeof parsed.schema_version === "number") {
+      return parsed;
+    }
+  } catch {
+    // Older or unavailable CLIs are handled by the compatibility fallback.
+  }
+  return undefined;
+}
+
+export function parseAiSetupReport(stdout: string): AiSetupReport | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as AiSetupReport;
+    if (parsed && Array.isArray(parsed.agents) && typeof parsed.overall === "string") {
+      return parsed;
+    }
+  } catch {
+    // The caller reports a legacy CLI/invalid contract and may use its fallback.
+  }
+  return undefined;
 }
 
 /** `[program, ...args]` for a `native_plugin` manifest, or undefined. */
@@ -92,6 +157,118 @@ async function fetchAdapterRegistry(
   return map;
 }
 
+interface BundleManifest {
+  schema_version: number;
+  bundle_version: string;
+  files: Record<string, string>;
+  digest: string;
+}
+
+interface ActiveBundleState {
+  schema_version: number;
+  active: string;
+  checksum: string;
+  previous?: string;
+}
+
+async function collectBundleFiles(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  async function visit(current: string): Promise<void> {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    // Keep the order byte/digest stable across locales and runtimes. The Rust
+    // verifier and the release manifest generator use the same codepoint order.
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`symlinks are not allowed in adapter bundles: ${full}`);
+      }
+      if (entry.isDirectory()) {
+        await visit(full);
+      } else if (entry.isFile()) {
+        const relative = path.relative(root, full).split(path.sep).join("/");
+        if (relative === BUNDLE_MANIFEST_FILENAME) continue;
+        const bytes = await fs.readFile(full);
+        files[relative] = createHash("sha256").update(bytes).digest("hex");
+      }
+    }
+  }
+  await visit(root);
+  return files;
+}
+
+function bundleDigest(files: Record<string, string>): string {
+  return createHash("sha256").update(JSON.stringify(files)).digest("hex");
+}
+
+async function readBundleManifest(root: string): Promise<BundleManifest | undefined> {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, BUNDLE_MANIFEST_FILENAME), "utf8")) as BundleManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeBundleManifest(root: string, bundleVersion: string): Promise<BundleManifest> {
+  const files = await collectBundleFiles(root);
+  const manifest: BundleManifest = {
+    schema_version: BUNDLE_SCHEMA_VERSION,
+    bundle_version: bundleVersion,
+    files,
+    digest: bundleDigest(files)
+  };
+  await fs.writeFile(
+    path.join(root, BUNDLE_MANIFEST_FILENAME),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8"
+  );
+  return manifest;
+}
+
+async function verifyBundle(root: string): Promise<BundleManifest> {
+  const manifest = await readBundleManifest(root);
+  if (!manifest || manifest.schema_version !== BUNDLE_SCHEMA_VERSION) {
+    throw new Error("adapter bundle manifest is missing or has an unsupported schema");
+  }
+  if (!manifest.bundle_version?.trim()) {
+    throw new Error("adapter bundle manifest has no version");
+  }
+  const files = await collectBundleFiles(root);
+  if (JSON.stringify(files) !== JSON.stringify(manifest.files) || bundleDigest(files) !== manifest.digest) {
+    throw new Error("adapter bundle checksum does not match its files");
+  }
+  if (!files["common/emit-event.sh"]) {
+    throw new Error("adapter bundle is missing common/emit-event.sh");
+  }
+  return manifest;
+}
+
+async function updateActiveBundleState(
+  homeDir: string,
+  targetDir: string,
+  manifest: BundleManifest
+): Promise<void> {
+  const root = path.dirname(targetDir);
+  const pointer = path.join(root, ACTIVE_BUNDLE_FILENAME);
+  let previous: string | undefined;
+  try {
+    const old = JSON.parse(await fs.readFile(pointer, "utf8")) as ActiveBundleState;
+    if (old.active !== targetDir) previous = old.active;
+  } catch {
+    // First install has no previous pointer.
+  }
+  const state: ActiveBundleState = {
+    schema_version: BUNDLE_SCHEMA_VERSION,
+    active: targetDir,
+    checksum: manifest.digest,
+    ...(previous ? { previous } : {})
+  };
+  const temp = `${pointer}.tmp-${process.pid}`;
+  await fs.writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await fs.rename(temp, pointer);
+  void homeDir;
+}
+
 export interface AiAgentSetupOptions {
   stableDir: string;
   homeDir?: string;
@@ -105,6 +282,7 @@ export interface AiAgentSetupResult {
   statuses: AiAgentStatus[];
   configured: AiAgentId[];
   failed: Array<{ id: AiAgentId; error: string }>;
+  outcomes?: AiSetupAgentOutcome[];
 }
 
 /**
@@ -135,11 +313,47 @@ export async function syncAgentPluginsToStableDir(
     return undefined;
   }
 
+  const sourceManifest = await readBundleManifest(sourceDir);
+  if (sourceManifest) {
+    try {
+      await verifyBundle(sourceDir);
+    } catch (error) {
+      logger.warn("agentSetup: bundled AI resources failed verification", {
+        sourceDir,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
+    }
+  }
+
   if (await pathExists(targetDir)) {
-    logger.debug("agentSetup: stable dir for this version already present, skipping copy", {
-      targetDir
-    });
-    return targetDir;
+    try {
+      const manifest = await verifyBundle(targetDir);
+      const sourceIsCurrent = !sourceManifest ||
+        (manifest.bundle_version === extensionVersion && manifest.digest === sourceManifest.digest);
+      if (sourceIsCurrent) {
+        await updateActiveBundleState(homeDir, targetDir, manifest);
+        logger.debug("agentSetup: verified stable dir for this version", { targetDir });
+        return targetDir;
+      }
+      logger.debug("agentSetup: stable dir is stale; refreshing from bundled resources", {
+        targetDir,
+        currentDigest: manifest.digest,
+        bundledDigest: sourceManifest.digest
+      });
+    } catch (error) {
+      // A development/legacy install may predate bundle manifests. Preserve it
+      // when the source is also a legacy tree, but never trust an invalid
+      // packaged artifact silently.
+      if (!sourceManifest) {
+        logger.debug("agentSetup: preserving legacy unmanifested stable dir", { targetDir });
+        return targetDir;
+      }
+      logger.warn("agentSetup: existing bundle failed verification; refreshing", {
+        targetDir,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   // Copy into a temp dir first and rename into place, so a crash or error mid-copy
@@ -151,7 +365,28 @@ export async function syncAgentPluginsToStableDir(
     await fs.mkdir(path.dirname(targetDir), { recursive: true });
     await fs.cp(sourceDir, tempDir, { recursive: true });
     await makeShellScriptsExecutable(tempDir);
-    await fs.rename(tempDir, targetDir);
+    const manifest = sourceManifest ?? (await writeBundleManifest(tempDir, extensionVersion));
+    if (sourceManifest) {
+      await verifyBundle(tempDir);
+    }
+    const backupDir = `${targetDir}.previous-${process.pid}`;
+    let movedPrevious = false;
+    try {
+      if (await pathExists(targetDir)) {
+        await fs.rm(backupDir, { recursive: true, force: true });
+        await fs.rename(targetDir, backupDir);
+        movedPrevious = true;
+      }
+      await fs.rename(tempDir, targetDir);
+      await updateActiveBundleState(homeDir, targetDir, manifest);
+      if (movedPrevious) await fs.rm(backupDir, { recursive: true, force: true });
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      if (movedPrevious && !(await pathExists(targetDir))) {
+        await fs.rename(backupDir, targetDir).catch(() => undefined);
+      }
+      throw error;
+    }
     logger.debug("agentSetup: synced AI agent plugin sources", { targetDir });
     return targetDir;
   } catch (error) {
@@ -176,69 +411,42 @@ export async function detectAiAgents(options: {
   const state = await readSetupState(homeDir);
   const codexConfigured = await codexHookIsConfigured(homeDir);
   const registry = await fetchAdapterRegistry(options.cliPath);
-
-  const [claude, codex, gemini, kilo, kimi] = await Promise.all([
-    detectExecutable("claude"),
-    detectExecutable("codex"),
-    detectExecutable("gemini"),
-    detectAnyExecutable(["kilo", "kilocode"]),
-    detectExecutable("kimi")
-  ]);
-
-  const withRegistry = (status: AiAgentStatus): AiAgentStatus => {
-    const manifest = registry.get(status.id);
-    return manifest?.verification?.status
-      ? { ...status, verificationStatus: manifest.verification.status }
-      : status;
-  };
-
-  return [
-    withRegistry({
-      id: "claude-code",
-      label: "Claude Code",
-      provider: "anthropic",
-      detected: claude.detected,
-      enabled: Boolean(state["claude-code"]),
-      executable: claude.path,
-      reason: claude.reason
-    }),
-    withRegistry({
-      id: "codex",
-      label: "Codex CLI",
-      provider: "openai",
-      detected: codex.detected,
-      enabled: codexConfigured,
-      executable: codex.path,
-      reason: codex.reason
-    }),
-    withRegistry({
-      id: "gemini-cli",
-      label: "Gemini CLI",
-      provider: "google",
-      detected: gemini.detected,
-      enabled: Boolean(state["gemini-cli"]),
-      executable: gemini.path,
-      reason: gemini.reason
-    }),
-    withRegistry({
-      id: "kilo-code",
-      label: "Kilo Code",
-      provider: "multi-provider",
-      detected: kilo.detected,
-      enabled: Boolean(state["kilo-code"]),
-      executable: kilo.path,
-      reason: kilo.reason
-    }),
-    withRegistry({
-      id: "kimi-code-cli",
-      label: "Kimi Code CLI",
-      provider: "moonshot",
-      detected: kimi.detected,
-      enabled: Boolean(state["kimi-code-cli"]),
-      executable: kimi.path,
-      reason: kimi.reason
-    })
+  const fallback: AdapterManifestLite[] = [
+    { id: "claude-code", provider: "anthropic", executable: { command_names: ["claude"] }, install: { kind: "native_plugin", install_args: [] } },
+    { id: "codex", provider: "openai", executable: { command_names: ["codex"] }, install: { kind: "config_hook_block", config_path_from_home: ".codex/config.toml", marker: "AtoAxis" } },
+    { id: "gemini-cli", provider: "google", executable: { command_names: ["gemini"] }, install: { kind: "native_plugin", install_args: [] } },
+    { id: "kilo-code", provider: "multi-provider", executable: { command_names: ["kilo", "kilocode"] }, install: { kind: "native_plugin", install_args: [] } },
+    { id: "kimi-code-cli", provider: "moonshot", executable: { command_names: ["kimi"] }, install: { kind: "config_hook_block", config_path_from_home: ".kimi-code/config.toml", marker: "AtoAxis" } }
   ];
+  const candidates = [...(registry.values() ?? [])].filter(
+    (manifest) => (manifest.executable?.command_names?.length ?? 0) > 0,
+  );
+  const manifests = candidates.length > 0 ? candidates : fallback;
+  const detected = await Promise.all(
+    manifests.map(async (manifest) => {
+      const commands = manifest.executable?.command_names ?? [];
+      const probe = await detectAnyExecutable(commands, manifest.executable?.version_arg);
+      const enabled = manifest.id === "codex" ? codexConfigured : Boolean(state[manifest.id]);
+      return {
+        id: manifest.id,
+        label: humanAgentLabel(manifest.id),
+        provider: manifest.provider,
+        detected: probe.detected,
+        enabled,
+        executable: probe.path,
+        reason: probe.reason,
+        verificationStatus: manifest.verification?.status
+      } satisfies AiAgentStatus;
+    }),
+  );
+  return detected;
+}
+
+function humanAgentLabel(id: string): string {
+  return id
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 /** Install/register the integrations for every detected agent. */
@@ -255,21 +463,37 @@ export async function setupDetectedAiAgents(
   const selected = options.selectedIds
     ? new Set(options.selectedIds)
     : undefined;
+  const outcomes: AiSetupAgentOutcome[] = [];
   for (const status of statuses.filter(
     (item) => item.detected && (!selected || selected.has(item.id)),
   )) {
     try {
-      if (status.id === "claude-code") {
-        await setupClaudeCode(options.stableDir, options.logger, registry.get("claude-code"));
-      } else if (status.id === "gemini-cli") {
-        await setupGeminiCli(options.stableDir, options.logger, registry.get("gemini-cli"));
-      } else if (status.id === "kilo-code") {
-        await setupKiloCode(options.stableDir, homeDir, options.logger);
-      } else if (status.id === "kimi-code-cli") {
-        await setupKimiCode(options.stableDir, homeDir, options.logger);
-      } else {
-        await setupCodex(options.stableDir, homeDir, options.logger);
+      const report = await runCliSetup(
+        options.cliPath,
+        status.id,
+        options.stableDir,
+        homeDir,
+      );
+      if (report) {
+        outcomes.push(...report.agents);
+        if (report.broker?.detail && report.overall !== "success") {
+          failed.push({ id: "wakaclock-broker", error: report.broker.detail });
+        }
+        for (const outcome of report.agents) {
+          if (outcome.status === "configured" || outcome.status === "already_configured") {
+            configured.push(outcome.id);
+          } else if (["failed", "unsupported"].includes(outcome.status)) {
+            failed.push({
+              id: outcome.id,
+              error: outcome.detail ?? outcome.suggested_action ?? outcome.status,
+            });
+          }
+        }
+        continue;
       }
+      // Compatibility path for a CLI older than the schema-versioned setup
+      // contract. It is deliberately unreachable once a valid report exists.
+      await setupLegacyAdapter(status, options, homeDir, registry);
       configured.push(status.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -286,7 +510,55 @@ export async function setupDetectedAiAgents(
     await writeHookConsentState(homeDir, configured, "enabled");
   }
   const refreshed = await detectAiAgents({ homeDir });
-  return { statuses: refreshed, configured, failed };
+  return { statuses: refreshed, configured, failed, outcomes };
+}
+
+async function runCliSetup(
+  cliPath: string | undefined,
+  id: string,
+  stableDir: string,
+  homeDir: string,
+): Promise<AiSetupReport | undefined> {
+  try {
+    const result = await execFileAsync(cliPath || "wakaclock", ["ai", "setup", id, "--yes", "--json"], {
+      timeout: 120_000,
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        WAKACLOCK_AGENT_BUNDLE: stableDir,
+      },
+    });
+    return parseAiSetupReport(result.stdout);
+  } catch (error) {
+    const stdout = error && typeof error === "object" && "stdout" in error
+      ? String((error as { stdout?: unknown }).stdout ?? "")
+      : "";
+    const report = parseAiSetupReport(stdout);
+    if (report) return report;
+    return undefined;
+  }
+}
+
+async function setupLegacyAdapter(
+  status: AiAgentStatus,
+  options: AiAgentSetupOptions,
+  homeDir: string,
+  registry: Map<string, AdapterManifestLite>,
+): Promise<void> {
+  if (status.id === "claude-code") {
+    await setupClaudeCode(options.stableDir, options.logger, registry.get("claude-code"));
+  } else if (status.id === "gemini-cli") {
+    await setupGeminiCli(options.stableDir, options.logger, registry.get("gemini-cli"));
+  } else if (status.id === "kilo-code") {
+    await setupKiloCode(options.stableDir, homeDir, options.logger);
+  } else if (status.id === "kimi-code-cli") {
+    await setupKimiCode(options.stableDir, homeDir, options.logger);
+  } else if (status.id === "codex") {
+    await setupCodex(options.stableDir, homeDir, options.logger);
+  } else {
+    throw new Error(`no legacy setup implementation for ${status.id}`);
+  }
 }
 
 async function setupClaudeCode(
@@ -608,13 +880,13 @@ function tomlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-async function detectExecutable(command: string): Promise<{
+async function detectExecutable(command: string, versionArg = "--version"): Promise<{
   detected: boolean;
   path?: string;
   reason?: string;
 }> {
   try {
-    const result = await execFileAsync(command, ["--version"], { timeout: 4_000 });
+    const result = await execFileAsync(command, [versionArg], { timeout: 4_000 });
     return { detected: true, path: command, reason: result.stdout.trim() };
   } catch (error) {
     return {
@@ -624,13 +896,13 @@ async function detectExecutable(command: string): Promise<{
   }
 }
 
-async function detectAnyExecutable(commands: string[]): Promise<{
+async function detectAnyExecutable(commands: string[], versionArg = "--version"): Promise<{
   detected: boolean;
   path?: string;
   reason?: string;
 }> {
   for (const command of commands) {
-    const result = await detectExecutable(command);
+    const result = await detectExecutable(command, versionArg);
     if (result.detected) return result;
   }
   return { detected: false, reason: commands.map((command) => `${command}: not found`).join("; ") };

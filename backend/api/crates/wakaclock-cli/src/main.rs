@@ -23,11 +23,12 @@ use wakaclock_core::{
     ai::{
         normalize_agent_id, normalize_client_id, normalize_model_id, normalize_provider_id,
         parse_claude_usage, parse_codex_usage, parse_gemini_usage, AdapterFreshnessV2,
-        AiActivityParser, AiAttributionState, AiConfidence, AiDiagnosticsReportV2, AiEditEvent,
-        AiEventSource, BrokerHealthV2, ClaudeCodeParser, CodexParser, DiagnosticMeasurement,
-        DiagnosticsConsent, DiscoveryContext, DiscoveryResult, DiscoveryState, GeminiCliParser,
-        MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
-        RuntimeHealth, TranscriptLag, VerificationStatus, PRODUCER_CONTRACT_VERSION,
+        AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence, AiDiagnosticsReportV2,
+        AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple, ClaudeCodeParser,
+        CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext, DiscoveryResult,
+        DiscoveryState, GeminiCliParser, MeasurementAvailability, ObserverConfig, ParseContext,
+        ParserCursor, ParserLagSummaryV2, RuntimeHealth, TranscriptLag, VerificationStatus,
+        FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
     },
     api_client::ApiClient,
     broker::BrokerEventV1,
@@ -1694,13 +1695,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
             AdapterAction::List { json } => {
                 let registry = wakaclock_core::ai::AdapterRegistry::builtin();
                 if json {
-                    println!("{}", serde_json::to_string(registry.manifests())?);
+                    println!("{}", serde_json::to_string(&registry.catalog_v1())?);
                 } else {
-                    for manifest in registry.manifests() {
+                    for entry in &registry.catalog_v1().adapters {
+                        let manifest = &entry.manifest;
                         println!(
-                            "{:<12} provider={:<10} install={:<18} status={}",
+                            "{:<14} provider={:<10} runtime={:<14} install={:<18} status={}",
                             manifest.id,
                             manifest.provider,
+                            format!("{:?}", entry.runtime).to_lowercase(),
                             adapter_install_kind(manifest),
                             format!("{:?}", manifest.effective_status()).to_lowercase(),
                         );
@@ -2254,6 +2257,9 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
                     runtime_health,
                     verification: VerificationStatus::Scaffold,
+                    certification: certification_tuple_for_agent(id),
+                    certificate_id: None,
+                    certification_status: None,
                     last_evidence_at,
                     diagnostic_code,
                 });
@@ -2285,6 +2291,9 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
                     runtime_health: RuntimeHealth::Unavailable,
                     verification: VerificationStatus::Scaffold,
+                    certification: certification_tuple_for_agent(id),
+                    certificate_id: None,
+                    certification_status: None,
                     last_evidence_at: None,
                     diagnostic_code: Some("discovery_unavailable".to_string()),
                 })
@@ -3058,21 +3067,122 @@ fn latest_sidecar_event_time() -> Option<String> {
 }
 
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
-    vec![
-        ("claude-code", Box::new(ClaudeCodeParser::new())),
-        ("codex", Box::new(CodexParser::new())),
-        ("gemini-cli", Box::new(GeminiCliParser::new())),
-    ]
+    // The factory itself is intentionally small and typed, but the registry
+    // owns which runtime is exposed. A scaffold/manual adapter therefore cannot
+    // accidentally become a working parser merely because a name was added to a
+    // client-side list.
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    registry
+        .catalog_v1()
+        .adapters
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.manifest.id.as_str();
+            let parser: Box<dyn AiActivityParser> = match entry.runtime {
+                AdapterRuntime::ClaudeCode => Box::new(ClaudeCodeParser::new()),
+                AdapterRuntime::Codex => Box::new(CodexParser::new()),
+                AdapterRuntime::GeminiCli => Box::new(GeminiCliParser::new()),
+                _ => return None,
+            };
+            // Builtin ids are static; keep the existing parser API stable while
+            // still deriving the inclusion decision from the catalog.
+            let static_id = match id {
+                "claude-code" => "claude-code",
+                "codex" => "codex",
+                "gemini-cli" => "gemini-cli",
+                _ => return None,
+            };
+            Some((static_id, parser))
+        })
+        .collect()
+}
+
+fn certification_tuple_for_agent(agent_id: &str) -> Option<CertificationTuple> {
+    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
+    let entry = registry
+        .catalog_v1()
+        .adapters
+        .into_iter()
+        .find(|entry| entry.manifest.id == agent_id)?;
+    let provider_id = normalize_provider_id(&entry.manifest.provider).ok()?;
+    let payload_schema_versions = if entry.manifest.payload_schema_versions.is_empty() {
+        vec!["diagnostic-v2".to_string()]
+    } else {
+        entry.manifest.payload_schema_versions.clone()
+    };
+    // Do not infer a CLI/Desktop runtime from the fact that a transcript exists.
+    // The current machine's Codex sessions are Desktop/subagent records, while
+    // the last approved evidence was a different CLI version. Until F5-02/F5-04
+    // captures an origin-specific tuple, send an explicit unclassified mode so
+    // the server returns a mismatch/scaffold decision instead of borrowing CLI
+    // certification.
+    let (tool_version, runtime, edit_modes) = if agent_id == "codex" {
+        (
+            detected_codex_version(),
+            None,
+            vec!["unclassified".to_string()],
+        )
+    } else {
+        (
+            None,
+            Some("cli".to_string()),
+            vec!["native_single_file".to_string()],
+        )
+    };
+    Some(CertificationTuple {
+        adapter_id: agent_id.to_string(),
+        client_id: normalize_client_id(agent_id).ok()?,
+        provider_id,
+        model_id: None,
+        tool_version,
+        producer_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        runtime,
+        os: Some(std::env::consts::OS.to_string()),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        edit_modes,
+        payload_schema_versions,
+        contract_version: format!("producer-v{PRODUCER_CONTRACT_VERSION}"),
+        fingerprint_version: FINGERPRINT_SCHEME_V1.to_string(),
+        corpus_version: None,
+    })
+}
+
+/// Return only the bounded version token from the installed Codex executable.
+/// This is observation metadata for an exact server-side tuple; it is never a
+/// certification claim and is intentionally `None` when the executable is absent.
+fn detected_codex_version() -> Option<String> {
+    let executable = resolve_named_command(&["codex".to_string()])?;
+    let output = Command::new(executable)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .last()
+        .map(str::to_string)
 }
 
 fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
     let registry = wakaclock_core::ai::AdapterRegistry::builtin();
-    ["kilo-code", "kimi-code-cli"]
-        .iter()
-        .filter_map(|id| {
-            let manifest = registry.get(id)?;
+    registry
+        .catalog_v1()
+        .adapters
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry.runtime,
+                AdapterRuntime::KiloCode | AdapterRuntime::KimiCodeCli
+            )
+        })
+        .filter_map(|entry| {
+            let id = entry.manifest.id.as_str();
+            let manifest = &entry.manifest;
             let executable = resolve_named_command(&manifest.executable.command_names);
-            let config_path = match *id {
+            let config_path = match id {
                 "kilo-code" => home_dir.join(".config/kilo/plugin/atoaxis-kilo-code"),
                 // Kimi renamed its default home directory in newer releases;
                 // prefer the current path but recognize the legacy Beta path.
@@ -3092,7 +3202,7 @@ fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
                 }
                 _ => return None,
             };
-            let installed = match *id {
+            let installed = match id {
                 "kilo-code" => {
                     config_path.is_dir()
                         && config_path
@@ -3365,6 +3475,7 @@ async fn run_ai_sync(
 
             if !new_events.is_empty() {
                 let mut broker_events = Vec::with_capacity(new_events.len());
+                let mut submitted_events = Vec::with_capacity(new_events.len());
                 for event in &new_events {
                     // One malformed historical transcript record must not abort the
                     // whole sync pass. In particular, Claude can report a file in a
@@ -3388,6 +3499,7 @@ async fn run_ai_sync(
                         AI_ACTIVITY_TIMEOUT_SECONDS,
                     )?;
                     broker_events.push(broker::event_from_ai_edit(event, active_seconds));
+                    submitted_events.push(*event);
                 }
                 if !broker_events.is_empty() {
                     let report =
@@ -3402,7 +3514,10 @@ async fn run_ai_sync(
                         agent_service::record_heartbeat();
                     }
                 }
-                for event in &new_events {
+                // Only acknowledge events that actually entered the submitted
+                // broker batch. Invalid path/project pairs are intentionally
+                // skipped above and must not be recorded as delivered locally.
+                for event in submitted_events {
                     state.mark_delivered(&event.event_id, &cursor_key)?;
                 }
             }
@@ -3954,6 +4069,16 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
             AiConfidence::Inferred
         }
     });
+    let change_kind = input
+        .change_kind
+        .as_deref()
+        .and_then(wakaclock_core::broker::BrokerChangeKind::from_tool_operation)
+        .unwrap_or(wakaclock_core::broker::BrokerChangeKind::Modify);
+    let previous_entity = input
+        .previous_entity
+        .as_ref()
+        .map(|path| normalize_entity(&path.to_string_lossy()).map(PathBuf::from))
+        .transpose()?;
     Ok(AiEditEvent {
         event_id: input.event_id.trim().to_string(),
         agent: normalize_agent_id(&input.agent),
@@ -3964,6 +4089,8 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
         occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
         entity,
         project_root,
+        change_kind,
+        previous_entity,
         lines_added: input.lines_added,
         lines_deleted: input.lines_deleted,
         input_tokens: None,

@@ -35,6 +35,7 @@
 
 pub mod adapter;
 pub mod canonical;
+pub mod certification;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -52,8 +53,16 @@ pub mod revision;
 pub mod state;
 pub mod usage;
 
-pub use adapter::{AdapterManifest, AdapterRegistry, InstallStrategy};
-pub use canonical::fingerprint_for_heartbeat;
+pub use adapter::{
+    AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
+    InstallStrategy,
+};
+pub use canonical::{fingerprint_for_heartbeat, FINGERPRINT_SCHEME_V1};
+pub use certification::{
+    CertificationCatalogEntry, CertificationCatalogV1, CertificationDecision,
+    CertificationDecisionStatus, CertificationRevocation, CertificationTuple,
+    CERTIFICATION_CATALOG_SCHEMA_VERSION,
+};
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{

@@ -1,4 +1,4 @@
-# AI coverage — implementation ledger (F0/F1/F2/F3)
+# AI coverage — implementation ledger (F0/F1/F2/F3/F4)
 
 Updated 2026-09-06. This ledger records what is wired and tested in
 features/ai-coverage-f0-baseline; it is not a claim of merge, live database
@@ -53,23 +53,68 @@ the production behaviors they described are now covered by F1 tests.
 
 The detailed implementation record is [the F1/F2 closeout](../docs/ai-coverage-f1-f2-closeout-2026-09-06.md).
 
-## F3 — registry-driven setup (in progress)
+## F3 — registry-driven setup (validated locally; release gate remains)
 
-The CLI now uses the existing adapter registry setup module as the real
-`wakaclock ai setup` / `wakaclock ai uninstall` path. Setup is consent-gated,
-`--all` configures only detected executable-backed adapters, and it does not
-copy resources or install the broker for a discovery-only invocation,
-preserves a user-owned observer config, writes only versioned managed bundles,
-and records an explicit per-adapter opt-out on uninstall. Legacy
-`ai-setup.json` consent is migrated without asking the user again. The registry
-setup unit suite passes as part of the CLI test suite (51 tests).
+F3 is implemented through the versioned `AdapterCatalogV1` contract. The CLI
+and Extension now consume the same runtime/platform/resource metadata, setup
+and uninstall outcomes carry schema/version/action fields, `--all` selects only
+detected supported runtimes, and parser/doctor dispatch is registry-driven.
+Bundles are verified with deterministic per-file SHA-256 manifests and an
+atomic active/previous pointer. Extension setup consumes the CLI report first
+and keeps only a compatibility fallback for older binaries. Native installer
+dependency failures and unsupported Windows shell setup are explicit outcomes;
+user config remains marker-owned and preserved.
 
-The remaining F3 gates are still open: make `--all` and extension setup fully
-registry-driven for every supported platform, add bundle checksum/version
-validation and active-pointer rollback, exercise native service strategies on
-macOS/Linux/Windows, and validate the packaged CLI/VS Code setup flow against
-real adapter installations. These are implementation and release work, not
-claims of live adapter certification.
+The implementation and local test gates are recorded in
+[the F3 closeout](../docs/ai-coverage-f3-closeout-2026-09-06.md). Live
+launchd/systemd/Task Scheduler restart-after-editor-close and real adapter
+certification remain release gates; they are not claimed from this macOS
+workspace.
+
+## F4 — certification infrastructure (validated locally; live promotion gate remains)
+
+F4-01 through F4-06 are implemented locally. Certification artifacts now carry
+an exact adapter/producer/tool/runtime/OS/architecture/capability tuple and
+mandatory stage results. A temporary live harness produces a pending,
+privacy-filtered candidate; it cannot edit the reviewed catalog. The server
+loads the reviewed catalog from the core release resource and resolves exact
+tuples with freshness and revocation checks. Legacy Claude/Codex records are
+historical evidence only. CLI tuple fields, API sanitization and frontend
+capability/runtime labels are covered by the same contract.
+
+See [the F4 implementation record](../docs/ai-coverage-f4-closeout-2026-09-06.md).
+An approved live tuple still needs an authenticated real-tool run, shipped
+build digest, backend/dashboard readback and human review.
+
+## F5 — Baseline agents (F5-01/F5-02/F5-03 in progress)
+
+F5-01 Claude Code has a current local transcript-shape refresh for executable
+`2.1.246`. The parser now ignores valid non-edit content shapes without false
+malformed warnings and carries the assistant workspace root when a matching tool
+result omits `cwd`. A real local transcript replay emitted 33 file-edit events
+with zero malformed-record warnings. Native-hook/API/dashboard certification is
+still a live gate. See the [F5-01 refresh](../docs/ai-coverage-f5-01-claude-refresh-2026-09-06.md).
+
+F5-02 local implementation is in place. The Codex transcript parser now accepts
+the current `session_meta` shape without dropping records when both session-id
+keys are present, rewinds incomplete call/output pairs across bounded scans,
+rejects explicit failed calls, suppresses duplicate completion evidence, carries
+provider identity, and preserves create/modify/delete/rename metadata through the
+broker envelope. The built-in manifest is intentionally `scaffold` while the
+current `codex-cli 0.153.4` tuple is not yet live-certified; the prior
+`0.151.0-alpha.7.1` run remains historical evidence. Desktop/IDE transcript
+evidence is not used as a CLI certificate.
+
+The parser, patch, and broker regression gates pass. The remaining F5-02 gate is
+a fresh authenticated `codex exec` campaign with the shipped bundle, backend and
+dashboard metadata readback, followed by a pending artifact and human review.
+See the [F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md).
+
+F5-03 Gemini CLI is survey-blocked on this machine. `gemini 0.58.0` is installed,
+but no JSON/JSONL session payload is present under the local Gemini history/tmp
+roots. No synthetic fixture was added; exact payload inventory and live
+certification require an authenticated disposable run. See the
+[F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md).
 
 ## Codex Desktop detection repair
 
@@ -78,17 +123,22 @@ custom_tool_call named exec unwraps literal and variable-wrapped tools.apply_pat
 calls, and a matching tool output is required before a file event is emitted. Sync
 validates each transcript event, isolates parser failures per agent, scans newest
 transcripts first, and keeps the broker retry queue at zero in the recorded replay.
+The regression path is now covered as well: a stale release LaunchAgent no longer
+aborts a whole sync on one out-of-root historical record, and Delete+Add of the
+same file in one Codex patch gets distinct deterministic event IDs.
 
 ## Local gates
 
 - cargo fmt --all -- --check — passed.
 - cargo check --workspace — passed.
 - Core diagnostics/revision/canonical tests — passed.
-- CLI unit suite — 51 passed.
+- CLI unit suite — 53 passed.
 - Server diagnostics/rate-limit/correction tests — passed.
-- VS Code extension — 105 tests passed; lint passed.
+- VS Code test suite — 107 passed; TypeScript lint passed.
 - Frontend typecheck and ESLint — passed; diagnostics panel test passed.
 - git diff --check — passed.
+- F4 Python schema/harness/catalog gates — passed.
+- Core/backend F4 certification tests — passed.
 
 The full frontend suite retains one unrelated pre-existing auth redirect failure
 in frontend/app/test/auth-screen.test.tsx. Live ClickHouse/PostgreSQL

@@ -32,6 +32,9 @@ KILO_PLUGIN_DIR="$PLUGIN_ROOT" "$ROOT/installer/install.sh" --uninstall
 OTHER="$TMP/config/kilo/user-plugin/plugin"
 mkdir -p "$OTHER"
 touch "$OTHER/keep"
-KILO_PLUGIN_DIR="$OTHER" "$ROOT/installer/install.sh" --uninstall
+if KILO_PLUGIN_DIR="$OTHER" "$ROOT/installer/install.sh" --uninstall; then
+  echo "unrecognised Kilo path unexpectedly succeeded" >&2
+  exit 1
+fi
 [ -f "$OTHER/keep" ]
 echo "kilo installer ok"

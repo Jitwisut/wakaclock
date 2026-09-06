@@ -1,0 +1,168 @@
+{
+  "catalog_version": "2026-09-06.1",
+  "entries": [
+    {
+      "artifact_sha256": "07bd4dddf275170c03c083d741773572bc34e5fbc589d375591f5c0c3d149284",
+      "build_sha256": null,
+      "certificate_id": "claude-code-historical-2026-09-03",
+      "checked_at_utc": "2026-09-02T16:00:00Z",
+      "evidence_digest": "26b745ce3e575c694a4d423b19bdcd1906eb30bb540b5a0a1c616fc8685131f9",
+      "evidence_kind": "historical",
+      "expires_at_utc": "2026-10-02T16:00:00Z",
+      "promotable": false,
+      "review_status": "historical",
+      "status": "verified",
+      "tuple": {
+        "adapter_id": "claude-code",
+        "arch": null,
+        "client_id": "claude-code",
+        "contract_version": "producer-v1",
+        "corpus_version": null,
+        "edit_modes": [
+          "historical-unknown"
+        ],
+        "fingerprint_version": "caf1",
+        "model_id": "claude-sonnet-5",
+        "os": null,
+        "payload_schema_versions": [
+          "historical-unknown"
+        ],
+        "producer_version": "1.0.2",
+        "provider_id": "anthropic",
+        "runtime": null,
+        "tool_version": null
+      }
+    },
+    {
+      "artifact_sha256": "efcd346d4e15bb0f59a85b0b05a3d132a744d87b33cdeaedbf912ccbcfc97f15",
+      "build_sha256": null,
+      "certificate_id": "codex-historical-2026-09-03",
+      "checked_at_utc": "2026-09-02T18:00:00Z",
+      "evidence_digest": "300171f99e9d866af33f72599c82744e8bc166080dd7f0a518487c23bc8edf52",
+      "evidence_kind": "historical",
+      "expires_at_utc": "2026-10-02T18:00:00Z",
+      "promotable": false,
+      "review_status": "historical",
+      "status": "verified",
+      "tuple": {
+        "adapter_id": "codex",
+        "arch": null,
+        "client_id": "codex",
+        "contract_version": "producer-v1",
+        "corpus_version": null,
+        "edit_modes": [
+          "historical-unknown"
+        ],
+        "fingerprint_version": "caf1",
+        "model_id": "gpt-5.6-sol",
+        "os": null,
+        "payload_schema_versions": [
+          "historical-unknown"
+        ],
+        "producer_version": "0.1.0",
+        "provider_id": "openai",
+        "runtime": null,
+        "tool_version": "0.151.0-alpha.7.1"
+      }
+    },
+    {
+      "artifact_sha256": "2ad36922dcbec284b9e7a48f21956e7f5fc695cef675c53eb42ef91078cfb2f1",
+      "build_sha256": null,
+      "certificate_id": "deep-code-historical-2026-09-03",
+      "checked_at_utc": "2026-09-02T18:00:00Z",
+      "evidence_digest": "e669362d4f5cd157c3f6cf57901a636c8bcc9acc279b91e9a61ab82831bd52f6",
+      "evidence_kind": "historical",
+      "expires_at_utc": "2026-10-02T18:00:00Z",
+      "promotable": false,
+      "review_status": "historical",
+      "status": "unsupported",
+      "tuple": {
+        "adapter_id": "deep-code",
+        "arch": null,
+        "client_id": "deep-code",
+        "contract_version": "producer-v1",
+        "corpus_version": null,
+        "edit_modes": [
+          "historical-unknown"
+        ],
+        "fingerprint_version": "caf1",
+        "model_id": null,
+        "os": null,
+        "payload_schema_versions": [
+          "historical-unknown"
+        ],
+        "producer_version": null,
+        "provider_id": "deepseek",
+        "runtime": null,
+        "tool_version": null
+      }
+    },
+    {
+      "artifact_sha256": "985270259360ae4f7f6436c44419e74d40a08d91e72c44d3b640968add8f4929",
+      "build_sha256": null,
+      "certificate_id": "kilo-code-historical-2026-09-03",
+      "checked_at_utc": "2026-09-02T18:00:00Z",
+      "evidence_digest": "7f3604066c47874e255dac6548c0e90665c5465f7e39ef4883533f115021b6e4",
+      "evidence_kind": "historical",
+      "expires_at_utc": "2026-10-02T18:00:00Z",
+      "promotable": false,
+      "review_status": "historical",
+      "status": "scaffold",
+      "tuple": {
+        "adapter_id": "kilo-code",
+        "arch": null,
+        "client_id": "kilo-code",
+        "contract_version": "producer-v1",
+        "corpus_version": null,
+        "edit_modes": [
+          "historical-unknown"
+        ],
+        "fingerprint_version": "caf1",
+        "model_id": null,
+        "os": null,
+        "payload_schema_versions": [
+          "historical-unknown"
+        ],
+        "producer_version": null,
+        "provider_id": "unknown",
+        "runtime": null,
+        "tool_version": null
+      }
+    },
+    {
+      "artifact_sha256": "461fc7c25b89c79261676801ff9662b639f655bfa7a3f82b767fe51be9c18b9f",
+      "build_sha256": null,
+      "certificate_id": "kimi-code-cli-historical-2026-09-03",
+      "checked_at_utc": "2026-09-02T18:00:00Z",
+      "evidence_digest": "b75f3267cec2a09f519bef8c0ce95bd4095da68a2efc800a6154b1e0e1a2ee15",
+      "evidence_kind": "historical",
+      "expires_at_utc": "2026-10-02T18:00:00Z",
+      "promotable": false,
+      "review_status": "historical",
+      "status": "scaffold",
+      "tuple": {
+        "adapter_id": "kimi-code-cli",
+        "arch": null,
+        "client_id": "kimi-code-cli",
+        "contract_version": "producer-v1",
+        "corpus_version": null,
+        "edit_modes": [
+          "historical-unknown"
+        ],
+        "fingerprint_version": "caf1",
+        "model_id": null,
+        "os": null,
+        "payload_schema_versions": [
+          "historical-unknown"
+        ],
+        "producer_version": null,
+        "provider_id": "moonshot",
+        "runtime": null,
+        "tool_version": null
+      }
+    }
+  ],
+  "generated_at_utc": "2026-09-06T04:18:06Z",
+  "revocations": [],
+  "schema_version": 1
+}

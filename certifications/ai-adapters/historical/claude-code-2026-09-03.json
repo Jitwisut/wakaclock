@@ -1,0 +1,58 @@
+{
+  "adapter_id": "claude-code",
+  "arch": null,
+  "artifact_kind": "historical_adapter_evidence",
+  "blockers": [
+    "legacy v1 evidence has no complete certification runtime tuple",
+    "fresh post-migration OAuth run is required before the next certification expiry"
+  ],
+  "build_sha256": null,
+  "certificate_id": "claude-code-historical-2026-09-03",
+  "client_id": "claude-code",
+  "completed_at_utc": "2026-09-02T16:00:00Z",
+  "contract_version": "producer-v1",
+  "corpus_version": null,
+  "edit_modes": [],
+  "evidence_digest": "26b745ce3e575c694a4d423b19bdcd1906eb30bb540b5a0a1c616fc8685131f9",
+  "evidence_kind": "historical",
+  "expires_at_utc": "2026-10-02T16:00:00Z",
+  "fingerprint_version": "caf1",
+  "legacy_artifact_sha256": "26b745ce3e575c694a4d423b19bdcd1906eb30bb540b5a0a1c616fc8685131f9",
+  "limitations": [
+    "historical v1 record is retained for audit and cannot promote an adapter"
+  ],
+  "metrics": {
+    "broker_accepted": 31,
+    "canonical": 3,
+    "captured": 32,
+    "delivered": 31,
+    "duplicates": 1,
+    "producer_events": 32,
+    "replayed": 1
+  },
+  "model_id": "claude-sonnet-5",
+  "os": null,
+  "payload_schema_versions": [],
+  "producer_version": "1.0.2",
+  "promotable": false,
+  "provider_id": "anthropic",
+  "review_status": "historical",
+  "runtime": null,
+  "scenarios": [
+    {
+      "id": "legacy-record",
+      "status": "not_run"
+    }
+  ],
+  "schema_version": 2,
+  "stages": [
+    {
+      "id": "historical_import",
+      "status": "passed"
+    }
+  ],
+  "started_at_utc": "2026-09-02T16:00:00Z",
+  "status": "verified",
+  "tested_commit_sha": "c7e78373d8f0d3c757d6b26d8ac6de14e903829a",
+  "tool_version": null
+}

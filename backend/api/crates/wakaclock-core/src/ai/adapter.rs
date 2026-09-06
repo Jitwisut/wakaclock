@@ -184,6 +184,62 @@ pub struct AdapterManifest {
     pub health_probe: HealthProbe,
 }
 
+/// The implementation selected by the adapter catalog.  A manifest can be
+/// useful for discovery without having a local installer or transcript parser;
+/// keeping that distinction in the registry prevents callers from treating
+/// every `InstallStrategy` value as executable code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterRuntime {
+    ClaudeCode,
+    Codex,
+    GeminiCli,
+    KiloCode,
+    KimiCodeCli,
+    #[default]
+    None,
+}
+
+/// Versioned, resolved registry entry consumed by CLI and editor installers.
+/// `manifest` is flattened so older clients can continue reading the ordinary
+/// adapter fields while newer clients also get aliases, platform support,
+/// implementation selection and the resource set required for installation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterCatalogEntry {
+    #[serde(flatten)]
+    pub manifest: AdapterManifest,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub supported_platforms: Vec<String>,
+    #[serde(default)]
+    pub runtime: AdapterRuntime,
+    #[serde(default)]
+    pub resources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterCatalogV1 {
+    pub schema_version: u8,
+    pub adapters: Vec<AdapterCatalogEntry>,
+}
+
+pub const ADAPTER_CATALOG_SCHEMA_VERSION: u8 = 1;
+
+impl AdapterCatalogEntry {
+    pub fn id(&self) -> &str {
+        &self.manifest.id
+    }
+
+    pub fn supports_platform(&self, platform: &str) -> bool {
+        self.supported_platforms.is_empty()
+            || self
+                .supported_platforms
+                .iter()
+                .any(|candidate| candidate == platform)
+    }
+}
+
 fn default_health_probe() -> HealthProbe {
     HealthProbe::None
 }
@@ -274,7 +330,11 @@ impl AdapterRegistry {
         // `Scaffold` (a documented payload shape exists) or `Unverified` (nothing
         // to go on yet) — never `Verified`. See VERIFICATION.md.
         manifests.extend(rollout_scaffold_manifests());
-        Self::from_manifests(manifests).expect("builtin manifests are valid")
+        let registry = Self::from_manifests(manifests).expect("builtin manifests are valid");
+        registry
+            .validate_catalog()
+            .expect("builtin adapter catalog is valid");
+        registry
     }
 
     pub fn register(&mut self, manifest: AdapterManifest) -> Result<(), String> {
@@ -300,6 +360,49 @@ impl AdapterRegistry {
 
     pub fn manifests(&self) -> &[AdapterManifest] {
         &self.manifests
+    }
+
+    /// Resolve the declarative manifests into the contract shared by CLI and
+    /// editor setup.  Metadata lives here rather than in either client, so an
+    /// adapter cannot silently appear in one surface with a different alias,
+    /// platform or installer implementation.
+    pub fn catalog_v1(&self) -> AdapterCatalogV1 {
+        AdapterCatalogV1 {
+            schema_version: ADAPTER_CATALOG_SCHEMA_VERSION,
+            adapters: self
+                .manifests
+                .iter()
+                .map(|manifest| catalog_entry(manifest.clone()))
+                .collect(),
+        }
+    }
+
+    /// Validate the resolved catalog independently of the wire serializer.
+    /// Aliases are canonical identifiers, so collisions are rejected before an
+    /// installer can choose the wrong adapter.
+    pub fn validate_catalog(&self) -> Result<(), String> {
+        let catalog = self.catalog_v1();
+        let mut names = std::collections::BTreeSet::new();
+        for entry in &catalog.adapters {
+            if !names.insert(entry.manifest.id.clone()) {
+                return Err(format!("duplicate adapter id '{}'", entry.manifest.id));
+            }
+            for alias in &entry.aliases {
+                if alias.trim().is_empty() || !names.insert(alias.clone()) {
+                    return Err(format!("duplicate or empty adapter alias '{alias}'"));
+                }
+            }
+            for resource in &entry.resources {
+                let path = std::path::Path::new(resource);
+                if path.is_absolute() || resource.split('/').any(|part| part == "..") {
+                    return Err(format!(
+                        "adapter '{}' has unsafe resource path '{resource}'",
+                        entry.manifest.id
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Idempotent, atomic where it writes. `ConfigHookBlock`: writes the managed
@@ -335,6 +438,87 @@ impl AdapterRegistry {
             }),
             InstallStrategy::TranscriptOnly => Ok(InstallOutcome::NothingToInstall),
         }
+    }
+}
+
+fn catalog_entry(manifest: AdapterManifest) -> AdapterCatalogEntry {
+    let (aliases, supported_platforms, runtime, resources) = match manifest.id.as_str() {
+        "claude-code" => (
+            vec!["claude".to_string()],
+            vec!["macos".to_string(), "linux".to_string()],
+            AdapterRuntime::ClaudeCode,
+            vec![
+                "common/emit-event.sh".to_string(),
+                "plugins/atoaxis-heartbeat/.claude-plugin/plugin.json".to_string(),
+            ],
+        ),
+        "codex" => (
+            vec!["codex-cli".to_string()],
+            vec!["macos".to_string(), "linux".to_string()],
+            AdapterRuntime::Codex,
+            vec![
+                "common/emit-event.sh".to_string(),
+                "codex/heartbeat-hook.sh".to_string(),
+                "codex/git-sweep-before.sh".to_string(),
+                "codex/git-sweep-after.sh".to_string(),
+                "codex/tool-abort.sh".to_string(),
+            ],
+        ),
+        "gemini-cli" => (
+            vec!["gemini".to_string()],
+            vec!["macos".to_string(), "linux".to_string()],
+            AdapterRuntime::GeminiCli,
+            vec![
+                "common/emit-event.sh".to_string(),
+                "gemini-cli/gemini-extension.json".to_string(),
+            ],
+        ),
+        "kilo-code" => (
+            vec!["kilo".to_string(), "kilocode".to_string()],
+            vec!["macos".to_string(), "linux".to_string()],
+            AdapterRuntime::KiloCode,
+            vec![
+                "common/emit-event.sh".to_string(),
+                "kilo-code/src/plugin.ts".to_string(),
+                "kilo-code/installer/entrypoint.ts".to_string(),
+            ],
+        ),
+        "kimi-code-cli" => (
+            vec!["kimi".to_string()],
+            vec!["macos".to_string(), "linux".to_string()],
+            AdapterRuntime::KimiCodeCli,
+            vec![
+                "common/emit-event.sh".to_string(),
+                "kimi-code/installer/install.sh".to_string(),
+            ],
+        ),
+        "cursor" => (
+            Vec::new(),
+            vec![
+                "macos".to_string(),
+                "linux".to_string(),
+                "windows".to_string(),
+            ],
+            AdapterRuntime::None,
+            vec!["cursor/hooks/hooks.json".to_string()],
+        ),
+        _ => (
+            Vec::new(),
+            vec![
+                "macos".to_string(),
+                "linux".to_string(),
+                "windows".to_string(),
+            ],
+            AdapterRuntime::None,
+            Vec::new(),
+        ),
+    };
+    AdapterCatalogEntry {
+        manifest,
+        aliases,
+        supported_platforms,
+        runtime,
+        resources,
     }
 }
 
@@ -432,16 +616,12 @@ fn codex_manifest() -> AdapterManifest {
             BrokerChangeKind::Delete,
             BrokerChangeKind::Rename,
         ],
-        // Promoted after a real codex-cli 0.151.0-alpha.7.1 run through the
-        // managed PostToolUse hook, broker/backend row inspection, and replay
-        // dedup verification recorded in ai/VERIFICATION.md. The legacy shell
-        // collision is a separate acceptance check and does not invalidate the
-        // native hook evidence represented by this status.
-        verification: Verification::verified(
-            DateTime::parse_from_rfc3339("2026-09-01T19:18:51Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            "codex-cli 0.151.0-alpha.7.1 (native hook + transcript dedup)",
+        // The previous native-hook run covered codex-cli 0.151.0-alpha.7.1.
+        // This workspace currently resolves 0.153.4, so the exact tuple is
+        // stale until F5-02 reruns the live CLI matrix. Keep the adapter usable
+        // for capture while preventing a version-mismatched global Verified label.
+        verification: Verification::scaffold(
+            "historical native-hook evidence is pinned to codex-cli 0.151.0-alpha.7.1; refresh the exact current CLI tuple before promotion",
         ),
         health_probe: HealthProbe::TranscriptFreshness {
             max_lag_seconds: 300,
@@ -792,6 +972,27 @@ mod tests {
     }
 
     #[test]
+    fn builtin_catalog_is_versioned_and_resolves_runtime_metadata() {
+        let registry = AdapterRegistry::builtin();
+        registry.validate_catalog().unwrap();
+        let catalog = registry.catalog_v1();
+        assert_eq!(catalog.schema_version, ADAPTER_CATALOG_SCHEMA_VERSION);
+        let codex = catalog
+            .adapters
+            .iter()
+            .find(|entry| entry.id() == "codex")
+            .unwrap();
+        assert_eq!(codex.runtime, AdapterRuntime::Codex);
+        assert!(codex.aliases.iter().any(|alias| alias == "codex-cli"));
+        assert!(codex
+            .resources
+            .iter()
+            .any(|path| path.ends_with("heartbeat-hook.sh")));
+        assert!(codex.supports_platform("macos"));
+        assert!(!codex.supports_platform("windows"));
+    }
+
+    #[test]
     fn verification_status_defaults_to_unverified() {
         // A manifest that omits `verification` entirely.
         let json = r#"{
@@ -867,7 +1068,10 @@ mod tests {
         }
         // Trust is graded honestly.
         assert!(registry.get("claude-code").unwrap().is_live_verified());
-        assert!(registry.get("codex").unwrap().is_live_verified());
+        assert_eq!(
+            registry.get("codex").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
         assert_eq!(
             registry.get("gemini-cli").unwrap().effective_status(),
             VerificationStatus::Unverified
@@ -953,7 +1157,7 @@ mod tests {
             .filter(|m| m.is_live_verified())
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(verified, vec!["claude-code", "codex"]);
+        assert_eq!(verified, vec!["claude-code"]);
     }
 
     #[test]

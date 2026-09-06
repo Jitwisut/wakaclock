@@ -426,12 +426,33 @@ export interface AiDiagnosticsParserV2 {
 export interface AiAdapterFreshnessV2 {
   agent: string;
   availability: AiMeasurementAvailability;
+  certificate_id?: null | string;
+  certification?: AiCertificationTuple | null;
+  certification_status?: null | string;
   detected: AiDiagnosticsMeasurement<boolean>;
   diagnostic_code?: null | string;
   enabled: AiDiagnosticsMeasurement<boolean>;
   last_evidence_at?: null | string;
   runtime_health: AiRuntimeHealth;
   verification: AiVerificationStatus;
+}
+
+/** Exact capability tuple used by the server-side certification catalog. */
+export interface AiCertificationTuple {
+  adapter_id: string;
+  arch?: null | string;
+  client_id: string;
+  contract_version: string;
+  corpus_version?: null | string;
+  edit_modes: string[];
+  fingerprint_version: string;
+  model_id?: null | string;
+  os?: null | string;
+  payload_schema_versions: string[];
+  producer_version?: null | string;
+  provider_id: string;
+  runtime?: null | string;
+  tool_version?: null | string;
 }
 
 export interface AiDiagnosticsReportV2 {

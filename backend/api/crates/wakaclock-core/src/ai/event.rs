@@ -1,3 +1,4 @@
+use crate::broker::BrokerChangeKind;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -135,6 +136,12 @@ pub struct AiEditEvent {
     pub occurred_at: DateTime<Utc>,
     pub entity: PathBuf,
     pub project_root: Option<PathBuf>,
+    /// Operation reported by the producer. Transcript parsers should preserve
+    /// explicit create/delete/rename markers; older producers default to modify.
+    #[serde(default = "default_change_kind")]
+    pub change_kind: BrokerChangeKind,
+    #[serde(default)]
+    pub previous_entity: Option<PathBuf>,
     /// `None` means unknown, not zero — some agents expose a tool call without an
     /// exact patch.
     pub lines_added: Option<u32>,
@@ -143,6 +150,10 @@ pub struct AiEditEvent {
     pub output_tokens: Option<u64>,
     pub source: AiEventSource,
     pub confidence: AiConfidence,
+}
+
+fn default_change_kind() -> BrokerChangeKind {
+    BrokerChangeKind::Modify
 }
 
 /// Map a client- or transcript-supplied agent label onto the stable identifier used
@@ -219,6 +230,8 @@ mod tests {
             occurred_at: Utc::now(),
             entity: PathBuf::from("src/lib.rs"),
             project_root: None,
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(3),
             lines_deleted: None,
             input_tokens: None,

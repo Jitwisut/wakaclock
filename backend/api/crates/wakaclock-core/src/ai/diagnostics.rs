@@ -8,6 +8,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::certification::CertificationTuple;
+
 /// Wire schema for the metadata-only diagnostics report.
 pub const AI_DIAGNOSTICS_SCHEMA_VERSION: u8 = 1;
 /// Additive diagnostics contract. Version 1 remains readable for older CLI and
@@ -109,6 +111,14 @@ pub struct AdapterFreshnessV2 {
     pub enabled: DiagnosticMeasurement<bool>,
     pub runtime_health: RuntimeHealth,
     pub verification: VerificationStatus,
+    /// Runtime tuple observed by the client.  It is evidence for server lookup,
+    /// never a client-controlled certification result.
+    #[serde(default)]
+    pub certification: Option<CertificationTuple>,
+    #[serde(default)]
+    pub certificate_id: Option<String>,
+    #[serde(default)]
+    pub certification_status: Option<String>,
     #[serde(default)]
     pub last_evidence_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -211,6 +221,9 @@ impl AiDiagnosticsReportV2 {
                         _ => RuntimeHealth::Unavailable,
                     },
                     verification: adapter.verification,
+                    certification: None,
+                    certificate_id: None,
+                    certification_status: None,
                     last_evidence_at: adapter
                         .last_evidence_unix
                         .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),

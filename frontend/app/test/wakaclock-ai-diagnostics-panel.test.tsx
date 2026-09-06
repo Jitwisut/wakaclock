@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
-import type { AiDiagnosticsReport } from '@/lib/wakaclock/types';
+import type { AiDiagnosticsReport, AiDiagnosticsReportV2 } from '@/lib/wakaclock/types';
 
 function report(): AiDiagnosticsReport {
   return {
@@ -30,6 +30,47 @@ function report(): AiDiagnosticsReport {
       transcripts_watched: 2,
     },
     schema_version: 1,
+  };
+}
+
+function certifiedDegradedReport(): AiDiagnosticsReportV2 {
+  const now = '2026-09-06T00:00:00Z';
+  return {
+    adapters: [
+      {
+        agent: 'codex',
+        availability: 'available',
+        certificate_id: 'codex-cli-2026-09-06',
+        certification_status: 'certification_verified',
+        detected: { availability: 'available', measured_at: now, value: true },
+        enabled: { availability: 'available', measured_at: now, value: true },
+        runtime_health: 'degraded',
+        verification: 'verified',
+      },
+    ],
+    boot_id: 'boot-test',
+    broker: {
+      availability: 'available',
+      dead_letter: { availability: 'available', measured_at: now, value: 0 },
+      last_delivery_at: null,
+      last_error_code: 'broker_unavailable',
+      pending: { availability: 'available', measured_at: now, value: 0 },
+      retry: { availability: 'available', measured_at: now, value: 0 },
+      running: { availability: 'available', measured_at: now, value: false },
+    },
+    captured_at: now,
+    consent: { adapter_tracking: true, diagnostics_upload: true, observer: true },
+    device_id: 'device-test',
+    measured_at: now,
+    parser: {
+      availability: 'available',
+      max_lag_seconds: { availability: 'available', measured_at: now, value: 0 },
+      transcripts_behind: { availability: 'available', measured_at: now, value: 0 },
+      transcripts_watched: { availability: 'available', measured_at: now, value: 1 },
+    },
+    runtime_health: 'degraded',
+    schema_version: 2,
+    sequence: 1,
   };
 }
 
@@ -76,5 +117,12 @@ describe('AiDiagnosticsPanel', () => {
     expect(screen.getByText('last error: http_503')).toBeInTheDocument();
     expect(screen.getByText(/3 watched · 1 behind/)).toBeInTheDocument();
     expect(screen.getByText('max lag 42s')).toBeInTheDocument();
+  });
+
+  it('keeps a reviewed capability certified while showing degraded runtime health', () => {
+    render(<AiDiagnosticsPanel report={certifiedDegradedReport()} />);
+
+    expect(screen.getByText(/Certified · codex-cli-2026-09-06 · runtime degraded/)).toBeInTheDocument();
+    expect(screen.getByText('stopped')).toBeInTheDocument();
   });
 });

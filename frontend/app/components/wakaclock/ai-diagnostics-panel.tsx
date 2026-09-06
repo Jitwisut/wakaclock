@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { formatIntegrationAgentName } from '@/lib/wakaclock/ai-display';
 import type {
+  AiAdapterFreshnessV2,
   AiDiagnosticsMeasurement,
   AiDiagnosticsReport,
   AiDiagnosticsReportV2,
@@ -42,6 +43,17 @@ function measurementText<T>(
     return measurement.availability;
   }
   return format(measurement.value);
+}
+
+function certificationLabel(adapter: AiAdapterFreshnessV2): string {
+  if (adapter.certification_status === 'certification_verified') {
+    return adapter.certificate_id ? `Certified · ${adapter.certificate_id}` : 'Certified';
+  }
+  if (adapter.certification_status === 'certification_expired') return 'Certification expired';
+  if (adapter.certification_status === 'certification_revoked') return 'Certification revoked';
+  if (adapter.certification_status === 'certification_mismatch') return 'Tuple mismatch';
+  if (adapter.certification_status === 'certification_historical') return 'Historical evidence';
+  return verificationLabels[adapter.verification];
 }
 
 function DiagnosticsV2Body({ report }: { report: AiDiagnosticsReportV2 }) {
@@ -86,7 +98,7 @@ function DiagnosticsV2Body({ report }: { report: AiDiagnosticsReportV2 }) {
               <span className="text-muted-foreground">
                 {measurementText(adapter.detected, (value) => (value ? 'detected' : 'not detected'))} ·{' '}
                 {measurementText(adapter.enabled, (value) => (value ? 'enabled' : 'disabled'))} ·{' '}
-                {verificationLabels[adapter.verification]} · {adapter.runtime_health}
+                {certificationLabel(adapter)} · runtime {adapter.runtime_health}
               </span>
             </li>
           ))}

@@ -11,14 +11,19 @@ set -eu
 VERSION="${WAKACLOCK_VERSION:-latest}"
 PREFIX="${WAKACLOCK_PREFIX:-${HOME}/.local/bin}"
 RELEASE_BASE="${WAKACLOCK_RELEASE_BASE_URL:-https://get.atoaxis.com/releases}"
-ARCHIVE_URL="${WAKACLOCK_ARCHIVE_URL:-${RELEASE_BASE}/wakaclock-${VERSION}-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m).tar.gz}"
-BINARY_OVERRIDE="${WAKACLOCK_BINARY:-}"
-SETUP_YES="${WAKACLOCK_SETUP_YES:-0}"
-
 case "$(uname -s)" in
-  Darwin|Linux) : ;;
+  Darwin) OS_TAG="darwin" ;;
+  Linux) OS_TAG="linux" ;;
   *) echo "wakaclock installer: unsupported operating system" >&2; exit 2 ;;
 esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH_TAG="x86_64" ;;
+  arm64|aarch64) ARCH_TAG="arm64" ;;
+  *) echo "wakaclock installer: unsupported architecture $(uname -m)" >&2; exit 2 ;;
+esac
+ARCHIVE_URL="${WAKACLOCK_ARCHIVE_URL:-${RELEASE_BASE}/wakaclock-${VERSION}-${OS_TAG}-${ARCH_TAG}.tar.gz}"
+BINARY_OVERRIDE="${WAKACLOCK_BINARY:-}"
+SETUP_YES="${WAKACLOCK_SETUP_YES:-0}"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wakaclock-install.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
@@ -48,10 +53,23 @@ else
     [ -n "$FOUND" ] || { echo "release archive does not contain wakaclock" >&2; exit 1; }
     cp "$FOUND" "$TMP_DIR/wakaclock"
   fi
+  if [ -d "$TMP_DIR/resources/ai-agents" ]; then
+    :
+  else
+    echo "release archive does not contain resources/ai-agents" >&2
+    exit 1
+  fi
 fi
 
 chmod 0755 "$TMP_DIR/wakaclock"
 install -m 0755 "$TMP_DIR/wakaclock" "$PREFIX/wakaclock"
+if [ -d "$TMP_DIR/resources/ai-agents" ]; then
+  mkdir -p "$PREFIX/resources"
+  rm -rf "$PREFIX/resources/ai-agents.new"
+  cp -R "$TMP_DIR/resources/ai-agents" "$PREFIX/resources/ai-agents.new"
+  rm -rf "$PREFIX/resources/ai-agents"
+  mv "$PREFIX/resources/ai-agents.new" "$PREFIX/resources/ai-agents"
+fi
 
 # The per-user broker service is always reconciled; it is safe to repeat. Adapter
 # hook setup requires explicit consent via WAKACLOCK_SETUP_YES=1 — without it, the

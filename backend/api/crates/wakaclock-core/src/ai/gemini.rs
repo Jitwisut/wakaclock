@@ -301,6 +301,8 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
         occurred_at,
         entity,
         project_root: root,
+        change_kind: crate::broker::BrokerChangeKind::Modify,
+        previous_entity: None,
         lines_added: Some(delta.added),
         lines_deleted: Some(delta.deleted),
         input_tokens: None,

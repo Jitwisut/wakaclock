@@ -1,9 +1,13 @@
 import type * as React from 'react';
 
+import type { SpriteAccessory } from '@/components/presence/appearance';
 import type { PresenceState } from '@/lib/wakaclock/types';
 
 interface PresenceSpriteProps {
+  accentColor?: string;
+  accessory?: SpriteAccessory;
   color: string;
+  hairColor?: string;
   isDragging?: boolean;
   reducedMotion: boolean;
   size?: number;
@@ -25,11 +29,10 @@ const PANTS = '#151442';
  * full 14-wide row (guarantees symmetry without hand-counting an ASCII grid — see
  * `PresenceDecoration.tsx` for the same technique applied to the field scenery).
  *
- * `HAIR`/`PANTS` intentionally match `OUTLINE` here (a dark hooded/masked silhouette,
- * matching the brief's "dark hair, blue shirt, dark pants" reference) rather than the
- * dashboard presence prototype's earlier attempt at a lighter, separately-coloured
- * hairline — the shirt colour (`SHIRT`, or the per-user hash colour when passed via
- * `color`) is what needs to pop, not the hair.
+ * The hair (`H`) fill and an optional headset/cap overlay come from `appearance.ts`
+ * (hashed from the user id) so the roster reads as distinct people, the way the
+ * PixelOffice reference workstations do; the shirt colour (`B`, via `color`) still
+ * carries most of the per-user variety.
  */
 const LEFT_HALVES = [
   '..OOOOO',
@@ -57,8 +60,14 @@ function mirrorRow(left: string): string {
 
 const SPRITE_ROWS: string[] = LEFT_HALVES.map(mirrorRow);
 
-function spritePixels(shirtColor: string): React.ReactNode[] {
-  const colorFor: Record<string, string> = { O: OUTLINE, H: HAIR, F: SKIN, B: shirtColor, L: PANTS };
+function spritePixels(shirtColor: string, hairColor: string): React.ReactNode[] {
+  const colorFor: Record<string, string> = {
+    B: shirtColor,
+    F: SKIN,
+    H: hairColor,
+    L: PANTS,
+    O: OUTLINE,
+  };
   const pixels: React.ReactNode[] = [];
   for (const [row, pattern] of SPRITE_ROWS.entries()) {
     for (let col = 0; col < pattern.length; col += 1) {
@@ -70,6 +79,38 @@ function spritePixels(shirtColor: string): React.ReactNode[] {
     }
   }
   return pixels;
+}
+
+/**
+ * Headset (band + two earcups) or backward cap (crown + brim), drawn over the base
+ * grid. Both sit on the head rows (0-4) and use the per-user accent colour.
+ */
+function AccessoryPixels({
+  accentColor,
+  accessory,
+}: {
+  accentColor: string;
+  accessory: SpriteAccessory;
+}) {
+  if (accessory === 'headset') {
+    return (
+      <>
+        <rect fill={accentColor} height={CELL} width={12 * CELL} x={CELL} y={0} />
+        <rect fill={accentColor} height={2 * CELL} width={CELL} x={0} y={3 * CELL} />
+        <rect fill={accentColor} height={2 * CELL} width={CELL} x={(GRID_COLS - 1) * CELL} y={3 * CELL} />
+      </>
+    );
+  }
+  if (accessory === 'cap') {
+    return (
+      <>
+        <rect fill="#181a20" height={1.5 * CELL} width={12 * CELL} x={CELL} y={0} />
+        <rect fill="#181a20" height={CELL} width={2.5 * CELL} x={(GRID_COLS - 1) * CELL} y={CELL} />
+        <rect fill={accentColor} height={CELL} width={CELL} x={HALF_COLS * CELL - CELL / 2} y={CELL / 2} />
+      </>
+    );
+  }
+  return null;
 }
 
 const EYE_ROW = 5;
@@ -125,9 +166,19 @@ const OPACITY_BY_STATUS: Record<PresenceState, number> = { coding: 1, idle: 1, o
  * The pixel-grid character itself, with no drag/position logic — `PresencePlayer` wraps
  * this with the actual draggable behaviour and name tag. Pose/colour are entirely a
  * function of `status`, mirroring the same live-activity signal design used throughout
- * this page: only people who are actually coding right now visibly move.
+ * this page: only people who are actually coding right now visibly move. Hair/accessory
+ * are a function of the user id (see `appearance.ts`).
  */
-export function PresenceSprite({ color, isDragging, reducedMotion, size = 84, status }: PresenceSpriteProps) {
+export function PresenceSprite({
+  accentColor = '#151442',
+  accessory = 'none',
+  color,
+  hairColor = HAIR,
+  isDragging,
+  reducedMotion,
+  size = 84,
+  status,
+}: PresenceSpriteProps) {
   const motionClass = reducedMotion || isDragging ? undefined : MOTION_CLASS[status];
   const ledColor = LED_COLOR[status];
 
@@ -141,7 +192,8 @@ export function PresenceSprite({ color, isDragging, reducedMotion, size = 84, st
       viewBox={`0 0 ${GRID_COLS * CELL} ${GRID_ROWS * CELL}`}
       width={size}
     >
-      {spritePixels(color)}
+      {spritePixels(color, hairColor)}
+      <AccessoryPixels accentColor={accentColor} accessory={accessory} />
       <ShinePixel status={status} />
       <EyesAndMouth status={status} />
       {ledColor ? (

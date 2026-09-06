@@ -4,22 +4,11 @@ import * as React from 'react';
 
 import { motion } from 'motion/react';
 
+import { appearanceFor } from '@/components/presence/appearance';
 import { PresenceSprite } from '@/components/presence/PresenceSprite';
 import type { PresenceUser } from '@/types/presence';
 
 import type { PanInfo } from 'motion/react';
-
-/** Assigns each user a stable shirt colour by hashing their id — same person, same
- * colour, every time they appear, without the server needing to send or track one. */
-const SHIRT_PALETTE = ['#2e86de', '#e0342b', '#b24bf3', '#1e9e52', '#f5c445', '#ff8fa3'] as const;
-
-export function shirtColorFor(userId: string): string {
-  let hash = 0;
-  for (const char of userId) {
-    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
-  }
-  return SHIRT_PALETTE[hash % SHIRT_PALETTE.length];
-}
 
 /** How far one arrow-key press moves the player, in playground-percentage units — the
  * keyboard-equivalent of a small drag, since Framer Motion's `drag` prop (used for
@@ -58,7 +47,7 @@ export function PresencePlayer({
   user,
 }: PresencePlayerProps) {
   const [isDragging, setIsDragging] = React.useState(false);
-  const shirtColor = shirtColorFor(user.id);
+  const appearance = appearanceFor(user.id);
 
   // `PanInfo.point` is page-relative (includes scroll), `getBoundingClientRect()` is
   // viewport-relative — add the scroll offset back in so the two are comparable.
@@ -107,7 +96,14 @@ export function PresencePlayer({
   if (!user.isCurrentUser) {
     return (
       <div className="absolute flex flex-col items-center gap-1" style={wrapperStyle}>
-        <PresenceSprite color={shirtColor} reducedMotion={reducedMotion} status={user.status} />
+        <PresenceSprite
+          accentColor={appearance.accentColor}
+          accessory={appearance.accessory}
+          color={appearance.shirtColor}
+          hairColor={appearance.hairColor}
+          reducedMotion={reducedMotion}
+          status={user.status}
+        />
         <NameTag isCurrentUser={false} nearby={isNearby} username={user.username} />
       </div>
     );
@@ -132,7 +128,15 @@ export function PresencePlayer({
       whileDrag={{ scale: 1.03 }}
       whileTap={{ scale: 1.03 }}
     >
-      <PresenceSprite color={shirtColor} isDragging={isDragging} reducedMotion={reducedMotion} status={user.status} />
+      <PresenceSprite
+        accentColor={appearance.accentColor}
+        accessory={appearance.accessory}
+        color={appearance.shirtColor}
+        hairColor={appearance.hairColor}
+        isDragging={isDragging}
+        reducedMotion={reducedMotion}
+        status={user.status}
+      />
       <NameTag isCurrentUser nearby={isNearby} username={user.username} />
     </motion.button>
   );

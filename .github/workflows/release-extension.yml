@@ -141,12 +141,38 @@ jobs:
           "$binary" --version
           smoke_home="$(mktemp -d)"
           HOME="$smoke_home" "$binary" verify --json || true
+          npm run build:resources
           CLI_VERSION="$version" npm run package:target -- ${{ matrix.target }} "$binary"
-          unzip -l atoaxis-vscode-*.vsix | grep -E "resources/(bin/wakaclock(\\.exe)?|cli-manifest.json)"
+          unzip -l atoaxis-vscode-*.vsix | grep -E "resources/(bin/wakaclock(\\.exe)?|ai-agents/bundle-manifest.json|cli-manifest.json)"
+      - name: Package terminal archive with verified AI resources
+        if: runner.os != 'Windows'
+        working-directory: extensions/vscode
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          case "${{ matrix.target }}" in
+            darwin-x64) archive_os=darwin; archive_arch=x86_64 ;;
+            darwin-arm64) archive_os=darwin; archive_arch=arm64 ;;
+            linux-x64|alpine-x64) archive_os=linux; archive_arch=x86_64 ;;
+            linux-arm64|alpine-arm64) archive_os=linux; archive_arch=arm64 ;;
+            *) echo "unsupported archive target" >&2; exit 1 ;;
+          esac
+          binary="../../backend/api/target/${{ matrix.rust_target }}/release/wakaclock"
+          archive_root="$RUNNER_TEMP/wakaclock-archive"
+          rm -rf "$archive_root"
+          mkdir -p "$archive_root/resources"
+          cp "$binary" "$archive_root/wakaclock"
+          cp -R resources/ai-agents "$archive_root/resources/ai-agents"
+          test -f "$archive_root/resources/ai-agents/bundle-manifest.json"
+          archive="wakaclock-${version}-${archive_os}-${archive_arch}.tar.gz"
+          tar -czf "$archive" -C "$archive_root" wakaclock resources/ai-agents
+          sha256sum "$archive" > "$archive.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: atoaxis-vscode-${{ matrix.target }}
-          path: extensions/vscode/*.vsix
+          path: |
+            extensions/vscode/*.vsix
+            extensions/vscode/wakaclock-*.tar.gz*
 
   zed-language-server:
     name: Package Zed language server ${{ matrix.asset }}
@@ -297,9 +323,11 @@ jobs:
           fi
 
   publish:
-    needs: package
+    needs: [package, publish-language-server]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -310,8 +338,24 @@ jobs:
         with:
           node-version: 20
       - run: test "$(find dist -name '*.vsix' | wc -l)" -eq 8
+      - run: test "$(find dist -name 'wakaclock-*.tar.gz' | wc -l)" -eq 6
+      - name: Verify terminal archive checksums and resources
+        run: |
+          for checksum in dist/wakaclock-*.tar.gz.sha256; do
+            (cd dist && sha256sum -c "$(basename "$checksum")")
+          done
+          for archive in dist/wakaclock-*.tar.gz; do
+            tar -tzf "$archive" | grep -q 'resources/ai-agents/bundle-manifest.json'
+          done
       - name: Publish every platform package
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           for package in dist/*.vsix; do
             npx --yes @vscode/vsce publish --packagePath "$package" --pat "${{ secrets.VSCE_PAT }}"
           done
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/wakaclock-*.tar.gz dist/wakaclock-*.tar.gz.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/wakaclock-*.tar.gz dist/wakaclock-*.tar.gz.sha256 --verify-tag --generate-notes --title "AtoAxis $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          fi

@@ -231,7 +231,8 @@ pub fn install() -> Result<AgentServiceReport, String> {
         let _ = Command::new("launchctl")
             .args(["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")])
             .status();
-        return Ok(report("macOS", manifest, true, true, None));
+        let running = running_probe().unwrap_or(false);
+        return Ok(report("macOS", manifest, true, running, None));
     }
 
     #[cfg(target_os = "linux")]
@@ -247,7 +248,8 @@ pub fn install() -> Result<AgentServiceReport, String> {
                 "atoaxis-wakaclock-agent.service",
             ],
         )?;
-        return Ok(report("Linux", manifest, true, true, None));
+        let running = running_probe().unwrap_or(false);
+        return Ok(report("Linux", manifest, true, running, None));
     }
 
     #[cfg(target_os = "windows")]
@@ -263,7 +265,8 @@ pub fn install() -> Result<AgentServiceReport, String> {
         let _ = Command::new("schtasks")
             .args(["/Run", "/TN", TASK_NAME])
             .status();
-        return Ok(report("Windows", manifest, true, true, None));
+        let running = running_probe().unwrap_or(false);
+        return Ok(report("Windows", manifest, true, running, None));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

@@ -343,7 +343,7 @@ Phase 9 artifacts are metadata-only and checked by
 
 | Adapter | Status | Artifact | Evidence boundary |
 |---|---|---|---|
-| Codex | `verified` | `certifications/ai-adapters/codex/2026-09-03.json` | real native single-/multi-file hook, backend row inspection and transcript replay dedup |
+| Codex | `historical evidence` | `certifications/ai-adapters/codex/2026-09-03.json` | real native single-/multi-file hook, backend row inspection and transcript replay dedup; exact tuple is stale for the current CLI |
 | Claude Code | `verified` | `certifications/ai-adapters/claude-code/2026-09-03.json` | retained pre-migration live baseline and installed plugin wiring; fresh OAuth run remains required |
 | Kilo Code | `scaffold` | `certifications/ai-adapters/kilo-code/2026-09-03.json` | implementation and fixture tests; executable unavailable on this host |
 | Kimi Code CLI | `scaffold` | `certifications/ai-adapters/kimi-code-cli/2026-09-03.json` | implementation and fixture tests; executable unavailable on this host |
@@ -360,3 +360,22 @@ The remaining acceptance work is external rather than a fixture gap: re-authenti
 Claude and run the live Kilo/Kimi matrices with broker/backend row inspection,
 exercise the legacy shell collision for Codex, and promote only artifacts backed by
 those runs. No scaffold or unverified adapter is represented as live-certified.
+
+## F5-02 current Codex CLI refresh (2026-09-06)
+
+The local executable now reports `codex-cli 0.153.4`, while the native-hook
+certificate above was exercised against `0.151.0-alpha.7.1`. The older run is
+retained as historical evidence; it is not reused as an exact current CLI
+certificate. All local Codex sessions inspected during this refresh are Desktop
+or subagent records, so they cannot certify the CLI runtime or be copied to the
+separate Desktop/IDE tuple.
+
+The parser was hardened before the new live run: both current session-id fields
+are accepted, incomplete call/output pairs are replay-safe across bounded cursor
+passes, failed calls are ignored, duplicate completion records are collapsed,
+provider metadata is retained, and apply-patch create/modify/delete/rename
+markers reach the broker envelope. These changes have local regression coverage.
+
+A fresh authenticated `codex exec` campaign with the shipped bundle, backend row
+readback, dashboard readback and human review is still required before a new
+catalog entry can be promoted.

@@ -351,6 +351,7 @@ async function setupAiTracking(
     }
     const configured = result.configured.length;
     const failed = result.failed.length;
+    const suggestedAction = result.outcomes?.find((outcome) => outcome.suggested_action)?.suggested_action;
     const prefix = repairing ? "AI integrations repaired" : "AI tracking configured";
     if (configured > 0) {
       const key = await getStoredApiKey(context.secrets);
@@ -375,10 +376,10 @@ async function setupAiTracking(
         );
       }
       if (failed > 0) {
-        await vscode.window.showWarningMessage(
+      await vscode.window.showWarningMessage(
           `${prefix}: ${configured} configured, ${failed} failed.${
             serviceInstalled ? "" : " The always-on agent also needs an upgrade or repair."
-          } Run “AtoAxis: Show AI Tracking Status” for details.`
+          }${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`
         );
         return false;
       }
@@ -386,6 +387,11 @@ async function setupAiTracking(
         await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
       }
       return serviceInstalled;
+    } else if (failed > 0) {
+      await vscode.window.showWarningMessage(
+        `AI setup did not complete.${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`
+      );
+      return false;
     } else {
       await vscode.window.showInformationMessage(
         "No supported AI CLI was detected. Install a supported integration and run setup again."

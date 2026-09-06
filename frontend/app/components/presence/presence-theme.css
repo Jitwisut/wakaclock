@@ -180,3 +180,188 @@
     0 0,
     14px 14px;
 }
+
+/* ===========================================================================
+ * PixelOffice floor layer
+ *
+ * A second visual treatment for the same functional playground: the drag-to-a-
+ * zone field is re-dressed as a top-down 16-bit office. Zones keep their real
+ * geometry (percent rects hit-tested by useRoomMovement) and are only *styled*
+ * as "department pods"; desks, props and the minimap are pointer-events-none
+ * decoration layered under the single positioned player sprites.
+ *
+ * Every animation here is also gated by a `reducedMotion` prop in the React
+ * components (the class is simply not applied), mirroring PresenceSprite — the
+ * media query below is the belt-and-braces fallback.
+ * ======================================================================== */
+.wakaclock-presence-theme {
+  --office-floor-a: #46506c;
+  --office-floor-b: #3c4560;
+  --office-desk-top: #ba7d48;
+  --office-desk-side: #784824;
+  --office-desk-edge: #4d2b13;
+  --office-desk-hi: #f1b37b;
+  --office-chair: #1d5c37;
+  --office-chair-hi: #388b58;
+}
+
+/* Parquet + fine tech grid, adapted from the reference prototype's floor. */
+.wakaclock-presence-theme .office-floor {
+  background-color: var(--office-floor-a);
+  background-image:
+    linear-gradient(45deg, var(--office-floor-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--office-floor-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--office-floor-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--office-floor-b) 75%),
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size:
+    34px 34px,
+    34px 34px,
+    34px 34px,
+    34px 34px,
+    17px 17px,
+    17px 17px;
+  background-position:
+    0 0,
+    0 17px,
+    17px -17px,
+    -17px 0,
+    0 0,
+    0 0;
+}
+
+/* Hard, unblurred cast shadow for desks and characters (2.5D "sits on floor"). */
+.wakaclock-presence-theme .office-cast-shadow {
+  filter: drop-shadow(0 5px 0 rgba(21, 20, 66, 0.4));
+}
+
+.wakaclock-presence-theme .office-ground-shadow {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(21, 20, 66, 0.5) 0%,
+    rgba(21, 20, 66, 0) 72%
+  );
+}
+
+/* CRT desk monitor: inner glow + scanline overlay. */
+.wakaclock-presence-theme .office-crt {
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 0 4px rgba(40, 182, 90, 0.5);
+}
+
+.wakaclock-presence-theme .office-crt::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%),
+    linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.04),
+      rgba(0, 255, 0, 0.02),
+      rgba(0, 0, 255, 0.04)
+    );
+  background-size:
+    100% 2px,
+    3px 100%;
+  pointer-events: none;
+}
+
+@keyframes wakaclock-office-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.5px);
+  }
+}
+
+@keyframes wakaclock-office-typing {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-1px) rotate(-0.6deg);
+  }
+  75% {
+    transform: translateY(1px) rotate(0.6deg);
+  }
+}
+
+@keyframes wakaclock-office-steam {
+  0% {
+    transform: translateY(0) scaleX(1);
+    opacity: 0.75;
+  }
+  50% {
+    transform: translateY(-3px) scaleX(1.3);
+    opacity: 0.35;
+  }
+  100% {
+    transform: translateY(-6px) scaleX(0.7);
+    opacity: 0;
+  }
+}
+
+@keyframes wakaclock-office-proximity {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.2;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+}
+
+@keyframes wakaclock-office-reaction {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-46px) scale(1.15);
+    opacity: 0;
+  }
+}
+
+.wakaclock-presence-theme .office-anim-breathe {
+  animation: wakaclock-office-breathe 2.4s steps(2, jump-none) infinite;
+}
+
+.wakaclock-presence-theme .office-anim-typing {
+  animation: wakaclock-office-typing 0.6s steps(2, jump-none) infinite;
+}
+
+.wakaclock-presence-theme .office-anim-steam {
+  animation: wakaclock-office-steam 1.6s steps(4) infinite;
+}
+
+.wakaclock-presence-theme .office-proximity-ring {
+  animation: wakaclock-office-proximity 2s ease-in-out infinite;
+}
+
+.wakaclock-presence-theme .office-reaction-float {
+  animation: wakaclock-office-reaction 1.1s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-presence-theme .office-anim-breathe,
+  .wakaclock-presence-theme .office-anim-typing,
+  .wakaclock-presence-theme .office-anim-steam,
+  .wakaclock-presence-theme .office-proximity-ring,
+  .wakaclock-presence-theme .office-reaction-float {
+    animation: none;
+  }
+}

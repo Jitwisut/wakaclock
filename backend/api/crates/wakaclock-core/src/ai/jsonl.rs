@@ -16,6 +16,10 @@ pub(super) struct LineRead {
     /// rather than attempt to parse a truncated/oversized line as JSON.
     pub text: String,
     pub too_large: bool,
+    /// Byte offset at which this complete line started. Callers that need to
+    /// resume a multi-record operation can rewind to this boundary without
+    /// ever seeking into the middle of a JSONL record.
+    pub offset_before: u64,
     pub offset_after: u64,
 }
 
@@ -57,6 +61,7 @@ impl JsonlCursorReader {
         Ok(Some(LineRead {
             text,
             too_large,
+            offset_before: start_offset,
             offset_after: self.offset,
         }))
     }

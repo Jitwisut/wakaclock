@@ -166,6 +166,7 @@ interface ActiveRoomViewProps {
   activeSession?: PresenceV2Session;
   connected: boolean;
   currentUserId: string;
+  floorHeightScale?: number;
   history: HistoryState;
   inviteId: null | string;
   inviteUrl: null | string;
@@ -190,6 +191,7 @@ export function ActiveRoomView({
   activeSession,
   connected,
   currentUserId,
+  floorHeightScale = 1,
   history,
   inviteId,
   inviteUrl,
@@ -315,13 +317,14 @@ export function ActiveRoomView({
       ) : null}
 
       <p className="px-1 text-xs font-bold" style={{ color: muted }}>
-        Drag your own sprite into a Pairing Table to make your availability explicit. A second
-        teammate entering the same table starts a shared session.
+        Walk your sprite onto a pod to make your availability explicit. A second teammate
+        entering the same pod starts a shared co-working session.
       </p>
 
       <div className="hidden md:block">
         <PresencePlayground
           currentUserId={currentUserId}
+          heightScale={floorHeightScale}
           onMoveCurrentUser={onMove}
           reducedMotion={reducedMotion}
           sessions={playgroundSessions}
@@ -329,7 +332,7 @@ export function ActiveRoomView({
           zones={snapshot.zones}
         />
       </div>
-      <div aria-label="Collaboration tables" className="grid gap-2 md:hidden">
+      <div aria-label="Collaboration pods" className="grid gap-2 md:hidden">
         {snapshot.zones.map((zone) => {
           const occupied = snapshot.roster.filter((entry) => entry.zone_id === zone.id).length;
           const atZone = snapshot.roster.some(

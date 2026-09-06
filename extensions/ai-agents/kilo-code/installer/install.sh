@@ -2,10 +2,10 @@
 # Install/remove the local Kilo server plugin without editing user JSONC config.
 # Kilo auto-discovers only *.ts/*.js files directly under plugin/. Keep helper
 # modules in a managed subdirectory and install one top-level entrypoint.
-set -u
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || exit 0)"
-ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || exit 0)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)"
 SOURCE="${ROOT}/src"
 ENTRYPOINT="${ROOT}/installer/entrypoint.ts"
 PLUGIN_ROOT="${KILO_PLUGIN_DIR:-${HOME}/.config/kilo/plugin}"
@@ -18,19 +18,22 @@ if [ "${1:-}" = "--uninstall" ]; then
       rm -rf "$TARGET" 2>/dev/null || true
       rm -f "$ENTRY_TARGET" 2>/dev/null || true
       ;;
-    *) echo "refusing to remove an unrecognised Kilo plugin path" >&2 ;;
+    *) echo "refusing to remove an unrecognised Kilo plugin path" >&2; exit 2 ;;
   esac
   exit 0
 fi
 
-[ -d "$SOURCE" ] && [ -f "$ENTRYPOINT" ] || exit 0
+[ -d "$SOURCE" ] && [ -f "$ENTRYPOINT" ] || {
+  echo "Kilo adapter resources are incomplete: expected $SOURCE and $ENTRYPOINT" >&2
+  exit 1
+}
 TMP="${TARGET}.tmp-$$"
 ENTRY_TMP="${ENTRY_TARGET}.tmp-$$"
-rm -rf "$TMP" "$ENTRY_TMP" 2>/dev/null || true
-mkdir -p "$PLUGIN_ROOT" 2>/dev/null || exit 0
-cp -R "$SOURCE" "$TMP" 2>/dev/null || { rm -rf "$TMP"; exit 0; }
-cp "$ENTRYPOINT" "$ENTRY_TMP" 2>/dev/null || { rm -rf "$TMP" "$ENTRY_TMP"; exit 0; }
-rm -rf "$TARGET" 2>/dev/null || true
-mv "$TMP" "$TARGET" 2>/dev/null || rm -rf "$TMP"
-mv "$ENTRY_TMP" "$ENTRY_TARGET" 2>/dev/null || rm -f "$ENTRY_TMP"
+rm -rf "$TMP" "$ENTRY_TMP"
+mkdir -p "$PLUGIN_ROOT"
+cp -R "$SOURCE" "$TMP"
+cp "$ENTRYPOINT" "$ENTRY_TMP"
+rm -rf "$TARGET"
+mv "$TMP" "$TARGET"
+mv "$ENTRY_TMP" "$ENTRY_TARGET"
 exit 0

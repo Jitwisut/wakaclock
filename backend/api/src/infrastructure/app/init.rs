@@ -26,6 +26,7 @@ use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
+use crate::services::ai_certification::AiCertificationService;
 use crate::services::ai_diagnostics::AiDiagnosticsService;
 use crate::services::ai_stats::AiStatsService;
 use crate::services::ai_usage::AiUsageService;
@@ -94,6 +95,7 @@ pub struct AppState {
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
     pub ai_stats_service: Arc<AiStatsService>,
     pub ai_diagnostics_service: Arc<AiDiagnosticsService>,
+    pub ai_certification_service: Arc<AiCertificationService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
     pub billing_service: Arc<BillingService>,
     pub ai_usage_service: Arc<AiUsageService>,
@@ -243,6 +245,10 @@ pub async fn create_app_state() -> Result<AppState> {
     // Initialise Services
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
     let ai_diagnostics_service = Arc::new(AiDiagnosticsService::with_postgres(postgres.clone()));
+    let ai_certification_service =
+        Arc::new(AiCertificationService::builtin().map_err(|error| {
+            anyhow::anyhow!("failed to load AI certification catalog: {error}")
+        })?);
     let account_analytics_service =
         Arc::new(AccountAnalyticsService::new(account_analytics_repo.clone()));
     let authorization_service = Arc::new(AuthorizationService::new(postgres.clone()));
@@ -359,6 +365,7 @@ pub async fn create_app_state() -> Result<AppState> {
         coworking_session_repo,
         ai_stats_service,
         ai_diagnostics_service,
+        ai_certification_service,
         account_analytics_service,
         billing_service,
         ai_usage_service,

@@ -174,7 +174,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit -p ./",
     "test": "vitest run",
-    "build:resources": "node scripts/copy-ai-agents.js",
+    "build:resources": "node scripts/copy-ai-agents.js && node scripts/generate-ai-bundle-manifest.js resources/ai-agents",
     "package:target": "node scripts/package-target.js",
     "generate:cli-manifest": "node scripts/generate-cli-manifest.js",
     "vscode:prepublish": "npm run compile && npm run build:resources"

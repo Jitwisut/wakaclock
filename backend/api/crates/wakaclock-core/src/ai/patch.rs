@@ -1,3 +1,4 @@
+use crate::broker::BrokerChangeKind;
 use serde::{Deserialize, Serialize};
 
 /// Net line counts for one file's patch. Counts hunk-body `+`/`-` lines only —
@@ -75,6 +76,7 @@ pub struct ApplyPatchFileChange {
     /// Set only when a `*** Move to:` marker renames the file this section started
     /// with `*** Update File:`.
     pub previous_path: Option<String>,
+    pub change_kind: BrokerChangeKind,
     pub delta: LineDelta,
 }
 
@@ -88,17 +90,25 @@ pub fn parse_apply_patch(text: &str) -> Vec<ApplyPatchFileChange> {
     let mut current: Option<ApplyPatchFileChange> = None;
 
     for line in text.lines() {
-        if let Some(path) = line
+        let marker = line
             .strip_prefix("*** Update File: ")
-            .or_else(|| line.strip_prefix("*** Add File: "))
-            .or_else(|| line.strip_prefix("*** Delete File: "))
-        {
+            .map(|path| (path, BrokerChangeKind::Modify))
+            .or_else(|| {
+                line.strip_prefix("*** Add File: ")
+                    .map(|path| (path, BrokerChangeKind::Create))
+            })
+            .or_else(|| {
+                line.strip_prefix("*** Delete File: ")
+                    .map(|path| (path, BrokerChangeKind::Delete))
+            });
+        if let Some((path, change_kind)) = marker {
             if let Some(change) = current.take() {
                 out.push(change);
             }
             current = Some(ApplyPatchFileChange {
                 path: path.to_string(),
                 previous_path: None,
+                change_kind,
                 delta: LineDelta::default(),
             });
             continue;
@@ -107,6 +117,7 @@ pub fn parse_apply_patch(text: &str) -> Vec<ApplyPatchFileChange> {
             if let Some(change) = current.as_mut() {
                 change.previous_path =
                     Some(std::mem::replace(&mut change.path, new_path.to_string()));
+                change.change_kind = BrokerChangeKind::Rename;
             }
             continue;
         }
@@ -257,14 +268,17 @@ mod tests {
 
         assert_eq!(changes[0].path, "src/a.py");
         assert_eq!(changes[0].previous_path, None);
+        assert_eq!(changes[0].change_kind, BrokerChangeKind::Modify);
         assert_eq!(changes[0].delta.added, 2);
         assert_eq!(changes[0].delta.deleted, 1);
 
         assert_eq!(changes[1].path, "src/b.py");
+        assert_eq!(changes[1].change_kind, BrokerChangeKind::Create);
         assert_eq!(changes[1].delta.added, 2);
         assert_eq!(changes[1].delta.deleted, 0);
 
         assert_eq!(changes[2].path, "src/c.py");
+        assert_eq!(changes[2].change_kind, BrokerChangeKind::Delete);
         assert_eq!(changes[2].delta.added, 0);
         assert_eq!(changes[2].delta.deleted, 3);
     }
@@ -281,6 +295,7 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, "new/name.py");
         assert_eq!(changes[0].previous_path.as_deref(), Some("old/name.py"));
+        assert_eq!(changes[0].change_kind, BrokerChangeKind::Rename);
         assert_eq!(changes[0].delta.added, 1);
         assert_eq!(changes[0].delta.deleted, 1);
     }

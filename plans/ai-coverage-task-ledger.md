@@ -67,14 +67,14 @@ Owner: client/core + integration/release · Effort รวม: 4–7 วันท
 
 | ID | งานและผลส่งมอบ | สถานะ | ขึ้นกับ | เกณฑ์ปิด |
 | --- | --- | --- | --- | --- |
-| F3-01 | Registry contract สำหรับ aliases/runtimes/capabilities/install resources | implemented | F0-06 | ตรวจ uniqueness, resource existence, supported schema ได้ |
-| F3-02 | Registry-driven CLI parser factory/setup/status/uninstall dispatch | in_progress | F3-01 | manifest ที่ไม่มี implementation ไม่แสดง installable/working |
-| F3-03 | Extension ลด duplicate AI lists ใช้ typed CLI contract | in_progress | F3-02 | CLI/VS Code รายการและ outcomes ตรงกัน |
-| F3-04 | Structured config merge, ownership ledger, atomic transaction/lock | implemented | F3-02 | preserve hooks, corrupt config และ concurrent setup tests ผ่าน |
-| F3-05 | Stable bundle/version/checksum/update/rollback และ resource verification | in_progress | F3-04 | VSIX update ไม่ทำ path ขาด; runtime ใช้ artifact ที่ผ่าน tests |
-| F3-06 | Per-OS service/hook dependencies และ restart outside-editor test | planned | F3-05 | macOS/Linux/Windows เฉพาะ tuple ที่รับรองติดตั้งใช้งานจริงได้ |
-| F3-07 | Uninstall ref-count/ownership, repeat setup และ partial batch outcome | implemented | F3-04, F3-06 | ไม่ลบ user files/other adapters; failures ไม่ถูกกลบเป็น success |
-| F3-08 | Onboarding consent/health integration และ setup runbook | in_progress | F2-03, F2-04, F3-03, F3-07 | first install/repair/update/uninstall flow ตรวจได้จาก UI/CLI |
+| F3-01 | Registry contract สำหรับ aliases/runtimes/capabilities/install resources | validated locally | F0-06 | ตรวจ uniqueness, resource existence, supported schema ได้ |
+| F3-02 | Registry-driven CLI parser factory/setup/status/uninstall dispatch | validated locally | F3-01 | manifest ที่ไม่มี implementation ไม่แสดง installable/working |
+| F3-03 | Extension ลด duplicate AI lists ใช้ typed CLI contract | validated locally | F3-02 | CLI/VS Code รายการและ outcomes ตรงกัน |
+| F3-04 | Structured config merge, ownership ledger, atomic transaction/lock | validated locally | F3-02 | preserve hooks, corrupt config และ concurrent setup tests ผ่าน |
+| F3-05 | Stable bundle/version/checksum/update/rollback และ resource verification | validated locally | F3-04 | VSIX update ไม่ทำ path ขาด; runtime ใช้ artifact ที่ผ่าน tests |
+| F3-06 | Per-OS service/hook dependencies และ restart outside-editor test | validated locally; live gate | F3-05 | deterministic manifest/preflight/post-start probe ผ่าน; live OS restart matrix remains release evidence |
+| F3-07 | Uninstall ref-count/ownership, repeat setup และ partial batch outcome | validated locally | F3-04, F3-06 | ไม่ลบ user files/other adapters; failures ไม่ถูกกลบเป็น success |
+| F3-08 | Onboarding consent/health integration และ setup runbook | validated locally | F2-03, F2-04, F3-03, F3-07 | first install/repair/update/uninstall flow ตรวจได้จาก UI/CLI |
 
 ## 6. F4 — Certification infrastructure
 
@@ -82,12 +82,12 @@ Owner: integration + backend/release · Effort รวม: 4–7 วันทำ�
 
 | ID | งานและผลส่งมอบ | ขึ้นกับ | เกณฑ์ปิด |
 | --- | --- | --- | --- |
-| F4-01 | Adapter certification schema + privacy validator | F0-07, F3-01 | missing evidence/fixture-only/PII artifact ไม่ผ่าน |
-| F4-02 | Live harness ต่อ source→broker→API→dashboard พร้อม ground truth | F1, F2, F3, F4-01 | ปล่อย artifact เฉพาะสิ่งที่รันจริงและแยก skipped/failed |
-| F4-03 | Reviewed certification catalog ใน release artifact + service lookup | F4-01 | client self-claim ไม่ promote; valid matching artifact promote ได้ |
-| F4-04 | Tuple matching, version freshness, revocation และ enum mapping | F4-03, F3-01 | mismatch/expired/revoked ไม่ Verified; old enum อ่านได้ |
-| F4-05 | Import historical Claude/Codex records และ list missing evidence | F4-01 | ไม่เติมวันที่/version/pass ที่ไม่ปรากฏในหลักฐาน |
-| F4-06 | CLI/API/frontend conformance ของ maturity กับ runtime health | F2, F4-04 | certified+stopped แสดง certified/degraded ไม่แสดง healthy |
+| F4-01 | validated locally | Adapter certification schema + privacy validator; missing evidence/fixture-only/PII artifact ไม่ผ่าน |
+| F4-02 | validated locally; live gate | Metadata-only isolated harness emits pending artifacts and separates skipped/failed; real authenticated source→broker→API→dashboard remains a release gate |
+| F4-03 | validated locally; no production promotion yet | Reviewed catalog is embedded in the release artifact and loaded by the service; current entries are historical only |
+| F4-04 | validated locally | Exact tuple, freshness, revocation and legacy enum mapping tests pass; mismatch/expired/revoked never become Verified |
+| F4-05 | validated locally | Five v1 records imported as historical evidence without inventing missing tuple fields or test results |
+| F4-06 | validated locally | CLI tuple, API overwrite and frontend capability/runtime conformance are wired; certified live UI proof remains a release gate |
 
 ตำแหน่งใหม่ที่เสนอ: `scripts/ai-coverage/` สำหรับ harness/validator, `docs/ai-certifications/` สำหรับ sanitized artifacts และ `backend/api/src/services/ai_certification.rs` สำหรับ policy/catalog lookup ทั้งหมดต้องสร้างและ wire จริงก่อนอ้างว่าใช้งานได้
 
@@ -115,6 +115,39 @@ Owner: integration · งานทุกตัวต้องใช้ checklist
 | F5-16 | Windsurf/Antigravity integration surveys | F4, F5 wave exit | verified official/current source; ไม่ใช้ process inference |
 | F5-17 | Kimi/standalone Deep Code evidence inventory | parked ตาม roadmap | เริ่ม implementation เมื่อมี real surface/environment; ไม่ตี provider เป็น client |
 | F5-18 | Generic MCP wrapper/SDK contract และ custom producer example | F1, F3, F4 | actual successful file tool calls ส่ง metadata อัตโนมัติ ไม่พึ่ง prompt เตือน |
+
+### สถานะการลงมือ F5-02 (2026-09-06)
+
+F5-02 อยู่สถานะ `implemented` ในส่วน local parser/broker contract และยังไม่ใช่
+`validated` หรือ `certified` สำหรับ Codex CLI รุ่นปัจจุบัน:
+
+- รองรับ `session_meta` ที่มี `id`, `session_id` หรือทั้งสองค่า และอ่าน provider
+  จาก `model_provider` โดยไม่ทำให้ record หายเงียบ
+- คู่ `custom_tool_call`/completion ที่ข้ามรอบ bounded scan จะถูก rewind cursor
+  กลับไปที่ call; failed/cancelled calls ถูกตัดออก และ completion ซ้ำจาก
+  `patch_apply_end` กับ `custom_tool_call_output` ถูก emit เพียงครั้งเดียว
+- apply patch แบบหลายไฟล์รักษา create/modify/delete/rename และ previous path
+  จนถึง broker envelope
+- automatic sync แยก skip รายการที่อยู่นอก `project_root` ออกจากความล้มเหลวทั้งรอบ,
+  acknowledge เฉพาะ event ที่ถูกส่งเข้า broker จริง และแยก event ID ของ Delete+Add
+  path เดิมใน tool call เดียวเพื่อป้องกัน batch conflict
+- manifest ถูกลดเป็น `scaffold` เพราะหลักฐานเดิมคือ `0.151.0-alpha.7.1` แต่
+  executable ปัจจุบันคือ `0.153.4`; Desktop/IDE ยังต้องมี tuple แยก
+
+รายละเอียดและ local gates อยู่ใน [F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md)
+
+### สถานะการลงมือ F5-01 และ F5-03 (2026-09-06)
+
+- F5-01 Claude Code อยู่สถานะ `validated locally`: executable `2.1.246` และ
+  transcript ปัจจุบันถูก replay แบบ dry-run ได้ 33 file-edit events โดยไม่มี
+  malformed-record warning หลังรองรับ non-edit content shapes และ assistant
+  `cwd` fallback แล้ว แต่ native-hook/API/dashboard live certificate ยังไม่ผ่าน
+- F5-03 Gemini CLI อยู่สถานะ `survey-blocked`: พบ executable `0.58.0` แต่ไม่มี
+  JSON/JSONL payload/session ให้ตรวจใน `$HOME/.gemini`; ห้ามสร้าง synthetic
+  fixture หรือเลื่อนเป็น verified จนกว่าจะมี authenticated disposable run
+
+รายละเอียดอยู่ใน [F5-01 refresh](../docs/ai-coverage-f5-01-claude-refresh-2026-09-06.md)
+และ [F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md)
 
 Effort: baseline Claude/Codex/Gemini รวม 6–12 วัน; adapter runtime ถัดไป survey 1–3 วันและ implementation/certification 3–8 วันเมื่อมี evidence surface ส่วน unavailable/closed tool ให้รายงาน survey outcome แล้วทำงานส่วนอื่นต่อ
 
