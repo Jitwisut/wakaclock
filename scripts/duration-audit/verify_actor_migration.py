@@ -28,6 +28,7 @@ PRODUCTION_ROOTS = (
 ALLOWED_FILES = {
     "backend/api/crates/wakaclock-cli/src/broker.rs",
     "backend/api/crates/wakaclock-cli/src/main.rs",
+    "backend/api/crates/wakaclock-core/src/api_client.rs",
     "backend/api/crates/wakaclock-core/src/heartbeat.rs",
     "backend/api/crates/wakaclock-ls/src/main.rs",
     "backend/api/src/handlers/v1/heartbeats.rs",
