@@ -414,8 +414,8 @@ fn ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
     )
 }
 
-/// `Heartbeat::ai_event_fingerprint` remains a privacy-safe audit field, but it is
-/// intentionally not used as an identity key. See the ingestion comment above.
+// `Heartbeat::ai_event_fingerprint` remains a privacy-safe audit field, but it is
+// intentionally not used as an identity key. See the ingestion comment above.
 
 /// Normalize the lexical tail for the fingerprint conformance tests. The fingerprint
 /// is never used as authoritative ingestion identity.
