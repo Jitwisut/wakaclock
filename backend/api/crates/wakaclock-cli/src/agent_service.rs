@@ -705,6 +705,10 @@ mod tests {
             1
         );
         assert!(a.contains("/opt/atoaxis/wakaclock"));
+        // launchd does not reliably inherit HOME, so only the macOS plist pins it
+        // explicitly (see manifest_content's macOS branch); systemd and Windows
+        // manifests have no equivalent key.
+        #[cfg(target_os = "macos")]
         assert!(a.contains(
             "<key>EnvironmentVariables</key><dict><key>HOME</key><string>/home/u</string>"
         ));
@@ -772,11 +776,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let lock = dir.join("agent.lock");
 
-        assert_eq!(running_probe_at(lock.clone()).unwrap(), false);
+        assert!(!running_probe_at(lock.clone()).unwrap());
         fs::write(&lock, "not-a-pid\n").unwrap();
         assert!(running_probe_at(lock.clone()).is_err());
         fs::write(&lock, "0\n").unwrap();
-        assert_eq!(running_probe_at(lock).unwrap(), false);
+        assert!(!running_probe_at(lock).unwrap());
 
         let _ = fs::remove_dir_all(&dir);
     }
