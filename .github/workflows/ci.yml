@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - "feature/**"
+      - "features/**"
       - "phase3/**"
       - "phase4/**"
       - "phase7/**"
