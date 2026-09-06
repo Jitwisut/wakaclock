@@ -506,20 +506,49 @@ async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// Writes a legacy-alias service manifest at whatever path this platform's
+/// `agent_service::manifest_path()` resolves to, in the shape an old CLI
+/// wrote, so `manifest_uses_legacy_alias()` finds it regardless of which OS
+/// runs the test (CI is Linux; local development is often macOS).
+fn write_legacy_alias_manifest(home: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let launch_agents = home.join("Library/LaunchAgents");
+        fs::create_dir_all(&launch_agents).unwrap();
+        fs::write(
+            launch_agents.join("com.atoaxis.wakaclock.agent.plist"),
+            "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>agent</string><string>run</string></array>\n</dict></plist>\n",
+        )
+        .unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let systemd_dir = home.join(".config/systemd/user");
+        fs::create_dir_all(&systemd_dir).unwrap();
+        fs::write(
+            systemd_dir.join("atoaxis-wakaclock-agent.service"),
+            "[Service]\nType=simple\nExecStart=/usr/local/bin/wakaclock agent run\nRestart=always\n",
+        )
+        .unwrap();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        fs::create_dir_all(home.join(".wakaclock")).unwrap();
+        fs::write(
+            home.join(".wakaclock/agent-task.txt"),
+            "\"C:\\bin\\wakaclock.exe\" agent run\r\n",
+        )
+        .unwrap();
+    }
+}
+
 /// p0.A4 — `wakaclock doctor ai --json` alone surfaces each pipeline gap: a
 /// service manifest on the legacy alias, and a recorded 402 classified as
 /// `payment_402` rather than an auth or network failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
     let home = temp_home("p0a4");
-    let launch_agents = home.join("Library/LaunchAgents");
-    fs::create_dir_all(&launch_agents).unwrap();
-    // A legacy-alias manifest (the shape an old CLI wrote).
-    fs::write(
-        launch_agents.join("com.atoaxis.wakaclock.agent.plist"),
-        "<plist version=\"1.0\"><dict>\n  <key>ProgramArguments</key><array><string>/usr/local/bin/wakaclock</string><string>agent</string><string>run</string></array>\n</dict></plist>\n",
-    )
-    .unwrap();
+    write_legacy_alias_manifest(&home);
     fs::create_dir_all(home.join(".wakaclock")).unwrap();
     fs::write(
         home.join(".wakaclock/last-delivery-failure.json"),
