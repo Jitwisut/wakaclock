@@ -22,8 +22,18 @@ pub struct GitInfo {
 pub fn discover(entity_path: &str) -> Option<GitInfo> {
     let path = Path::new(entity_path);
 
-    // ถ้า entity เป็นไฟล์ ให้เริ่มจาก parent folder
-    let start = if path.is_file() { path.parent()? } else { path };
+    // เริ่มค้นจาก "โฟลเดอร์แรกที่มีอยู่จริง" ไล่ขึ้นจาก entity
+    //
+    // เดิมใช้ `path.is_file()` ซึ่งคืน false ทั้งกรณีที่เป็นโฟลเดอร์ **และ** กรณีที่ path
+    // ไม่มีอยู่จริง แล้วส่ง path เต็ม (รวมชื่อไฟล์) เข้า `gix::discover` ซึ่งล้มเหลวทันที
+    // ai-sync อ่าน session log ย้อนหลัง ไฟล์ที่ agent แก้จึงมักถูกลบหรือย้ายไปแล้ว ทำให้
+    // git detection พังทั้งที่ path นั้นอยู่ใน repo และ heartbeat ตกไปใช้ชื่อโฟลเดอร์ที่
+    // ใกล้ที่สุดแทน — `frontend/app/lib/ga.ts` กลายเป็น project `app`
+    let start = if path.is_dir() {
+        path
+    } else {
+        path.ancestors().skip(1).find(|ancestor| ancestor.is_dir())?
+    };
 
     let repo = gix::discover(start).ok()?;
 
@@ -155,6 +165,31 @@ mod tests {
 
         let entity = repo.join("README.md");
         let info = discover(entity.to_str().unwrap()).expect("discover succeeds");
+
+        assert_eq!(info.project, "wakaclock");
+        assert_eq!(info.branch, "main");
+    }
+
+    /// ai-sync อ่าน session log ของ AI agent ย้อนหลัง ไฟล์ที่ agent แก้จึงมักถูกลบหรือ
+    /// เปลี่ยนชื่อไปแล้วตอน sync การที่ไฟล์ไม่มีอยู่ต้องไม่ทำให้หา repo ไม่เจอ มิฉะนั้น
+    /// heartbeat จะตกไปใช้ชื่อโฟลเดอร์ใกล้ ๆ แทน (`frontend/app` -> project `app`)
+    #[test]
+    fn missing_file_inside_repo_still_resolves_project_and_branch() {
+        let tmp = TempDir::new("missing-file");
+        let repo = tmp.0.join("wakaclock");
+        fs::create_dir_all(repo.join("frontend/app/lib")).unwrap();
+
+        run_git(&repo, &["init", "-q", "-b", "main"]);
+        fs::write(repo.join("README.md"), "hello").unwrap();
+        run_git(&repo, &["add", "README.md"]);
+        run_git(&repo, &["commit", "-q", "-m", "init"]);
+
+        // ไฟล์นี้ไม่เคยถูกสร้าง — จำลองไฟล์ที่ agent แก้แล้วถูกลบก่อน ai-sync จะทำงาน
+        let missing = repo.join("frontend/app/lib/ga.ts");
+        assert!(!missing.exists(), "fixture ต้องเป็น path ที่ไม่มีอยู่จริง");
+
+        let info = discover(missing.to_str().unwrap())
+            .expect("ไฟล์ที่หายไปยังต้องหา repo เจอจากโฟลเดอร์แม่");
 
         assert_eq!(info.project, "wakaclock");
         assert_eq!(info.branch, "main");

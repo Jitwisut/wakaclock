@@ -3,7 +3,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 use uuid::Uuid;
@@ -438,10 +438,117 @@ impl ActivityTimelineService {
         start: f64,
         end: f64,
     ) -> Result<Vec<CanonicalInterval>> {
-        Ok(canonicalize_bridged(
+        let mut intervals = canonicalize_bridged(
             &self.intervals(user_id, start, end).await?,
             self.bridge,
-        ))
+        );
+        self.apply_project_merges(user_id, &mut intervals).await?;
+        Ok(intervals)
+    }
+
+    /// Fold merged project names into their target, for the timeline as well as the
+    /// project list.
+    ///
+    /// `ProjectIdentityService::resolve_project_id` already canonicalises the name when a
+    /// heartbeat is *written*, so anything recorded after a merge exists arrives with the
+    /// target's identity. Rows written before it keep the id they were minted with, and
+    /// this view groups by `project_id` — so renaming alone would leave two rows carrying
+    /// the same label. The id has to travel with the name, which is why this reads the
+    /// target's persisted identity rather than re-deriving one.
+    async fn apply_project_merges(
+        &self,
+        user_id: Uuid,
+        intervals: &mut [CanonicalInterval],
+    ) -> Result<()> {
+        if intervals.iter().all(|interval| interval.project.is_none()) {
+            return Ok(());
+        }
+
+        let merges = self.merge_map(user_id).await?;
+        if merges.is_empty() {
+            return Ok(());
+        }
+
+        let identities = self.identity_ids(user_id).await?;
+
+        for interval in intervals.iter_mut() {
+            let Some(target) = interval
+                .project
+                .as_deref()
+                .and_then(|name| merges.get(name))
+                .cloned()
+            else {
+                continue;
+            };
+
+            // Only move the id when the target has a persisted identity. Leaving the old
+            // id in place keeps the row grouped where it already was, which is wrong but
+            // visible; inventing an id would fork the project silently.
+            if let Some(target_id) = identities.get(&target) {
+                interval.project_id = Some(*target_id);
+            }
+            interval.project = Some(target);
+        }
+
+        Ok(())
+    }
+
+    /// Latest merge target per source project name.
+    async fn merge_map(&self, user_id: Uuid) -> Result<HashMap<String, String>> {
+        #[derive(Debug, Row, Deserialize)]
+        struct MergeRow {
+            source_project: String,
+            target_project: String,
+        }
+
+        let rows = self
+            .clickhouse
+            .get_client()
+            .query(
+                "SELECT source_project, argMax(target_project, updated_at) AS target_project
+                 FROM wakaclock.project_merges
+                 WHERE user_id = ?
+                 GROUP BY source_project",
+            )
+            .bind(user_id)
+            .fetch_all::<MergeRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse project merges query error: {error}"))?;
+
+        Ok(rows
+            .into_iter()
+            .filter(|row| !row.target_project.is_empty() && row.source_project != row.target_project)
+            .map(|row| (row.source_project, row.target_project))
+            .collect())
+    }
+
+    /// Persisted project id per canonical name.
+    async fn identity_ids(&self, user_id: Uuid) -> Result<HashMap<String, Uuid>> {
+        #[derive(Debug, Row, Deserialize)]
+        struct IdentityRow {
+            canonical_name: String,
+            #[serde(with = "clickhouse::serde::uuid")]
+            project_id: Uuid,
+        }
+
+        let rows = self
+            .clickhouse
+            .get_client()
+            .query(
+                "SELECT canonical_name, argMax(project_id, version) AS project_id
+                 FROM wakaclock.project_identities
+                 WHERE user_id = ?
+                 GROUP BY canonical_name",
+            )
+            .bind(user_id)
+            .fetch_all::<IdentityRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse project identities query error: {error}"))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.canonical_name, row.project_id))
+            .collect())
     }
 }
 

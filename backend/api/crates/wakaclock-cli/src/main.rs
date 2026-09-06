@@ -4342,7 +4342,17 @@ pub(crate) fn build_ai_heartbeat(
         .as_ref()
         .map(|info| info.project.clone())
         .or_else(|| infer_non_git_project_name(Path::new(&entity_path)))
-        .or_else(|| project_name_from_root(event.project_root.as_deref()));
+        // `project_root` คือ cwd ที่ agent รายงานมาเอง ซึ่งอาจเป็นโฟลเดอร์อะไรก็ได้ —
+        // การรับชื่อมันดื้อ ๆ ทำให้ smoke test ใน `/private/tmp` กลายเป็น project ชื่อ
+        // `tmp` ปนอยู่ใน dashboard ต้องมี marker ยืนยันว่าเป็น root ของโปรเจกต์จริงก่อน
+        // ไม่งั้นปล่อยเป็น NULL ดีกว่ารายงานชื่อที่ไม่ใช่ project ของใครเลย
+        .or_else(|| {
+            event
+                .project_root
+                .as_deref()
+                .filter(|root| has_workspace_marker(root) || has_project_marker(root))
+                .and_then(|root| project_name_from_root(Some(root)))
+        });
     heartbeat.branch = git_info.map(|info| info.branch);
     heartbeat.is_write = true;
     heartbeat.category = Category::Coding;
