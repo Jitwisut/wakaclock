@@ -67,12 +67,23 @@ and loopback endpoint, so it did not send transcript data to the configured API.
 
 ## Live gate still open
 
-The local transcript corpus is useful shape evidence, but it is not a current
-Codex CLI certification run. Before F5-02 can move to `validated`, run a fresh
-authenticated `codex exec` campaign in a disposable workspace with the shipped
-managed bundle and current `0.153.4` executable. The campaign must inspect only
-bounded metadata through broker, API and dashboard and cover single-file,
-multi-file, create/delete/rename, failure/no-op, retry, and native-hook plus
-transcript replay deduplication. Produce a pending artifact first; a human
-reviewer must approve any catalog promotion. Codex Desktop/IDE evidence remains
-an independent F5-04 tuple and must not reuse the CLI result.
+The fresh campaign gate now has partial live evidence: authenticated
+`codex-cli 0.153.4` with the shipped release binary captured 8 events from the
+single-file, multi-file, create/delete/rename and failure/no-op scenarios. A
+separate delivered retry/dedup run accepted one event and replayed it once;
+nested execution remains `not_run`. The first campaign was metadata-only, while
+the retry run exercised the local broker fallback and API delivery path.
+Event-bound API readback found 8 unique Codex transcript rows in the campaign
+window, and the dashboard analytics endpoint returned 200. The certification
+driver still leaves canonical/API/dashboard stages `not_run` until those probes
+are wired into the artifact command.
+
+Before F5-02 can move to `validated`, run the driver with `--deliver`, configured
+API credentials and explicit privacy-safe readback probes. The delivered run
+must include the retry probe (the driver performs a second sync and requires
+`already delivered >= parsed` with `new=0`), repeat after a broker restart,
+record a clean shipped-bundle commit/build digest, produce a pending artifact,
+and receive human review before any catalog promotion. Codex Desktop/IDE
+evidence remains an independent F5-04 tuple and must not reuse the CLI result.
+
+The complete F5-01…F5-18 status matrix is in the [F5 closeout report](ai-coverage-f5-closeout-2026-09-07.md).

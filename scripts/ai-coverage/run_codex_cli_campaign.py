@@ -40,33 +40,40 @@ SCENARIO_IDS = (
 )
 SCENARIO_PROMPTS = {
     "single-file": (
-        "In this disposable workspace, create or modify single.txt with a short marker. "
-        "Do not touch any other file."
+        "In this disposable workspace, use the apply_patch tool (not a shell command) to "
+        "create or modify single.txt with a short marker. Do not touch any other file."
     ),
     "multi-file": (
-        "In this disposable workspace, create or modify multi-a.txt and multi-b.txt with "
-        "short markers. Do not touch any other file."
+        "In this disposable workspace, use one apply_patch tool call (not shell commands) "
+        "to create or modify multi-a.txt and multi-b.txt with short markers. Do not touch "
+        "any other file."
     ),
     "create-delete-rename": (
-        "In this disposable workspace, create created.txt, rename rename-source.txt to "
-        "rename-target.txt, and delete delete-me.txt if it exists. Do not touch any other file."
+        "In this disposable workspace, use the apply_patch tool (not shell commands) to "
+        "create created.txt, move rename-source.txt to rename-target.txt, and delete "
+        "delete-me.txt. Do not touch any other file."
     ),
     "failure-no-op": (
         "In this disposable workspace, do not change any files. Explain what you would do "
         "without invoking a file mutation tool."
     ),
     "retry-dedup": (
-        "In this disposable workspace, make one small change to retry.txt and then stop. "
-        "Do not change any other file."
+        "In this disposable workspace, use the apply_patch tool (not a shell command) to "
+        "make one small change to retry.txt and then stop. Do not change any other file."
     ),
     "nested-execution": (
-        "In this disposable workspace, make one small change to nested.txt through the normal "
-        "file-edit path and stop. Do not change any other file."
+        "In this disposable workspace, use the apply_patch tool to make one small change to "
+        "nested.txt through the normal file-edit path and stop. Do not change any other file."
     ),
 }
 VERSION_RE = re.compile(r"\bcodex-cli\s+([0-9A-Za-z._-]+)\b")
-PARSED_RE = re.compile(r"\b(\d+) event\(s\) parsed since last scan\b")
-BROKER_RE = re.compile(r"\bbroker accepted (\d+) \(duplicates (\d+)\)\b")
+THREAD_ID_RE = re.compile(r'"thread_id"\s*:\s*"([A-Za-z0-9_-]{8,128})"')
+PARSED_RE = re.compile(r"\b(\d+) event\(s\) parsed since last (?:scan|sync)\b")
+PARSED_DETAIL_RE = re.compile(
+    r"\b(\d+) event\(s\) parsed since last (?:scan|sync), "
+    r"(\d+) already delivered, (\d+) new\b"
+)
+BROKER_RE = re.compile(r"\bbroker accepted (\d+) \(duplicates (\d+)\)")
 MAX_PROCESS_OUTPUT = 2 * 1024 * 1024
 
 
@@ -115,6 +122,7 @@ def newest_changed_session(
     codex_home: Path,
     before: dict[Path, tuple[int, int]],
     started_ns: int,
+    thread_id: str | None = None,
 ) -> Path | None:
     after = snapshot_sessions(codex_home)
     candidates = [
@@ -122,17 +130,36 @@ def newest_changed_session(
         for path, metadata in after.items()
         if metadata[0] >= started_ns and (path not in before or before[path] != metadata)
     ]
+    if thread_id:
+        thread_candidates = [path for path in candidates if thread_id in path.name]
+        if thread_candidates:
+            candidates = thread_candidates
     return max(candidates, key=lambda path: after[path][0], default=None)
 
 
-def parse_parser_output(output: str) -> tuple[int, int, int]:
-    parsed = sum(int(match.group(1)) for match in PARSED_RE.finditer(output))
+def parse_parser_output(output: str) -> tuple[int, int, int, int, int]:
+    """Extract bounded sync counters without retaining parser output.
+
+    Current CLI builds print the already-delivered/new split.  Keep the older
+    count-only shape as a compatibility fallback because a shipped binary may
+    be one release behind the driver.  The split is required for the retry
+    scenario; a count-only response can never prove replay deduplication.
+    """
+    detailed = list(PARSED_DETAIL_RE.finditer(output))
+    if detailed:
+        parsed = sum(int(match.group(1)) for match in detailed)
+        already_delivered = sum(int(match.group(2)) for match in detailed)
+        new_events = sum(int(match.group(3)) for match in detailed)
+    else:
+        parsed = sum(int(match.group(1)) for match in PARSED_RE.finditer(output))
+        already_delivered = 0
+        new_events = parsed
     accepted = 0
     duplicates = 0
     for match in BROKER_RE.finditer(output):
         accepted += int(match.group(1))
         duplicates += int(match.group(2))
-    return parsed, accepted, duplicates
+    return parsed, accepted, duplicates, already_delivered, new_events
 
 
 def empty_summary() -> dict[str, Any]:
@@ -162,9 +189,13 @@ def scenario_status(scenario: str, command_ok: bool, parsed: int, session_found:
         return "failed"
     if scenario == "failure-no-op":
         return "passed" if parsed == 0 else "failed"
-    if scenario in {"retry-dedup", "nested-execution"}:
-        # A single parser pass cannot prove retry identity or nested execution
-        # lineage. Keep these rows honest until the delivery/readback probes run.
+    if scenario == "nested-execution":
+        # The Codex CLI transcript does not expose a stable parent/child
+        # execution contract that this driver can validate safely.
+        return "not_run"
+    if scenario == "retry-dedup":
+        # The caller upgrades this row only after a second delivered sync proves
+        # that the same event is already delivered and no new event is emitted.
         return "not_run"
     return "passed" if parsed > 0 else "failed"
 
@@ -177,6 +208,9 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         for value in os.environ.get("WAKACLOCK_CERTIFICATION_SCENARIOS", "").split(",")
         if value.strip()
     ]
+    unknown_configured = sorted(set(configured_scenarios) - set(SCENARIO_IDS))
+    if unknown_configured:
+        raise ValueError("unsupported certification scenario")
     selected = args.scenario_ids or configured_scenarios or list(SCENARIO_IDS)
     summary["scenarios"] = {scenario: "not_run" for scenario in selected}
 
@@ -234,6 +268,21 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
     for scenario in selected:
         scenario_root = workspace / f"scenario-{scenario.replace('-', '_')}"
         scenario_root.mkdir(parents=True, exist_ok=True)
+        try:
+            initialized = run_process(
+                ["git", "init", "-q"],
+                cwd=scenario_root,
+                env=process_env,
+                timeout=args.timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            summary["scenarios"][scenario] = "failed"
+            add_blocker(summary, "disposable_repo_init_failed")
+            continue
+        if initialized.returncode != 0:
+            summary["scenarios"][scenario] = "failed"
+            add_blocker(summary, "disposable_repo_init_failed")
+            continue
         if scenario == "create-delete-rename":
             # Seed the files inside the same disposable root passed to Codex.
             # Seeding the parent workspace would make the rename/delete prompt
@@ -248,8 +297,7 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             "--json",
             "--cd",
             str(scenario_root),
-            "--sandbox",
-            "workspace-write",
+            "--skip-git-repo-check",
             "--approve-for-me",
             SCENARIO_PROMPTS[scenario],
         ]
@@ -263,8 +311,18 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             summary["scenarios"][scenario] = "failed"
             add_blocker(summary, "codex_output_too_large")
             continue
+        if completed.returncode != 0:
+            summary["scenarios"][scenario] = "failed"
+            add_blocker(summary, "codex_exec_failed")
+            continue
 
-        session = newest_changed_session(codex_home, before, started_ns)
+        thread_match = THREAD_ID_RE.search(completed.stdout)
+        session = newest_changed_session(
+            codex_home,
+            before,
+            started_ns,
+            thread_id=thread_match.group(1) if thread_match else None,
+        )
         if session is None:
             summary["scenarios"][scenario] = "failed"
             add_blocker(summary, "codex_transcript_not_captured")
@@ -296,7 +354,7 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             add_blocker(summary, "parser_probe_failed")
             continue
         parser_output = f"{parsed_result.stdout}\n{parsed_result.stderr}"
-        parsed, accepted, duplicates = parse_parser_output(parser_output)
+        parsed, accepted, duplicates, _already_delivered, new_events = parse_parser_output(parser_output)
         summary["metrics"]["captured"] += parsed
         summary["metrics"]["producer_events"] += parsed
         summary["metrics"]["broker_accepted"] += accepted
@@ -304,7 +362,7 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         summary["stages"]["source_capture"] = "passed"
         if parsed > 0 or scenario == "failure-no-op":
             summary["stages"]["producer_event"] = "passed"
-        summary["scenarios"][scenario] = scenario_status(
+        status = scenario_status(
             scenario,
             parsed_result.returncode == 0,
             parsed,
@@ -313,6 +371,60 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         if parsed_result.returncode != 0:
             add_blocker(summary, "parser_probe_failed")
 
+        if scenario == "retry-dedup":
+            if not args.deliver:
+                add_blocker(summary, "retry_dedup_requires_delivery")
+            elif (
+                parsed_result.returncode != 0
+                or session is None
+                or parsed == 0
+                or new_events == 0
+                or accepted == 0
+            ):
+                status = "failed"
+                add_blocker(summary, "retry_dedup_initial_sync_failed")
+            else:
+                # A second non-dry sync exercises the durable delivered-event
+                # identity store. It must report the original event as already
+                # delivered and produce zero new events; broker duplicate counts
+                # alone are insufficient because they can hide a parser replay.
+                try:
+                    replay_result = run_process(
+                        sync_command,
+                        cwd=sandbox,
+                        env=process_env,
+                        timeout=args.timeout,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    replay_result = None
+                if replay_result is None:
+                    status = "failed"
+                    add_blocker(summary, "retry_dedup_probe_failed")
+                else:
+                    replay_output = f"{replay_result.stdout}\n{replay_result.stderr}"
+                    replay_parsed, replay_accepted, replay_duplicates, replay_already, replay_new = parse_parser_output(
+                        replay_output
+                    )
+                    summary["metrics"]["broker_accepted"] += replay_accepted
+                    summary["metrics"]["duplicates"] += replay_duplicates
+                    summary["metrics"]["replayed"] += replay_already
+                    if (
+                        replay_result.returncode == 0
+                        and replay_parsed > 0
+                        and replay_already >= replay_parsed
+                        and replay_new == 0
+                    ):
+                        status = "passed"
+                    else:
+                        status = "failed"
+                        add_blocker(summary, "retry_dedup_not_proven")
+            summary["scenarios"][scenario] = status
+        elif scenario == "nested-execution":
+            summary["scenarios"][scenario] = status
+            add_blocker(summary, "nested_execution_probe_not_configured")
+        else:
+            summary["scenarios"][scenario] = status
+
     if args.deliver:
         if not os.environ.get("WAKACLOCK_SERVER_URL"):
             add_blocker(summary, "api_url_not_configured")
@@ -320,7 +432,12 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             add_blocker(summary, "api_key_not_configured")
         if summary["metrics"]["broker_accepted"] > 0:
             summary["stages"]["broker_accept"] = "passed"
-            summary["stages"]["api_delivery"] = "passed"
+            # `wakaclock ai sync` reports the local broker inbox acknowledgement.
+            # That durable local acceptance is deliberately not treated as proof
+            # that the API received the event; only an explicit readback probe can
+            # promote the delivery stage.
+            summary["stages"]["api_delivery"] = "not_run"
+            add_blocker(summary, "api_delivery_readback_not_configured")
         else:
             summary["stages"]["broker_accept"] = "not_run"
             summary["stages"]["api_delivery"] = "not_run"

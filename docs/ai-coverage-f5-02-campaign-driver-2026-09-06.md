@@ -17,8 +17,14 @@ an artifact or change the reviewed catalog.
 - Copies each newly written transcript only into the temporary certification
   sandbox, replays it through the shipped CLI parser, and retains only event
   counters and stage/scenario statuses in stdout.
+- For `retry-dedup`, a delivered campaign performs a second sync and requires
+  the same parsed event to be reported as already delivered with zero new
+  events. `nested-execution` stays `not_run` until Codex exposes a stable,
+  privacy-safe parent/child execution identity.
 - Never places Codex stdout, prompts, patches, source, account paths, or
   credentials in the certification result.
+- Treats a local broker acknowledgement as `broker_accept` only; it never marks
+  `api_delivery` passed without an explicit API readback probe.
 - Leaves canonical and dashboard stages as `not_run` until an explicit
   privacy-safe readback probe is configured. A local parser pass cannot imply
   backend delivery or UI visibility.

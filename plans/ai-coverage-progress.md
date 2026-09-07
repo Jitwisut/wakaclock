@@ -86,7 +86,7 @@ See [the F4 implementation record](../docs/ai-coverage-f4-closeout-2026-09-06.md
 An approved live tuple still needs an authenticated real-tool run, shipped
 build digest, backend/dashboard readback and human review.
 
-## F5 — Baseline agents (F5-01/F5-02/F5-03 in progress)
+## F5 — Baseline agents (local work complete; live gates blocked)
 
 F5-01 Claude Code has a current local transcript-shape refresh for executable
 `2.1.246`. The parser now ignores valid non-edit content shapes without false
@@ -105,19 +105,24 @@ current `codex-cli 0.153.4` tuple is not yet live-certified; the prior
 `0.151.0-alpha.7.1` run remains historical evidence. Desktop/IDE transcript
 evidence is not used as a CLI certificate.
 
-The parser, patch, and broker regression gates pass. The remaining F5-02 gate is
-a fresh authenticated `codex exec` campaign with the shipped bundle, backend and
-dashboard metadata readback, followed by a pending artifact and human review.
-The adapter-specific campaign driver and generic harness hardening are now
-implemented locally; they do not claim that the live gate passed. See the
+The parser, patch, and broker regression gates pass. A fresh authenticated
+`codex exec` campaign with the shipped bundle proves source capture and
+producer parsing for 8 events across the four supported scenarios. A separate
+delivered retry run accepted one event and replayed it once; nested execution
+remains open. Local API readback found 8 unique Codex rows in the campaign
+window and the dashboard endpoint returned 200, but the certification driver
+still leaves these stages `not_run` until event-bound privacy-safe probes are
+wired. The adapter-specific driver now performs a second sync for retry proof
+when a delivered run is enabled. See the [F5 closeout matrix](../docs/ai-coverage-f5-closeout-2026-09-07.md),
 [F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md) and
 [campaign driver record](../docs/ai-coverage-f5-02-campaign-driver-2026-09-06.md).
 
-F5-03 Gemini CLI is survey-blocked on this machine. `gemini 0.58.0` is installed,
-but no JSON/JSONL session payload is present under the local Gemini history/tmp
-roots. No synthetic fixture was added; exact payload inventory and live
-certification require an authenticated disposable run. See the
-[F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md).
+F5-03 Gemini CLI remains survey-blocked on this machine. `gemini 0.58.0` is
+installed and advertises JSON/stream-JSON, session-file and hook surfaces, but
+no authenticated account or real edit payload is available. No synthetic
+fixture was added; exact payload inventory and live certification require an
+authenticated disposable run. See the [F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md)
+and the [F5 closeout matrix](../docs/ai-coverage-f5-closeout-2026-09-07.md).
 
 ## Codex Desktop detection repair
 

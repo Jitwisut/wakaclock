@@ -20,10 +20,16 @@ def make_executable(path: Path, content: str) -> None:
 
 
 class CodexCliCampaignTest(unittest.TestCase):
-    def run_driver(self, args: list[str], sandbox: Path) -> dict[str, object]:
+    def run_driver(
+        self,
+        args: list[str],
+        sandbox: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         env = {
             **os.environ,
             "WAKACLOCK_CERTIFICATION_SANDBOX": str(sandbox),
+            **(extra_env or {}),
         }
         result = subprocess.run(
             [sys.executable, str(SCRIPT), *args],
@@ -81,15 +87,23 @@ if args[:2] == ['login', 'status']:
     print('logged in')
     raise SystemExit(0)
 if args and args[0] == 'exec':
+    if '--sandbox' in args and '--approve-for-me' in args:
+        raise SystemExit(7)
+    if '--skip-git-repo-check' not in args:
+        raise SystemExit(7)
+    if not (Path.cwd() / '.git').is_dir():
+        raise SystemExit(7)
     if 'rename-source.txt' in args[-1]:
         root = Path.cwd()
         if not (root / 'rename-source.txt').is_file() or not (root / 'delete-me.txt').is_file():
             raise SystemExit(7)
     root = Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '09' / '06'
     root.mkdir(parents=True, exist_ok=True)
-    (root / f'rollout-{time.time_ns()}.jsonl').write_text(
+    thread_id = '01testthread0000000000000000'
+    (root / f'rollout-{time.time_ns()}-{thread_id}.jsonl').write_text(
         json.dumps({'type': 'session_meta'}) + '\\n', encoding='utf-8'
     )
+    print(json.dumps({'type': 'thread.started', 'thread_id': thread_id}))
     print(json.dumps({'type': 'task_complete'}))
     raise SystemExit(0)
 raise SystemExit(2)
@@ -101,7 +115,8 @@ raise SystemExit(2)
                 """#!/usr/bin/env python3
 import sys
 if 'sync' in sys.argv:
-    print('  1 event(s) parsed since last scan, 0 already delivered, 1 new')
+    print('  1 event(s) parsed since last sync, 0 already delivered, 1 new')
+    print('  broker accepted 1 (duplicates 0)')
     raise SystemExit(0)
 raise SystemExit(2)
 """,
@@ -117,13 +132,21 @@ raise SystemExit(2)
                     str(fake_wakaclock),
                     "--scenario-id",
                     "single-file",
+                    "--deliver",
                 ],
                 sandbox,
+                {
+                    "WAKACLOCK_SERVER_URL": "http://127.0.0.1:8080",
+                    "WAKACLOCK_API_KEY": "test-key",
+                },
             )
             self.assertEqual(summary["stages"]["source_capture"], "passed")
             self.assertEqual(summary["stages"]["producer_event"], "passed")
             self.assertEqual(summary["scenarios"]["single-file"], "passed")
             self.assertEqual(summary["metrics"]["captured"], 1)
+            self.assertEqual(summary["stages"]["broker_accept"], "passed")
+            self.assertEqual(summary["stages"]["api_delivery"], "not_run")
+            self.assertIn("api_delivery_readback_not_configured", summary["blockers"])
             serialized = json.dumps(summary)
             self.assertNotIn(str(sandbox), serialized)
             self.assertNotIn("single.txt", serialized)
@@ -150,6 +173,8 @@ if args == ['--version']:
 if args[:2] == ['login', 'status']:
     raise SystemExit(0)
 if args and args[0] == 'exec':
+    if '--skip-git-repo-check' not in args:
+        raise SystemExit(7)
     if 'rename-source.txt' in args[-1]:
         root = Path.cwd()
         if not (root / 'rename-source.txt').is_file() or not (root / 'delete-me.txt').is_file():
@@ -169,7 +194,7 @@ raise SystemExit(2)
                 """#!/usr/bin/env python3
 import sys
 if 'sync' in sys.argv:
-    print('  1 event(s) parsed since last scan, 0 already delivered, 1 new')
+    print('  1 event(s) parsed since last sync, 0 already delivered, 1 new')
     raise SystemExit(0)
 raise SystemExit(2)
 """,
@@ -189,6 +214,86 @@ raise SystemExit(2)
                 sandbox,
             )
             self.assertEqual(summary["scenarios"]["create-delete-rename"], "passed")
+
+    def test_retry_dedup_requires_a_second_delivered_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory)
+            codex_home = sandbox / "codex-home"
+            codex_home.mkdir()
+            fake_codex = sandbox / "codex"
+            make_executable(
+                fake_codex,
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+args = sys.argv[1:]
+if args == ['--version']:
+    print('codex-cli 0.153.4')
+    raise SystemExit(0)
+if args[:2] == ['login', 'status']:
+    raise SystemExit(0)
+if args and args[0] == 'exec':
+    if '--skip-git-repo-check' not in args:
+        raise SystemExit(7)
+    root = Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '09' / '06'
+    root.mkdir(parents=True, exist_ok=True)
+    thread_id = '01retrythread0000000000000000'
+    (root / f'rollout-{time.time_ns()}-{thread_id}.jsonl').write_text(
+        json.dumps({'type': 'session_meta'}) + '\\n', encoding='utf-8'
+    )
+    print(json.dumps({'type': 'thread.started', 'thread_id': thread_id}))
+    raise SystemExit(0)
+raise SystemExit(2)
+""",
+            )
+            fake_wakaclock = sandbox / "wakaclock"
+            make_executable(
+                fake_wakaclock,
+                """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+if 'sync' in sys.argv:
+    state = Path(os.environ['WAKACLOCK_CERTIFICATION_SANDBOX']) / 'sync-count'
+    count = int(state.read_text()) if state.exists() else 0
+    state.write_text(str(count + 1))
+    if count == 0:
+        print('  1 event(s) parsed since last sync, 0 already delivered, 1 new')
+        print('  broker accepted 1 (duplicates 0)')
+    else:
+        print('  1 event(s) parsed since last sync, 1 already delivered, 0 new')
+        print('  broker accepted 0 (duplicates 1)')
+    raise SystemExit(0)
+raise SystemExit(2)
+""",
+            )
+            summary = self.run_driver(
+                [
+                    "--execute",
+                    "--codex",
+                    str(fake_codex),
+                    "--codex-home",
+                    str(codex_home),
+                    "--wakaclock",
+                    str(fake_wakaclock),
+                    "--scenario-id",
+                    "retry-dedup",
+                    "--deliver",
+                ],
+                sandbox,
+                {
+                    "WAKACLOCK_SERVER_URL": "http://127.0.0.1:8080",
+                    "WAKACLOCK_API_KEY": "test-key",
+                },
+            )
+            self.assertEqual(summary["scenarios"]["retry-dedup"], "passed")
+            self.assertEqual(summary["metrics"]["replayed"], 1)
+            self.assertEqual(summary["metrics"]["duplicates"], 1)
 
 
 if __name__ == "__main__":

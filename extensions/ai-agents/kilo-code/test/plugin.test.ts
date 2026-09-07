@@ -90,6 +90,36 @@ test("Kilo keeps independent edits to one file inside the dedup window", async (
   });
 });
 
+test("Kilo deduplicates a delayed file.edited callback beyond two seconds", async () => {
+  await withMockCli(async (capture) => {
+    const hooks = await plugin.server({ sessionID: "session-delayed", directory: "/repo" }) as Record<string, any>;
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      await hooks["tool.execute.before"]({ callID: "call-delayed", file_path: "/repo/src/main.ts" });
+      await hooks["tool.execute.after"](
+        { callID: "call-delayed", file_path: "/repo/src/main.ts", tool: "WriteFile" },
+        { success: true, lines_added: 3, lines_deleted: 1 }
+      );
+      now += 2_001;
+      await hooks.event({
+        event: {
+          type: "file.edited",
+          file_path: "/repo/src/main.ts",
+          tool_call_id: "call-delayed",
+          lines_added: 3,
+          lines_deleted: 1
+        }
+      });
+    } finally {
+      Date.now = realNow;
+    }
+    const lines = (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(lines.length, 1);
+  });
+});
+
 test("Kilo shell tools use the shared snapshot lifecycle without forwarding command text", async () => {
   await withMockCli(async (_capture, argsCapture) => {
     const hooks = await plugin.server({ sessionID: "session-shell", directory: "/repo", provider: "DeepSeek" }) as Record<string, any>;

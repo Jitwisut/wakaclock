@@ -154,6 +154,29 @@ campaign, broker/API/dashboard readback และ human review จริง
 รายละเอียดอยู่ใน [F5-01 refresh](../docs/ai-coverage-f5-01-claude-refresh-2026-09-06.md)
 และ [F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md)
 
+### F5 closeout audit (2026-09-07)
+
+งาน implementation และ local regression ของ F5 ที่ทำได้ใน environment นี้
+เสร็จแล้ว แต่ milestone ยังเป็น `in_progress / environment-blocked` ตามเกณฑ์ใน
+execution plan: live adapter ต้องมี authenticated real run, shipped-bundle
+identity, broker/API/canonical/dashboard readback และ human review ก่อนปิด
+milestone ได้
+
+- Codex CLI `0.153.4` รันจริงใน disposable repo ได้ 8 producer events จาก
+  single-file, multi-file, create/delete/rename และ failure/no-op; delivered
+  retry/dedup probe ผ่านด้วย broker accepted=1 และ replayed=1, ส่วน nested
+  execution ยังไม่ทำ และ driver ยังไม่ mark API/canonical/dashboard stages
+  จนกว่าจะมี event-bound readback probe
+- Claude OAuth logout, Gemini ไม่มี authenticated account และ Kilo ยังไม่มี
+  live provider callback certificate; แถวที่ไม่มี runtime เช่น Cursor/Cline/
+  Roo/Continue/OpenCode/Goose/Copilot CLI/Windsurf/Antigravity จึงบันทึกเป็น
+  `survey-blocked`, ส่วน Kimi/Deep Code เป็น `parked`
+- Generic MCP ingress และ Kilo delayed-callback dedup ผ่าน local tests; ยังไม่
+  ใช้ผลดังกล่าวอ้างว่า external producer ทุกตัวผ่าน live certification
+
+ดูตาราง F5-01 ถึง F5-18, counters, blockers และ closure actions ใน
+[F5 closeout report](../docs/ai-coverage-f5-closeout-2026-09-07.md)
+
 Effort: baseline Claude/Codex/Gemini รวม 6–12 วัน; adapter runtime ถัดไป survey 1–3 วันและ implementation/certification 3–8 วันเมื่อมี evidence surface ส่วน unavailable/closed tool ให้รายงาน survey outcome แล้วทำงานส่วนอื่นต่อ
 
 ## 8. F6 — Analytics และ UX
