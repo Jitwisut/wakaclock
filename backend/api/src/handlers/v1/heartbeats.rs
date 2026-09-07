@@ -189,6 +189,22 @@ pub struct HeartbeatItem {
 // Handlers
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Best-effort presence liveness after a heartbeat write actually inserted something.
+///
+/// Feeds the in-memory prototype store *and*, when Presence v2 is enabled, the Redis
+/// key `derive_state_at` reads — so a `/api/v2` coworking roster flips the caller to
+/// "coding" just from logging time, without the client having to also send
+/// `POST /api/v2/me/presence/heartbeat`. Neither call may fail or delay the response;
+/// presence is a social feature, time tracking is not.
+async fn record_presence_activity(state: &AppState, user_id: Uuid) {
+    state.presence.record_heartbeat(user_id).await;
+    if let Some(redis_presence) = &state.redis_presence {
+        if let Err(error) = redis_presence.heartbeat(user_id).await {
+            tracing::debug!(%user_id, %error, "presence v2 liveness ping failed");
+        }
+    }
+}
+
 /// POST /api/v1/heartbeats — single heartbeat
 pub async fn create(
     State(state): State<Arc<AppState>>,
@@ -216,11 +232,10 @@ pub async fn create(
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Presence (plan.md Phase 7): best-effort, in-memory, and deliberately after the
-    // ClickHouse write succeeds — a presence update is not a reason to fail or delay a
-    // heartbeat, and `record_heartbeat` cannot itself fail (see presence_store).
+    // Presence: best-effort, and deliberately after the ClickHouse write succeeds — a
+    // presence update is not a reason to fail or delay a heartbeat.
     if inserted > 0 {
-        state.presence.record_heartbeat(user_id).await;
+        record_presence_activity(&state, user_id).await;
     }
 
     Ok(Json(HeartbeatResponse {
@@ -270,7 +285,7 @@ pub async fn create_bulk(
     // See the same call in `create` above. Guarded on `count` so an empty batch — which
     // sent zero actual heartbeats — does not mark the user as having just been active.
     if count > 0 {
-        state.presence.record_heartbeat(user_id).await;
+        record_presence_activity(&state, user_id).await;
     }
 
     Ok(Json(HeartbeatResponse {
