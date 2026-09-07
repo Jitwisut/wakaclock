@@ -37,8 +37,11 @@ export function SeatedOccupant({
           accessory={appearance.accessory}
           color={appearance.shirtColor}
           hairColor={appearance.hairColor}
+          hairStyle={appearance.hairStyle}
+          outfit={appearance.outfit}
           reducedMotion={reducedMotion}
-          size={30}
+          size={42}
+          skinColor={appearance.skinColor}
           status={user.status}
         />
         <span className="mb-0.5 flex flex-col items-center">
@@ -57,7 +60,10 @@ export function SeatedOccupant({
           <span className="h-1 w-1.5" style={{ background: '#9ca3af' }} />
         </span>
       </div>
-      <span className="h-1.5 w-11 border-x-2 border-t-2" style={{ background: 'var(--office-desk-top)', borderColor: 'var(--office-desk-edge)' }} />
+      <span
+        className="h-1.5 w-11 border-x-2 border-t-2"
+        style={{ background: 'var(--office-desk-top)', borderColor: 'var(--office-desk-edge)' }}
+      />
       <span
         className="presence-pixel-shadow-sm mt-1 max-w-[5.5rem] truncate border px-1 text-[8px] font-bold text-white"
         style={{ background: border, borderColor: border }}

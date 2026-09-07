@@ -81,7 +81,7 @@ export function PresenceHeader({
               className="border px-1 py-0.5 text-[8px] font-bold"
               style={{ borderColor: live, color: live }}
             >
-              16-BIT
+              2.5D
             </span>
           </div>
           <h1 className="mt-0.5 text-[11px] font-bold" style={{ color: muted }}>
@@ -106,8 +106,7 @@ export function PresenceHeader({
         className="hidden max-w-sm text-[10px] font-bold lg:block"
         style={{ color: muted, ...headingStyle }}
       >
-        ⚡ SPATIAL AUDIO · walk your sprite into a pod to co-work — proximity is the
-        whole interaction
+        Your space to focus together. Move your character into a pod to co-work.
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -156,7 +155,11 @@ export function PresenceHeader({
           </span>
         ) : (
           <Chip>
-            <ConstructionIcon aria-hidden className="size-3" style={{ color: 'var(--presence-danger)' }} />
+            <ConstructionIcon
+              aria-hidden
+              className="size-3"
+              style={{ color: 'var(--presence-danger)' }}
+            />
             Prototype
           </Chip>
         )}

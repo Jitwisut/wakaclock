@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { appearanceFor } from '@/components/presence/appearance';
+import { PresenceSprite } from '@/components/presence/PresenceSprite';
 import type { PresenceUser } from '@/types/presence';
 
 /**
@@ -154,8 +156,19 @@ function PodGroup({ group, reducedMotion }: { group: DirectoryGroup; reducedMoti
       <ul className="mt-2 flex flex-col gap-1.5">
         {group.occupants.map((user) => (
           <li className="flex items-center justify-between gap-2" key={`${group.id}:${user.id}`}>
-            <span className="min-w-0 truncate text-xs font-bold">
-              {user.isCurrentUser ? `${user.username} (you)` : user.username}
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="shrink-0">
+                <PresenceSprite
+                  {...appearanceFor(user.id)}
+                  color={appearanceFor(user.id).shirtColor}
+                  reducedMotion
+                  size={32}
+                  status={user.status}
+                />
+              </span>
+              <span className="truncate text-xs font-bold">
+                {user.isCurrentUser ? `${user.username} (you)` : user.username}
+              </span>
             </span>
             <StatusBadge pulse={!reducedMotion} status={user.status} />
           </li>

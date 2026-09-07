@@ -86,10 +86,7 @@
   animation: wakaclock-presence-pulse 1.6s ease-in-out infinite;
 }
 
-/* Player motion — three states, three feels: "coding" bobs (the live-activity tell),
-   "idle" sways more slowly, "offline" holds still (handled by simply applying no class).
-   `steps()` timing, not smooth easing, on purpose: a smoothly-interpolated bob reads as
-   a soft/claymorphism motion, discrete "frame flips" are what makes it read as 8-bit. */
+/* Subtle, smooth movement; the ground shadow stays anchored below the character. */
 @keyframes wakaclock-presence-bob {
   0%,
   100% {
@@ -122,11 +119,11 @@
 }
 
 .presence-player-coding {
-  animation: wakaclock-presence-bob 0.9s steps(2, jump-none) infinite;
+  animation: wakaclock-presence-bob 2s ease-in-out infinite;
 }
 
 .presence-player-idle {
-  animation: wakaclock-presence-sway 2.4s steps(4, jump-none) infinite;
+  animation: wakaclock-presence-sway 3.6s ease-in-out infinite;
 }
 
 .presence-status-blink {
@@ -237,11 +234,7 @@
 }
 
 .wakaclock-presence-theme .office-ground-shadow {
-  background: radial-gradient(
-    ellipse at center,
-    rgba(21, 20, 66, 0.5) 0%,
-    rgba(21, 20, 66, 0) 72%
-  );
+  background: radial-gradient(ellipse at center, rgba(21, 20, 66, 0.5) 0%, rgba(21, 20, 66, 0) 72%);
 }
 
 /* CRT desk monitor: inner glow + scanline overlay. */
@@ -257,12 +250,7 @@
   inset: 0;
   background:
     linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.3) 50%),
-    linear-gradient(
-      90deg,
-      rgba(255, 0, 0, 0.04),
-      rgba(0, 255, 0, 0.02),
-      rgba(0, 0, 255, 0.04)
-    );
+    linear-gradient(90deg, rgba(255, 0, 0, 0.04), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.04));
   background-size:
     100% 2px,
     3px 100%;
@@ -364,4 +352,27 @@
   .wakaclock-presence-theme .office-reaction-float {
     animation: none;
   }
+}
+
+/* Character surfaces stay smooth even inside the pixel-office theme. */
+.wakaclock-presence-theme .presence-character {
+  overflow: visible;
+  flex-shrink: 0;
+  image-rendering: auto;
+}
+
+.presence-character > g {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+}
+
+.wakaclock-presence-theme .presence-character-name {
+  border-radius: 8px;
+  box-shadow: 0 3px 8px rgb(21 20 66 / 18%);
+  line-height: 1.2;
+}
+
+.wakaclock-presence-theme .presence-character-control:focus-visible {
+  outline: 2px solid var(--presence-live);
+  outline-offset: 5px;
 }

@@ -15,8 +15,18 @@ import type { PanInfo } from 'motion/react';
  * pointer/touch) has no keyboard interaction of its own. */
 const KEYBOARD_STEP_PERCENT = 3;
 
+/** Non-finite means an upstream calculation already broke (a 0-width container, a
+ * corrupt server position); recover to the field centre rather than the 0,0 corner. */
 function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 50;
   return Math.min(100, Math.max(0, value));
+}
+
+/** `DEFAULT_SPAWN_POSITION` in `@/types/presence` — kept local to avoid the import cycle. */
+const SAFE_CENTRE = 46;
+
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
 }
 
 interface PresencePlayerProps {
@@ -48,22 +58,26 @@ export function PresencePlayer({
 }: PresencePlayerProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const appearance = appearanceFor(user.id);
+  const safeX = finiteOr(user.x, SAFE_CENTRE);
+  const safeY = finiteOr(user.y, SAFE_CENTRE);
 
-  // `PanInfo.point` is page-relative (includes scroll), `getBoundingClientRect()` is
-  // viewport-relative — add the scroll offset back in so the two are comparable.
-  const reportPoint = React.useCallback(
-    (pagePoint: { x: number; y: number }) => {
+  // Position from the drag *offset* (pixels moved since the gesture started), not
+  // `PanInfo.point`. `point` is documented as "relative to the device or page" — which
+  // one varies — so converting it against `getBoundingClientRect()` broke whenever the
+  // dashboard was scrolled: the result went negative and clamped every drop to 0,0.
+  // The offset is a pure delta and is unaffected by scroll or the page/viewport frame.
+  const reportDragOffset = React.useCallback(
+    (offset: { x: number; y: number }) => {
       const container = containerRef.current;
       if (!container || !onMove) return;
       const rect = container.getBoundingClientRect();
-      const left = rect.left + window.scrollX;
-      const top = rect.top + window.scrollY;
+      if (rect.width <= 0 || rect.height <= 0) return;
       onMove({
-        x: clampPercent(((pagePoint.x - left) / rect.width) * 100),
-        y: clampPercent(((pagePoint.y - top) / rect.height) * 100),
+        x: clampPercent(safeX + (offset.x / rect.width) * 100),
+        y: clampPercent(safeY + (offset.y / rect.height) * 100),
       });
     },
-    [containerRef, onMove]
+    [containerRef, onMove, safeX, safeY]
   );
 
   const handleKeyDown = React.useCallback(
@@ -82,14 +96,14 @@ export function PresencePlayer({
       const delta = deltas[event.key];
       if (!delta || !onMove) return;
       event.preventDefault();
-      onMove({ x: clampPercent(user.x + delta[0]), y: clampPercent(user.y + delta[1]) });
+      onMove({ x: clampPercent(safeX + delta[0]), y: clampPercent(safeY + delta[1]) });
     },
-    [onEnterZone, onMove, user.x, user.y]
+    [onEnterZone, onMove, safeX, safeY]
   );
 
   const wrapperStyle: React.CSSProperties = {
-    left: `${user.x}%`,
-    top: `${user.y}%`,
+    left: `${safeX}%`,
+    top: `${safeY}%`,
     transform: 'translate(-50%, -50%)',
   };
 
@@ -101,7 +115,10 @@ export function PresencePlayer({
           accessory={appearance.accessory}
           color={appearance.shirtColor}
           hairColor={appearance.hairColor}
+          hairStyle={appearance.hairStyle}
+          outfit={appearance.outfit}
           reducedMotion={reducedMotion}
+          skinColor={appearance.skinColor}
           status={user.status}
         />
         <NameTag isCurrentUser={false} nearby={isNearby} username={user.username} />
@@ -112,14 +129,18 @@ export function PresencePlayer({
   return (
     <motion.button
       aria-label={`You, ${user.status}. Drag, or focus and use arrow keys, to move.`}
-      className="presence-pixel-press absolute flex touch-none flex-col items-center gap-1 rounded-none border-none bg-transparent p-1 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+      className="presence-character-control absolute flex touch-none flex-col items-center gap-1 rounded-none border-none bg-transparent p-1 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
       drag
       dragConstraints={containerRef}
       dragElastic={0.06}
       dragMomentum={false}
+      // Snap the Motion transform back to 0 on release; the final resting place comes
+      // entirely from the `left`/`top` percentages the server round-trip updates, so the
+      // drag translation must not linger and stack on top of the new position.
+      dragSnapToOrigin
       onDragEnd={(_event, info: PanInfo) => {
         setIsDragging(false);
-        reportPoint(info.point);
+        reportDragOffset(info.offset);
       }}
       onDragStart={() => setIsDragging(true)}
       onKeyDown={handleKeyDown}
@@ -133,8 +154,11 @@ export function PresencePlayer({
         accessory={appearance.accessory}
         color={appearance.shirtColor}
         hairColor={appearance.hairColor}
+        hairStyle={appearance.hairStyle}
         isDragging={isDragging}
+        outfit={appearance.outfit}
         reducedMotion={reducedMotion}
+        skinColor={appearance.skinColor}
         status={user.status}
       />
       <NameTag isCurrentUser nearby={isNearby} username={user.username} />
@@ -153,7 +177,7 @@ function NameTag({
 }) {
   return (
     <span
-      className="presence-pixel-shadow-sm max-w-24 truncate border-2 px-2 py-0.5 text-[10px] font-bold text-white"
+      className="presence-character-name max-w-28 truncate border px-2.5 py-1 text-[10px] font-bold text-white"
       style={{
         background: nearby ? 'var(--presence-live)' : 'var(--presence-border)',
         borderColor: 'var(--presence-border)',
