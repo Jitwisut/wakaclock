@@ -57,12 +57,44 @@ class CodexCliCampaignTest(unittest.TestCase):
                 "#!/usr/bin/env python3\nprint('codex-cli 0.153.4')\n",
             )
             summary = self.run_driver(
-                ["--execute", "--codex", str(fake_codex), "--scenario-id", "single-file"],
+                [
+                    "--execute",
+                    "--allow-shared-account",
+                    "--codex",
+                    str(fake_codex),
+                    "--scenario-id",
+                    "single-file",
+                ],
                 sandbox,
             )
             self.assertEqual(summary["stages"]["source_capture"], "failed")
             self.assertIn("codex_auth_home_not_configured", summary["blockers"])
             self.assertEqual(summary["scenarios"]["single-file"], "not_run")
+
+    def test_execute_refuses_a_shared_account_without_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self.run_driver(
+                ["--execute", "--codex", "codex", "--scenario-id", "single-file"],
+                Path(directory),
+            )
+            self.assertIn("campaign_identity_not_isolated", summary["blockers"])
+            self.assertTrue(all(status == "not_run" for status in summary["scenarios"].values()))
+
+    def test_campaign_api_key_satisfies_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            summary = self.run_driver(
+                [
+                    "--execute",
+                    "--campaign-api-key",
+                    "throwaway-key",
+                    "--codex",
+                    "codex",
+                    "--scenario-id",
+                    "single-file",
+                ],
+                Path(directory),
+            )
+            self.assertNotIn("campaign_identity_not_isolated", summary["blockers"])
 
     def test_fake_campaign_keeps_only_bounded_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -124,6 +156,7 @@ raise SystemExit(2)
             summary = self.run_driver(
                 [
                     "--execute",
+                    "--allow-shared-account",
                     "--codex",
                     str(fake_codex),
                     "--codex-home",
@@ -202,6 +235,7 @@ raise SystemExit(2)
             summary = self.run_driver(
                 [
                     "--execute",
+                    "--allow-shared-account",
                     "--codex",
                     str(fake_codex),
                     "--codex-home",
@@ -275,6 +309,7 @@ raise SystemExit(2)
             summary = self.run_driver(
                 [
                     "--execute",
+                    "--allow-shared-account",
                     "--codex",
                     str(fake_codex),
                     "--codex-home",

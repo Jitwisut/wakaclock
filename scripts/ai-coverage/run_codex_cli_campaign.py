@@ -8,6 +8,13 @@ opt-in with ``--execute`` because it invokes an authenticated AI client and may
 consume a paid account.  The driver can prove transcript capture and parser
 events locally; broker/API/dashboard stages remain ``not_run`` until their
 explicit delivery/readback configuration is supplied.
+
+A scenario run drives a real Codex CLI with the wakaclock hook active, so its
+heartbeats reach whatever account ``WAKACLOCK_API_KEY`` points at and would
+otherwise show ``scenario-*`` projects on a developer's own dashboard.  ``--execute``
+therefore refuses to run against a personal account: pass ``--campaign-api-key``
+(a throwaway user), ``--campaign-server-url`` (a disposable backend), or the
+explicit ``--allow-shared-account`` opt-out.
 """
 from __future__ import annotations
 
@@ -218,6 +225,14 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         add_blocker(summary, "campaign_not_enabled")
         return summary
 
+    campaign_key = args.campaign_api_key or os.environ.get("WAKACLOCK_CAMPAIGN_API_KEY")
+    campaign_url = args.campaign_server_url or os.environ.get("WAKACLOCK_CAMPAIGN_SERVER_URL")
+    if not (campaign_key or campaign_url or args.allow_shared_account):
+        # Fail closed rather than let a real Codex run post `scenario-*` heartbeats onto
+        # whatever WAKACLOCK_API_KEY points at (typically the operator's own account).
+        add_blocker(summary, "campaign_identity_not_isolated")
+        return summary
+
     codex = executable(args.codex)
     if codex is None:
         summary["stages"]["source_capture"] = "failed"
@@ -236,6 +251,12 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         return summary
 
     process_env = {**os.environ, "HOME": str(sandbox / "home"), "CODEX_HOME": str(codex_home)}
+    # Route every scenario heartbeat (from the live Codex hook and from `wakaclock sync`)
+    # to the isolated campaign identity so it never lands on a personal dashboard.
+    if campaign_key:
+        process_env["WAKACLOCK_API_KEY"] = campaign_key
+    if campaign_url:
+        process_env["WAKACLOCK_SERVER_URL"] = campaign_url
     version_result = run_process([codex, "--version"], cwd=sandbox, env=process_env, timeout=args.timeout)
     version_text = f"{version_result.stdout}\n{version_result.stderr}"
     version_match = VERSION_RE.search(version_text)
@@ -461,6 +482,23 @@ def main() -> int:
     parser.add_argument("--deliver", action="store_true", help="Send parsed events to the configured API")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--scenario-id", action="append", dest="scenario_ids")
+    parser.add_argument(
+        "--campaign-api-key",
+        default=os.environ.get("WAKACLOCK_CAMPAIGN_API_KEY"),
+        help="wakaclock API key for a throwaway campaign account; scenario heartbeats "
+        "land under it, not the operator's, so they never reach a personal dashboard",
+    )
+    parser.add_argument(
+        "--campaign-server-url",
+        default=os.environ.get("WAKACLOCK_CAMPAIGN_SERVER_URL"),
+        help="Override WAKACLOCK_SERVER_URL for the campaign (e.g. a disposable backend)",
+    )
+    parser.add_argument(
+        "--allow-shared-account",
+        action="store_true",
+        help="Opt out of campaign isolation and post scenario heartbeats under the "
+        "current wakaclock account (not recommended)",
+    )
     args = parser.parse_args()
     try:
         args.timeout = max(1, min(args.timeout, 900))

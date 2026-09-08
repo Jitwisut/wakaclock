@@ -361,6 +361,19 @@ async fn process_record(
             .default_confidence(Some(event.source.as_str()), Some(event.confidence.as_str()))
     });
     heartbeat.is_ai_generated = heartbeat.actor_type.is_ai();
+    if heartbeat.actor_type == ActorType::Unknown {
+        // Legacy or weak transcript events can carry AI-shaped metadata without
+        // enough provenance to enter either AI bucket. Remove the producer labels
+        // before the API client applies its transport policy; otherwise that policy
+        // would correctly scrub the labels but temporarily set the legacy boolean
+        // to true, violating the unknown actor invariant before delivery.
+        heartbeat.ai_agent = None;
+        heartbeat.ai_provider = None;
+        heartbeat.ai_model = None;
+        heartbeat.ai_source = Some("observer".to_string());
+        heartbeat.ai_confidence = Some("inferred".to_string());
+        heartbeat.is_ai_generated = false;
+    }
     heartbeat.activity_segments = if active_seconds > 0.0 {
         vec![ActivitySegment {
             segment_id: format!("{}:segment", event.heartbeat_id()),

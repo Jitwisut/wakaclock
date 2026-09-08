@@ -3875,6 +3875,12 @@ fn tool_change_input(
         // inferred instead of upgrading shell observation to verified AI.
         AiEventSource::IdeTelemetry
     };
+    // A completed before/after snapshot is positive evidence that an AI tool
+    // operation changed the workspace, but the snapshot cannot prove which
+    // process wrote the bytes. Preserve that distinction explicitly so the
+    // broker publishes `ai_inferred` and the transport policy can scrub the
+    // self-declared tool name before the heartbeat leaves the machine.
+    let actor_type = Some(ActorType::AiInferred);
     GenericAiEventInput {
         event_id: tool_snapshot::stable_change_event_id(&before.tool_event_id, change),
         producer_version: Some(wakaclock_core::ai::PRODUCER_CONTRACT_VERSION),
@@ -3895,7 +3901,7 @@ fn tool_change_input(
         lines_deleted: change.lines_deleted,
         source: Some(source),
         confidence: Some(AiConfidence::Inferred),
-        actor_type: None,
+        actor_type,
         actor_confidence: None,
         active_seconds: None,
         transport,
@@ -4968,6 +4974,53 @@ mod generic_ai_ingress_tests {
         let mut bogus = sample_input();
         bogus.change_kind = Some("teleport".to_string());
         assert!(broker_event_from_generic(&bogus).is_err());
+    }
+
+    #[test]
+    fn shell_tool_snapshot_keeps_positive_ai_evidence_as_inferred() {
+        let started_at = chrono::Utc::now();
+        let before = ToolSnapshot {
+            tool_event_id: "shell-call-1".to_string(),
+            agent: "codex".to_string(),
+            provider: Some("openai".to_string()),
+            model: None,
+            session_id: Some("session-1".to_string()),
+            tool: Some("Bash".to_string()),
+            transport: Some("shell_hook".to_string()),
+            workspace_root: PathBuf::from("/workspace"),
+            started_at,
+            files: BTreeMap::new(),
+            git_backed: true,
+        };
+        let after_input = AiToolInput {
+            tool_event_id: "shell-call-1".to_string(),
+            agent: "codex".to_string(),
+            provider: Some("openai".to_string()),
+            model: None,
+            session_id: Some("session-1".to_string()),
+            tool: Some("Bash".to_string()),
+            transport: Some("shell_hook".to_string()),
+            workspace_root: Some(PathBuf::from("/workspace")),
+            cwd: None,
+        };
+        let change = WorkspaceChange {
+            kind: tool_snapshot::WorkspaceChangeKind::Modified,
+            entity: PathBuf::from("/workspace/app.py"),
+            previous_entity: None,
+            lines_added: Some(1),
+            lines_deleted: Some(1),
+        };
+
+        let input = tool_change_input(&before, &after_input, &change, started_at);
+        assert_eq!(input.actor_type, Some(ActorType::AiInferred));
+        assert_eq!(input.actor_confidence, None);
+
+        let event = broker_event_from_generic(&input)
+            .expect("tool snapshot should become a broker event")
+            .normalize()
+            .expect("tool snapshot should normalize");
+        assert_eq!(event.actor_type, Some(ActorType::AiInferred));
+        assert_eq!(event.actor_confidence, Some(0.6));
     }
 
     #[test]

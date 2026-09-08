@@ -83,7 +83,7 @@ function AiStatsPanel() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>AI party member</CardTitle>
           </div>

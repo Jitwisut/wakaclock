@@ -438,10 +438,8 @@ impl ActivityTimelineService {
         start: f64,
         end: f64,
     ) -> Result<Vec<CanonicalInterval>> {
-        let mut intervals = canonicalize_bridged(
-            &self.intervals(user_id, start, end).await?,
-            self.bridge,
-        );
+        let mut intervals =
+            canonicalize_bridged(&self.intervals(user_id, start, end).await?, self.bridge);
         self.apply_project_merges(user_id, &mut intervals).await?;
         Ok(intervals)
     }
@@ -517,7 +515,9 @@ impl ActivityTimelineService {
 
         Ok(rows
             .into_iter()
-            .filter(|row| !row.target_project.is_empty() && row.source_project != row.target_project)
+            .filter(|row| {
+                !row.target_project.is_empty() && row.source_project != row.target_project
+            })
             .map(|row| (row.source_project, row.target_project))
             .collect())
     }
@@ -543,7 +543,9 @@ impl ActivityTimelineService {
             .bind(user_id)
             .fetch_all::<IdentityRow>()
             .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse project identities query error: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse project identities query error: {error}")
+            })?;
 
         Ok(rows
             .into_iter()

@@ -32,7 +32,9 @@ pub fn discover(entity_path: &str) -> Option<GitInfo> {
     let start = if path.is_dir() {
         path
     } else {
-        path.ancestors().skip(1).find(|ancestor| ancestor.is_dir())?
+        path.ancestors()
+            .skip(1)
+            .find(|ancestor| ancestor.is_dir())?
     };
 
     let repo = gix::discover(start).ok()?;
@@ -188,8 +190,8 @@ mod tests {
         let missing = repo.join("frontend/app/lib/ga.ts");
         assert!(!missing.exists(), "fixture ต้องเป็น path ที่ไม่มีอยู่จริง");
 
-        let info = discover(missing.to_str().unwrap())
-            .expect("ไฟล์ที่หายไปยังต้องหา repo เจอจากโฟลเดอร์แม่");
+        let info =
+            discover(missing.to_str().unwrap()).expect("ไฟล์ที่หายไปยังต้องหา repo เจอจากโฟลเดอร์แม่");
 
         assert_eq!(info.project, "wakaclock");
         assert_eq!(info.branch, "main");

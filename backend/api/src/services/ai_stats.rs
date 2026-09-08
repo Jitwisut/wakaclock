@@ -26,7 +26,7 @@ fn known_agent_ids_sql() -> String {
 fn verified_identity_expr() -> String {
     let known_agent_ids = known_agent_ids_sql();
     format!(
-        "h.is_ai_generated = 1
+        "h.actor_type = 'ai_verified'
          AND nullIf(trim(ifNull(h.ai_agent, '')), '') IS NOT NULL
          AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agent_ids})
          AND lower(trim(ifNull(h.ai_confidence, ''))) = 'verified'
@@ -35,8 +35,7 @@ fn verified_identity_expr() -> String {
 }
 
 fn ai_evidence_expr() -> &'static str {
-    "h.is_ai_generated = 1
-     OR lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+    "lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
      OR lower(ifNull(h.ai_event_id, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
      OR coalesce(h.ai_lines_added, 0) > 0
      OR coalesce(h.ai_lines_deleted, 0) > 0

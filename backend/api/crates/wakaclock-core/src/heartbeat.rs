@@ -263,10 +263,10 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
         } else {
             // Accuracy-over-coverage (plans/decision-accuracy-over-coverage.md): identity
             // may only be emitted from a native hook, MCP event, or verified transcript
-            // tool call. Non-verified AI evidence (a bare agent name, a legacy boolean
-            // flag) is unattributed, not a weaker AI guess — `AiInferred` stays a
-            // parseable, readable enum variant for old data, but nothing new constructs
-            // it.
+            // tool call. Non-verified legacy evidence (a bare agent name or boolean flag)
+            // is unattributed and remains `Unknown`; producers with a completed,
+            // operation-bound tool snapshot may opt into `AiInferred` explicitly while
+            // the transport policy still strips the unverified tool identity.
             ActorType::Unknown
         }
     } else if ambiguous_lines {
