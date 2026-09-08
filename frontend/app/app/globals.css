@@ -196,6 +196,21 @@
   scrollbar-color: var(--border) transparent;
 }
 
+/*
+  Strips the scrollbar from a strip that scrolls sideways on small screens — a tab rail,
+  a filter row — where the global thin scrollbar would eat into an already short control
+  and read as damage rather than as an affordance. Only for elements whose overflow is
+  obvious from the clipped content itself; never for a region a reader must discover.
+*/
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

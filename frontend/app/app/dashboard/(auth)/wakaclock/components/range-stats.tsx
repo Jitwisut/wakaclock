@@ -48,12 +48,21 @@ export function RangeStats() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Stats</CardTitle>
           </div>
-          <Tabs onValueChange={(v) => setRange(v as StatsRange)} value={range}>
-            <TabsList>
+          {/*
+            `min-w-0` is what actually lets the rail scroll. A flex item defaults to
+            min-width:auto, so without it the range tabs hold the header open at their
+            content width and push the whole card past the viewport on a phone.
+          */}
+          <Tabs
+            className="max-w-full min-w-0"
+            onValueChange={(v) => setRange(v as StatsRange)}
+            value={range}
+          >
+            <TabsList className="no-scrollbar max-w-full justify-start overflow-x-auto">
               {STATS_RANGES.map((r) => (
                 <TabsTrigger key={r} value={r}>
                   {RANGE_LABELS[r]}
@@ -88,8 +97,12 @@ export function RangeStats() {
 
               {stats.evidence && <EvidenceSplitPanel evidence={stats.evidence} />}
 
-              <Tabs onValueChange={(v) => setBreakdown(v as typeof breakdown)} value={breakdown}>
-                <TabsList>
+              <Tabs
+                className="max-w-full min-w-0"
+                onValueChange={(v) => setBreakdown(v as typeof breakdown)}
+                value={breakdown}
+              >
+                <TabsList className="no-scrollbar max-w-full justify-start overflow-x-auto">
                   {(Object.keys(BREAKDOWN_LABELS) as (keyof typeof BREAKDOWN_LABELS)[]).map(
                     (key) => (
                       <TabsTrigger key={key} value={key}>

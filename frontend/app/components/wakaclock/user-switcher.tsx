@@ -39,11 +39,11 @@ export function UserSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className="h-9 gap-2 pr-2 pl-1.5" size="sm" variant="outline">
+        <Button className="h-9 gap-2 px-1.5 sm:pr-2 sm:pl-1.5" size="sm" variant="outline">
           <Avatar className="size-6">
             <AvatarFallback className="text-[10px]">{initialsOf(username)}</AvatarFallback>
           </Avatar>
-          <span className="max-w-32 truncate text-sm">{username}</span>
+          <span className="hidden max-w-32 truncate text-sm sm:inline">{username}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
