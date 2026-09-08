@@ -1,12 +1,12 @@
 import React from 'react';
 
 import { cookies } from 'next/headers';
-import { ThemeProvider } from 'next-themes';
 import NextTopLoader from 'nextjs-toploader';
 
 import { ActiveThemeProvider } from '@/components/active-theme';
 import { DashboardPanelsProvider } from '@/components/dashboard-panels';
 import { QueryProvider } from '@/components/query-provider';
+import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { DASHBOARD_PANELS_COOKIE, readHiddenPanels } from '@/lib/dashboard-panels';
 import { fontVariables } from '@/lib/fonts';
