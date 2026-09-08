@@ -84,6 +84,7 @@ function sessionLifecycleInput(
 
 /** Kilo server plugin. All hooks are best-effort and fail open by design. */
 const server = async (ctx: AnyRecord) => {
+  const DEDUP_WINDOW_MS = 120_000;
   const pending = new Map<string, { input: AnyRecord; at: number }>();
   const emitted = new Map<string, number>();
   const identity = () => contextIdentity(ctx);
@@ -101,7 +102,11 @@ const server = async (ctx: AnyRecord) => {
     const now = Date.now();
     const last = emitted.get(metadata.event_id ?? "")
       ?? (semanticKey ? emitted.get(semanticKey) : undefined);
-    if (last && now - last < 2_000) return;
+    // Kilo can deliver the paired `file.edited` callback well after the tool
+    // completion callback. Keep exact operation identity long enough for the
+    // callback/retry path to converge, while independent tool calls retain
+    // distinct IDs and are never collapsed by elapsed time alone.
+    if (last && now - last < DEDUP_WINDOW_MS) return;
     emitted.set(metadata.event_id ?? "", now);
     if (semanticKey) emitted.set(semanticKey, now);
     if (emitted.size > 4_000) {

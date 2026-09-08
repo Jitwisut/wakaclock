@@ -10,12 +10,12 @@ failure points to the producer or boundary that regressed.
 | Human save file | HUMAN | `extensions/vscode/test/buffer.test.ts` — `save flushes immediately with write=true` |
 | Claude Edit | AI_VERIFIED | `backend/api/crates/wakaclock-core` — `parse_since_extracts_edit_with_model_from_preceding_assistant_record`; broker `normalizes_paths_agent_and_verified_actor` |
 | Claude Write | AI_VERIFIED | `extensions/vscode/test/buffer.test.ts` — `attributes a whole-file agent overwrite as AI on the save that follows it` |
-| Claude Bash + sed | AI | `scripts/ai-attribution-integration.py` — `Claude Bash + sed`: real `ai tool-before`/`ai tool-after` CLI round trip around a real `sed -i` on a real git-tracked file |
-| Claude Python codemod | AI | `scripts/ai-attribution-integration.py` — `Claude Python codemod`: same round trip around a real multi-line Python rewrite; the 50-file broker bound is tested separately |
+| Claude Bash + sed | AI_INFERRED (unattributed) | `scripts/ai-attribution-integration.py` — `Claude Bash + sed`: real `ai tool-before`/`ai tool-after` CLI round trip around a real `sed -i` on a real git-tracked file; the published heartbeat keeps the AI bucket and removes the unverified tool identity |
+| Claude Python codemod | AI_INFERRED (unattributed) | `scripts/ai-attribution-integration.py` — `Claude Python codemod`: same round trip around a real multi-line Python rewrite; the 50-file broker bound is tested separately |
 | Codex apply_patch | AI_VERIFIED | `backend/api/crates/wakaclock-core` — `parse_since_splits_multi_file_patch_into_one_event_per_file`; broker `normalizes_paths_agent_and_verified_actor` |
-| Codex shell | AI | `scripts/ai-attribution-integration.py` — `Codex shell`: same tool-before/tool-after engine, `agent=codex` |
+| Codex shell | AI_INFERRED (unattributed) | `scripts/ai-attribution-integration.py` — `Codex shell`: same tool-before/tool-after engine, `agent=codex` |
 | Gemini replace | AI | `backend/api/crates/wakaclock-core/src/ai/gemini.rs` — `parses_verified_write_record_without_retaining_content` |
-| Gemini shell | AI | `scripts/ai-attribution-integration.py` — `Gemini shell`: same tool-before/tool-after engine, `agent=gemini-cli` |
+| Gemini shell | AI_INFERRED (unattributed) | `scripts/ai-attribution-integration.py` — `Gemini shell`: same tool-before/tool-after engine, `agent=gemini-cli` |
 | ChatGPT → tan.apply_patch | AI_VERIFIED | CLI generic ingress tests — `generic_ingress_defaults_to_verified_mcp_and_normalizes_agent` |
 | MCP move file | AI_VERIFIED | `backend/api/crates/wakaclock-cli/src/tool_snapshot.rs` — `infers_a_one_to_one_pure_rename_from_the_content_hash`; broker `rename_requires_previous_entity` |
 | MCP delete/create | AI_VERIFIED | `backend/api/crates/wakaclock-cli/src/tool_snapshot.rs` — `detects_create_and_delete_with_exact_whole_file_line_counts`; broker `rename_previous_entity_must_stay_inside_project_root` |
@@ -33,7 +33,9 @@ failure points to the producer or boundary that regressed.
 `scripts/ai-attribution-integration.py` builds the real `wakaclock` CLI binary and
 drives it as a real subprocess against real temporary git repositories — real `sed`,
 a real Python rewrite, a real `git checkout`/`git merge` — capturing what actually
-reaches a fake backend HTTP server. It runs in the `backend` CI job right after
+reaches a fake backend HTTP server. Shell snapshot rows assert `ai_inferred` with no
+published agent/provider/model, because the before/after evidence proves AI activity
+without proving which process wrote the bytes. It runs in the `backend` CI job right after
 `cargo test --workspace` (which already produces the debug binary it needs). This
 replaced six rows that were previously "Manual CI external-process check" placeholders
 with no automated owner; running it against the real binary for the first time also

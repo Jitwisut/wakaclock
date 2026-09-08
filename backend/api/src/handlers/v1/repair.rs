@@ -75,7 +75,7 @@ pub async fn day(
                     uniqExact(ifNull(heartbeat_id, concat(entity, ':', toString(time)))) AS unique_heartbeats,
                     coalesce(sum(ifNull(active_seconds, 0.0)), 0.0) AS before_seconds,
                     coalesce(sumIf(ifNull(active_seconds, 0.0), active_seconds > 120.0), 0.0) AS long_gap_seconds
-             FROM wakaclock.heartbeats WHERE user_id = ? AND time >= ? AND time < ?",
+             FROM wakaclock.heartbeats_canonical WHERE user_id = ? AND time >= ? AND time < ?",
         )
         .bind(user_id)
         .bind(start)

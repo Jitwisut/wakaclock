@@ -7,29 +7,52 @@ use crate::model::ai_stats::{
     AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
     AiUsageMetricsRow,
 };
+use crate::repository::canonical::canonical_winner_relation;
+use wakaclock_core::ai::KNOWN_AGENT_IDS;
 
-// A small compatibility projection for rows written before `actor_type` became the
-// canonical field. Some WakaTime imports explicitly stored `actor_type = 'unknown'`
-// while also carrying positive AI evidence. Project those rows for reporting only; the
-// raw heartbeat remains unchanged and can be repaired separately once its provenance is
-// audited. This keeps old data from disappearing from AI totals after the import fix.
-const EFFECTIVE_ACTOR_TYPE_EXPR: &str = "multiIf(
-    h.actor_type = 'unknown' AND (
-        h.is_ai_generated = 1
-        OR lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
-        OR lower(ifNull(h.ai_event_id, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
-        OR coalesce(h.ai_lines_added, 0) > 0
-        OR coalesce(h.ai_lines_deleted, 0) > 0
-        OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp')
-    ),
-    multiIf(
-        lower(ifNull(h.ai_confidence, '')) = 'verified'
-            OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp'),
-        'ai_verified',
-        'ai_inferred'
-    ),
-    h.actor_type
-)";
+// Keep the dashboard conservative when reading rows written by older clients. The
+// raw heartbeat remains the audit record, while this projection prevents arbitrary
+// labels (for example integration-test names) from becoming named verified agents.
+// Unknown labels can still contribute to the unattributed bucket, but a legacy
+// evidence field must never promote the canonical `unknown` actor to AI.
+fn known_agent_ids_sql() -> String {
+    KNOWN_AGENT_IDS
+        .iter()
+        .map(|agent| format!("'{agent}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn verified_identity_expr() -> String {
+    let known_agent_ids = known_agent_ids_sql();
+    format!(
+        "h.actor_type = 'ai_verified'
+         AND nullIf(trim(ifNull(h.ai_agent, '')), '') IS NOT NULL
+         AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agent_ids})
+         AND lower(trim(ifNull(h.ai_confidence, ''))) = 'verified'
+         AND lower(trim(ifNull(h.ai_source, ''))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')"
+    )
+}
+
+fn ai_evidence_expr() -> &'static str {
+    "lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+     OR lower(ifNull(h.ai_event_id, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+     OR coalesce(h.ai_lines_added, 0) > 0
+     OR coalesce(h.ai_lines_deleted, 0) > 0
+     OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')"
+}
+
+fn effective_actor_type_expr() -> String {
+    let verified_identity = verified_identity_expr();
+    format!(
+        "multiIf(
+            h.actor_type = 'ai_verified' AND NOT ({verified_identity}),
+            if(({ai_evidence}), 'ai_inferred', 'unknown'),
+            h.actor_type
+        )",
+        ai_evidence = ai_evidence_expr(),
+    )
+}
 
 pub struct AiStatsService {
     clickhouse: Arc<ClickHouseClient>,
@@ -141,6 +164,11 @@ impl AiStatsService {
     }
 
     async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiTotalsRow> {
+        let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
@@ -167,9 +195,8 @@ impl AiStatsService {
                     countIf(h.effective_actor_type = 'human') AS human_heartbeats,
                     countIf(h.effective_actor_type = 'unknown') AS unattributed_heartbeats
                 FROM (
-                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    SELECT h.*, {effective_actor_type} AS effective_actor_type
+                    FROM {relation}
                 ) AS h
                 ",
         );
@@ -185,17 +212,23 @@ impl AiStatsService {
     }
 
     async fn fetch_agents(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiAgentRow>> {
+        let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
                     multiIf(
-                        h.effective_actor_type IN ('ai_verified', 'ai_inferred'), coalesce(h.ai_agent, 'unknown'),
+                        h.effective_actor_type = 'ai_verified', coalesce(nullIf(trim(h.ai_agent), ''), 'unknown'),
+                        h.effective_actor_type = 'ai_inferred', 'unknown',
                         h.effective_actor_type = 'human', 'human',
                         'unknown'
                     ) AS agent,
                     h.effective_actor_type AS actor_type,
-                    h.ai_provider AS provider,
-                    h.ai_model AS model,
+                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(h.ai_provider), ''), NULL) AS provider,
+                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(h.ai_model), ''), NULL) AS model,
                     sumIf(coalesce(h.ai_lines_added, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
                     sumIf(coalesce(h.ai_lines_deleted, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
                     sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
@@ -208,11 +241,10 @@ impl AiStatsService {
                         + sumIf(toUInt64(coalesce(h.human_lines_deleted, 0)), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS unattributed_lines_deleted,
                     count() AS heartbeat_count
                 FROM (
-                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    SELECT h.*, {effective_actor_type} AS effective_actor_type
+                    FROM {relation}
                 ) AS h
-                GROUP BY agent, actor_type, h.ai_provider, h.ai_model
+                GROUP BY agent, actor_type, provider, model
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
         );
@@ -255,6 +287,11 @@ impl AiStatsService {
     }
 
     async fn fetch_daily(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiDailyRow>> {
+        let effective_actor_type = effective_actor_type_expr();
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+            "h",
+        );
         let query = format!(
             "
                 SELECT
@@ -277,9 +314,8 @@ impl AiStatsService {
                     sumIf(coalesce(h.chars_added, 0), h.effective_actor_type = 'human') AS human_chars_added,
                     count() AS heartbeat_count
                 FROM (
-                    SELECT h.*, {EFFECTIVE_ACTOR_TYPE_EXPR} AS effective_actor_type
-                    FROM wakaclock.heartbeats AS h
-                    WHERE h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)
+                    SELECT h.*, {effective_actor_type} AS effective_actor_type
+                    FROM {relation}
                 ) AS h
                 GROUP BY day
                 ORDER BY day ASC
@@ -309,4 +345,16 @@ fn validate_date(date: &str) -> Result<()> {
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .context("Invalid date format, expected YYYY-MM-DD")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_actor_type_expr;
+
+    #[test]
+    fn effective_actor_projection_does_not_promote_unknown_rows() {
+        let expression = effective_actor_type_expr();
+        assert!(expression.contains("h.actor_type = 'ai_verified' AND NOT"));
+        assert!(!expression.contains("h.actor_type = 'unknown' AND"));
+    }
 }

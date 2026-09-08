@@ -90,7 +90,7 @@ impl InsightsService {
                 -- been repaired or partially cleaned can report an all-time range that
                 -- extends past any surviving activity. See docs/duration-accuracy-audit.md,
                 -- Finding 5.
-                FROM wakaclock.heartbeats
+                FROM wakaclock.heartbeats_canonical
                 WHERE user_id = ?
                 ",
             )

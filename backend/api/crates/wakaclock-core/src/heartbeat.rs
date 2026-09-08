@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+use crate::ai::is_known_agent_id;
+
 pub const CLIPBOARD_TRACKING_VERSION: u8 = 1;
 pub const MAX_CLIPBOARD_COUNTER: u32 = 10_000_000;
 
@@ -240,21 +242,31 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
         }
         explicit
     } else if ai_evidence {
-        let verified = input
-            .ai_confidence
-            .is_some_and(|confidence| confidence.eq_ignore_ascii_case("verified"))
-            || input.ai_source.is_some_and(|source| {
-                source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
-            });
-        if verified {
+        let verified_source = input.ai_source.is_some_and(|source| {
+            matches!(
+                source.trim().to_ascii_lowercase().as_str(),
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            )
+        });
+        let verified = verified_source
+            && (input
+                .ai_confidence
+                .is_some_and(|confidence| confidence.eq_ignore_ascii_case("verified"))
+                || input.ai_source.is_some_and(|source| {
+                    source.eq_ignore_ascii_case("agent_hook") || source.eq_ignore_ascii_case("mcp")
+                }));
+        let named_agent_is_known = input
+            .ai_agent
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent));
+        if verified && named_agent_is_known {
             ActorType::AiVerified
         } else {
             // Accuracy-over-coverage (plans/decision-accuracy-over-coverage.md): identity
             // may only be emitted from a native hook, MCP event, or verified transcript
-            // tool call. Non-verified AI evidence (a bare agent name, a legacy boolean
-            // flag) is unattributed, not a weaker AI guess — `AiInferred` stays a
-            // parseable, readable enum variant for old data, but nothing new constructs
-            // it.
+            // tool call. Non-verified legacy evidence (a bare agent name or boolean flag)
+            // is unattributed and remains `Unknown`; producers with a completed,
+            // operation-bound tool snapshot may opt into `AiInferred` explicitly while
+            // the transport policy still strips the unverified tool identity.
             ActorType::Unknown
         }
     } else if ambiguous_lines {
@@ -281,6 +293,9 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
 /// this window to mean the same thing here as it does there.
 pub const MAX_ACTIVITY_GAP_SECONDS: f64 = 120.0;
 pub const DEDUP_WINDOW_SECONDS: f64 = MAX_ACTIVITY_GAP_SECONDS;
+/// Upper bound for append-only attribution corrections. A revision is a small
+/// monotonic counter, never an unbounded client-controlled integer.
+pub const MAX_HEARTBEAT_REVISION: u32 = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActivitySegment {
@@ -538,6 +553,9 @@ pub struct Heartbeat {
     pub unattributed_lines_added: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattributed_lines_deleted: Option<u32>,
+    /// Append-only correction revision for this canonical operation.
+    #[serde(default)]
+    pub revision: u32,
     pub created_at: String,
 }
 
@@ -617,6 +635,7 @@ impl Heartbeat {
             human_lines_deleted: None,
             unattributed_lines_added: None,
             unattributed_lines_deleted: None,
+            revision: 0,
             created_at: now.to_rfc3339(),
         }
     }
@@ -663,7 +682,7 @@ impl Heartbeat {
         let verified_identity = self
             .ai_agent
             .as_deref()
-            .is_some_and(|agent| !agent.trim().is_empty())
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && verified_source
             && verified_confidence;
 
@@ -702,7 +721,7 @@ impl Heartbeat {
             && self
                 .ai_agent
                 .as_deref()
-                .is_some_and(|agent| !agent.trim().is_empty())
+                .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && self
                 .ai_confidence
                 .as_deref()
@@ -742,6 +761,9 @@ impl Heartbeat {
             if heartbeat_id.trim().is_empty() {
                 return Err("heartbeat_id cannot be empty".to_string());
             }
+        }
+        if self.revision > MAX_HEARTBEAT_REVISION {
+            return Err("revision exceeds the supported bound".to_string());
         }
         self.validate_clipboard_metrics()?;
         for segment in &self.activity_segments {
@@ -807,7 +829,9 @@ impl Heartbeat {
     /// either side of the comparison and must never let a pair be coalesced into one.
     pub fn is_duplicate_of(&self, other: &Heartbeat) -> bool {
         if self.heartbeat_id.is_some() && self.heartbeat_id == other.heartbeat_id {
-            return true;
+            // A higher revision is an append-only correction of the same operation;
+            // it must reach the server even when it carries no new editor counters.
+            return self.revision == other.revision;
         }
         let time_diff = (self.time - other.time).abs();
         self.entity == other.entity
@@ -957,6 +981,19 @@ mod tests {
     }
 
     #[test]
+    fn unknown_agent_labels_are_not_promoted_to_verified() {
+        let resolved = resolve_attribution(AttributionInput {
+            ai_agent: Some("verify-declared"),
+            ai_source: Some("agent_hook"),
+            ai_confidence: Some("verified"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(resolved.actor_type, ActorType::Unknown);
+        assert_eq!(resolved.confidence, 0.0);
+    }
+
+    #[test]
     fn attribution_requires_positive_human_evidence() {
         let human = resolve_attribution(AttributionInput {
             keystrokes: Some(3),
@@ -1091,6 +1128,21 @@ mod tests {
         let mut hb3 = hb1.clone();
         hb3.is_write = true;
         assert!(!hb1.is_duplicate_of(&hb3));
+    }
+
+    #[test]
+    fn higher_revision_with_same_transport_id_is_not_deduped() {
+        let mut original = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        original.heartbeat_id = Some("operation-1".to_string());
+        let mut correction = original.clone();
+        correction.revision = 1;
+        assert!(!correction.is_duplicate_of(&original));
+        assert!(original.is_duplicate_of(&original.clone()));
     }
 
     /// Regression test for silent data loss: a heartbeat carrying counters the editor

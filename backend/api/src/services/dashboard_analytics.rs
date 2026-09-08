@@ -237,7 +237,7 @@ impl DashboardAnalyticsService {
                             )
                             AND actor_type != 'unknown'
                         ) AS complete_attribution_rows
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND time >= ? AND time < ?
                  GROUP BY day ORDER BY day ASC",
             )
@@ -305,7 +305,7 @@ impl DashboardAnalyticsService {
             "
             SELECT {name_expression} AS name,
                    toInt64(round(sum(ifNull(active_seconds, 0.0)))) AS total
-            FROM wakaclock.heartbeats
+            FROM wakaclock.heartbeats_canonical
             WHERE user_id = ? AND time >= ? AND time < ?
             GROUP BY name
             HAVING total > 0
@@ -347,7 +347,7 @@ impl DashboardAnalyticsService {
             "
                 SELECT {name_expression} AS name,
                        toInt64(sum(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0))) AS total
-                FROM wakaclock.heartbeats
+                FROM wakaclock.heartbeats_canonical
                 WHERE user_id = ? AND time >= ? AND time < ?
                   AND actor_type IN ('ai_verified', 'ai_inferred')
                 GROUP BY name
@@ -386,7 +386,7 @@ fn normalized_dimension(column: &str) -> String {
 }
 
 fn normalized_ai_model_dimension() -> &'static str {
-    "if(is_ai_generated AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
+    "if(actor_type = 'ai_verified' AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
 }
 
 /// Group daily totals into Monday–Sunday, always emitting all seven days.
@@ -589,7 +589,7 @@ mod tests {
     fn inferred_ai_models_are_grouped_as_unattributed() {
         assert_eq!(
             normalized_ai_model_dimension(),
-            "if(is_ai_generated AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
+            "if(actor_type = 'ai_verified' AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
         );
     }
 

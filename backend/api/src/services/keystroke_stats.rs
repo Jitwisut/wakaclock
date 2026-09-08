@@ -127,7 +127,7 @@ impl KeystrokeStatsService {
                     uniqExactIf(hb.date, hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0) AS days_with_activity,
                     countIf(position(hb.user_agent, 'wakaclock-vscode/') > 0 AND hb.clipboard_tracking_version = 1) AS supported_vscode_heartbeats,
                     countIf(position(hb.user_agent, 'wakaclock-vscode/') > 0) AS total_vscode_heartbeats
-                FROM wakaclock.heartbeats AS hb
+                FROM wakaclock.heartbeats_canonical AS hb
                 WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
                 ",
             )
@@ -165,7 +165,7 @@ impl KeystrokeStatsService {
                     coalesce(sum(hb.paste_same_file_actions), 0) AS paste_same_file_actions,
                     coalesce(sum(hb.paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
                     coalesce(sum(hb.paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
-                FROM wakaclock.heartbeats AS hb
+                FROM wakaclock.heartbeats_canonical AS hb
                 WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
                   AND (hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0)
                 GROUP BY name
@@ -206,7 +206,7 @@ impl KeystrokeStatsService {
                     coalesce(sum(hb.paste_same_file_actions), 0) AS paste_same_file_actions,
                     coalesce(sum(hb.paste_same_workspace_actions), 0) AS paste_same_workspace_actions,
                     coalesce(sum(hb.paste_external_or_unknown_actions), 0) AS paste_external_or_unknown_actions
-                FROM wakaclock.heartbeats AS hb
+                FROM wakaclock.heartbeats_canonical AS hb
                 WHERE hb.user_id = ? AND hb.date BETWEEN toDate(?) AND toDate(?)
                   AND (hb.actor_type = 'human' OR coalesce(hb.copy_actions, 0) > 0 OR coalesce(hb.paste_actions, 0) > 0)
                 GROUP BY day

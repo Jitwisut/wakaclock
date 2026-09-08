@@ -8,6 +8,30 @@
 import type { AiAgentStatus } from './agentSetup';
 import type { BrokerStatusSnapshot } from './types';
 
+/** The typed v2 snapshot emitted by the CLI collector. Values are nullable by
+ * design; the self-test must not turn an unavailable probe into a stopped/zero
+ * result. */
+export interface AiDiagnosticsSnapshot {
+  schema_version: 2;
+  runtime_health: 'unavailable' | 'idle' | 'healthy' | 'degraded' | 'disabled';
+  broker: {
+    availability: 'unavailable' | 'available' | 'disabled';
+    running: { availability: string; value: boolean | null };
+    pending: { availability: string; value: number | null };
+    retry: { availability: string; value: number | null };
+    dead_letter: { availability: string; value: number | null };
+    last_error_code?: string | null;
+  };
+  adapters: Array<{
+    agent: string;
+    availability: 'unavailable' | 'available' | 'disabled';
+    detected: { availability: string; value: boolean | null };
+    enabled: { availability: string; value: boolean | null };
+    runtime_health: string;
+    diagnostic_code?: string | null;
+  }>;
+}
+
 export type SelfTestSeverity = 'ok' | 'warn' | 'fail';
 
 export interface SelfTestCheck {
@@ -27,6 +51,9 @@ export interface AiDetectionReport {
 export interface AiDetectionSelfTestDeps {
   getBrokerStatus(): Promise<BrokerStatusSnapshot>;
   getAiAgentStatuses(): Promise<AiAgentStatus[]>;
+  /** Optional CLI v2 collector. Older extension test fixtures can use the two
+   * legacy probes above until they opt into the typed snapshot. */
+  getDiagnosticsSnapshot?: () => Promise<AiDiagnosticsSnapshot>;
   /** Wall clock in epoch ms; injectable for tests. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -49,6 +76,91 @@ export async function runAiDetectionSelfTest(
 ): Promise<AiDetectionReport> {
   const now = deps.now ?? (() => Date.now());
   const checks: SelfTestCheck[] = [];
+
+  if (deps.getDiagnosticsSnapshot) {
+    try {
+      const snapshot = await deps.getDiagnosticsSnapshot();
+      const runtimeHealth = snapshot.runtime_health;
+      checks.push({
+        id: 'diagnostics-runtime',
+        label: 'AI diagnostics collector runtime',
+        severity:
+          runtimeHealth === 'healthy' || runtimeHealth === 'idle'
+            ? 'ok'
+            : runtimeHealth === 'disabled'
+              ? 'warn'
+              : runtimeHealth === 'degraded'
+                ? 'warn'
+                : 'fail',
+        detail: runtimeHealth,
+      });
+      const brokerRunning = snapshot.broker.running;
+      checks.push({
+        id: 'broker-running',
+        label: 'Local AI broker running',
+        severity:
+          brokerRunning.availability !== 'available'
+            ? 'warn'
+            : brokerRunning.value === true
+              ? 'ok'
+              : 'fail',
+        detail:
+          brokerRunning.availability !== 'available'
+            ? 'broker running probe unavailable'
+            : brokerRunning.value === true
+              ? undefined
+              : 'run "AtoAxis: Repair AI Integrations"',
+      });
+      const deadLetter = snapshot.broker.dead_letter;
+      checks.push({
+        id: 'broker-inbox-draining',
+        label: 'Broker inbox draining',
+        severity:
+          deadLetter.availability !== 'available'
+            ? 'warn'
+            : (deadLetter.value ?? 0) > 0
+              ? 'warn'
+              : 'ok',
+        detail:
+          deadLetter.availability !== 'available'
+            ? 'dead-letter probe unavailable'
+            : (deadLetter.value ?? 0) > 0
+              ? `${deadLetter.value} event(s) in dead-letter`
+              : undefined,
+      });
+      const detected = snapshot.adapters.filter(
+        (adapter) => adapter.detected.availability === 'available' && adapter.detected.value === true
+      );
+      checks.push({
+        id: 'adapters-detected',
+        label: 'AI agents detected on this machine',
+        severity: detected.length > 0 ? 'ok' : 'warn',
+        detail:
+          detected.length > 0
+            ? detected.map((adapter) => adapter.agent).join(', ')
+            : 'no supported AI agent found (Claude Code, Codex, Gemini CLI, …)',
+      });
+      const disabled = snapshot.adapters.filter(
+        (adapter) => adapter.enabled.availability === 'available' && adapter.enabled.value === false
+      );
+      if (disabled.length > 0) {
+        checks.push({
+          id: 'adapters-enabled',
+          label: 'Detected agents have AI tracking enabled',
+          severity: 'warn',
+          detail: `not enabled: ${disabled.map((adapter) => adapter.agent).join(', ')}`,
+        });
+      }
+      return { verdict: rollUp(checks), checks };
+    } catch (error) {
+      checks.push({
+        id: 'diagnostics-collector',
+        label: 'AI diagnostics collector reachable',
+        severity: 'warn',
+        detail: error instanceof Error ? error.message : 'diagnostics snapshot unavailable',
+      });
+    }
+  }
 
   let broker: BrokerStatusSnapshot | undefined;
   try {

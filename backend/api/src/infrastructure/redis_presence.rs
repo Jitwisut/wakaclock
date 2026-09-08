@@ -27,6 +27,11 @@ pub const CODING_WINDOW_SECONDS: i64 = 120;
 pub const IDLE_WINDOW_SECONDS: i64 = 300;
 pub const VIEWER_LEASE_SECONDS: i64 = 45;
 pub const MAX_ROOM_VIEWERS: i64 = 30;
+/// How long "Leave room" suppresses the presence-heartbeat auto-rejoin for a team room.
+/// A user who explicitly left while still coding should stay gone for the rest of a
+/// normal working session, not reappear on the next throttled heartbeat tick a few
+/// seconds later.
+pub const AUTO_JOIN_SNOOZE_SECONDS: i64 = 3600;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -189,9 +194,11 @@ impl RedisPresenceStore {
         self.command("PING", &[]).await.map(|_| ())
     }
 
-    // Not yet called by any handler — the presence-v2 heartbeat submission route ships
-    // with `phase7/presence-v2-hardening`, which is a separate, still-unmerged branch.
-    #[allow(dead_code)]
+    /// Marks `user_id` as actively coding for `derive_state_at`'s coding/idle split.
+    /// Deliberately keyed by user, not by room: a user's coding activity is the same
+    /// fact regardless of which of their team rooms is asking, and one client process
+    /// (desktop, CLI, editor) can refresh it on behalf of every room they belong to.
+    /// Room *membership* (the lease in `member_key`) is separate — see `join`/`renew`.
     pub async fn heartbeat(&self, user_id: Uuid) -> Result<()> {
         self.command(
             "SET",
@@ -305,6 +312,32 @@ impl RedisPresenceStore {
             )
             .await?;
         Ok(result > 0)
+    }
+
+    /// Suppresses presence-heartbeat's auto-rejoin for this room/user for
+    /// `AUTO_JOIN_SNOOZE_SECONDS`. Called when a user explicitly leaves a team room so
+    /// the next throttled heartbeat tick (as soon as ~30s later, since they are
+    /// presumably still coding) does not silently pull them back in.
+    pub async fn snooze_auto_join(&self, room_id: Uuid, user_id: Uuid) -> Result<()> {
+        self.command(
+            "SET",
+            &[
+                auto_join_snooze_key(room_id, user_id),
+                "1".to_string(),
+                "EX".to_string(),
+                AUTO_JOIN_SNOOZE_SECONDS.to_string(),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn is_auto_join_snoozed(&self, room_id: Uuid, user_id: Uuid) -> Result<bool> {
+        let exists = integer_or_zero(
+            self.command("EXISTS", &[auto_join_snooze_key(room_id, user_id)])
+                .await?,
+        );
+        Ok(exists > 0)
     }
 
     pub async fn leave(&self, room_id: Uuid, user_id: Uuid) -> Result<()> {
@@ -1112,6 +1145,9 @@ fn movement_rate_key(user_id: Uuid) -> String {
 }
 fn user_rooms_key(user_id: Uuid) -> String {
     format!("presence:user:{user_id}:rooms")
+}
+fn auto_join_snooze_key(room_id: Uuid, user_id: Uuid) -> String {
+    format!("presence:room:{room_id}:auto-join-snooze:{user_id}")
 }
 fn session_zones_key(room_id: Uuid) -> String {
     format!("presence:room:{room_id}:sessions")

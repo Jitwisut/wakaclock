@@ -5,6 +5,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import '@/components/presence/presence-theme.css';
+import { PixelOfficeDirectory } from '@/components/presence/PixelOfficeDirectory';
+import { PixelOfficeDock } from '@/components/presence/PixelOfficeDock';
+import { PixelOfficeToolRail } from '@/components/presence/PixelOfficeToolRail';
 import { presenceBodyFont, presenceHeadingFont } from '@/components/presence/presence-fonts';
 import { PresenceHeader } from '@/components/presence/PresenceHeader';
 import {
@@ -15,6 +18,7 @@ import {
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useCoworkingHistory } from '@/hooks/use-coworking-history';
+import { useOfficeChrome } from '@/hooks/use-office-chrome';
 import { usePresenceStream } from '@/hooks/use-presence-stream';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useRoomMovement } from '@/hooks/use-room-movement';
@@ -56,7 +60,10 @@ function formatDuration(seconds: number): string {
 
 function PresenceApp() {
   const currentUserId = useWakaclockUserStore((state) => state.userId) ?? '';
+  const currentUsername = useWakaclockUserStore((state) => state.username) ?? '';
   const reducedMotion = useReducedMotion();
+  const chrome = useOfficeChrome();
+  const officeWindowRef = React.useRef<HTMLDivElement>(null);
   const { isLoading: capabilitiesLoading, presenceV2Available } = useCapabilities();
   const [rooms, setRooms] = React.useState<PresenceV2Room[]>([]);
   const [roomPreview, setRoomPreview] = React.useState<null | PresenceV2RoomData>(null);
@@ -243,6 +250,13 @@ function PresenceApp() {
       window.localStorage.removeItem(ROOM_STORAGE_KEY);
       window.localStorage.removeItem(INVITE_TOKEN_KEY);
       await refreshRooms();
+      // A team room re-admits its members automatically as they keep coding (see the
+      // presence-heartbeat route); without this the leave would otherwise look like it
+      // silently failed a few seconds later. Ad-hoc rooms have no such path, so only say
+      // this for the case where it is actually true.
+      if (activeRoom.kind === 'team') {
+        toast.success("You left the room. You won't be re-added automatically for 1 hour.");
+      }
     } catch (requestError) {
       toast.error(requestError instanceof Error ? requestError.message : 'Could not leave room');
     } finally {
@@ -297,6 +311,18 @@ function PresenceApp() {
   const teamRooms = rooms.filter((room) => room.kind === 'team');
   const adhocRooms = rooms.filter((room) => room.kind === 'adhoc');
 
+  const inRoom = Boolean(activeRoom && snapshot);
+  const myPresenceState = users.find((user) => user.isCurrentUser)?.status ?? null;
+  const partyCount = inRoom && snapshot ? snapshot.roster.length : null;
+
+  let hudConnectionLabel = 'Connecting';
+  if (connected) hudConnectionLabel = 'Live';
+  else if (stale) hudConnectionLabel = 'Stale';
+
+  const notifyLocked = React.useCallback((label: string) => {
+    toast(`${label} isn't wired up yet — it's a preview of where PixelOffice is heading.`);
+  }, []);
+
   let content: React.ReactNode;
   if (capabilitiesLoading || presenceV2Available === false) {
     content = (
@@ -312,6 +338,7 @@ function PresenceApp() {
         activeSession={activeSession}
         connected={connected}
         currentUserId={currentUserId}
+        floorHeightScale={chrome.zoomPercent / 100}
         history={history}
         inviteId={inviteId}
         inviteUrl={inviteUrl}
@@ -356,14 +383,57 @@ function PresenceApp() {
 
   return (
     <div
-      className={`${presenceHeadingFont.variable} ${presenceBodyFont.variable} wakaclock-presence-theme p-4 sm:p-8`}
+      className={`${presenceHeadingFont.variable} ${presenceBodyFont.variable} wakaclock-presence-theme p-4 sm:p-6`}
+      ref={officeWindowRef}
       style={{ fontFamily: 'var(--font-presence-body)' }}
     >
-      <PresenceHeader />
-      {content}
+      <PresenceHeader
+        connectionLabel={inRoom ? hudConnectionLabel : null}
+        onLockedFeature={notifyLocked}
+        partyCount={partyCount}
+        presenceState={inRoom ? myPresenceState : null}
+        roomName={activeRoom?.name ?? null}
+        username={currentUsername || null}
+      />
+
+      <div className="flex gap-3">
+        <div className="hidden sm:block">
+          <PixelOfficeToolRail onLockedFeature={notifyLocked} />
+        </div>
+        <div className="min-w-0 flex-1">{content}</div>
+        {inRoom && snapshot ? (
+          <div className="hidden xl:block">
+            <PixelOfficeDirectory
+              onReact={chrome.pushReaction}
+              reducedMotion={reducedMotion}
+              users={users}
+              zones={snapshot.zones}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="relative mt-3">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2"
+        >
+          {chrome.reactions.map((reaction) => (
+            <span className="office-reaction-float text-2xl" key={reaction.id}>
+              {reaction.emoji}
+            </span>
+          ))}
+        </div>
+        <PixelOfficeDock
+          canReturnToDesk={Boolean(activeSession)}
+          chrome={chrome}
+          fullscreenTargetRef={officeWindowRef}
+          onLockedFeature={notifyLocked}
+          onReturnToDesk={handleReturnToSession}
+        />
+      </div>
     </div>
   );
-
 }
 
 export default function PresencePage() {

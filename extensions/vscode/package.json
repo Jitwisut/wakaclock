@@ -160,6 +160,11 @@
           "type": "boolean",
           "default": true,
           "description": "Offer one-time consent to install metadata-only hooks for detected AI tools. Turning this off stops automatic setup; existing hooks are not removed."
+        },
+        "wakaclock.presenceAutoJoinEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "While coding, periodically appear as active in your team's coworking presence room even when the AtoAxis dashboard tab isn't open. Off by default because it makes your activity visible to teammates without an explicit join."
         }
       }
     }
@@ -169,7 +174,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit -p ./",
     "test": "vitest run",
-    "build:resources": "node scripts/copy-ai-agents.js",
+    "build:resources": "node scripts/copy-ai-agents.js && node scripts/generate-ai-bundle-manifest.js resources/ai-agents",
     "package:target": "node scripts/package-target.js",
     "generate:cli-manifest": "node scripts/generate-cli-manifest.js",
     "vscode:prepublish": "npm run compile && npm run build:resources"

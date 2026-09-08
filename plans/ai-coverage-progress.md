@@ -1,82 +1,154 @@
-# AI coverage — implementation ledger (F0)
+# AI coverage — implementation ledger (F0/F1/F2/F3/F4)
 
-Updated 2026-09-05. Tracks actual status against [ai-coverage-task-ledger.md](ai-coverage-task-ledger.md);
-this file records what is wired/tested in `features/ai-coverage-f0-baseline`, it
-is not a claim of merge or live certification. Statuses use the ledger's own
-vocabulary: `planned → in_progress → implemented → validated`.
+Updated 2026-09-06. This ledger records what is wired and tested in
+features/ai-coverage-f0-baseline; it is not a claim of merge, live database
+certification, or real-account adapter certification. Statuses use the ledger's
+vocabulary: planned → in_progress → implemented → validated.
 
-| Task | Status | Evidence / remaining caveat |
-| --- | --- | --- |
-| F0-01 baseline | implemented | [docs/ai-coverage-baseline-2026-09-05.md](../docs/ai-coverage-baseline-2026-09-05.md) — branch point, component versions, module-wiring check (ObserverConfig defaults confirmed off/observe_only; naming collision noted). |
-| F0-02 doctor placeholders (audit gap #4) | implemented, failing on purpose | `f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state` in [backend/api/crates/wakaclock-cli/tests/broker_process.rs](../backend/api/crates/wakaclock-cli/tests/broker_process.rs), `#[ignore]`d with reason. Spawns a real broker, confirms `doctor ai` sees it running, shows `ai doctor` hardcodes `running: false` regardless. Run with `cargo test -p wakaclock-cli -- --ignored f0_02_ai_doctor`. |
-| F0-02 unmatched AI edit (audit gap #1) | implemented, failing on purpose | `it.fails(...)` reproducer in [extensions/vscode/test/aiAttribution.test.ts](../extensions/vscode/test/aiAttribution.test.ts) — an edit with zero sidecar candidates currently returns `human`; decision D06 says it should be `unattributed`. `it.fails` keeps `npm test` green while the gap stands; if it starts unexpectedly *passing*, `vitest` fails the run, which is the signal to promote it back to a normal `it`. |
-| F0-02 delayed sidecar | **fixture only, no assertion yet — now explained, still deferred** | `classify()`'s correlation window (`CORRELATION_WINDOW_SECONDS = 15`) already has a boundary test (`does not match an event one second past the 15-second boundary`) that pins current behavior. F0-05 (below) designed the revision mechanism this scenario needs, and found the specific reason it can't be closed yet: an editor-flushed observation has **zero available alias proof** against a later AI event today (no shared content-version signal exists on both sides) — see [design doc](design-canonical-operation-and-revision-protocol.md) §3/§5.1.5. Needs a new capability (F1) before this fixture can get a real assertion. |
-| F0-02 mixed human+AI edits | **fixture only, no assertion yet** | Not written, for the same reason: per-change ownership (F1-02) and exact editor↔agent reconciliation (F1-04) define what "correct" looks like for a batch containing both human and AI keystrokes on the same file/window, and that protocol isn't decided yet. |
-| F0-03 ADR: unknown vs Unattributed AI | implemented | [plans/decision-unknown-authorship-vs-unattributed-ai.md](decision-unknown-authorship-vs-unattributed-ai.md) — truth table across Rust core/ClickHouse/API JSON/frontend confirms no layer promotes `Unknown → AI`. Found and documented (not fixed) a real instance of the *opposite* conflation: `wakatime_import.rs::map_heartbeat` maps historical AI-generated WakaTime data to `actor_type: "unknown"` instead of `ai_inferred`, bypassing `resolve_attribution` entirely. Flagged for F1-07. |
-| F0-04 VS Code capability spike | implemented | [docs/vscode-human-input-capability-spike-2026-09-05.md](../docs/vscode-human-input-capability-spike-2026-09-05.md) — `TextDocumentChangeReason` only ever distinguishes undo/redo; "keystrokes" is a content-delta heuristic, not a keyboard count; IME composition is unobservable by any VS Code extension API; formatter/paste rewrites are only partially distinguishable (paste, only when the custom clipboard MIME token round-trips); `vscode.env.appName`/`vscode.version` are never captured today, meaning the extension can't tell it's running inside a VS Code fork (Cursor/Windsurf) with its own built-in AI features. |
-| F0-05 canonical operation/alias/revision/correction protocol | implemented | [plans/design-canonical-operation-and-revision-protocol.md](design-canonical-operation-and-revision-protocol.md) — canonical operation ID is always a real producer `event_id` (never a synthetic third ID); aliases require ID/session or content-version proof only (never time+line-delta); revision protocol picks full-value correction rows with `max(revision)`-per-operation as the only valid read (naive `sum()` across revisions double-counts — named as a required F1-08 change to every existing line-summing query, e.g. `ai_stats.rs::fetch_agents`). Three worked examples (late event, retry, multifile) with real numbers. Explicitly identifies that the editor↔AI late-evidence pairing has no available proof today — a capability gap for F1, not solved by this design. |
-| F0-06 wire/schema compatibility inventory | implemented | [plans/wire-schema-compatibility-inventory-2026-09-05.md](wire-schema-compatibility-inventory-2026-09-05.md) — three boundaries (local hook↔broker wire, CLI↔API, API↔ClickHouse), only the first is strict (`deny_unknown_fields` everywhere in the parse chain, verified via `main.rs`); found this codebase already anticipates the resulting hook/binary version-skew risk (`CliPathReport`/`cli_identity_mismatch`) though no live drop was confirmed. Verified ClickHouse reads decode positionally by explicit column list (not `SELECT *`) and named the real hazard: every `fetch_all::<HeartbeatRow>()` call site must independently track `HeartbeatRow`'s field order. Postgres confirmed out of scope for F1's fields. The previously open retention decision is now recorded in [plans/ai-coverage-retention-policy.md](ai-coverage-retention-policy.md) and enforced by the local ledger; server migration remains F1-05/F1-06 work. |
-| F0-07 ground-truth corpus manifest | implemented | [plans/ai-coverage-ground-truth-manifest.md](ai-coverage-ground-truth-manifest.md) — Tier 1 (local/synthetic/no-account, ~12 scenarios mapped to existing test infra, buildable now) and Tier 2 (needs a real AI tool account per adapter; status per adapter drawn from existing `CAPABILITIES.md`/`VERIFICATION.md`, not re-measured). Every scenario `not_run`, no fabricated results or cost figures. Names two candidate "first release tuples" (Claude Code refresh vs. Gemini CLI as next-new-adapter) without picking one — a scheduling call outside this document's scope. |
-
-## F0 phase status
-
-F0-01 through F0-07 have their documents and reproduction artifacts. The missing
-retention decision is now explicit and implemented for the local durable ledger:
-15-second grace, 24-hour pending observations, and 30-day superseded-revision and
-alias history. That makes the F0 schema-ownership gate reviewable; it does not claim
-live ground-truth validation. F1 is now in progress for the server migration and the
-editor/sidecar reconciliation path.
-
-## F1 implementation started
+## F0 — baseline and decisions
 
 | Task | Status | Evidence / remaining caveat |
 | --- | --- | --- |
-| F1-05 canonical IDs/aliases | in_progress | `ai/revision.rs` enforces direct tool-event/entity or content-version/entity proof; `AiAttributionState::record_event_alias` persists one-hop aliases and rejects session-only/time-only guesses. Server alias storage and producer wiring remain. |
-| F1-06 revision storage/read semantics | in_progress | `attribution_revisions` SQLite table, idempotent payload-hash append, full-value correction rows, max-revision read, and retention pruning are implemented and tested. The ClickHouse `heartbeats`/`heartbeats_incoming` schemas and `HeartbeatRow` now carry additive `revision` (default `0`), including reprocess reads; correction writers, canonical-winner projections, and client revision input remain. |
+| F0-01 baseline | validated | [baseline](../docs/ai-coverage-baseline-2026-09-05.md) records branch point, versions, module wiring, and dirty-tree boundary. |
+| F0-02 doctor placeholder | validated | The former doctor ai/ai doctor running-state mismatch is now a passing broker integration regression in backend/api/crates/wakaclock-cli/tests/broker_process.rs. |
+| F0-02 unmatched AI edit | validated | A change with no positive AI or human proof remains unattributed; covered by extensions/vscode/test/aiAttribution.test.ts. |
+| F0-02 delayed sidecar | validated | A pending observation is revised only after a valid tool ID or content-version proof arrives. |
+| F0-02 mixed human + AI edit | validated | Proven AI lines are split from the unknown residual; the whole batch is never relabeled as one actor. |
+| F0-03 unknown vs. Unattributed AI | validated | [decision ADR](decision-unknown-authorship-vs-unattributed-ai.md) and client/server/UI truth tables preserve the distinction. |
+| F0-04 VS Code capability spike | validated | [capability spike](../docs/vscode-human-input-capability-spike-2026-09-05.md) records real extension limits for undo/redo, paste, formatter, and IME. |
+| F0-05 canonical identity/revision protocol | validated | [protocol design](design-canonical-operation-and-revision-protocol.md) prohibits time/line-only aliases and defines full-value corrections. |
+| F0-06 wire/schema inventory | validated | [compatibility inventory](wire-schema-compatibility-inventory-2026-09-05.md) records strict boundaries and additive migration rules. |
+| F0-07 ground-truth manifest | validated | [ground-truth manifest](ai-coverage-ground-truth-manifest.md) separates runnable synthetic scenarios from real-account certification. |
 
-## Codex Desktop detection repair (2026-09-05)
+F0 is closed. Its original failure artifacts remain useful regression history;
+the production behaviors they described are now covered by F1 tests.
 
-The live Codex Desktop transcript shape was added to `wakaclock-core::ai::codex`: a
-`custom_tool_call` named `exec` now unwraps both literal
-`tools.apply_patch("...")` and `const patch = "..."` variable wrappers, then still
-requires the matching `custom_tool_call_output` before emitting verified file events.
-`run_ai_sync` validates each transcript event before batching so an unsafe historical
-Claude path is skipped without aborting later agents. Automatic sync now gives each
-agent its own bounded pass and scans newest transcripts first. Core tests (202 passed),
-CLI integration tests (6 passed, 1 ignored), and a replay of the real Codex Desktop
-session all pass; the replay grew from `0` to `44` parsed events, and the live broker
-processed Codex rows while keeping new retries at zero.
+## F1 — attribution, deduplication, and late reconciliation
 
-## Why two of the four F0-02 scenarios are deferred
+| Task | Status | Evidence / remaining caveat |
+| --- | --- | --- |
+| F1-01 pure attribution + conformance | validated | Shared decision fixtures pass Rust, VS Code, v1 ingestion, and history projection tests. |
+| F1-02 per-change editor pending state | validated | VS Code retains bounded pending observations and separates AI, human, and unknown line ownership. |
+| F1-03 sidecar version/sequence/resume | validated | Durable stream/sequence, partial-line and rotation recovery, bounded reads, and restart checkpoints pass extension/core tests. |
+| F1-04 exact editor↔agent reconciliation | validated | Matching requires tool identity or post-edit SHA-256 content proof; same-time/same-lines is not enough. |
+| F1-05 canonical IDs/aliases | validated | Codex/Claude/Gemini tool IDs propagate through broker and server; weak path/time/line fingerprint suppression is removed. |
+| F1-06 revision storage/read semantics | validated | Bounded monotonic full-value corrections, orphan/gap rejection, retry idempotency, and durable local history are implemented. |
+| F1-07 policy/legacy projection | validated | Invalid verified identity is downgraded; unknown is never promoted by source labels or legacy fields. |
+| F1-08 API/ClickHouse canonical projection | validated | Reads use heartbeats_canonical; max revision is selected before aggregation and reprocess carries revision. Legacy no-ID rows remain independent. |
+| F1-09 unmatched fallback/rollout | validated | Unmatched is unattributed; late proof can revise it; broker-owned gap flushes do not emit duplicate editor heartbeats. |
+| F1-10 crash/offline/concurrency matrix | validated locally | Broker restart/lease recovery, offline queue, sidecar restart, duplicate, and concurrency suites pass. Full live ClickHouse replay remains a release gate. |
 
-The ledger's F0-02 closing criterion is "มี expected/actual และ failing assertion
-ที่ชี้ช่องว่างจริง" (an expected/actual pair and a failing assertion that points at
-a real gap). For **unmatched AI edit** and **doctor placeholders**, "expected" is
-already fully determined by decisions already on record (D06; `doctor ai`'s own
-correct output as ground truth) — the reproducer just has to show the other path
-disagrees. For **delayed sidecar** and **mixed edits**, no committed decision yet
-defines "expected": F0-05 ("ออกแบบ canonical operation, aliases, revision และ
-correction protocol") is explicitly the task that produces that answer, and F0-05
-depends on F0-03 and F0-04, which have not started. Asserting a value now would be
-guessing, not reproducing a known gap — exactly what [ai-coverage-task-ledger.md](ai-coverage-task-ledger.md)
-§1 warns against ("เขียน code แล้ว ไม่เท่ากับ validated").
+## F2 — runtime diagnostics and multi-device persistence
 
-## Gates run locally for what's implemented so far
+| Task | Status | Evidence / remaining caveat |
+| --- | --- | --- |
+| F2-01 nullable health DTO | validated | v2 measurements carry availability, measured_at, and nullable value; v1 mapping remains additive. |
+| F2-02 real process/queue/parser probes | validated | Broker store, queue, service lock, parser files/cursors, lag, delivery, and safe errors are measured; probe failure is unavailable, not false/zero. |
+| F2-03 command/self-test unification | validated | ai doctor, doctor ai, ai status, and extension diagnostics use the same v2 collector contract. |
+| F2-04 consent separation | validated | Adapter tracking, observer, and diagnostics upload are separate; observer remains observe-only. |
+| F2-05 device repository/order/TTL | validated | Opaque device + boot + sequence is stored per user/device with 30-day TTL and deterministic newest-first fallback ordering. |
+| F2-06 persistence wiring/degradation | validated | PostgreSQL mode is durable; no-PostgreSQL mode reports storage: ephemeral. |
+| F2-07 validation/privacy/rate limits | validated | Auth scopes, bounded IDs/counters, safe codes, metadata-only payloads, and user/device upload limits are enforced. |
+| F2-08 observer noninterference/idle-stalled states | validated locally | Core noninterference tests and idle/stalled/unavailable representations pass; live production-vs-observe-only differential remains a release gate. |
 
-- `cargo test -p wakaclock-core -p wakaclock-cli` (backend/api) — core and CLI unit
-  suites passed; the broker integration target is green with 6 passed and 1
-  intentionally `#[ignore]`d (the new F0-02 reproducer). The first sandboxed run
-  could not bind localhost sockets; the same target was rerun with socket access and
-  passed.
-- `cargo test -p wakaclock-core` (backend/api) — 200 passed, including the new
-  revision/alias/retention ledger tests and the invariant that corrections cannot add
-  measured time or line totals.
-- `cargo test -p wakaclock-cli -- --ignored f0_02_ai_doctor` — confirms the
-  reproducer fails for the documented reason (`left: false, right: true` on
-  `broker.running`).
-- `bash extensions/ai-agents/common/tests/emit-event.test.sh` — passed.
-- `npm test` (extensions/vscode) — 96 passed, 1 expected fail (the new F0-02
-  reproducer via `it.fails`).
-- `npm run validate` (frontend/app) — **not green**, but confirmed pre-existing
-  on `main` before this branch (reproduced against commit `98e2455`); unrelated
-  to AI coverage, flagged separately, not fixed here.
+The detailed implementation record is [the F1/F2 closeout](../docs/ai-coverage-f1-f2-closeout-2026-09-06.md).
+
+## F3 — registry-driven setup (validated locally; release gate remains)
+
+F3 is implemented through the versioned `AdapterCatalogV1` contract. The CLI
+and Extension now consume the same runtime/platform/resource metadata, setup
+and uninstall outcomes carry schema/version/action fields, `--all` selects only
+detected supported runtimes, and parser/doctor dispatch is registry-driven.
+Bundles are verified with deterministic per-file SHA-256 manifests and an
+atomic active/previous pointer. Extension setup consumes the CLI report first
+and keeps only a compatibility fallback for older binaries. Native installer
+dependency failures and unsupported Windows shell setup are explicit outcomes;
+user config remains marker-owned and preserved.
+
+The implementation and local test gates are recorded in
+[the F3 closeout](../docs/ai-coverage-f3-closeout-2026-09-06.md). Live
+launchd/systemd/Task Scheduler restart-after-editor-close and real adapter
+certification remain release gates; they are not claimed from this macOS
+workspace.
+
+## F4 — certification infrastructure (validated locally; live promotion gate remains)
+
+F4-01 through F4-06 are implemented locally. Certification artifacts now carry
+an exact adapter/producer/tool/runtime/OS/architecture/capability tuple and
+mandatory stage results. A temporary live harness produces a pending,
+privacy-filtered candidate; it cannot edit the reviewed catalog. The server
+loads the reviewed catalog from the core release resource and resolves exact
+tuples with freshness and revocation checks. Legacy Claude/Codex records are
+historical evidence only. CLI tuple fields, API sanitization and frontend
+capability/runtime labels are covered by the same contract.
+
+See [the F4 implementation record](../docs/ai-coverage-f4-closeout-2026-09-06.md).
+An approved live tuple still needs an authenticated real-tool run, shipped
+build digest, backend/dashboard readback and human review.
+
+## F5 — Baseline agents (local work complete; live gates blocked)
+
+F5-01 Claude Code has a current local transcript-shape refresh for executable
+`2.1.246`. The parser now ignores valid non-edit content shapes without false
+malformed warnings and carries the assistant workspace root when a matching tool
+result omits `cwd`. A real local transcript replay emitted 33 file-edit events
+with zero malformed-record warnings. Native-hook/API/dashboard certification is
+still a live gate. See the [F5-01 refresh](../docs/ai-coverage-f5-01-claude-refresh-2026-09-06.md).
+
+F5-02 local implementation is in place. The Codex transcript parser now accepts
+the current `session_meta` shape without dropping records when both session-id
+keys are present, rewinds incomplete call/output pairs across bounded scans,
+rejects explicit failed calls, suppresses duplicate completion evidence, carries
+provider identity, and preserves create/modify/delete/rename metadata through the
+broker envelope. The built-in manifest is intentionally `scaffold` while the
+current `codex-cli 0.153.4` tuple is not yet live-certified; the prior
+`0.151.0-alpha.7.1` run remains historical evidence. Desktop/IDE transcript
+evidence is not used as a CLI certificate.
+
+The parser, patch, and broker regression gates pass. A fresh authenticated
+`codex exec` campaign with the shipped bundle proves source capture and
+producer parsing for 8 events across the four supported scenarios. A separate
+delivered retry run accepted one event and replayed it once; nested execution
+remains open. Local API readback found 8 unique Codex rows in the campaign
+window and the dashboard endpoint returned 200, but the certification driver
+still leaves these stages `not_run` until event-bound privacy-safe probes are
+wired. The adapter-specific driver now performs a second sync for retry proof
+when a delivered run is enabled. See the [F5 closeout matrix](../docs/ai-coverage-f5-closeout-2026-09-07.md),
+[F5-02 closeout](../docs/ai-coverage-f5-02-codex-closeout-2026-09-06.md) and
+[campaign driver record](../docs/ai-coverage-f5-02-campaign-driver-2026-09-06.md).
+
+F5-03 Gemini CLI remains survey-blocked on this machine. `gemini 0.58.0` is
+installed and advertises JSON/stream-JSON, session-file and hook surfaces, but
+no authenticated account or real edit payload is available. No synthetic
+fixture was added; exact payload inventory and live certification require an
+authenticated disposable run. See the [F5-03 inventory](../docs/ai-coverage-f5-03-gemini-inventory-2026-09-06.md)
+and the [F5 closeout matrix](../docs/ai-coverage-f5-closeout-2026-09-07.md).
+
+## Codex Desktop detection repair
+
+wakaclock-core::ai::codex recognizes the live Codex Desktop transcript shape:
+custom_tool_call named exec unwraps literal and variable-wrapped tools.apply_patch
+calls, and a matching tool output is required before a file event is emitted. Sync
+validates each transcript event, isolates parser failures per agent, scans newest
+transcripts first, and keeps the broker retry queue at zero in the recorded replay.
+The regression path is now covered as well: a stale release LaunchAgent no longer
+aborts a whole sync on one out-of-root historical record, and Delete+Add of the
+same file in one Codex patch gets distinct deterministic event IDs.
+
+## Local gates
+
+- cargo fmt --all -- --check — passed.
+- cargo check --workspace — passed.
+- Core diagnostics/revision/canonical tests — passed.
+- CLI unit suite — 53 passed.
+- Server diagnostics/rate-limit/correction tests — passed.
+- VS Code test suite — 107 passed; TypeScript lint passed.
+- Frontend typecheck and ESLint — passed; diagnostics panel test passed.
+- git diff --check — passed.
+- F4 Python schema/harness/catalog gates — passed.
+- Core/backend F4 certification tests — passed.
+
+The full frontend suite retains one unrelated pre-existing auth redirect failure
+in frontend/app/test/auth-screen.test.tsx. Live ClickHouse/PostgreSQL
+integration, historical materialized-view rebuild, and real-account adapter
+certification remain F4/F8 work.

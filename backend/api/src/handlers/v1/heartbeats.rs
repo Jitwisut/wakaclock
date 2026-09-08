@@ -7,13 +7,18 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
-use wakaclock_core::heartbeat::{ActivitySegment, ActorType, Category, EntityType, Heartbeat};
+use crate::model::heartbeat::HeartbeatRow;
+use wakaclock_core::ai::is_known_agent_id;
+use wakaclock_core::heartbeat::{
+    resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
+    Heartbeat, MAX_HEARTBEAT_REVISION,
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Request / Response models
@@ -75,6 +80,10 @@ pub struct HeartbeatPayload {
     pub ai_event_id: Option<String>,
     #[serde(default)]
     pub ai_change_id: Option<String>,
+    /// Append-only correction revision. The server accepts a bounded value and
+    /// canonical readers select the highest revision for the operation ID.
+    #[serde(default)]
+    pub revision: Option<u32>,
     #[serde(default)]
     pub prompt_character_count: Option<u64>,
     #[serde(default)]
@@ -91,6 +100,11 @@ pub struct HeartbeatPayload {
     pub token_source: Option<String>,
     #[serde(default)]
     pub attribution_source: Option<String>,
+    /// Canonical numeric actor confidence. Older clients used
+    /// `attribution_confidence`; both are accepted at the transport boundary,
+    /// but a conflicting pair is rejected.
+    #[serde(default)]
+    pub actor_confidence: Option<f32>,
     #[serde(default)]
     pub attribution_confidence: Option<f32>,
     pub ai_lines_added: Option<u32>,
@@ -165,11 +179,31 @@ pub struct HeartbeatItem {
     pub activity_segments: Vec<ActivitySegment>,
     /// Compatibility actor label retained for old API consumers.
     pub actor_type: String,
+    /// Confidence for the projected actor state. This is additive so older clients
+    /// can continue to consume the response while newer clients stop inferring it
+    /// from the legacy boolean and string fields.
+    pub actor_confidence: f32,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Best-effort presence liveness after a heartbeat write actually inserted something.
+///
+/// Feeds the in-memory prototype store *and*, when Presence v2 is enabled, the Redis
+/// key `derive_state_at` reads — so a `/api/v2` coworking roster flips the caller to
+/// "coding" just from logging time, without the client having to also send
+/// `POST /api/v2/me/presence/heartbeat`. Neither call may fail or delay the response;
+/// presence is a social feature, time tracking is not.
+async fn record_presence_activity(state: &AppState, user_id: Uuid) {
+    state.presence.record_heartbeat(user_id).await;
+    if let Some(redis_presence) = &state.redis_presence {
+        if let Err(error) = redis_presence.heartbeat(user_id).await {
+            tracing::debug!(%user_id, %error, "presence v2 liveness ping failed");
+        }
+    }
+}
 
 /// POST /api/v1/heartbeats — single heartbeat
 pub async fn create(
@@ -182,10 +216,11 @@ pub async fn create(
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     require_active_access(&state, user_id).await?;
-    let heartbeat =
-        resolve_heartbeat_project(&state, user_id, payload_to_heartbeat(payload, user_id))
-            .await
-            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let heartbeat = payload_to_heartbeat(payload, user_id)
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
+        .await
+        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     heartbeat
         .validate()
@@ -197,11 +232,10 @@ pub async fn create(
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    // Presence (plan.md Phase 7): best-effort, in-memory, and deliberately after the
-    // ClickHouse write succeeds — a presence update is not a reason to fail or delay a
-    // heartbeat, and `record_heartbeat` cannot itself fail (see presence_store).
+    // Presence: best-effort, and deliberately after the ClickHouse write succeeds — a
+    // presence update is not a reason to fail or delay a heartbeat.
     if inserted > 0 {
-        state.presence.record_heartbeat(user_id).await;
+        record_presence_activity(&state, user_id).await;
     }
 
     Ok(Json(HeartbeatResponse {
@@ -225,7 +259,8 @@ pub async fn create_bulk(
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
         .map(|p| payload_to_heartbeat(p, user_id))
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
 
     let mut resolved = Vec::with_capacity(heartbeats.len());
     for heartbeat in heartbeats.drain(..) {
@@ -250,7 +285,7 @@ pub async fn create_bulk(
     // See the same call in `create` above. Guarded on `count` so an empty batch — which
     // sent zero actual heartbeats — does not mark the user as having just been active.
     if count > 0 {
-        state.presence.record_heartbeat(user_id).await;
+        record_presence_activity(&state, user_id).await;
     }
 
     Ok(Json(HeartbeatResponse {
@@ -325,41 +360,40 @@ pub async fn list(
     let items: Vec<HeartbeatItem> = rows
         .into_iter()
         .map(|mut r| {
-            // Historical rows may predate the accuracy-first boundary. Apply the
-            // same source/confidence check at read time so an old inferred row can
-            // never reveal an agent name through the API.
-            let verified_identity = r.is_ai_generated
-                && r.ai_agent
-                    .as_deref()
-                    .is_some_and(|agent| !agent.trim().is_empty())
-                && r.ai_confidence
-                    .as_deref()
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
-                && r.ai_source.as_deref().is_some_and(|value| {
-                    matches!(
-                        value.trim().to_ascii_lowercase().as_str(),
-                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                    )
-                });
-            if !verified_identity {
-                if r.is_ai_generated {
+            // The stored actor enum is canonical for reads. Legacy booleans and
+            // metadata are used only to validate a verified identity or to safely
+            // downgrade a malformed verified row; they never promote `unknown`.
+            let stored_actor_type = r.actor_type.parse().unwrap_or_default();
+            let verified_identity = row_has_verified_identity(&r);
+            let projection = project_history_attribution(
+                stored_actor_type,
+                r.actor_confidence,
+                row_has_ai_evidence(&r),
+                verified_identity,
+                r.ai_source.as_deref(),
+                r.ai_confidence.as_deref(),
+            );
+
+            // Only a verified actor may expose identity. Inferred rows retain a
+            // useful compatibility marker without leaking an arbitrary label;
+            // human/unknown rows do not carry stale AI labels into the response.
+            match projection.actor_type {
+                ActorType::AiVerified => {}
+                ActorType::AiInferred => {
+                    r.ai_agent = None;
+                    r.ai_provider = None;
+                    r.ai_model = None;
                     r.ai_confidence = Some("inferred".to_string());
                     r.ai_source = Some("observer".to_string());
                 }
-                r.ai_agent = None;
-                r.ai_provider = None;
-                r.ai_model = None;
-            }
-            let actor_type = if r.is_ai_generated {
-                if verified_identity {
-                    "ai_verified"
-                } else {
-                    "ai_inferred"
+                ActorType::Human | ActorType::Unknown => {
+                    r.ai_agent = None;
+                    r.ai_provider = None;
+                    r.ai_model = None;
+                    r.ai_confidence = None;
+                    r.ai_source = None;
                 }
-            } else {
-                "unknown"
             }
-            .to_string();
             HeartbeatItem {
                 // History is still owner-scoped, but the response must not become a path
                 // exfiltration endpoint. Keep project-relative names where possible and reduce
@@ -384,7 +418,7 @@ pub async fn list(
                 active_seconds: r.active_seconds,
                 heartbeat_id: r.heartbeat_id,
                 activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
-                is_ai_generated: r.is_ai_generated,
+                is_ai_generated: projection.is_ai_generated,
                 ai_agent: r.ai_agent,
                 ai_provider: r.ai_provider,
                 ai_model: r.ai_model,
@@ -400,7 +434,8 @@ pub async fn list(
                 editor: r.editor,
                 operating_system: r.operating_system,
                 machine: r.machine,
-                actor_type,
+                actor_type: projection.actor_type.as_str().to_string(),
+                actor_confidence: projection.actor_confidence,
             }
         })
         .collect();
@@ -435,6 +470,94 @@ fn sanitize_entity(entity: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HistoryAttributionProjection {
+    actor_type: ActorType,
+    actor_confidence: f32,
+    is_ai_generated: bool,
+}
+
+/// Project a stored heartbeat into the public history contract.
+///
+/// `actor_type` is intentionally authoritative here. The legacy AI fields are
+/// evidence for validating a verified identity and for downgrading a spoofed
+/// `ai_verified` row, but they cannot turn an explicit `unknown` row into AI.
+fn project_history_attribution(
+    stored_actor_type: ActorType,
+    stored_confidence: f32,
+    has_ai_evidence: bool,
+    verified_identity: bool,
+    ai_source: Option<&str>,
+    ai_confidence: Option<&str>,
+) -> HistoryAttributionProjection {
+    let actor_type = match stored_actor_type {
+        ActorType::AiVerified if verified_identity => ActorType::AiVerified,
+        ActorType::AiVerified if has_ai_evidence => ActorType::AiInferred,
+        ActorType::AiVerified => ActorType::Unknown,
+        actor_type => actor_type,
+    };
+
+    // A confidence value belongs to the projected actor. Do not carry a verified
+    // value across a downgrade, and treat zero/non-finite legacy defaults as
+    // missing for actors that have positive confidence by definition.
+    let stored_confidence_is_usable = stored_actor_type == actor_type
+        && stored_confidence.is_finite()
+        && (0.0..=1.0).contains(&stored_confidence)
+        && (stored_confidence > 0.0 || actor_type == ActorType::Unknown);
+    let actor_confidence = if actor_type == ActorType::Unknown {
+        0.0
+    } else if stored_confidence_is_usable {
+        stored_confidence
+    } else {
+        actor_type.default_confidence(ai_source, ai_confidence)
+    };
+
+    HistoryAttributionProjection {
+        actor_type,
+        actor_confidence,
+        is_ai_generated: actor_type.is_ai(),
+    }
+}
+
+fn row_has_verified_identity(row: &HeartbeatRow) -> bool {
+    row.is_ai_generated
+        && row
+            .ai_agent
+            .as_deref()
+            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
+        && row
+            .ai_confidence
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
+        && row.ai_source.as_deref().is_some_and(is_verified_ai_source)
+}
+
+fn row_has_ai_evidence(row: &HeartbeatRow) -> bool {
+    row.is_ai_generated
+        || row.ai_agent.as_deref().is_some_and(has_non_sentinel_value)
+        || row
+            .ai_event_id
+            .as_deref()
+            .is_some_and(has_non_sentinel_value)
+        || row.ai_lines_added.is_some_and(|value| value > 0)
+        || row.ai_lines_deleted.is_some_and(|value| value > 0)
+        || row.ai_source.as_deref().is_some_and(is_verified_ai_source)
+}
+
+fn has_non_sentinel_value(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "unknown" | "<unknown>" | "null" | "undefined"
+    )
+}
+
+fn is_verified_ai_source(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+    )
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
@@ -460,26 +583,74 @@ async fn require_active_access(
     }
 }
 
-fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
-    let legacy_actor = p
+fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
+    if p.revision.unwrap_or(0) > MAX_HEARTBEAT_REVISION {
+        return Err("revision exceeds the supported bound".to_string());
+    }
+    let explicit_actor_type = p
         .actor_type
         .as_deref()
-        .map(|value| value.trim().to_ascii_lowercase());
-    let legacy_inferred = legacy_actor
+        .map(ActorType::from_str)
+        .transpose()?;
+    let legacy_inferred = explicit_actor_type == Some(ActorType::AiInferred);
+    let legacy_unknown = explicit_actor_type == Some(ActorType::Unknown);
+    let legacy_is_ai_generated = p.is_ai_generated;
+    let explicit_confidence = match (p.actor_confidence, p.attribution_confidence) {
+        (Some(actor), Some(attribution)) if actor.to_bits() != attribution.to_bits() => {
+            return Err("actor_confidence conflicts with attribution_confidence".to_string());
+        }
+        (Some(actor), _) => Some(actor),
+        (_, attribution) => attribution,
+    };
+    let has_legacy_ai_claim = p.ai_agent.is_some()
+        || p.ai_provider.is_some()
+        || p.ai_model.is_some()
+        || p.ai_event_id.is_some()
+        || p.ai_source
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.ai_confidence
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || p.is_ai_generated == Some(true)
+        || p.ai_lines_added.is_some_and(|value| value > 0)
+        || p.ai_lines_deleted.is_some_and(|value| value > 0);
+    let legacy_unattributed = legacy_inferred || (legacy_unknown && has_legacy_ai_claim);
+
+    // `unknown` was used by older clients as a compatibility label for an AI
+    // observation whose identity was not proven. Keep that safe interpretation,
+    // but do not feed the explicit enum back into the resolver alongside the
+    // positive AI evidence (the canonical contract correctly rejects that
+    // contradiction). Explicit `ai_verified` is accepted only when the payload
+    // itself carries the same proof that the resolver would require.
+    let has_verified_resolver_evidence = p
+        .ai_agent
         .as_deref()
-        .is_some_and(|value| matches!(value, "ai_inferred" | "inferred" | "correlated"));
-    let legacy_unknown = legacy_actor
-        .as_deref()
-        .is_some_and(|value| matches!(value, "unknown" | "unattributed"));
-    let legacy_unattributed = legacy_inferred
-        || (legacy_unknown
-            && (p.ai_agent.is_some()
-                || p.ai_provider.is_some()
-                || p.ai_model.is_some()
-                || p.ai_event_id.is_some()
-                || p.is_ai_generated == Some(true)
-                || p.ai_lines_added.is_some_and(|value| value > 0)
-                || p.ai_lines_deleted.is_some_and(|value| value > 0)));
+        .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
+        && p.ai_source.as_deref().is_some_and(|source| {
+            let normalized = source.trim().to_ascii_lowercase();
+            matches!(
+                normalized.as_str(),
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            ) && (p
+                .ai_confidence
+                .as_deref()
+                .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"))
+                || matches!(normalized.as_str(), "agent_hook" | "mcp"))
+        });
+    let resolver_actor_type = match explicit_actor_type {
+        Some(ActorType::Unknown) if legacy_unattributed => None,
+        Some(ActorType::AiVerified) if !has_verified_resolver_evidence => None,
+        actor => actor,
+    };
+    let has_ai_metadata = has_legacy_ai_claim || explicit_actor_type.is_some_and(ActorType::is_ai);
+    let positive_editor_evidence = !has_ai_metadata
+        && (p.is_write == Some(true)
+            || p.activity_segments.iter().any(|segment| {
+                segment.source.as_deref().is_some_and(|source| {
+                    source.eq_ignore_ascii_case("human") || source.eq_ignore_ascii_case("editor")
+                })
+            }));
     let date = Heartbeat::date_from_time(p.time);
     let created_at = p
         .created_at
@@ -562,6 +733,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         human_lines_deleted: p.human_lines_deleted,
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
+        revision: p.revision.unwrap_or(0),
         created_at,
     };
     // Actor-enum clients may send an explicit inferred/unknown label. Honor that
@@ -578,25 +750,44 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Heartbeat {
         heartbeat.attribution_source = None;
         heartbeat.attribution_confidence = None;
     }
+
+    let resolution = resolve_attribution(AttributionInput {
+        explicit_actor_type: resolver_actor_type,
+        explicit_confidence,
+        legacy_is_ai_generated,
+        ai_agent: heartbeat.ai_agent.as_deref(),
+        ai_source: heartbeat.ai_source.as_deref(),
+        ai_confidence: heartbeat.ai_confidence.as_deref(),
+        ai_event_id: heartbeat.ai_event_id.as_deref(),
+        ai_lines_added: heartbeat.ai_lines_added,
+        ai_lines_deleted: heartbeat.ai_lines_deleted,
+        human_lines_added: heartbeat.human_lines_added,
+        human_lines_deleted: heartbeat.human_lines_deleted,
+        unattributed_lines_added: heartbeat.unattributed_lines_added,
+        unattributed_lines_deleted: heartbeat.unattributed_lines_deleted,
+        keystrokes: heartbeat.keystrokes,
+        chars_added: heartbeat.chars_added,
+        chars_deleted: heartbeat.chars_deleted,
+        positive_editor_evidence,
+    })?;
+
+    // The resolver treats an agent_hook/MCP source as verified evidence even when
+    // an older client omitted the redundant confidence label. Populate that label
+    // before the shared policy runs so the identity is retained consistently.
+    if resolution.actor_type == ActorType::AiVerified && heartbeat.ai_confidence.is_none() {
+        heartbeat.ai_confidence = Some("verified".to_string());
+    }
+
     // Apply the same policy before validation and project resolution so old clients
     // cannot persist an unverified agent name through either single or bulk ingest.
     heartbeat.enforce_attribution_policy();
-    // `actor_type` is the canonical enum view of the legacy string fields above, which
-    // `enforce_attribution_policy` just normalized. It must only ever be `AiVerified`
-    // when the native-hook/MCP/transcript check passes — never a heuristic-inferred
-    // guess (plans/decision-accuracy-over-coverage.md).
-    heartbeat.actor_type = if heartbeat.has_verified_ai_identity() {
-        ActorType::AiVerified
-    } else if heartbeat.is_ai_generated {
-        ActorType::Unknown
-    } else {
-        ActorType::Human
-    };
-    heartbeat.actor_confidence = heartbeat.actor_type.default_confidence(
-        heartbeat.ai_source.as_deref(),
-        heartbeat.ai_confidence.as_deref(),
-    );
-    heartbeat
+    heartbeat.actor_type = resolution.actor_type;
+    heartbeat.actor_confidence = resolution.confidence;
+    // Unknown is deliberately separate from inferred AI. Keeping this legacy flag
+    // derived from the canonical enum prevents `validate()` from accepting a row
+    // whose dashboard bucket disagrees with its transport boolean.
+    heartbeat.is_ai_generated = resolution.actor_type.is_ai();
+    Ok(heartbeat)
 }
 
 async fn resolve_heartbeat_project(
@@ -625,9 +816,16 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
 
 #[cfg(test)]
 mod tests {
-    use super::{payload_to_heartbeat, sanitize_entity, HeartbeatPayload};
-    use serde_json::json;
+    use super::{
+        payload_to_heartbeat, project_history_attribution, sanitize_entity, HeartbeatItem,
+        HeartbeatPayload, MAX_HEARTBEAT_REVISION,
+    };
+    use serde_json::{json, Value};
     use uuid::Uuid;
+    use wakaclock_core::heartbeat::ActorType;
+
+    const DECISION_FIXTURE: &str =
+        include_str!("../../../../../fixtures/ai-attribution/decision-v1.json");
 
     #[test]
     fn history_entity_redacts_absolute_and_traversal_paths() {
@@ -658,13 +856,16 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
-        assert!(heartbeat.is_ai_generated);
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert!(!heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::Unknown);
+        assert_eq!(heartbeat.actor_confidence, 0.0);
         assert!(heartbeat.ai_agent.is_none());
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]
@@ -682,10 +883,71 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
         assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::AiVerified);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
         assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn correction_revision_is_preserved_and_bounded() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "heartbeat_id": "operation-1",
+            "ai_change_id": "change-1",
+            "revision": 2,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 4
+        }))
+        .unwrap();
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.revision, 2);
+        heartbeat.validate().unwrap();
+
+        let oversized: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "revision": MAX_HEARTBEAT_REVISION + 1
+        }))
+        .unwrap();
+        let error = payload_to_heartbeat(oversized, Uuid::nil()).unwrap_err();
+        assert!(error.contains("revision exceeds"));
+    }
+
+    #[test]
+    fn unknown_verified_label_is_stored_as_unattributed_ai() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "ai_agent": "verify-declared",
+            "ai_provider": "openai",
+            "ai_model": "gpt-test",
+            "ai_source": "agent_hook",
+            "ai_confidence": "verified",
+            "ai_lines_added": 3
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert!(!heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::Unknown);
+        assert_eq!(heartbeat.actor_confidence, 0.0);
+        assert!(heartbeat.ai_agent.is_none());
+        assert!(heartbeat.ai_provider.is_none());
+        assert!(heartbeat.ai_model.is_none());
+        assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]
@@ -704,11 +966,258 @@ mod tests {
         }))
         .unwrap();
 
-        let heartbeat = payload_to_heartbeat(payload, Uuid::nil());
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
         assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.actor_type, super::ActorType::AiInferred);
+        assert_eq!(heartbeat.actor_confidence, 0.6);
         assert!(heartbeat.ai_agent.is_none());
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn positive_editor_write_resolves_human_without_ai_metadata() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "is_write": true
+        }))
+        .unwrap();
+
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert_eq!(heartbeat.actor_type, super::ActorType::Human);
+        assert_eq!(heartbeat.actor_confidence, 1.0);
+        assert!(!heartbeat.is_ai_generated);
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn conflicting_confidence_fields_are_rejected() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "actor_confidence": 1.0,
+            "attribution_confidence": 0.5
+        }))
+        .unwrap();
+
+        let error = payload_to_heartbeat(payload, Uuid::nil()).unwrap_err();
+        assert!(error.contains("conflicts"));
+    }
+
+    #[test]
+    fn history_projection_keeps_canonical_actor_buckets() {
+        struct Case {
+            name: &'static str,
+            stored_actor_type: ActorType,
+            stored_confidence: f32,
+            has_ai_evidence: bool,
+            verified_identity: bool,
+            expected_actor_type: ActorType,
+            expected_confidence: f32,
+            expected_is_ai_generated: bool,
+        }
+
+        let cases = [
+            Case {
+                name: "unknown does not get promoted by stale AI evidence",
+                stored_actor_type: ActorType::Unknown,
+                stored_confidence: 0.0,
+                has_ai_evidence: true,
+                verified_identity: true,
+                expected_actor_type: ActorType::Unknown,
+                expected_confidence: 0.0,
+                expected_is_ai_generated: false,
+            },
+            Case {
+                name: "verified identity survives",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 0.95,
+                has_ai_evidence: true,
+                verified_identity: true,
+                expected_actor_type: ActorType::AiVerified,
+                expected_confidence: 0.95,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "spoofed verified identity downgrades to inferred",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 1.0,
+                has_ai_evidence: true,
+                verified_identity: false,
+                expected_actor_type: ActorType::AiInferred,
+                expected_confidence: 0.6,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "verified row without evidence becomes unknown",
+                stored_actor_type: ActorType::AiVerified,
+                stored_confidence: 1.0,
+                has_ai_evidence: false,
+                verified_identity: false,
+                expected_actor_type: ActorType::Unknown,
+                expected_confidence: 0.0,
+                expected_is_ai_generated: false,
+            },
+            Case {
+                name: "stored inferred actor remains inferred",
+                stored_actor_type: ActorType::AiInferred,
+                stored_confidence: 0.0,
+                has_ai_evidence: false,
+                verified_identity: false,
+                expected_actor_type: ActorType::AiInferred,
+                expected_confidence: 0.6,
+                expected_is_ai_generated: true,
+            },
+            Case {
+                name: "stored human actor gets its legacy default confidence",
+                stored_actor_type: ActorType::Human,
+                stored_confidence: 0.0,
+                has_ai_evidence: true,
+                verified_identity: false,
+                expected_actor_type: ActorType::Human,
+                expected_confidence: 1.0,
+                expected_is_ai_generated: false,
+            },
+        ];
+
+        for case in cases {
+            let projection = project_history_attribution(
+                case.stored_actor_type,
+                case.stored_confidence,
+                case.has_ai_evidence,
+                case.verified_identity,
+                Some("mcp"),
+                Some("verified"),
+            );
+            assert_eq!(
+                projection.actor_type, case.expected_actor_type,
+                "actor for {}",
+                case.name
+            );
+            assert_eq!(
+                projection.actor_confidence, case.expected_confidence,
+                "confidence for {}",
+                case.name
+            );
+            assert_eq!(
+                projection.is_ai_generated, case.expected_is_ai_generated,
+                "legacy boolean for {}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn history_item_serializes_projected_actor_confidence() {
+        let item = HeartbeatItem {
+            entity: "src/main.rs".to_string(),
+            entity_type: "file".to_string(),
+            time: 1_700_000_000.0,
+            project: None,
+            project_id: None,
+            branch: None,
+            head_revision: None,
+            repository_id: None,
+            language: Some("Rust".to_string()),
+            is_write: true,
+            category: "coding".to_string(),
+            lines: None,
+            line_number: None,
+            cursor_position: None,
+            dependencies: Vec::new(),
+            ast_language: None,
+            ast_confidence: None,
+            active_seconds: None,
+            is_ai_generated: false,
+            ai_agent: None,
+            ai_provider: None,
+            ai_model: None,
+            ai_source: None,
+            ai_confidence: None,
+            ai_event_id: None,
+            ai_lines_added: None,
+            ai_lines_deleted: None,
+            human_lines_added: None,
+            human_lines_deleted: None,
+            unattributed_lines_added: None,
+            unattributed_lines_deleted: None,
+            editor: "vscode".to_string(),
+            operating_system: "macos".to_string(),
+            machine: "dev".to_string(),
+            heartbeat_id: None,
+            activity_segments: Vec::new(),
+            actor_type: "human".to_string(),
+            actor_confidence: 1.0,
+        };
+
+        let serialized = serde_json::to_value(item).unwrap();
+        assert_eq!(serialized["actor_type"], "human");
+        assert_eq!(serialized["actor_confidence"], 1.0);
+        assert_eq!(serialized["is_ai_generated"], false);
+    }
+
+    #[test]
+    fn server_adapter_matches_shared_decision_fixture() {
+        let fixture: Value = serde_json::from_str(DECISION_FIXTURE).unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["contract"], "canonical_attribution_decision");
+
+        for case in fixture["cases"].as_array().unwrap() {
+            let mut payload = json!({
+                "entity": "src/main.rs",
+                "entity_type": "file",
+                "time": 1_700_000_000.0
+            });
+            for (key, value) in case["input"].as_object().unwrap() {
+                let Some(wire_key) = (match key.as_str() {
+                    "explicit_actor_type" => Some("actor_type"),
+                    "explicit_confidence" => Some("actor_confidence"),
+                    "legacy_is_ai_generated" => Some("is_ai_generated"),
+                    // This is adapter metadata used by the fixture's pure
+                    // implementation; the server derives it from its registry.
+                    "known_agent_id" | "positive_editor_evidence" => None,
+                    other => Some(other),
+                }) else {
+                    continue;
+                };
+                payload[wire_key] = value.clone();
+            }
+
+            let id = case["id"].as_str().unwrap();
+            let expected_kind = case["expected"]["kind"].as_str().unwrap();
+            let result = serde_json::from_value::<HeartbeatPayload>(payload)
+                .map_err(|error| format!("{id} payload: {error}"))
+                .and_then(|payload| payload_to_heartbeat(payload, Uuid::nil()));
+
+            match expected_kind {
+                "rejected" => assert!(result.is_err(), "{id} should be rejected"),
+                "resolved" => {
+                    let heartbeat = result.unwrap_or_else(|error| {
+                        panic!("{id} should resolve, got rejection: {error}")
+                    });
+                    assert_eq!(
+                        heartbeat.actor_type.as_str(),
+                        case["expected"]["actor_type"].as_str().unwrap(),
+                        "actor for {id}"
+                    );
+                    let expected_confidence = case["expected"]["confidence"].as_f64().unwrap();
+                    assert!(
+                        (f64::from(heartbeat.actor_confidence) - expected_confidence).abs()
+                            < 0.00001,
+                        "confidence for {id}: got {}, expected {expected_confidence}",
+                        heartbeat.actor_confidence
+                    );
+                    heartbeat.validate().unwrap_or_else(|error| {
+                        panic!("{id} violates heartbeat invariant: {error}")
+                    });
+                }
+                other => panic!("unsupported expected result kind {other} in {id}"),
+            }
+        }
     }
 }

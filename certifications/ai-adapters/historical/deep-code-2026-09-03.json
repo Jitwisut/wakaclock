@@ -1,0 +1,59 @@
+{
+  "adapter_id": "deep-code",
+  "arch": null,
+  "artifact_kind": "historical_adapter_evidence",
+  "blockers": [
+    "legacy v1 evidence has no complete certification runtime tuple",
+    "no supported standalone DeepSeek coding-client hook or transcript contract is available",
+    "DeepSeek API and browser activity cannot prove an editor file edit"
+  ],
+  "build_sha256": null,
+  "certificate_id": "deep-code-historical-2026-09-03",
+  "client_id": "deep-code",
+  "completed_at_utc": "2026-09-02T18:00:00Z",
+  "contract_version": "producer-v1",
+  "corpus_version": null,
+  "edit_modes": [],
+  "evidence_digest": "e669362d4f5cd157c3f6cf57901a636c8bcc9acc279b91e9a61ab82831bd52f6",
+  "evidence_kind": "historical",
+  "expires_at_utc": "2026-10-02T18:00:00Z",
+  "fingerprint_version": "caf1",
+  "legacy_artifact_sha256": "e669362d4f5cd157c3f6cf57901a636c8bcc9acc279b91e9a61ab82831bd52f6",
+  "limitations": [
+    "historical v1 record is retained for audit and cannot promote an adapter"
+  ],
+  "metrics": {
+    "broker_accepted": 0,
+    "canonical": 0,
+    "captured": 0,
+    "delivered": 0,
+    "duplicates": 0,
+    "producer_events": 0,
+    "replayed": 0
+  },
+  "model_id": null,
+  "os": null,
+  "payload_schema_versions": [],
+  "producer_version": null,
+  "promotable": false,
+  "provider_id": "deepseek",
+  "review_status": "historical",
+  "runtime": null,
+  "scenarios": [
+    {
+      "id": "legacy-record",
+      "status": "not_run"
+    }
+  ],
+  "schema_version": 2,
+  "stages": [
+    {
+      "id": "historical_import",
+      "status": "passed"
+    }
+  ],
+  "started_at_utc": "2026-09-02T18:00:00Z",
+  "status": "unverified",
+  "tested_commit_sha": "c7e78373d8f0d3c757d6b26d8ac6de14e903829a",
+  "tool_version": null
+}

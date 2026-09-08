@@ -453,9 +453,81 @@ pub async fn leave_room(
         .map_err(PresenceApiError::unavailable)?;
     if let Ok(repo) = repo(&state) {
         if let Ok(Some(room)) = repo.get(room_id).await {
+            if room.kind == PresenceRoomKind::Team {
+                // An explicit leave from a team's always-available home room must stick
+                // for a while, or the next presence-heartbeat tick (as soon as ~30s
+                // later, since the user is presumably still coding) silently undoes it.
+                // Ad-hoc rooms have no auto-join path, so nothing to suppress there.
+                if let Err(error) = redis.snooze_auto_join(room_id, user_id).await {
+                    tracing::warn!(room_id = %room_id, user_id = %user_id, error = %error, "could not snooze presence auto-join after leave");
+                }
+            }
             if let Ok(live) = redis.snapshot(room_id).await {
                 checkpoint_live_sessions(&state, room.team_id, room_id, &live).await;
             }
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Keeps a user present without requiring the dashboard tab to stay open. A viewer with
+/// an active SSE stream already gets this for free (`stream_presence` calls `redis.renew`
+/// on every tick); this route exists for the case that motivated it — a CLI/editor client
+/// that is still emitting heartbeats with no browser tab watching the room at all, which
+/// would otherwise fall off the roster after `VIEWER_LEASE_SECONDS`.
+///
+/// User-scoped rather than room-scoped: it marks the caller as actively coding for every
+/// team room they belong to, creating membership (via `join`) the first time and just
+/// refreshing the lease (via `renew`) afterward, without disturbing their last position.
+/// One team room failing to renew (closed/full) does not fail the others.
+///
+/// Skips auto-join for a room the caller explicitly left recently — see
+/// `snooze_auto_join` — so leaving does not just get silently undone by the next tick.
+pub async fn heartbeat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, PresenceApiError> {
+    let user_id = user(&state, &headers)?;
+    let repo = repo(&state)?;
+    let redis = redis(&state)?;
+    redis
+        .heartbeat(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+
+    let rooms = repo
+        .list_for_user(user_id)
+        .await
+        .map_err(PresenceApiError::internal)?;
+    let team_rooms = rooms
+        .into_iter()
+        .filter(|room| room.kind == PresenceRoomKind::Team);
+    for room in team_rooms {
+        match redis.renew(room.id, user_id).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat renew failed");
+                continue;
+            }
+        }
+        match redis.is_auto_join_snoozed(room.id, user_id).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat could not check auto-join snooze");
+                continue;
+            }
+        }
+        let username = match state.user_service.get_current(user_id).await {
+            Ok(current) => current.data.username,
+            Err(error) => {
+                tracing::warn!(user_id = %user_id, error = %error, "presence heartbeat could not resolve username for auto-join");
+                continue;
+            }
+        };
+        if let Err(error) = redis.join(room.id, user_id, username, None).await {
+            tracing::warn!(room_id = %room.id, user_id = %user_id, error = %error, "presence heartbeat auto-join failed");
         }
     }
     Ok(StatusCode::NO_CONTENT)

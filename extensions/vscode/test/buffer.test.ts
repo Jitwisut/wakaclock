@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +10,14 @@ import type { WakaclockConfigSnapshot } from "../src/types";
 
 function fileUri(fsPath: string) {
   return { scheme: "file", fsPath } as const as any;
+}
+
+function document(fsPath: string, text: string) {
+  return { uri: fileUri(fsPath), getText: () => text } as const as any;
+}
+
+function contentFingerprint(text: string) {
+  return `sha256:${createHash("sha256").update(text).digest("hex")}`;
 }
 
 function selection(line: number, character: number) {
@@ -157,9 +166,10 @@ describe("HeartbeatBufferManager", () => {
         // Like WakaTime, one isolated heartbeat has no duration until another
         // editor activity establishes the interval after it.
         active_seconds: 0,
-        human_lines_added: 1,
-        actor_type: "human",
-        actor_confidence: 1,
+        human_lines_added: undefined,
+        unattributed_lines_added: 1,
+        actor_type: "unknown",
+        actor_confidence: 0,
         line_number: 5,
         cursor_position: 3
       })
@@ -229,7 +239,7 @@ describe("HeartbeatBufferManager", () => {
       false,
       "coding",
       [],
-      expect.objectContaining({ keystrokes: 5, human_lines_added: 1 })
+      expect.objectContaining({ keystrokes: 5, human_lines_added: undefined, unattributed_lines_added: 1 })
     );
   });
 
@@ -684,7 +694,8 @@ describe("HeartbeatBufferManager", () => {
           entity: "C:/project/a.ts",
           time: 10,
           lines_added: 1,
-          lines_deleted: 0
+          lines_deleted: 0,
+          content_fingerprint: contentFingerprint("hello")
         }) + "\n"
       );
 
@@ -698,7 +709,7 @@ describe("HeartbeatBufferManager", () => {
       );
 
       await manager.recordTextChange(
-        { uri: fileUri("C:/project/a.ts") },
+        document("C:/project/a.ts", "hello"),
         [{ text: "hello", rangeLength: 0 }],
         selection(0, 0),
         10_000
@@ -723,7 +734,8 @@ describe("HeartbeatBufferManager", () => {
           entity: "C:/project/a.ts",
           time: 105,
           lines_added: 1,
-          lines_deleted: 0
+          lines_deleted: 0,
+          content_fingerprint: contentFingerprint("hello")
         }) + "\n"
       );
 
@@ -745,7 +757,7 @@ describe("HeartbeatBufferManager", () => {
       // ...then, five seconds later, the agent patches the same file and its sidecar
       // event matches the change exactly.
       await manager.recordTextChange(
-        { uri: fileUri("C:/project/a.ts") },
+        document("C:/project/a.ts", "hello"),
         [{ text: "hello", rangeLength: 0 }],
         selection(0, 3),
         105_000
@@ -833,7 +845,8 @@ describe("HeartbeatBufferManager", () => {
           lines_deleted: 0,
           agent: "claude-code",
           actor_type: "ai_verified",
-          actor_confidence: 1
+          actor_confidence: 1,
+          content_fingerprint: contentFingerprint("line1\nline2\nline3\nline4\nline5")
         }) + "\n"
       );
 
@@ -852,7 +865,7 @@ describe("HeartbeatBufferManager", () => {
       expect(manager.getBufferedSeconds()).toBe(40);
 
       await manager.recordTextChange(
-        { uri: fileUri("C:/project/a.ts") },
+        document("C:/project/a.ts", "line1\nline2\nline3\nline4\nline5"),
         [
           {
             text: "line1\nline2\nline3\nline4\nline5",
@@ -868,7 +881,7 @@ describe("HeartbeatBufferManager", () => {
       const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
       expect(payload.human_lines_added).toBeUndefined();
       expect(payload.active_seconds).toBe(40);
-      expect(payload.actor_type).toBe("human");
+      expect(payload.actor_type).toBe("unknown");
       expect(payload.ai_event_id).toBeUndefined();
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
@@ -879,9 +892,8 @@ describe("HeartbeatBufferManager", () => {
     // Regression test for the `Write` line-delta asymmetry: an agent hook overwriting
     // an existing file has no prior content to diff, so it reports lines_deleted: 0.
     // VS Code sees the reload as a full-range replacement, so its own linesDeleted is
-    // the old file's line count (200 here) — far outside LINE_MATCH_SLACK of the
-    // hook's 0. Before this fix that mismatch fell through to "unattributed", so the
-    // agent's entire rewrite was counted as neither Human nor AI in the wire payload.
+    // the old file's line count (200 here). The shared post-edit fingerprint proves
+    // ownership while the unmatched deleted lines remain explicitly unknown.
     //
     // This edit has no prior activity behind it, so the classifying flush sends
     // nothing on its own (an AI-only edit produces no heartbeat by design — see "does
@@ -907,7 +919,8 @@ describe("HeartbeatBufferManager", () => {
           source: "agent_hook",
           confidence: "verified",
           actor_type: "ai_verified",
-          actor_confidence: 1
+          actor_confidence: 1,
+          content_fingerprint: contentFingerprint("line1\nline2\nline3\nline4\nline5")
         }) + "\n"
       );
 
@@ -921,7 +934,7 @@ describe("HeartbeatBufferManager", () => {
       );
 
       await manager.recordTextChange(
-        { uri: fileUri("C:/project/b.ts") },
+        document("C:/project/b.ts", "line1\nline2\nline3\nline4\nline5"),
         [
           {
             text: "line1\nline2\nline3\nline4\nline5",
@@ -987,9 +1000,10 @@ describe("HeartbeatBufferManager", () => {
 
       expect(sendHeartbeat).toHaveBeenCalledTimes(1);
       const payload = sendHeartbeat.mock.calls[0][4];
-      expect(payload.actor_type).toBe("human");
+      expect(payload.actor_type).toBe("unknown");
       expect(payload.ai_event_id).toBeUndefined();
-      expect(payload.human_lines_added).toBe(5);
+      expect(payload.human_lines_added).toBeUndefined();
+      expect(payload.unattributed_lines_added).toBe(5);
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
     }

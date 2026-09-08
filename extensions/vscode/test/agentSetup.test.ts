@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -7,7 +8,9 @@ import {
   assertStableManagedHookPath,
   ensureCodexHook,
   ensureCodexHooksFeature,
+  parseAdapterCatalog,
   parseAdapterList,
+  parseAiSetupReport,
   pluginInstallCommand,
   refreshManagedCodexHookCommands,
   syncAgentPluginsToStableDir,
@@ -39,6 +42,29 @@ async function writeBundledSource(extensionPath: string): Promise<void> {
   await fs.mkdir(path.join(sourceDir, "codex"), { recursive: true });
   await fs.writeFile(path.join(sourceDir, "README.md"), "hello\n");
   await fs.writeFile(path.join(sourceDir, "codex", "heartbeat-hook.sh"), "#!/usr/bin/env bash\n");
+}
+
+async function writeSourceManifest(sourceDir: string, bundleVersion: string): Promise<void> {
+  const files: Record<string, string> = {};
+  async function visit(current: string): Promise<void> {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+      } else if (entry.isFile() && entry.name !== "bundle-manifest.json") {
+        const relative = path.relative(sourceDir, full).split(path.sep).join("/");
+        files[relative] = createHash("sha256").update(await fs.readFile(full)).digest("hex");
+      }
+    }
+  }
+  await visit(sourceDir);
+  const digest = createHash("sha256").update(JSON.stringify(files)).digest("hex");
+  await fs.writeFile(
+    path.join(sourceDir, "bundle-manifest.json"),
+    `${JSON.stringify({ schema_version: 1, bundle_version: bundleVersion, files, digest }, null, 2)}\n`
+  );
 }
 
 async function runHook(script: string, input: unknown, env: NodeJS.ProcessEnv): Promise<void> {
@@ -136,6 +162,35 @@ describe("syncAgentPluginsToStableDir", () => {
     expect(first).not.toBe(second);
     await expect(fs.access(first as string)).resolves.toBeUndefined();
     await expect(fs.access(second as string)).resolves.toBeUndefined();
+  });
+
+  it("refreshes a stable dir when the verified bundle digest changes", async () => {
+    const { extensionPath, homeDir, logger } = setup();
+    const sourceDir = path.join(extensionPath, "resources", "ai-agents");
+    await fs.mkdir(path.join(sourceDir, "codex"), { recursive: true });
+    await fs.mkdir(path.join(sourceDir, "common"), { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "README.md"), "first\n");
+    await fs.writeFile(path.join(sourceDir, "codex", "heartbeat-hook.sh"), "#!/bin/sh\n");
+    await fs.writeFile(path.join(sourceDir, "common", "emit-event.sh"), "#!/bin/sh\n");
+    await writeSourceManifest(sourceDir, "1.2.3");
+
+    const target = await syncAgentPluginsToStableDir({
+      extensionPath,
+      extensionVersion: "1.2.3",
+      homeDir,
+      logger
+    });
+    expect(await fs.readFile(path.join(target as string, "README.md"), "utf8")).toBe("first\n");
+
+    await fs.writeFile(path.join(sourceDir, "README.md"), "updated\n");
+    await writeSourceManifest(sourceDir, "1.2.3");
+    await syncAgentPluginsToStableDir({
+      extensionPath,
+      extensionVersion: "1.2.3",
+      homeDir,
+      logger
+    });
+    expect(await fs.readFile(path.join(target as string, "README.md"), "utf8")).toBe("updated\n");
   });
 });
 
@@ -321,6 +376,24 @@ describe("adapter registry consumption (planai2 p1.5)", () => {
     expect(parsed.map((m) => m.id)).toEqual(["claude-code", "codex", "gemini-cli"]);
     expect(parseAdapterList("not json")).toEqual([]);
     expect(parseAdapterList("{}")).toEqual([]);
+  });
+
+  it("reads the versioned catalog and separates partial setup outcomes", () => {
+    const catalog = parseAdapterCatalog(JSON.stringify({ schema_version: 1, adapters: JSON.parse(listJson) }));
+    expect(catalog?.schema_version).toBe(1);
+    expect(catalog?.adapters[1].id).toBe("codex");
+    const report = parseAiSetupReport(JSON.stringify({
+      schema_version: 1,
+      overall: "partial",
+      suggested_action: "repair failed adapters",
+      agents: [
+        { id: "codex", status: "configured", outcome_code: "configured" },
+        { id: "gemini-cli", status: "failed", outcome_code: "resource_invalid", suggested_action: "repair bundle" }
+      ]
+    }));
+    expect(report?.overall).toBe("partial");
+    expect(report?.agents[1].outcome_code).toBe("resource_invalid");
+    expect(parseAiSetupReport(JSON.stringify({ agents: [] }))).toBeUndefined();
   });
 
   it("pluginInstallCommand splits the manifest args and skips non-plugin strategies", () => {

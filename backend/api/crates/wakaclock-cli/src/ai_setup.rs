@@ -2,13 +2,16 @@
 //!
 //! The VS Code extension has a richer consent UI, but the CLI must also be able
 //! to bootstrap an installation from a terminal.  This module intentionally
-//! shares the Rust adapter registry with `wakaclock adapter list`: setup never
-//! has a second hard-coded list of clients or providers.  It copies the tested
-//! adapter bundle into a managed, versioned directory and then performs only the
-//! adapter-owned configuration change.  User config outside the AtoAxis marker
-//! is left byte-for-byte unchanged.
+//! shares the Rust adapter registry with `wakaclock adapter list`: provider,
+//! verification and install metadata come from the manifest, while the small
+//! implementation dispatch only names adapters with a tested installer path. It
+//! copies the tested adapter bundle into a managed, versioned directory and then
+//! performs only the adapter-owned configuration change. User config outside the
+//! AtoAxis marker is left byte-for-byte unchanged.
 
+use fs2::FileExt;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -19,17 +22,9 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use wakaclock_core::ai::{
-    normalize_client_id, AdapterManifest, AdapterRegistry, DetectedAiProcess, VerificationStatus,
-};
+use wakaclock_core::ai::adapter::VerificationStatus;
+use wakaclock_core::ai::{normalize_client_id, AdapterManifest, AdapterRegistry, AdapterRuntime};
 
-const SETUP_CLIENTS: &[&str] = &[
-    "claude-code",
-    "codex",
-    "gemini-cli",
-    "kilo-code",
-    "kimi-code-cli",
-];
 const BUNDLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUNDLE_ENV: &str = "WAKACLOCK_AGENT_BUNDLE";
 /// Comma-separated adapter ids disabled by policy.  This is deliberately a
@@ -38,8 +33,13 @@ const BUNDLE_ENV: &str = "WAKACLOCK_AGENT_BUNDLE";
 pub(crate) const DISABLED_ADAPTERS_ENV: &str = "WAKACLOCK_DISABLED_AI_ADAPTERS";
 const HOOK_CONSENT_FILENAME: &str = "agent-hook-consent.json";
 const HOOK_AUDIT_FILENAME: &str = "agent-hook-audit.jsonl";
-const AUTO_INSTALL_POLICY_FILENAME: &str = "agent-hook-autoinstall.json";
-const AUTO_INSTALL_ENV: &str = "WAKACLOCK_AUTO_INSTALL_AGENT_HOOKS";
+const LEGACY_SETUP_STATE_FILENAME: &str = "ai-setup.json";
+const OBSERVER_CONFIG_FILENAME: &str = "ai-observer.toml";
+const OBSERVER_CONFIG_BODY: &str = "# Managed by AtoAxis after explicit ai setup consent.\nenabled = true\nattribution_mode = \"observe_only\"\n";
+const SETUP_REPORT_SCHEMA_VERSION: u8 = 1;
+const BUNDLE_MANIFEST_SCHEMA_VERSION: u8 = 1;
+const BUNDLE_MANIFEST_FILENAME: &str = "bundle-manifest.json";
+const ACTIVE_BUNDLE_FILENAME: &str = "active-bundle.json";
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -50,17 +50,30 @@ enum HookConsent {
 
 type HookConsentFile = BTreeMap<String, HookConsent>;
 
-#[derive(Debug, serde::Deserialize)]
-struct AutoInstallPolicy {
-    enabled: bool,
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+struct BundleManifest {
+    schema_version: u8,
+    bundle_version: String,
+    files: BTreeMap<String, String>,
+    digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+struct ActiveBundleState {
+    schema_version: u8,
+    active: String,
+    checksum: String,
+    previous: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct SetupAgentReport {
     id: String,
     status: String,
+    outcome_code: String,
     executable: Option<String>,
     verification_status: String,
+    suggested_action: Option<String>,
     detail: Option<String>,
 }
 
@@ -73,9 +86,13 @@ struct SetupBrokerReport {
 
 #[derive(Debug, Serialize)]
 struct SetupReport {
+    schema_version: u8,
+    overall: String,
+    suggested_action: Option<String>,
     bundle: Option<String>,
     bundle_detail: Option<String>,
     broker: SetupBrokerReport,
+    observer_detail: Option<String>,
     agents: Vec<SetupAgentReport>,
 }
 
@@ -83,7 +100,16 @@ struct SetupReport {
 struct UninstallReport {
     id: String,
     status: String,
+    outcome_code: String,
+    suggested_action: Option<String>,
     detail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UninstallResponse {
+    schema_version: u8,
+    overall: String,
+    agents: Vec<UninstallReport>,
 }
 
 /// Run `wakaclock ai setup [AGENT|--all]`.
@@ -103,38 +129,40 @@ pub(crate) fn run(
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    let _setup_lock = acquire_setup_lock(&home)?;
 
-    // Broker installation is deliberately best-effort here.  A service manager
-    // may be unavailable in a container/SSH session, while the local adapters can
-    // still spool events and the report should tell the user how to repair it.
-    let broker = match crate::broker::ensure_token()
-        .map_err(|error| error.to_string())
-        .and_then(|_| crate::agent_service::install())
-    {
-        Ok(_) => {
-            let status = crate::agent_service::status();
-            SetupBrokerReport {
-                installed: status.installed,
-                running: status.running,
-                detail: if status.running {
-                    None
-                } else {
-                    Some(
-                        "service installed but is not running; run `wakaclock broker start`".into(),
+    let catalog = registry.catalog_v1();
+    // Do not copy a bundle, create a token, or install a service until at least
+    // one adapter has an existing opt-in or the caller supplies `--yes`.  A
+    // discovery-only setup command must be side-effect free.
+    let setup_consented = selected.iter().any(|id| {
+        let detected_supported = catalog
+            .adapters
+            .iter()
+            .find(|entry| entry.manifest.id == *id)
+            .is_some_and(|entry| {
+                !matches!(entry.runtime, AdapterRuntime::None)
+                    && entry.supports_platform(std::env::consts::OS)
+                    && resolve_and_probe_executable(
+                        &entry.manifest.executable.command_names,
+                        entry.manifest.executable.version_arg.as_deref(),
                     )
-                },
-            }
+                    .is_some()
+            });
+        detected_supported
+            && !is_adapter_disabled(id)
+            && (effective_consent(&home, id) == Some(HookConsent::Enabled) || yes)
+    });
+    let (bundle, bundle_detail) = if setup_consented {
+        match ensure_managed_bundle(&home) {
+            Ok(path) => (path, None),
+            Err(error) => (None, Some(error)),
         }
-        Err(error) => SetupBrokerReport {
-            installed: false,
-            running: false,
-            detail: Some(format!("broker setup unavailable: {error}")),
-        },
-    };
-
-    let (bundle, bundle_detail) = match ensure_managed_bundle(&home) {
-        Ok(path) => (path, None),
-        Err(error) => (None, Some(error)),
+    } else {
+        (
+            None,
+            Some("explicit consent is required before installing adapter resources".into()),
+        )
     };
 
     let mut agents = Vec::with_capacity(selected.len());
@@ -142,12 +170,58 @@ pub(crate) fn run(
         let manifest = registry
             .get(&id)
             .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
-        if hook_consent(&home, &id) == Some(HookConsent::Denied) {
+        let catalog_entry = catalog
+            .adapters
+            .iter()
+            .find(|entry| entry.manifest.id == id);
+        if let Some(entry) = catalog_entry {
+            if !entry.supports_platform(std::env::consts::OS) {
+                agents.push(SetupAgentReport {
+                    id,
+                    status: "unsupported".into(),
+                    outcome_code: "unsupported_platform".into(),
+                    executable: None,
+                    verification_status: format!("{:?}", manifest.effective_status())
+                        .to_lowercase(),
+                    suggested_action: Some(
+                        "use transcript-only mode or run setup on a supported platform".into(),
+                    ),
+                    detail: Some(format!(
+                        "native setup is not supported on {}",
+                        std::env::consts::OS
+                    )),
+                });
+                continue;
+            }
+        }
+        if all
+            && resolve_and_probe_executable(
+                &manifest.executable.command_names,
+                manifest.executable.version_arg.as_deref(),
+            )
+            .is_none()
+        {
+            agents.push(SetupAgentReport {
+                id,
+                status: "not_detected".into(),
+                outcome_code: "skipped_not_detected".into(),
+                executable: None,
+                verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                suggested_action: Some("install the adapter executable, then retry setup".into()),
+                detail: Some(
+                    "adapter executable was not detected; no configuration was changed".into(),
+                ),
+            });
+            continue;
+        }
+        if effective_consent(&home, &id) == Some(HookConsent::Denied) {
             agents.push(SetupAgentReport {
                 id,
                 status: "opted_out".into(),
+                outcome_code: "skipped_opted_out".into(),
                 executable: None,
                 verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                suggested_action: Some("remove the local opt-out record before retrying".into()),
                 detail: Some(
                     "auto-install is disabled for this agent; remove the local consent record before re-enabling"
                         .into(),
@@ -160,12 +234,14 @@ pub(crate) fn run(
         // installers use `--yes`. An ordinary `ai setup` invocation must not
         // silently rewrite another tool's configuration just because the agent
         // executable happens to be present. A persisted opt-out always wins.
-        if hook_consent(&home, &id).is_none() && !yes {
+        if effective_consent(&home, &id).is_none() && !yes {
             agents.push(SetupAgentReport {
                 id,
                 status: "consent_required".into(),
+                outcome_code: "consent_required".into(),
                 executable: None,
                 verification_status: format!("{:?}", manifest.effective_status()).to_lowercase(),
+                suggested_action: Some("rerun with --yes or approve setup in the editor".into()),
                 detail: Some(
                     "first hook write requires explicit consent; rerun with `wakaclock ai setup --yes` or approve in the editor".into(),
                 ),
@@ -173,15 +249,73 @@ pub(crate) fn run(
             continue;
         }
         set_hook_consent(&home, &id, HookConsent::Enabled)?;
-        let report = setup_adapter(manifest, bundle.as_deref(), &home);
+        let runtime = catalog
+            .adapters
+            .iter()
+            .find(|entry| entry.manifest.id == id)
+            .map(|entry| entry.runtime)
+            .unwrap_or(AdapterRuntime::None);
+        let report = setup_adapter(manifest, runtime, bundle.as_deref(), &home);
         append_hook_audit(&home, &id, "setup", &report.status);
         agents.push(report);
     }
 
+    // Broker installation is deliberately best-effort here.  A service manager
+    // may be unavailable in a container/SSH session, while the local adapters can
+    // still spool events and the report should tell the user how to repair it.
+    let broker = if setup_consented {
+        match crate::broker::ensure_token()
+            .map_err(|error| error.to_string())
+            .and_then(|_| crate::agent_service::install())
+        {
+            Ok(_) => {
+                let status = crate::agent_service::status();
+                SetupBrokerReport {
+                    installed: status.installed,
+                    running: status.running,
+                    detail: if status.running {
+                        None
+                    } else {
+                        Some(
+                            "service installed but is not running; run `wakaclock broker start`"
+                                .into(),
+                        )
+                    },
+                }
+            }
+            Err(error) => SetupBrokerReport {
+                installed: false,
+                running: false,
+                detail: Some(format!("broker setup unavailable: {error}")),
+            },
+        }
+    } else {
+        SetupBrokerReport {
+            installed: false,
+            running: false,
+            detail: Some("consent_required".into()),
+        }
+    };
+
+    let observer_detail = if has_enabled_consent_at(&home) {
+        match ensure_observer_config(&home) {
+            Ok(None) => None,
+            Ok(Some(path)) => Some(format!("observer enabled at {}", path.display())),
+            Err(error) => Some(format!("observer setup unavailable: {error}")),
+        }
+    } else {
+        None
+    };
+
+    let (overall, suggested_action) = setup_overall(&agents, &broker);
     let report = SetupReport {
+        schema_version: SETUP_REPORT_SCHEMA_VERSION,
+        overall: overall.into(),
+        suggested_action,
         bundle: bundle.map(|path| path.display().to_string()),
         bundle_detail,
         broker,
+        observer_detail,
         agents,
     };
     if json {
@@ -189,79 +323,130 @@ pub(crate) fn run(
     } else {
         print_text_report(&report);
     }
+    if matches!(report.overall.as_str(), "failed" | "partial") {
+        return Err(format!("AI adapter setup completed with {} outcome", report.overall).into());
+    }
     Ok(())
 }
 
-/// Install hooks for detected agents only after an explicit consent record exists.
-/// The broker calls this on a throttled cadence; a missing record is fail-closed,
-/// so merely launching an agent can never mutate its configuration.
-pub(crate) fn auto_setup_detected_agents(detected: &[DetectedAiProcess]) {
-    if !auto_install_enabled() {
-        return;
-    }
-    let Ok(home) = dirs::home_dir().ok_or("could not resolve home directory") else {
-        return;
-    };
-    let registry = AdapterRegistry::builtin();
-    let mut ids: Vec<String> = detected
-        .iter()
-        .map(|process| process.agent.clone())
-        .collect();
-    ids.sort();
-    ids.dedup();
-    let consented: Vec<String> = ids
-        .iter()
-        .filter(|id| {
-            SETUP_CLIENTS.contains(&id.as_str())
-                && hook_consent(&home, id) == Some(HookConsent::Enabled)
-        })
-        .cloned()
-        .collect();
-    if consented.is_empty() {
-        return;
-    }
-    let bundle = ensure_managed_bundle(&home).ok().flatten();
-    for id in consented {
-        let Some(manifest) = registry.get(&id) else {
-            continue;
-        };
-        if is_adapter_disabled(&id) {
-            continue;
-        }
-        let report = setup_adapter(manifest, bundle.as_deref(), &home);
-        append_hook_audit(&home, &id, "auto_setup", &report.status);
-    }
+/// Return whether any adapter has an explicit local opt-in. This is used by the
+/// CLI heartbeat path to gate passive transcript scanning after setup.
+pub(crate) fn has_enabled_consent() -> bool {
+    dirs::home_dir()
+        .map(|home| has_enabled_consent_at(&home))
+        .unwrap_or(false)
 }
 
-fn auto_install_enabled() -> bool {
-    let env_value = std::env::var(AUTO_INSTALL_ENV)
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase());
-    if matches!(
-        env_value.as_deref(),
-        Some("0") | Some("false") | Some("no") | Some("off")
-    ) {
-        return false;
-    }
-    if matches!(
-        env_value.as_deref(),
-        Some("1") | Some("true") | Some("yes") | Some("on")
-    ) {
-        return true;
-    }
+fn has_enabled_consent_at(home: &Path) -> bool {
+    // A new per-adapter record overrides the legacy aggregate state. This is
+    // important after uninstall: a denied adapter must not be resurrected by a
+    // stale `ai-setup.json` entry left by an older CLI.
+    AdapterRegistry::builtin()
+        .catalog_v1()
+        .adapters
+        .iter()
+        .filter(|entry| !matches!(entry.runtime, AdapterRuntime::None))
+        .any(|entry| effective_consent(home, entry.id()) == Some(HookConsent::Enabled))
+}
 
-    let Some(home) = dirs::home_dir() else {
-        return true;
-    };
-    fs::read_to_string(home.join(".wakaclock").join(AUTO_INSTALL_POLICY_FILENAME))
-        .ok()
-        .and_then(|text| serde_json::from_str::<AutoInstallPolicy>(&text).ok())
-        .map(|policy| policy.enabled)
-        .unwrap_or(true)
+fn setup_overall(
+    agents: &[SetupAgentReport],
+    broker: &SetupBrokerReport,
+) -> (&'static str, Option<String>) {
+    let failed = agents.iter().any(|agent| agent.status == "failed")
+        || (broker.installed && !broker.running)
+        || broker
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail != "consent_required");
+    let configured = agents
+        .iter()
+        .any(|agent| matches!(agent.status.as_str(), "configured" | "already_configured"));
+    if failed && configured {
+        return (
+            "partial",
+            Some(
+                "repair the failed adapters and rerun setup; configured adapters were preserved"
+                    .into(),
+            ),
+        );
+    }
+    if failed {
+        return (
+            "failed",
+            Some(
+                "inspect each adapter outcome and rerun setup after fixing the suggested action"
+                    .into(),
+            ),
+        );
+    }
+    if !configured {
+        return (
+            "skipped",
+            Some(
+                "install a detected supported adapter or grant setup consent before retrying"
+                    .into(),
+            ),
+        );
+    }
+    ("success", None)
+}
+
+fn effective_consent(home: &Path, id: &str) -> Option<HookConsent> {
+    hook_consent(home, id).or_else(|| {
+        fs::read_to_string(home.join(".wakaclock").join(LEGACY_SETUP_STATE_FILENAME))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get("adapters").cloned())
+            .and_then(|adapters| adapters.get(id).cloned())
+            .and_then(|adapter| {
+                adapter
+                    .get("consented")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .filter(|consented| *consented)
+            .map(|_| HookConsent::Enabled)
+    })
+}
+
+fn observer_config_path(home: &Path) -> PathBuf {
+    home.join(".wakaclock").join(OBSERVER_CONFIG_FILENAME)
+}
+
+fn ensure_observer_config(home: &Path) -> Result<Option<PathBuf>, String> {
+    let path = observer_config_path(home);
+    if path.exists() {
+        // A user-managed observer file wins. The parser still enforces
+        // observe-only mode for legacy `infer` values.
+        return Ok(None);
+    }
+    write_text_atomically(&path, OBSERVER_CONFIG_BODY).map_err(|error| error.to_string())?;
+    set_private_permissions(&path).map_err(|error| error.to_string())?;
+    Ok(Some(path))
 }
 
 fn consent_path(home: &Path) -> PathBuf {
     home.join(".wakaclock").join(HOOK_CONSENT_FILENAME)
+}
+
+fn acquire_setup_lock(home: &Path) -> Result<fs::File, Box<dyn Error>> {
+    let path = home.join(".wakaclock").join("ai-setup.lock");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(file),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err("another AI adapter setup is already running".into())
+        }
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 fn audit_path(home: &Path) -> PathBuf {
@@ -353,21 +538,72 @@ pub(crate) fn uninstall(
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
     let home = dirs::home_dir().ok_or("could not resolve home directory")?;
+    let _setup_lock = acquire_setup_lock(&home)?;
+    let catalog = registry.catalog_v1();
     let bundle = find_existing_managed_bundle(&home);
     let mut reports = Vec::with_capacity(selected.len());
     for id in selected {
         let manifest = registry
             .get(&id)
             .ok_or_else(|| format!("no adapter registered for '{id}'"))?;
-        let outcome = uninstall_adapter(manifest, bundle.as_deref(), &home);
+        // Preserve an explicit opt-out so the broker cannot reinstall the hook
+        // on its next discovery pass. This record is metadata-only and does not
+        // touch the agent's own configuration.
+        set_hook_consent(&home, &id, HookConsent::Denied)?;
+        let catalog_entry = catalog
+            .adapters
+            .iter()
+            .find(|entry| entry.manifest.id == id)
+            .cloned();
+        if catalog_entry
+            .as_ref()
+            .is_some_and(|entry| !entry.supports_platform(std::env::consts::OS))
+        {
+            let report = UninstallReport {
+                id: manifest.id.clone(),
+                status: "unsupported".into(),
+                outcome_code: "unsupported_platform".into(),
+                suggested_action: Some(
+                    "use transcript-only mode or run uninstall on a supported platform".into(),
+                ),
+                detail: Some(format!(
+                    "native uninstall is not supported on {}",
+                    std::env::consts::OS
+                )),
+            };
+            append_hook_audit(&home, &id, "uninstall", &report.status);
+            reports.push(report);
+            continue;
+        }
+        let runtime = catalog_entry
+            .map(|entry| entry.runtime)
+            .unwrap_or(AdapterRuntime::None);
+        let outcome = uninstall_adapter(manifest, runtime, bundle.as_deref(), &home);
+        append_hook_audit(&home, &id, "uninstall", &outcome.0);
+        let outcome_code = uninstall_outcome_code(&outcome.0).to_string();
+        let suggested_action = uninstall_suggested_action(&outcome.0);
         reports.push(UninstallReport {
             id: manifest.id.clone(),
             status: outcome.0,
+            outcome_code,
+            suggested_action,
             detail: outcome.1,
         });
     }
+    if all && !has_enabled_consent_at(&home) {
+        cleanup_unused_bundles(&home);
+    }
+    let has_failures = reports.iter().any(|report| report.status == "failed");
     if json {
-        println!("{}", serde_json::to_string_pretty(&reports)?);
+        let overall = if has_failures { "partial" } else { "success" };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&UninstallResponse {
+                schema_version: SETUP_REPORT_SCHEMA_VERSION,
+                overall: overall.into(),
+                agents: reports,
+            })?
+        );
     } else {
         for report in &reports {
             println!("{}: {}", report.id, report.status);
@@ -376,28 +612,78 @@ pub(crate) fn uninstall(
             }
         }
     }
+    if has_failures {
+        return Err("AI adapter uninstall completed with failures".into());
+    }
     Ok(())
 }
 
+fn uninstall_outcome_code(status: &str) -> &'static str {
+    match status {
+        "uninstalled" => "uninstalled",
+        "not_installed" => "skipped_not_installed",
+        "not_detected" => "skipped_not_detected",
+        "manual" => "manual_action_required",
+        "unsupported" => "unsupported_strategy",
+        _ => "failed",
+    }
+}
+
+fn uninstall_suggested_action(status: &str) -> Option<String> {
+    match status {
+        "manual" => Some("remove the adapter integration using the agent's own CLI".into()),
+        "not_detected" => Some("install the adapter CLI, then retry uninstall".into()),
+        "failed" => Some("inspect the adapter error and retry uninstall".into()),
+        _ => None,
+    }
+}
+
 fn find_existing_managed_bundle(home: &Path) -> Option<PathBuf> {
-    let root = home.join(".wakaclock/agent-plugins");
+    let root = bundle_root(home);
+    if let Ok(text) = fs::read_to_string(active_bundle_path(home)) {
+        if let Ok(state) = serde_json::from_str::<ActiveBundleState>(&text) {
+            let active = PathBuf::from(state.active);
+            if active.starts_with(&root) {
+                if let Ok(manifest) = verify_bundle(&active, None) {
+                    if manifest.digest == state.checksum {
+                        return Some(active);
+                    }
+                }
+            }
+        }
+    }
     let mut entries: Vec<PathBuf> = fs::read_dir(root)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join("common/emit-event.sh").is_file())
+        .filter(|path| path.is_dir() && verify_bundle(path, None).is_ok())
         .collect();
     entries.sort_by(|a, b| b.cmp(a));
     entries.into_iter().next()
 }
 
+fn cleanup_unused_bundles(home: &Path) {
+    let root = bundle_root(home);
+    let Ok(entries) = fs::read_dir(&root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && verify_bundle(&path, None).is_ok() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+    let _ = fs::remove_file(active_bundle_path(home));
+}
+
 fn uninstall_adapter(
     manifest: &AdapterManifest,
+    runtime: AdapterRuntime,
     bundle: Option<&Path>,
     home: &Path,
 ) -> (String, Option<String>) {
-    match manifest.id.as_str() {
-        "codex" => {
+    match runtime {
+        AdapterRuntime::Codex => {
             let path = home.join(".codex/config.toml");
             let existing = fs::read_to_string(&path).unwrap_or_default();
             let updated = remove_codex_managed_hooks(&existing);
@@ -409,17 +695,22 @@ fn uninstall_adapter(
                 ("uninstalled".into(), Some(format!("updated {}", path.display())))
             }
         }
-        "claude-code" => run_plugin_uninstall(
-            "claude",
+        AdapterRuntime::ClaudeCode => run_plugin_uninstall(
+            manifest
+                .executable
+                .command_names
+                .first()
+                .map(String::as_str)
+                .unwrap_or("claude"),
             &["plugin", "uninstall", "atoaxis-heartbeat@atoaxis-plugins"],
             home,
         ),
-        "gemini-cli" => (
+        AdapterRuntime::GeminiCli => (
             "manual".into(),
             Some("remove the AtoAxis Gemini extension with the installed Gemini CLI; no managed config is edited".into()),
         ),
-        "kilo-code" => run_bundle_uninstaller(bundle, "kilo-code", home),
-        "kimi-code-cli" => run_bundle_uninstaller(bundle, "kimi-code", home),
+        AdapterRuntime::KiloCode => run_bundle_uninstaller(bundle, "kilo-code", home),
+        AdapterRuntime::KimiCodeCli => run_bundle_uninstaller(bundle, "kimi-code", home),
         _ => (
             "unsupported".into(),
             Some("adapter has no standalone uninstall path".into()),
@@ -428,7 +719,7 @@ fn uninstall_adapter(
 }
 
 fn run_plugin_uninstall(program: &str, args: &[&str], home: &Path) -> (String, Option<String>) {
-    let path = resolve_and_probe_executable(&[program.to_string()]);
+    let path = resolve_and_probe_executable(&[program.to_string()], Some("--version"));
     let Some(path) = path else {
         return (
             "not_detected".into(),
@@ -524,22 +815,34 @@ fn selected_ids(
     all: bool,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     if all {
-        return Ok(SETUP_CLIENTS.iter().map(|id| (*id).to_string()).collect());
+        let platform = std::env::consts::OS;
+        return Ok(registry
+            .catalog_v1()
+            .adapters
+            .into_iter()
+            .filter(|entry| !matches!(entry.runtime, AdapterRuntime::None))
+            .filter(|entry| entry.supports_platform(platform))
+            .map(|entry| entry.manifest.id)
+            .collect());
     }
     let raw = requested_agent.unwrap_or_default();
     let id = normalize_client_id(raw).map_err(|error| error.to_string())?;
-    if registry.get(&id).is_none() || !SETUP_CLIENTS.contains(&id.as_str()) {
-        return Err(format!("adapter '{raw}' is not supported by standalone setup").into());
+    if registry.get(&id).is_none() {
+        return Err(format!("adapter '{raw}' is not registered").into());
     }
     Ok(vec![id])
 }
 
 fn setup_adapter(
     manifest: &AdapterManifest,
+    runtime: AdapterRuntime,
     bundle: Option<&Path>,
     home: &Path,
 ) -> SetupAgentReport {
-    let executable = resolve_and_probe_executable(&manifest.executable.command_names);
+    let executable = resolve_and_probe_executable(
+        &manifest.executable.command_names,
+        manifest.executable.version_arg.as_deref(),
+    );
     let verification_status = match manifest.effective_status() {
         VerificationStatus::Verified => "verified",
         VerificationStatus::Scaffold => "scaffold",
@@ -547,15 +850,71 @@ fn setup_adapter(
     }
     .to_string();
 
+    if matches!(runtime, AdapterRuntime::None) {
+        return SetupAgentReport {
+            id: manifest.id.clone(),
+            status: "unsupported".into(),
+            outcome_code: "unsupported_strategy".into(),
+            executable: None,
+            verification_status,
+            suggested_action: Some(
+                "use the adapter's documented manual or transcript integration".into(),
+            ),
+            detail: Some(
+                "the registry has no tested standalone setup implementation for this adapter"
+                    .into(),
+            ),
+        };
+    }
+
     if is_adapter_disabled(&manifest.id) {
         return SetupAgentReport {
             id: manifest.id.clone(),
-            status: "disabled".into(),
+            status: "skipped".into(),
+            outcome_code: "disabled_by_policy".into(),
             executable: None,
             verification_status,
+            suggested_action: Some(format!(
+                "remove {DISABLED_ADAPTERS_ENV} entry to enable this adapter"
+            )),
             detail: Some(format!(
                 "disabled by {DISABLED_ADAPTERS_ENV}; core heartbeat remains enabled"
             )),
+        };
+    }
+
+    if let Err(error) = verify_runtime_dependencies(runtime) {
+        return SetupAgentReport {
+            id: manifest.id.clone(),
+            status: "failed".into(),
+            outcome_code: "dependency_missing".into(),
+            executable: None,
+            verification_status,
+            suggested_action: Some("install the required local hook dependencies and retry".into()),
+            detail: Some(error),
+        };
+    }
+
+    let Some(bundle_root) = bundle else {
+        return SetupAgentReport {
+            id: manifest.id.clone(),
+            status: "failed".into(),
+            outcome_code: "resource_invalid".into(),
+            executable: None,
+            verification_status,
+            suggested_action: Some("install a verified adapter bundle and retry setup".into()),
+            detail: Some("verified adapter bundle is unavailable".into()),
+        };
+    };
+    if let Err(error) = verify_runtime_resources(bundle_root, runtime) {
+        return SetupAgentReport {
+            id: manifest.id.clone(),
+            status: "failed".into(),
+            outcome_code: "resource_invalid".into(),
+            executable: None,
+            verification_status,
+            suggested_action: Some("repair or reinstall the bundled adapter resources".into()),
+            detail: Some(error),
         };
     }
 
@@ -563,48 +922,52 @@ fn setup_adapter(
         return SetupAgentReport {
             id: manifest.id.clone(),
             status: "not_detected".into(),
+            outcome_code: "skipped_not_detected".into(),
             executable: None,
             verification_status,
+            suggested_action: Some("install the adapter executable, then retry setup".into()),
             detail: Some(format!(
-                "{} not found or did not answer --version",
+                "{} not found or did not answer its configured version probe",
                 manifest.executable.command_names.join("/")
             )),
         };
     };
 
     let executable_text = executable_path.display().to_string();
-    let result = match manifest.id.as_str() {
-        "codex" => bundle
-            .ok_or_else(|| "tested adapter bundle is unavailable".to_string())
-            .and_then(|root| configure_codex(root, home)),
-        "claude-code" => bundle
-            .ok_or_else(|| "tested adapter bundle is unavailable".to_string())
-            .and_then(|root| configure_claude(&executable_path, root, home)),
-        "gemini-cli" => bundle
-            .ok_or_else(|| "tested adapter bundle is unavailable".to_string())
-            .and_then(|root| configure_gemini(&executable_path, root, home)),
-        "kilo-code" => bundle
-            .ok_or_else(|| "tested adapter bundle is unavailable".to_string())
-            .and_then(|root| configure_script(root, "kilo-code", home)),
-        "kimi-code-cli" => bundle
-            .ok_or_else(|| "tested adapter bundle is unavailable".to_string())
-            .and_then(|root| configure_script(root, "kimi-code", home)),
-        _ => Err("adapter has no standalone setup implementation".to_string()),
+    let result = match runtime {
+        AdapterRuntime::Codex => configure_codex(bundle_root, home),
+        AdapterRuntime::ClaudeCode => configure_claude(&executable_path, bundle_root, home),
+        AdapterRuntime::GeminiCli => configure_gemini(&executable_path, bundle_root, home),
+        AdapterRuntime::KiloCode => configure_script(bundle_root, "kilo-code", home),
+        AdapterRuntime::KimiCodeCli => configure_script(bundle_root, "kimi-code", home),
+        AdapterRuntime::None => Err("adapter has no standalone setup implementation".to_string()),
     };
 
     match result {
         Ok(detail) => SetupAgentReport {
             id: manifest.id.clone(),
             status: "configured".into(),
+            outcome_code: "configured".into(),
             executable: Some(executable_text),
             verification_status,
+            suggested_action: None,
             detail,
         },
         Err(error) => SetupAgentReport {
             id: manifest.id.clone(),
             status: "failed".into(),
+            outcome_code: if error.contains("unsupported") || error.contains("no standalone") {
+                "unsupported_strategy".into()
+            } else if error.contains("bundle") {
+                "resource_invalid".into()
+            } else {
+                "failed".into()
+            },
             executable: Some(executable_text),
             verification_status,
+            suggested_action: Some(
+                "repair the adapter resource/configuration and retry setup".into(),
+            ),
             detail: Some(error),
         },
     }
@@ -625,6 +988,9 @@ fn print_text_report(report: &SetupReport) {
     if let Some(detail) = &report.broker.detail {
         println!("Broker note: {detail}");
     }
+    if let Some(detail) = &report.observer_detail {
+        println!("Observer note: {detail}");
+    }
     for agent in &report.agents {
         println!(
             "{}: {} (verification={}, executable={})",
@@ -639,7 +1005,7 @@ fn print_text_report(report: &SetupReport) {
     }
 }
 
-fn resolve_and_probe_executable(names: &[String]) -> Option<PathBuf> {
+fn resolve_and_probe_executable(names: &[String], version_arg: Option<&str>) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path) {
         for name in names {
@@ -648,7 +1014,7 @@ fn resolve_and_probe_executable(names: &[String]) -> Option<PathBuf> {
                 continue;
             }
             let status = Command::new(&candidate)
-                .arg("--version")
+                .arg(version_arg.unwrap_or("--version"))
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -659,6 +1025,31 @@ fn resolve_and_probe_executable(names: &[String]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn verify_runtime_dependencies(runtime: AdapterRuntime) -> Result<(), String> {
+    if cfg!(windows) {
+        return Err(
+            "native shell hook setup is unsupported on Windows; use transcript mode".into(),
+        );
+    }
+    let dependencies: &[&str] = match runtime {
+        AdapterRuntime::ClaudeCode
+        | AdapterRuntime::Codex
+        | AdapterRuntime::GeminiCli
+        | AdapterRuntime::KiloCode
+        | AdapterRuntime::KimiCodeCli => &["bash", "jq"],
+        AdapterRuntime::None => &[],
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dependency in dependencies {
+        if !std::env::split_paths(&path).any(|directory| directory.join(dependency).is_file()) {
+            return Err(format!(
+                "required dependency '{dependency}' is not available on PATH"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Locate a bundle from the environment, a checkout, or a bundle previously
@@ -699,7 +1090,7 @@ fn find_bundle_source(home: &Path, target: &Path) -> Option<PathBuf> {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.is_dir() && candidate.join("common/emit-event.sh").is_file())
+        .find(|candidate| candidate.is_dir() && verify_bundle(candidate, None).is_ok())
 }
 
 fn ensure_managed_bundle(home: &Path) -> Result<Option<PathBuf>, String> {
@@ -707,25 +1098,212 @@ fn ensure_managed_bundle(home: &Path) -> Result<Option<PathBuf>, String> {
         .join(".wakaclock")
         .join("agent-plugins")
         .join(format!("cli-{BUNDLE_VERSION}"));
-    if target.join("common/emit-event.sh").is_file() {
-        return Ok(Some(target));
+    let source = find_bundle_source(home, &target);
+    if target.is_dir() {
+        if let Ok(target_manifest) = verify_bundle(&target, None) {
+            let source_is_new = source
+                .as_deref()
+                .and_then(|path| verify_bundle(path, None).ok())
+                .is_some_and(|manifest| manifest.digest != target_manifest.digest);
+            if !source_is_new {
+                update_active_bundle(home, &target)?;
+                return Ok(Some(target));
+            }
+        }
     }
-    let Some(source) = find_bundle_source(home, &target) else {
-        return Ok(None);
+    let Some(source) = source else {
+        return Err(
+            "no verified adapter bundle was found; reinstall the CLI or Extension resources".into(),
+        );
     };
     let staging = target.with_extension(format!("staging-{}", std::process::id()));
     if staging.exists() {
         fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
     }
     copy_tree(&source, &staging).map_err(|error| format!("copying adapter bundle: {error}"))?;
+    verify_bundle(&staging, None).map_err(|error| format!("verifying adapter bundle: {error}"))?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     if target.exists() {
+        // Preserve the previous verified directory until the new tree has been
+        // fully checked and renamed. A failed copy therefore cannot point hooks
+        // at a half-written bundle.
         fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
     }
     fs::rename(&staging, &target).map_err(|error| error.to_string())?;
+    update_active_bundle(home, &target)?;
     Ok(Some(target))
+}
+
+fn bundle_root(home: &Path) -> PathBuf {
+    home.join(".wakaclock/agent-plugins")
+}
+
+fn active_bundle_path(home: &Path) -> PathBuf {
+    bundle_root(home).join(ACTIVE_BUNDLE_FILENAME)
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn bundle_files(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    fn visit(
+        root: &Path,
+        current: &Path,
+        files: &mut BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let entries = fs::read_dir(current).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|error| error.to_string())?;
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "symlinks are not allowed in adapter bundles: {}",
+                    path.display()
+                ));
+            }
+            if file_type.is_dir() {
+                visit(root, &path, files)?;
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if relative == BUNDLE_MANIFEST_FILENAME {
+                    continue;
+                }
+                let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+                files.insert(relative, hash_bytes(&bytes));
+            }
+        }
+        Ok(())
+    }
+    let mut files = BTreeMap::new();
+    visit(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn bundle_digest(files: &BTreeMap<String, String>) -> Result<String, String> {
+    serde_json::to_vec(files)
+        .map(|bytes| hash_bytes(&bytes))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+fn write_bundle_manifest(root: &Path, bundle_version: &str) -> Result<BundleManifest, String> {
+    let files = bundle_files(root)?;
+    let manifest = BundleManifest {
+        schema_version: BUNDLE_MANIFEST_SCHEMA_VERSION,
+        bundle_version: bundle_version.to_string(),
+        digest: bundle_digest(&files)?,
+        files,
+    };
+    write_text_atomically(
+        &root.join(BUNDLE_MANIFEST_FILENAME),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(manifest)
+}
+
+fn verify_bundle(root: &Path, expected_version: Option<&str>) -> Result<BundleManifest, String> {
+    let manifest_path = root.join(BUNDLE_MANIFEST_FILENAME);
+    let text = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "missing bundle manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: BundleManifest =
+        serde_json::from_str(&text).map_err(|error| format!("invalid bundle manifest: {error}"))?;
+    if manifest.schema_version != BUNDLE_MANIFEST_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported bundle manifest schema {}",
+            manifest.schema_version
+        ));
+    }
+    if manifest.bundle_version.trim().is_empty()
+        || expected_version.is_some_and(|version| version != manifest.bundle_version)
+    {
+        return Err("bundle version does not match the requested artifact".into());
+    }
+    let actual_files = bundle_files(root)?;
+    let actual_digest = bundle_digest(&actual_files)?;
+    if actual_files != manifest.files || actual_digest != manifest.digest {
+        return Err("bundle checksum does not match its files".into());
+    }
+    for required in ["common/emit-event.sh"] {
+        if !manifest.files.contains_key(required) {
+            return Err(format!("bundle is missing required resource {required}"));
+        }
+    }
+    Ok(manifest)
+}
+
+fn verify_runtime_resources(root: &Path, runtime: AdapterRuntime) -> Result<(), String> {
+    let required: &[&str] = match runtime {
+        AdapterRuntime::ClaudeCode => &[
+            "plugins/atoaxis-heartbeat/.claude-plugin/plugin.json",
+            "plugins/atoaxis-heartbeat/hooks/hooks.json",
+        ],
+        AdapterRuntime::Codex => &[
+            "codex/heartbeat-hook.sh",
+            "codex/git-sweep-before.sh",
+            "codex/git-sweep-after.sh",
+            "codex/tool-abort.sh",
+        ],
+        AdapterRuntime::GeminiCli => &[
+            "gemini-cli/gemini-extension.json",
+            "gemini-cli/hooks/hooks.json",
+        ],
+        AdapterRuntime::KiloCode => &[
+            "kilo-code/src/plugin.ts",
+            "kilo-code/installer/entrypoint.ts",
+            "kilo-code/installer/install.sh",
+        ],
+        AdapterRuntime::KimiCodeCli => &["kimi-code/installer/install.sh"],
+        AdapterRuntime::None => &[],
+    };
+    for relative in required {
+        if !root.join(relative).is_file() {
+            return Err(format!(
+                "verified bundle is missing required resource {relative}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn update_active_bundle(home: &Path, target: &Path) -> Result<(), String> {
+    let manifest = verify_bundle(target, None)?;
+    let previous = fs::read_to_string(active_bundle_path(home))
+        .ok()
+        .and_then(|text| serde_json::from_str::<ActiveBundleState>(&text).ok())
+        .map(|state| state.active)
+        .filter(|path| path != &target.display().to_string());
+    let state = ActiveBundleState {
+        schema_version: BUNDLE_MANIFEST_SCHEMA_VERSION,
+        active: target.display().to_string(),
+        checksum: manifest.digest,
+        previous,
+    };
+    write_text_atomically(
+        &active_bundle_path(home),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?
+        ),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
@@ -864,9 +1442,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
                 }
                 thread::sleep(Duration::from_millis(100));
             }
-            Err(error) => {
-                return Err(format!("could not wait for {}: {error}", program.display()))
-            }
+            Err(error) => return Err(format!("could not wait for {}: {error}", program.display())),
         }
     };
     let output = std::process::Output {
@@ -1112,9 +1688,13 @@ mod tests {
         let registry = AdapterRegistry::builtin();
         assert_eq!(
             selected_ids(&registry, None, true).unwrap(),
-            SETUP_CLIENTS
-                .iter()
-                .map(|id| (*id).to_string())
+            registry
+                .catalog_v1()
+                .adapters
+                .into_iter()
+                .filter(|entry| !matches!(entry.runtime, AdapterRuntime::None))
+                .filter(|entry| entry.supports_platform(std::env::consts::OS))
+                .map(|entry| entry.manifest.id)
                 .collect::<Vec<_>>()
         );
         assert_eq!(
@@ -1122,6 +1702,21 @@ mod tests {
             vec!["kilo-code"]
         );
         assert!(selected_ids(&registry, Some("not-an-agent"), false).is_err());
+    }
+
+    #[test]
+    fn bundle_manifest_rejects_tampering_and_tracks_active_pointer() {
+        let home = std::env::temp_dir().join(format!("wakaclock-bundle-{}", uuid::Uuid::new_v4()));
+        let bundle = home.join(".wakaclock/agent-plugins/cli-0.1.0");
+        fs::create_dir_all(bundle.join("common")).unwrap();
+        fs::write(bundle.join("common/emit-event.sh"), "#!/bin/sh\n").unwrap();
+        let manifest = write_bundle_manifest(&bundle, "0.1.0").unwrap();
+        assert_eq!(verify_bundle(&bundle, Some("0.1.0")).unwrap(), manifest);
+        update_active_bundle(&home, &bundle).unwrap();
+        assert!(active_bundle_path(&home).is_file());
+        fs::write(bundle.join("common/emit-event.sh"), "tampered\n").unwrap();
+        assert!(verify_bundle(&bundle, None).is_err());
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
@@ -1225,6 +1820,71 @@ command = "/keep/me.sh"
         assert!(audit.contains("\"action\":\"setup\""));
         assert!(!audit.contains("prompt"));
         assert!(!audit.contains("content"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn observer_config_is_created_once_and_user_file_is_preserved() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-observer-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        set_hook_consent(&home, "codex", HookConsent::Enabled).unwrap();
+        let created = ensure_observer_config(&home).unwrap().unwrap();
+        assert_eq!(created, observer_config_path(&home));
+        assert_eq!(fs::read_to_string(&created).unwrap(), OBSERVER_CONFIG_BODY);
+        assert!(ensure_observer_config(&home).unwrap().is_none());
+
+        fs::write(
+            &created,
+            "enabled = false\nattribution_mode = \"observe_only\"\n",
+        )
+        .unwrap();
+        assert!(ensure_observer_config(&home).unwrap().is_none());
+        assert!(fs::read_to_string(&created)
+            .unwrap()
+            .contains("enabled = false"));
+        assert!(has_enabled_consent_at(&home));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn legacy_consent_is_reused_without_prompting_again() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-legacy-consent-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = home.join(".wakaclock").join(LEGACY_SETUP_STATE_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"version":1,"adapters":{"codex":{"consented":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            effective_consent(&home, "codex"),
+            Some(HookConsent::Enabled)
+        );
+        assert!(has_enabled_consent_at(&home));
+        set_hook_consent(&home, "codex", HookConsent::Denied).unwrap();
+        assert!(!has_enabled_consent_at(&home));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn setup_lock_serializes_cli_and_extension_writes() {
+        let home = std::env::temp_dir().join(format!(
+            "wakaclock-setup-lock-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let first = acquire_setup_lock(&home).unwrap();
+        let second = acquire_setup_lock(&home);
+        assert!(second.is_err());
+        drop(first);
+        assert!(acquire_setup_lock(&home).is_ok());
         let _ = fs::remove_dir_all(home);
     }
 }

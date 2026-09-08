@@ -215,7 +215,7 @@ impl ProjectIdentityRepository {
                 "SELECT
                     ifNull(project, '') AS project,
                     count() AS heartbeat_count
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND project_id IS NULL
                  GROUP BY project
                  ORDER BY heartbeat_count DESC, project ASC",

@@ -381,7 +381,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
         if goal.metric == "heartbeats" {
             return (
                 "SELECT count() AS value, count() AS samples
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND date BETWEEN ? AND ?"
                     .to_string(),
                 None,
@@ -390,7 +390,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
         return (
             format!(
                 "SELECT {value_expression} AS value, count() AS samples
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND date BETWEEN ? AND ?"
             ),
             None,
@@ -405,7 +405,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
     };
     let query = format!(
         "SELECT {value_expression} AS value, count() AS samples
-         FROM wakaclock.heartbeats
+         FROM wakaclock.heartbeats_canonical
          WHERE user_id = ? AND date BETWEEN ? AND ? AND {dimension} = ?"
     );
     (query, filter)

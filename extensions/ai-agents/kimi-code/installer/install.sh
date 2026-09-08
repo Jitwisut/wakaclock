@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install or remove only the AtoAxis-managed Kimi hook block.
-set -u
+set -euo pipefail
 
 MARKER="# AtoAxis managed Kimi Code hooks"
 END_MARKER="# End AtoAxis managed Kimi Code hooks"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || exit 0)"
-ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || exit 0)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd)"
 HOOK_DIR="${ROOT}/hooks"
 CONFIG="${KIMI_CONFIG_PATH:-${HOME}/.kimi/config.toml}"
 if [ -z "${KIMI_CONFIG_PATH:-}" ]; then
@@ -31,13 +31,13 @@ toml_quote() {
 remove_block() {
   [ -f "$CONFIG" ] || return 0
   local tmp
-  tmp="$(mktemp "${CONFIG}.atoaxis.XXXXXX")" || return 0
+  tmp="$(mktemp "${CONFIG}.atoaxis.XXXXXX")"
   awk -v start="$MARKER" -v end="$END_MARKER" '
     $0 == start {skip=1; next}
     $0 == end {skip=0; next}
     !skip {print}
-  ' "$CONFIG" >"$tmp" || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$CONFIG" 2>/dev/null || rm -f "$tmp"
+  ' "$CONFIG" >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$CONFIG" || { rm -f "$tmp"; return 1; }
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -45,11 +45,11 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "$CONFIG")" 2>/dev/null || exit 0
+mkdir -p "$(dirname "$CONFIG")"
 remove_block
-TMP="$(mktemp "${CONFIG}.atoaxis.XXXXXX")" || exit 0
+TMP="$(mktemp "${CONFIG}.atoaxis.XXXXXX")"
 if [ -f "$CONFIG" ]; then
-  cat "$CONFIG" >"$TMP" || { rm -f "$TMP"; exit 0; }
+  cat "$CONFIG" >"$TMP" || { rm -f "$TMP"; exit 1; }
 fi
 
 cat >>"$TMP" <<EOF
@@ -94,5 +94,5 @@ command = $(toml_quote "${HOOK_DIR}/stop-failure.sh")
 timeout = 10
 $END_MARKER
 EOF
-mv "$TMP" "$CONFIG" 2>/dev/null || rm -f "$TMP"
+mv "$TMP" "$CONFIG"
 exit 0

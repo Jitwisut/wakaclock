@@ -190,12 +190,18 @@ def scenario_shell_mutation(server_url: str, agent: str, provider: str | None, m
         matching = [h for h in heartbeats if h.get("ai_change_id") == tool_event_id]
         check(len(matching) >= 1, f"[{agent}] expected at least one heartbeat, got {len(heartbeats)}: {heartbeats}")
         heartbeat = matching[0]
-        check(heartbeat.get("ai_agent") == agent, f"[{agent}] ai_agent was {heartbeat.get('ai_agent')!r}")
+        # Shell snapshots prove that an AI tool operation changed the file, but
+        # they do not provide verified authorship. The client therefore keeps the
+        # AI bucket while scrubbing the self-declared agent/provider before upload.
+        check(heartbeat.get("ai_agent") is None, f"[{agent}] unverified ai_agent leaked: {heartbeat.get('ai_agent')!r}")
         check(
-            heartbeat.get("actor_type") in ("ai_verified", "ai_inferred"),
-            f"[{agent}] actor_type was {heartbeat.get('actor_type')!r}, expected an AI actor",
+            heartbeat.get("actor_type") == "ai_inferred",
+            f"[{agent}] actor_type was {heartbeat.get('actor_type')!r}, expected ai_inferred",
         )
         check(not heartbeat.get("is_ai_generated") is False, f"[{agent}] is_ai_generated must be true")
+        check(heartbeat.get("ai_provider") is None, f"[{agent}] unverified ai_provider leaked")
+        check(heartbeat.get("ai_model") is None, f"[{agent}] unverified ai_model leaked")
+        check(heartbeat.get("ai_source") == "observer", f"[{agent}] ai_source was {heartbeat.get('ai_source')!r}")
         check(
             heartbeat.get("human_lines_added") in (None, 0) and heartbeat.get("human_lines_deleted") in (None, 0),
             f"[{agent}] a shell-mutated file must not also carry positive Human line counters",
@@ -365,14 +371,15 @@ def scenario_cursor_shell_scaffold(server_url: str) -> None:
         check(after.returncode == 0, f"[cursor scaffold] git-sweep-after.sh failed: {after.stderr}")
 
         heartbeats = drain_heartbeats()
-        matching = [h for h in heartbeats if h.get("ai_agent") == "cursor"]
+        matching = [h for h in heartbeats if h.get("actor_type") == "ai_inferred"]
         check(len(matching) >= 1, f"[cursor scaffold] expected a heartbeat, got {len(heartbeats)}: {heartbeats}")
         heartbeat = matching[0]
         check(
-            heartbeat.get("actor_type") in ("ai_verified", "ai_inferred"),
-            f"[cursor scaffold] actor_type was {heartbeat.get('actor_type')!r}",
+            heartbeat.get("ai_agent") is None,
+            f"[cursor scaffold] unverified ai_agent leaked: {heartbeat.get('ai_agent')!r}",
         )
-        check(heartbeat.get("ai_provider") == "anysphere", f"[cursor scaffold] ai_provider was {heartbeat.get('ai_provider')!r}")
+        check(heartbeat.get("ai_provider") is None, f"[cursor scaffold] unverified ai_provider leaked")
+        check(heartbeat.get("ai_source") == "observer", f"[cursor scaffold] ai_source was {heartbeat.get('ai_source')!r}")
 
 
 def scenario_cursor_after_file_edit_scaffold(server_url: str) -> None:

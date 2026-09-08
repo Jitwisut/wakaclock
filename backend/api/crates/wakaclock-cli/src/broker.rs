@@ -14,10 +14,11 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -28,9 +29,9 @@ use wakaclock_core::{
     ai::{AiAttributionState, AiEditEvent},
     api_client::ApiClient,
     broker::{
-        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
-        BrokerChangeKind, BrokerClient, BrokerDiscovery, BrokerEventAck, BrokerEventStatus,
-        BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats, QuarantineDiagnostic,
+        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck, BrokerClient,
+        BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
+        BrokerStore, BrokerStoreStats, QuarantineDiagnostic, AI_SIDECAR_SCHEMA_VERSION,
         BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
     },
     config::Config,
@@ -43,6 +44,7 @@ use crate::agent_service;
 
 const BROKER_POLL_SECONDS: u64 = 1;
 const BROKER_AI_ACTIVITY_STREAM: &str = "broker-ai";
+const MAX_SIDECAR_FINGERPRINT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct BrokerProcessReport {
@@ -75,8 +77,11 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
             .project_root
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
-        change_kind: BrokerChangeKind::Modify,
-        previous_entity: None,
+        change_kind: event.change_kind,
+        previous_entity: event
+            .previous_entity
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
         agent: event.agent.clone(),
         provider: event.provider.clone(),
         model: event.model.clone(),
@@ -316,25 +321,18 @@ async fn process_record(
         )?
     };
 
-    // A hook and transcript can legitimately have different event IDs for one edit.
-    // The existing metadata-only fingerprint remains the cross-source safety net.
-    if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
-        let state = AiAttributionState::open()?;
-        if state.has_fingerprint(&event.entity, event_time, added, deleted)? {
-            state.mark_delivered(&event.event_id, "broker_fingerprint")?;
-            return Ok(());
-        }
-    }
-
     let ai_event = AiEditEvent {
         event_id: event.event_id.clone(),
         agent: event.agent.clone(),
         provider: event.provider.clone(),
         model: event.model.clone(),
         session_id: event.session_id.clone(),
+        tool_event_id: event.tool_event_id.clone(),
         occurred_at: event.occurred_at,
         entity: PathBuf::from(&event.entity),
         project_root: event.project_root.as_deref().map(PathBuf::from),
+        change_kind: event.change_kind,
+        previous_entity: event.previous_entity.as_deref().map(PathBuf::from),
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
         input_tokens: None,
@@ -363,6 +361,19 @@ async fn process_record(
             .default_confidence(Some(event.source.as_str()), Some(event.confidence.as_str()))
     });
     heartbeat.is_ai_generated = heartbeat.actor_type.is_ai();
+    if heartbeat.actor_type == ActorType::Unknown {
+        // Legacy or weak transcript events can carry AI-shaped metadata without
+        // enough provenance to enter either AI bucket. Remove the producer labels
+        // before the API client applies its transport policy; otherwise that policy
+        // would correctly scrub the labels but temporarily set the legacy boolean
+        // to true, violating the unknown actor invariant before delivery.
+        heartbeat.ai_agent = None;
+        heartbeat.ai_provider = None;
+        heartbeat.ai_model = None;
+        heartbeat.ai_source = Some("observer".to_string());
+        heartbeat.ai_confidence = Some("inferred".to_string());
+        heartbeat.is_ai_generated = false;
+    }
     heartbeat.activity_segments = if active_seconds > 0.0 {
         vec![ActivitySegment {
             segment_id: format!("{}:segment", event.heartbeat_id()),
@@ -383,40 +394,33 @@ async fn process_record(
 
     let state = AiAttributionState::open()?;
     state.mark_delivered(&event.event_id, "broker")?;
-    if let (Some(added), Some(deleted)) = (event.lines_added, event.lines_deleted) {
-        state.mark_fingerprint(
-            &event.entity,
-            event_time,
-            added,
-            deleted,
-            Some(&event.event_id),
-        )?;
-    }
     agent_service::record_heartbeat();
     Ok(())
 }
 
 fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
+    // The sequence is reserved in the broker's durable inbox database before this
+    // append. A retry therefore reuses the same stream/sequence pair without an
+    // O(n) scan of the JSONL file; the reader deduplicates a crash-boundary duplicate.
     let state_dir = broker_runtime_dir();
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join("ai-events.jsonl");
-    if fs::read_to_string(&path).ok().is_some_and(|content| {
-        content.lines().any(|line| {
-            serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("event_id")
-                        .and_then(|id| id.as_str())
-                        .map(str::to_string)
-                })
-                .is_some_and(|event_id| event_id == event.event_id)
-        })
-    }) {
+    let mut store = BrokerStore::open()?;
+    let cursor = store.reserve_sidecar_cursor(&event.event_id)?;
+    if cursor.already_written {
         return Ok(());
     }
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    // A post-edit content hash is the only editor↔producer identity proof currently
+    // available. Keep it local metadata, bounded by size, and only emit it for live
+    // producer paths; a delayed transcript replay may point at a newer file version.
+    let content_fingerprint = (event.source.as_str() != "transcript")
+        .then(|| content_fingerprint_for_path(Path::new(&event.entity)))
+        .flatten();
     let payload = serde_json::json!({
+        "schema_version": AI_SIDECAR_SCHEMA_VERSION,
+        "stream_id": cursor.stream_id,
+        "sequence": cursor.sequence,
         "event_id": event.event_id,
         "entity": event.entity,
         "time": event.occurred_at.timestamp_millis() as f64 / 1000.0,
@@ -433,13 +437,32 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         "transport": event.transport,
         "tool": event.tool,
         "tool_event_id": event.tool_event_id,
+        "content_fingerprint": content_fingerprint,
         "change_kind": event.change_kind.as_str(),
         "previous_entity": event.previous_entity,
     });
     writeln!(file, "{}", serde_json::to_string(&payload)?)?;
     drop(file);
+    store.mark_sidecar_written(&event.event_id)?;
     set_private_permissions(&path)?;
     Ok(())
+}
+
+fn content_fingerprint_for_path(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > MAX_SIDECAR_FINGERPRINT_BYTES {
+        return None;
+    }
+    let mut input = fs::File::open(path).ok()?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    input.read_to_end(&mut bytes).ok()?;
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(format!("sha256:{hex}"))
 }
 
 pub(crate) async fn run(config: Config, interval_seconds: u64) -> Result<(), Box<dyn Error>> {
@@ -959,6 +982,7 @@ mod tests {
     use std::path::PathBuf;
     use tower::ServiceExt;
     use wakaclock_core::ai::{AiConfidence, AiEventSource};
+    use wakaclock_core::broker::BrokerChangeKind;
 
     fn event(id: &str) -> BrokerEventV1 {
         BrokerEventV1 {
@@ -997,9 +1021,12 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/lib.rs"),
             project_root: Some(PathBuf::from("/workspace")),
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(2),
             lines_deleted: Some(1),
             input_tokens: None,
@@ -1015,6 +1042,36 @@ mod tests {
         assert_eq!(event.actor_type, Some(ActorType::Unknown));
         let value = serde_json::to_value(event).unwrap();
         assert!(!value.as_object().unwrap().contains_key("prompt"));
+    }
+
+    #[test]
+    fn event_from_parser_preserves_codex_rename_identity() {
+        let ai = AiEditEvent {
+            event_id: "rename-event".to_string(),
+            agent: "codex".to_string(),
+            provider: Some("openai".to_string()),
+            model: None,
+            session_id: Some("session".to_string()),
+            tool_event_id: Some("call-rename".to_string()),
+            occurred_at: Utc::now(),
+            entity: PathBuf::from("/workspace/src/new.rs"),
+            project_root: Some(PathBuf::from("/workspace")),
+            change_kind: BrokerChangeKind::Rename,
+            previous_entity: Some(PathBuf::from("/workspace/src/old.rs")),
+            lines_added: Some(1),
+            lines_deleted: Some(1),
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        };
+
+        let event = event_from_ai_edit(&ai, 0.0).normalize().unwrap();
+        assert_eq!(event.change_kind, BrokerChangeKind::Rename);
+        assert_eq!(
+            event.previous_entity.as_deref(),
+            Some("/workspace/src/old.rs")
+        );
     }
 
     #[test]

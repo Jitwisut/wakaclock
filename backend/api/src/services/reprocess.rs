@@ -295,7 +295,7 @@ impl ReprocessService {
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
                     created_at, actor_type, actor_confidence, revision
-                FROM wakaclock.heartbeats AS h
+                FROM wakaclock.heartbeats_canonical AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC
                 ",
@@ -427,11 +427,11 @@ fn rebuild_activity_intervals(rows: &[HeartbeatRow]) -> Vec<ActivityIntervalRow>
     let projection_created_at = chrono::Utc::now().timestamp().max(0) as u32;
     let mut projected = Vec::new();
 
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         let heartbeat_id = row
             .heartbeat_id
             .clone()
-            .unwrap_or_else(|| format!("legacy:{}:{:.6}", row.entity, row.time));
+            .unwrap_or_else(|| format!("legacy-row:{row_index}"));
         let segments = serde_json::from_str::<Vec<ActivitySegment>>(&row.activity_segments)
             .unwrap_or_default();
         let evidence = clamp_to_evidence_window(

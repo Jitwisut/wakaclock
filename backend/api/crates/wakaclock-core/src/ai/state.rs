@@ -680,6 +680,7 @@ impl AiAttributionState {
 mod tests {
     use super::*;
     use crate::ai::event::{AiConfidence, AiEditEvent, AiEventSource};
+    use crate::broker::BrokerChangeKind;
     use std::path::PathBuf as StdPathBuf;
 
     fn temp_db_path(name: &str) -> PathBuf {
@@ -696,9 +697,12 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: chrono::Utc::now(),
             entity: StdPathBuf::from("src/lib.rs"),
             project_root: None,
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(1),
             lines_deleted: None,
             input_tokens: None,

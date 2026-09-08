@@ -306,6 +306,7 @@ pub fn expire_unmatched(pending: &mut Vec<AiEditEvent>, now: DateTime<Utc>, rete
 mod tests {
     use super::*;
     use crate::ai::event::{AiConfidence, AiEventSource};
+    use crate::broker::BrokerChangeKind;
     use chrono::TimeZone;
 
     fn at(seconds: i64) -> DateTime<Utc> {
@@ -326,9 +327,12 @@ mod tests {
             provider: Some("test-provider".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at,
             entity: PathBuf::from(entity),
             project_root: Some(PathBuf::from("/home/dev/example-project")),
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(added),
             lines_deleted: Some(deleted),
             input_tokens: None,

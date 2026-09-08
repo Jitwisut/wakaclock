@@ -487,10 +487,24 @@ async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
         recorded.contains("402"),
         "recorded failure should name the 402"
     );
+    let sidecar_path = home.join(".wakaclock/ai-events.jsonl");
     assert!(
-        home.join(".wakaclock/ai-events.jsonl").exists(),
+        sidecar_path.exists(),
         "correlation sidecar is written even when delivery fails"
     );
+    let sidecar_row = fs::read_to_string(&sidecar_path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .next()
+        .expect("sidecar should contain one valid metadata row");
+    assert_eq!(sidecar_row["schema_version"], 2);
+    assert!(sidecar_row["stream_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert!(sidecar_row["sequence"]
+        .as_i64()
+        .is_some_and(|sequence| sequence >= 1));
     assert!(
         home.join(".wakaclock/queue.db").exists(),
         "the heartbeat is durably queued for later delivery"
@@ -585,20 +599,9 @@ async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
     let _ = fs::remove_dir_all(&home);
 }
 
-/// F0-02 reproducer for ai-coverage-gap-audit-2026-09-05.md gap #4: `wakaclock ai
-/// doctor` and `wakaclock doctor ai` are two independent code paths reading the
-/// same broker state, but only `doctor ai` (`broker::status_for_cli`, exercised by
-/// `p0_a4_doctor_ai_identifies_pipeline_gaps` above) actually probes the running
-/// process. `ai doctor` (`run_ai_doctor` in `src/main.rs`) hardcodes
-/// `BrokerHealth { running: false, ..Default::default() }` and
-/// `ParserLagSummary { transcripts_behind: 0, max_lag_seconds: 0, .. }`
-/// regardless of reality. This spawns a real broker, confirms it is alive via the
-/// `doctor ai` path, then shows `ai doctor` denies that same broker is running.
-/// Expected once F1-03/F2-02 wire a shared collector: both commands agree.
-/// Actual today: `ai doctor` always reports `running: false`. Left `#[ignore]`
-/// so `cargo test` stays green until F2-03 fixes it — run explicitly with
-/// `cargo test -- --ignored f0_02_ai_doctor` to reproduce the gap.
-#[ignore = "F0-02 known-gap reproducer for audit gap #4; fails until F2-03 unifies ai doctor / doctor ai on one collector"]
+/// Regression test for the former ai-coverage gap #4: `wakaclock ai doctor` and
+/// `wakaclock doctor ai` must agree on the running broker. Both commands now expose
+/// the same typed v2 collector snapshot (the legacy doctor fields remain additive).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state() {
     let home = temp_home("f0-02-doctor-mismatch");
@@ -633,14 +636,12 @@ async fn f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state() {
     let ai_doctor_report: serde_json::Value =
         serde_json::from_slice(&ai_doctor_output.stdout).expect("ai doctor emitted valid json");
 
-    // Gap: this is expected to be `true` (same broker, same host) but the
-    // hardcoded `BrokerHealth::default()` fallback in `run_ai_doctor` makes it
-    // `false` every time, which is exactly gap #4 in the audit.
+    // The v2 measurement is explicit so unavailable probes cannot be confused with
+    // a confirmed stopped broker.
     assert_eq!(
-        ai_doctor_report["broker"]["running"],
+        ai_doctor_report["broker"]["running"]["value"],
         serde_json::json!(true),
-        "ai doctor and doctor ai must agree on whether the broker is running; \
-         ai doctor hardcodes `running: false` in run_ai_doctor (src/main.rs)"
+        "ai doctor and doctor ai must agree on whether the broker is running"
     );
 
     broker.kill();

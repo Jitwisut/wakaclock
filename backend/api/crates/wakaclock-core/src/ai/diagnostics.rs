@@ -8,8 +8,231 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::certification::CertificationTuple;
+
 /// Wire schema for the metadata-only diagnostics report.
 pub const AI_DIAGNOSTICS_SCHEMA_VERSION: u8 = 1;
+/// Additive diagnostics contract. Version 1 remains readable for older CLI and
+/// dashboard builds; v2 distinguishes an unavailable measurement from a real zero.
+pub const AI_DIAGNOSTICS_SCHEMA_VERSION_V2: u8 = 2;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementAvailability {
+    #[default]
+    Unavailable,
+    Available,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHealth {
+    #[default]
+    Unavailable,
+    Idle,
+    Healthy,
+    Degraded,
+    Disabled,
+}
+
+/// A measurement carries both its value and the probe result that makes the value
+/// meaningful. `None` is intentional when the probe failed; it must never be rendered
+/// as a zero by a consumer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticMeasurement<T> {
+    pub availability: MeasurementAvailability,
+    pub measured_at: Option<DateTime<Utc>>,
+    pub value: Option<T>,
+}
+
+impl<T> DiagnosticMeasurement<T> {
+    pub fn available(value: T, measured_at: DateTime<Utc>) -> Self {
+        Self {
+            availability: MeasurementAvailability::Available,
+            measured_at: Some(measured_at),
+            value: Some(value),
+        }
+    }
+
+    pub fn unavailable() -> Self {
+        Self {
+            availability: MeasurementAvailability::Unavailable,
+            measured_at: None,
+            value: None,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            availability: MeasurementAvailability::Disabled,
+            measured_at: None,
+            value: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticsConsent {
+    #[serde(default)]
+    pub adapter_tracking: bool,
+    #[serde(default)]
+    pub observer: bool,
+    #[serde(default)]
+    pub diagnostics_upload: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerHealthV2 {
+    pub availability: MeasurementAvailability,
+    pub running: DiagnosticMeasurement<bool>,
+    pub pending: DiagnosticMeasurement<u32>,
+    pub retry: DiagnosticMeasurement<u32>,
+    pub dead_letter: DiagnosticMeasurement<u32>,
+    #[serde(default)]
+    pub last_delivery_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParserLagSummaryV2 {
+    pub availability: MeasurementAvailability,
+    pub transcripts_watched: DiagnosticMeasurement<u32>,
+    pub transcripts_behind: DiagnosticMeasurement<u32>,
+    pub max_lag_seconds: DiagnosticMeasurement<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterFreshnessV2 {
+    pub agent: String,
+    pub availability: MeasurementAvailability,
+    pub detected: DiagnosticMeasurement<bool>,
+    pub enabled: DiagnosticMeasurement<bool>,
+    pub runtime_health: RuntimeHealth,
+    pub verification: VerificationStatus,
+    /// Runtime tuple observed by the client.  It is evidence for server lookup,
+    /// never a client-controlled certification result.
+    #[serde(default)]
+    pub certification: Option<CertificationTuple>,
+    #[serde(default)]
+    pub certificate_id: Option<String>,
+    #[serde(default)]
+    pub certification_status: Option<String>,
+    #[serde(default)]
+    pub last_evidence_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub diagnostic_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiDiagnosticsReportV2 {
+    pub schema_version: u8,
+    pub captured_at: DateTime<Utc>,
+    /// Opaque, bounded device identity. It is not a hostname or filesystem path.
+    pub device_id: String,
+    /// Changes on a local broker restart; used with sequence for receipt ordering.
+    pub boot_id: String,
+    pub sequence: u64,
+    pub measured_at: DateTime<Utc>,
+    pub runtime_health: RuntimeHealth,
+    pub consent: DiagnosticsConsent,
+    pub broker: BrokerHealthV2,
+    pub parser: ParserLagSummaryV2,
+    pub adapters: Vec<AdapterFreshnessV2>,
+}
+
+impl AiDiagnosticsReportV2 {
+    pub fn schema_is_supported(&self) -> bool {
+        self.schema_version == AI_DIAGNOSTICS_SCHEMA_VERSION_V2
+    }
+
+    /// Additive compatibility mapping for v1 consumers and migration tests. A v1
+    /// boolean/counter is marked available because it was actually supplied by the
+    /// legacy producer; new collectors should use the nullable probes directly.
+    pub fn from_v1(
+        report: &AiDiagnosticsReport,
+        device_id: String,
+        boot_id: String,
+        sequence: u64,
+    ) -> Self {
+        let measured_at = report.captured_at;
+        let availability = MeasurementAvailability::Available;
+        Self {
+            schema_version: AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
+            captured_at: report.captured_at,
+            device_id,
+            boot_id,
+            sequence,
+            measured_at,
+            runtime_health: if report.broker.running {
+                RuntimeHealth::Healthy
+            } else {
+                RuntimeHealth::Degraded
+            },
+            consent: DiagnosticsConsent {
+                adapter_tracking: report.adapters.iter().any(|adapter| adapter.enabled),
+                observer: true,
+                diagnostics_upload: false,
+            },
+            broker: BrokerHealthV2 {
+                availability,
+                running: DiagnosticMeasurement::available(report.broker.running, measured_at),
+                pending: DiagnosticMeasurement::available(report.broker.pending, measured_at),
+                retry: DiagnosticMeasurement::available(report.broker.retry, measured_at),
+                dead_letter: DiagnosticMeasurement::available(
+                    report.broker.dead_letter,
+                    measured_at,
+                ),
+                last_delivery_at: report
+                    .broker
+                    .last_delivery_unix
+                    .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
+                last_error_code: report.broker.last_error_code.clone(),
+            },
+            parser: ParserLagSummaryV2 {
+                availability,
+                transcripts_watched: DiagnosticMeasurement::available(
+                    report.parser.transcripts_watched,
+                    measured_at,
+                ),
+                transcripts_behind: DiagnosticMeasurement::available(
+                    report.parser.transcripts_behind,
+                    measured_at,
+                ),
+                max_lag_seconds: DiagnosticMeasurement::available(
+                    report.parser.max_lag_seconds.max(0) as u32,
+                    measured_at,
+                ),
+            },
+            adapters: report
+                .adapters
+                .iter()
+                .map(|adapter| AdapterFreshnessV2 {
+                    agent: adapter.agent.clone(),
+                    availability,
+                    detected: DiagnosticMeasurement::available(adapter.detected, measured_at),
+                    enabled: DiagnosticMeasurement::available(adapter.enabled, measured_at),
+                    runtime_health: match adapter.health_status() {
+                        "healthy" => RuntimeHealth::Healthy,
+                        "captured_locally" => RuntimeHealth::Idle,
+                        "degraded" => RuntimeHealth::Degraded,
+                        "needs_consent" => RuntimeHealth::Disabled,
+                        _ => RuntimeHealth::Unavailable,
+                    },
+                    verification: adapter.verification,
+                    certification: None,
+                    certificate_id: None,
+                    certification_status: None,
+                    last_evidence_at: adapter
+                        .last_evidence_unix
+                        .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
+                    diagnostic_code: adapter.diagnostic_code.clone(),
+                })
+                .collect(),
+        }
+    }
+}
 
 /// The only production observer mode.  The custom deserializer accepts the old
 /// `infer` spelling and deliberately downgrades it to `observe_only` so an old
@@ -246,5 +469,70 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(adapter.health_status(), "captured_locally");
+    }
+
+    #[test]
+    fn v2_preserves_unavailable_as_null_and_maps_legacy_reports_additively() {
+        let measurement: DiagnosticMeasurement<u32> = DiagnosticMeasurement::unavailable();
+        let json = serde_json::to_value(&measurement).unwrap();
+        assert_eq!(json["availability"], "unavailable");
+        assert!(json["value"].is_null());
+        assert!(json["measured_at"].is_null());
+
+        let legacy = build_report(
+            Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            BrokerHealth::default(),
+            ParserLagSummary::default(),
+            Vec::new(),
+        );
+        let v2 = AiDiagnosticsReportV2::from_v1(
+            &legacy,
+            "device-1".to_string(),
+            "boot-1".to_string(),
+            7,
+        );
+        assert!(v2.schema_is_supported());
+        assert_eq!(v2.sequence, 7);
+        assert_eq!(v2.device_id, "device-1");
+    }
+
+    #[test]
+    fn v2_consent_is_separate_from_runtime_health() {
+        let report = AiDiagnosticsReportV2 {
+            schema_version: AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
+            captured_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            device_id: "device".to_string(),
+            boot_id: "boot".to_string(),
+            sequence: 1,
+            measured_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            runtime_health: RuntimeHealth::Idle,
+            consent: DiagnosticsConsent {
+                adapter_tracking: true,
+                observer: false,
+                diagnostics_upload: false,
+            },
+            broker: BrokerHealthV2 {
+                availability: MeasurementAvailability::Disabled,
+                running: DiagnosticMeasurement::disabled(),
+                pending: DiagnosticMeasurement::unavailable(),
+                retry: DiagnosticMeasurement::unavailable(),
+                dead_letter: DiagnosticMeasurement::unavailable(),
+                last_delivery_at: None,
+                last_error_code: None,
+            },
+            parser: ParserLagSummaryV2 {
+                availability: MeasurementAvailability::Disabled,
+                transcripts_watched: DiagnosticMeasurement::disabled(),
+                transcripts_behind: DiagnosticMeasurement::disabled(),
+                max_lag_seconds: DiagnosticMeasurement::disabled(),
+            },
+            adapters: Vec::new(),
+        };
+        assert!(!report.consent.observer);
+        assert_eq!(report.runtime_health, RuntimeHealth::Idle);
+        assert_eq!(
+            report.broker.running.availability,
+            MeasurementAvailability::Disabled
+        );
     }
 }

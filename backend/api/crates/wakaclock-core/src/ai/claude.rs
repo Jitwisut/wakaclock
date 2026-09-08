@@ -10,6 +10,7 @@ use crate::ai::patch::{
 use crate::ai::path::resolve_within_workspace;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -185,7 +186,7 @@ impl AiActivityParser for ClaudeCodeParser {
         // once the matching `user`/tool_result record for the same call arrives later
         // in the stream (plan.md 8.5.2 capability note: model lives on the assistant
         // turn, not on the tool result).
-        let mut pending_tool_use_models: HashMap<String, Option<String>> = HashMap::new();
+        let mut pending_tool_uses: HashMap<String, PendingClaudeToolUse> = HashMap::new();
         let mut last_offset = cursor.byte_offset;
         let mut last_record_time: Option<DateTime<Utc>> = cursor.last_record_time;
         let mut last_record_id: Option<String> = cursor.last_record_id.clone();
@@ -225,12 +226,25 @@ impl AiActivityParser for ClaudeCodeParser {
                     let Some(message) = record.message else {
                         continue;
                     };
-                    for block in message.content.unwrap_or_default() {
+                    let blocks = match message.content {
+                        Some(ClaudeMessageContent::Blocks(blocks)) => blocks,
+                        // Claude records also contain ordinary text, progress maps, and
+                        // other non-tool content. Those are valid records, but they do
+                        // not prove a file edit and must not become parse warnings.
+                        Some(ClaudeMessageContent::Other(_)) | None => continue,
+                    };
+                    for block in blocks {
                         if block.block_type == "tool_use"
                             && FILE_EDIT_TOOLS.contains(&block.name.as_deref().unwrap_or(""))
                         {
                             if let Some(id) = block.id {
-                                pending_tool_use_models.insert(id, message.model.clone());
+                                pending_tool_uses.insert(
+                                    id,
+                                    PendingClaudeToolUse {
+                                        model: message.model.clone(),
+                                        project_root: record.cwd.clone().map(PathBuf::from),
+                                    },
+                                );
                             }
                         }
                     }
@@ -239,7 +253,13 @@ impl AiActivityParser for ClaudeCodeParser {
                     let Some(message) = &record.message else {
                         continue;
                     };
-                    let Some(block) = message.content.as_ref().and_then(|c| c.first()) else {
+                    let Some(blocks) = message.content.as_ref().and_then(|content| match content {
+                        ClaudeMessageContent::Blocks(blocks) => Some(blocks),
+                        ClaudeMessageContent::Other(_) => None,
+                    }) else {
+                        continue;
+                    };
+                    let Some(block) = blocks.first() else {
                         continue;
                     };
                     if block.block_type != "tool_result" {
@@ -253,7 +273,9 @@ impl AiActivityParser for ClaudeCodeParser {
                     };
                     last_record_id = Some(tool_use_id.clone());
 
-                    let Some(result) = record.tool_use_result.as_ref() else {
+                    let Some(ClaudeToolUseResultValue::Object(result)) =
+                        record.tool_use_result.as_ref()
+                    else {
                         continue;
                     };
                     let Some(file_path) = result
@@ -285,9 +307,13 @@ impl AiActivityParser for ClaudeCodeParser {
                         continue;
                     };
                     last_record_time = Some(timestamp);
-                    let project_root = record.cwd.clone().map(PathBuf::from);
+                    let pending = pending_tool_uses.remove(&tool_use_id);
+                    let project_root =
+                        record.cwd.clone().map(PathBuf::from).or_else(|| {
+                            pending.as_ref().and_then(|tool| tool.project_root.clone())
+                        });
                     let entity = resolve_entity(&file_path, project_root.as_deref());
-                    let model = pending_tool_use_models.remove(&tool_use_id).flatten();
+                    let model = pending.and_then(|tool| tool.model);
 
                     events.push(AiEditEvent {
                         event_id: format!("claude-code-v1:{tool_use_id}"),
@@ -295,9 +321,12 @@ impl AiActivityParser for ClaudeCodeParser {
                         provider: Some("anthropic".to_string()),
                         model,
                         session_id: record.session_id.clone(),
+                        tool_event_id: Some(tool_use_id.clone()),
                         occurred_at: timestamp,
                         entity,
                         project_root,
+                        change_kind: crate::broker::BrokerChangeKind::Modify,
+                        previous_entity: None,
                         lines_added: Some(delta.added),
                         lines_deleted: Some(delta.deleted),
                         input_tokens: None,
@@ -344,13 +373,30 @@ struct ClaudeRecord {
     timestamp: Option<DateTime<Utc>>,
     message: Option<ClaudeMessage>,
     #[serde(rename = "toolUseResult")]
-    tool_use_result: Option<ClaudeToolUseResult>,
+    tool_use_result: Option<ClaudeToolUseResultValue>,
+}
+
+#[derive(Debug)]
+struct PendingClaudeToolUse {
+    model: Option<String>,
+    project_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ClaudeMessage {
     model: Option<String>,
-    content: Option<Vec<ClaudeContentBlock>>,
+    content: Option<ClaudeMessageContent>,
+}
+
+/// A Claude transcript contains both structured content blocks and ordinary text or
+/// progress objects. Keep the latter as an opaque value so valid non-edit records do
+/// not look malformed to the parser; the value is never inspected or retained.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum ClaudeMessageContent {
+    Blocks(Vec<ClaudeContentBlock>),
+    Other(Value),
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,6 +417,14 @@ struct ClaudeContentBlock {
 /// *existing*-file edit — a brand-new file (`Write` with no prior content) reports an
 /// **empty** `structuredPatch` and puts the whole file in `content` instead (found by
 /// running this parser against a real session; see CAPABILITIES.md's correction note).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum ClaudeToolUseResultValue {
+    Object(ClaudeToolUseResult),
+    Other(Value),
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct ClaudeToolUseResult {
     #[serde(rename = "filePath")]
@@ -553,5 +607,121 @@ mod tests {
             .parse_since(&ParseContext::default(), Some(&cursor))
             .unwrap();
         assert!(batch.events.is_empty());
+    }
+
+    #[test]
+    fn parse_since_ignores_non_edit_content_shapes_without_warnings() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-claude-shapes-{}",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": "ordinary text"}
+            }),
+            serde_json::json!({
+                "type": "user",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "bash-1"}]
+                },
+                "toolUseResult": "shell output"
+            }),
+            serde_json::json!({
+                "type": "user",
+                "message": {"content": {"progress": true}},
+                "toolUseResult": []
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let parser = ClaudeCodeParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+        };
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+        assert!(batch.events.is_empty());
+        assert!(batch.warnings.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_since_uses_assistant_cwd_when_tool_result_omits_it() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-claude-cwd-fallback-{}",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "type": "assistant",
+                "cwd": "/workspace",
+                "message": {
+                    "model": "claude-sonnet-5",
+                    "content": [{"type": "tool_use", "id": "edit-1", "name": "Edit"}]
+                }
+            }),
+            serde_json::json!({
+                "type": "user",
+                "timestamp": "2026-09-06T10:00:00Z",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "edit-1"}]
+                },
+                "toolUseResult": {
+                    "filePath": "src/lib.rs",
+                    "structuredPatch": [{
+                        "oldStart": 1,
+                        "oldLines": 1,
+                        "newStart": 1,
+                        "newLines": 2,
+                        "lines": ["-old", "+new", "+line"]
+                    }]
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let parser = ClaudeCodeParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+        };
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+        assert_eq!(batch.events.len(), 1);
+        let event = &batch.events[0];
+        assert_eq!(event.project_root, Some(PathBuf::from("/workspace")));
+        assert_eq!(event.entity, PathBuf::from("/workspace/src/lib.rs"));
+        assert_eq!(event.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(event.lines_added, Some(2));
+        assert_eq!(event.lines_deleted, Some(1));
+        let _ = fs::remove_file(path);
     }
 }

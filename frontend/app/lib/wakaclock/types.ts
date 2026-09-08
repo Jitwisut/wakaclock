@@ -394,7 +394,88 @@ export interface AiDiagnosticsReport {
   broker: AiDiagnosticsBroker;
   captured_at: string;
   parser: AiDiagnosticsParser;
-  schema_version: number;
+  schema_version: 1;
+}
+
+export type AiMeasurementAvailability = 'available' | 'disabled' | 'unavailable';
+export type AiRuntimeHealth = 'degraded' | 'disabled' | 'healthy' | 'idle' | 'unavailable';
+
+export interface AiDiagnosticsMeasurement<T> {
+  availability: AiMeasurementAvailability;
+  measured_at: null | string;
+  value: null | T;
+}
+
+export interface AiDiagnosticsBrokerV2 {
+  availability: AiMeasurementAvailability;
+  dead_letter: AiDiagnosticsMeasurement<number>;
+  last_delivery_at?: null | string;
+  last_error_code?: null | string;
+  pending: AiDiagnosticsMeasurement<number>;
+  retry: AiDiagnosticsMeasurement<number>;
+  running: AiDiagnosticsMeasurement<boolean>;
+}
+
+export interface AiDiagnosticsParserV2 {
+  availability: AiMeasurementAvailability;
+  max_lag_seconds: AiDiagnosticsMeasurement<number>;
+  transcripts_behind: AiDiagnosticsMeasurement<number>;
+  transcripts_watched: AiDiagnosticsMeasurement<number>;
+}
+
+export interface AiAdapterFreshnessV2 {
+  agent: string;
+  availability: AiMeasurementAvailability;
+  certificate_id?: null | string;
+  certification?: AiCertificationTuple | null;
+  certification_status?: null | string;
+  detected: AiDiagnosticsMeasurement<boolean>;
+  diagnostic_code?: null | string;
+  enabled: AiDiagnosticsMeasurement<boolean>;
+  last_evidence_at?: null | string;
+  runtime_health: AiRuntimeHealth;
+  verification: AiVerificationStatus;
+}
+
+/** Exact capability tuple used by the server-side certification catalog. */
+export interface AiCertificationTuple {
+  adapter_id: string;
+  arch?: null | string;
+  client_id: string;
+  contract_version: string;
+  corpus_version?: null | string;
+  edit_modes: string[];
+  fingerprint_version: string;
+  model_id?: null | string;
+  os?: null | string;
+  payload_schema_versions: string[];
+  producer_version?: null | string;
+  provider_id: string;
+  runtime?: null | string;
+  tool_version?: null | string;
+}
+
+export interface AiDiagnosticsReportV2 {
+  adapters: AiAdapterFreshnessV2[];
+  boot_id: string;
+  broker: AiDiagnosticsBrokerV2;
+  captured_at: string;
+  consent: {
+    adapter_tracking: boolean;
+    diagnostics_upload: boolean;
+    observer: boolean;
+  };
+  device_id: string;
+  measured_at: string;
+  parser: AiDiagnosticsParserV2;
+  runtime_health: AiRuntimeHealth;
+  schema_version: 2;
+  sequence: number;
+}
+
+export interface AiDiagnosticsV2Response {
+  reports: AiDiagnosticsReportV2[];
+  storage: 'ephemeral' | 'postgres' | string;
 }
 
 export interface AiDiagnosticsResponse {

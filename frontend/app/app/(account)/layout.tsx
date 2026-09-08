@@ -1,10 +1,10 @@
 import type React from 'react';
 
 import { cookies } from 'next/headers';
-import { ThemeProvider } from 'next-themes';
 
 import { ActiveThemeProvider } from '@/components/active-theme';
 import { QueryProvider } from '@/components/query-provider';
+import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { fontVariables } from '@/lib/fonts';
 import {

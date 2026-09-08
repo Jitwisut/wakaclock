@@ -13,6 +13,8 @@ use crate::config::PostgresConfig;
 const FOUNDATION_MIGRATION: &str =
     include_str!("../../migrations/postgres/001_phase10_foundation.sql");
 const PRESENCE_MIGRATION: &str = include_str!("../../migrations/postgres/002_presence_v2.sql");
+const AI_DIAGNOSTICS_MIGRATION: &str =
+    include_str!("../../migrations/postgres/003_ai_diagnostics.sql");
 
 pub struct PostgresClient {
     client: Client,
@@ -46,7 +48,11 @@ impl PostgresClient {
         self.client
             .batch_execute(PRESENCE_MIGRATION)
             .await
-            .context("failed to apply PostgreSQL Presence v2 migration")
+            .context("failed to apply PostgreSQL Presence v2 migration")?;
+        self.client
+            .batch_execute(AI_DIAGNOSTICS_MIGRATION)
+            .await
+            .context("failed to apply PostgreSQL AI diagnostics migration")
     }
 
     pub async fn health_check(&self) -> Result<()> {
@@ -105,5 +111,7 @@ mod tests {
                 "presence migration is missing {table}"
             );
         }
+        assert!(AI_DIAGNOSTICS_MIGRATION.contains("ai_diagnostics_devices"));
+        assert!(AI_DIAGNOSTICS_MIGRATION.contains("expires_at"));
     }
 }

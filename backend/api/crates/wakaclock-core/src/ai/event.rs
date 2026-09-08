@@ -1,3 +1,4 @@
+use crate::broker::BrokerChangeKind;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,6 +15,40 @@ pub fn is_safe_event_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+/// Agent identifiers that this build can attribute by name.
+///
+/// An arbitrary client supplied string is still useful as evidence that some AI
+/// activity may have happened, but it must not become a named verified agent in
+/// analytics. Keeping this list beside the normalizer gives the CLI, API and
+/// dashboard the same identity boundary and prevents test labels or typos from
+/// appearing as real integrations.
+pub const KNOWN_AGENT_IDS: &[&str] = &[
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "cursor",
+    "cursor-agent",
+    "kilo-code",
+    "kimi-code-cli",
+    "deep-code",
+    "antigravity",
+    "copilot",
+    "windsurf",
+    "cline",
+    "roo-code",
+    "opencode",
+    "generic-mcp",
+    "chatgpt-mcp",
+];
+
+/// Return whether `raw` resolves to an adapter identifier that can be named in
+/// verified attribution. Unknown integrations remain eligible for an unattributed
+/// AI bucket, but never for a named row.
+pub fn is_known_agent_id(raw: &str) -> bool {
+    let normalized = normalize_agent_id(raw);
+    KNOWN_AGENT_IDS.contains(&normalized.as_str())
 }
 
 /// Build a stable producer event ID without putting a file path (or any other
@@ -93,9 +128,20 @@ pub struct AiEditEvent {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub session_id: Option<String>,
+    /// Stable producer operation identity when the source exposes one. This is the
+    /// proof-bearing alias key shared by hook/transcript observations; it is never
+    /// synthesized from path, time, or line counts.
+    #[serde(default)]
+    pub tool_event_id: Option<String>,
     pub occurred_at: DateTime<Utc>,
     pub entity: PathBuf,
     pub project_root: Option<PathBuf>,
+    /// Operation reported by the producer. Transcript parsers should preserve
+    /// explicit create/delete/rename markers; older producers default to modify.
+    #[serde(default = "default_change_kind")]
+    pub change_kind: BrokerChangeKind,
+    #[serde(default)]
+    pub previous_entity: Option<PathBuf>,
     /// `None` means unknown, not zero — some agents expose a tool call without an
     /// exact patch.
     pub lines_added: Option<u32>,
@@ -104,6 +150,10 @@ pub struct AiEditEvent {
     pub output_tokens: Option<u64>,
     pub source: AiEventSource,
     pub confidence: AiConfidence,
+}
+
+fn default_change_kind() -> BrokerChangeKind {
+    BrokerChangeKind::Modify
 }
 
 /// Map a client- or transcript-supplied agent label onto the stable identifier used
@@ -161,6 +211,14 @@ mod tests {
     }
 
     #[test]
+    fn only_canonical_adapter_ids_can_be_named() {
+        assert!(is_known_agent_id("Codex CLI"));
+        assert!(is_known_agent_id("Cursor Agent"));
+        assert!(!is_known_agent_id("verify-declared"));
+        assert!(!is_known_agent_id("unknown-agent"));
+    }
+
+    #[test]
     fn event_serializes_without_raw_content_fields() {
         let event = AiEditEvent {
             event_id: opaque_file_event_id("codex-v1", "exec-1", "src/lib.rs"),
@@ -168,9 +226,12 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("src/lib.rs"),
             project_root: None,
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
             lines_added: Some(3),
             lines_deleted: None,
             input_tokens: None,

@@ -9,6 +9,7 @@ import { PresencePlayground } from '@/components/presence/PresencePlayground';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { PresenceWeeklySummary } from '@/hooks/use-coworking-history';
+import { freeSlotIndex, seatAnchor, standingSpotNear } from '@/lib/presence/floor-geometry';
 import type {
   PresenceHistoryItem,
   PresenceV2Room,
@@ -16,7 +17,7 @@ import type {
   PresenceV2Session,
   PresenceV2Snapshot,
 } from '@/lib/wakaclock/types';
-import type { PresenceUser } from '@/types/presence';
+import { DEFAULT_SPAWN_POSITION, type PresenceUser } from '@/types/presence';
 
 const border = 'var(--presence-border)';
 const panel = 'var(--presence-panel)';
@@ -48,7 +49,6 @@ function connectionLabel(connected: boolean, stale: boolean): string {
   if (stale) return 'Stale · reconnecting';
   return 'Connecting';
 }
-
 
 function SessionBar({
   currentUserId,
@@ -166,6 +166,7 @@ interface ActiveRoomViewProps {
   activeSession?: PresenceV2Session;
   connected: boolean;
   currentUserId: string;
+  floorHeightScale?: number;
   history: HistoryState;
   inviteId: null | string;
   inviteUrl: null | string;
@@ -190,6 +191,7 @@ export function ActiveRoomView({
   activeSession,
   connected,
   currentUserId,
+  floorHeightScale = 1,
   history,
   inviteId,
   inviteUrl,
@@ -214,6 +216,8 @@ export function ActiveRoomView({
     participantIds: session.participants.map((participant) => participant.user_id),
     zoneId: session.zone_id,
   }));
+  const me = users.find((user) => user.isCurrentUser);
+  const myPosition = me ? { x: me.x, y: me.y } : DEFAULT_SPAWN_POSITION;
 
   return (
     <div className="flex flex-col gap-4">
@@ -315,13 +319,14 @@ export function ActiveRoomView({
       ) : null}
 
       <p className="px-1 text-xs font-bold" style={{ color: muted }}>
-        Drag your own sprite into a Pairing Table to make your availability explicit. A second
-        teammate entering the same table starts a shared session.
+        Walk your sprite onto a pod to make your availability explicit. A second teammate entering
+        the same pod starts a shared co-working session.
       </p>
 
       <div className="hidden md:block">
         <PresencePlayground
           currentUserId={currentUserId}
+          heightScale={floorHeightScale}
           onMoveCurrentUser={onMove}
           reducedMotion={reducedMotion}
           sessions={playgroundSessions}
@@ -329,15 +334,17 @@ export function ActiveRoomView({
           zones={snapshot.zones}
         />
       </div>
-      <div aria-label="Collaboration tables" className="grid gap-2 md:hidden">
+      <div aria-label="Collaboration pods" className="grid gap-2 md:hidden">
         {snapshot.zones.map((zone) => {
           const occupied = snapshot.roster.filter((entry) => entry.zone_id === zone.id).length;
           const atZone = snapshot.roster.some(
             (entry) => entry.user_id === currentUserId && entry.zone_id === zone.id
           );
+          // Leaving has to be computed from the room's real zones — a fixed point such
+          // as the floor centre can itself sit inside a pod, which would re-seat you.
           const nextPosition = atZone
-            ? { x: 50, y: 50 }
-            : { x: zone.center_x, y: zone.center_y };
+            ? standingSpotNear(snapshot.zones, myPosition)
+            : seatAnchor(zone, freeSlotIndex(zone, occupied));
           return (
             <div
               className="flex items-center justify-between gap-3 border-2 p-3"
@@ -463,10 +470,7 @@ export function LobbyView({
           <p className="text-xs font-bold uppercase" style={{ color: muted }}>
             Join preview
           </p>
-          <h2
-            className="mt-2 text-xl font-bold"
-            style={{ fontFamily: headingFont }}
-          >
+          <h2 className="mt-2 text-xl font-bold" style={{ fontFamily: headingFont }}>
             {roomLabel(roomPreview)}
           </h2>
           <p className="mt-2 text-sm" style={{ color: previewUnavailable ? danger : muted }}>
@@ -504,10 +508,7 @@ export function LobbyView({
             <p className="text-xs font-bold uppercase" style={{ color: muted }}>
               My teams
             </p>
-            <h2
-              className="mt-2 text-xl font-bold"
-              style={{ fontFamily: headingFont }}
-            >
+            <h2 className="mt-2 text-xl font-bold" style={{ fontFamily: headingFont }}>
               Choose a room to show up
             </h2>
             <p className="mt-2 max-w-xl text-sm" style={{ color: muted }}>
@@ -556,10 +557,7 @@ export function LobbyView({
         <p className="text-xs font-bold uppercase" style={{ color: muted }}>
           Quick room
         </p>
-        <h2
-          className="mt-2 text-lg font-bold"
-          style={{ fontFamily: headingFont }}
-        >
+        <h2 className="mt-2 text-lg font-bold" style={{ fontFamily: headingFont }}>
           Start a temporary co-working room
         </h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_auto]">

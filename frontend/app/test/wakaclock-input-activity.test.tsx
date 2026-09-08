@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { ClipboardCoverageNotice } from '@/app/dashboard/(auth)/wakaclock/keystrokes/page';
+import { ClipboardCoverageNotice } from '@/app/dashboard/(auth)/wakaclock/keystrokes/components/clipboard-coverage-notice';
 
 describe('Input Activity clipboard coverage', () => {
   it('distinguishes unavailable, partial, and complete coverage', () => {

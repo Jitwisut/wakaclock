@@ -160,7 +160,7 @@ impl AnalyticsRepository {
                     sumIf(toUInt64(ifNull(keystrokes, 0)), actor_type = 'human') AS human_keystrokes,
                     sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
                     count() AS heartbeat_count
-                 FROM wakaclock.heartbeats AS h
+                 FROM wakaclock.heartbeats_canonical AS h
                  GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model",
             )
             .execute()
@@ -179,7 +179,7 @@ impl AnalyticsRepository {
                     sum(toUInt64(ifNull(unattributed_lines_deleted, 0)))
                         + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), actor_type = 'unknown') AS unknown_lines_deleted,
                     count() AS heartbeat_count
-                 FROM wakaclock.heartbeats AS h",
+                 FROM wakaclock.heartbeats_canonical AS h",
             )
             .fetch_one::<ActorRollupTotalsRow>()
             .await
@@ -570,6 +570,7 @@ const STATEMENTS: &[&str] = &[
         count() AS heartbeat_count,
         sum(ifNull(active_seconds, 0.0)) AS total_seconds
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date
     "#,
     r#"
@@ -582,6 +583,7 @@ const STATEMENTS: &[&str] = &[
         count() AS heartbeat_count,
         sum(ifNull(active_seconds, 0.0)) AS total_seconds
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, language
     "#,
     r#"
@@ -594,6 +596,7 @@ const STATEMENTS: &[&str] = &[
         count() AS heartbeat_count,
         sum(ifNull(active_seconds, 0.0)) AS total_seconds
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, project
     "#,
     r#"
@@ -606,6 +609,7 @@ const STATEMENTS: &[&str] = &[
         count() AS heartbeat_count,
         sum(ifNull(active_seconds, 0.0)) AS total_seconds
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, editor
     "#,
     r#"
@@ -618,6 +622,7 @@ const STATEMENTS: &[&str] = &[
         count() AS heartbeat_count,
         sum(ifNull(active_seconds, 0.0)) AS total_seconds
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, os
     "#,
     r#"
@@ -635,6 +640,7 @@ const STATEMENTS: &[&str] = &[
         count()          AS heartbeat_count,
         uniqState(date)  AS unique_days
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, language, project, editor, os, branch
     "#,
     r#"
@@ -652,6 +658,7 @@ const STATEMENTS: &[&str] = &[
         sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, ai_agent
     "#,
     // Actor-aware replacement for the boolean-keyed AI rollup. It is additive so old
@@ -679,6 +686,7 @@ const STATEMENTS: &[&str] = &[
         sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats AS h
+    WHERE h.revision = 0
     GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model
     "#,
     r#"
@@ -693,6 +701,7 @@ const STATEMENTS: &[&str] = &[
         sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats
+    WHERE revision = 0
     GROUP BY user_id, date, project
     "#,
     // ============================================================
@@ -702,33 +711,33 @@ const STATEMENTS: &[&str] = &[
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_daily_summary
     TO wakaclock.daily_totals AS
     SELECT user_id, date, count() AS heartbeat_count, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_lang_summary
     TO wakaclock.language_daily AS
     SELECT user_id, date, coalesce(ast_language, language, 'Unknown') AS language,
            count() AS heartbeat_count, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, language
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, language
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_project_summary
     TO wakaclock.project_daily AS
     SELECT user_id, date, coalesce(project, 'Unknown') AS project,
            count() AS heartbeat_count, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, project
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, project
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_editor_summary
     TO wakaclock.editor_daily AS
     SELECT user_id, date, editor, count() AS heartbeat_count, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, editor
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, editor
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_os_summary
     TO wakaclock.os_daily AS
     SELECT user_id, date, operating_system AS os, count() AS heartbeat_count, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, os
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, os
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_insights_agg
@@ -737,7 +746,7 @@ const STATEMENTS: &[&str] = &[
            coalesce(project, 'Unknown') AS project, editor, operating_system AS os,
            coalesce(branch, '') AS branch, sum(ifNull(active_seconds, 0.0)) AS total_seconds,
            count() AS heartbeat_count, uniqState(date) AS unique_days
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, language, project, editor, os, branch
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, language, project, editor, os, branch
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_ai_summary
@@ -750,7 +759,7 @@ const STATEMENTS: &[&str] = &[
            sumIf(coalesce(keystrokes, 0), actor_type = 'human') AS human_keystrokes,
            sumIf(coalesce(chars_added, 0), actor_type = 'human') AS human_chars_added,
            count() AS heartbeat_count
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, ai_agent
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, ai_agent
     "#,
     r#"
     CREATE MATERIALIZED VIEW IF NOT EXISTS wakaclock.mv_inc_actor_summary_v2
@@ -774,6 +783,7 @@ const STATEMENTS: &[&str] = &[
         sumIf(toUInt64(ifNull(chars_added, 0)), actor_type = 'human') AS human_chars_added,
         count() AS heartbeat_count
     FROM wakaclock.heartbeats_incoming AS h
+    WHERE h.revision = 0
     GROUP BY user_id, date, actor_type, ai_agent, ai_provider, ai_model
     "#,
     r#"
@@ -784,7 +794,7 @@ const STATEMENTS: &[&str] = &[
            sumIf(coalesce(chars_added, 0), actor_type = 'human') AS chars_added,
            sumIf(coalesce(chars_deleted, 0), actor_type = 'human') AS chars_deleted,
            count() AS heartbeat_count
-    FROM wakaclock.heartbeats_incoming GROUP BY user_id, date, project
+    FROM wakaclock.heartbeats_incoming WHERE revision = 0 GROUP BY user_id, date, project
     "#,
 ];
 
@@ -848,7 +858,7 @@ mod tests {
         for actor in ["human", "ai_verified", "ai_inferred", "unknown"] {
             let raw: u64 = client
                 .query(&format!(
-                    "SELECT count() FROM wakaclock.heartbeats WHERE user_id = '{user_id}' AND actor_type = '{actor}'"
+                    "SELECT count() FROM wakaclock.heartbeats_canonical WHERE user_id = '{user_id}' AND actor_type = '{actor}'"
                 ))
                 .fetch_one()
                 .await

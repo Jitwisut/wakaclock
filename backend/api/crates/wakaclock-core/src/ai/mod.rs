@@ -35,6 +35,7 @@
 
 pub mod adapter;
 pub mod canonical;
+pub mod certification;
 pub mod claude;
 pub mod codex;
 pub mod correlation;
@@ -52,19 +53,32 @@ pub mod revision;
 pub mod state;
 pub mod usage;
 
-pub use adapter::{AdapterManifest, AdapterRegistry, InstallStrategy};
-pub use canonical::fingerprint_for_heartbeat;
+pub use adapter::{
+    AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
+    InstallStrategy,
+};
+pub use canonical::{fingerprint_for_heartbeat, FINGERPRINT_SCHEME_V1};
+pub use certification::{
+    CertificationCatalogEntry, CertificationCatalogV1, CertificationDecision,
+    CertificationDecisionStatus, CertificationRevocation, CertificationTuple,
+    CERTIFICATION_CATALOG_SCHEMA_VERSION,
+};
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
 pub use diagnostics::{
-    build_report as build_ai_diagnostics_report, AdapterFreshness, AiDiagnosticsReport,
-    AttributionMode, BrokerHealth, ObserverConfig, ParserLagSummary, VerificationStatus,
-    AI_DIAGNOSTICS_SCHEMA_VERSION,
+    build_report as build_ai_diagnostics_report, AdapterFreshness, AdapterFreshnessV2,
+    AiDiagnosticsReport, AiDiagnosticsReportV2, AttributionMode, BrokerHealth, BrokerHealthV2,
+    DiagnosticMeasurement, DiagnosticsConsent, MeasurementAvailability, ObserverConfig,
+    ParserLagSummary, ParserLagSummaryV2, RuntimeHealth, VerificationStatus,
+    AI_DIAGNOSTICS_SCHEMA_VERSION, AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
 };
-pub use event::{normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource};
+pub use event::{
+    is_known_agent_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
+    KNOWN_AGENT_IDS,
+};
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
 pub use parser::{

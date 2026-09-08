@@ -59,7 +59,7 @@ impl ProjectAnalyticsRepository {
                     ifNull(any(u.estimated_cost_microusd), 0) AS estimated_cost_microusd,
                     ifNull(any(u.usage_events), 0) AS usage_events,
                     ifNull(any(u.priced_events), 0) AS priced_events
-                 FROM wakaclock.heartbeats AS h
+                 FROM wakaclock.heartbeats_canonical AS h
                  INNER JOIN (
                     SELECT user_id, project_id,
                            argMax(display_name, version) AS display_name,
@@ -142,7 +142,7 @@ impl ProjectAnalyticsRepository {
                     sum(toUInt64(ifNull(h.unattributed_lines_deleted, 0)))
                         + sumIf(toUInt64(ifNull(h.ai_lines_deleted, 0) + ifNull(h.human_lines_deleted, 0)), h.actor_type = 'unknown') AS unattributed_deleted,
                     countIf(h.actor_type = 'unknown') AS unattributed_unknown
-             FROM wakaclock.heartbeats AS h
+             FROM wakaclock.heartbeats_canonical AS h
              WHERE h.user_id = ? AND h.project_id = ?
                AND h.time >= ? AND h.time < ?",
             " GROUP BY date ORDER BY date ASC",
@@ -185,7 +185,7 @@ impl ProjectAnalyticsRepository {
         };
         let base = format!(
             "SELECT {dimension} AS name, sum(ifNull(active_seconds, 0.0)) AS total_seconds
-             FROM wakaclock.heartbeats
+             FROM wakaclock.heartbeats_canonical
              WHERE user_id = ? AND project_id = ?
                AND time >= ? AND time < ?"
         );
@@ -233,7 +233,7 @@ impl ProjectAnalyticsRepository {
                         sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0)))
                             + sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0) + ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'unknown') AS unattributed_changes,
                         countIf(actor_type = 'unknown') AS unattributed_unknown
-                 FROM wakaclock.heartbeats
+                 FROM wakaclock.heartbeats_canonical
                  WHERE user_id = ? AND project_id = ?
                    AND time >= ? AND time < ?
                  GROUP BY branch
@@ -269,7 +269,7 @@ impl ProjectAnalyticsRepository {
                     sum(toUInt64(ifNull(unattributed_lines_added, 0) + ifNull(unattributed_lines_deleted, 0)))
                         + sumIf(toUInt64(ifNull(ai_lines_added, 0) + ifNull(ai_lines_deleted, 0) + ifNull(human_lines_added, 0) + ifNull(human_lines_deleted, 0)), actor_type = 'unknown') AS unattributed_changes,
                     countIf(actor_type = 'unknown') AS unattributed_unknown
-             FROM wakaclock.heartbeats
+             FROM wakaclock.heartbeats_canonical
              WHERE user_id = ? AND project_id = ?
                AND time >= ? AND time < ?",
             " GROUP BY entity_key, path, language ORDER BY total_seconds DESC, path ASC",

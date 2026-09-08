@@ -95,7 +95,7 @@ pub async fn today(
         .query(
             "SELECT uniqExact(ifNull(heartbeat_id, concat(entity, ':', toString(time)))) AS heartbeat_count,
                     maxOrNull(time) AS last_heartbeat_at
-             FROM wakaclock.heartbeats WHERE user_id = ? AND time >= ? AND time < ?",
+             FROM wakaclock.heartbeats_canonical WHERE user_id = ? AND time >= ? AND time < ?",
         )
         .bind(user_id)
         .bind(start)
