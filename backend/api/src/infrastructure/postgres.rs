@@ -87,6 +87,7 @@ mod tests {
             "vcs_connections",
             "repositories",
             "commits",
+            "vcs_identities",
             "audit_logs",
         ] {
             assert!(

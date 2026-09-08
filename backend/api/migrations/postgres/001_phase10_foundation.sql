@@ -581,6 +581,39 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 CREATE INDEX IF NOT EXISTS outbox_unpublished_idx ON outbox_events(created_at) WHERE published_at IS NULL;
 CREATE INDEX IF NOT EXISTS audit_logs_org_created_idx ON audit_logs(organization_id, created_at DESC);
 
+-- Commit attribution: linking a provider commit author to a local user, which is what
+-- lets coding time from the canonical timeline be charged to a commit. A commit's author
+-- is only ever a provider-side identity (a login/id, or the email in the git object), so
+-- without this mapping there is no way to know whose timeline to read.
+CREATE TABLE IF NOT EXISTS vcs_identities (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('github', 'gitlab', 'bitbucket')),
+    external_id TEXT NOT NULL,
+    external_login TEXT,
+    email TEXT,
+    -- Set when the link was proven (OAuth callback, verified email match) rather than
+    -- guessed. An unverified link still resolves, but callers can tell the two apart.
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (provider, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS vcs_identities_user_idx ON vcs_identities(user_id);
+CREATE INDEX IF NOT EXISTS vcs_identities_email_idx
+    ON vcs_identities(provider, lower(email)) WHERE email IS NOT NULL;
+
+-- Git records an author email on every commit; providers do not always expose a stable
+-- account id for it (a commit can be authored by someone with no provider account at
+-- all). Keeping the email lets the email path resolve an author that `vcs_identities`
+-- has no row for.
+ALTER TABLE commits ADD COLUMN IF NOT EXISTS author_email TEXT;
+
+CREATE INDEX IF NOT EXISTS commits_author_email_idx
+    ON commits(lower(author_email)) WHERE author_email IS NOT NULL;
+CREATE INDEX IF NOT EXISTS commits_repo_branch_time_idx
+    ON commits(repository_id, branch, committed_at DESC);
+
 INSERT INTO schema_migrations(version, name)
 VALUES (1001, 'phase10_foundation')
 ON CONFLICT (version) DO NOTHING;

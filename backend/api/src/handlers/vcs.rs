@@ -102,6 +102,30 @@ pub async fn commits(
     Ok(Json(envelope(data)))
 }
 
+/// Commits with the coding time charged to each.
+///
+/// Separate from `commits` rather than a flag on it: attribution reads the canonical
+/// timeline once per commit author, so a caller that only wants the metadata list should
+/// not pay for ClickHouse reads it will not use.
+pub async fn commit_analytics(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<OrganizationQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let data = state
+        .vcs_service
+        .commit_analytics(
+            actor,
+            query.organization_id,
+            query.repository_id,
+            query.limit.unwrap_or(100),
+        )
+        .await
+        .map_err(service_error)?;
+    Ok(Json(envelope(data)))
+}
+
 pub async fn pull_requests(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
