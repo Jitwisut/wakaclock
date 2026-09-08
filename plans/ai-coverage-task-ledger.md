@@ -192,6 +192,19 @@ Owner: backend + frontend · Effort รวมกับ initial rollout: 5–9 �
 | F6-05 | Onboarding/repair messages และ advanced detail | F3, F6-04 | ผู้ใช้เห็น next action ที่แก้สาเหตุ ไม่ใช่ข้อความ failure รวม |
 | F6-06 | Dashboard E2E, timezone/device/project filters, accessibility | F6-03–F6-05 | keyboard/screen reader/responsive states และ cross-user tests ผ่าน |
 
+### สถานะการลงมือ F6 (2026-09-08)
+
+| ID | สถานะ | หลักฐาน / ข้อจำกัด |
+| --- | --- | --- |
+| F6-01 | validated locally | Additive AI stats coverage contract, disjoint actor/line partitions, denominator and no-activity tests. |
+| F6-02 | validated locally | Typed frontend compatibility fields, user/range/timezone query keys and timezone request propagation. |
+| F6-03 | validated locally | AI Stats unknown series, event/line coverage display, attribution legend and unavailable-value presentation. |
+| F6-04 | validated locally | Multi-device v2 diagnostics rendering with runtime/certification separation and last event/delivery fields. |
+| F6-05 | validated locally | Bounded repair guidance for consent, auth, schema, delivery and certification codes. |
+| F6-06 | validated locally; release gate | Full frontend test/typecheck/lint and Webpack build pass. Empirical recall, live adapter certification and real DB integration remain release gates; device health is per-device while canonical analytics does not guess a machine filter. |
+
+รายละเอียดอยู่ใน [F6 closeout](../docs/ai-coverage-f6-closeout-2026-09-08.md)
+
 ## 9. F7 — Remote, cloud และ editor เพิ่มเติม
 
 Owner: client/core + integration · Effort foundations: 8–15 วัน + certification ต่อ topology
@@ -205,18 +218,36 @@ Owner: client/core + integration · Effort foundations: 8–15 วัน + certi
 | F7-05 | JetBrains/Neovim/Zed/LSP capability inventory | F1, F3 | known edit/input evidence surfaces แยก; ไม่รับรองด้วยชื่อ editor |
 | F7-06 | Browser paste provenance scope record | F0-03 | current paste remains unknown; ไม่มี permission expansion แฝง |
 
+### สถานะการลงมือ F7 (2026-09-08)
+
+| ID | สถานะ | หลักฐาน / ข้อจำกัด |
+| --- | --- | --- |
+| F7-01 | validated locally; live certificate gate | `wakaclock-core::ai::topology`, stable worktree identity, explicit local/remote mapping, fail-closed execution surface และ optional topology input ใน `ai emit`; topology ยังอยู่ local จนกว่า F8 compatibility rehearsal จะผ่าน |
+| F7-02 | validated locally; live bridge certificate gate | `CollectorRegistration` + runtime `HandoffLedger` ต่อกับ `ai emit`, authenticated transport boundary, scoped local+remote dedup, reconnect and sequence tests; live SSH/remote-extension bridge run ยังต้องทำ |
+| F7-03 | validated locally; live WSL/container certificate gate | receipt ถูกบันทึกใน SQLite ก่อน broker submit, retry หลัง reconnect, teardown/draining, retention ไม่ลบ pending และ queue reopen tests ผ่าน; ต้องรันบน WSL/dev-container จริง |
+| F7-04 | validated locally; live cloud certificate gate | `CloudJobEvidence` ผูก opaque callback-key/job/tool/file mutation identity, reject commit-author shortcut และ `ai emit` ตรวจ cloud boundary; ต้องต่อ disposable authenticated callback จริง |
+| F7-05 | validated locally; live capability certificate gate | shared editor capability catalog ถูก expose ผ่าน `wakaclock ai capabilities`; input evidence แยกจาก AI provenance และ generic LSP/Zed ไม่ถูกยกระดับจากชื่อ editor |
+| F7-06 | validated locally; browser provenance unsupported by design | clipboard counters คง metadata-only และ browser paste เป็น `unknown` หากไม่มี bounded provenance token; ไม่มี permission expansion |
+
+รายละเอียดและหลักฐานรวมอยู่ใน [F7 closeout](../docs/ai-coverage-f7-closeout-2026-09-08.md)
+
 ## 10. F8 — Release และ maintenance
 
 Owner: release · ทำร่วมทุก milestone ไม่รอท้ายโครงการ
 
-| ID | งานและผลส่งมอบ | ขึ้นกับ | เกณฑ์ปิด |
-| --- | --- | --- | --- |
-| F8-01 | Server-first migration/compatibility rehearsal | F1, F2, F4 | old/new client-server combinations ผ่านตาม matrix |
-| F8-02 | Shipped CLI/VSIX/native bundle checksums/resources/platform checks | F3, F5 baseline | binaries ที่รับรองตรง artifact ที่ติดตั้ง |
-| F8-03 | Lab → internal live → opt-in beta rollout พร้อม limits | F6, F8-01, F8-02 | gates ผ่านและ sample size เพียงพอ ไม่ใช้เวลาอย่างเดียว |
-| F8-04 | Disable/revoke/rollback และ queue replay drill | F8-01 | rollback ไม่ทำข้อมูลหาย/เปิด inference/กลับไป guessed human |
-| F8-05 | Support matrix, release notes และ troubleshooting runbook | F8-03, F8-04 | รายชื่อที่โฆษณาไม่เกิน certificate tuples |
-| F8-06 | Parser drift/version renewal process และ maintenance ownership | F8-05 | version change triggers/test checklist มีคนรับผิดชอบ; ไม่สร้าง schedule จริงในงานวางแผน |
+| ID | งานและผลส่งมอบ | สถานะ | ขึ้นกับ | เกณฑ์ปิด |
+| --- | --- | --- | --- | --- |
+| F8-01 | Server-first migration/compatibility rehearsal | validated locally; previous-artifact gate | F1, F2, F4 | old/new client-server combinations ผ่านตาม matrix |
+| F8-02 | Shipped CLI/VSIX/native bundle checksums/resources/platform checks | validated locally; platform/live artifact gate | F3, F5 baseline | binaries ที่รับรองตรง artifact ที่ติดตั้ง |
+| F8-03 | Lab → internal live → opt-in beta rollout พร้อม limits | planned | F6, F8-01, F8-02 | gates ผ่านและ sample size เพียงพอ ไม่ใช้เวลาอย่างเดียว |
+| F8-04 | Disable/revoke/rollback และ queue replay drill | planned | F8-01 | rollback ไม่ทำข้อมูลหาย/เปิด inference/กลับไป guessed human |
+| F8-05 | Support matrix, release notes และ troubleshooting runbook | planned | F8-03, F8-04 | รายชื่อที่โฆษณาไม่เกิน certificate tuples |
+| F8-06 | Parser drift/version renewal process และ maintenance ownership | planned | F8-05 | version change triggers/test checklist มีคนรับผิดชอบ; ไม่สร้าง schedule จริงในงานวางแผน |
+
+F8-01/F8-02 implementation และ local evidence อยู่ใน
+[F8 release rehearsal](../docs/ai-coverage-f8-release-rehearsal-2026-09-08.md).
+`validated locally` ไม่หมายถึง previous binary, platform signature หรือ live
+certificate ผ่านแล้ว.
 
 ## 11. แผน PR ที่ตรวจได้ทีละชุด
 

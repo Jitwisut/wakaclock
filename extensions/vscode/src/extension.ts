@@ -44,7 +44,8 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
     async () => (await getStoredApiKey(context.secrets)) ?? (await getPendingApiKey(context.secrets)),
     managedCli,
-    `wakaclock-vscode/${extensionVersion}`
+    `wakaclock-vscode/${extensionVersion}`,
+    vscode.env.remoteName ? "remote_extension" : undefined
   );
   const statusBar = new StatusBarController(
     () => configService.getSnapshot(),

@@ -45,7 +45,9 @@ export function AnalyticsFrame({
     setRange,
     toRequest,
   } = useAnalyticsFilters(30);
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  // The hook owns the URL/browser fallback. Reuse the selected value for both the
+  // request and query key so changing timezone cannot retain another range's cache.
+  const { timezone } = filters;
   const request = toRequest(timezone, lockedProjectId);
   const query = useQuery({
     enabled: Boolean(userId),

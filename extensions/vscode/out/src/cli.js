@@ -8,6 +8,7 @@ class WakaclockCliService {
     getApiKey;
     managedCli;
     pluginId;
+    executionSurface;
     clipboardCapability;
     constructor(getConfig, logger, 
     // Optional so existing 2-arg call sites (tests) keep working unauthenticated.
@@ -16,13 +17,14 @@ class WakaclockCliService {
      * Stamped into every heartbeat's `user_agent`. A running extension host keeps
      * the JS it loaded at window start, so a rebuilt extension can go unused for
      * hours; without this the stored heartbeats give no hint which build sent them.
-     */
-    pluginId) {
+    */
+    pluginId, executionSurface) {
         this.getConfig = getConfig;
         this.logger = logger;
         this.getApiKey = getApiKey;
         this.managedCli = managedCli;
         this.pluginId = pluginId;
+        this.executionSurface = executionSurface;
     }
     async sendHeartbeat(primaryEntity, primaryWrite, primaryCategory, extraHeartbeats = [], primaryExtra = {}) {
         const args = [
@@ -280,6 +282,22 @@ class WakaclockCliService {
             capabilities,
         };
     }
+    /**
+     * Best-effort presence liveness ping (see `PresenceHeartbeat` in wakaclock-cli).
+     * Callers must never let this affect the heartbeat pipeline: presence is a social
+     * feature, time tracking is not, so every failure is swallowed here rather than
+     * thrown.
+     */
+    async sendPresenceHeartbeat() {
+        try {
+            await this.runCli(["presence-heartbeat"]);
+        }
+        catch (error) {
+            this.logger.debug("presence heartbeat ping failed", {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
     async installAgent() {
         return this.runCli(["broker", "install", "--json"]);
     }
@@ -290,6 +308,15 @@ class WakaclockCliService {
             throw new Error("wakaclock broker status returned invalid JSON");
         }
         return status;
+    }
+    /** Read the same typed runtime snapshot used by `wakaclock ai doctor`. */
+    async getAiDiagnosticsSnapshot() {
+        const result = await this.runCli(["ai", "doctor", "--json"]);
+        const snapshot = this.parseJson(result.stdout.trim());
+        if (!snapshot || snapshot.schema_version !== 2) {
+            throw new Error("wakaclock ai doctor returned an unsupported diagnostics snapshot");
+        }
+        return snapshot;
     }
     /**
      * Hosts without LaunchAgent/systemd/Task Scheduler (containers, Codespaces and
@@ -308,6 +335,11 @@ class WakaclockCliService {
             env: {
                 ...process.env,
                 WAKACLOCK_EDITOR: "vscode",
+                ...this.topologyEnvironment(),
+                // Enable the topology-aware handoff path for transcript and hook
+                // events launched by the extension host. Remote runtimes still
+                // require their explicit runtime/bridge ids before certification.
+                WAKACLOCK_TOPOLOGY_AUTO: process.env.WAKACLOCK_TOPOLOGY_AUTO ?? "1",
                 WAKACLOCK_SERVER_URL: config.serverUrl?.trim() || "https://api.atoaxis.com",
                 ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
             },
@@ -347,6 +379,8 @@ class WakaclockCliService {
                 env: {
                     ...process.env,
                     WAKACLOCK_EDITOR: "vscode",
+                    ...this.topologyEnvironment(),
+                    WAKACLOCK_TOPOLOGY_AUTO: process.env.WAKACLOCK_TOPOLOGY_AUTO ?? "1",
                     WAKACLOCK_SERVER_URL: config.serverUrl?.trim() || "https://api.atoaxis.com",
                     ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
                 },
@@ -377,6 +411,10 @@ class WakaclockCliService {
             }
             child.stdin.end();
         });
+    }
+    topologyEnvironment() {
+        const execution = process.env.WAKACLOCK_EXECUTION_SURFACE ?? this.executionSurface;
+        return execution ? { WAKACLOCK_EXECUTION_SURFACE: execution } : {};
     }
     parseKeyValueLines(stdout) {
         return stdout

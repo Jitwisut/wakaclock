@@ -1,12 +1,13 @@
 // crates/wakaclock-core/src/queue.rs
 
 use crate::{
+    ai::HandoffLedger,
     error::AppError,
     heartbeat::{union_activity_seconds, ActivitySegment},
 };
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -18,8 +19,13 @@ pub struct Queue {
 impl Queue {
     /// เปิด SQLite database ที่ ~/.wakaclock/queue.db
     pub fn open() -> Result<Self, AppError> {
-        let path = Self::db_path();
+        Self::open_at(&Self::db_path())
+    }
 
+    /// Open a queue at an explicit path. Production callers use [`Self::open`];
+    /// the path form lets lifecycle tests exercise a disposable SQLite database
+    /// without changing HOME or touching a user's queue.
+    pub fn open_at(path: &std::path::Path) -> Result<Self, AppError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(AppError::Io)?;
         }
@@ -40,9 +46,23 @@ impl Queue {
                 next_retry_at INTEGER DEFAULT 0
             );
 
+            -- Metadata-only remote/container handoff state. The actual heartbeat
+            -- payload stays in heartbeat_queue; this snapshot only protects the
+            -- accepted receipt/dedup ledger across a runtime restart.
+            CREATE TABLE IF NOT EXISTS topology_handoff_state (
+                state_key   TEXT PRIMARY KEY,
+                snapshot    BLOB NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
             -- ลบ rows ที่เก่าเกิน 30 วันอัตโนมัติ
             DELETE FROM heartbeat_queue
             WHERE created_at < strftime('%s', 'now') - 2592000;
+            -- Do not age out the handoff snapshot here. It may contain accepted
+            -- but unacknowledged receipts from a stopped container. The snapshot
+            -- is metadata-only and bounded by save_handoff_ledger; acknowledged
+            -- identity compaction is an explicit ledger operation, never a blind
+            -- time-based delete that could lose a remote edit.
         ",
         )
         .map_err(AppError::Queue)?;
@@ -255,6 +275,63 @@ impl Queue {
         Ok(self.len()? == 0)
     }
 
+    /// Persist the topology handoff ledger atomically with a single SQLite row.
+    /// The ledger is metadata-only and bounded so a remote collector cannot turn
+    /// the queue database into an unbounded payload store.
+    pub fn save_handoff_ledger(&self, ledger: &HandoffLedger) -> Result<(), AppError> {
+        const MAX_HANDOFF_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+        let snapshot = ledger
+            .snapshot()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if snapshot.len() > MAX_HANDOFF_SNAPSHOT_BYTES {
+            return Err(AppError::Validation(
+                "topology handoff snapshot exceeds the local bound".to_string(),
+            ));
+        }
+        self.conn
+            .execute(
+                "INSERT INTO topology_handoff_state (state_key, snapshot, updated_at)
+                 VALUES ('default', ?1, strftime('%s', 'now'))
+                 ON CONFLICT(state_key) DO UPDATE SET
+                    snapshot = excluded.snapshot,
+                    updated_at = excluded.updated_at",
+                params![snapshot],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Restore a previously persisted handoff ledger. Corrupt state is surfaced as
+    /// validation failure so a caller can quarantine it instead of accepting an
+    /// ambiguous identity map.
+    pub fn load_handoff_ledger(&self) -> Result<Option<HandoffLedger>, AppError> {
+        let snapshot: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT snapshot FROM topology_handoff_state WHERE state_key = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::Queue)?;
+        snapshot
+            .map(|bytes| {
+                HandoffLedger::restore(&bytes)
+                    .map_err(|error| AppError::Validation(error.to_string()))
+            })
+            .transpose()
+    }
+
+    pub fn clear_handoff_ledger(&self) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "DELETE FROM topology_handoff_state WHERE state_key = 'default'",
+                [],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
     /// Sum the active time in the offline queue for the calendar day in `timezone`.
     /// Queue entries keep the original heartbeat timestamp, so a heartbeat queued just
     /// before midnight is not accidentally shown on the wrong local day after a
@@ -370,5 +447,110 @@ impl Queue {
     fn db_path() -> PathBuf {
         let home = dirs::home_dir().expect("หา home directory ไม่เจอ");
         home.join(".wakaclock").join("queue.db")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::{
+        CollectorCapabilities, CollectorRegistration, CollectorTransport, EditorSurface,
+        ExecutionSurface, HandoffEvent, HandoffEventIdentity, HandoffIngestOutcome,
+        TopologyIdentityInput,
+    };
+    use chrono::DateTime;
+    use uuid::Uuid;
+
+    fn test_ledger() -> HandoffLedger {
+        let topology = TopologyIdentityInput {
+            execution: ExecutionSurface::DevContainer,
+            editor: EditorSurface::Vscode,
+            device_seed: "queue-test-device".to_string(),
+            workspace_key: "queue-test-workspace".to_string(),
+            worktree_key: "queue-test-worktree".to_string(),
+            session_id: "queue-test-session".to_string(),
+            runtime_instance_key: Some("container-1".to_string()),
+            repository_id: None,
+        }
+        .build()
+        .unwrap();
+        let registration = CollectorRegistration::new(
+            "collector-queue-test",
+            Some("bridge-queue-test".to_string()),
+            "boot-queue-test",
+            topology,
+            CollectorTransport::AuthenticatedBridge,
+            CollectorCapabilities {
+                file_mutations: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut ledger = HandoffLedger::default();
+        ledger.register(registration).unwrap();
+        let event = HandoffEvent {
+            identity: HandoffEventIdentity {
+                event_id: "queue-event-1".to_string(),
+                operation_id: Some("queue-tool-1".to_string()),
+                mutation_id: Some("queue-file-v1".to_string()),
+                scope_id: None,
+            },
+            source_sequence: 1,
+            occurred_at: DateTime::from_timestamp(1, 0).unwrap(),
+        };
+        assert_eq!(
+            ledger.ingest("collector-queue-test", event),
+            Ok(HandoffIngestOutcome::Accepted { receipt_id: 1 })
+        );
+        ledger
+    }
+
+    #[test]
+    fn handoff_snapshot_survives_queue_reopen_and_can_be_cleared() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-topology-queue-{}.db", Uuid::new_v4()));
+        let ledger = test_ledger();
+        {
+            let queue = Queue::open_at(&path).unwrap();
+            queue.save_handoff_ledger(&ledger).unwrap();
+            assert_eq!(
+                queue.load_handoff_ledger().unwrap().unwrap().pending_len(),
+                1
+            );
+        }
+        {
+            let queue = Queue::open_at(&path).unwrap();
+            let restored = queue.load_handoff_ledger().unwrap().unwrap();
+            assert_eq!(restored.pending_len(), 1);
+            queue.clear_handoff_ledger().unwrap();
+            assert!(queue.load_handoff_ledger().unwrap().is_none());
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn old_handoff_snapshot_is_not_deleted_while_it_may_hold_pending_receipts() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-topology-queue-retention-{}.db",
+            Uuid::new_v4()
+        ));
+        let ledger = test_ledger();
+        {
+            let queue = Queue::open_at(&path).unwrap();
+            queue.save_handoff_ledger(&ledger).unwrap();
+            queue
+                .conn
+                .execute(
+                    "UPDATE topology_handoff_state SET updated_at = strftime('%s', 'now') - 2592001",
+                    [],
+                )
+                .unwrap();
+        }
+        let queue = Queue::open_at(&path).unwrap();
+        assert_eq!(
+            queue.load_handoff_ledger().unwrap().unwrap().pending_len(),
+            1
+        );
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -74,7 +74,8 @@ class WakaclockConfigService {
             trackDebugSessions: config.get("trackDebugSessions", true),
             trackBuildTasks: config.get("trackBuildTasks", true),
             trackClipboardActions: config.get("trackClipboardActions", true),
-            autoInstallAgentHooks: config.get("autoInstallAgentHooks", true)
+            autoInstallAgentHooks: config.get("autoInstallAgentHooks", true),
+            presenceAutoJoinEnabled: config.get("presenceAutoJoinEnabled", false)
         };
     }
     async updateSetting(key, value) {

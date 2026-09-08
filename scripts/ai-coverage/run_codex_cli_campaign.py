@@ -19,6 +19,8 @@ explicit ``--allow-shared-account`` opt-out.
 from __future__ import annotations
 
 import argparse
+import base64
+import datetime as dt
 import json
 import os
 import re
@@ -26,6 +28,9 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +87,11 @@ PARSED_DETAIL_RE = re.compile(
 )
 BROKER_RE = re.compile(r"\bbroker accepted (\d+) \(duplicates (\d+)\)")
 MAX_PROCESS_OUTPUT = 2 * 1024 * 1024
+DRY_RUN_EVENT_RE = re.compile(r"^\s*\[dry-run\]\s+(\S+)\s+", re.MULTILINE)
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def bounded_id(value: str) -> str:
@@ -169,6 +179,288 @@ def parse_parser_output(output: str) -> tuple[int, int, int, int, int]:
     return parsed, accepted, duplicates, already_delivered, new_events
 
 
+def parse_dry_run_event_ids(output: str) -> set[str]:
+    """Extract opaque event IDs from the CLI's metadata-only dry-run output.
+
+    The IDs are retained only in memory and are used to bind the later API and
+    ClickHouse readback to this campaign. Paths and the rest of the dry-run
+    output are deliberately discarded.
+    """
+    return {match.group(1) for match in DRY_RUN_EVENT_RE.finditer(output)}
+
+
+def _json_request(
+    method: str,
+    url: str,
+    *,
+    api_key: str,
+    payload: dict[str, Any] | None = None,
+    timeout: int = 15,
+) -> tuple[int, dict[str, Any] | None]:
+    """Perform a bounded metadata-only request without returning raw errors."""
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=body, method=method)
+    request.add_header("Authorization", "Basic " + base64.b64encode(f"{api_key}:".encode()).decode())
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read().decode("utf-8"))
+            return response.status, value if isinstance(value, dict) else None
+    except (OSError, urllib.error.HTTPError, json.JSONDecodeError, UnicodeDecodeError):
+        return 0, None
+
+
+def _clickhouse_rows(
+    url: str,
+    *,
+    username: str,
+    password: str,
+    query: str,
+    timeout: int = 15,
+) -> list[dict[str, Any]] | None:
+    """Read only allowlisted canonical columns from an isolated ClickHouse."""
+    request = urllib.request.Request(url.rstrip("/") + "/", data=query.encode("utf-8"), method="POST")
+    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+    request.add_header("Authorization", "Basic " + credentials)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.HTTPError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    rows = value.get("data") if isinstance(value, dict) else None
+    return rows if isinstance(rows, list) and all(isinstance(row, dict) for row in rows) else None
+
+
+def _campaign_dates(started_at: float, finished_at: float) -> list[str]:
+    first = dt.datetime.fromtimestamp(started_at, dt.timezone.utc).date()
+    last = dt.datetime.fromtimestamp(finished_at, dt.timezone.utc).date()
+    current = first
+    dates: list[str] = []
+    while current <= last and len(dates) < 3:
+        dates.append(current.isoformat())
+        current += dt.timedelta(days=1)
+    return dates
+
+
+def _dashboard_totals(payload: dict[str, Any]) -> dict[str, int] | None:
+    if payload.get("schema_version") != 3:
+        return None
+    daily = payload.get("daily_attribution")
+    if not isinstance(daily, list):
+        return None
+    totals = {
+        "ai_added": 0,
+        "ai_deleted": 0,
+        "ai_verified_added": 0,
+        "ai_verified_deleted": 0,
+    }
+    try:
+        for row in daily:
+            if not isinstance(row, dict):
+                return None
+            for key in totals:
+                value = row.get(key, 0)
+                if not isinstance(value, int) or value < 0:
+                    return None
+                totals[key] += value
+    except (TypeError, ValueError):
+        return None
+    return totals
+
+
+def _dashboard_snapshot(
+    campaign_url: str,
+    campaign_key: str,
+    when: float,
+) -> dict[str, int] | None:
+    date = dt.datetime.fromtimestamp(when, dt.timezone.utc).date()
+    query = urllib.parse.urlencode(
+        {"start": date.isoformat(), "end": (date + dt.timedelta(days=1)).isoformat(), "timezone": "UTC"}
+    )
+    status, response = _json_request(
+        "GET",
+        f"{campaign_url.rstrip('/')}/api/v1/dashboard/analytics?{query}",
+        api_key=campaign_key,
+    )
+    if status != 200 or response is None:
+        return None
+    return _dashboard_totals(response)
+
+
+def _resolve_user_id(campaign_url: str, campaign_key: str) -> str | None:
+    status, response = _json_request(
+        "GET",
+        f"{campaign_url.rstrip('/')}/api/v1/users/current",
+        api_key=campaign_key,
+    )
+    if status != 200 or response is None:
+        return None
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+    value = data.get("id") or data.get("user_id")
+    return value if isinstance(value, str) and UUID_RE.fullmatch(value) else None
+
+
+def _readback_campaign(
+    args: argparse.Namespace,
+    *,
+    campaign_url: str,
+    campaign_key: str,
+    event_ids: set[str],
+    started_at: float,
+    finished_at: float,
+    baseline_dashboard: dict[str, int] | None,
+) -> tuple[dict[str, str], dict[str, int], list[str]]:
+    """Verify event-bound API, canonical and dashboard visibility.
+
+    All raw rows and IDs stay in process memory. The returned values contain
+    only stage statuses, bounded counters and blocker codes suitable for the
+    certification artifact.
+    """
+    stages = {"api_delivery": "not_run", "canonical_reconcile": "not_run", "dashboard_readback": "not_run"}
+    metrics = {"delivered": 0, "canonical": 0}
+    blockers: list[str] = []
+    if not campaign_url or not campaign_key:
+        return stages, metrics, ["readback_identity_not_configured"]
+    if not UUID_RE.fullmatch(args.readback_user_id or ""):
+        return stages, metrics, ["readback_user_id_not_configured"]
+    if not event_ids:
+        return stages, metrics, ["readback_event_ids_not_configured"]
+    expected_provider = args.expected_provider
+    expected_model = args.expected_model
+    if not expected_provider or not expected_model:
+        return stages, metrics, ["readback_tuple_not_configured"]
+
+    api_base = campaign_url.rstrip("/") + "/api/v1"
+    api_rows: list[dict[str, Any]] = []
+    for date in _campaign_dates(started_at, finished_at):
+        query = urllib.parse.urlencode({"date": date, "timezone": "UTC"})
+        status, response = _json_request(
+            "GET",
+            f"{api_base}/heartbeats?{query}",
+            api_key=campaign_key,
+        )
+        if status != 200 or response is None or not isinstance(response.get("data"), list):
+            blockers.append("api_delivery_readback_failed")
+            break
+        api_rows.extend(row for row in response["data"] if isinstance(row, dict))
+    if not blockers:
+        api_matches = [row for row in api_rows if row.get("ai_event_id") in event_ids]
+        api_counts: dict[str, int] = {}
+        for row in api_matches:
+            event_id = row.get("ai_event_id")
+            if isinstance(event_id, str):
+                api_counts[event_id] = api_counts.get(event_id, 0) + 1
+        missing = event_ids - set(api_counts)
+        duplicate = any(count != 1 for count in api_counts.values())
+        tuple_ok = all(
+            row.get("actor_type") == "ai_verified"
+            and row.get("ai_agent") == "codex"
+            and row.get("ai_provider") == expected_provider
+            and row.get("ai_model") == expected_model
+            for row in api_matches
+        )
+        if missing:
+            blockers.append("api_delivery_event_missing")
+        if duplicate:
+            blockers.append("api_delivery_event_duplicate")
+        if not tuple_ok:
+            blockers.append("api_delivery_tuple_mismatch")
+        if not blockers:
+            stages["api_delivery"] = "passed"
+            metrics["delivered"] = len(api_matches)
+
+    clickhouse_url = args.clickhouse_url
+    if not clickhouse_url:
+        blockers.append("canonical_readback_not_configured")
+    else:
+        start = max(0.0, started_at - 300.0)
+        end = finished_at + 300.0
+        user_id = args.readback_user_id
+        quote = chr(39)
+        query = (
+            "SELECT ai_event_id, revision, actor_type, ai_agent, ai_provider, ai_model, "
+            "ai_lines_added, ai_lines_deleted "
+            "FROM wakaclock.heartbeats_canonical "
+            f"WHERE user_id = toUUID({quote}{user_id}{quote}) "
+            f"AND time >= {start} AND time <= {end} LIMIT 10000 FORMAT JSON"
+        )
+        rows = _clickhouse_rows(
+            clickhouse_url,
+            username=args.clickhouse_user,
+            password=args.clickhouse_password,
+            query=query,
+        )
+        if rows is None:
+            blockers.append("canonical_readback_failed")
+        else:
+            matches = [row for row in rows if row.get("ai_event_id") in event_ids]
+            counts: dict[str, int] = {}
+            for row in matches:
+                event_id = row.get("ai_event_id")
+                if isinstance(event_id, str):
+                    counts[event_id] = counts.get(event_id, 0) + 1
+            missing = event_ids - set(counts)
+            duplicate = any(count != 1 for count in counts.values())
+            tuple_ok = all(
+                row.get("actor_type") == "ai_verified"
+                and row.get("ai_agent") == "codex"
+                and row.get("ai_provider") == expected_provider
+                and row.get("ai_model") == expected_model
+                for row in matches
+            )
+            if missing:
+                blockers.append("canonical_event_missing")
+            if duplicate:
+                blockers.append("canonical_event_duplicate")
+            if not tuple_ok:
+                blockers.append("canonical_tuple_mismatch")
+            # A separate canonical query is authoritative even when API
+            # readback has a transient issue; retain its exact count.
+            if not missing and not duplicate and tuple_ok:
+                stages["canonical_reconcile"] = "passed"
+                metrics["canonical"] = len(matches)
+
+            expected_added = sum(int(row.get("ai_lines_added") or 0) for row in matches)
+            expected_deleted = sum(int(row.get("ai_lines_deleted") or 0) for row in matches)
+            dashboard_baseline = baseline_dashboard
+            if dashboard_baseline is None:
+                blockers.append("dashboard_baseline_not_captured")
+            else:
+                dashboard: dict[str, int] | None = None
+                for _ in range(5):
+                    current = dt.datetime.fromtimestamp(finished_at, dt.timezone.utc).date()
+                    end_date = current + dt.timedelta(days=1)
+                    query_string = urllib.parse.urlencode(
+                        {"start": current.isoformat(), "end": end_date.isoformat(), "timezone": "UTC"}
+                    )
+                    status, response = _json_request(
+                        "GET",
+                        f"{api_base}/dashboard/analytics?{query_string}",
+                        api_key=campaign_key,
+                    )
+                    if status == 200 and response is not None:
+                        dashboard = _dashboard_totals(response)
+                        if dashboard is not None:
+                            delta_added = dashboard["ai_verified_added"] - dashboard_baseline["ai_verified_added"]
+                            delta_deleted = dashboard["ai_verified_deleted"] - dashboard_baseline["ai_verified_deleted"]
+                            if delta_added == expected_added and delta_deleted == expected_deleted:
+                                break
+                    time.sleep(1)
+                if dashboard is None:
+                    blockers.append("dashboard_readback_failed")
+                else:
+                    delta_added = dashboard["ai_verified_added"] - dashboard_baseline["ai_verified_added"]
+                    delta_deleted = dashboard["ai_verified_deleted"] - dashboard_baseline["ai_verified_deleted"]
+                    if delta_added != expected_added or delta_deleted != expected_deleted:
+                        blockers.append("dashboard_delta_mismatch")
+                    else:
+                        stages["dashboard_readback"] = "passed"
+    return stages, metrics, sorted(set(blockers))
+
+
 def empty_summary() -> dict[str, Any]:
     return {
         "stages": {stage: "not_run" for stage in MANDATORY_STAGES},
@@ -232,6 +524,23 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         # whatever WAKACLOCK_API_KEY points at (typically the operator's own account).
         add_blocker(summary, "campaign_identity_not_isolated")
         return summary
+
+    campaign_started_at = time.time()
+    campaign_event_ids: set[str] = set()
+    baseline_dashboard: dict[str, int] | None = None
+    if args.readback:
+        if not args.deliver:
+            add_blocker(summary, "readback_requires_delivery")
+        elif not campaign_key or not campaign_url:
+            add_blocker(summary, "readback_identity_not_configured")
+        else:
+            if not args.readback_user_id:
+                args.readback_user_id = _resolve_user_id(campaign_url, campaign_key)
+            if not args.readback_user_id:
+                add_blocker(summary, "readback_user_id_not_configured")
+            baseline_dashboard = _dashboard_snapshot(campaign_url, campaign_key, campaign_started_at)
+            if baseline_dashboard is None:
+                add_blocker(summary, "dashboard_baseline_not_captured")
 
     codex = executable(args.codex)
     if codex is None:
@@ -356,6 +665,35 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             add_blocker(summary, "codex_transcript_copy_failed")
             continue
 
+        expected_event_ids: set[str] = set()
+        if args.readback:
+            dry_run_command = [
+                wakaclock,
+                "ai",
+                "sync",
+                "--agent",
+                "codex",
+                "--dry-run",
+                "--from-start",
+                "--transcript",
+                str(captured),
+            ]
+            try:
+                dry_run_result = run_process(
+                    dry_run_command,
+                    cwd=sandbox,
+                    env=process_env,
+                    timeout=args.timeout,
+                )
+            except (OSError, subprocess.SubprocessError):
+                dry_run_result = None
+            if dry_run_result is None or dry_run_result.returncode != 0:
+                add_blocker(summary, "readback_event_probe_failed")
+            else:
+                expected_event_ids = parse_dry_run_event_ids(
+                    f"{dry_run_result.stdout}\n{dry_run_result.stderr}"
+                )
+
         sync_command = [
             wakaclock,
             "ai",
@@ -391,6 +729,10 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         )
         if parsed_result.returncode != 0:
             add_blocker(summary, "parser_probe_failed")
+        if args.readback:
+            if parsed > 0 and len(expected_event_ids) != parsed:
+                add_blocker(summary, "readback_event_count_mismatch")
+            campaign_event_ids.update(expected_event_ids)
 
         if scenario == "retry-dedup":
             if not args.deliver:
@@ -447,28 +789,45 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
             summary["scenarios"][scenario] = status
 
     if args.deliver:
-        if not os.environ.get("WAKACLOCK_SERVER_URL"):
+        if not campaign_url and not os.environ.get("WAKACLOCK_SERVER_URL"):
             add_blocker(summary, "api_url_not_configured")
-        if not os.environ.get("WAKACLOCK_API_KEY"):
+        if not campaign_key and not os.environ.get("WAKACLOCK_API_KEY"):
             add_blocker(summary, "api_key_not_configured")
         if summary["metrics"]["broker_accepted"] > 0:
             summary["stages"]["broker_accept"] = "passed"
-            # `wakaclock ai sync` reports the local broker inbox acknowledgement.
-            # That durable local acceptance is deliberately not treated as proof
-            # that the API received the event; only an explicit readback probe can
-            # promote the delivery stage.
-            summary["stages"]["api_delivery"] = "not_run"
-            add_blocker(summary, "api_delivery_readback_not_configured")
+            if args.readback:
+                readback_stages, readback_metrics, readback_blockers = _readback_campaign(
+                    args,
+                    campaign_url=campaign_url or os.environ.get("WAKACLOCK_SERVER_URL", ""),
+                    campaign_key=campaign_key or os.environ.get("WAKACLOCK_API_KEY", ""),
+                    event_ids=campaign_event_ids,
+                    started_at=campaign_started_at,
+                    finished_at=time.time(),
+                    baseline_dashboard=baseline_dashboard,
+                )
+                summary["stages"].update(readback_stages)
+                summary["metrics"]["delivered"] = readback_metrics["delivered"]
+                summary["metrics"]["canonical"] = readback_metrics["canonical"]
+                for blocker in readback_blockers:
+                    add_blocker(summary, blocker)
+            else:
+                # `wakaclock ai sync` reports the local broker inbox acknowledgement.
+                # That durable local acceptance is deliberately not treated as proof
+                # that the API received the event; only an explicit readback probe can
+                # promote the delivery stage.
+                summary["stages"]["api_delivery"] = "not_run"
+                add_blocker(summary, "api_delivery_readback_not_configured")
         else:
             summary["stages"]["broker_accept"] = "not_run"
             summary["stages"]["api_delivery"] = "not_run"
     else:
         add_blocker(summary, "delivery_not_requested")
 
-    # These two stages require an explicit, privacy-safe readback probe. Never
-    # infer them from a successful local parser or an HTTP 2xx alone.
-    add_blocker(summary, "canonical_readback_not_configured")
-    add_blocker(summary, "dashboard_readback_not_configured")
+    if not args.readback:
+        # These two stages require an explicit, privacy-safe readback probe. Never
+        # infer them from a successful local parser or an HTTP 2xx alone.
+        add_blocker(summary, "canonical_readback_not_configured")
+        add_blocker(summary, "dashboard_readback_not_configured")
     return summary
 
 
@@ -480,6 +839,17 @@ def main() -> int:
     parser.add_argument("--wakaclock", default=os.environ.get("WAKACLOCK_CLI_PATH", "wakaclock"))
     parser.add_argument("--expected-version", default="0.153.4")
     parser.add_argument("--deliver", action="store_true", help="Send parsed events to the configured API")
+    parser.add_argument(
+        "--readback",
+        action="store_true",
+        help="Bind API, canonical and dashboard readback to this campaign's opaque event IDs",
+    )
+    parser.add_argument("--readback-user-id", default=os.environ.get("WAKACLOCK_CAMPAIGN_USER_ID"))
+    parser.add_argument("--expected-provider", default=os.environ.get("WAKACLOCK_EXPECTED_PROVIDER"))
+    parser.add_argument("--expected-model", default=os.environ.get("WAKACLOCK_EXPECTED_MODEL"))
+    parser.add_argument("--clickhouse-url", default=os.environ.get("CLICKHOUSE_URL"))
+    parser.add_argument("--clickhouse-user", default=os.environ.get("CLICKHOUSE_USER", "default"))
+    parser.add_argument("--clickhouse-password", default=os.environ.get("CLICKHOUSE_PASSWORD", ""))
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--scenario-id", action="append", dest="scenario_ids")
     parser.add_argument(

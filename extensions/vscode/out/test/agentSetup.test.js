@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("node:fs/promises"));
+const node_crypto_1 = require("node:crypto");
 const os = __importStar(require("node:os"));
 const path = __importStar(require("node:path"));
 const node_child_process_1 = require("node:child_process");
@@ -59,6 +60,26 @@ async function writeBundledSource(extensionPath) {
     await fs.mkdir(path.join(sourceDir, "codex"), { recursive: true });
     await fs.writeFile(path.join(sourceDir, "README.md"), "hello\n");
     await fs.writeFile(path.join(sourceDir, "codex", "heartbeat-hook.sh"), "#!/usr/bin/env bash\n");
+}
+async function writeSourceManifest(sourceDir, bundleVersion) {
+    const files = {};
+    async function visit(current) {
+        const entries = await fs.readdir(current, { withFileTypes: true });
+        entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        for (const entry of entries) {
+            const full = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                await visit(full);
+            }
+            else if (entry.isFile() && entry.name !== "bundle-manifest.json") {
+                const relative = path.relative(sourceDir, full).split(path.sep).join("/");
+                files[relative] = (0, node_crypto_1.createHash)("sha256").update(await fs.readFile(full)).digest("hex");
+            }
+        }
+    }
+    await visit(sourceDir);
+    const digest = (0, node_crypto_1.createHash)("sha256").update(JSON.stringify(files)).digest("hex");
+    await fs.writeFile(path.join(sourceDir, "bundle-manifest.json"), `${JSON.stringify({ schema_version: 1, bundle_version: bundleVersion, files, digest }, null, 2)}\n`);
 }
 async function runHook(script, input, env) {
     await new Promise((resolve, reject) => {
@@ -141,6 +162,32 @@ async function runHook(script, input, env) {
         (0, vitest_1.expect)(first).not.toBe(second);
         await (0, vitest_1.expect)(fs.access(first)).resolves.toBeUndefined();
         await (0, vitest_1.expect)(fs.access(second)).resolves.toBeUndefined();
+    });
+    (0, vitest_1.it)("refreshes a stable dir when the verified bundle digest changes", async () => {
+        const { extensionPath, homeDir, logger } = setup();
+        const sourceDir = path.join(extensionPath, "resources", "ai-agents");
+        await fs.mkdir(path.join(sourceDir, "codex"), { recursive: true });
+        await fs.mkdir(path.join(sourceDir, "common"), { recursive: true });
+        await fs.writeFile(path.join(sourceDir, "README.md"), "first\n");
+        await fs.writeFile(path.join(sourceDir, "codex", "heartbeat-hook.sh"), "#!/bin/sh\n");
+        await fs.writeFile(path.join(sourceDir, "common", "emit-event.sh"), "#!/bin/sh\n");
+        await writeSourceManifest(sourceDir, "1.2.3");
+        const target = await (0, agentSetup_1.syncAgentPluginsToStableDir)({
+            extensionPath,
+            extensionVersion: "1.2.3",
+            homeDir,
+            logger
+        });
+        (0, vitest_1.expect)(await fs.readFile(path.join(target, "README.md"), "utf8")).toBe("first\n");
+        await fs.writeFile(path.join(sourceDir, "README.md"), "updated\n");
+        await writeSourceManifest(sourceDir, "1.2.3");
+        await (0, agentSetup_1.syncAgentPluginsToStableDir)({
+            extensionPath,
+            extensionVersion: "1.2.3",
+            homeDir,
+            logger
+        });
+        (0, vitest_1.expect)(await fs.readFile(path.join(target, "README.md"), "utf8")).toBe("updated\n");
     });
 });
 (0, vitest_1.describe)("shared broker consent policy", () => {
@@ -302,6 +349,23 @@ async function runHook(script, input, env) {
         (0, vitest_1.expect)(parsed.map((m) => m.id)).toEqual(["claude-code", "codex", "gemini-cli"]);
         (0, vitest_1.expect)((0, agentSetup_1.parseAdapterList)("not json")).toEqual([]);
         (0, vitest_1.expect)((0, agentSetup_1.parseAdapterList)("{}")).toEqual([]);
+    });
+    (0, vitest_1.it)("reads the versioned catalog and separates partial setup outcomes", () => {
+        const catalog = (0, agentSetup_1.parseAdapterCatalog)(JSON.stringify({ schema_version: 1, adapters: JSON.parse(listJson) }));
+        (0, vitest_1.expect)(catalog?.schema_version).toBe(1);
+        (0, vitest_1.expect)(catalog?.adapters[1].id).toBe("codex");
+        const report = (0, agentSetup_1.parseAiSetupReport)(JSON.stringify({
+            schema_version: 1,
+            overall: "partial",
+            suggested_action: "repair failed adapters",
+            agents: [
+                { id: "codex", status: "configured", outcome_code: "configured" },
+                { id: "gemini-cli", status: "failed", outcome_code: "resource_invalid", suggested_action: "repair bundle" }
+            ]
+        }));
+        (0, vitest_1.expect)(report?.overall).toBe("partial");
+        (0, vitest_1.expect)(report?.agents[1].outcome_code).toBe("resource_invalid");
+        (0, vitest_1.expect)((0, agentSetup_1.parseAiSetupReport)(JSON.stringify({ agents: [] }))).toBeUndefined();
     });
     (0, vitest_1.it)("pluginInstallCommand splits the manifest args and skips non-plugin strategies", () => {
         const [claude, codex, gemini] = (0, agentSetup_1.parseAdapterList)(listJson);

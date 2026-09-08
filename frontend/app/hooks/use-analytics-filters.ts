@@ -14,12 +14,7 @@ import { daysAgoDateString, todayDateString } from '@/lib/wakaclock/format';
 import type { ActorType } from '@/lib/wakaclock/types';
 
 const SOURCE_VALUES = new Set<AnalyticsSourceFilter>(['human', 'ai', 'other']);
-const ACTOR_TYPE_VALUES = new Set<ActorType>([
-  'human',
-  'ai_verified',
-  'ai_inferred',
-  'unknown',
-]);
+const ACTOR_TYPE_VALUES = new Set<ActorType>(['human', 'ai_verified', 'ai_inferred', 'unknown']);
 
 export interface AnalyticsUrlFilters {
   actorType?: AnalyticsActorTypeFilter;
@@ -31,6 +26,7 @@ export interface AnalyticsUrlFilters {
   projectId?: string;
   source?: AnalyticsSourceFilter;
   start: string;
+  timezone: string;
 }
 
 function valueOrUndefined(value: null | string) {
@@ -46,6 +42,15 @@ export function useAnalyticsFilters(defaultDays = 30) {
     () => ({ end: todayDateString(), start: daysAgoDateString(defaultDays - 1) }),
     [defaultDays]
   );
+  const browserTimezone = React.useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  }, []);
+  const timezoneParam = valueOrUndefined(searchParams.get('timezone'));
+  const timezone = timezoneParam ?? browserTimezone;
   const sourceValue = valueOrUndefined(searchParams.get('source'));
   const source =
     (SOURCE_VALUES.has(sourceValue as AnalyticsSourceFilter) &&
@@ -67,8 +72,9 @@ export function useAnalyticsFilters(defaultDays = 30) {
       projectId: valueOrUndefined(searchParams.get('project_id')),
       source,
       start: valueOrUndefined(searchParams.get('start')) ?? defaults.start,
+      timezone,
     }),
-    [actorType, defaults.end, defaults.start, searchParams, source]
+    [actorType, defaults.end, defaults.start, searchParams, source, timezone]
   );
 
   const replaceParams = React.useCallback(
@@ -113,6 +119,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
         'source',
         'actor_type',
         'operating_system',
+        'timezone',
       ]) {
         params.delete(key);
       }
@@ -132,13 +139,14 @@ export function useAnalyticsFilters(defaultDays = 30) {
       if (next.source) params.set('source', next.source);
       if (next.actorType) params.set('actor_type', next.actorType);
       if (next.operatingSystem) params.set('operating_system', next.operatingSystem);
+      if (next.timezone) params.set('timezone', next.timezone);
       return `${targetPath}?${params.toString()}`;
     },
     [filters]
   );
 
   const toRequest = React.useCallback(
-    (timezone: string, fixedProjectId?: string): AnalyticsExplorerParams => ({
+    (fallbackTimezone: string, fixedProjectId?: string): AnalyticsExplorerParams => ({
       category: filters.category,
       actor_type: filters.actorType,
       editor: filters.editor,
@@ -148,7 +156,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
       project_id: fixedProjectId ?? filters.projectId,
       source: filters.source,
       start: filters.start,
-      timezone,
+      timezone: filters.timezone || fallbackTimezone,
     }),
     [filters]
   );

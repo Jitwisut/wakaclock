@@ -170,7 +170,7 @@ fi
 # `agent`/`provider`/`model` are the existing Broker Event v1 wire names.  The
 # producer contract calls the same values client/provider/model to make the
 # distinction explicit at adapter boundaries.
-jq -cn \
+ENVELOPE="$(jq -cn \
   --argjson producer_version 1 \
   --arg event_id "$EVENT_ID" \
   --arg occurred_at "$OCCURRED_AT" \
@@ -191,8 +191,17 @@ jq -cn \
   --argjson lines_added "$LINES_ADDED" \
   --argjson lines_deleted "$LINES_DELETED" \
   --argjson active_seconds "$ACTIVE_SECONDS" \
-  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end),editor:(if $editor=="" then null else $editor end)}' \
-  | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end),editor:(if $editor=="" then null else $editor end)}')"
+
+# An absolute workspace root is enough for the CLI to derive a local topology. A
+# remote producer must additionally provide its explicit runtime/bridge ids; if it
+# does not, the CLI fails closed and this hook still fails open for the agent edit.
+if [[ "$PROJECT_ROOT" == /* ]]; then
+  printf '%s' "$ENVELOPE" | WAKACLOCK_TOPOLOGY_AUTO="${WAKACLOCK_TOPOLOGY_AUTO:-1}" \
+    "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+else
+  printf '%s' "$ENVELOPE" | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+fi
 
 # Hooks must always fail open so telemetry cannot block an agent's edit.
 exit 0

@@ -50,6 +50,9 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
@@ -144,6 +147,21 @@ jobs:
           npm run build:resources
           CLI_VERSION="$version" npm run package:target -- ${{ matrix.target }} "$binary"
           unzip -l atoaxis-vscode-*.vsix | grep -E "resources/(bin/wakaclock(\\.exe)?|ai-agents/bundle-manifest.json|cli-manifest.json)"
+          vsix="atoaxis-vscode-${{ matrix.target }}.vsix"
+          VSIX="$vsix" python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          path = Path(os.environ["VSIX"])
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          path.with_name(f"{path.name}.sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+          PY
+      - name: Verify embedded VSIX artifact
+        working-directory: extensions/vscode
+        shell: bash
+        run: |
+          python ../../scripts/ai-coverage/verify_release_artifacts.py \
+            --vsix "atoaxis-vscode-${{ matrix.target }}.vsix"
       - name: Package terminal archive with verified AI resources
         if: runner.os != 'Windows'
         working-directory: extensions/vscode
@@ -167,11 +185,20 @@ jobs:
           archive="wakaclock-${version}-${archive_os}-${archive_arch}.tar.gz"
           tar -czf "$archive" -C "$archive_root" wakaclock resources/ai-agents
           sha256sum "$archive" > "$archive.sha256"
+      - name: Verify terminal artifact
+        if: runner.os != 'Windows'
+        working-directory: extensions/vscode
+        shell: bash
+        run: |
+          for archive in wakaclock-*.tar.gz; do
+            python ../../scripts/ai-coverage/verify_release_artifacts.py --archive "$archive"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: atoaxis-vscode-${{ matrix.target }}
           path: |
             extensions/vscode/*.vsix
+            extensions/vscode/*.vsix.sha256
             extensions/vscode/wakaclock-*.tar.gz*
 
   zed-language-server:
@@ -337,8 +364,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: test "$(find dist -name '*.vsix' | wc -l)" -eq 8
+      - run: test "$(find dist -name '*.vsix.sha256' | wc -l)" -eq 8
       - run: test "$(find dist -name 'wakaclock-*.tar.gz' | wc -l)" -eq 6
+      - name: Verify embedded release artifacts
+        run: python scripts/ai-coverage/verify_release_artifacts.py --dist dist --expected-vsix 8 --expected-archives 6
       - name: Verify terminal archive checksums and resources
         run: |
           for checksum in dist/wakaclock-*.tar.gz.sha256; do

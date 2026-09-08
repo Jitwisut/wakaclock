@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("node:fs/promises"));
+const node_crypto_1 = require("node:crypto");
 const os = __importStar(require("node:os"));
 const path = __importStar(require("node:path"));
 const vitest_1 = require("vitest");
@@ -42,6 +43,12 @@ const buffer_1 = require("../src/buffer");
 const logging_1 = require("../src/logging");
 function fileUri(fsPath) {
     return { scheme: "file", fsPath };
+}
+function document(fsPath, text) {
+    return { uri: fileUri(fsPath), getText: () => text };
+}
+function contentFingerprint(text) {
+    return `sha256:${(0, node_crypto_1.createHash)("sha256").update(text).digest("hex")}`;
 }
 function selection(line, character) {
     return { active: { line, character } };
@@ -130,9 +137,10 @@ function createConfig() {
             // Like WakaTime, one isolated heartbeat has no duration until another
             // editor activity establishes the interval after it.
             active_seconds: 0,
-            human_lines_added: 1,
-            actor_type: "human",
-            actor_confidence: 1,
+            human_lines_added: undefined,
+            unattributed_lines_added: 1,
+            actor_type: "unknown",
+            actor_confidence: 0,
             line_number: 5,
             cursor_position: 3
         }));
@@ -162,7 +170,7 @@ function createConfig() {
         const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
         await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "hello", rangeLength: 0 }], selection(4, 2), 1_000, "Daniel", undefined);
         await manager.flushDueBuffers("timer", 31_000);
-        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({ keystrokes: 5, human_lines_added: 1 }));
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({ keystrokes: 5, human_lines_added: undefined, unattributed_lines_added: 1 }));
     });
     (0, vitest_1.it)("save flushes immediately with write=true", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
@@ -355,11 +363,12 @@ function createConfig() {
                 entity: "C:/project/a.ts",
                 time: 10,
                 lines_added: 1,
-                lines_deleted: 0
+                lines_deleted: 0,
+                content_fingerprint: contentFingerprint("hello")
             }) + "\n");
             const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
             const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
-            await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "hello", rangeLength: 0 }], selection(0, 0), 10_000);
+            await manager.recordTextChange(document("C:/project/a.ts", "hello"), [{ text: "hello", rangeLength: 0 }], selection(0, 0), 10_000);
             await manager.flushDueBuffers("timer", 31_000);
             (0, vitest_1.expect)(sendHeartbeat).not.toHaveBeenCalled();
         }
@@ -377,7 +386,8 @@ function createConfig() {
                 entity: "C:/project/a.ts",
                 time: 105,
                 lines_added: 1,
-                lines_deleted: 0
+                lines_deleted: 0,
+                content_fingerprint: contentFingerprint("hello")
             }) + "\n");
             const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
             const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
@@ -388,7 +398,7 @@ function createConfig() {
             (0, vitest_1.expect)(manager.getBufferedSeconds()).toBe(40);
             // ...then, five seconds later, the agent patches the same file and its sidecar
             // event matches the change exactly.
-            await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [{ text: "hello", rangeLength: 0 }], selection(0, 3), 105_000);
+            await manager.recordTextChange(document("C:/project/a.ts", "hello"), [{ text: "hello", rangeLength: 0 }], selection(0, 3), 105_000);
             await manager.flushDueBuffers("timer", 130_000);
             const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
             // The agent owns the line counts and the interval its own edit closed; the
@@ -446,7 +456,8 @@ function createConfig() {
                 lines_deleted: 0,
                 agent: "claude-code",
                 actor_type: "ai_verified",
-                actor_confidence: 1
+                actor_confidence: 1,
+                content_fingerprint: contentFingerprint("line1\nline2\nline3\nline4\nline5")
             }) + "\n");
             const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
             const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
@@ -454,7 +465,7 @@ function createConfig() {
             await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 1), undefined, 80_000);
             await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 2), undefined, 100_000);
             (0, vitest_1.expect)(manager.getBufferedSeconds()).toBe(40);
-            await manager.recordTextChange({ uri: fileUri("C:/project/a.ts") }, [
+            await manager.recordTextChange(document("C:/project/a.ts", "line1\nline2\nline3\nline4\nline5"), [
                 {
                     text: "line1\nline2\nline3\nline4\nline5",
                     rangeLength: 4000,
@@ -465,7 +476,7 @@ function createConfig() {
             const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
             (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
             (0, vitest_1.expect)(payload.active_seconds).toBe(40);
-            (0, vitest_1.expect)(payload.actor_type).toBe("human");
+            (0, vitest_1.expect)(payload.actor_type).toBe("unknown");
             (0, vitest_1.expect)(payload.ai_event_id).toBeUndefined();
         }
         finally {
@@ -476,9 +487,8 @@ function createConfig() {
         // Regression test for the `Write` line-delta asymmetry: an agent hook overwriting
         // an existing file has no prior content to diff, so it reports lines_deleted: 0.
         // VS Code sees the reload as a full-range replacement, so its own linesDeleted is
-        // the old file's line count (200 here) — far outside LINE_MATCH_SLACK of the
-        // hook's 0. Before this fix that mismatch fell through to "unattributed", so the
-        // agent's entire rewrite was counted as neither Human nor AI in the wire payload.
+        // the old file's line count (200 here). The shared post-edit fingerprint proves
+        // ownership while the unmatched deleted lines remain explicitly unknown.
         //
         // This edit has no prior activity behind it, so the classifying flush sends
         // nothing on its own (an AI-only edit produces no heartbeat by design — see "does
@@ -502,11 +512,12 @@ function createConfig() {
                 source: "agent_hook",
                 confidence: "verified",
                 actor_type: "ai_verified",
-                actor_confidence: 1
+                actor_confidence: 1,
+                content_fingerprint: contentFingerprint("line1\nline2\nline3\nline4\nline5")
             }) + "\n");
             const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
             const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
-            await manager.recordTextChange({ uri: fileUri("C:/project/b.ts") }, [
+            await manager.recordTextChange(document("C:/project/b.ts", "line1\nline2\nline3\nline4\nline5"), [
                 {
                     text: "line1\nline2\nline3\nline4\nline5",
                     rangeLength: 4000,
@@ -553,9 +564,10 @@ function createConfig() {
             await manager.flushDueBuffers("timer", 40_000);
             (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
             const payload = sendHeartbeat.mock.calls[0][4];
-            (0, vitest_1.expect)(payload.actor_type).toBe("human");
+            (0, vitest_1.expect)(payload.actor_type).toBe("unknown");
             (0, vitest_1.expect)(payload.ai_event_id).toBeUndefined();
-            (0, vitest_1.expect)(payload.human_lines_added).toBe(5);
+            (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
+            (0, vitest_1.expect)(payload.unattributed_lines_added).toBe(5);
         }
         finally {
             await fs.rm(homeDir, { recursive: true, force: true });

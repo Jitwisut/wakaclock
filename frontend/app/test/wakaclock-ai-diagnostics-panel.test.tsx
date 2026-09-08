@@ -122,7 +122,54 @@ describe('AiDiagnosticsPanel', () => {
   it('keeps a reviewed capability certified while showing degraded runtime health', () => {
     render(<AiDiagnosticsPanel report={certifiedDegradedReport()} />);
 
-    expect(screen.getByText(/Certified · codex-cli-2026-09-06 · runtime degraded/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Certified · codex-cli-2026-09-06 · runtime degraded/)
+    ).toBeInTheDocument();
     expect(screen.getByText('stopped')).toBeInTheDocument();
+  });
+
+  it('renders every device and keeps idle/unavailable capability states separate', () => {
+    const first = certifiedDegradedReport();
+    const second: AiDiagnosticsReportV2 = {
+      ...first,
+      adapters: [
+        {
+          agent: 'gemini-cli',
+          availability: 'unavailable',
+          detected: { availability: 'unavailable', measured_at: null, value: null },
+          diagnostic_code: 'auth_required',
+          enabled: { availability: 'unavailable', measured_at: null, value: null },
+          runtime_health: 'idle',
+          verification: 'unverified',
+        },
+      ],
+      consent: { adapter_tracking: true, diagnostics_upload: true, observer: true },
+      device_id: 'device-second',
+      runtime_health: 'idle',
+    };
+
+    render(<AiDiagnosticsPanel report={first} reports={[first, second]} />);
+
+    expect(screen.getByRole('article', { name: 'Device device-test' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Device device-second' })).toBeInTheDocument();
+    expect(screen.getByText('Ready · idle')).toBeInTheDocument();
+    expect(screen.getByText('Measurement unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Certification not reported')).toBeInTheDocument();
+    expect(screen.getByText('Advanced details')).toBeInTheDocument();
+    expect(screen.queryByText('No adapters reported yet.')).not.toBeInTheDocument();
+  });
+
+  it('shows a bounded repair action when a device has no adapter capability', () => {
+    const reportWithNoAdapters: AiDiagnosticsReportV2 = {
+      ...certifiedDegradedReport(),
+      adapters: [],
+      device_id: 'device-empty',
+      runtime_health: 'unavailable',
+    };
+
+    render(<AiDiagnosticsPanel report={reportWithNoAdapters} />);
+
+    expect(screen.getByText('Observer unavailable')).toBeInTheDocument();
+    expect(screen.getByText('No adapters reported yet.')).toBeInTheDocument();
   });
 });

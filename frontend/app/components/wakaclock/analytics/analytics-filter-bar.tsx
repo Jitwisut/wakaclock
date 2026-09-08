@@ -21,6 +21,7 @@ interface AnalyticsFilterBarProps {
     projectId?: string;
     source?: AnalyticsSourceFilter;
     start: string;
+    timezone: string;
   };
   lockedProjectId?: string;
   onReset: () => void;
@@ -32,7 +33,8 @@ interface AnalyticsFilterBarProps {
       | 'language'
       | 'operating_system'
       | 'project_id'
-      | 'source',
+      | 'source'
+      | 'timezone',
     value?: string
   ) => void;
   onSetRange: (range: { end: string; start: string }) => void;
@@ -55,7 +57,9 @@ function FilterSelect({
       <span className="text-muted-foreground">{label}</span>
       <select
         className="bg-background h-9 rounded-md border px-2 text-sm"
-        onChange={(event) => onChange(event.target.value === 'all' ? undefined : event.target.value)}
+        onChange={(event) =>
+          onChange(event.target.value === 'all' ? undefined : event.target.value)
+        }
         value={value ?? 'all'}
       >
         <option value="all">All</option>
@@ -77,6 +81,13 @@ export function AnalyticsFilterBar({
   onSetRange,
   options,
 }: AnalyticsFilterBarProps) {
+  let localTimezone = 'UTC';
+  try {
+    localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    // Keep the filter usable in restricted runtimes without IANA timezone support.
+  }
+  const timezoneOptions = [...new Set(['UTC', localTimezone, filters.timezone])];
   const lockedProject = lockedProjectId
     ? options.projects.find((option) => option.key === lockedProjectId)
     : undefined;
@@ -148,6 +159,21 @@ export function AnalyticsFilterBar({
           options={options.operating_systems}
           value={filters.operatingSystem}
         />
+        <label className="flex min-w-36 flex-col gap-1 text-xs font-medium">
+          <span className="text-muted-foreground">Timezone</span>
+          <select
+            aria-label="Timezone"
+            className="bg-background h-9 rounded-md border px-2 text-sm"
+            onChange={(event) => onSetFilter('timezone', event.target.value)}
+            value={filters.timezone}
+          >
+            {timezoneOptions.map((timezone) => (
+              <option key={timezone} value={timezone}>
+                {timezone}
+              </option>
+            ))}
+          </select>
+        </label>
         <Button className="ml-auto" onClick={onReset} type="button" variant="outline">
           Reset filters
         </Button>

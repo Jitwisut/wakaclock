@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::ai_stats::{
-    AiAgentItem, AiAgentRow, AiDailyItem, AiDailyRow, AiStatsData, AiStatsResponse, AiTotalsRow,
-    AiUsageMetricsRow,
+    AiAgentItem, AiAgentRow, AiCoverageStatus, AiDailyItem, AiDailyRow, AiStatsCoverage,
+    AiStatsData, AiStatsResponse, AiTotalsRow, AiUsageMetricsRow, AI_STATS_SCHEMA_VERSION,
 };
 use crate::repository::canonical::canonical_winner_relation;
 use wakaclock_core::ai::KNOWN_AGENT_IDS;
@@ -92,6 +92,7 @@ impl AiStatsService {
         Ok(AiStatsResponse {
             start: start.to_string(),
             end: end.to_string(),
+            schema_version: AI_STATS_SCHEMA_VERSION,
             data: AiStatsData {
                 total_ai_lines_added: totals.total_ai_lines_added,
                 total_ai_lines_deleted: totals.total_ai_lines_deleted,
@@ -120,6 +121,7 @@ impl AiStatsService {
                 human_heartbeat_percentage,
                 unknown_heartbeat_percentage,
                 unattributed_heartbeat_percentage,
+                coverage: coverage_from_totals(&totals),
                 agents: agents
                     .into_iter()
                     .map(|row| AiAgentItem {
@@ -333,6 +335,43 @@ impl AiStatsService {
     }
 }
 
+/// Build the explicit F6 partition contract from the same totals row used by every
+/// legacy percentage. Keeping this as a pure function makes the denominator rules easy
+/// to test without a ClickHouse fixture and prevents the UI from reconstructing them from
+/// independently rounded percentages.
+fn coverage_from_totals(totals: &AiTotalsRow) -> AiStatsCoverage {
+    let attributed_line_changes = totals
+        .total_ai_lines_added
+        .saturating_add(totals.total_ai_lines_deleted)
+        .saturating_add(totals.total_human_lines_added)
+        .saturating_add(totals.total_human_lines_deleted);
+    let unknown_line_changes = totals
+        .total_unattributed_lines_added
+        .saturating_add(totals.total_unattributed_lines_deleted);
+    let line_change_denominator = attributed_line_changes.saturating_add(unknown_line_changes);
+    let status = if totals.total_heartbeats == 0 {
+        AiCoverageStatus::NoActivity
+    } else if totals.unattributed_heartbeats > 0 || unknown_line_changes > 0 {
+        AiCoverageStatus::Partial
+    } else {
+        AiCoverageStatus::Complete
+    };
+
+    AiStatsCoverage {
+        attributed_line_changes,
+        ai_inferred_heartbeats: totals.ai_inferred_heartbeats,
+        ai_verified_heartbeats: totals.ai_verified_heartbeats,
+        heartbeat_denominator: totals.total_heartbeats,
+        human_heartbeats: totals.human_heartbeats,
+        line_change_denominator,
+        line_coverage_percent: (line_change_denominator > 0)
+            .then(|| attributed_line_changes as f64 * 100.0 / line_change_denominator as f64),
+        status,
+        unknown_heartbeats: totals.unattributed_heartbeats,
+        unknown_line_changes,
+    }
+}
+
 fn percentage(part: u64, total: u64) -> f64 {
     if total == 0 {
         0.0
@@ -349,12 +388,76 @@ fn validate_date(date: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::effective_actor_type_expr;
+    use super::{coverage_from_totals, effective_actor_type_expr};
+    use crate::model::ai_stats::{AiCoverageStatus, AiTotalsRow};
+
+    fn totals() -> AiTotalsRow {
+        AiTotalsRow {
+            total_ai_lines_added: 10,
+            total_ai_lines_deleted: 2,
+            total_ai_verified_lines_added: 10,
+            total_ai_verified_lines_deleted: 2,
+            total_ai_inferred_lines_added: 0,
+            total_ai_inferred_lines_deleted: 0,
+            total_human_lines_added: 4,
+            total_human_lines_deleted: 1,
+            total_unattributed_lines_added: 3,
+            total_unattributed_lines_deleted: 1,
+            total_human_keystrokes: 20,
+            total_human_chars_added: 30,
+            total_heartbeats: 8,
+            ai_heartbeats: 3,
+            ai_verified_heartbeats: 3,
+            ai_inferred_heartbeats: 0,
+            human_heartbeats: 4,
+            unattributed_heartbeats: 1,
+        }
+    }
 
     #[test]
     fn effective_actor_projection_does_not_promote_unknown_rows() {
         let expression = effective_actor_type_expr();
         assert!(expression.contains("h.actor_type = 'ai_verified' AND NOT"));
         assert!(!expression.contains("h.actor_type = 'unknown' AND"));
+    }
+
+    #[test]
+    fn coverage_keeps_actor_buckets_and_line_denominator_disjoint() {
+        let coverage = coverage_from_totals(&totals());
+
+        assert_eq!(
+            coverage.ai_verified_heartbeats
+                + coverage.ai_inferred_heartbeats
+                + coverage.human_heartbeats
+                + coverage.unknown_heartbeats,
+            coverage.heartbeat_denominator
+        );
+        assert_eq!(coverage.attributed_line_changes, 17);
+        assert_eq!(coverage.unknown_line_changes, 4);
+        assert_eq!(coverage.line_change_denominator, 21);
+        assert_eq!(coverage.status, AiCoverageStatus::Partial);
+        assert_eq!(coverage.line_coverage_percent, Some(17.0 / 21.0 * 100.0));
+    }
+
+    #[test]
+    fn coverage_reports_no_activity_without_fabricating_zero_percent() {
+        let mut empty = totals();
+        empty.total_heartbeats = 0;
+        empty.ai_heartbeats = 0;
+        empty.ai_verified_heartbeats = 0;
+        empty.ai_inferred_heartbeats = 0;
+        empty.human_heartbeats = 0;
+        empty.unattributed_heartbeats = 0;
+        empty.total_ai_lines_added = 0;
+        empty.total_ai_lines_deleted = 0;
+        empty.total_human_lines_added = 0;
+        empty.total_human_lines_deleted = 0;
+        empty.total_unattributed_lines_added = 0;
+        empty.total_unattributed_lines_deleted = 0;
+
+        let coverage = coverage_from_totals(&empty);
+        assert_eq!(coverage.status, AiCoverageStatus::NoActivity);
+        assert_eq!(coverage.line_change_denominator, 0);
+        assert_eq!(coverage.line_coverage_percent, None);
     }
 }

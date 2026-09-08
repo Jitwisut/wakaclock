@@ -19,15 +19,20 @@ mod broker;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
+use wakaclock_core::ai::topology_handoff::{
+    CloudJobEvidence, CollectorCapabilities, CollectorRegistration, HandoffEvent,
+    HandoffEventIdentity, HandoffIngestOutcome, HandoffLedger,
+};
 use wakaclock_core::{
     ai::{
-        normalize_agent_id, normalize_client_id, normalize_model_id, normalize_provider_id,
-        parse_claude_usage, parse_codex_usage, parse_gemini_usage, AdapterFreshnessV2,
-        AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence, AiDiagnosticsReportV2,
-        AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple, ClaudeCodeParser,
-        CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext, DiscoveryResult,
-        DiscoveryState, GeminiCliParser, MeasurementAvailability, ObserverConfig, ParseContext,
-        ParserCursor, ParserLagSummaryV2, RuntimeHealth, TranscriptLag, VerificationStatus,
+        editor_capability_catalog, normalize_agent_id, normalize_client_id, normalize_model_id,
+        normalize_provider_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
+        AdapterFreshnessV2, AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence,
+        AiDiagnosticsReportV2, AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple,
+        ClaudeCodeParser, CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext,
+        DiscoveryResult, DiscoveryState, EditorSurface, ExecutionSurface, GeminiCliParser,
+        MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
+        RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag, VerificationStatus,
         FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
     },
     api_client::ApiClient,
@@ -60,6 +65,25 @@ impl AiSyncLock {
     fn acquire() -> Result<Option<Self>, Box<dyn Error>> {
         let home = dirs::home_dir().ok_or("cannot resolve home directory for ai-sync.lock")?;
         Self::try_acquire_at(&home.join(".wakaclock").join("ai-sync.lock"))
+    }
+
+    /// Acquire a second, short-lived lease for topology handoff mutations. The
+    /// handoff ledger is a load/modify/save snapshot, so SQLite's row write alone
+    /// cannot prevent two CLI processes from both accepting the same receipt. A
+    /// blocking OS lease serializes that critical section and is released by the
+    /// kernel if the producer exits unexpectedly.
+    fn acquire_blocking_at(path: &Path) -> Result<Self, Box<dyn Error>> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        file.lock_exclusive()?;
+        Ok(Self { _file: file })
     }
 
     fn try_acquire_at(path: &Path) -> Result<Option<Self>, Box<dyn Error>> {
@@ -412,6 +436,21 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Print the local topology identity used by remote/container collector setup.
+    /// The output contains only opaque IDs; local paths and repository URLs stay
+    /// local to the collector and are never included in this snapshot.
+    Topology {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Print the shared editor/input/AI-evidence capability inventory. Editor
+    /// names never promote a generic document change to an AI attribution.
+    Capabilities {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Configure one registry-supported adapter (or detected adapters with
     /// `--all`) after explicit consent. This command never infers authorship
     /// and never overwrites an agent-owned configuration file.
@@ -663,6 +702,11 @@ struct GenericAiEventInput {
     /// means the producer had no editor context — an agent host that isn't an editor.
     #[serde(default)]
     editor: Option<String>,
+    /// Optional F7 topology context. It is validated locally and scopes the
+    /// opaque event identity; broker v1 does not receive a new field until F8
+    /// compatibility rehearsal completes.
+    #[serde(default)]
+    topology: Option<wakaclock_core::ai::TopologyContext>,
 }
 
 /// Lifecycle metadata emitted by SessionStart/SessionEnd hooks. This is a local
@@ -830,6 +874,7 @@ impl LegacyAiEventInput {
             change_kind: self.change_kind,
             previous_entity: self.previous_entity,
             editor: None,
+            topology: None,
         })
     }
 }
@@ -1507,6 +1552,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::Ai { action } => match action {
             AiAction::Status { json } => print_ai_status(json)?,
+            AiAction::Topology { root, json } => print_ai_topology(root.as_deref(), json)?,
+            AiAction::Capabilities { json } => print_ai_capabilities(json)?,
             AiAction::Setup {
                 agent,
                 all,
@@ -2027,6 +2074,289 @@ async fn run_ai_doctor(
         }
     }
     Ok(())
+}
+
+/// Print a topology context for the workspace where a remote/container collector
+/// is running. This is a local setup/diagnostic command: it does not upload the
+/// context and deliberately omits the path that was used as key material.
+fn print_ai_topology(root: Option<&Path>, json: bool) -> Result<(), Box<dyn Error>> {
+    let root = root
+        .map(Path::to_path_buf)
+        .unwrap_or(std::env::current_dir()?);
+    if !root.is_absolute() {
+        return Err("topology root must be an absolute path".into());
+    }
+    let root = fs::canonicalize(&root).unwrap_or(root);
+    let execution = execution_surface_from_env()?;
+    let editor = editor_surface_from_env();
+    let device_seed = topology_device_seed()?;
+    let git_info = git::discover(&root.to_string_lossy());
+    let workspace_key = git_info
+        .as_ref()
+        .map(|info| format!("git-workspace:{}", info.root.display()))
+        .unwrap_or_else(|| format!("path:{}", root.display()));
+    // A branch is mutable metadata, not a worktree identity. The root path (or
+    // an explicit bridge key) remains stable when a user switches branches.
+    let worktree_key = git_info
+        .as_ref()
+        .map(|info| format!("git-worktree:{}", info.root.display()))
+        .unwrap_or_else(|| format!("path:{}", root.display()));
+    let runtime_instance_key = (!matches!(execution, ExecutionSurface::Local))
+        .then(|| std::env::var("WAKACLOCK_RUNTIME_INSTANCE_ID").ok())
+        .flatten();
+    let repository_id = std::env::var("WAKACLOCK_REPOSITORY_ID").ok();
+    let session_id = std::env::var("WAKACLOCK_SESSION_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("topology-session-{}", Uuid::new_v4().simple()));
+    let context = TopologyIdentityInput {
+        execution,
+        editor,
+        device_seed,
+        workspace_key,
+        worktree_key,
+        session_id,
+        runtime_instance_key,
+        repository_id,
+    }
+    .build()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&context)?);
+    } else {
+        println!("Execution surface: {:?}", context.execution);
+        println!("Editor surface: {:?}", context.editor);
+        println!("Device: {}", context.device_id);
+        println!("Workspace: {}", context.workspace_id);
+        println!("Worktree: {}", context.worktree_id);
+        println!("Session: {}", context.session_id);
+        println!(
+            "Runtime instance: {}",
+            context.runtime_instance_id.as_deref().unwrap_or("none")
+        );
+        println!(
+            "Repository identity: {}",
+            context.repository_id.as_deref().unwrap_or("unreported")
+        );
+    }
+    Ok(())
+}
+
+fn print_ai_capabilities(json: bool) -> Result<(), Box<dyn Error>> {
+    let catalog = editor_capability_catalog();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&catalog)?);
+        return Ok(());
+    }
+    for entry in catalog {
+        println!(
+            "{:?}: status={:?}, input={:?}, separate_ai_evidence={}",
+            entry.editor,
+            entry.status,
+            entry.input_evidence,
+            entry.has_separate_ai_evidence()
+        );
+        println!("  {}", entry.notes);
+    }
+    Ok(())
+}
+
+fn execution_surface_from_env() -> Result<ExecutionSurface, Box<dyn Error>> {
+    if let Some(value) = std::env::var("WAKACLOCK_EXECUTION_SURFACE").ok() {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "local" => return Ok(ExecutionSurface::Local),
+            "ssh" | "ssh_remote" => return Ok(ExecutionSurface::SshRemote),
+            "wsl" => return Ok(ExecutionSurface::Wsl),
+            "container" | "dev_container" => return Ok(ExecutionSurface::DevContainer),
+            "remote_extension" | "remote_extension_host" => {
+                return Ok(ExecutionSurface::RemoteExtensionHost)
+            }
+            "cloud" | "cloud_job" => return Ok(ExecutionSurface::CloudJob),
+            other => {
+                return Err(
+                    format!("unsupported WAKACLOCK_EXECUTION_SURFACE value: {other}").into(),
+                )
+            }
+        }
+    }
+    if std::env::var_os("SSH_CONNECTION").is_some() {
+        Ok(ExecutionSurface::SshRemote)
+    } else if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        Ok(ExecutionSurface::Wsl)
+    } else if std::env::var_os("REMOTE_CONTAINERS").is_some()
+        || std::env::var_os("DEV_CONTAINER").is_some()
+    {
+        Ok(ExecutionSurface::DevContainer)
+    } else {
+        Ok(ExecutionSurface::Local)
+    }
+}
+
+fn editor_surface_from_env() -> EditorSurface {
+    let value = std::env::var("WAKACLOCK_EDITOR")
+        .ok()
+        .or_else(|| std::env::var("TERM_PROGRAM").ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if value.contains("code") || value.contains("vscode") {
+        EditorSurface::Vscode
+    } else if value.contains("zed") {
+        EditorSurface::Zed
+    } else if value.contains("jetbrains") || value.contains("idea") || value.contains("pycharm") {
+        EditorSurface::Jetbrains
+    } else if value.contains("nvim") || value.contains("neovim") {
+        EditorSurface::Neovim
+    } else if value.contains("browser") {
+        EditorSurface::Browser
+    } else if value.is_empty() {
+        EditorSurface::None
+    } else {
+        EditorSurface::Unknown
+    }
+}
+
+fn topology_auto_enabled() -> bool {
+    std::env::var("WAKACLOCK_TOPOLOGY_AUTO")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        || std::env::var_os("WAKACLOCK_EXECUTION_SURFACE").is_some()
+        || std::env::var_os("SSH_CONNECTION").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::env::var_os("REMOTE_CONTAINERS").is_some()
+        || std::env::var_os("DEV_CONTAINER").is_some()
+}
+
+/// Derive a topology only when the producer explicitly opts into the F7 path or
+/// the runtime is unambiguously remote. Legacy local events remain wire-compatible
+/// and do not suddenly acquire a new identity namespace.
+fn infer_topology_for_event(
+    project_root: Option<&Path>,
+    session_id: Option<&str>,
+) -> Result<Option<TopologyContext>, Box<dyn Error>> {
+    if !topology_auto_enabled() {
+        return Ok(None);
+    }
+    let root = project_root.ok_or(
+        "topology-enabled AI event requires an absolute project_root for workspace mapping",
+    )?;
+    if !root.is_absolute() {
+        return Err("topology project_root must be absolute".into());
+    }
+    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let execution = execution_surface_from_env()?;
+    let git_info = git::discover(&root.to_string_lossy());
+    let workspace_key = std::env::var("WAKACLOCK_TOPOLOGY_WORKSPACE_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            git_info
+                .as_ref()
+                .map(|info| format!("git-workspace:{}", info.root.display()))
+        })
+        .unwrap_or_else(|| format!("path:{}", root.display()));
+    let worktree_key = std::env::var("WAKACLOCK_TOPOLOGY_WORKTREE_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            git_info
+                .as_ref()
+                .map(|info| format!("git-worktree:{}", info.root.display()))
+        })
+        .unwrap_or_else(|| format!("path:{}", root.display()));
+    let runtime_instance_key = if matches!(execution, ExecutionSurface::Local) {
+        None
+    } else {
+        Some(
+            std::env::var("WAKACLOCK_RUNTIME_INSTANCE_ID")
+                .map_err(|_| "remote topology requires WAKACLOCK_RUNTIME_INSTANCE_ID")?,
+        )
+    };
+    let session_id = session_id
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| std::env::var("WAKACLOCK_SESSION_ID").ok())
+        .unwrap_or_else(|| format!("process:{}", std::process::id()));
+    let context = TopologyIdentityInput {
+        execution,
+        editor: editor_surface_from_env(),
+        device_seed: topology_device_seed()?,
+        workspace_key,
+        worktree_key,
+        session_id,
+        runtime_instance_key,
+        repository_id: std::env::var("WAKACLOCK_REPOSITORY_ID").ok(),
+    }
+    .build()?;
+    Ok(Some(context))
+}
+
+fn handoff_source_sequence() -> Result<u64, Box<dyn Error>> {
+    let value = std::env::var("WAKACLOCK_SOURCE_SEQUENCE")
+        .ok()
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|_| "WAKACLOCK_SOURCE_SEQUENCE must be a positive integer")?
+        .unwrap_or(1);
+    if value == 0 {
+        return Err("WAKACLOCK_SOURCE_SEQUENCE must be a positive integer".into());
+    }
+    Ok(value)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TopologySeedState {
+    device_seed: String,
+}
+
+fn topology_device_seed() -> Result<String, Box<dyn Error>> {
+    let path = dirs::home_dir()
+        .ok_or("could not resolve home directory")?
+        .join(".wakaclock")
+        .join("topology-identity.json");
+    if let Some(seed) = fs::read_to_string(&path)
+        .ok()
+        .and_then(|value| serde_json::from_str::<TopologySeedState>(&value).ok())
+        .map(|state| state.device_seed)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 128)
+    {
+        return Ok(seed);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = path.with_extension("lock");
+    let _lock = AiSyncLock::try_acquire_at(&lock_path)?
+        .ok_or("topology identity is being initialized by another process")?;
+    // Re-read after taking the lock: another process may have created the file while
+    // this caller was resolving the home directory.
+    if let Some(seed) = fs::read_to_string(&path)
+        .ok()
+        .and_then(|value| serde_json::from_str::<TopologySeedState>(&value).ok())
+        .map(|state| state.device_seed)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 128)
+    {
+        return Ok(seed);
+    }
+    let seed = format!("install-{}", Uuid::new_v4().simple());
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(
+        &temporary,
+        serde_json::to_vec(&TopologySeedState {
+            device_seed: seed.clone(),
+        })?,
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(temporary, path)?;
+    Ok(seed)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3503,7 +3833,8 @@ async fn run_ai_sync(
                 }
                 if !broker_events.is_empty() {
                     let report =
-                        broker::submit_events_chunked(config, api_client, &broker_events).await?;
+                        submit_events_with_optional_handoff(config, api_client, &broker_events)
+                            .await?;
                     if verbose {
                         println!(
                             "  broker accepted {} (duplicates {})",
@@ -3587,13 +3918,24 @@ async fn run_ai_sync(
     Ok(())
 }
 
-fn read_broker_event_input() -> Result<BrokerEventV1, Box<dyn Error>> {
-    let mut stdin = String::new();
-    io::stdin().read_to_string(&mut stdin)?;
-    parse_broker_event_input(&stdin)
+#[derive(Debug)]
+struct ParsedBrokerEventInput {
+    event: BrokerEventV1,
+    topology: Option<TopologyContext>,
+    /// Stable producer mutation identity used only by the local handoff ledger.
+    /// The broker v1 event id remains deploy-order compatible.
+    mutation_id: Option<String>,
+    source_sequence: u64,
 }
 
+#[allow(dead_code)]
 fn parse_broker_event_input(stdin: &str) -> Result<BrokerEventV1, Box<dyn Error>> {
+    Ok(parse_broker_event_input_with_context(stdin)?.event)
+}
+
+fn parse_broker_event_input_with_context(
+    stdin: &str,
+) -> Result<ParsedBrokerEventInput, Box<dyn Error>> {
     if stdin.trim().is_empty() {
         return Err("AI event JSON is required on stdin".into());
     }
@@ -3602,7 +3944,24 @@ fn parse_broker_event_input(stdin: &str) -> Result<BrokerEventV1, Box<dyn Error>
     // `wakaclock ai emit` shape remains accepted below and is normalized into the
     // same contract before it reaches the inbox.
     if let Ok(event) = serde_json::from_str::<BrokerEventV1>(stdin) {
-        return Ok(event.normalize()?);
+        let event = event.normalize()?;
+        let topology = infer_topology_for_event(
+            event.project_root.as_deref().map(Path::new),
+            event.session_id.as_deref(),
+        )?;
+        let mutation_id = topology.as_ref().map(|_| {
+            wakaclock_core::ai::event::opaque_file_event_id(
+                "handoff-mutation-v1",
+                "",
+                &event.event_id,
+            )
+        });
+        return Ok(ParsedBrokerEventInput {
+            event,
+            topology,
+            mutation_id,
+            source_sequence: handoff_source_sequence()?,
+        });
     }
 
     let input: GenericAiEventInput = match serde_json::from_str(stdin) {
@@ -3630,7 +3989,27 @@ fn parse_broker_event_input(stdin: &str) -> Result<BrokerEventV1, Box<dyn Error>
             return Err("active_seconds must be a finite non-negative number".into());
         }
     }
-    Ok(broker_event_from_generic(&input)?.normalize()?)
+    let topology = match input.topology.clone() {
+        Some(topology) => Some(topology),
+        None => {
+            infer_topology_for_event(input.project_root.as_deref(), input.session_id.as_deref())?
+        }
+    };
+    let mut input = input;
+    input.topology = topology.clone();
+    let mutation_id = topology.as_ref().map(|_| {
+        wakaclock_core::ai::event::opaque_file_event_id(
+            "handoff-mutation-v1",
+            "",
+            input.event_id.trim(),
+        )
+    });
+    Ok(ParsedBrokerEventInput {
+        event: broker_event_from_generic(&input)?.normalize()?,
+        topology,
+        mutation_id,
+        source_sequence: handoff_source_sequence()?,
+    })
 }
 
 fn read_ai_tool_input() -> Result<AiToolInput, Box<dyn Error>> {
@@ -3910,6 +4289,7 @@ fn tool_change_input(
         change_kind: Some(change.kind.as_str().to_string()),
         previous_entity: change.previous_entity.clone(),
         editor: None,
+        topology: None,
     }
 }
 
@@ -3999,7 +4379,7 @@ async fn run_ai_tool_after(
     for event_input in &inputs {
         broker_events.push(broker_event_from_generic(event_input)?);
     }
-    let report = broker::submit_events_chunked(config, api_client, &broker_events).await?;
+    let report = submit_events_with_optional_handoff(config, api_client, &broker_events).await?;
 
     for (event, _) in &pending {
         state.mark_delivered(&event.event_id, "tool_snapshot")?;
@@ -4048,6 +4428,9 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
 }
 
 fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box<dyn Error>> {
+    if let Some(topology) = input.topology.as_ref() {
+        topology.validate()?;
+    }
     let entity = PathBuf::from(normalize_entity(&input.entity.to_string_lossy())?);
     let project_root = input
         .project_root
@@ -4085,12 +4468,29 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
         .as_ref()
         .map(|path| normalize_entity(&path.to_string_lossy()).map(PathBuf::from))
         .transpose()?;
+    let event_id = if let Some(topology) = input.topology.as_ref() {
+        // Keep broker-v1 payloads deploy-order safe while still preventing an
+        // identical producer event from a different topology scope from being
+        // treated as the same retry. The raw context never enters the ID.
+        wakaclock_core::ai::event::opaque_file_event_id(
+            "topology-v1",
+            &format!("{}|{}", topology.workspace_id, topology.worktree_id),
+            input.event_id.trim(),
+        )
+    } else {
+        input.event_id.trim().to_string()
+    };
     Ok(AiEditEvent {
-        event_id: input.event_id.trim().to_string(),
+        event_id,
         agent: normalize_agent_id(&input.agent),
         provider: normalize_optional_text(input.provider.clone()),
         model: normalize_optional_text(input.model.clone()),
-        session_id: normalize_optional_text(input.session_id.clone()),
+        session_id: normalize_optional_text(input.session_id.clone()).or_else(|| {
+            input
+                .topology
+                .as_ref()
+                .map(|topology| topology.session_id.clone())
+        }),
         tool_event_id: normalize_optional_text(input.tool_event_id.clone()),
         occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
         entity,
@@ -4267,10 +4667,47 @@ async fn run_ai_emit(
     api_client: &ApiClient,
     json: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let event = read_broker_event_input()?;
+    let mut stdin = String::new();
+    io::stdin().read_to_string(&mut stdin)?;
+    let parsed = parse_broker_event_input_with_context(&stdin)?;
+    let event = parsed.event.clone();
+    let mut handoff = match parsed.topology.as_ref() {
+        Some(topology) => Some(prepare_handoff(topology, &parsed, &event)?),
+        None => None,
+    };
+    if handoff
+        .as_ref()
+        .is_some_and(|state| state.already_acknowledged)
+    {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "duplicate",
+                    "event_id": event.event_id,
+                    "agent": event.agent,
+                    "source": event.source,
+                    "confidence": event.confidence,
+                    "accepted": false,
+                    "duplicate": true,
+                    "handoff": "deduplicated",
+                })
+            );
+        } else {
+            println!("AI event {}: duplicate (handoff ledger)", event.event_id);
+        }
+        return Ok(());
+    }
+
     let ack = broker::submit_event(config, api_client, event.clone()).await?;
     let accepted = ack.status == "accepted";
     let duplicate = ack.status == "duplicate";
+    if let Some(state) = handoff.as_mut() {
+        if accepted || duplicate {
+            state.ledger.acknowledge(state.receipt_id)?;
+            state.queue.save_handoff_ledger(&state.ledger)?;
+        }
+    }
     if json {
         println!(
             "{}",
@@ -4292,6 +4729,197 @@ async fn run_ai_emit(
         println!("Actor: {} ({:.2})", ack.actor_type, ack.actor_confidence);
     }
     Ok(())
+}
+
+struct PreparedHandoff {
+    queue: Queue,
+    ledger: HandoffLedger,
+    receipt_id: u64,
+    already_acknowledged: bool,
+    // Held from the ledger load until broker acknowledgement so concurrent
+    // emitters cannot race on the same snapshot.
+    _lock: AiSyncLock,
+}
+
+async fn submit_events_with_optional_handoff(
+    config: &Config,
+    api_client: &ApiClient,
+    events: &[BrokerEventV1],
+) -> Result<wakaclock_core::broker::BrokerBatchAck, Box<dyn Error>> {
+    if !topology_auto_enabled() {
+        return Ok(broker::submit_events_chunked(config, api_client, events).await?);
+    }
+
+    let mut combined = wakaclock_core::broker::BrokerBatchAck {
+        accepted: 0,
+        duplicate: 0,
+        results: Vec::with_capacity(events.len()),
+    };
+    let mut direct_events = Vec::new();
+    for (index, event) in events.iter().enumerate() {
+        let Some(project_root) = event.project_root.as_deref() else {
+            direct_events.push(event.clone());
+            continue;
+        };
+        let Some(topology) =
+            infer_topology_for_event(Some(Path::new(project_root)), event.session_id.as_deref())?
+        else {
+            direct_events.push(event.clone());
+            continue;
+        };
+        let parsed = ParsedBrokerEventInput {
+            event: event.clone(),
+            topology: Some(topology.clone()),
+            mutation_id: Some(wakaclock_core::ai::event::opaque_file_event_id(
+                "handoff-mutation-v1",
+                "",
+                &event.event_id,
+            )),
+            source_sequence: (index as u64).saturating_add(1),
+        };
+        let mut handoff = prepare_handoff(&topology, &parsed, event)?;
+        if handoff.already_acknowledged {
+            combined.duplicate += 1;
+            combined
+                .results
+                .push(wakaclock_core::broker::BrokerEventAck {
+                    event_id: event.event_id.clone(),
+                    status: "duplicate".to_string(),
+                    actor_type: event.actor_type.unwrap_or(ActorType::Unknown),
+                    actor_confidence: event.actor_confidence.unwrap_or(0.0),
+                });
+            continue;
+        }
+        let ack = broker::submit_event(config, api_client, event.clone()).await?;
+        if ack.status == "accepted" {
+            combined.accepted += 1;
+        } else if ack.status == "duplicate" {
+            combined.duplicate += 1;
+        }
+        if ack.status == "accepted" || ack.status == "duplicate" {
+            handoff.ledger.acknowledge(handoff.receipt_id)?;
+            handoff.queue.save_handoff_ledger(&handoff.ledger)?;
+        }
+        combined.results.push(ack);
+    }
+    if !direct_events.is_empty() {
+        let direct = broker::submit_events_chunked(config, api_client, &direct_events).await?;
+        combined.accepted += direct.accepted;
+        combined.duplicate += direct.duplicate;
+        combined.results.extend(direct.results);
+    }
+    Ok(combined)
+}
+
+fn prepare_handoff(
+    topology: &TopologyContext,
+    parsed: &ParsedBrokerEventInput,
+    event: &BrokerEventV1,
+) -> Result<PreparedHandoff, Box<dyn Error>> {
+    let home = dirs::home_dir().ok_or("cannot resolve home directory for handoff.lock")?;
+    let handoff_lock =
+        AiSyncLock::acquire_blocking_at(&home.join(".wakaclock").join("handoff.lock"))?;
+    let bridge_id = if matches!(topology.execution, ExecutionSurface::Local) {
+        None
+    } else {
+        Some(
+            std::env::var("WAKACLOCK_BRIDGE_ID")
+                .or_else(|_| std::env::var("WAKACLOCK_CLOUD_AUTH_KEY_ID"))
+                .map_err(|_| {
+                    "remote/cloud topology requires WAKACLOCK_BRIDGE_ID (opaque authenticated bridge reference)"
+                })?,
+        )
+    };
+    if matches!(topology.execution, ExecutionSurface::CloudJob) {
+        let auth_key_id = bridge_id
+            .clone()
+            .ok_or("cloud topology requires an authenticated callback key reference")?;
+        let job_id = std::env::var("WAKACLOCK_CLOUD_JOB_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| topology.runtime_instance_id.clone())
+            .ok_or("cloud topology requires WAKACLOCK_CLOUD_JOB_ID")?;
+        let tool_event_id = event
+            .tool_event_id
+            .clone()
+            .ok_or("cloud topology requires tool_event_id evidence")?;
+        let mutation_id = parsed
+            .mutation_id
+            .clone()
+            .ok_or("cloud topology requires a file mutation identity")?;
+        CloudJobEvidence {
+            schema_version: wakaclock_core::ai::TOPOLOGY_HANDOFF_SCHEMA_VERSION,
+            topology: topology.clone(),
+            auth_key_id,
+            job_id,
+            tool_event_id,
+            mutation_id,
+            event_id: event.event_id.clone(),
+        }
+        .validate()?;
+    }
+    let boot_id = std::env::var("WAKACLOCK_BOOT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("boot:{}", std::process::id()));
+    let registration = CollectorRegistration::for_topology(
+        topology.clone(),
+        bridge_id,
+        boot_id,
+        CollectorCapabilities {
+            file_mutations: true,
+            transcripts: matches!(&event.source, AiEventSource::Transcript),
+            editor_observations: matches!(&event.source, AiEventSource::IdeTelemetry),
+        },
+    )?;
+    let queue = Queue::open()?;
+    let mut ledger = queue.load_handoff_ledger()?.unwrap_or_default();
+    ledger.prune_acknowledged_before(chrono::Utc::now() - chrono::Duration::days(30));
+    let collector_id = registration.collector_id.clone();
+    ledger.register_or_reconnect(registration)?;
+
+    let operation_id = event.tool_event_id.as_deref().map(|value| {
+        wakaclock_core::ai::event::opaque_file_event_id("handoff-operation-v1", "", value)
+    });
+    let scope_id = topology
+        .repository_id
+        .clone()
+        .unwrap_or_else(|| topology.workspace_id.clone());
+    let identity = HandoffEventIdentity {
+        event_id: event.event_id.clone(),
+        operation_id,
+        mutation_id: parsed.mutation_id.clone(),
+        scope_id: Some(scope_id),
+    };
+    let source_sequence = if std::env::var_os("WAKACLOCK_SOURCE_SEQUENCE").is_some() {
+        parsed.source_sequence
+    } else {
+        ledger.next_source_sequence(&collector_id)?
+    };
+    let receipt = ledger.ingest(
+        &collector_id,
+        HandoffEvent {
+            identity,
+            source_sequence,
+            occurred_at: event.occurred_at,
+        },
+    )?;
+    let (receipt_id, already_acknowledged) = match receipt {
+        HandoffIngestOutcome::Accepted { receipt_id } => {
+            queue.save_handoff_ledger(&ledger)?;
+            (receipt_id, false)
+        }
+        HandoffIngestOutcome::Duplicate { receipt_id } => {
+            (receipt_id, !ledger.is_pending(receipt_id))
+        }
+    };
+    Ok(PreparedHandoff {
+        queue,
+        ledger,
+        receipt_id,
+        already_acknowledged,
+        _lock: handoff_lock,
+    })
 }
 
 /// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
@@ -4883,7 +5511,112 @@ mod generic_ai_ingress_tests {
             change_kind: None,
             previous_entity: None,
             editor: None,
+            topology: None,
         }
+    }
+
+    #[test]
+    fn topology_scopes_generic_event_identity_without_leaking_context() {
+        let mut first = sample_input();
+        first.topology = Some(
+            TopologyIdentityInput {
+                execution: ExecutionSurface::SshRemote,
+                editor: EditorSurface::Vscode,
+                device_seed: "device-a".to_string(),
+                workspace_key: "workspace-a".to_string(),
+                worktree_key: "worktree-a".to_string(),
+                session_id: "session-a".to_string(),
+                runtime_instance_key: Some("host-a".to_string()),
+                repository_id: Some("remote:git.example/app.git".to_string()),
+            }
+            .build()
+            .unwrap(),
+        );
+        let first_event = generic_ai_edit_event(&first).unwrap();
+
+        let mut second = first.clone();
+        second.topology = Some(
+            TopologyIdentityInput {
+                device_seed: "device-b".to_string(),
+                ..TopologyIdentityInput {
+                    execution: ExecutionSurface::SshRemote,
+                    editor: EditorSurface::Vscode,
+                    device_seed: "device-a".to_string(),
+                    workspace_key: "workspace-a".to_string(),
+                    worktree_key: "worktree-a".to_string(),
+                    session_id: "session-a".to_string(),
+                    runtime_instance_key: Some("host-a".to_string()),
+                    repository_id: Some("remote:git.example/app.git".to_string()),
+                }
+            }
+            .build()
+            .unwrap(),
+        );
+        let second_event = generic_ai_edit_event(&second).unwrap();
+
+        assert_ne!(first_event.event_id, second_event.event_id);
+        assert!(!first_event.event_id.contains("workspace-a"));
+        assert!(!first_event.event_id.contains("git.example"));
+    }
+
+    #[test]
+    fn topology_event_identity_survives_a_session_reconnect() {
+        let mut first = sample_input();
+        first.topology = Some(
+            TopologyIdentityInput {
+                execution: ExecutionSurface::SshRemote,
+                editor: EditorSurface::Vscode,
+                device_seed: "device-a".to_string(),
+                workspace_key: "workspace-a".to_string(),
+                worktree_key: "worktree-a".to_string(),
+                session_id: "session-a".to_string(),
+                runtime_instance_key: Some("host-a".to_string()),
+                repository_id: Some("remote:git.example/app.git".to_string()),
+            }
+            .build()
+            .unwrap(),
+        );
+        let first_id = generic_ai_edit_event(&first).unwrap().event_id;
+        let mut reconnected = first.clone();
+        reconnected.session_id = Some("session-b".to_string());
+        reconnected.topology = Some(
+            TopologyIdentityInput {
+                session_id: "session-b".to_string(),
+                ..TopologyIdentityInput {
+                    execution: ExecutionSurface::SshRemote,
+                    editor: EditorSurface::Vscode,
+                    device_seed: "device-a".to_string(),
+                    workspace_key: "workspace-a".to_string(),
+                    worktree_key: "worktree-a".to_string(),
+                    session_id: "session-a".to_string(),
+                    runtime_instance_key: Some("host-a".to_string()),
+                    repository_id: Some("remote:git.example/app.git".to_string()),
+                }
+            }
+            .build()
+            .unwrap(),
+        );
+        assert_eq!(
+            first_id,
+            generic_ai_edit_event(&reconnected).unwrap().event_id
+        );
+    }
+
+    #[test]
+    fn malformed_topology_is_rejected_before_generic_ingress() {
+        let mut input = sample_input();
+        input.topology = Some(wakaclock_core::ai::TopologyContext {
+            schema_version: 1,
+            execution: ExecutionSurface::CloudJob,
+            editor: EditorSurface::None,
+            device_id: "device-1".to_string(),
+            workspace_id: "workspace-1".to_string(),
+            worktree_id: "worktree-1".to_string(),
+            session_id: "session-1".to_string(),
+            runtime_instance_id: None,
+            repository_id: None,
+        });
+        assert!(generic_ai_edit_event(&input).is_err());
     }
 
     #[test]
@@ -4894,6 +5627,18 @@ mod generic_ai_ingress_tests {
             parsed.command,
             Commands::Ai {
                 action: AiAction::Emit { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_capabilities_is_a_first_class_cli_subcommand() {
+        let parsed = Cli::try_parse_from(["wakaclock", "ai", "capabilities", "--json"])
+            .expect("ai capabilities should parse");
+        assert!(matches!(
+            parsed.command,
+            Commands::Ai {
+                action: AiAction::Capabilities { json: true }
             }
         ));
     }

@@ -25,7 +25,10 @@
 //! transcript tool call; filesystem/process correlation stays a diagnostics-only
 //! research line, never a production attribution source.
 //!
-//! `canonical.rs` is declared — unlike its research-line siblings — because
+//! `topology.rs` is declared as the first F7 production contract. It owns opaque
+//! remote/device/workspace identity and explicit local mapping, but is not attached
+//! to the strict broker wire until the F8 compatibility rehearsal. `canonical.rs`
+//! is declared — unlike its research-line siblings — because
 //! `fingerprint_for_heartbeat` is a real, needed dependency of the server's
 //! heartbeat dedup key (`backend/api/src/services/heartbeat.rs`) and is pure
 //! hashing over already-known metadata, never identity inference. Its
@@ -40,6 +43,7 @@ pub mod claude;
 pub mod codex;
 pub mod correlation;
 pub mod diagnostics;
+pub mod editor_capability;
 pub mod event;
 pub mod follow_up;
 pub mod gemini;
@@ -51,6 +55,8 @@ pub mod producer;
 pub mod provider;
 pub mod revision;
 pub mod state;
+pub mod topology;
+pub mod topology_handoff;
 pub mod usage;
 
 pub use adapter::{
@@ -74,6 +80,9 @@ pub use diagnostics::{
     DiagnosticMeasurement, DiagnosticsConsent, MeasurementAvailability, ObserverConfig,
     ParserLagSummary, ParserLagSummaryV2, RuntimeHealth, VerificationStatus,
     AI_DIAGNOSTICS_SCHEMA_VERSION, AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
+};
+pub use editor_capability::{
+    editor_capability_catalog, AiEvidence, CapabilityStatus, EditorCapability, InputEvidence,
 };
 pub use event::{
     is_known_agent_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
@@ -106,6 +115,16 @@ pub use revision::{
     PENDING_OBSERVATION_RETENTION_SECONDS,
 };
 pub use state::AiAttributionState;
+pub use topology::{
+    from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,
+    TopologyIdentityInput, WorkspaceMapping, WorkspaceMappingRegistry, TOPOLOGY_SCHEMA_VERSION,
+};
+pub use topology_handoff::{
+    collector_id_for, transport_for_topology, CloudJobEvidence, CollectorCapabilities,
+    CollectorLifecycle, CollectorRegistration, CollectorTransport, HandoffError, HandoffEvent,
+    HandoffEventIdentity, HandoffIngestOutcome, HandoffLedger, PendingHandoff,
+    TOPOLOGY_HANDOFF_SCHEMA_VERSION,
+};
 pub use usage::{
     parse_claude_usage, parse_claude_usage_str, parse_codex_usage, parse_codex_usage_str,
     parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageRecord, TokenSource,

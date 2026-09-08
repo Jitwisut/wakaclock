@@ -31,10 +31,17 @@ function FilterProbe() {
     <div>
       <span data-testid="project">{filters.projectId ?? 'all'}</span>
       <span data-testid="source">{filters.source ?? 'all'}</span>
+      <span data-testid="timezone">{filters.timezone}</span>
       <a href={href('/dashboard/wakaclock/analytics/heatmap')}>Heatmap link</a>
-      <button onClick={() => setFilter('language', 'Rust')} type="button">Set Rust</button>
-      <button onClick={() => setRange({ start: '2026-08-10', end: '2026-08-12' })} type="button">Set range</button>
-      <button onClick={reset} type="button">Reset</button>
+      <button onClick={() => setFilter('language', 'Rust')} type="button">
+        Set Rust
+      </button>
+      <button onClick={() => setRange({ start: '2026-08-10', end: '2026-08-12' })} type="button">
+        Set range
+      </button>
+      <button onClick={reset} type="button">
+        Reset
+      </button>
     </div>
   );
 }
@@ -104,7 +111,7 @@ function multiMonthResponse(): AnalyticsExplorerResponse {
 describe('Analytics Explorer frontend foundation', () => {
   beforeEach(() => {
     navigation.params = new URLSearchParams(
-      'start=2026-08-01&end=2026-08-28&project_id=project-1&source=ai'
+      'start=2026-08-01&end=2026-08-28&project_id=project-1&source=ai&timezone=UTC'
     );
     navigation.replace.mockReset();
   });
@@ -114,11 +121,13 @@ describe('Analytics Explorer frontend foundation', () => {
 
     expect(screen.getByTestId('project')).toHaveTextContent('project-1');
     expect(screen.getByTestId('source')).toHaveTextContent('ai');
+    expect(screen.getByTestId('timezone')).toHaveTextContent('UTC');
     const href = screen.getByRole('link', { name: 'Heatmap link' }).getAttribute('href') ?? '';
     expect(href).toContain('start=2026-08-01');
     expect(href).toContain('end=2026-08-28');
     expect(href).toContain('project_id=project-1');
     expect(href).toContain('source=ai');
+    expect(href).toContain('timezone=UTC');
   });
 
   it('updates one filter without dropping the current range or other filters', async () => {
@@ -219,5 +228,6 @@ describe('Analytics Explorer frontend foundation', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /AI agent/ }));
     expect(onSelect).toHaveBeenCalledWith('ai');
+    expect(screen.getByRole('button', { name: /Unknown: Unavailable/ })).toBeInTheDocument();
   });
 });
