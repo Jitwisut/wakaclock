@@ -80,6 +80,29 @@ describe("WakaclockCliService", () => {
     expect(child.stdin.read()?.toString() ?? "").toBe("");
   });
 
+  it("marks a remote extension host for topology-aware CLI calls", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(
+      createConfig,
+      new Logger(() => false),
+      () => Promise.resolve(undefined),
+      undefined,
+      undefined,
+      "remote_extension",
+    );
+
+    await service.sendHeartbeat("/workspace/project/main.ts", false, "coding");
+
+    expect(spawnMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          WAKACLOCK_EXECUTION_SURFACE: "remote_extension",
+          WAKACLOCK_TOPOLOGY_AUTO: "1",
+        }),
+      }),
+    );
+  });
+
   it("writes json array to stdin when extras are provided", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));

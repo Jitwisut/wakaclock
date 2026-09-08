@@ -62,6 +62,17 @@ function mockChild(result = {}) {
         }));
         (0, vitest_1.expect)(child.stdin.read()?.toString() ?? "").toBe("");
     });
+    (0, vitest_1.it)("marks a remote extension host for topology-aware CLI calls", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false), () => Promise.resolve(undefined), undefined, undefined, "remote_extension");
+        await service.sendHeartbeat("/workspace/project/main.ts", false, "coding");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0]?.[2]).toEqual(vitest_1.expect.objectContaining({
+            env: vitest_1.expect.objectContaining({
+                WAKACLOCK_EXECUTION_SURFACE: "remote_extension",
+                WAKACLOCK_TOPOLOGY_AUTO: "1",
+            }),
+        }));
+    });
     (0, vitest_1.it)("writes json array to stdin when extras are provided", async () => {
         spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
         const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));

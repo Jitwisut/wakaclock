@@ -272,10 +272,12 @@ export interface AiAgentItem {
   human_lines_deleted: number;
   model?: null | string;
   provider?: null | string;
-  unattributed_lines_added: number;
-  unattributed_lines_deleted: number;
-  unknown_lines_added: number;
-  unknown_lines_deleted: number;
+  /** Legacy spelling retained while older servers roll forward. */
+  unattributed_lines_added?: number;
+  /** Legacy spelling retained while older servers roll forward. */
+  unattributed_lines_deleted?: number;
+  unknown_lines_added?: number;
+  unknown_lines_deleted?: number;
 }
 
 export interface AiDailyItem {
@@ -291,6 +293,12 @@ export interface AiDailyItem {
   human_keystrokes: number;
   human_lines_added: number;
   human_lines_deleted: number;
+  /** Legacy spelling retained while older servers roll forward. */
+  unattributed_lines_added?: number;
+  /** Legacy spelling retained while older servers roll forward. */
+  unattributed_lines_deleted?: number;
+  unknown_lines_added?: number;
+  unknown_lines_deleted?: number;
 }
 
 export interface AiStatsData {
@@ -298,6 +306,8 @@ export interface AiStatsData {
   ai_heartbeat_percentage: number;
   ai_inferred_heartbeat_percentage: number;
   ai_verified_heartbeat_percentage: number;
+  /** Additive F6 contract; absent on older servers. */
+  coverage?: AiStatsCoverage;
   daily: AiDailyItem[];
   human_heartbeat_percentage: number;
   total_ai_inferred_lines_added: number;
@@ -316,9 +326,26 @@ export interface AiStatsData {
   unknown_heartbeat_percentage: number;
 }
 
+export type AiStatsCoverageStatus = 'complete' | 'no_activity' | 'partial';
+
+export interface AiStatsCoverage {
+  ai_inferred_heartbeats: number;
+  ai_verified_heartbeats: number;
+  attributed_line_changes: number;
+  heartbeat_denominator: number;
+  human_heartbeats: number;
+  line_change_denominator: number;
+  line_coverage_percent: null | number;
+  status: AiStatsCoverageStatus;
+  unknown_heartbeats: number;
+  unknown_line_changes: number;
+}
+
 export interface AiStatsResponse {
   data: AiStatsData;
   end: string;
+  /** Optional for compatibility with pre-F6 servers. */
+  schema_version?: number;
   start: string;
 }
 

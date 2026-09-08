@@ -8,6 +8,10 @@ import type {
 } from '@/lib/wakaclock/analytics';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 
+function durationLabel(value?: number) {
+  return value == null ? 'Unavailable' : formatDurationShort(value);
+}
+
 export function SourceSummary({
   data,
   onSelect,
@@ -39,7 +43,7 @@ export function SourceSummary({
       label: 'AI inferred',
       value: data.summary.ai_inferred_seconds ?? 0,
     },
-    { key: 'unknown' as const, label: 'Unknown', value: data.summary.unknown_seconds ?? 0 },
+    { key: 'unknown' as const, label: 'Unknown', value: data.summary.unknown_seconds },
   ];
 
   return (
@@ -47,11 +51,20 @@ export function SourceSummary({
       {cards.map((card) => {
         const active = selected === card.key || (!selected && card.key === undefined);
         return (
-          <button className="text-left" key={card.label} onClick={() => onSelect(card.key)} type="button">
-            <Card className={active ? 'border-primary ring-primary/20 h-full ring-2' : 'h-full'}>
+          <button
+            aria-pressed={active}
+            className="text-left"
+            key={card.label}
+            onClick={() => onSelect(card.key)}
+            type="button"
+          >
+            <Card
+              aria-label={`${card.label}: ${durationLabel(card.value)}`}
+              className={active ? 'border-primary ring-primary/20 h-full ring-2' : 'h-full'}
+            >
               <CardHeader className="pb-2">
                 <CardDescription>{card.label}</CardDescription>
-                <CardTitle className="text-2xl">{formatDurationShort(card.value)}</CardTitle>
+                <CardTitle className="text-2xl">{durationLabel(card.value)}</CardTitle>
               </CardHeader>
             </Card>
           </button>
@@ -61,15 +74,19 @@ export function SourceSummary({
         const active = selectedActor === card.key;
         return (
           <button
+            aria-pressed={active}
             className="text-left"
             key={`actor:${card.key}`}
             onClick={() => onSelectActor?.(active ? undefined : card.key)}
             type="button"
           >
-            <Card className={active ? 'border-primary ring-primary/20 h-full ring-2' : 'h-full'}>
+            <Card
+              aria-label={`${card.label}: ${durationLabel(card.value)}`}
+              className={active ? 'border-primary ring-primary/20 h-full ring-2' : 'h-full'}
+            >
               <CardHeader className="pb-2">
                 <CardDescription>{card.label}</CardDescription>
-                <CardTitle className="text-2xl">{formatDurationShort(card.value)}</CardTitle>
+                <CardTitle className="text-2xl">{durationLabel(card.value)}</CardTitle>
               </CardHeader>
             </Card>
           </button>

@@ -8,10 +8,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "ai-coverage" / "run_codex_cli_campaign.py"
+
+sys.path.insert(0, str(SCRIPT.parent))
+import run_codex_cli_campaign as campaign  # noqa: E402
 
 
 def make_executable(path: Path, content: str) -> None:
@@ -20,6 +23,90 @@ def make_executable(path: Path, content: str) -> None:
 
 
 class CodexCliCampaignTest(unittest.TestCase):
+    def test_dry_run_event_parser_keeps_only_opaque_ids(self) -> None:
+        output = (
+            "== codex ==\n"
+            "  [dry-run] evt-1 /private/user/project/a.ts +2/-0 model=gpt-6-astra\n"
+            "  [dry-run] evt-2 /private/user/project/b.ts +1/-0 model=gpt-6-astra\n"
+        )
+        self.assertEqual(campaign.parse_dry_run_event_ids(output), {"evt-1", "evt-2"})
+
+    def test_event_bound_readback_passes_all_external_stages(self) -> None:
+        args = type(
+            "ReadbackArgs",
+            (),
+            {
+                "readback_user_id": "00000000-0000-4000-8000-000000000001",
+                "expected_provider": "openai",
+                "expected_model": "gpt-6-astra",
+                "clickhouse_url": "http://127.0.0.1:8123",
+                "clickhouse_user": "default",
+                "clickhouse_password": "default",
+            },
+        )()
+
+        def fake_json_request(method: str, url: str, **_: object):
+            if "/heartbeats?" in url:
+                return 200, {
+                    "data": [
+                        {
+                            "ai_event_id": "evt-1",
+                            "actor_type": "ai_verified",
+                            "ai_agent": "codex",
+                            "ai_provider": "openai",
+                            "ai_model": "gpt-6-astra",
+                        }
+                    ]
+                }
+            if "/dashboard/analytics?" in url:
+                return 200, {
+                    "schema_version": 3,
+                    "daily_attribution": [
+                        {
+                            "ai_added": 2,
+                            "ai_deleted": 0,
+                            "ai_verified_added": 2,
+                            "ai_verified_deleted": 0,
+                        }
+                    ],
+                }
+            raise AssertionError(url)
+
+        canonical_rows = [
+            {
+                "ai_event_id": "evt-1",
+                "revision": 0,
+                "actor_type": "ai_verified",
+                "ai_agent": "codex",
+                "ai_provider": "openai",
+                "ai_model": "gpt-6-astra",
+                "ai_lines_added": 2,
+                "ai_lines_deleted": 0,
+            }
+        ]
+        with patch.object(campaign, "_json_request", side_effect=fake_json_request), patch.object(
+            campaign, "_clickhouse_rows", return_value=canonical_rows
+        ):
+            stages, metrics, blockers = campaign._readback_campaign(
+                args,
+                campaign_url="http://127.0.0.1:8080",
+                campaign_key="throwaway-key",
+                event_ids={"evt-1"},
+                started_at=1_756_000_000.0,
+                finished_at=1_756_000_010.0,
+                baseline_dashboard={
+                    "ai_added": 0,
+                    "ai_deleted": 0,
+                    "ai_verified_added": 0,
+                    "ai_verified_deleted": 0,
+                },
+            )
+        self.assertEqual(stages["api_delivery"], "passed")
+        self.assertEqual(stages["canonical_reconcile"], "passed")
+        self.assertEqual(stages["dashboard_readback"], "passed")
+        self.assertEqual(metrics, {"delivered": 1, "canonical": 1})
+        self.assertEqual(blockers, [])
+
     def run_driver(
         self,
         args: list[str],

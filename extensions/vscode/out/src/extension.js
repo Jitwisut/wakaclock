@@ -58,9 +58,13 @@ function activate(context) {
         extensionVersion: String(context.extension.packageJSON.version ?? "0.0.0")
     }, () => configService.getSnapshot(), logger);
     const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
-    const cliService = new cli_1.WakaclockCliService(() => configService.getSnapshot(), logger, async () => (await (0, secrets_1.getStoredApiKey)(context.secrets)) ?? (await (0, secrets_1.getPendingApiKey)(context.secrets)), managedCli, `wakaclock-vscode/${extensionVersion}`);
+    const cliService = new cli_1.WakaclockCliService(() => configService.getSnapshot(), logger, async () => (await (0, secrets_1.getStoredApiKey)(context.secrets)) ?? (await (0, secrets_1.getPendingApiKey)(context.secrets)), managedCli, `wakaclock-vscode/${extensionVersion}`, vscode.env.remoteName ? "remote_extension" : undefined);
     const statusBar = new statusBar_1.StatusBarController(() => configService.getSnapshot(), cliService, logger, async () => (await (0, secrets_1.getStoredApiKey)(context.secrets)) ?? (await (0, secrets_1.getPendingApiKey)(context.secrets)));
-    const bufferManager = new buffer_1.HeartbeatBufferManager(() => configService.getSnapshot(), cliService, logger, () => statusBar.handleHeartbeatSent(), undefined, () => statusBar.handleActivity());
+    const presenceHeartbeat = createPresenceHeartbeatPing(configService, cliService);
+    const bufferManager = new buffer_1.HeartbeatBufferManager(() => configService.getSnapshot(), cliService, logger, () => {
+        statusBar.handleHeartbeatSent();
+        presenceHeartbeat();
+    }, undefined, () => statusBar.handleActivity());
     statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
     statusBar.setBufferedSegmentsProvider(() => bufferManager.getBufferedSegments());
     const stableAgentDir = (0, agentSetup_1.syncAgentPluginsToStableDir)({
@@ -184,6 +188,28 @@ async function initializeConnection(context, cliService, aiIntegrations, logger)
 }
 function delay(milliseconds) {
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+/**
+ * Throttles presence liveness pings to piggyback on real heartbeat sends rather than
+ * running its own timer. A heartbeat only fires when the buffer actually flushes
+ * accumulated activity, so this naturally pings only while the user is coding and never
+ * while idle. The throttle keeps it well under the 45-second room lease
+ * (`VIEWER_LEASE_SECONDS` in redis_presence.rs) without sending on every single flush.
+ */
+function createPresenceHeartbeatPing(configService, cliService) {
+    const throttleMs = 30_000;
+    let lastSentAt = 0;
+    return () => {
+        if (!configService.getSnapshot().presenceAutoJoinEnabled) {
+            return;
+        }
+        const now = Date.now();
+        if (now - lastSentAt < throttleMs) {
+            return;
+        }
+        lastSentAt = now;
+        void cliService.sendPresenceHeartbeat();
+    };
 }
 async function maybeOfferAiSetup(context, aiIntegrations, logger) {
     if (!vscode.workspace.getConfiguration("wakaclock").get("autoInstallAgentHooks", true)) {

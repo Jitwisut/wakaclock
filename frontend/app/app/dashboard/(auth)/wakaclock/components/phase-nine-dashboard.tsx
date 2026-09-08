@@ -24,11 +24,7 @@ import {
   presentPeriodComparison,
 } from '@/lib/wakaclock/dashboard-analytics-presenters';
 import { getDashboardAnalytics } from '@/lib/wakaclock/endpoints';
-import {
-  formatDurationShort,
-  formatMagnitude,
-  toDivergingNegative,
-} from '@/lib/wakaclock/format';
+import { formatDurationShort, formatMagnitude, toDivergingNegative } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
@@ -62,15 +58,7 @@ function spend(value: null | number) {
   return value === null ? 'Unavailable' : `$${(value / 1_000_000).toFixed(2)}`;
 }
 
-function MetricCard({
-  label,
-  subtext,
-  value,
-}: {
-  label: string;
-  subtext?: string;
-  value: string;
-}) {
+function MetricCard({ label, subtext, value }: { label: string; subtext?: string; value: string }) {
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -124,7 +112,7 @@ export function PhaseNineDashboard() {
   const { data, error, isLoading } = useQuery({
     enabled: Boolean(userId),
     queryFn: () => getDashboardAnalytics({ end, start, timezone }),
-    queryKey: [...wakaclockKeys.all, 'dashboard-analytics', userId, start, end, timezone],
+    queryKey: wakaclockKeys.dashboardAnalytics(userId, start, end, timezone),
   });
 
   // `unattributed_*` is nullable on purpose — the API reports "we cannot tell" rather
@@ -233,19 +221,25 @@ export function PhaseNineDashboard() {
                   <CardHeader>
                     <CardTitle className="text-base">Daily code-change attribution</CardTitle>
                     <CardDescription>
-                      Additions above the axis, deletions below. Human, verified AI, inferred AI
-                      and Unknown remain separate actor classes.
+                      Additions above the axis, deletions below. Human, verified AI, inferred AI and
+                      Unknown remain separate actor classes.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <ChartContainer className="h-72 w-full" config={chartConfig}>
-                      <BarChart data={divergingSeries} margin={{ left: 0, right: 12 }} stackOffset="sign">
+                      <BarChart
+                        data={divergingSeries}
+                        margin={{ left: 0, right: 12 }}
+                        stackOffset="sign"
+                      >
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis dataKey="date" tickLine={false} tickMargin={8} />
                         <YAxis tickFormatter={formatMagnitude} tickLine={false} tickMargin={8} />
                         <ReferenceLine stroke="var(--border)" y={0} />
                         <ChartTooltip
-                          content={<ChartTooltipContent formatter={(value) => formatMagnitude(value)} />}
+                          content={
+                            <ChartTooltipContent formatter={(value) => formatMagnitude(value)} />
+                          }
                         />
                         <ChartLegend content={<ChartLegendContent />} />
                         <Bar
@@ -263,7 +257,11 @@ export function PhaseNineDashboard() {
                           fill="var(--color-human_added)"
                           stackId="churn"
                         />
-                        <Bar dataKey="unknown_added" fill="var(--color-unknown_added)" stackId="churn" />
+                        <Bar
+                          dataKey="unknown_added"
+                          fill="var(--color-unknown_added)"
+                          stackId="churn"
+                        />
                         <Bar
                           dataKey="ai_verified_deleted"
                           fill="var(--color-ai_verified_deleted)"

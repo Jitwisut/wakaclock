@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import { AiAgentsTable } from '@/components/wakaclock/ai-agents-table';
+import { AiAttributionLegend } from '@/components/wakaclock/ai-attribution-legend';
 import { AiDiagnosticsPanel } from '@/components/wakaclock/ai-diagnostics-panel';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
@@ -37,6 +38,7 @@ const attributionConfig = {
 const dailyConfig = {
   ai_lines_added: { label: 'AI lines added', color: 'var(--chart-1)' },
   human_lines_added: { label: 'Human lines added', color: 'var(--chart-3)' },
+  unknown_lines_added: { label: 'Unknown lines added', color: 'var(--chart-4)' },
 } satisfies ChartConfig;
 
 function AiStatsPanel() {
@@ -55,6 +57,11 @@ function AiStatsPanel() {
   const aiInferredPct = stats?.ai_inferred_heartbeat_percentage ?? 0;
   const humanPct = stats?.human_heartbeat_percentage ?? 0;
   const unknownPct = stats?.unknown_heartbeat_percentage ?? 0;
+  const coverageStatus =
+    stats?.coverage?.status ?? (stats?.total_heartbeats ? 'partial' : 'no_activity');
+  const knownHeartbeatCount = stats?.coverage
+    ? Math.max(0, stats.coverage.heartbeat_denominator - stats.coverage.unknown_heartbeats)
+    : null;
   const pieData = stats
     ? [
         {
@@ -120,6 +127,22 @@ function AiStatsPanel() {
                 />
               </div>
 
+              <div className="rounded-md border p-3 text-sm" role="status">
+                <p className="font-medium">
+                  Attribution coverage: {coverageStatus.replaceAll('_', ' ')}
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {stats.coverage
+                    ? `Event evidence: ${formatCompactNumber(knownHeartbeatCount ?? 0)} of ${formatCompactNumber(stats.coverage.heartbeat_denominator)} heartbeats have a known actor.`
+                    : 'Event evidence counts are unavailable on this server version.'}
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {stats.coverage?.line_coverage_percent == null
+                    ? 'Line attribution coverage is unavailable for this range.'
+                    : `Line evidence: ${formatCompactNumber(stats.coverage.attributed_line_changes)} of ${formatCompactNumber(stats.coverage.line_change_denominator)} measured line changes have an explicit actor (${formatPercent(stats.coverage.line_coverage_percent)}).`}
+                </p>
+              </div>
+
               <DashboardPanel id="ai.charts">
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
@@ -176,7 +199,14 @@ function AiStatsPanel() {
                   <div>
                     <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
                     <ChartContainer className="h-64 w-full" config={dailyConfig}>
-                      <BarChart data={stats.daily} margin={{ left: 4, right: 4 }}>
+                      <BarChart
+                        data={stats.daily.map((row) => ({
+                          ...row,
+                          unknown_lines_added:
+                            row.unknown_lines_added ?? row.unattributed_lines_added ?? 0,
+                        }))}
+                        margin={{ left: 4, right: 4 }}
+                      >
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis
                           axisLine={false}
@@ -196,10 +226,21 @@ function AiStatsPanel() {
                           fill="var(--color-human_lines_added)"
                           radius={3}
                         />
+                        <Bar
+                          dataKey="unknown_lines_added"
+                          fill="var(--color-unknown_lines_added)"
+                          radius={3}
+                        />
                       </BarChart>
                     </ChartContainer>
                   </div>
                 </div>
+                <AiAttributionLegend
+                  aiInferredPercent={aiInferredPct}
+                  aiVerifiedPercent={aiVerifiedPct}
+                  humanPercent={humanPct}
+                  unknownPercent={unknownPct}
+                />
               </DashboardPanel>
 
               <div>
@@ -233,11 +274,16 @@ function AiDiagnosticsPanelContainer() {
     enabled: Boolean(userId),
   });
 
+  const reports = v2.data?.reports ?? [];
+  const legacyReport = legacy.data?.report;
+  const hasSnapshot = reports.length > 0 || Boolean(legacyReport);
+
   return (
     <AiDiagnosticsPanel
-      error={legacy.error ?? v2.error}
-      isLoading={legacy.isLoading || v2.isLoading}
-      report={v2.data?.reports[0] ?? legacy.data?.report}
+      error={hasSnapshot ? undefined : (v2.error ?? legacy.error)}
+      isLoading={v2.isLoading || (reports.length === 0 && legacy.isLoading)}
+      report={reports[0] ?? legacyReport}
+      reports={reports}
     />
   );
 }

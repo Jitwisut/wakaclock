@@ -19,9 +19,11 @@ the surfaces that can be inspected here. The phase cannot be promoted to
   edit payload.
 - Kilo has a local plugin and regression suite, but no authenticated live
   callback/provider run has been certified.
-- Codex CLI has a fresh authenticated source/producer campaign and a separate
-  delivered retry probe. The driver still cannot mark API delivery or
-  canonical/dashboard stages without its explicit readback probes.
+- Codex CLI has a fresh authenticated source → broker → API → canonical →
+  dashboard campaign. All six mandatory stages passed for 8 event IDs and the
+  delivered retry probe replayed one event with zero new events. The pending
+  artifact still has an explicit nested-execution blocker, and human review,
+  clean-release identity and catalog promotion remain separate gates.
 - The current worktree contains unrelated uncommitted changes, so no clean
   release commit digest can be attached to a certificate yet.
 
@@ -40,7 +42,7 @@ explicit roadmap decision.
 | ID | Runtime / deliverable | Status | Evidence and remaining gate |
 | --- | --- | --- | --- |
 | F5-01 | Claude Code CLI refresh | `survey-blocked` | Parser replay and hook wiring are locally validated for `2.1.246`; `claude auth status` is logged out. A fresh native hook → transcript → broker → API → dashboard run is still required. |
-| F5-02 | Codex CLI current tuple | `live-pending` | Authenticated `codex-cli 0.153.4` campaign using the shipped release binary captured 8 producer events. Single-file, multi-file, create/delete/rename and failure/no-op passed; a separate delivered retry/dedup run passed with broker accepted=1 and replayed=1. Nested execution remains not run. Driver API/canonical/dashboard stages remain not run until explicit probes are configured. |
+| F5-02 | Codex CLI current tuple | `live-pending` | Authenticated `codex-cli 0.153.4` campaign using the shipped release binary captured, accepted, delivered and reconciled 8 events. API, canonical and dashboard readback all passed; single-file, multi-file, create/delete/rename, failure/no-op and retry/dedup passed. Nested execution remains not run; the pending artifact still needs human review and clean-release/catalog decisions. |
 | F5-03 | Gemini CLI | `survey-blocked` | `gemini 0.58.0` is installed and advertises JSON/stream-JSON, session-file and hooks. No authenticated account, extension or real edit payload is available; no synthetic fixture was added. |
 | F5-04 | Codex Desktop / IDE | `survey-blocked` | Desktop is installed, but the current evidence does not expose a separate runtime identity/readback tuple. CLI evidence is not borrowed. |
 | F5-05 | Kilo CLI (`kilo`/`kilocode`) | `live-pending` | Kilo `7.5.13` plugin scaffolding and metadata normalization are locally tested. Exact duplicate callbacks now use a bounded 120-second identity window and a delayed-callback regression passes. Live provider/model callback evidence is still required. |
@@ -60,52 +62,42 @@ explicit roadmap decision.
 
 ## Codex campaign evidence
 
-The live campaign was run with the existing authenticated Codex account in a
-disposable repository. Only aggregate counters were retained:
+The live campaign was run with `codex-cli 0.153.4` in a disposable repository
+and a newly created disposable Wakaclock account. Only aggregate counters were
+retained:
 
 ```text
 codex-cli: 0.153.4
 scenarios: single-file=passed, multi-file=passed,
            create-delete-rename=passed, failure-no-op=passed,
-           retry-dedup=not_run, nested-execution=not_run
+           retry-dedup=passed, nested-execution=not_run
 stages: source_capture=passed, producer_event=passed,
-        broker_accept=not_run, api_delivery=not_run,
-        canonical_reconcile=not_run, dashboard_readback=not_run
-metrics: captured=8, producer_events=8, broker_accepted=0,
-         delivered=0, duplicates=0, replayed=0
-blockers: delivery_not_requested, canonical_readback_not_configured,
-          dashboard_readback_not_configured
+        broker_accept=passed, api_delivery=passed,
+        canonical_reconcile=passed, dashboard_readback=passed
+metrics: captured=8, producer_events=8, broker_accepted=8,
+         delivered=8, canonical=8, duplicates=0, replayed=1
+blockers: nested_execution_probe_not_configured
 ```
 
-The separate delivered retry probe returned the following bounded result:
-
-```text
-scenario: retry-dedup=passed
-stages: source_capture=passed, producer_event=passed, broker_accept=passed,
-        api_delivery=not_run, canonical_reconcile=not_run,
-        dashboard_readback=not_run
-metrics: captured=1, producer_events=1, broker_accepted=1,
-         duplicates=0, replayed=1
-```
-
-As a local readback audit, `GET /api/v1/heartbeats` returned 200 and showed 8
-unique Codex transcript rows in the campaign window, all with verified actor
-projection. `GET /api/v1/dashboard/analytics` returned 200 with schema 3. The
-driver still leaves those stages `not_run` because there is no event-bound,
-privacy-safe readback probe wired into the certification command; the dashboard
-response also covers the full day rather than only the campaign rows.
+The event-bound readback verified 8 unique API rows, 8 canonical winners and
+the dashboard AI delta against the canonical line counts. The artifact is
+`/tmp/wakaclock-codex-final-certification-20260909.json`; its validator passed,
+but it remains `status=scaffold`, `review_status=pending` and
+`promotable=false`. The retry check is a second CLI process invocation that
+re-opened the local broker store; it is not a managed-service restart.
 
 The campaign driver performs the second sync for retry proof and requires
 `already delivered >= parsed` with `new=0`. It never treats a local broker
 acknowledgement as API delivery, and it never promotes a local parser pass to
-canonical or dashboard visibility.
+canonical or dashboard visibility without the event-bound readback.
 
 ## Local implementation gates
 
-The following F5-focused checks passed on 2026-09-07:
+The following F5-focused checks passed or were re-run on 2026-09-09:
 
-- `python3 -m unittest discover -s scripts/ai-coverage/tests -p 'test_*.py'` — 16/16.
+- `python3 -m unittest discover -s scripts/ai-coverage/tests -p 'test_*.py'` — 32/32.
 - `python3 -m py_compile scripts/ai-coverage/run_codex_cli_campaign.py` — passed.
+- `python3 scripts/ai-coverage/validate_certification.py /tmp/wakaclock-codex-final-certification-20260909.json` — passed.
 - `npm test --prefix extensions/ai-agents/kilo-code` — 12/12.
 - `npm run test:installer --prefix extensions/ai-agents/kilo-code` — passed.
 - `python3 scripts/ai-coverage/validate_catalog.py certifications/ai-adapters/catalog-v1.json` — passed.
@@ -122,13 +114,13 @@ environment and attach a pending artifact before human review:
 
 1. Authenticate Claude, Gemini and Kilo where their current runtime surfaces
    are available; capture only bounded tool/session/path/result metadata.
-2. Run Codex again with `--deliver`, a configured API key and the explicit
-   canonical/dashboard readback probes. Include the retry/dedup probe and repeat
-   after a broker restart.
-3. Record the clean shipped commit SHA and release-binary SHA-256 in the pending
-   artifact; validate it with `validate_certification.py`.
-4. Inspect backend canonical rows and dashboard data using the same event IDs,
-   then obtain human approval before changing any reviewed catalog entry.
+2. Add a privacy-safe nested-execution probe if Codex exposes a stable
+   parent/child identity; until then keep that scenario `not_run`.
+3. Repeat the retry/dedup check after a managed broker service restart when
+   that service is available, rather than treating a process reopen as the same
+   gate.
+4. Record a clean shipped commit SHA and release-binary SHA-256 in a reviewed
+   artifact, then obtain human approval before changing any catalog entry.
 5. Keep unavailable runtimes as explicit `survey-blocked` or `parked` rows; do
    not claim “all AI” from process presence, executable names or historical
    certificates.

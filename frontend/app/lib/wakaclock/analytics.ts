@@ -82,13 +82,12 @@ export const analyticsFilterParamNames = [
   'source',
   'actor_type',
   'operating_system',
+  'timezone',
 ] as const;
 
 export type AnalyticsFilterParamName = (typeof analyticsFilterParamNames)[number];
 
 export function analyticsFilterLabel(value: string) {
   if (!value) return 'Unknown';
-  return value
-    .replaceAll('_', ' ')
-    .replaceAll(/\b\w/g, (letter) => letter.toUpperCase());
+  return value.replaceAll('_', ' ').replaceAll(/\b\w/g, (letter) => letter.toUpperCase());
 }

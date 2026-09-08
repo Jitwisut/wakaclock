@@ -138,6 +138,25 @@ jobs:
           python3 -m unittest discover -s scripts/ai-coverage/tests -v
           python3 scripts/ai-coverage/validate_certification.py certifications/ai-adapters/historical
           python3 scripts/ai-coverage/validate_catalog.py certifications/ai-adapters/catalog-v1.json
+      - name: Run F8 compatibility rehearsal (fail closed)
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/f8-compatibility.json"
+          set +e
+          python3 scripts/ai-coverage/rehearse_compatibility.py --report "$report"
+          code=$?
+          set -e
+          if [[ "$code" -ne 0 && "$code" -ne 2 ]]; then
+            exit "$code"
+          fi
+          python3 - "$report" <<'PY'
+          import json
+          import sys
+          report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          if report.get("status") == "failed" or report.get("summary", {}).get("failed", 0):
+              raise SystemExit("F8 compatibility rehearsal contains a failed case")
+          print(json.dumps({"status": report.get("status"), "summary": report.get("summary")}, sort_keys=True))
+          PY
 
   backend-integration:
     name: Rust ClickHouse integration tests

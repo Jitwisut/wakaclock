@@ -65,7 +65,11 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
                   <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
                   <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
                   <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
-                  <TableCell>{formatCompactNumber(agent.unknown_lines_added)}</TableCell>
+                  <TableCell>
+                    {formatCompactNumber(
+                      agent.unknown_lines_added ?? agent.unattributed_lines_added ?? 0
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     {formatCompactNumber(agent.heartbeat_count)}
                   </TableCell>

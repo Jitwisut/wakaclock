@@ -147,6 +147,7 @@ pub struct AiEffectivenessData {
 pub struct AiEffectivenessMetrics {
     pub ai_line_share: f64,
     pub human_line_share: f64,
+    pub unknown_line_share: f64,
     pub prompt_character_count: Option<u64>,
     pub tokens_per_ai_line: Option<f64>,
     pub cost_per_ai_line_microusd: Option<f64>,
@@ -156,7 +157,10 @@ pub struct AiEffectivenessMetrics {
 
 #[derive(Debug, Serialize)]
 pub struct AiCoverage {
+    pub attributed_line_changes: u64,
+    pub line_change_denominator: u64,
     pub line_attribution: &'static str,
+    pub unknown_line_changes: u64,
     pub token_usage: &'static str,
     pub prompt_length: &'static str,
     pub human_follow_up: &'static str,
@@ -485,7 +489,8 @@ pub async fn ai_effectiveness(
     let ai_lines = (stats.data.total_ai_lines_added + stats.data.total_ai_lines_deleted) as f64;
     let human_lines =
         (stats.data.total_human_lines_added + stats.data.total_human_lines_deleted) as f64;
-    let total_lines = ai_lines + human_lines;
+    let unknown_lines = stats.data.coverage.unknown_line_changes as f64;
+    let total_lines = stats.data.coverage.line_change_denominator as f64;
     let ai_line_share = if total_lines > 0.0 {
         ai_lines / total_lines
     } else {
@@ -494,10 +499,13 @@ pub async fn ai_effectiveness(
 
     let total_heartbeats = stats.data.total_heartbeats;
     let stats_data = stats.data;
+    let stats_coverage = stats_data.coverage.clone();
     let coverage = if total_heartbeats == 0 {
         "no_data"
+    } else if stats_data.coverage.status == crate::model::ai_stats::AiCoverageStatus::Partial {
+        "partial_line_attribution"
     } else {
-        "line_attribution_only"
+        "complete_line_attribution"
     };
     let reported_tokens = stats_data
         .total_input_tokens
@@ -519,12 +527,20 @@ pub async fn ai_effectiveness(
                 } else {
                     0.0
                 },
+                unknown_line_share: if total_lines > 0.0 {
+                    unknown_lines / total_lines
+                } else {
+                    0.0
+                },
                 prompt_character_count,
                 tokens_per_ai_line,
                 cost_per_ai_line_microusd,
                 human_follow_up_rate: None,
                 coverage: AiCoverage {
+                    attributed_line_changes: stats_coverage.attributed_line_changes,
+                    line_change_denominator: stats_coverage.line_change_denominator,
                     line_attribution: coverage,
+                    unknown_line_changes: stats_coverage.unknown_line_changes,
                     token_usage: "not_available_in_heartbeat_stream",
                     prompt_length: "not_available_in_heartbeat_stream",
                     human_follow_up: "not_available_until_ai_change_ledger_is_enabled",

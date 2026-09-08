@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "matrix_id": "f8-compatibility-v1",
+  "current_contract": {
+    "broker_schema_version": 1,
+    "producer_version": 1
+  },
+  "previous_baseline": {
+    "commit": null,
+    "build_sha256": null,
+    "release_tag": null
+  },
+  "cases": [
+    {
+      "id": "F8-C01",
+      "boundary": "A",
+      "mode": "synthetic",
+      "description": "old producer payload reaches the current strict local contract",
+      "operation": "local_accept",
+      "payload": {
+        "event_id": "old-event-1",
+        "agent": "codex",
+        "entity": "/workspace/src/lib.rs",
+        "occurred_at": "2026-09-08T00:00:00Z",
+        "source": "agent_hook",
+        "confidence": "verified"
+      },
+      "expected": "accepted"
+    },
+    {
+      "id": "F8-C02",
+      "boundary": "A",
+      "mode": "synthetic",
+      "description": "retrying the same current event is a duplicate, not a second event",
+      "operation": "dedup",
+      "event_ids": ["same-event-1", "same-event-1"],
+      "expected": "accepted_then_duplicate"
+    },
+    {
+      "id": "F8-C03",
+      "boundary": "A",
+      "mode": "requires_previous_artifact",
+      "description": "current hook and pinned previous CLI have an explicit downgrade outcome",
+      "operation": "previous_binary",
+      "expected": "accepted_or_explicit_unsupported"
+    },
+    {
+      "id": "F8-C04",
+      "boundary": "A",
+      "mode": "synthetic",
+      "description": "known additive topology metadata is downlevelled while content fields quarantine",
+      "operation": "local_downlevel",
+      "payload": {
+        "event_id": "topology-event-1",
+        "agent": "codex",
+        "entity": "/workspace/src/lib.rs",
+        "occurred_at": "2026-09-08T00:00:00Z",
+        "source": "agent_hook",
+        "confidence": "verified",
+        "topology": {
+          "schema_version": 1,
+          "device_id": "opaque-device",
+          "workspace_id": "opaque-workspace",
+          "worktree_id": "opaque-worktree",
+          "session_id": "opaque-session"
+        }
+      },
+      "forbidden_payload": {
+        "event_id": "content-event-1",
+        "agent": "codex",
+        "entity": "/workspace/src/lib.rs",
+        "prompt": "must never be accepted"
+      },
+      "expected": "topology_stripped_content_rejected"
+    },
+    {
+      "id": "F8-C05",
+      "boundary": "A",
+      "mode": "synthetic",
+      "description": "unsupported broker schema is retained as an explicit rejection",
+      "operation": "schema_version",
+      "payload": {
+        "schema_version": 2,
+        "event_id": "future-event-1",
+        "agent": "codex",
+        "entity": "/workspace/src/lib.rs"
+      },
+      "expected": "unsupported_schema"
+    },
+    {
+      "id": "F8-C06",
+      "boundary": "A",
+      "mode": "requires_previous_artifact",
+      "description": "stale hook and active broker expose an identity mismatch to doctor",
+      "operation": "identity_mismatch",
+      "expected": "explicit_mismatch"
+    },
+    {
+      "id": "F8-C07",
+      "boundary": "B",
+      "mode": "synthetic",
+      "description": "old heartbeat fields remain readable with revision zero",
+      "operation": "api_additive_read",
+      "payload": {"entity": "lib.rs", "time": 1725753600.0, "ai_agent": "codex"},
+      "expected": "accepted_default_revision"
+    },
+    {
+      "id": "F8-C08",
+      "boundary": "B",
+      "mode": "requires_previous_artifact",
+      "description": "new client against a pinned old API has an explicit capability outcome",
+      "operation": "old_api",
+      "expected": "ignored_or_downlevelled"
+    },
+    {
+      "id": "F8-C09",
+      "boundary": "B",
+      "mode": "synthetic",
+      "description": "diagnostics availability is not converted from missing into zero",
+      "operation": "diagnostics_compat",
+      "payload": {"schema_version": 1, "queue_depth": null, "available": false},
+      "expected": "unavailable_preserved"
+    },
+    {
+      "id": "F8-C10",
+      "boundary": "B",
+      "mode": "synthetic",
+      "description": "old analytics response keeps unknown partitions separate",
+      "operation": "analytics_compat",
+      "payload": {"ai_lines": 4, "unknown_lines": 3, "human_lines": 2},
+      "expected": "partitions_disjoint"
+    },
+    {
+      "id": "F8-C11",
+      "boundary": "C",
+      "mode": "requires_previous_artifact",
+      "description": "migration from the previous ClickHouse schema is idempotent",
+      "operation": "clickhouse_migration",
+      "expected": "migration_twice"
+    },
+    {
+      "id": "F8-C12",
+      "boundary": "C",
+      "mode": "synthetic",
+      "description": "revision winner is selected before aggregation and replay is stable",
+      "operation": "revision_winner",
+      "rows": [
+        {"operation_id": "op-1", "revision": 0, "ai_lines_added": 2},
+        {"operation_id": "op-1", "revision": 1, "ai_lines_added": 5},
+        {"operation_id": "op-2", "revision": 0, "ai_lines_added": 3}
+      ],
+      "expected": "winner_total_8"
+    },
+    {
+      "id": "F8-C13",
+      "boundary": "C",
+      "mode": "requires_previous_artifact",
+      "description": "previous server is blocked or proven correct after a revision correction",
+      "operation": "previous_server_revision",
+      "expected": "verified_or_explicit_block"
+    },
+    {
+      "id": "F8-C14",
+      "boundary": "C",
+      "mode": "requires_previous_artifact",
+      "description": "PostgreSQL diagnostics persistence and absent-store degradation are explicit",
+      "operation": "postgres_compat",
+      "expected": "durable_or_ephemeral"
+    },
+    {
+      "id": "F8-C15",
+      "boundary": "C",
+      "mode": "synthetic",
+      "description": "catalog mismatch, expiry and revocation never promote a tuple",
+      "operation": "catalog_resolution",
+      "tuples": [
+        {"id": "exact", "exact": true, "fresh": true, "revoked": false},
+        {"id": "expired", "exact": true, "fresh": false, "revoked": false},
+        {"id": "revoked", "exact": true, "fresh": true, "revoked": true},
+        {"id": "mismatch", "exact": false, "fresh": true, "revoked": false}
+      ],
+      "expected": "only_exact_promotes"
+    },
+    {
+      "id": "F8-C16",
+      "boundary": "D",
+      "mode": "synthetic",
+      "description": "topology stays local when the peer has no capability",
+      "operation": "topology_capability",
+      "payload": {"topology": {"workspace_id": "opaque-workspace"}},
+      "expected": "base_wire_without_topology"
+    },
+    {
+      "id": "F8-C17",
+      "boundary": "D",
+      "mode": "synthetic",
+      "description": "topology capability negotiation is deterministic",
+      "operation": "topology_negotiation",
+      "peer_capabilities": ["broker-v1"],
+      "expected": "omit_topology"
+    },
+    {
+      "id": "F8-C18",
+      "boundary": "D",
+      "mode": "synthetic",
+      "description": "same mutation reconnects while a different worktree never deduplicates",
+      "operation": "topology_identity",
+      "events": [
+        {"scope": "worktree-a", "mutation": "mutation-1"},
+        {"scope": "worktree-a", "mutation": "mutation-1"},
+        {"scope": "worktree-b", "mutation": "mutation-1"}
+      ],
+      "expected": "one_duplicate_one_new"
+    }
+  ]
+}

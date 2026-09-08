@@ -67,23 +67,20 @@ and loopback endpoint, so it did not send transcript data to the configured API.
 
 ## Live gate still open
 
-The fresh campaign gate now has partial live evidence: authenticated
-`codex-cli 0.153.4` with the shipped release binary captured 8 events from the
-single-file, multi-file, create/delete/rename and failure/no-op scenarios. A
-separate delivered retry/dedup run accepted one event and replayed it once;
-nested execution remains `not_run`. The first campaign was metadata-only, while
-the retry run exercised the local broker fallback and API delivery path.
-Event-bound API readback found 8 unique Codex transcript rows in the campaign
-window, and the dashboard analytics endpoint returned 200. The certification
-driver still leaves canonical/API/dashboard stages `not_run` until those probes
-are wired into the artifact command.
+The final campaign used authenticated `codex-cli 0.153.4` with the shipped
+release binary and a disposable API identity. It captured 8 events across
+single-file, multi-file, create/delete/rename and failure/no-op scenarios. The
+delivered retry scenario replayed one event with zero new events. The same run
+passed event-bound API delivery, canonical reconciliation and dashboard
+readback: 8 unique API rows, 8 canonical winners, 8 unique fingerprints, and
+the dashboard AI delta matched canonical line counts.
 
-Before F5-02 can move to `validated`, run the driver with `--deliver`, configured
-API credentials and explicit privacy-safe readback probes. The delivered run
-must include the retry probe (the driver performs a second sync and requires
-`already delivered >= parsed` with `new=0`), repeat after a broker restart,
-record a clean shipped-bundle commit/build digest, produce a pending artifact,
-and receive human review before any catalog promotion. Codex Desktop/IDE
-evidence remains an independent F5-04 tuple and must not reuse the CLI result.
+The sanitized pending artifact records all six mandatory stages as `passed`,
+with `review_status=pending` and `promotable=false`. The nested execution row
+is still `not_run` because Codex does not expose a stable privacy-safe
+parent/child execution identity. A separate process invocation re-opened the
+local broker store for retry/dedup; a service-level restart remains a release
+rehearsal item when the managed broker is available. Codex Desktop/IDE evidence
+remains an independent F5-04 tuple and must not reuse the CLI result.
 
 The complete F5-01…F5-18 status matrix is in the [F5 closeout report](ai-coverage-f5-closeout-2026-09-07.md).
