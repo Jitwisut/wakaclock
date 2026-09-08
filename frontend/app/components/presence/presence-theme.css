@@ -344,13 +344,137 @@
   animation: wakaclock-office-reaction 1.1s ease-out forwards;
 }
 
+/* ---------------------------------------------------------------------------
+ * Seated workstation — the character drops into a desk when it enters a pod:
+ * hands tap the keyboard, the CRT types code out line by line, a focus pip
+ * rises. All `steps()` so it reads as frame-flips, not a smooth easing.
+ * ------------------------------------------------------------------------- */
+@keyframes wakaclock-office-keys {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(1.6px);
+  }
+}
+
+@keyframes wakaclock-office-cursor {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  50%,
+  98% {
+    opacity: 0;
+  }
+}
+
+@keyframes wakaclock-office-typeline {
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  70%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes wakaclock-office-sitdown {
+  0% {
+    transform: translateY(-11px);
+  }
+  60% {
+    transform: translateY(2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes wakaclock-office-poof {
+  0% {
+    opacity: 0.5;
+    transform: translateX(-50%) scale(0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) scale(1.7);
+  }
+}
+
+@keyframes wakaclock-office-focuspip {
+  0% {
+    opacity: 0;
+    transform: translateY(5px) scale(0.7);
+  }
+  16% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-26px) scale(1);
+  }
+}
+
+.wakaclock-presence-theme .office-anim-keys-l {
+  animation: wakaclock-office-keys 0.34s steps(2, jump-none) infinite;
+}
+
+.wakaclock-presence-theme .office-anim-keys-r {
+  animation: wakaclock-office-keys 0.34s steps(2, jump-none) infinite;
+  animation-delay: 0.17s;
+}
+
+.wakaclock-presence-theme .office-crt-cursor {
+  animation: wakaclock-office-cursor 1s steps(1, jump-none) infinite;
+}
+
+.wakaclock-presence-theme .office-crt-line {
+  animation: wakaclock-office-typeline 2.6s steps(14, jump-none) infinite;
+}
+
+.wakaclock-presence-theme .office-anim-sitdown {
+  animation: wakaclock-office-sitdown 0.36s steps(3, jump-none) 1 both;
+}
+
+.wakaclock-presence-theme .office-poof {
+  animation: wakaclock-office-poof 0.5s steps(3, jump-none) 1 forwards;
+}
+
+.wakaclock-presence-theme .office-focus-pip {
+  animation: wakaclock-office-focuspip 2.9s steps(6, jump-none) infinite;
+}
+
+/* Soft cream glow that marks the current user's own workstation. Static — no
+   reduced-motion concern. */
+.wakaclock-presence-theme .office-self-halo {
+  background: radial-gradient(
+    ellipse at 50% 64%,
+    rgb(255 249 233 / 58%) 0%,
+    rgb(255 249 233 / 0%) 68%
+  );
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wakaclock-presence-theme .office-anim-breathe,
   .wakaclock-presence-theme .office-anim-typing,
   .wakaclock-presence-theme .office-anim-steam,
   .wakaclock-presence-theme .office-proximity-ring,
-  .wakaclock-presence-theme .office-reaction-float {
+  .wakaclock-presence-theme .office-reaction-float,
+  .wakaclock-presence-theme .office-anim-keys-l,
+  .wakaclock-presence-theme .office-anim-keys-r,
+  .wakaclock-presence-theme .office-crt-cursor,
+  .wakaclock-presence-theme .office-crt-line,
+  .wakaclock-presence-theme .office-anim-sitdown,
+  .wakaclock-presence-theme .office-poof,
+  .wakaclock-presence-theme .office-focus-pip {
     animation: none;
+  }
+
+  /* With the reveal animation off, the typed lines must still be visible. */
+  .wakaclock-presence-theme .office-crt-line {
+    clip-path: none;
   }
 }
 

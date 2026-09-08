@@ -50,6 +50,7 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
       };
       flush();
       timerRef.current = window.setTimeout(() => {
+        timerRef.current = null;
         if (pendingRef.current) flush();
       }, 250);
     },

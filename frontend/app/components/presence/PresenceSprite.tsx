@@ -18,6 +18,9 @@ interface PresenceSpriteProps {
   isDragging?: boolean;
   outfit?: SpriteOutfit;
   reducedMotion: boolean;
+  /** Rendered inside a `DeskWorkstation`: drop the ground shadow and let the
+   * workstation own the pose animation. */
+  seated?: boolean;
   size?: number;
   skinColor?: string;
   status: PresenceState;
@@ -104,13 +107,16 @@ export function PresenceSprite({
   skinColor = '#e9b48e',
   isDragging,
   reducedMotion,
+  seated = false,
   size = 84,
   status,
 }: PresenceSpriteProps) {
   const id = useId().replaceAll(':', '');
   const fill = (part: string) => `url(#${id}-${part})`;
   const motionClass =
-    reducedMotion || isDragging || status === 'offline' ? undefined : `presence-player-${status}`;
+    reducedMotion || isDragging || seated || status === 'offline'
+      ? undefined
+      : `presence-player-${status}`;
   return (
     <svg
       aria-hidden
@@ -144,7 +150,7 @@ export function PresenceSprite({
           <stop offset="1" stopColor="#17223c" stopOpacity="0" />
         </radialGradient>
       </defs>
-      <ellipse cx="51" cy="113" fill={fill('shadow')} rx="35" ry="8" />
+      {seated ? null : <ellipse cx="51" cy="113" fill={fill('shadow')} rx="35" ry="8" />}
       <g className={motionClass}>
         <path d="M35 88 L49 90 L47 107 L34 107Z M53 90 L67 87 L66 105 L54 106Z" fill="#353c54" />
         <path

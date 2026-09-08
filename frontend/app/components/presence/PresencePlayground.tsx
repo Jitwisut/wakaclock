@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { LogOutIcon } from 'lucide-react';
+
 import {
   PixelDeskCluster,
   PixelFicus,
@@ -9,15 +11,24 @@ import {
   PixelWaterCooler,
   PixelWhiteboard,
 } from '@/components/presence/OfficeProps';
-import { PixelBush, PixelFlower, PixelRock, PixelTree } from '@/components/presence/PresenceDecoration';
+import {
+  PixelBush,
+  PixelFlower,
+  PixelRock,
+  PixelTree,
+} from '@/components/presence/PresenceDecoration';
 import { PresencePlayer } from '@/components/presence/PresencePlayer';
 import { SeatedOccupant } from '@/components/presence/SeatedOccupant';
+import {
+  deskSlotOffsets,
+  freeSlotIndex,
+  nearestSlotIndex,
+  seatAnchor,
+  standingSpotNear,
+  zoneAt,
+  zoneContains,
+} from '@/lib/presence/floor-geometry';
 import type { PresenceUser } from '@/types/presence';
-
-/** Desk slots a pod is drawn with — a wide pod seats two, a narrow one seats one. */
-function deskCountFor(zoneWidth: number): number {
-  return zoneWidth >= 22 ? 2 : 1;
-}
 
 interface PresencePlaygroundProps {
   currentUserId: string;
@@ -98,25 +109,39 @@ const DECORATIONS: { node: React.ReactNode; x: number; y: number }[] = [
 
 /**
  * Desk slots inside a pod rect. A slot with an occupant shows that person seated
- * (see `SeatedOccupant`); an empty slot shows bare desk furniture. The slot layer
- * is pointer-events-none so it never blocks the current user dragging across it.
+ * (see `SeatedOccupant`); an empty slot shows bare desk furniture; the slot the current
+ * user has taken is left empty, because their own draggable sprite is drawn there. The
+ * slot layer is pointer-events-none so it never blocks the current user dragging across
+ * it.
  */
 function PodSlots({
-  deskCount,
+  offsets,
   reducedMotion,
   seated,
+  selfSlot,
   tone,
 }: {
-  deskCount: number;
+  offsets: number[];
   reducedMotion: boolean;
   seated: PresenceUser[];
+  selfSlot: null | number;
   tone: string;
 }) {
-  const spots = deskCount >= 2 ? [26, 68] : [50];
+  // Occupants fill the slots in order, stepping over the one the current user sits in.
+  const slotOwners: (PresenceUser | undefined)[] = offsets.map(() => undefined);
+  let cursor = 0;
+  for (const occupant of seated) {
+    while (cursor < offsets.length && cursor === selfSlot) cursor += 1;
+    if (cursor >= offsets.length) break;
+    slotOwners[cursor] = occupant;
+    cursor += 1;
+  }
+
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0">
-      {spots.map((left, index) => {
-        const occupant = seated[index];
+      {offsets.map((left, index) => {
+        if (index === selfSlot) return null;
+        const occupant = slotOwners[index];
         return (
           <div
             className="office-cast-shadow absolute -translate-x-1/2"
@@ -135,13 +160,7 @@ function PodSlots({
   );
 }
 
-function OfficeMinimap({
-  me,
-  zones,
-}: {
-  me: PresenceUser | undefined;
-  zones: PresenceZoneView[];
-}) {
+function OfficeMinimap({ me, zones }: { me: PresenceUser | undefined; zones: PresenceZoneView[] }) {
   return (
     <div
       aria-hidden
@@ -205,6 +224,7 @@ export function PresencePlayground({
 }: PresencePlaygroundProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const me = users.find((user) => user.id === currentUserId);
+  const myDeskZone = me ? zoneAt(zones, me) : undefined;
 
   const nearbyIds = React.useMemo(() => {
     if (!me) return new Set<string>();
@@ -219,50 +239,53 @@ export function PresencePlayground({
   const seatedByZone = React.useMemo(() => {
     const map = new Map<string, PresenceUser[]>();
     for (const zone of zones) {
-      const zoneOccupants = users.filter(
-        (user) => user.zoneId === zone.id && !user.isCurrentUser
-      );
-      map.set(zone.id, zoneOccupants.slice(0, deskCountFor(zone.width)));
+      const zoneOccupants = users.filter((user) => user.zoneId === zone.id && !user.isCurrentUser);
+      map.set(zone.id, zoneOccupants);
     }
     return map;
   }, [users, zones]);
 
   const seatedIds = React.useMemo(() => {
     const ids = new Set<string>();
-    for (const list of seatedByZone.values()) {
-      for (const user of list) ids.add(user.id);
+    for (const [zoneId, list] of seatedByZone) {
+      const zone = zones.find((candidate) => candidate.id === zoneId);
+      if (!zone) continue;
+      const capacity = deskSlotOffsets(zone.width).length - (myDeskZone?.id === zoneId ? 1 : 0);
+      for (const user of list.slice(0, Math.max(0, capacity))) ids.add(user.id);
     }
     return ids;
-  }, [seatedByZone]);
+  }, [myDeskZone, seatedByZone, zones]);
 
   const handleMove = React.useCallback(
     (next: { x: number; y: number }) => {
       onMoveCurrentUser(next);
-      if (onZoneChange) {
-        const zone = zones.find(
-          (candidate) =>
-            next.x >= candidate.center_x - candidate.width / 2 &&
-            next.x <= candidate.center_x + candidate.width / 2 &&
-            next.y >= candidate.center_y - candidate.height / 2 &&
-            next.y <= candidate.center_y + candidate.height / 2
-        );
-        onZoneChange(zone?.id ?? null);
-      }
+      onZoneChange?.(zoneAt(zones, next)?.id ?? null);
     },
     [onMoveCurrentUser, onZoneChange, zones]
   );
 
+  /**
+   * A pointer drop inside a pod lands on the desk slot nearest the drop rather than on
+   * the raw pointer position. Without this a drop near a pod's edge parks the
+   * fixed-size sprite half outside the rect, and two people in one pod overlap.
+   */
+  const resolveDrop = React.useCallback(
+    (position: { x: number; y: number }) => {
+      const zone = zoneAt(zones, position);
+      return zone ? seatAnchor(zone, nearestSlotIndex(zone, position)) : position;
+    },
+    [zones]
+  );
+
+  const handleLeaveDesk = React.useCallback(() => {
+    if (!me) return;
+    handleMove(standingSpotNear(zones, me));
+  }, [handleMove, me, zones]);
+
   const handleEnterZone = React.useCallback(() => {
     if (!me) return;
-    const currentZone = zones.find(
-      (zone) =>
-        me.x >= zone.center_x - zone.width / 2 &&
-        me.x <= zone.center_x + zone.width / 2 &&
-        me.y >= zone.center_y - zone.height / 2 &&
-        me.y <= zone.center_y + zone.height / 2
-    );
-    if (currentZone) {
-      handleMove({ x: 50, y: 50 });
+    if (zoneAt(zones, me)) {
+      handleLeaveDesk();
       return;
     }
     const nearest = zones.reduce<null | PresenceZoneView>((candidate, zone) => {
@@ -271,8 +294,20 @@ export function PresencePlayground({
       const zoneDistance = (zone.center_x - me.x) ** 2 + (zone.center_y - me.y) ** 2;
       return zoneDistance < candidateDistance ? zone : candidate;
     }, null);
-    if (nearest) handleMove({ x: nearest.center_x, y: nearest.center_y });
-  }, [handleMove, me, zones]);
+    if (nearest) {
+      const occupants = seatedByZone.get(nearest.id) ?? [];
+      handleMove(seatAnchor(nearest, freeSlotIndex(nearest, occupants.length)));
+    }
+  }, [handleLeaveDesk, handleMove, me, seatedByZone, zones]);
+
+  // Render order is sorted by id and never filtered, so an SSE snapshot that hands the
+  // roster back in a different order cannot make React reorder these nodes. Moving the
+  // current user's button mid-drag used to cancel the gesture outright (see the note in
+  // `PresencePlayer`), which is why seated members struggled to drag themselves out.
+  const orderedUsers = React.useMemo(
+    () => [...users].sort((left, right) => left.id.localeCompare(right.id)),
+    [users]
+  );
 
   const minHeight = Math.round(460 * Math.max(0.6, Math.min(1.4, heightScale)));
 
@@ -299,8 +334,8 @@ export function PresencePlayground({
         const session = sessions.find((candidate) => candidate.zoneId === zone.id);
         const occupants = users.filter((user) => user.zoneId === zone.id).length;
         const tint = podTint(zone.id);
-        const deskCount = deskCountFor(zone.width);
         const seated = seatedByZone.get(zone.id) ?? [];
+        const selfSlot = me && myDeskZone?.id === zone.id ? nearestSlotIndex(zone, me) : null;
         return (
           <div
             aria-label={`${zone.label} pod, ${occupants} ${occupants === 1 ? 'person' : 'people'}`}
@@ -327,43 +362,56 @@ export function PresencePlayground({
               style={{ background: tint, borderColor: border, fontFamily: headingFont }}
             >
               <span className="tracking-wide">{zone.label}</span>
-              <span
-                className="px-1 text-[8px]"
-                style={{ background: 'rgba(21, 20, 66, 0.35)' }}
-              >
+              <span className="px-1 text-[8px]" style={{ background: 'rgba(21, 20, 66, 0.35)' }}>
                 {session ? `${session.participantIds.length} together` : `${occupants} here`}
               </span>
             </div>
             <PodSlots
-              deskCount={deskCount}
+              offsets={deskSlotOffsets(zone.width)}
               reducedMotion={reducedMotion}
               seated={seated}
+              selfSlot={selfSlot}
               tone={tint}
             />
           </div>
         );
       })}
 
-      {users
-        .filter((user) => !seatedIds.has(user.id))
-        .map((user) => (
-        <PresencePlayer
-          containerRef={containerRef}
-          isNearby={nearbyIds.has(user.id)}
-          key={user.id}
-          onEnterZone={user.isCurrentUser ? handleEnterZone : undefined}
-          onMove={user.isCurrentUser ? handleMove : undefined}
-          reducedMotion={reducedMotion}
-          user={user}
-        />
-      ))}
+      {orderedUsers.map((user) =>
+        seatedIds.has(user.id) ? null : (
+          <PresencePlayer
+            atDesk={user.isCurrentUser ? Boolean(myDeskZone) : undefined}
+            containerRef={containerRef}
+            isDeskPosition={(position) => zones.some((zone) => zoneContains(zone, position))}
+            isNearby={nearbyIds.has(user.id)}
+            key={user.id}
+            onEnterZone={user.isCurrentUser ? handleEnterZone : undefined}
+            onMove={user.isCurrentUser ? handleMove : undefined}
+            reducedMotion={reducedMotion}
+            resolveDrop={user.isCurrentUser ? resolveDrop : undefined}
+            user={user}
+          />
+        )
+      )}
+
+      {myDeskZone ? (
+        <button
+          className="presence-pixel-shadow-sm presence-pixel-press absolute top-3 right-3 z-40 flex items-center gap-1.5 border-2 px-2.5 py-1.5 text-[10px] font-bold"
+          onClick={handleLeaveDesk}
+          style={{ background: panel, borderColor: border, fontFamily: headingFont }}
+          type="button"
+        >
+          <LogOutIcon aria-hidden className="size-3.5" />
+          Leave desk
+        </button>
+      ) : null}
 
       <div
         className="presence-pixel-shadow-sm absolute bottom-3 left-3 hidden max-w-[15rem] border-2 px-2.5 py-1.5 text-[9px] font-bold sm:block"
         style={{ background: panel, borderColor: border, color: muted, fontFamily: headingFont }}
       >
-        Drag your sprite onto a pod · or focus it and use the arrow keys · Enter snaps
-        to the nearest pod
+        Drag your sprite onto a pod · or focus it and use the arrow keys · Enter sits down at the
+        nearest pod and stands you back up
       </div>
 
       <OfficeMinimap me={me} zones={zones} />

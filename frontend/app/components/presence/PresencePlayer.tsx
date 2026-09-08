@@ -2,13 +2,10 @@
 
 import * as React from 'react';
 
-import { motion } from 'motion/react';
-
 import { appearanceFor } from '@/components/presence/appearance';
+import { DeskWorkstation } from '@/components/presence/DeskWorkstation';
 import { PresenceSprite } from '@/components/presence/PresenceSprite';
 import type { PresenceUser } from '@/types/presence';
-
-import type { PanInfo } from 'motion/react';
 
 /** How far one arrow-key press moves the player, in playground-percentage units — the
  * keyboard-equivalent of a small drag, since Framer Motion's `drag` prop (used for
@@ -30,11 +27,17 @@ function finiteOr(value: number, fallback: number): number {
 }
 
 interface PresencePlayerProps {
+  atDesk?: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  isDeskPosition?: (position: { x: number; y: number }) => boolean;
   isNearby?: boolean;
   onEnterZone?: () => void;
   onMove?: (next: { x: number; y: number }) => void;
   reducedMotion: boolean;
+  /** Where a pointer drop actually lands — used to snap a drop inside a pod onto a desk
+   * slot. Applied to the drag preview as well as to `onMove`, so the sprite does not
+   * flash at the raw pointer position before the server echoes the seat back. */
+  resolveDrop?: (position: { x: number; y: number }) => { x: number; y: number };
   user: PresenceUser;
 }
 
@@ -45,8 +48,16 @@ interface PresencePlayerProps {
  * everyone else is what prevents silently moving your own marker while trying to drag
  * a teammate's.
  *
- * The player keeps a stable React key while its position changes. Framer Motion receives
- * the shared server position through props, preserving drag/animation state across updates.
+ * The gesture is tracked with `window` listeners rather than `setPointerCapture`.
+ * Capture is bound to the DOM node, and this node lives in a list that re-renders on
+ * every SSE roster snapshot: any snapshot that reorders the roster makes React move the
+ * button with `insertBefore`, which drops the capture. That fired `lostpointercapture`
+ * mid-drag, and the `pointerup` that followed no longer had a gesture to commit — the
+ * drop was silently discarded and the sprite snapped back to its server position, which
+ * looked exactly like "I cannot drag myself out of this pod". Window listeners survive
+ * the node move.
+ *
+ * Local coordinates preview movement until a new server position arrives.
  */
 export function PresencePlayer({
   containerRef,
@@ -54,31 +65,87 @@ export function PresencePlayer({
   onEnterZone,
   onMove,
   reducedMotion,
+  resolveDrop,
   user,
+  atDesk = Boolean(user.zoneId),
+  isDeskPosition,
 }: PresencePlayerProps) {
   const [isDragging, setIsDragging] = React.useState(false);
+  const [localPosition, setLocalPosition] = React.useState<{
+    serverX: number;
+    serverY: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const gesture = React.useRef<{
+    clientX: number;
+    clientY: number;
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** Last previewed point, so a gesture that ends without usable coordinates (a
+   * `pointercancel`, a release the browser reports outside the floor) still commits
+   * where the character was actually dragged to instead of throwing the drag away. */
+  const lastPreview = React.useRef<{ x: number; y: number } | null>(null);
   const appearance = appearanceFor(user.id);
-  const safeX = finiteOr(user.x, SAFE_CENTRE);
-  const safeY = finiteOr(user.y, SAFE_CENTRE);
+  const pendingPosition =
+    localPosition?.serverX === user.x && localPosition.serverY === user.y ? localPosition : null;
+  const safeX = pendingPosition?.x ?? finiteOr(user.x, SAFE_CENTRE);
+  const safeY = pendingPosition?.y ?? finiteOr(user.y, SAFE_CENTRE);
 
-  // Position from the drag *offset* (pixels moved since the gesture started), not
-  // `PanInfo.point`. `point` is documented as "relative to the device or page" — which
-  // one varies — so converting it against `getBoundingClientRect()` broke whenever the
-  // dashboard was scrolled: the result went negative and clamped every drop to 0,0.
-  // The offset is a pure delta and is unaffected by scroll or the page/viewport frame.
-  const reportDragOffset = React.useCallback(
-    (offset: { x: number; y: number }) => {
-      const container = containerRef.current;
-      if (!container || !onMove) return;
-      const rect = container.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      onMove({
-        x: clampPercent(safeX + (offset.x / rect.width) * 100),
-        y: clampPercent(safeY + (offset.y / rect.height) * 100),
-      });
+  // Use viewport deltas from pointer-down so scrolling does not mix page and
+  // viewport coordinates. Keep the same captured button throughout the gesture.
+  const pointerPosition = React.useCallback(
+    (event: { clientX: number; clientY: number; pointerId: number }) => {
+      const start = gesture.current;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!start || event.pointerId !== start.pointerId || !rect?.width || !rect.height) {
+        return null;
+      }
+      return {
+        x: clampPercent(start.x + ((event.clientX - start.clientX) / rect.width) * 100),
+        y: clampPercent(start.y + ((event.clientY - start.clientY) / rect.height) * 100),
+      };
     },
-    [containerRef, onMove, safeX, safeY]
+    [containerRef]
   );
+
+  React.useEffect(() => {
+    if (!isDragging) return;
+
+    const preview = (position: { x: number; y: number }) => {
+      lastPreview.current = position;
+      setLocalPosition({ ...position, serverX: user.x, serverY: user.y });
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const position = pointerPosition(event);
+      if (position) preview(position);
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      const start = gesture.current;
+      if (start && event.pointerId !== start.pointerId) return;
+      const dropped = pointerPosition(event) ?? lastPreview.current;
+      gesture.current = null;
+      lastPreview.current = null;
+      setIsDragging(false);
+      if (!dropped) return;
+      const resolved = resolveDrop ? resolveDrop(dropped) : dropped;
+      preview(resolved);
+      onMove?.(resolved);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerEnd);
+    window.addEventListener('pointercancel', handlePointerEnd);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerEnd);
+      window.removeEventListener('pointercancel', handlePointerEnd);
+    };
+  }, [isDragging, onMove, pointerPosition, resolveDrop, user.x, user.y]);
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent) => {
@@ -96,6 +163,9 @@ export function PresencePlayer({
       const delta = deltas[event.key];
       if (!delta || !onMove) return;
       event.preventDefault();
+      // Deliberately not routed through `resolveDrop`: snapping every step onto the desk
+      // slot would pin a seated keyboard user to their chair, since one 3% step never
+      // clears the pod.
       onMove({ x: clampPercent(safeX + delta[0]), y: clampPercent(safeY + delta[1]) });
     },
     [onEnterZone, onMove, safeX, safeY]
@@ -106,6 +176,10 @@ export function PresencePlayer({
     top: `${safeY}%`,
     transform: 'translate(-50%, -50%)',
   };
+
+  // Inside a pod the character drops into a desk and starts working. It stays wrapped
+  // in the same draggable button below, so dragging back out stands it up again.
+  const seatedInZone = isDeskPosition ? isDeskPosition({ x: safeX, y: safeY }) : atDesk;
 
   if (!user.isCurrentUser) {
     return (
@@ -127,42 +201,62 @@ export function PresencePlayer({
   }
 
   return (
-    <motion.button
-      aria-label={`You, ${user.status}. Drag, or focus and use arrow keys, to move.`}
+    <button
+      aria-label={`You, ${seatedInZone && !isDragging ? 'seated at desk' : 'standing'}, ${user.status}. Drag, or focus and use arrow keys, to move.`}
       className="presence-character-control absolute flex touch-none flex-col items-center gap-1 rounded-none border-none bg-transparent p-1 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-      drag
-      dragConstraints={containerRef}
-      dragElastic={0.06}
-      dragMomentum={false}
-      // Snap the Motion transform back to 0 on release; the final resting place comes
-      // entirely from the `left`/`top` percentages the server round-trip updates, so the
-      // drag translation must not linger and stack on top of the new position.
-      dragSnapToOrigin
-      onDragEnd={(_event, info: PanInfo) => {
-        setIsDragging(false);
-        reportDragOffset(info.offset);
-      }}
-      onDragStart={() => setIsDragging(true)}
+      data-pose={seatedInZone && !isDragging ? 'seated' : 'standing'}
       onKeyDown={handleKeyDown}
-      style={{ ...wrapperStyle, cursor: isDragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || gesture.current) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        gesture.current = {
+          pointerId: event.pointerId,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          x: safeX,
+          y: safeY,
+        };
+        lastPreview.current = { x: safeX, y: safeY };
+        setIsDragging(true);
+      }}
+      style={{
+        ...wrapperStyle,
+        width: 112,
+        height: 144,
+        justifyContent: 'flex-end',
+        cursor: isDragging ? 'grabbing' : 'grab',
+        touchAction: 'none',
+        zIndex: isDragging ? 30 : 10,
+      }}
       type="button"
-      whileDrag={{ scale: 1.03 }}
-      whileTap={{ scale: 1.03 }}
     >
-      <PresenceSprite
-        accentColor={appearance.accentColor}
-        accessory={appearance.accessory}
-        color={appearance.shirtColor}
-        hairColor={appearance.hairColor}
-        hairStyle={appearance.hairStyle}
-        isDragging={isDragging}
-        outfit={appearance.outfit}
-        reducedMotion={reducedMotion}
-        skinColor={appearance.skinColor}
-        status={user.status}
-      />
+      {seatedInZone && !isDragging ? (
+        <DeskWorkstation
+          appearance={appearance}
+          emphasis
+          entering
+          reducedMotion={reducedMotion}
+          size={104}
+          status={user.status}
+          working
+        />
+      ) : (
+        <PresenceSprite
+          accentColor={appearance.accentColor}
+          accessory={appearance.accessory}
+          color={appearance.shirtColor}
+          hairColor={appearance.hairColor}
+          hairStyle={appearance.hairStyle}
+          isDragging={isDragging}
+          outfit={appearance.outfit}
+          reducedMotion
+          skinColor={appearance.skinColor}
+          status={user.status}
+        />
+      )}
       <NameTag isCurrentUser nearby={isNearby} username={user.username} />
-    </motion.button>
+    </button>
   );
 }
 
