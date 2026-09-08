@@ -83,7 +83,7 @@ vi.mock('@/lib/wakaclock/user-store', () => ({
     selector({ userId: 'user-1' }),
 }));
 
-import { KeystrokesPanel } from '@/app/dashboard/(auth)/wakaclock/keystrokes/page';
+import { KeystrokesPanel } from '@/app/dashboard/(auth)/wakaclock/keystrokes/components/keystrokes-panel';
 
 describe('Input Activity content', () => {
   it('renders a Copy/Paste-only range instead of the empty state', () => {
