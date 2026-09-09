@@ -30,7 +30,7 @@ impl Queue {
             std::fs::create_dir_all(parent).map_err(AppError::Io)?;
         }
 
-        let conn = Connection::open(&path).map_err(AppError::Queue)?;
+        let conn = Connection::open(path).map_err(AppError::Queue)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(AppError::Queue)?;
 

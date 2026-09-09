@@ -28,8 +28,10 @@ pub async fn ingest(
     headers: HeaderMap,
     Json(records): Json<Vec<AiUsageRecord>>,
 ) -> Result<Json<AiUsageIngestReport>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "write_logged_time").await {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     let record_count = records.len();

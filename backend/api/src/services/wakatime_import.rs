@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -9,6 +8,7 @@ use crate::model::wakatime_import::{WakaTimeDump, WakaTimeHeartbeat};
 use crate::repository::heartbeat::HeartbeatRepository;
 
 pub struct WakaTimeImportResult {
+    pub import_id: String,
     pub imported_heartbeats: usize,
     pub skipped_heartbeats: usize,
 }
@@ -22,15 +22,17 @@ impl WakaTimeImportService {
         Self { heartbeat_repo }
     }
 
-    pub async fn run(&self, user_id: Uuid, file_path: &str) -> Result<WakaTimeImportResult> {
-        validate_file_path(file_path)?;
-
-        let raw = tokio::fs::read_to_string(file_path)
-            .await
-            .with_context(|| format!("Failed to read WakaTime dump: {file_path}"))?;
+    pub async fn run(&self, user_id: Uuid, raw: &str) -> Result<WakaTimeImportResult> {
+        if raw.len() > 1024 * 1024 {
+            anyhow::bail!(
+                "dump exceeds the 1 MiB upload limit; split the export into smaller files"
+            );
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(raw).context("invalid WakaTime dump JSON")?;
+        let import_id = crate::middleware::auth::hash_key(&serde_json::to_string(&json)?);
         let dump: WakaTimeDump =
-            serde_json::from_str(&raw).context("Failed to parse WakaTime dump JSON")?;
-
+            serde_json::from_value(json).context("invalid WakaTime dump format")?;
         validate_dump(&dump)?;
 
         let editor = infer_editor(&dump.user.last_plugin_name, &dump.user.last_plugin);
@@ -43,6 +45,7 @@ impl WakaTimeImportService {
 
         let mut rows = Vec::new();
         let mut skipped = 0usize;
+        let mut record_index = 0usize;
 
         for day in dump.days {
             let Some(heartbeats) = day.heartbeats else {
@@ -51,39 +54,46 @@ impl WakaTimeImportService {
 
             for heartbeat in heartbeats {
                 match map_heartbeat(user_id, heartbeat, &editor, &operating_system, &user_agent) {
-                    Some(row) => rows.push(row),
+                    Some(mut row) => {
+                        row.heartbeat_id = Some(format!("import:{import_id}:{record_index}"));
+                        rows.push(row);
+                    }
                     None => skipped += 1,
                 }
+                record_index += 1;
             }
         }
 
+        let ids: Vec<String> = rows
+            .iter()
+            .filter_map(|row| row.heartbeat_id.clone())
+            .collect();
+        let existing = self
+            .heartbeat_repo
+            .existing_heartbeat_revisions(user_id, &ids)
+            .await?;
+        rows.retain(|row| !existing.contains_key(row.heartbeat_id.as_deref().unwrap_or_default()));
         let imported = rows.len();
         self.heartbeat_repo.insert_batch(rows).await?;
 
         Ok(WakaTimeImportResult {
+            import_id,
             imported_heartbeats: imported,
             skipped_heartbeats: skipped,
         })
     }
 }
 
-fn validate_file_path(file_path: &str) -> Result<()> {
-    if file_path.trim().is_empty() {
-        anyhow::bail!("file_path cannot be empty");
-    }
-
-    let path = Path::new(file_path);
-    if !path.exists() {
-        anyhow::bail!("WakaTime dump file not found: {file_path}");
-    }
-    if !path.is_file() {
-        anyhow::bail!("file_path must point to a file");
-    }
-
-    Ok(())
-}
-
 fn validate_dump(dump: &WakaTimeDump) -> Result<()> {
+    let count: usize = dump
+        .days
+        .iter()
+        .filter_map(|day| day.heartbeats.as_ref())
+        .map(Vec::len)
+        .sum();
+    if count > 10_000 {
+        anyhow::bail!("at most 10000 heartbeats per import");
+    }
     if dump.days.is_empty() {
         anyhow::bail!("WakaTime dump does not contain any days");
     }
@@ -111,7 +121,12 @@ fn map_heartbeat(
     operating_system: &str,
     user_agent: &str,
 ) -> Option<HeartbeatRow> {
-    if heartbeat.entity.trim().is_empty() || heartbeat.time <= 0.0 {
+    if heartbeat.entity.trim().is_empty()
+        || heartbeat.entity.len() > 4096
+        || !heartbeat.time.is_finite()
+        || heartbeat.time <= 0.0
+        || heartbeat.time > u32::MAX as f64
+    {
         return None;
     }
 
@@ -120,12 +135,7 @@ fn map_heartbeat(
     let created_at = parse_created_at(heartbeat.created_at.as_deref());
     let category = normalize_category(heartbeat.category.as_deref());
     let is_ai_generated = is_ai_generated(&heartbeat);
-    let ai_event_id = heartbeat
-        .ai_session
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let ai_event_id = None;
     let ai_lines_added = to_positive_u32(heartbeat.ai_line_changes);
     let ai_lines_deleted = to_negative_u32(heartbeat.ai_line_changes);
     let human_lines_added = to_positive_u32(heartbeat.human_line_changes);

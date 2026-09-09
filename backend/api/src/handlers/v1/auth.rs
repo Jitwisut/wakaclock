@@ -1,6 +1,6 @@
 use axum::{
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use std::net::SocketAddr;
@@ -14,14 +14,21 @@ use crate::model::auth::{AuthResponse, LoginRequest, RegisterRequest};
 pub async fn register(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
-    auth::check_rate_limit(&state, addr.ip())?;
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
 
-    if payload.username.trim().is_empty() || payload.password.len() < 8 {
+    if payload.username.trim().is_empty()
+        || payload.username.len() > 160
+        || !(8..=1024).contains(&payload.password.len())
+    {
         return Err(app_error(
             StatusCode::BAD_REQUEST,
-            "username is required and password must be at least 8 characters",
+            "username must contain 1-160 bytes and password 8-1024 bytes",
         ));
     }
 
@@ -42,10 +49,20 @@ pub async fn register(
 pub async fn login(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
-    auth::check_rate_limit(&state, addr.ip())?;
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
 
+    if payload.username.len() > 160 || payload.password.len() > 1024 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "credentials exceed size limits",
+        ));
+    }
     let data = state
         .user_service
         .login(

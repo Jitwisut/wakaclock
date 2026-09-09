@@ -118,18 +118,16 @@ describe('ApiKeyPanel when the response has no key', () => {
 });
 
 describe('ApiKeyPanel on load', () => {
-  it('shows a previously generated key without needing to generate a new one', async () => {
-    // The current key is retrievable by the authenticated dashboard session, so a reload
-    // must not force a rotation that would break existing clients.
+  it('does not expose a key returned by a legacy read endpoint', async () => {
+    // A stale server/cache must not restore a plaintext secret into the panel.
     getCurrentApiKey.mockResolvedValue({
       data: { api_key: 'wcl_already_stored', user_id: 'user-1' },
     });
     renderPanel();
 
-    await waitFor(() =>
-      expect(screen.getByDisplayValue('wcl_already_stored')).toBeInTheDocument()
-    );
+    await waitFor(() => expect(getCurrentApiKey).toHaveBeenCalled());
+    expect(screen.queryByDisplayValue('wcl_already_stored')).not.toBeInTheDocument();
     expect(generateApiKey).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /regenerate key/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generate key/i })).toBeInTheDocument();
   });
 });

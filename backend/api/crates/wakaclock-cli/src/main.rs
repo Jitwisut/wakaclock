@@ -2162,7 +2162,7 @@ fn print_ai_capabilities(json: bool) -> Result<(), Box<dyn Error>> {
 }
 
 fn execution_surface_from_env() -> Result<ExecutionSurface, Box<dyn Error>> {
-    if let Some(value) = std::env::var("WAKACLOCK_EXECUTION_SURFACE").ok() {
+    if let Ok(value) = std::env::var("WAKACLOCK_EXECUTION_SURFACE") {
         match value.trim().to_ascii_lowercase().as_str() {
             "local" => return Ok(ExecutionSurface::Local),
             "ssh" | "ssh_remote" => return Ok(ExecutionSurface::SshRemote),

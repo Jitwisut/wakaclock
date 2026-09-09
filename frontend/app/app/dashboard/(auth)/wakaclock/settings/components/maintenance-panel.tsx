@@ -122,10 +122,14 @@ function ReprocessCard() {
 
 function ImportCard() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
-  const [filePath, setFilePath] = React.useState('');
+  const [file, setFile] = React.useState<File | null>(null);
 
   const mutation = useMutation({
-    mutationFn: () => importWakaTime(userId, filePath),
+    mutationFn: async () => {
+      if (!file) throw new Error('Select a JSON file');
+      if (file.size > 1024 * 1024) throw new Error('Select a JSON file smaller than 1 MiB');
+      return importWakaTime(userId, await file.text());
+    },
     onSuccess: (res) => {
       toast.success(
         `Imported ${res.data.imported_heartbeats} (skipped ${res.data.skipped_heartbeats})`
@@ -146,25 +150,23 @@ function ImportCard() {
       <CardContent className="space-y-4">
         <Alert>
           <TriangleAlertIcon />
-          <AlertTitle>Server-side path, not a file upload</AlertTitle>
+          <AlertTitle>Upload your WakaTime export</AlertTitle>
           <AlertDescription>
-            The backend reads this path from its own filesystem — it must already exist on the
-            machine running the wakaclock API, not on the machine running this browser.
+            Select a JSON export containing raw heartbeats, up to 1 MiB and 10,000 records.
+            Uploading the same file again will not duplicate its canonical activity.
           </AlertDescription>
         </Alert>
         <div className="space-y-1.5">
-          <Label>File path</Label>
+          <Label htmlFor="wakatime-import-file">JSON file</Label>
           <Input
+            accept=".json,application/json"
             className="font-mono text-sm"
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="/data/wakatime-export.json"
-            value={filePath}
+            id="wakatime-import-file"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            type="file"
           />
         </div>
-        <Button
-          disabled={!userId || !filePath || mutation.isPending}
-          onClick={() => mutation.mutate()}
-        >
+        <Button disabled={!userId || !file || mutation.isPending} onClick={() => mutation.mutate()}>
           {mutation.isPending ? 'Importing…' : 'Import'}
         </Button>
       </CardContent>

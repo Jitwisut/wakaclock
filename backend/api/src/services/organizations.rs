@@ -66,8 +66,9 @@ impl OrganizationsService {
         let slug = normalize_slug(request.slug.as_deref().unwrap_or(name))?;
         let postgres = self.required()?;
         let id = Uuid::now_v7();
-        let row = postgres
-            .client()
+        let mut client = postgres.transaction_client().await?;
+        let tx = client.transaction().await?;
+        let row = tx
             .query_one(
                 "INSERT INTO organizations (id, slug, name, personal_owner_id)
                  VALUES ($1, $2, $3, NULL)
@@ -76,25 +77,18 @@ impl OrganizationsService {
             )
             .await
             .context("failed to create organization")?;
-        postgres
-            .client()
-            .execute(
-                "INSERT INTO organization_members
+        tx.execute(
+            "INSERT INTO organization_members
                     (organization_id, user_id, role, seat_type)
                  VALUES ($1, $2, 'owner', 'developer')",
-                &[&id, &owner_user_id],
-            )
-            .await
-            .context("failed to create organization owner membership")?;
-        self.audit(
-            id,
-            owner_user_id,
-            "organization.created",
-            "organization",
-            Some(id),
-            serde_json::json!({ "slug": slug }),
+            &[&id, &owner_user_id],
         )
-        .await?;
+        .await
+        .context("failed to create organization owner membership")?;
+        tx.execute("INSERT INTO audit_logs (id, organization_id, actor_user_id, action, resource_type, resource_id, metadata)
+            VALUES ($1, $2, $3, 'organization.created', 'organization', $2, $4)",
+            &[&Uuid::now_v7(), &id, &owner_user_id, &serde_json::json!({"slug": slug})]).await?;
+        tx.commit().await?;
         organization_from_row(row)
     }
 

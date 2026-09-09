@@ -61,7 +61,9 @@ pub async fn create(
     Path(org_id): Path<Uuid>,
     Json(payload): Json<CreateTeamPayload>,
 ) -> Result<Json<TeamResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
 
     let team = state
         .team_service
@@ -78,7 +80,9 @@ pub async fn list(
     headers: HeaderMap,
     Path(org_id): Path<Uuid>,
 ) -> Result<Json<TeamsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
 
     let teams = state
         .team_service
@@ -108,7 +112,9 @@ pub async fn add_member(
     Path((_org_id, team_id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<AddMemberPayload>,
 ) -> Result<Json<AddMemberResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let actor_user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let actor_user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
 
     state
         .team_service

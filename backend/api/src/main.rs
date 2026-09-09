@@ -64,6 +64,11 @@ async fn main() -> Result<()> {
     // Initialise logging from AppState
     info!("Wakaclock Server Starting...");
 
+    let migration_guard = match &app_state.postgres {
+        Some(postgres) => Some(postgres.migration_guard().await?),
+        None => None,
+    };
+
     // 2. Perform Database Migrations
     info!("Running ClickHouse migrations...");
     if let Err(e) = app_state.heartbeat_repo.migrate().await {
@@ -129,17 +134,8 @@ async fn main() -> Result<()> {
     }
     info!("Migrations completed successfully.");
 
-    // Load any existing API key hashes into memory (wakaclock.users now exists).
-    if let Err(e) = app_state.auth_cache.refresh(&app_state.clickhouse).await {
-        error!("Failed to load auth key cache: {}", e);
-        return Err(e);
-    }
-    if let Some(postgres) = &app_state.postgres {
-        if let Err(e) = app_state.auth_cache.refresh_from_postgres(postgres).await {
-            error!("Failed to load OAuth token cache: {}", e);
-            return Err(e);
-        }
-    }
+    app_state.user_service.migrate_legacy_credentials().await?;
+    drop(migration_guard);
 
     // Reconcile active Redis projections into ClickHouse even when no browser is currently
     // connected. This closes sessions after lease expiry and provides the recovery timeout
@@ -271,10 +267,28 @@ async fn main() -> Result<()> {
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .context("Server error")?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 #[cfg(test)]

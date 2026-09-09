@@ -21,7 +21,7 @@ pub async fn get(
     headers: HeaderMap,
     Query(params): Query<KeystrokeStatsQuery>,
 ) -> Result<Json<KeystrokeStatsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_stats").await?;
 
     let response = state
         .keystroke_stats_service

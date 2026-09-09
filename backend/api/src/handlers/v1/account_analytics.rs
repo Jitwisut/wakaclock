@@ -21,7 +21,7 @@ pub async fn rebuild(
     headers: HeaderMap,
     Json(payload): Json<AccountProjectionRebuildRequest>,
 ) -> Result<Json<AccountProjectionRebuildResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_stats").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let data = state
         .account_analytics_service

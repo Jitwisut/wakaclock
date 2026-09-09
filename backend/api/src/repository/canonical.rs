@@ -26,7 +26,8 @@ pub fn canonical_winner_relation(predicate: &str, alias: &str) -> String {
                        ORDER BY h.revision DESC, h.created_at DESC, h.time DESC \
                    ) AS canonical_rank \
             FROM wakaclock.heartbeats AS h \
-            WHERE {predicate} \
+            WHERE ({predicate}) AND (h.user_id, ifNull(h.heartbeat_id, '')) NOT IN \
+                (SELECT user_id, heartbeat_id FROM wakaclock.heartbeat_deletions) \
         ) AS ranked WHERE canonical_rank = 1) AS {alias}"
     )
 }

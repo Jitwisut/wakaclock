@@ -46,7 +46,7 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<DataDumpListResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = require_export_scope(&state, &headers)?;
+    let user_id = require_export_scope(&state, &headers).await?;
     let jobs = state
         .export_service
         .list(user_id)
@@ -60,7 +60,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(input): Json<DataDumpRequest>,
 ) -> Result<(StatusCode, Json<DataDumpResponse>), (StatusCode, Json<serde_json::Value>)> {
-    let user_id = require_export_scope(&state, &headers)?;
+    let user_id = require_export_scope(&state, &headers).await?;
     let job = state
         .export_service
         .create(
@@ -83,12 +83,14 @@ pub async fn create(
     Ok((StatusCode::ACCEPTED, Json(DataDumpResponse { data: job })))
 }
 
-fn require_export_scope(
+async fn require_export_scope(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<uuid::Uuid, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(state, headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "export_data") {
+    let user_id = auth::resolve_user_id(state, headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(state, headers, "export_data").await {
         return Err(auth::forbidden_scope("export_data"));
     }
     Ok(user_id)

@@ -39,3 +39,9 @@ pub mod user;
 pub mod vcs;
 pub mod vcs_attribution;
 pub mod wakatime_import;
+
+/// No production job processors are registered in this build. Never acknowledge a
+/// queued operation until a durable worker and its dependencies are available.
+pub fn require_background_processor() -> anyhow::Result<()> {
+    anyhow::bail!("background processing is unavailable in this build")
+}

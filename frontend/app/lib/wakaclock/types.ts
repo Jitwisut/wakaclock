@@ -48,7 +48,7 @@ export interface V2Capabilities {
     vscode: string;
     wakatime_protocol: string;
   };
-  features: Array<{ api: string; key: string; status: string }>;
+  features: Array<{ api: string; available?: boolean; key: string; status: string }>;
   postgres_enabled: boolean;
   presence_v2_available: boolean;
   privacy: {
@@ -1127,15 +1127,14 @@ export interface ReprocessResponse {
 }
 
 // ---------------------------------------------------------------------------
-// POST /import/wakatime — file_path is a SERVER-SIDE filesystem path, not an upload
+// POST /import/wakatime — uploaded JSON contents
 // ---------------------------------------------------------------------------
 export interface WakaTimeImportRequest {
-  file_path: string;
-  user_id: string;
+  dump_json: string;
 }
 
 export interface WakaTimeImportData {
-  file_path: string;
+  import_id: string;
   imported_heartbeats: number;
   skipped_heartbeats: number;
   user_id: string;

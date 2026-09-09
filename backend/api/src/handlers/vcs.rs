@@ -36,7 +36,7 @@ pub async fn connect(
     Path(provider): Path<String>,
     Json(payload): Json<ConnectPayload>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "manage_integrations")?;
+    let actor = require_scope(&state, &headers, "manage_integrations").await?;
     let data = state
         .vcs_service
         .connect(
@@ -59,7 +59,7 @@ pub async fn repositories(
     headers: HeaderMap,
     Query(query): Query<OrganizationQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .vcs_service
         .repositories(actor, query.organization_id)
@@ -74,7 +74,7 @@ pub async fn project_mapping(
     Path(repository_id): Path<Uuid>,
     Json(input): Json<ProjectMappingRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "manage_integrations")?;
+    let actor = require_scope(&state, &headers, "manage_integrations").await?;
     let data = state
         .vcs_service
         .map_project(actor, repository_id, input)
@@ -88,7 +88,7 @@ pub async fn commits(
     headers: HeaderMap,
     Query(query): Query<OrganizationQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .vcs_service
         .commits(
@@ -112,7 +112,7 @@ pub async fn commit_analytics(
     headers: HeaderMap,
     Query(query): Query<OrganizationQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .vcs_service
         .commit_analytics(
@@ -131,7 +131,7 @@ pub async fn pull_requests(
     headers: HeaderMap,
     Query(query): Query<OrganizationQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .vcs_service
         .pull_requests(
@@ -151,7 +151,7 @@ pub async fn pull_request_analytics(
     Path(pull_request_id): Path<Uuid>,
     Query(query): Query<OrganizationQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_scope(&state, &headers, "read_org_dashboards")?;
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .vcs_service
         .pull_request_analytics(actor, query.organization_id, pull_request_id)
@@ -166,13 +166,15 @@ pub async fn pull_request_analytics(
     Ok(Json(envelope(data)))
 }
 
-fn require_scope(
+async fn require_scope(
     state: &AppState,
     headers: &HeaderMap,
     scope: &str,
 ) -> Result<Uuid, (StatusCode, Json<Value>)> {
-    let actor = auth::resolve_user_id(state, headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, scope) {
+    let actor = auth::resolve_user_id(state, headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(state, headers, scope).await {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "insufficient_scope", "scope": scope })),

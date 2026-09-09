@@ -13,7 +13,7 @@ pub async fn get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<AllTimeResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_stats").await?;
 
     let response = state
         .all_time_service

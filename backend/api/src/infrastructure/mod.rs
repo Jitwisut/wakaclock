@@ -1,5 +1,4 @@
 pub mod app;
-pub mod auth_cache;
 pub mod contracts;
 pub mod database;
 pub mod logger;

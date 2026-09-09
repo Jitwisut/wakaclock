@@ -26,11 +26,12 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 export function ApiKeyPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
-  const [plaintextKey, setPlaintextKey] = React.useState<null | string>(null);
+  const [plaintextKey, setPlaintextKey] = React.useState<{ userId: string; value: string } | null>(
+    null
+  );
   const [copied, setCopied] = React.useState(false);
 
-  // The session-only API returns the current key so it remains available after a reload
-  // or when the user returns to Settings later.
+  // Reads never return a plaintext credential.
   const currentKeyQuery = useQuery({
     queryKey: ['wakaclock', 'api-key', userId],
     queryFn: getCurrentApiKey,
@@ -38,7 +39,7 @@ export function ApiKeyPanel() {
   });
 
   // Prefer the freshly generated value until the follow-up query catches up.
-  const shownKey = plaintextKey ?? currentKeyQuery.data?.data.api_key ?? null;
+  const shownKey = plaintextKey?.userId === userId ? plaintextKey.value : null;
 
   const queryClient = useQueryClient();
 
@@ -55,10 +56,10 @@ export function ApiKeyPanel() {
         );
         return;
       }
-      setPlaintextKey(key);
+      setPlaintextKey({ userId: res.data.user_id, value: key });
       setCopied(false);
       queryClient.setQueryData(['wakaclock', 'api-key', userId], {
-        data: { api_key: key, user_id: userId },
+        data: { api_key: null, user_id: userId },
       });
       void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('New API key generated');
@@ -94,9 +95,8 @@ export function ApiKeyPanel() {
           API key
         </CardTitle>
         <CardDescription>
-          Lets a CLI, editor extension or agent hook authenticate as you. Always tied to the
-          account this session is logged into — proven by your login, not a query param anyone
-          could set.
+          Lets a CLI, editor extension or agent hook authenticate as you. Always tied to the account
+          this session is logged into — proven by your login, not a query param anyone could set.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -106,8 +106,8 @@ export function ApiKeyPanel() {
               <TriangleAlertIcon />
               <AlertTitle>Treat this like a password</AlertTitle>
               <AlertDescription>
-                Anyone with this key can send and read coding activity as you. It stays visible in
-                this panel so you can copy it whenever you need to configure another client.
+                Anyone with this key can send and read coding activity as you. Copy it now and store
+                it securely. It will not be shown again after leaving this page.
               </AlertDescription>
             </Alert>
             <div className="flex gap-2">
@@ -164,8 +164,8 @@ export function ApiKeyPanel() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Revoke the current key?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Requests using it will immediately receive an authentication error until a new
-                  key is generated.
+                  Requests using it will immediately receive an authentication error until a new key
+                  is generated.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

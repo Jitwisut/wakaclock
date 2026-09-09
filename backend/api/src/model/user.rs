@@ -39,9 +39,6 @@ pub struct ExistingUserRow {
     pub password_hash: String,
     /// SHA-256 hash — what authentication compares against.
     pub api_key: String,
-    /// The same key in retrievable form, so it can be shown to its owner again.
-    /// Empty when no key exists, or for keys issued before this column existed.
-    pub api_key_plain: String,
     pub subscription_status: String,
     pub trial_ends_at: u32,
     pub subscription_period_end: Option<u32>,
@@ -54,8 +51,7 @@ pub struct CredentialsRow {
     pub password_hash: String,
 }
 
-/// The plaintext key is returned when generated and can be read back by the owning
-/// authenticated dashboard session. Authentication still uses the hash.
+/// The plaintext key is returned exactly once when generated.
 #[derive(Debug, Serialize)]
 pub struct GenerateApiKeyData {
     pub user_id: Uuid,

@@ -431,17 +431,22 @@ impl HeartbeatRepository {
                 .with_context(|| format!("Failed to add heartbeats_incoming column: {column}"))?;
         }
 
+        ch_client
+            .query(
+                "CREATE TABLE IF NOT EXISTS wakaclock.heartbeat_deletions (
+            user_id UUID, heartbeat_id String, deleted_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(deleted_at) ORDER BY (user_id, heartbeat_id)",
+            )
+            .execute()
+            .await
+            .context("Failed to create heartbeat tombstones")?;
+
         // Every read-side consumer uses this projection so a correction revision
         // replaces the original operation before durations or line counts are summed.
         // Materialized views continue to consume revision 0 only; the canonical view
         // is the authoritative path for interactive reads and rebuilds.
-        ch_client
-            .query("DROP VIEW IF EXISTS wakaclock.heartbeats_canonical")
-            .execute()
-            .await
-            .context("Failed to replace canonical heartbeat view")?;
         let canonical_view = format!(
-            "CREATE VIEW wakaclock.heartbeats_canonical AS SELECT * FROM {}",
+            "CREATE OR REPLACE VIEW wakaclock.heartbeats_canonical AS SELECT * FROM {}",
             canonical_winner_relation("1 = 1", "h")
         );
         ch_client
@@ -521,11 +526,17 @@ impl HeartbeatRepository {
             .client
             .get_client()
             .query(
-                "SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, max(revision) AS revision
-                 FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
-                 GROUP BY heartbeat_id",
+                "SELECT heartbeat_id, max(revision) AS revision FROM (
+                     SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, revision
+                     FROM wakaclock.heartbeats
+                     WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                     UNION ALL
+                     SELECT heartbeat_id, toUInt32(4294967295) AS revision
+                     FROM wakaclock.heartbeat_deletions WHERE user_id = ? AND heartbeat_id IN ?
+                 ) GROUP BY heartbeat_id",
             )
+            .bind(user_id)
+            .bind(candidates)
             .bind(user_id)
             .bind(candidates)
             .fetch_all::<RevisionRow>()
@@ -619,19 +630,25 @@ impl HeartbeatRepository {
         if heartbeat_ids.is_empty() {
             return Ok(0);
         }
-        let query = self
-            .client
+        // Persist deletion intent before physical cleanup. All canonical readers
+        // exclude these IDs immediately, including retransmissions after deletion.
+        self.client
             .get_client()
             .query(
-                "ALTER TABLE wakaclock.heartbeats DELETE
-                 WHERE user_id = ? AND heartbeat_id IN ?",
+                "INSERT INTO wakaclock.heartbeat_deletions (user_id, heartbeat_id)
+             SELECT ?, arrayJoin(?)",
             )
             .bind(user_id)
-            .bind(heartbeat_ids);
-        query
+            .bind(heartbeat_ids)
             .execute()
             .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse heartbeat deletion failed: {error}"))?;
+            .context("failed to persist heartbeat deletion")?;
+        for table in ["heartbeats", "activity_intervals"] {
+            self.client.get_client().query(&format!(
+                "ALTER TABLE wakaclock.{table} DELETE WHERE user_id = ? AND heartbeat_id IN ? SETTINGS mutations_sync = 1"
+            )).bind(user_id).bind(heartbeat_ids).execute().await
+                .context("failed to purge deleted heartbeat data")?;
+        }
         Ok(heartbeat_ids.len() as u64)
     }
 

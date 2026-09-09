@@ -552,12 +552,13 @@ const STATEMENTS: &[&str] = &[
     ALTER TABLE wakaclock.users
     ADD COLUMN IF NOT EXISTS subscription_period_end Nullable(DateTime)
     "#,
-    // Keep a retrievable copy for the authenticated dashboard's API-key panel. The
-    // `api_key` column remains the SHA-256 authentication value.
+    // Retain an empty compatibility column during rollout. Never write a key here.
     r#"
     ALTER TABLE wakaclock.users
     ADD COLUMN IF NOT EXISTS api_key_plain String DEFAULT ''
     "#,
+    r#"ALTER TABLE wakaclock.users UPDATE api_key_plain = ''
+        WHERE api_key_plain != '' SETTINGS mutations_sync = 1"#,
     // ============================================================
     // Materialized Views — Path A: live ingestion (from heartbeats)
     // ============================================================

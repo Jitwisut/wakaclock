@@ -100,6 +100,75 @@ impl UserService {
         .await
     }
 
+    async fn issue_session(&self, user_id: Uuid, jwt_secret: &str) -> Result<String> {
+        let token = auth::issue_session_token(user_id, jwt_secret)?;
+        if let Some(postgres) = &self.postgres {
+            postgres.client().execute(
+                "INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '24 hours')",
+                &[&Uuid::now_v7(), &user_id, &auth::hash_key(&token)],
+            ).await?;
+        }
+        Ok(token)
+    }
+
+    pub async fn migrate_legacy_credentials(&self) -> Result<()> {
+        let Some(postgres) = &self.postgres else {
+            return Ok(());
+        };
+        #[derive(Deserialize, Row)]
+        struct LegacyUser {
+            #[serde(with = "clickhouse::serde::uuid")]
+            user_id: Uuid,
+            api_key: String,
+            is_active: bool,
+        }
+        let rows = self
+            .clickhouse
+            .get_client()
+            .query("SELECT user_id, api_key, is_active FROM wakaclock.users FINAL")
+            .fetch_all::<LegacyUser>()
+            .await?;
+        for row in rows {
+            if !row.is_active {
+                continue;
+            }
+            self.ensure_postgres_identity(row.user_id).await?;
+            let mut client = postgres.transaction_client().await?;
+            let tx = client.transaction().await?;
+            tx.query_one(
+                "SELECT id FROM users WHERE id = $1 FOR UPDATE",
+                &[&row.user_id],
+            )
+            .await?;
+            let first = tx.execute(
+                "INSERT INTO credential_migrations (user_id) VALUES ($1) ON CONFLICT DO NOTHING", &[&row.user_id]
+            ).await? == 1;
+            if first && !row.api_key.is_empty() {
+                tx.execute(
+                    "INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes)
+                     SELECT $1, $2, 'legacy', $3, $4, ARRAY['*'] WHERE NOT EXISTS (SELECT 1 FROM api_keys WHERE user_id = $2)
+                     ON CONFLICT (key_hash) DO NOTHING",
+                    &[&Uuid::now_v7(), &row.user_id, &row.api_key, &&row.api_key[..row.api_key.len().min(12)]],
+                ).await?;
+            }
+            tx.commit().await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_clickhouse_identity(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        password_hash: &str,
+    ) -> Result<()> {
+        self.clickhouse.get_client().query(
+            "INSERT INTO wakaclock.users (user_id, username, email, api_key, is_active, password_hash)
+             SELECT ?, ?, '', '', true, ? WHERE NOT EXISTS (SELECT 1 FROM wakaclock.users FINAL WHERE user_id = ?)"
+        ).bind(user_id).bind(username).bind(password_hash).bind(user_id).execute().await?;
+        Ok(())
+    }
+
     /// Create an account: username must be unique, password is hashed with argon2 (a
     /// slow KDF is correct here — unlike an API key, a password is a low-entropy secret
     /// a human chose). Returns a session JWT so the frontend is logged in immediately.
@@ -116,42 +185,29 @@ impl UserService {
             return Err(anyhow!("username already taken"));
         }
 
-        let salt = SaltString::generate(&mut OsRng);
-        let password_hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|error| anyhow!("failed to hash password: {error}"))?
-            .to_string();
+        let password = password.to_owned();
+        let password_hash = tokio::task::spawn_blocking(move || {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|hash| hash.to_string())
+                .map_err(|error| anyhow!("failed to hash password: {error}"))
+        })
+        .await
+        .context("password hashing task failed")??;
 
         let user_id = Uuid::now_v7();
 
-        self.clickhouse
-            .get_client()
-            .query(
-                "INSERT INTO wakaclock.users (user_id, username, email, api_key, is_active, password_hash)
-                 VALUES (?, ?, '', '', true, ?)",
-            )
-            .bind(user_id)
-            .bind(username)
-            .bind(&password_hash)
-            .execute()
-            .await
-            .map_err(|error| anyhow!("ClickHouse users insert error: {error}"))?;
+        let postgres = self
+            .postgres
+            .as_deref()
+            .context("PostgreSQL is required to register an account")?;
+        self.sync_postgres_identity(postgres, user_id, username, &password_hash)
+            .await?;
+        self.ensure_clickhouse_identity(user_id, username, &password_hash)
+            .await?;
 
-        // During the migration window ClickHouse remains the compatibility write path, while
-        // PostgreSQL receives the transactional identity needed by goals, OAuth and future
-        // organization features. A failed secondary write is visible in logs and can be
-        // repaired by the reconciliation job; it must not silently fabricate a success.
-        if let Some(postgres) = &self.postgres {
-            if let Err(error) = self
-                .sync_postgres_identity(postgres, user_id, username, &password_hash)
-                .await
-            {
-                tracing::error!(%user_id, %error, "failed to sync newly registered user to PostgreSQL");
-            }
-        }
-
-        let token = auth::issue_session_token(user_id, jwt_secret)
-            .map_err(|error| anyhow!("failed to issue session token: {error}"))?;
+        let token = self.issue_session(user_id, jwt_secret).await?;
 
         Ok(AuthData {
             user_id,
@@ -167,67 +223,53 @@ impl UserService {
         password: &str,
         jwt_secret: &str,
     ) -> Result<AuthData> {
-        let row = self
-            .clickhouse
-            .get_client()
-            .query(
-                "SELECT user_id, password_hash FROM wakaclock.users FINAL
-                 WHERE username = ? AND is_active
-                 LIMIT 1",
-            )
-            .bind(username)
-            .fetch_optional::<CredentialsRow>()
-            .await
-            .map_err(|error| anyhow!("ClickHouse users query error: {error}"))?;
-
-        let (user_id, password_hash) = match row {
-            Some(row) => (row.user_id, row.password_hash),
-            None => {
-                let Some(postgres) = &self.postgres else {
-                    return Err(anyhow!("invalid username or password"));
-                };
-                let row = postgres
-                    .client()
-                    .query_opt(
-                        "SELECT u.id, c.password_hash
-                         FROM users u
-                         JOIN password_credentials c ON c.user_id = u.id
-                         WHERE u.username = $1 AND u.is_active",
-                        &[&username],
-                    )
-                    .await
-                    .map_err(|error| anyhow!("PostgreSQL users query error: {error}"))?;
-                let Some(row) = row else {
-                    return Err(anyhow!("invalid username or password"));
-                };
-                (row.try_get("id")?, row.try_get("password_hash")?)
+        let pg_credentials = if let Some(postgres) = &self.postgres {
+            postgres.client().query_opt(
+                "SELECT u.id, c.password_hash, u.is_active AND u.deleted_at IS NULL AS active
+                 FROM users u LEFT JOIN password_credentials c ON c.user_id = u.id WHERE u.username = $1",
+                &[&username],
+            ).await?
+        } else {
+            None
+        };
+        let (user_id, password_hash): (Uuid, String) = if let Some(row) = pg_credentials {
+            if !row.get::<_, bool>("active") {
+                anyhow::bail!("invalid username or password");
             }
+            (
+                row.get("id"),
+                row.get::<_, Option<String>>("password_hash")
+                    .context("password login unavailable")?,
+            )
+        } else {
+            let row = self.clickhouse.get_client().query(
+                "SELECT user_id, password_hash FROM wakaclock.users FINAL WHERE username = ? AND is_active LIMIT 1"
+            ).bind(username).fetch_optional::<CredentialsRow>().await?
+                .context("invalid username or password")?;
+            (row.user_id, row.password_hash)
         };
 
         if password_hash.is_empty() {
             return Err(anyhow!("invalid username or password"));
         }
 
-        let parsed_hash = PasswordHash::new(&password_hash)
-            .map_err(|error| anyhow!("stored password hash is corrupt: {error}"))?;
-        Argon2::default()
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .map_err(|_| anyhow!("invalid username or password"))?;
+        let password = password.to_owned();
+        let hash = password_hash.clone();
+        tokio::task::spawn_blocking(move || {
+            let parsed =
+                PasswordHash::new(&hash).map_err(|_| anyhow!("invalid stored credential"))?;
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .map_err(|_| anyhow!("invalid username or password"))
+        })
+        .await
+        .context("password verification task failed")??;
 
-        // Users created before PostgreSQL became the transactional store still authenticate
-        // through the ClickHouse compatibility path. Bring their identity across on the next
-        // successful login so PostgreSQL-backed features can safely reference their user_id.
-        if let Some(postgres) = &self.postgres {
-            if let Err(error) = self
-                .sync_postgres_identity(postgres, user_id, username, &password_hash)
-                .await
-            {
-                tracing::error!(%user_id, %error, "failed to sync logged-in user to PostgreSQL");
-            }
-        }
+        self.ensure_postgres_identity(user_id).await?;
+        self.ensure_clickhouse_identity(user_id, username, &password_hash)
+            .await?;
 
-        let token = auth::issue_session_token(user_id, jwt_secret)
-            .map_err(|error| anyhow!("failed to issue session token: {error}"))?;
+        let token = self.issue_session(user_id, jwt_secret).await?;
 
         Ok(AuthData {
             user_id,
@@ -236,31 +278,19 @@ impl UserService {
         })
     }
 
-    /// Generate a new API key for `user_id`, replacing any previous one. The SHA-256
-    /// hash remains the authentication value, while the plaintext is kept in the
-    /// retrievable column so the owning dashboard session can show it again later.
-    ///
-    /// `wakaclock.users` is `ReplacingMergeTree(updated_at)`, so this INSERT becomes the
-    /// new "current" row once ClickHouse merges; callers must also update the in-memory
-    /// `AuthKeyCache` themselves (this method has no reference to it, to keep the
-    /// repository layer free of auth concerns).
+    /// Generate a key once. PostgreSQL owns its lifecycle when configured; the
+    /// compatibility store never contains a retrievable plaintext credential.
     pub async fn generate_api_key(&self, user_id: Uuid) -> Result<GenerateApiKeyResponse> {
-        let identity = self.existing_identity(user_id).await?;
         let plaintext_key = auth::generate_key();
         let key_hash = auth::hash_key(&plaintext_key);
-
-        self.upsert_preserving_identity(user_id, &identity, &key_hash, &plaintext_key)
-            .await?;
-
         if let Some(postgres) = &self.postgres {
-            if let Err(error) = self
-                .sync_postgres_api_key(postgres, user_id, &key_hash)
-                .await
-            {
-                tracing::error!(%user_id, %error, "failed to sync API key to PostgreSQL");
-            }
+            self.sync_postgres_api_key(postgres, user_id, &key_hash)
+                .await?;
+        } else {
+            let identity = self.existing_identity(user_id).await?;
+            self.upsert_preserving_identity(user_id, &identity, &key_hash)
+                .await?;
         }
-
         Ok(GenerateApiKeyResponse {
             data: GenerateApiKeyData {
                 user_id,
@@ -269,34 +299,24 @@ impl UserService {
         })
     }
 
-    /// Return the caller's current API key in retrievable form for the authenticated
-    /// dashboard session. API-key authentication is not accepted by the handler, so a
-    /// leaked key cannot use this endpoint to read itself back.
-    pub async fn current_api_key(&self, user_id: Uuid) -> Result<Option<String>> {
-        let identity = self.existing_identity(user_id).await?;
-        if identity.api_key_plain.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(identity.api_key_plain))
+    pub async fn current_api_key(&self, _user_id: Uuid) -> Result<Option<String>> {
+        Ok(None)
     }
 
-    /// Revoke the current key for `user_id` by writing a new row with an empty `api_key`.
-    /// Callers must also remove the old hash from `AuthKeyCache`.
+    /// Revoke current keys in the authoritative store.
     pub async fn revoke_api_key(&self, user_id: Uuid) -> Result<RevokeApiKeyResponse> {
-        let identity = self.existing_identity(user_id).await?;
-
-        self.upsert_preserving_identity(user_id, &identity, "", "")
-            .await?;
-
         if let Some(postgres) = &self.postgres {
-            postgres
-                .client()
-                .execute(
-                    "UPDATE api_keys SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
-                    &[&user_id],
-                )
-                .await
-                .context("failed to revoke PostgreSQL API keys")?;
+            let mut client = postgres.transaction_client().await?;
+            let transaction = client.transaction().await?;
+            transaction
+                .query_one("SELECT id FROM users WHERE id = $1 FOR UPDATE", &[&user_id])
+                .await?;
+            transaction.execute("UPDATE api_keys SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", &[&user_id]).await?;
+            transaction.commit().await?;
+        } else {
+            let identity = self.existing_identity(user_id).await?;
+            self.upsert_preserving_identity(user_id, &identity, "")
+                .await?;
         }
 
         Ok(RevokeApiKeyResponse {
@@ -369,7 +389,7 @@ impl UserService {
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(&identity.api_key)
-            .bind(&identity.api_key_plain)
+            .bind("")
             .bind(&identity.password_hash)
             .bind(status)
             .bind(identity.trial_ends_at)
@@ -419,8 +439,9 @@ impl UserService {
         username: &str,
         password_hash: &str,
     ) -> Result<()> {
-        postgres
-            .client()
+        let mut client = postgres.transaction_client().await?;
+        let transaction = client.transaction().await?;
+        transaction
             .execute(
                 "INSERT INTO users (id, username, is_active)
                  VALUES ($1, $2, TRUE)
@@ -429,8 +450,7 @@ impl UserService {
             )
             .await
             .context("failed to upsert PostgreSQL user")?;
-        postgres
-            .client()
+        transaction
             .execute(
                 "INSERT INTO password_credentials (user_id, password_hash)
                  VALUES ($1, $2)
@@ -441,8 +461,7 @@ impl UserService {
             .context("failed to upsert PostgreSQL password credential")?;
         let organization_id = Uuid::now_v7();
         let slug = format!("personal-{}", user_id.simple());
-        postgres
-            .client()
+        transaction
             .execute(
                 "INSERT INTO organizations (id, slug, name, personal_owner_id)
                  VALUES ($1, $2, $3, $4)
@@ -456,14 +475,12 @@ impl UserService {
             )
             .await
             .context("failed to create personal PostgreSQL organization")?;
-        let organization_id = postgres
-            .client()
+        let organization_id = transaction
             .query_one("SELECT id FROM organizations WHERE slug = $1", &[&slug])
             .await
             .context("failed to resolve personal PostgreSQL organization")?
             .get::<_, Uuid>("id");
-        postgres
-            .client()
+        transaction
             .execute(
                 "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
                  VALUES ($1, $2, 'owner', 'developer')
@@ -473,6 +490,7 @@ impl UserService {
             )
             .await
             .context("failed to add user to personal PostgreSQL organization")?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -482,10 +500,12 @@ impl UserService {
         user_id: Uuid,
         key_hash: &str,
     ) -> Result<()> {
+        let mut client = postgres.transaction_client().await?;
+        let transaction = client.transaction().await?;
+        transaction.query_one("SELECT id FROM users WHERE id = $1 AND is_active AND deleted_at IS NULL FOR UPDATE", &[&user_id]).await?;
         let id = Uuid::now_v7();
         let key_prefix = &key_hash[..key_hash.len().min(12)];
-        postgres
-            .client()
+        transaction
             .execute(
                 "UPDATE api_keys SET revoked_at = now()
                  WHERE user_id = $1 AND revoked_at IS NULL",
@@ -493,8 +513,7 @@ impl UserService {
             )
             .await
             .context("failed to retire previous PostgreSQL API key")?;
-        postgres
-            .client()
+        transaction
             .execute(
                 "INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes)
                  VALUES ($1, $2, 'default', $3, $4, ARRAY['write_logged_time'])",
@@ -502,6 +521,7 @@ impl UserService {
             )
             .await
             .context("failed to persist PostgreSQL API key")?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -514,7 +534,7 @@ impl UserService {
             .clickhouse
             .get_client()
             .query(
-                "SELECT username, email, password_hash, api_key, api_key_plain,
+                "SELECT username, email, password_hash, api_key,
                         subscription_status, trial_ends_at, subscription_period_end
                  FROM wakaclock.users FINAL
                  WHERE user_id = ? LIMIT 1",
@@ -529,21 +549,18 @@ impl UserService {
             email: String::new(),
             password_hash: String::new(),
             api_key: String::new(),
-            api_key_plain: String::new(),
             subscription_status: "trialing".to_string(),
             trial_ends_at: default_trial_ends_at(),
             subscription_period_end: None,
         }))
     }
 
-    /// Shared by generate/revoke — every identity field is preserved, while the hash
-    /// and retrievable plaintext are supplied by the caller.
+    /// Compatibility writes preserve identity and keep only the key hash.
     async fn upsert_preserving_identity(
         &self,
         user_id: Uuid,
         identity: &ExistingUserRow,
         api_key: &str,
-        api_key_plain: &str,
     ) -> Result<()> {
         self.clickhouse
             .get_client()
@@ -558,7 +575,7 @@ impl UserService {
             .bind(&identity.username)
             .bind(&identity.email)
             .bind(api_key)
-            .bind(api_key_plain)
+            .bind("")
             .bind(&identity.password_hash)
             .bind(&identity.subscription_status)
             .bind(identity.trial_ends_at)

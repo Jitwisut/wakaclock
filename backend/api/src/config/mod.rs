@@ -51,6 +51,7 @@ pub struct Config {
     pub presence_v2_enabled: bool,
     pub jwt_secret: String,
     pub cors_origins: CorsOrigins,
+    pub trusted_proxy_ips: Vec<std::net::IpAddr>,
     /// Public browser origin used for human-facing OAuth/device approval links.
     pub public_app_url: String,
     /// Gates POST /internal/subscription — the seam an external payment system calls
@@ -144,6 +145,14 @@ impl Config {
                 .unwrap_or(false),
             jwt_secret,
             cors_origins,
+            trusted_proxy_ips: std::env::var("TRUSTED_PROXY_IPS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|ip| !ip.is_empty())
+                .map(str::parse)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("TRUSTED_PROXY_IPS must contain comma-separated IP addresses")?,
             public_app_url,
             internal_api_secret: std::env::var("INTERNAL_API_SECRET")
                 .ok()

@@ -47,7 +47,9 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<ProjectMergesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let rows = state
         .project_merge_service
         .list_by_user(user_id)
@@ -65,7 +67,9 @@ pub async fn upsert(
     Path(merge_id): Path<Uuid>,
     Json(payload): Json<UpsertProjectMergePayload>,
 ) -> Result<Json<ProjectMergeMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let row = state
         .project_merge_service
         .upsert(
@@ -88,7 +92,9 @@ pub async fn delete(
     headers: HeaderMap,
     Path(merge_id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     state
         .project_merge_service
         .delete(user_id, merge_id)
