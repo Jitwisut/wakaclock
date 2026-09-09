@@ -617,7 +617,11 @@ export interface GenerateApiKeyData {
   user_id: string;
 }
 
-/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
+/**
+ * `api_key` is the caller's active key when the server holds a sealed copy
+ * (ATOAXIS_KMS_KEY_ID configured), otherwise null — keys issued without a master
+ * key, or by a ClickHouse-only deployment, are shown only once by POST.
+ */
 // ---------------------------------------------------------------------------
 // GET /dashboard/analytics — every value carries the metric it counts and the unit
 // it is measured in, because the cards mix seconds, lines and currency.

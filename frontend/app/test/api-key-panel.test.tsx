@@ -118,16 +118,51 @@ describe('ApiKeyPanel when the response has no key', () => {
 });
 
 describe('ApiKeyPanel on load', () => {
-  it('does not expose a key returned by a legacy read endpoint', async () => {
-    // A stale server/cache must not restore a plaintext secret into the panel.
+  it('shows a stored key from the read endpoint, hidden by default', async () => {
+    // When the server holds a sealed copy it returns the key so the user can
+    // paste it again after closing the tab — but it must not be on screen until
+    // a deliberate reveal.
     getCurrentApiKey.mockResolvedValue({
       data: { api_key: 'wcl_already_stored', user_id: 'user-1' },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    const field = (await screen.findByDisplayValue('wcl_already_stored')) as HTMLInputElement;
+    expect(field.type).toBe('password');
+    expect(generateApiKey).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /reveal api key/i }));
+    expect((screen.getByDisplayValue('wcl_already_stored') as HTMLInputElement).type).toBe('text');
+
+    await user.click(screen.getByRole('button', { name: /hide api key/i }));
+    expect((screen.getByDisplayValue('wcl_already_stored') as HTMLInputElement).type).toBe(
+      'password'
+    );
+  });
+
+  it('does not surface another user’s key from a stale cache', async () => {
+    getCurrentApiKey.mockResolvedValue({
+      data: { api_key: 'wcl_other_user', user_id: 'user-2' },
     });
     renderPanel();
 
     await waitFor(() => expect(getCurrentApiKey).toHaveBeenCalled());
-    expect(screen.queryByDisplayValue('wcl_already_stored')).not.toBeInTheDocument();
-    expect(generateApiKey).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue('wcl_other_user')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /generate key/i })).toBeInTheDocument();
+  });
+
+  it('keeps a freshly generated key hidden until revealed', async () => {
+    generateApiKey.mockResolvedValue({
+      data: { api_key: 'wcl_fresh_value', user_id: 'user-1' },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /generate key/i }));
+    await user.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    const field = (await screen.findByDisplayValue('wcl_fresh_value')) as HTMLInputElement;
+    expect(field.type).toBe('password');
   });
 });

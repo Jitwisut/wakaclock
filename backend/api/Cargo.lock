@@ -5050,6 +5050,7 @@ dependencies = [
  "parking_lot",
  "regex",
  "reqwest",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

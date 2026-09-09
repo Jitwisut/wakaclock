@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
+use crate::infrastructure::secret_box::{SecretBox, KEY_VERSION};
 use crate::middleware::auth;
 use crate::model::auth::AuthData;
 use crate::model::user::{
@@ -20,13 +21,21 @@ use crate::model::user::{
 pub struct UserService {
     clickhouse: Arc<ClickHouseClient>,
     postgres: Option<Arc<PostgresClient>>,
+    /// Seals the generated API key so `current_api_key` can return it later.
+    /// `None` (no `ATOAXIS_KMS_KEY_ID`) keeps keys hash-only and reads blank.
+    secret_box: Option<Arc<SecretBox>>,
 }
 
 impl UserService {
-    pub fn new(clickhouse: Arc<ClickHouseClient>, postgres: Option<Arc<PostgresClient>>) -> Self {
+    pub fn new(
+        clickhouse: Arc<ClickHouseClient>,
+        postgres: Option<Arc<PostgresClient>>,
+        secret_box: Option<Arc<SecretBox>>,
+    ) -> Self {
         Self {
             clickhouse,
             postgres,
+            secret_box,
         }
     }
 
@@ -283,8 +292,15 @@ impl UserService {
     pub async fn generate_api_key(&self, user_id: Uuid) -> Result<GenerateApiKeyResponse> {
         let plaintext_key = auth::generate_key();
         let key_hash = auth::hash_key(&plaintext_key);
+        // Seal a recoverable copy, bound to this user, only when a master key is
+        // configured. Without it the key stays hash-only and reads return blank.
+        let sealed = self
+            .secret_box
+            .as_ref()
+            .map(|sb| sb.seal(user_id.as_bytes(), plaintext_key.as_bytes()))
+            .transpose()?;
         if let Some(postgres) = &self.postgres {
-            self.sync_postgres_api_key(postgres, user_id, &key_hash)
+            self.sync_postgres_api_key(postgres, user_id, &key_hash, sealed.as_deref())
                 .await?;
         } else {
             let identity = self.existing_identity(user_id).await?;
@@ -299,8 +315,35 @@ impl UserService {
         })
     }
 
-    pub async fn current_api_key(&self, _user_id: Uuid) -> Result<Option<String>> {
-        Ok(None)
+    /// Return the caller's active key in plaintext by unsealing the stored
+    /// ciphertext. `None` when there is no active key, when it was issued before
+    /// a master key was configured, or when PostgreSQL is not the store.
+    pub async fn current_api_key(&self, user_id: Uuid) -> Result<Option<String>> {
+        let (Some(postgres), Some(secret_box)) = (&self.postgres, &self.secret_box) else {
+            return Ok(None);
+        };
+        let Some(row) = postgres
+            .client()
+            .query_opt(
+                "SELECT secret_ciphertext
+                 FROM api_keys
+                 WHERE user_id = $1 AND revoked_at IS NULL AND secret_ciphertext IS NOT NULL
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                &[&user_id],
+            )
+            .await
+            .context("failed to load stored API key")?
+        else {
+            return Ok(None);
+        };
+        let ciphertext: Vec<u8> = row.try_get("secret_ciphertext")?;
+        let plaintext = secret_box
+            .open(user_id.as_bytes(), &ciphertext)
+            .context("failed to unseal stored API key")?;
+        Ok(Some(
+            String::from_utf8(plaintext).context("stored API key is not valid UTF-8")?,
+        ))
     }
 
     /// Revoke current keys in the authoritative store.
@@ -499,12 +542,14 @@ impl UserService {
         postgres: &PostgresClient,
         user_id: Uuid,
         key_hash: &str,
+        sealed: Option<&[u8]>,
     ) -> Result<()> {
         let mut client = postgres.transaction_client().await?;
         let transaction = client.transaction().await?;
         transaction.query_one("SELECT id FROM users WHERE id = $1 AND is_active AND deleted_at IS NULL FOR UPDATE", &[&user_id]).await?;
         let id = Uuid::now_v7();
         let key_prefix = &key_hash[..key_hash.len().min(12)];
+        let key_version = sealed.map(|_| KEY_VERSION);
         transaction
             .execute(
                 "UPDATE api_keys SET revoked_at = now()
@@ -515,9 +560,11 @@ impl UserService {
             .context("failed to retire previous PostgreSQL API key")?;
         transaction
             .execute(
-                "INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes)
-                 VALUES ($1, $2, 'default', $3, $4, ARRAY['write_logged_time'])",
-                &[&id, &user_id, &key_hash, &key_prefix],
+                "INSERT INTO api_keys
+                     (id, user_id, name, key_hash, key_prefix, scopes,
+                      secret_ciphertext, secret_key_version)
+                 VALUES ($1, $2, 'default', $3, $4, ARRAY['write_logged_time'], $5, $6)",
+                &[&id, &user_id, &key_hash, &key_prefix, &sealed, &key_version],
             )
             .await
             .context("failed to persist PostgreSQL API key")?;

@@ -103,6 +103,10 @@ impl PostgresClient {
                 "credential migrations",
                 include_str!("../../migrations/postgres/005_credential_migrations.sql"),
             ),
+            (
+                "API key readback",
+                include_str!("../../migrations/postgres/006_api_key_readback.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

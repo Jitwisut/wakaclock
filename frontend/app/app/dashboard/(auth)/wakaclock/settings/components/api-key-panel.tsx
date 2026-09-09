@@ -3,7 +3,14 @@
 import * as React from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckIcon, CopyIcon, KeyRoundIcon, TriangleAlertIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  CopyIcon,
+  EyeIcon,
+  EyeOffIcon,
+  KeyRoundIcon,
+  TriangleAlertIcon,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -30,16 +37,26 @@ export function ApiKeyPanel() {
     null
   );
   const [copied, setCopied] = React.useState(false);
+  // Always start hidden so opening the page in front of someone never puts the
+  // key on screen. Revealing is a deliberate click.
+  const [revealed, setRevealed] = React.useState(false);
 
-  // Reads never return a plaintext credential.
+  // The server returns the key here when it holds a sealed copy (ATOAXIS_KMS_KEY_ID
+  // set); otherwise this stays null and the key is shown only once at creation.
   const currentKeyQuery = useQuery({
     queryKey: ['wakaclock', 'api-key', userId],
     queryFn: getCurrentApiKey,
     enabled: Boolean(userId),
   });
 
+  const storedKey =
+    currentKeyQuery.data?.data?.user_id === userId
+      ? (currentKeyQuery.data?.data?.api_key ?? null)
+      : null;
   // Prefer the freshly generated value until the follow-up query catches up.
-  const shownKey = plaintextKey?.userId === userId ? plaintextKey.value : null;
+  const freshKey = plaintextKey?.userId === userId ? plaintextKey.value : null;
+  const shownKey = freshKey ?? storedKey;
+  const justGenerated = Boolean(freshKey);
 
   const queryClient = useQueryClient();
 
@@ -58,9 +75,7 @@ export function ApiKeyPanel() {
       }
       setPlaintextKey({ userId: res.data.user_id, value: key });
       setCopied(false);
-      queryClient.setQueryData(['wakaclock', 'api-key', userId], {
-        data: { api_key: null, user_id: userId },
-      });
+      setRevealed(false);
       void queryClient.invalidateQueries({ queryKey: ['wakaclock', 'api-key'] });
       toast.success('New API key generated');
     },
@@ -71,6 +86,7 @@ export function ApiKeyPanel() {
     mutationFn: revokeApiKey,
     onSuccess: () => {
       setPlaintextKey(null);
+      setRevealed(false);
       queryClient.setQueryData(['wakaclock', 'api-key', userId], {
         data: { api_key: null, user_id: userId },
       });
@@ -102,31 +118,49 @@ export function ApiKeyPanel() {
       <CardContent className="space-y-4">
         {shownKey ? (
           <div className="space-y-2">
-            <Alert>
-              <TriangleAlertIcon />
-              <AlertTitle>Treat this like a password</AlertTitle>
-              <AlertDescription>
-                Anyone with this key can send and read coding activity as you. Copy it now and store
-                it securely. It will not be shown again after leaving this page.
-              </AlertDescription>
-            </Alert>
+            {justGenerated ? (
+              <Alert>
+                <TriangleAlertIcon />
+                <AlertTitle>Treat this like a password</AlertTitle>
+                <AlertDescription>
+                  Anyone with this key can send and read coding activity as you. Copy it now and
+                  store it somewhere safe.
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <div className="flex gap-2">
-              <Input className="font-mono text-xs" readOnly value={shownKey} />
+              <Input
+                aria-label="API key"
+                className="font-mono text-xs"
+                readOnly
+                type={revealed ? 'text' : 'password'}
+                value={shownKey}
+              />
+              <Button
+                aria-label={revealed ? 'Hide API key' : 'Reveal API key'}
+                aria-pressed={revealed}
+                onClick={() => setRevealed((v) => !v)}
+                size="icon"
+                variant="outline"
+              >
+                {revealed ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+              </Button>
               <Button aria-label="Copy API key" onClick={copyKey} size="icon" variant="outline">
                 {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
               </Button>
             </div>
             <p className="text-muted-foreground text-xs">
-              Run <code className="text-foreground">wakaclock-cli config set-key &lt;KEY&gt;</code>{' '}
-              in a terminal, or use &quot;Wakaclock: Set API Key&quot; in VS Code, to start
-              authenticating with it.
+              Hidden by default so it is not exposed on screen. Reveal it or copy it straight to the
+              clipboard, then run{' '}
+              <code className="text-foreground">wakaclock-cli config set-key &lt;KEY&gt;</code> in a
+              terminal, or use &quot;Wakaclock: Set API Key&quot; in VS Code.
             </p>
           </div>
         ) : (
           <p className="text-muted-foreground text-sm">
             {currentKeyQuery.isLoading
               ? 'Loading your API key…'
-              : 'No API key is available to display. Generate a new one below if needed.'}
+              : 'No API key yet. Generate one below.'}
           </p>
         )}
 

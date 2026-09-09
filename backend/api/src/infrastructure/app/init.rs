@@ -264,7 +264,20 @@ pub async fn create_app_state() -> Result<AppState> {
         bridge_config,
     ));
     let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone(), bridge_config));
-    let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
+    // Master key for credentials the product must show again (the dashboard API
+    // key today). Unset in local dev without ATOAXIS_KMS_KEY_ID — keys then stay
+    // hash-only and reads return blank, the pre-existing behaviour.
+    let credential_secret_box = match &config.credential_master_key {
+        Some(raw) => Some(Arc::new(
+            crate::infrastructure::secret_box::SecretBox::from_env_value(raw)?,
+        )),
+        None => None,
+    };
+    let user_service = Arc::new(UserService::new(
+        clickhouse.clone(),
+        postgres.clone(),
+        credential_secret_box,
+    ));
     let duration_service = Arc::new(DurationService::new(clickhouse.clone(), bridge_config));
     let external_duration_service =
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
