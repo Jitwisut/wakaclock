@@ -13,7 +13,9 @@ pub async fn current(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
 
     let response = state
         .user_service

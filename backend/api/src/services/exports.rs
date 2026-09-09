@@ -29,6 +29,7 @@ impl ExportService {
     }
 
     pub async fn create(&self, user_id: Uuid, request: CreateExportRequest) -> Result<ExportJob> {
+        super::require_background_processor()?;
         validate(&request)?;
         let postgres = self.required()?;
         let id = Uuid::now_v7();

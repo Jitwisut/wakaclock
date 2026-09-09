@@ -21,9 +21,13 @@ pub async fn generate(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<GenerateApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
-    auth::check_rate_limit(&state, addr.ip())?;
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
 
     let user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let response = state
@@ -32,32 +36,25 @@ pub async fn generate(
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 
-    // Hash is recomputed here rather than threaded back from the service so the cache
-    // insert stays in the handler layer, next to the other auth-cache mutation (revoke).
-    state.auth_cache.remove_for_user(user_id);
-    let key_hash = auth::hash_key(&response.data.api_key);
-    state.auth_cache.insert(key_hash, user_id);
-
     Ok(Json(response))
 }
 
 /// GET /api/v1/users/current/api_key
 ///
-/// Returns the caller's current key so the dashboard can show it whenever they need to
-/// paste it somewhere, rather than only in the seconds after it was created. Session-only
-/// for the same reason as generate: an API key must never be able to read itself back, or
-/// a leaked key would hand over a permanent, self-renewing credential.
-///
-/// `api_key: null` means there is nothing displayable — no key, or one issued before keys
-/// were stored retrievably. Those still authenticate; they just cannot be shown again.
+/// Plaintext keys are shown only in the generation response. Reads retain the v1
+/// envelope with a null value for compatibility.
 pub async fn current(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    auth::check_rate_limit(&state, addr.ip())?;
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
 
     let user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let api_key = state
@@ -77,9 +74,13 @@ pub async fn revoke(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<RevokeApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
-    auth::check_rate_limit(&state, addr.ip())?;
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
 
     let user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let response = state
@@ -87,8 +88,6 @@ pub async fn revoke(
         .revoke_api_key(user_id)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
-
-    state.auth_cache.remove_for_user(user_id);
 
     Ok(Json(response))
 }

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::infrastructure::auth_cache::AuthKeyCache;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
@@ -71,7 +70,6 @@ pub struct AppState {
     /// Transactional product store. Optional only during the ClickHouse-only compatibility
     /// rollout; production deployments should set POSTGRES_URL.
     pub postgres: Option<Arc<PostgresClient>>,
-    pub auth_cache: Arc<AuthKeyCache>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     pub presence_rate_limiter: Arc<PresenceRateLimiter>,
@@ -200,9 +198,6 @@ pub async fn create_app_state() -> Result<AppState> {
         }
     };
 
-    // Auth key cache starts empty — populated by `AuthKeyCache::refresh()` in main.rs
-    // once migrations have created `wakaclock.users`.
-    let auth_cache = AuthKeyCache::new();
     let auth_rate_limiter = AuthRateLimiter::new();
     let analytics_rate_limiter = AnalyticsRateLimiter::new();
     let presence_rate_limiter = PresenceRateLimiter::new();
@@ -269,7 +264,20 @@ pub async fn create_app_state() -> Result<AppState> {
         bridge_config,
     ));
     let all_time_service = Arc::new(AllTimeService::new(clickhouse.clone(), bridge_config));
-    let user_service = Arc::new(UserService::new(clickhouse.clone(), postgres.clone()));
+    // Master key for credentials the product must show again (the dashboard API
+    // key today). Unset in local dev without ATOAXIS_KMS_KEY_ID — keys then stay
+    // hash-only and reads return blank, the pre-existing behaviour.
+    let credential_secret_box = match &config.credential_master_key {
+        Some(raw) => Some(Arc::new(
+            crate::infrastructure::secret_box::SecretBox::from_env_value(raw)?,
+        )),
+        None => None,
+    };
+    let user_service = Arc::new(UserService::new(
+        clickhouse.clone(),
+        postgres.clone(),
+        credential_secret_box,
+    ));
     let duration_service = Arc::new(DurationService::new(clickhouse.clone(), bridge_config));
     let external_duration_service =
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
@@ -323,6 +331,7 @@ pub async fn create_app_state() -> Result<AppState> {
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone(), bridge_config));
     let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
     let reprocess_service = Arc::new(ReprocessService::new(
+        postgres.clone(),
         clickhouse.clone(),
         project_rule_service.clone(),
         project_identity_service.clone(),
@@ -346,7 +355,6 @@ pub async fn create_app_state() -> Result<AppState> {
         config,
         clickhouse,
         postgres,
-        auth_cache,
         auth_rate_limiter,
         analytics_rate_limiter,
         presence_rate_limiter,

@@ -51,7 +51,9 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<ProjectRulesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let rows = state
         .project_rule_service
         .list_by_user(user_id)
@@ -69,7 +71,9 @@ pub async fn upsert(
     Path(rule_id): Path<Uuid>,
     Json(payload): Json<UpsertProjectRulePayload>,
 ) -> Result<Json<ProjectRuleMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let row = state
         .project_rule_service
         .upsert(
@@ -94,7 +98,9 @@ pub async fn delete(
     headers: HeaderMap,
     Path(rule_id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     state
         .project_rule_service
         .delete(user_id, rule_id)

@@ -51,6 +51,7 @@ pub struct Config {
     pub presence_v2_enabled: bool,
     pub jwt_secret: String,
     pub cors_origins: CorsOrigins,
+    pub trusted_proxy_ips: Vec<std::net::IpAddr>,
     /// Public browser origin used for human-facing OAuth/device approval links.
     pub public_app_url: String,
     /// Gates POST /internal/subscription — the seam an external payment system calls
@@ -58,6 +59,10 @@ pub struct Config {
     /// route entirely (404, same as an admin surface with no token configured) rather
     /// than leaving it reachable with no credential at all.
     pub internal_api_secret: Option<String>,
+    /// Raw `ATOAXIS_KMS_KEY_ID` — the base64 master key that seals credentials the
+    /// product must be able to show again (currently the dashboard API key). `None`
+    /// leaves keys hash-only and `GET /users/current/api_key` returns no value.
+    pub credential_master_key: Option<String>,
     /// How long a pause between two *proven* activity intervals may last before the
     /// clock stops. This is WakaTime's per-user timeout, and it exists because a
     /// segment can only ever be as long as the strict 120-second evidence window:
@@ -144,8 +149,19 @@ impl Config {
                 .unwrap_or(false),
             jwt_secret,
             cors_origins,
+            trusted_proxy_ips: std::env::var("TRUSTED_PROXY_IPS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|ip| !ip.is_empty())
+                .map(str::parse)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("TRUSTED_PROXY_IPS must contain comma-separated IP addresses")?,
             public_app_url,
             internal_api_secret: std::env::var("INTERNAL_API_SECRET")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            credential_master_key: std::env::var("ATOAXIS_KMS_KEY_ID")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             idle_timeout_seconds,

@@ -147,7 +147,9 @@ async fn distinct_telemetry_values(
     column: &str,
     hash_machine: bool,
 ) -> Result<Json<CatalogResponse<Vec<NamedItem>>>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(state, headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(state, headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     // Column names are selected from a closed list above; never interpolate client input.
     let query = format!(
         "SELECT DISTINCT {column} AS value
@@ -193,7 +195,9 @@ pub async fn stats_default(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<crate::model::stats::StatsResponse>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     state
         .stats_service
         .get_by_range(user_id, "last_7_days")
@@ -214,7 +218,9 @@ pub async fn custom_rule_upsert(
     headers: HeaderMap,
     Json(input): Json<CustomRuleRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let pattern = input
         .pattern
         .ok_or_else(|| bad_request("pattern is required"))?;
@@ -250,7 +256,9 @@ pub async fn private_leaderboards(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<CatalogResponse<Value>>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let rows = state
         .leaderboard_service
         .list(user_id)
@@ -266,7 +274,9 @@ pub async fn private_leaderboard(
     headers: HeaderMap,
     Path(board): Path<Uuid>,
 ) -> Result<Json<CatalogResponse<Value>>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
     let board = state
         .leaderboard_service
         .get(user_id, board)

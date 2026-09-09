@@ -69,7 +69,7 @@ pub async fn today(
     headers: HeaderMap,
     Query(params): Query<StatusBarQuery>,
 ) -> Result<Json<StatusBarResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_stats").await?;
     let date = ResolvedRange::today_date_string(params.timezone.as_deref())
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())

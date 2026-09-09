@@ -43,7 +43,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(query): Query<ProjectListQuery>,
 ) -> Result<Json<ProjectAnalyticsListResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let sort = ProjectSort::parse(query.sort.as_deref()).map_err(bad_request)?;
@@ -70,7 +70,7 @@ pub async fn detail(
     Path(project_id): Path<Uuid>,
     Query(query): Query<ProjectDetailQuery>,
 ) -> Result<Json<ProjectAnalyticsDetailResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let branch = parse_branch(query.branch.as_deref())?;
@@ -91,7 +91,7 @@ pub async fn files(
     Path(project_id): Path<Uuid>,
     Query(query): Query<ProjectDetailQuery>,
 ) -> Result<Json<ProjectFilesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let branch = parse_branch(query.branch.as_deref())?;
@@ -118,7 +118,7 @@ pub async fn branches(
     Path(project_id): Path<Uuid>,
     Query(query): Query<ProjectDetailQuery>,
 ) -> Result<Json<ProjectBranchesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let response = state
@@ -142,7 +142,7 @@ pub async fn daily(
     Path(project_id): Path<Uuid>,
     Query(query): Query<ProjectDetailQuery>,
 ) -> Result<Json<ProjectDailyResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let branch = parse_branch(query.branch.as_deref())?;
@@ -161,7 +161,7 @@ pub async fn ai(
     Path(project_id): Path<Uuid>,
     Query(query): Query<ProjectDetailQuery>,
 ) -> Result<Json<ProjectAiResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
     auth::check_analytics_rate_limit(&state, user_id)?;
     let range = parse_range(&query.start, &query.end, query.timezone.as_deref())?;
     let branch = parse_branch(query.branch.as_deref())?;

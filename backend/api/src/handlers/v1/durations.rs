@@ -29,8 +29,10 @@ pub async fn list(
     };
     let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "read_logged_time").await {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 

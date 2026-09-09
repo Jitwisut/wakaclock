@@ -49,6 +49,7 @@ impl HeartbeatService {
         // receive a random heartbeat ID in the API client before they are queued.
         let mut rows = Vec::with_capacity(heartbeats.len());
         let mut interval_rows = Vec::new();
+        let mut project_ids = HashMap::new();
         // Surfaced rather than swallowed: a client whose claims are being clamped is
         // reporting less time than it observed, and that used to be invisible.
         let mut clamped_claims = 0u32;
@@ -186,10 +187,16 @@ impl HeartbeatService {
             // Project identity belongs on the raw heartbeat at write time. Project-detail
             // projections can then group by a stable ID even when a display name is renamed
             // later; historical NULL rows remain explicitly backfillable in PR 9.9.
-            hb.project_id = self
-                .project_identity_service
-                .resolve_project_id(user_id, hb.project.as_deref(), None)
-                .await?;
+            hb.project_id = if let Some(id) = project_ids.get(&hb.project) {
+                *id
+            } else {
+                let id = self
+                    .project_identity_service
+                    .resolve_project_id(user_id, hb.project.as_deref(), None)
+                    .await?;
+                project_ids.insert(hb.project.clone(), id);
+                id
+            };
 
             let date = (hb.time as i64 / 86400).max(0) as u16;
             let created_at = parse_created_at(&hb.created_at);

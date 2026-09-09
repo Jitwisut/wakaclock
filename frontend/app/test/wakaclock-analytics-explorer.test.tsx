@@ -192,6 +192,21 @@ describe('Analytics Explorer frontend foundation', () => {
     expect(onSelectDate).toHaveBeenCalledWith('2026-08-28');
   });
 
+  it('updates the inspected pixel when filtered data changes', async () => {
+    const initial = response();
+    const { container, rerender } = render(
+      <CalendarHeatmap data={initial} onSelectDate={vi.fn()} />
+    );
+    await userEvent.hover(screen.getByRole('button', { name: /2026-08-28/ }));
+    expect(container.querySelector('[aria-live]')).toHaveTextContent('2026-08-28');
+    const updated = {
+      ...initial,
+      calendar_heatmap: initial.calendar_heatmap.map((day) => ({ ...day, total_seconds: 0 })),
+    };
+    rerender(<CalendarHeatmap data={updated} onSelectDate={vi.fn()} />);
+    expect(container.querySelector('[aria-live] strong')).toHaveTextContent('0');
+  });
+
   it('builds a Monday-through-Sunday calendar grid from the filtered range', () => {
     const weeks = buildCalendarWeeks(multiMonthResponse());
     expect(weeks).toHaveLength(5);

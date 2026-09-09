@@ -16,7 +16,7 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = require(&state, &headers)?;
+    let user_id = require(&state, &headers).await?;
     let data = state
         .goal_service
         .list_for_user(user_id)
@@ -30,7 +30,7 @@ pub async fn get(
     headers: HeaderMap,
     Path(goal): Path<Uuid>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = require(&state, &headers)?;
+    let user_id = require(&state, &headers).await?;
     let data = state
         .goal_service
         .get(user_id, goal)
@@ -45,9 +45,11 @@ pub async fn get(
     Ok(Json(json!({ "data": data })))
 }
 
-fn require(state: &AppState, headers: &HeaderMap) -> Result<Uuid, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(state, headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "read_goals") {
+async fn require(state: &AppState, headers: &HeaderMap) -> Result<Uuid, (StatusCode, Json<Value>)> {
+    let user_id = auth::resolve_user_id(state, headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(state, headers, "read_goals").await {
         return Err(auth::forbidden_scope("read_goals"));
     }
     Ok(user_id)

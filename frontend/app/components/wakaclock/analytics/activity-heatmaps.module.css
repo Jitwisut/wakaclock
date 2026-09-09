@@ -1,0 +1,311 @@
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  --depth: var(--retro-shadow, #193c2c);
+}
+.board [data-slot='card'] {
+  border: 2px solid var(--border);
+  box-shadow:
+    inset 2px 2px 0 #ffffff30,
+    5px 5px 0 var(--depth);
+  border-radius: 0;
+}
+.intro {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  padding: 28px;
+  background: #18382c;
+  color: #eff7df;
+  border: 3px solid #567a57;
+  box-shadow:
+    inset 3px 3px 0 #acc49140,
+    inset -3px -3px 0 #0b211b,
+    5px 5px 0 var(--depth);
+}
+.kicker {
+  color: #c2e99a;
+  font: 10px monospace;
+  letter-spacing: 0.12em;
+}
+.intro h2 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  margin: 12px 0 8px;
+  text-shadow: 3px 3px 0 #0b211b;
+}
+.intro p {
+  color: #c4d4b9;
+  font-size: 13px;
+}
+.pixelArt {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  height: 80px;
+  padding-right: 16px;
+  transform: skewY(-12deg);
+}
+.pixelArt span {
+  width: 22px;
+  height: 25%;
+  background: #b9e98b;
+  border: 2px solid #0b211b;
+  box-shadow:
+    inset 3px 3px 0 #ecffbb,
+    5px 5px 0 #5e8852;
+}
+.pixelArt span:nth-child(2) {
+  height: 55%;
+}
+.pixelArt span:nth-child(3) {
+  height: 40%;
+}
+.pixelArt span:nth-child(4) {
+  height: 80%;
+}
+.pixelArt span:nth-child(5) {
+  height: 100%;
+  background: #e9cb7c;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.stats > div {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  align-items: center;
+  background: var(--card);
+  border: 2px solid var(--border);
+  padding: 20px;
+  box-shadow: 3px 3px 0 var(--depth);
+}
+.stats svg {
+  color: var(--primary);
+}
+.stats span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.stats strong {
+  grid-column: 2;
+  font-size: 24px;
+  font-family: monospace;
+}
+.stats small {
+  font: 11px monospace;
+  color: var(--muted-foreground);
+}
+.calendar {
+  --tile: 28px;
+  --gutter: 7px;
+}
+.scroll {
+  overflow-x: auto;
+  padding: 16px 8px 20px;
+  background: var(--muted);
+  border: 2px solid var(--border);
+  box-shadow: inset 3px 3px 0 #00000010;
+}
+.matrix {
+  min-width: max-content;
+}
+.months {
+  margin-left: 40px;
+  display: flex;
+  gap: var(--gutter);
+  margin-bottom: 12px;
+}
+.month {
+  width: var(--tile);
+  font: 10px monospace;
+  color: var(--muted-foreground);
+}
+.weekdays,
+.week {
+  display: grid;
+  grid-template-rows: repeat(7, var(--tile));
+  gap: var(--gutter);
+}
+.dayLabel {
+  display: flex;
+  align-items: center;
+  width: 32px;
+  font: 10px monospace;
+  color: var(--muted-foreground);
+}
+.columns {
+  display: flex;
+  gap: var(--gutter);
+}
+.tile,
+.spacer {
+  width: var(--tile);
+  height: var(--tile);
+}
+.tile {
+  border: 1px solid color-mix(in oklab, var(--foreground) 18%, transparent);
+  border-radius: 0;
+  box-shadow:
+    inset 2px 2px 0 #ffffff25,
+    2px 2px 0 #00000015;
+  cursor: pointer;
+  position: relative;
+}
+.tile[data-active='true'] {
+  box-shadow:
+    inset 2px 2px 0 #ffffff40,
+    inset -2px -2px 0 #00000015,
+    3px 3px 0 color-mix(in oklab, var(--primary) 45%, var(--background));
+}
+.tile:hover,
+.tile:focus-visible {
+  transform: translate(-2px, -2px);
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+  z-index: 1;
+}
+.tile:active {
+  transform: translate(1px, 1px);
+}
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  padding: 16px 0 0;
+  font: 11px monospace;
+  color: var(--muted-foreground);
+}
+.readout strong {
+  color: var(--foreground);
+}
+.readout > span:last-child {
+  margin-left: auto;
+  font: 11px sans-serif;
+}
+.barPlot {
+  display: flex;
+  align-items: flex-end;
+  height: 224px;
+  gap: 14px;
+  border-bottom: 2px solid var(--border);
+  padding: 30px 12px 0;
+  background: repeating-linear-gradient(to top, transparent 0 47px, var(--border) 47px 48px);
+}
+.bar {
+  flex-shrink: 0;
+  width: 100%;
+  min-height: 3px;
+  position: relative;
+  background:
+    repeating-linear-gradient(to top, transparent 0 15px, #ffffff25 15px 17px), var(--primary);
+  border: 1px solid color-mix(in oklab, var(--primary) 75%, #000);
+  box-shadow:
+    inset 3px 3px 0 #ffffff35,
+    4px -4px 0 color-mix(in oklab, var(--primary) 55%, var(--background));
+  cursor: pointer;
+}
+.bar[data-empty='true'] {
+  background: var(--border);
+  box-shadow: none;
+  border: 0;
+}
+.bar:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.bar:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 4px;
+}
+.bar:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+.barValue {
+  text-align: center;
+  font: 10px monospace;
+  margin-bottom: 9px;
+  white-space: nowrap;
+}
+.monthly {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-height: 230px;
+  min-height: 205px;
+  overflow-y: auto;
+  padding: 4px 8px 8px 0;
+}
+.monthHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font: 12px monospace;
+  margin-bottom: 10px;
+}
+.monthHeading small {
+  color: var(--muted-foreground);
+}
+.track {
+  height: 26px;
+  background: var(--muted);
+  border: 2px solid var(--border);
+  box-shadow: inset 2px 2px 0 #00000015;
+  padding: 3px;
+}
+.trackFill {
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--primary) 0 10px, transparent 10px 13px);
+  filter: drop-shadow(1px 1px 0 #0002);
+}
+.scaleNote {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+@media (max-width: 640px) {
+  .intro {
+    padding: 20px;
+  }
+  .pixelArt {
+    display: none;
+  }
+  .stats {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .stats > div {
+    grid-template-columns: 24px 1fr auto;
+    padding: 14px;
+  }
+  .stats strong {
+    grid-column: 3;
+    font-size: 20px;
+  }
+  .readout > span:last-child {
+    margin-left: 0;
+  }
+  .barPlot {
+    gap: 9px;
+    padding-inline: 4px;
+  }
+  .barValue {
+    font-size: 9px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile:hover,
+  .tile:focus-visible,
+  .tile:active {
+    transform: none;
+  }
+}

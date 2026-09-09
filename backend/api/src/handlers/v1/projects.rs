@@ -21,7 +21,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(params): Query<ProjectsQuery>,
 ) -> Result<Json<ProjectsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_scoped_user(&state, &headers, "read_projects").await?;
 
     let response = state
         .projects_service

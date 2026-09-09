@@ -53,7 +53,7 @@ pub async fn sso_get(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let data = state
         .enterprise_service
         .get_sso(actor, organization_id)
@@ -68,7 +68,7 @@ pub async fn sso_upsert(
     Path(organization_id): Path<Uuid>,
     Json(input): Json<UpsertSsoRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let data = state
         .enterprise_service
         .upsert_sso(actor, organization_id, input)
@@ -83,7 +83,7 @@ pub async fn sso_enforce(
     Path((organization_id, connection_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<SsoEnforcementInput>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let changed = state
         .enterprise_service
         .set_sso_enforced(actor, organization_id, connection_id, input.enforced)
@@ -103,7 +103,7 @@ pub async fn scim_tokens_list(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let data = state
         .enterprise_service
         .list_scim_tokens(actor, organization_id)
@@ -118,7 +118,7 @@ pub async fn scim_tokens_create(
     Path(organization_id): Path<Uuid>,
     Json(input): Json<ScimTokenInput>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let data = state
         .enterprise_service
         .create_scim_token(actor, organization_id, input.expires_at)
@@ -132,7 +132,7 @@ pub async fn scim_tokens_revoke(
     headers: HeaderMap,
     Path((organization_id, token_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let actor = require_admin_scope(&state, &headers)?;
+    let actor = require_admin_scope(&state, &headers).await?;
     let changed = state
         .enterprise_service
         .revoke_scim_token(actor, organization_id, token_id)
@@ -331,12 +331,14 @@ async fn scim_org(
         })
 }
 
-fn require_admin_scope(
+async fn require_admin_scope(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Uuid, (StatusCode, Json<Value>)> {
-    let actor = auth::resolve_user_id(state, headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "manage_integrations") {
+    let actor = auth::resolve_user_id(state, headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(state, headers, "manage_integrations").await {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "insufficient_scope", "scope": "manage_integrations" })),

@@ -467,11 +467,10 @@ export async function reprocess(start: string, end: string, dryRun = true) {
   return data;
 }
 
-// POST /import/wakatime — file_path is a path on the BACKEND's filesystem, not an upload
-export async function importWakaTime(userId: string, filePath: string) {
+// Upload a bounded WakaTime JSON dump.
+export async function importWakaTime(_userId: string, dumpJson: string) {
   const { data } = await wakaclockClient.post<WakaTimeImportResponse>('/import/wakatime', {
-    user_id: userId,
-    file_path: filePath,
+    dump_json: dumpJson,
   });
   return data;
 }

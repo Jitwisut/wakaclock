@@ -70,6 +70,46 @@ zones; Redis owns only leases/live snapshots and ClickHouse owns session history
 The frontend uses `https://api.atoaxis.com` as its production API origin. Set
 `NEXT_PUBLIC_WAKACLOCK_API_URL` to a local API URL during development.
 
+## Authentication and data-lifecycle rollout
+
+- PostgreSQL is required for new registrations. It owns credentials when configured;
+  boot migrates legacy ClickHouse credentials once. Keep PostgreSQL configured after
+  cutover: reverting to ClickHouse-only authentication is not a supported rollback.
+- Requests consult the authoritative store, including revocation, expiry and active
+  account state. Session tokens are registered in PostgreSQL; existing sessions must
+  sign in again after this rollout. API keys remain compatible and are migrated.
+- API keys are displayed only by their generation response. GET returns `api_key: null`.
+  Startup clears the historical `api_key_plain` column. Existing backups need their own
+  retention/rotation review; a live-table migration cannot erase historical backups.
+- Use `sslmode=require` in `POSTGRES_URL` for remote TLS connections. The pool verifies
+  certificates using public trust roots, bounds connection/statement waits and replaces
+  disconnected clients. Private-CA deployments need an appropriate trust configuration.
+- Configure `TRUSTED_PROXY_IPS` with exact comma-separated reverse-proxy IPs to use
+  `X-Forwarded-For` for auth rate limits. Without this setting, only the TCP peer is trusted.
+  Limits remain per API process; distributed rate limiting is a separate follow-up.
+- `/api/v1/import/wakatime` accepts `{ "dump_json": "...JSON export contents..." }`.
+  Server paths are rejected. The Settings UI uploads a local file (1 MiB / 10,000
+  heartbeats maximum). Identical imports reuse stable record IDs.
+- Canonical time reads derive segments from the latest raw heartbeat revision,
+  including delayed uploads. Durable tombstones exclude deleted IDs and prevent
+  retransmission from restoring them. Legacy aggregate tables still need full
+  versioned invalidation/rebuild work; do not use them as the authority for deleted data.
+- Startup migrations serialize across API replicas sharing PostgreSQL. Reprocess apply
+  jobs serialize per user, but legacy aggregate replay is not an atomic snapshot swap.
+
+Run the disposable two-replica regression suite after building the server:
+
+```bash
+python3 scripts/backend-security-smoke-runtime.py \
+  --binary backend/api/target/debug/wakaclock-server \
+  --clickhouse-test-url http://127.0.0.1:58129 \
+  --postgres-test-url postgres://test:test@127.0.0.1:55439/test
+```
+
+Run this command from the repository root against isolated test databases only.
+The runner creates test identities, exercises credential revocation and terminates
+API connections in that test database to verify reconnect behavior.
+
 ## Public contracts
 
 ### WakaTime compatibility (`/api/v1`)
@@ -118,12 +158,15 @@ export-worker           report-worker      billing-reconciliation
 account-deletion
 ```
 
-Each process reads `ATOAXIS_JOB_QUEUE_URL`, propagates envelope metadata
-(`event_id`, `event_version`, `tenant_id`, `occurred_at`, `trace_id` and
-`idempotency_key`) and exits cleanly on SIGINT/SIGTERM. Set
-`ATOAXIS_WORKER_ONESHOT=1` for a readiness check in CI. Production queue and
-storage adapters must provide duplicate detection, bounded exponential retry,
-dead-letter handling and audit-friendly replay.
+These binaries are currently **unavailable**: they exit with an error until a real
+processor is registered. `ATOAXIS_WORKER_ONESHOT=1` does not bypass this check.
+Export creation, report scheduling and integration connect/sync return 503 before
+persisting new jobs or credentials. Existing records remain readable/cancellable.
+Capabilities expose `available: false` for these incomplete workflows.
+
+Queue consumption, retry/dead-letter processing, artifact delivery, provider sync
+and cross-store account deletion still require implementation. Do not deploy
+these binaries as healthy consumers merely because they compile.
 
 ## Quality gates
 

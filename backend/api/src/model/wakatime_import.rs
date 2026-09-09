@@ -2,14 +2,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WakaTimeImportRequest {
-    pub file_path: String,
+    pub dump_json: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WakaTimeImportData {
     pub user_id: Uuid,
-    pub file_path: String,
+    pub import_id: String,
     pub imported_heartbeats: usize,
     pub skipped_heartbeats: usize,
 }
@@ -81,4 +82,24 @@ pub struct WakaTimeHeartbeat {
     pub human_line_changes: Option<i32>,
     #[serde(default)]
     pub machine_name_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn import_rejects_server_paths() {
+        assert!(serde_json::from_value::<WakaTimeImportRequest>(
+            serde_json::json!({"file_path":"/etc/passwd"})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<WakaTimeImportRequest>(
+            serde_json::json!({"dump_json":"{}", "file_path":"/tmp/other"})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<WakaTimeImportRequest>(
+            serde_json::json!({"dump_json":"{}"})
+        )
+        .is_ok());
+    }
 }

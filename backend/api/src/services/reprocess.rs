@@ -31,6 +31,7 @@ const AGGREGATE_TABLES: &[&str] = &[
 ];
 
 pub struct ReprocessService {
+    postgres: Option<Arc<crate::infrastructure::postgres::PostgresClient>>,
     account_analytics_service: Arc<AccountAnalyticsService>,
     clickhouse: Arc<ClickHouseClient>,
     project_identity_service: Arc<ProjectIdentityService>,
@@ -39,12 +40,14 @@ pub struct ReprocessService {
 
 impl ReprocessService {
     pub fn new(
+        postgres: Option<Arc<crate::infrastructure::postgres::PostgresClient>>,
         clickhouse: Arc<ClickHouseClient>,
         project_rule_service: Arc<ProjectRuleService>,
         project_identity_service: Arc<ProjectIdentityService>,
         account_analytics_service: Arc<AccountAnalyticsService>,
     ) -> Self {
         Self {
+            postgres,
             account_analytics_service,
             clickhouse,
             project_identity_service,
@@ -87,6 +90,34 @@ impl ReprocessService {
         dry_run: bool,
     ) -> Result<ReprocessData> {
         validate_date_range(start, end)?;
+        let mut lock_client = if !dry_run {
+            Some(
+                self.postgres
+                    .as_ref()
+                    .context("PostgreSQL is required for serialized reprocessing")?
+                    .transaction_client()
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let _lock = if let Some(client) = lock_client.as_mut() {
+            let transaction = client.transaction().await?;
+            transaction
+                .query_one(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 73109))",
+                    &[&user_id.to_string()],
+                )
+                .await?;
+            // ClickHouse replay can exceed a normal request timeout. Keep this dedicated
+            // transaction alive until replay completes; dropping it releases the lock.
+            transaction
+                .batch_execute("SET LOCAL idle_in_transaction_session_timeout = 0")
+                .await?;
+            Some(transaction)
+        } else {
+            None
+        };
         let audit_id = Uuid::new_v4();
         let started = Instant::now();
         let mut rows = self.fetch_raw_heartbeats(user_id, start, end).await?;
@@ -243,7 +274,7 @@ impl ReprocessService {
     async fn delete_aggregate_range(&self, user_id: Uuid, start: &str, end: &str) -> Result<()> {
         for table in AGGREGATE_TABLES {
             let sql = format!(
-                "ALTER TABLE wakaclock.{table} DELETE WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?)"
+                "ALTER TABLE wakaclock.{table} DELETE WHERE user_id = ? AND toDate(date) BETWEEN toDate(?) AND toDate(?) SETTINGS mutations_sync = 1"
             );
 
             self.clickhouse

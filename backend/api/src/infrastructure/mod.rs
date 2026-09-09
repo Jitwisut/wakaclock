@@ -1,5 +1,4 @@
 pub mod app;
-pub mod auth_cache;
 pub mod contracts;
 pub mod database;
 pub mod logger;
@@ -7,3 +6,4 @@ pub mod postgres;
 pub mod presence_store;
 pub mod rate_limiter;
 pub mod redis_presence;
+pub mod secret_box;

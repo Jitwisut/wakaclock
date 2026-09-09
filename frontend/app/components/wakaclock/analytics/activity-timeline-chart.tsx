@@ -1,7 +1,10 @@
 'use client';
 
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
+import { useState } from 'react';
 
+import { Area, Bar, CartesianGrid, ComposedChart, XAxis, YAxis } from 'recharts';
+
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ChartContainer,
@@ -28,12 +31,33 @@ function granularityLabel(bucketSeconds: number) {
 }
 
 export function ActivityTimelineChart({ data }: { data: AnalyticsExplorerResponse }) {
+  const [mode, setMode] = useState<'bars' | 'wave'>('wave');
   const granularity = granularityLabel(data.timeline.bucket_seconds);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Activity timeline</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <CardTitle>Activity timeline</CardTitle>
+          <div aria-label="Chart style" className="flex gap-2" role="group">
+            <Button
+              aria-pressed={mode === 'wave'}
+              onClick={() => setMode('wave')}
+              size="sm"
+              variant={mode === 'wave' ? 'default' : 'outline'}
+            >
+              ↝ Wave
+            </Button>
+            <Button
+              aria-pressed={mode === 'bars'}
+              onClick={() => setMode('bars')}
+              size="sm"
+              variant={mode === 'bars' ? 'default' : 'outline'}
+            >
+              ▥ Bars
+            </Button>
+          </div>
+        </div>
         <CardDescription>
           Canonical time split into {granularity} buckets by Human, verified AI, inferred AI and
           Unknown attribution.
@@ -41,7 +65,11 @@ export function ActivityTimelineChart({ data }: { data: AnalyticsExplorerRespons
       </CardHeader>
       <CardContent>
         <ChartContainer className="h-80 w-full" config={chartConfig}>
-          <AreaChart data={data.timeline.items} margin={{ left: 4, right: 8 }}>
+          <ComposedChart
+            accessibilityLayer
+            data={data.timeline.items}
+            margin={{ left: 4, right: 8 }}
+          >
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="label" minTickGap={28} tickLine={false} tickMargin={8} />
             <YAxis
@@ -51,45 +79,35 @@ export function ActivityTimelineChart({ data }: { data: AnalyticsExplorerRespons
             />
             <ChartTooltip
               content={
-                <ChartTooltipContent
-                  formatter={(value) => formatDurationShort(Number(value))}
-                />
+                <ChartTooltipContent formatter={(value) => formatDurationShort(Number(value))} />
               }
             />
             <ChartLegend content={<ChartLegendContent />} />
-            <Area
-              dataKey="human_seconds"
-              fill="var(--color-human_seconds)"
-              fillOpacity={0.35}
-              stackId="duration"
-              stroke="var(--color-human_seconds)"
-              type="monotone"
-            />
-            <Area
-              dataKey="ai_verified_seconds"
-              fill="var(--color-ai_verified_seconds)"
-              fillOpacity={0.35}
-              stackId="duration"
-              stroke="var(--color-ai_verified_seconds)"
-              type="monotone"
-            />
-            <Area
-              dataKey="ai_inferred_seconds"
-              fill="var(--color-ai_inferred_seconds)"
-              fillOpacity={0.35}
-              stackId="duration"
-              stroke="var(--color-ai_inferred_seconds)"
-              type="monotone"
-            />
-            <Area
-              dataKey="unknown_seconds"
-              fill="var(--color-unknown_seconds)"
-              fillOpacity={0.3}
-              stackId="duration"
-              stroke="var(--color-unknown_seconds)"
-              type="monotone"
-            />
-          </AreaChart>
+            {Object.entries(chartConfig).map(([key, config]) =>
+              mode === 'wave' ? (
+                <Area
+                  dataKey={key}
+                  fill={config.color}
+                  fillOpacity={0.3}
+                  isAnimationActive={false}
+                  key={key}
+                  stackId="duration"
+                  stroke={config.color}
+                  strokeWidth={2.5}
+                  type="stepAfter"
+                />
+              ) : (
+                <Bar
+                  dataKey={key}
+                  fill={config.color}
+                  isAnimationActive={false}
+                  key={key}
+                  maxBarSize={32}
+                  stackId="duration"
+                />
+              )
+            )}
+          </ComposedChart>
         </ChartContainer>
       </CardContent>
     </Card>

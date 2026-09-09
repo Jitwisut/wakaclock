@@ -195,6 +195,16 @@ jobs:
           CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
           POSTGRES_TEST_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_test
         run: cargo test --workspace -- --ignored --test-threads=1
+      - name: Build API for cross-replica security regression tests
+        run: cargo build -p wakaclock-server --bin wakaclock-server
+      - name: Install PostgreSQL test client
+        run: sudo apt-get install -y postgresql-client
+      - name: Run cross-replica security and import smoke tests
+        run: >-
+          python3 ../../scripts/backend-security-smoke-runtime.py
+          --binary target/debug/wakaclock-server
+          --clickhouse-test-url http://127.0.0.1:8123
+          --postgres-test-url postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_test
 
   extensions:
     name: Extension compile, tests and package checks

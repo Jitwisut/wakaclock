@@ -14,7 +14,10 @@ heartbeats reach whatever account ``WAKACLOCK_API_KEY`` points at and would
 otherwise show ``scenario-*`` projects on a developer's own dashboard.  ``--execute``
 therefore refuses to run against a personal account: pass ``--campaign-api-key``
 (a throwaway user), ``--campaign-server-url`` (a disposable backend), or the
-explicit ``--allow-shared-account`` opt-out.
+explicit ``--allow-shared-account`` opt-out. Transcript storage is independently
+isolated: ``--codex-home`` must name a separately authenticated Codex home outside
+the personal/active home. Never reuse the personal transcript directory, even
+with an isolated API key, since background collectors can replay those sessions.
 """
 from __future__ import annotations
 
@@ -548,12 +551,26 @@ def run_campaign(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
         add_blocker(summary, "codex_executable_unavailable")
         return summary
 
-    codex_home_value = args.codex_home or os.environ.get("CODEX_HOME")
+    # API isolation alone is insufficient: the personal collector can later replay
+    # campaign transcripts from a shared CODEX_HOME under its own API identity.
+    # Require an explicitly selected transcript home, never inherit the active one.
+    codex_home_value = args.codex_home
     if not codex_home_value:
         summary["stages"]["source_capture"] = "failed"
         add_blocker(summary, "codex_auth_home_not_configured")
         return summary
-    codex_home = Path(codex_home_value).expanduser()
+    codex_home = Path(codex_home_value).expanduser().resolve()
+    personal_homes = {Path.home().joinpath(".codex").resolve()}
+    if os.environ.get("CODEX_HOME"):
+        personal_homes.add(Path(os.environ["CODEX_HOME"]).expanduser().resolve())
+    if os.name == "posix":
+        import pwd
+
+        personal_homes.add(Path(pwd.getpwuid(os.getuid()).pw_dir, ".codex").resolve())
+    if any(codex_home == home or home in codex_home.parents for home in personal_homes):
+        add_blocker(summary, "campaign_transcript_home_not_isolated")
+        summary["stages"]["source_capture"] = "failed"
+        return summary
     if not codex_home.is_dir():
         summary["stages"]["source_capture"] = "failed"
         add_blocker(summary, "codex_auth_home_unavailable")
@@ -835,7 +852,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="Run authenticated Codex scenarios")
     parser.add_argument("--codex", default=os.environ.get("CODEX_BIN", "codex"))
-    parser.add_argument("--codex-home")
+    parser.add_argument("--codex-home", help="Separately authenticated Codex home; personal/active homes are rejected")
     parser.add_argument("--wakaclock", default=os.environ.get("WAKACLOCK_CLI_PATH", "wakaclock"))
     parser.add_argument("--expected-version", default="0.153.4")
     parser.add_argument("--deliver", action="store_true", help="Send parsed events to the configured API")

@@ -6,7 +6,6 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -79,6 +78,7 @@ pub async fn list_apps(
     headers: HeaderMap,
 ) -> Result<Json<Vec<crate::services::oauth::DeveloperAppSummary>>, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     let apps = state
         .oauth_service
@@ -94,8 +94,9 @@ pub async fn revoke_app(
     axum::extract::Path(client_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
-    let Some(access_hashes) = state
+    let Some(_access_hashes) = state
         .oauth_service
         .revoke_app(owner_user_id, &client_id)
         .await
@@ -103,9 +104,6 @@ pub async fn revoke_app(
     else {
         return Err(OAuthError::bad_request("OAuth application not found"));
     };
-    for hash in access_hashes {
-        state.auth_cache.remove_hash(&hash);
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -118,6 +116,7 @@ pub async fn authorize(
         return Err(OAuthError::bad_request("response_type must be code"));
     }
     let user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, user_id).await?;
     let scopes = parse_scopes(query.scope.as_deref())?;
@@ -157,7 +156,7 @@ pub async fn token(
 ) -> Result<Json<crate::services::oauth::TokenResponse>, OAuthError> {
     let (client_id, client_secret) =
         client_credentials(&headers, &form.client_id, form.client_secret.as_deref())?;
-    let (response, user_id) = match form.grant_type.as_str() {
+    let (response, _user_id) = match form.grant_type.as_str() {
         "authorization_code" => state
             .oauth_service
             .exchange_code(
@@ -186,16 +185,6 @@ pub async fn token(
             .map_err(OAuthError::invalid_grant)?,
         _ => return Err(OAuthError::bad_request("unsupported grant_type")),
     };
-    state.auth_cache.insert_with_expiry_and_scopes(
-        auth::hash_key(&response.access_token),
-        user_id,
-        Utc::now().timestamp() + response.expires_in,
-        &response
-            .scope
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    );
     Ok(Json(response))
 }
 
@@ -203,14 +192,11 @@ pub async fn revoke(
     State(state): State<Arc<AppState>>,
     Form(form): Form<RevokeForm>,
 ) -> Result<StatusCode, OAuthError> {
-    let revoked_hashes = state
+    let _revoked_hashes = state
         .oauth_service
         .revoke(&form.token)
         .await
         .map_err(OAuthError::service_unavailable)?;
-    for hash in revoked_hashes {
-        state.auth_cache.remove_hash(&hash);
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -225,6 +211,7 @@ pub async fn register_app(
     Json(request): Json<RegisterAppRequest>,
 ) -> Result<(StatusCode, Json<crate::services::oauth::RegisteredApp>), OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, owner_user_id).await?;
     let app = state
@@ -275,21 +262,11 @@ pub async fn device_token(
     State(state): State<Arc<AppState>>,
     Form(form): Form<DeviceTokenForm>,
 ) -> Result<Json<crate::services::oauth::TokenResponse>, OAuthError> {
-    let (response, user_id) = state
+    let (response, _user_id) = state
         .oauth_service
         .exchange_device_code(&form.device_code, &form.client_id)
         .await
         .map_err(OAuthError::device_grant)?;
-    state.auth_cache.insert_with_expiry_and_scopes(
-        auth::hash_key(&response.access_token),
-        user_id,
-        Utc::now().timestamp() + response.expires_in,
-        &response
-            .scope
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    );
     Ok(Json(response))
 }
 
@@ -299,6 +276,7 @@ pub async fn device_approve(
     Form(form): Form<DeviceApproveForm>,
 ) -> Result<StatusCode, OAuthError> {
     let user_id = auth::require_session_user(&state, &headers)
+        .await
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, user_id).await?;
     state

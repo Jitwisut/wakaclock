@@ -21,6 +21,7 @@ impl ReportService {
         user_id: Uuid,
         request: CreateReportScheduleRequest,
     ) -> Result<ReportSchedule> {
+        super::require_background_processor()?;
         validate(&request)?;
         let postgres = self.required()?;
         let id = Uuid::now_v7();

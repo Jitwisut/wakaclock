@@ -85,26 +85,6 @@ struct RawActivityRow {
     actor_confidence: f32,
 }
 
-#[derive(Debug, Row, Deserialize)]
-struct ProjectedActivityRow {
-    segment_id: String,
-    heartbeat_id: String,
-    start: f64,
-    end: f64,
-    source: String,
-    entity: String,
-    project: Option<String>,
-    #[serde(with = "clickhouse::serde::uuid::option")]
-    project_id: Option<Uuid>,
-    branch: Option<String>,
-    language: Option<String>,
-    category: String,
-    editor: String,
-    operating_system: String,
-    actor_type: String,
-    actor_confidence: f32,
-}
-
 /// How long a pause may be and still count as working time — one timeout per stream.
 ///
 /// WakaTime has a single knob because a WakaTime plugin only emits a heartbeat when a
@@ -221,68 +201,10 @@ impl ActivityTimelineService {
         start: f64,
         end: f64,
     ) -> Result<Vec<ActivityInterval>> {
-        // New clients are projected into a deduplicated interval table at ingest. Read it
-        // first; the raw-heartbeat path below is a compatibility fallback for old rows
-        // and for deployments that have not run the additive migration yet.
-        let projected = match self
-            .clickhouse
-            .get_client()
-            .query(
-                "SELECT segment_id, heartbeat_id, `start`, `end`, source, entity, project, project_id, branch, language,
-                        category, editor, operating_system, actor_type, actor_confidence
-                 FROM wakaclock.activity_intervals FINAL
-                 WHERE user_id = ? AND `end` > ? AND `start` < ?
-                 ORDER BY `start` ASC, heartbeat_id ASC",
-            )
-            .bind(user_id)
-            .bind(start)
-            .bind(end)
-            .fetch_all::<ProjectedActivityRow>()
-            .await
-        {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    %user_id,
-                    start,
-                    end,
-                    "activity_intervals query failed; falling back to raw heartbeats"
-                );
-                Vec::new()
-            }
-        };
-        let mut seen_heartbeats = HashSet::new();
+        // Derive intervals from the winning raw revision. A projection may still
+        // contain removed segments after a correction or a partially failed write.
         let mut seen_segments = HashSet::new();
         let mut intervals = Vec::new();
-        for row in projected {
-            let start_value = row.start.max(start);
-            let end_value = row.end.min(end);
-            if end_value <= start_value {
-                continue;
-            }
-            seen_heartbeats.insert(row.heartbeat_id.clone());
-            if !seen_segments.insert(row.segment_id.clone()) {
-                continue;
-            }
-            intervals.push(ActivityInterval {
-                segment_id: row.segment_id,
-                heartbeat_id: row.heartbeat_id,
-                start: start_value,
-                end: end_value,
-                source: normalize_activity_source(Some(&row.source), &row.actor_type).to_string(),
-                actor_type: row.actor_type.parse().unwrap_or_default(),
-                actor_confidence: row.actor_confidence,
-                entity: row.entity,
-                project: row.project,
-                project_id: row.project_id,
-                branch: row.branch.clone(),
-                language: row.language,
-                category: row.category,
-                editor: row.editor,
-                operating_system: row.operating_system,
-            });
-        }
         let rows = self
             .clickhouse
             .get_client()
@@ -294,13 +216,20 @@ impl ActivityTimelineService {
                  -- A legacy heartbeat stores only its end timestamp plus
                  -- `active_seconds`. Include one strict window on either side so an
                  -- interval crossing a day/range boundary is still recovered before
-                 -- it is clipped below. New segment-bearing rows are also safe here.
-                 WHERE user_id = ? AND time >= ? AND time < ?
+                 -- clipping. Buffered explicit segments can predate the send timestamp
+                 -- by hours; include them by their own bounds, not just heartbeat time.
+                 WHERE user_id = ? AND (
+                     (time >= ? AND time < ?)
+                     OR arrayExists(segment -> segment.end > ? AND segment.start < ?,
+                         JSONExtract(activity_segments, 'Array(Tuple(start Float64, end Float64))'))
+                 )
                  ORDER BY time ASC, heartbeat_id ASC",
             )
             .bind(user_id)
             .bind(start - MAX_ACTIVITY_GAP_SECONDS)
             .bind(end + MAX_ACTIVITY_GAP_SECONDS)
+            .bind(start)
+            .bind(end)
             .fetch_all::<RawActivityRow>()
             .await
             .map_err(|error| {
@@ -308,17 +237,10 @@ impl ActivityTimelineService {
             })?;
 
         for (row_index, row) in rows.into_iter().enumerate() {
-            let has_stable_heartbeat_id = row.heartbeat_id.is_some();
             let heartbeat_id = row
                 .heartbeat_id
                 .clone()
                 .unwrap_or_else(|| format!("legacy-row:{row_index}"));
-            // Stable heartbeat IDs make retries idempotent. An old row without one has
-            // no safe identity, so keep it as its own row rather than merging it with a
-            // different observation that happens to share entity/time metadata.
-            let already_projected =
-                has_stable_heartbeat_id && !seen_heartbeats.insert(heartbeat_id.clone());
-
             // A heartbeat proves the developer was present at *its own* timestamp, and
             // that is true whatever its segments happen to cover.
             //
@@ -356,11 +278,6 @@ impl ActivityTimelineService {
                 }
             }
 
-            if already_projected {
-                // The measured intervals for this heartbeat came from
-                // `activity_intervals`; only its timestamp was still missing.
-                continue;
-            }
             let mut segments = serde_json::from_str::<Vec<ActivitySegment>>(&row.activity_segments)
                 .unwrap_or_default();
             if segments.is_empty() {
@@ -1819,6 +1736,104 @@ mod tests {
                 .unwrap()
                 .source,
             "editor"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::repository::heartbeat::HeartbeatRepository;
+
+    #[tokio::test]
+    #[ignore = "requires isolated ClickHouse via CLICKHOUSE_TEST_URL"]
+    async fn corrections_and_deletions_override_stale_intervals_and_retries() {
+        let ch = crate::test_support::clickhouse_client().await;
+        let repo = HeartbeatRepository::new(ch.clone());
+        repo.migrate().await.unwrap();
+        let user = Uuid::now_v7();
+        let other_user = Uuid::now_v7();
+        let id = format!("lifecycle-{user}");
+        let segments = serde_json::json!([{"segment_id":"old-segment", "start":1000.0, "end":1060.0, "source":"editor"}]).to_string();
+        let seed = |owner, revision, data: String, seconds, time| {
+            ch.get_client().query(
+                "INSERT INTO wakaclock.heartbeats (user_id, entity, entity_type, time, dependencies, is_write, category,
+                 editor, operating_system, machine, user_agent, is_ai_generated, created_at,
+                 heartbeat_id, revision, activity_segments, active_seconds, actor_type, actor_confidence)
+                 VALUES (?, 'a.rs', 'file', ?, [], 1, 'coding', 'vscode', 'test', 'test', 'test', 0, 1060, ?, ?, ?, ?, 'human', 1)"
+            ).bind(owner).bind(time).bind(&id).bind(revision).bind(data).bind(seconds)
+        };
+        seed(user, 0u32, segments.clone(), 60.0, 1060.0)
+            .execute()
+            .await
+            .unwrap();
+        seed(other_user, 0u32, segments.clone(), 60.0, 1060.0)
+            .execute()
+            .await
+            .unwrap();
+        ch.get_client()
+            .query(
+                "INSERT INTO wakaclock.activity_intervals
+            (user_id, segment_id, heartbeat_id, start, end, source, entity, category, created_at)
+            VALUES (?, 'old-segment', ?, 1000, 1060, 'editor', 'a.rs', 'coding', 1060)",
+            )
+            .bind(user)
+            .bind(&id)
+            .execute()
+            .await
+            .unwrap();
+        let timeline = ActivityTimelineService::new(ch.clone(), BridgeConfig::single(0.0));
+        let duration = |intervals: Vec<ActivityInterval>| {
+            intervals.iter().map(|i| i.end - i.start).sum::<f64>()
+        };
+        assert_eq!(
+            duration(timeline.intervals(user, 900.0, 1200.0).await.unwrap()),
+            60.0
+        );
+        seed(user, 1u32, "[]".into(), 0.0, 1060.0)
+            .execute()
+            .await
+            .unwrap();
+        assert_eq!(
+            duration(timeline.intervals(user, 900.0, 1200.0).await.unwrap()),
+            0.0
+        );
+        let delayed_user = Uuid::now_v7();
+        seed(delayed_user, 0u32, segments, 60.0, 2000.0)
+            .execute()
+            .await
+            .unwrap();
+        assert_eq!(
+            duration(
+                timeline
+                    .intervals(delayed_user, 900.0, 1200.0)
+                    .await
+                    .unwrap()
+            ),
+            60.0
+        );
+        repo.delete_ids(user, std::slice::from_ref(&id))
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.existing_heartbeat_revisions(user, std::slice::from_ref(&id))
+                .await
+                .unwrap()
+                .get(&id),
+            Some(&u32::MAX)
+        );
+        seed(user, 0u32, "[]".into(), 60.0, 1060.0)
+            .execute()
+            .await
+            .unwrap();
+        assert!(timeline
+            .intervals(user, 900.0, 1200.0)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            duration(timeline.intervals(other_user, 900.0, 1200.0).await.unwrap()),
+            60.0
         );
     }
 }

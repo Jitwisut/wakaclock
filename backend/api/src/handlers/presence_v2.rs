@@ -275,7 +275,7 @@ pub async fn list_rooms(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<RoomEnvelope<Vec<RoomListItem>>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let rooms = repo
         .list_for_user(user_id)
@@ -290,7 +290,7 @@ pub async fn create_room(
     headers: HeaderMap,
     Json(input): Json<CreateRoomInput>,
 ) -> Result<(StatusCode, Json<RoomEnvelope<RoomData>>), PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     state
         .user_service
@@ -314,7 +314,7 @@ pub async fn get_room(
     headers: HeaderMap,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<RoomEnvelope<RoomData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let room = repo
         .get(room_id)
@@ -338,7 +338,7 @@ pub async fn resolve_invite(
     headers: HeaderMap,
     Json(input): Json<ResolveInviteInput>,
 ) -> Result<Json<RoomEnvelope<RoomData>>, PresenceApiError> {
-    let _ = user(&state, &headers)?;
+    let _ = user(&state, &headers).await?;
     if input.token.trim().is_empty() {
         return Err(PresenceApiError::bad_request("invite token is required"));
     }
@@ -360,7 +360,7 @@ pub async fn join_room(
     Path(room_id): Path<Uuid>,
     body: Option<Json<JoinRoomInput>>,
 ) -> Result<Json<RoomEnvelope<SnapshotData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let redis = redis(&state)?;
     let room = repo
@@ -445,7 +445,7 @@ pub async fn leave_room(
     headers: HeaderMap,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let redis = redis(&state)?;
     redis
         .leave(room_id, user_id)
@@ -487,7 +487,7 @@ pub async fn heartbeat(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<StatusCode, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let redis = redis(&state)?;
     redis
@@ -538,7 +538,7 @@ pub async fn end_room(
     headers: HeaderMap,
     Path(room_id): Path<Uuid>,
 ) -> Result<StatusCode, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let changed = repo(&state)?
         .end_room(room_id, user_id)
         .await
@@ -561,7 +561,7 @@ pub async fn update_member(
     Path(room_id): Path<Uuid>,
     Json(input): Json<UpdateMemberInput>,
 ) -> Result<Json<RoomEnvelope<SnapshotData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     state
         .presence_rate_limiter
         .check(user_id)
@@ -653,7 +653,7 @@ pub async fn create_stream_ticket(
     headers: HeaderMap,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<RoomEnvelope<TicketData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let redis = redis(&state)?;
     let room = repo
@@ -705,7 +705,7 @@ pub async fn stream_presence(
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, PresenceApiError> {
     let redis = redis(&state)?;
-    let user_id = if let Some(user_id) = auth::resolve_user_id(&state, &headers) {
+    let user_id = if let Some(user_id) = auth::require_account_user(&state, &headers).await {
         user_id
     } else {
         let ticket = query
@@ -877,7 +877,7 @@ pub async fn create_invite(
     Path(room_id): Path<Uuid>,
     body: Option<Json<CreateInviteInput>>,
 ) -> Result<(StatusCode, Json<RoomEnvelope<InviteData>>), PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let room = repo
         .get(room_id)
@@ -927,7 +927,7 @@ pub async fn list_invites(
     headers: HeaderMap,
     Path(room_id): Path<Uuid>,
 ) -> Result<Json<RoomEnvelope<Vec<InviteData>>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let repo = repo(&state)?;
     let room = repo
         .get(room_id)
@@ -956,7 +956,7 @@ pub async fn revoke_invite(
     headers: HeaderMap,
     Path((room_id, invite_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let changed = repo(&state)?
         .revoke_invite(room_id, invite_id, user_id)
         .await
@@ -972,7 +972,7 @@ pub async fn history(
     headers: HeaderMap,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<RoomEnvelope<HistoryData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let (from, to) = history_bounds(
         query.from.as_deref(),
         query.to.as_deref(),
@@ -1079,7 +1079,7 @@ pub async fn organization_summary(
     Path(organization_id): Path<Uuid>,
     Query(query): Query<SummaryQuery>,
 ) -> Result<Json<RoomEnvelope<PresenceSummaryData>>, PresenceApiError> {
-    let user_id = user(&state, &headers)?;
+    let user_id = user(&state, &headers).await?;
     let (from, to) = history_bounds(
         query.from.as_deref(),
         query.to.as_deref(),
@@ -1160,8 +1160,10 @@ fn history_bounds(
     Ok((start_at.max(0) as u32, end_at.max(0) as u32))
 }
 
-fn user(state: &AppState, headers: &HeaderMap) -> Result<Uuid, PresenceApiError> {
-    auth::resolve_user_id(state, headers).ok_or_else(PresenceApiError::unauthorized)
+async fn user(state: &AppState, headers: &HeaderMap) -> Result<Uuid, PresenceApiError> {
+    auth::require_account_user(state, headers)
+        .await
+        .ok_or_else(PresenceApiError::unauthorized)
 }
 
 async fn checkpoint_live_sessions(

@@ -37,6 +37,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 struct SessionClaims {
     sub: Uuid,
     exp: i64,
+    jti: Uuid,
 }
 
 /// Issue a short-lived (24h) session JWT after a successful /auth/login or
@@ -49,6 +50,7 @@ pub fn issue_session_token(
 ) -> Result<String, jsonwebtoken::errors::Error> {
     let claims = SessionClaims {
         sub: user_id,
+        jti: Uuid::now_v7(),
         exp: chrono::Utc::now().timestamp() + SESSION_TTL_SECONDS,
     };
     encode(
@@ -89,57 +91,137 @@ fn extract_key(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Resolve the caller's `user_id` from a session JWT (dashboard) or an API key
-/// (CLI/extension) — the only two ways to prove identity. Returns `None` if neither is
-/// present or valid, and callers must treat that as a hard failure (401), not fall back
-/// to a client-supplied `user_id` in a query string or JSON body: that field is never
-/// trustworthy on its own, since anyone can set it to any uuid. An earlier version of
-/// this function accepted that fallback for a soft rollout; every caller now requires
-/// real authentication, so it was removed rather than left reachable.
-pub fn resolve_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
-    let token = extract_key(headers)?;
-    resolve_user_id_from_token(state, &token)
+/// Credentials are resolved against the authoritative store on each request. A process
+/// cache must never extend a revoked credential's lifetime or hide a newly issued key.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CredentialKind {
+    Session,
+    ApiKey,
+    OAuth(Vec<String>),
 }
 
-/// Same resolution as `resolve_user_id`, but takes the token directly instead of
-/// reading it from an `Authorization` header.
-///
-/// Exists for the presence SSE stream: browsers' native `EventSource` cannot set custom
-/// request headers, so that one endpoint accepts the session token as a `?token=` query
-/// parameter instead. This is the standard workaround for authenticating SSE from a
-/// browser — not a general-purpose alternative to header auth, and no other handler
-/// should call this directly with a client-supplied query parameter.
-pub fn resolve_user_id_from_token(state: &AppState, token: &str) -> Option<Uuid> {
-    if let Some(user_id) = verify_session_token(token, &state.config.jwt_secret) {
-        return Some(user_id);
+#[derive(Debug)]
+pub struct AuthContext {
+    pub user_id: Uuid,
+    pub kind: CredentialKind,
+}
+
+impl AuthContext {
+    pub fn allows(&self, scope: &str) -> bool {
+        match &self.kind {
+            CredentialKind::Session | CredentialKind::ApiKey => true,
+            CredentialKind::OAuth(scopes) => scopes.iter().any(|s| s == scope || s == "*"),
+        }
     }
-
-    let hash = hash_key(token);
-    state.auth_cache.lookup(&hash)
 }
 
-/// Like `resolve_user_id`, but only accepts a session JWT — not an API key. Used by
-/// endpoints that must not be reachable from a long-lived CLI/extension credential at
-/// all, such as generating a *new* API key: a key should never be able to mint another
-/// key for itself.
-pub fn require_session_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+pub async fn resolve_context(state: &AppState, headers: &HeaderMap) -> Option<AuthContext> {
     let token = extract_key(headers)?;
-    verify_session_token(&token, &state.config.jwt_secret)
-}
-
-/// Require an OAuth scope for an endpoint while preserving the compatibility
-/// semantics of API keys and dashboard sessions. OAuth access tokens carry a
-/// scope set in the in-memory auth index; API keys are account credentials and
-/// therefore have no scope entry, and session JWTs are already restricted to
-/// the first-party dashboard.
-pub fn require_scope(state: &AppState, headers: &HeaderMap, scope: &str) -> bool {
-    let Some(token) = extract_key(headers) else {
-        return false;
+    let session_user = verify_session_token(&token, &state.config.jwt_secret);
+    let hash = hash_key(&token);
+    if let Some(postgres) = &state.postgres {
+        if let Some(user_id) = session_user {
+            let active = postgres
+                .client()
+                .query_opt(
+                    "SELECT 1 FROM users u JOIN sessions s ON s.user_id = u.id
+                 WHERE u.id = $1 AND u.is_active AND u.deleted_at IS NULL
+                   AND s.token_hash = $2 AND s.revoked_at IS NULL AND s.expires_at > now()",
+                    &[&user_id, &hash],
+                )
+                .await
+                .ok()??;
+            let _ = active;
+            return Some(AuthContext {
+                user_id,
+                kind: CredentialKind::Session,
+            });
+        }
+        let row = postgres
+            .client()
+            .query_opt(
+                "SELECT k.user_id, NULL::text[] AS scopes FROM api_keys k
+             JOIN users u ON u.id = k.user_id
+             WHERE k.key_hash = $1 AND k.revoked_at IS NULL
+               AND (k.expires_at IS NULL OR k.expires_at > now())
+               AND u.is_active AND u.deleted_at IS NULL
+             UNION ALL
+             SELECT t.user_id, t.scopes FROM oauth_access_tokens t
+             JOIN users u ON u.id = t.user_id JOIN oauth_apps a ON a.id = t.app_id
+             WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND t.expires_at > now()
+               AND a.revoked_at IS NULL AND u.is_active AND u.deleted_at IS NULL
+             LIMIT 1",
+                &[&hash],
+            )
+            .await
+            .ok()??;
+        let scopes: Option<Vec<String>> = row.get("scopes");
+        return Some(AuthContext {
+            user_id: row.get("user_id"),
+            kind: scopes
+                .map(CredentialKind::OAuth)
+                .unwrap_or(CredentialKind::ApiKey),
+        });
+    }
+    #[derive(Deserialize, clickhouse::Row)]
+    struct Identity {
+        #[serde(with = "clickhouse::serde::uuid")]
+        user_id: Uuid,
+    }
+    let client = state.clickhouse.get_client();
+    let query = if let Some(user_id) = session_user {
+        client
+            .query(
+                "SELECT user_id FROM wakaclock.users FINAL WHERE user_id = ? AND is_active LIMIT 1",
+            )
+            .bind(user_id)
+    } else {
+        client.query("SELECT user_id FROM wakaclock.users FINAL WHERE api_key = ? AND api_key != '' AND is_active LIMIT 1").bind(hash)
     };
-    if verify_session_token(&token, &state.config.jwt_secret).is_some() {
-        return true;
+    let identity = query.fetch_optional::<Identity>().await.ok()??;
+    Some(AuthContext {
+        user_id: identity.user_id,
+        kind: if session_user.is_some() {
+            CredentialKind::Session
+        } else {
+            CredentialKind::ApiKey
+        },
+    })
+}
+
+pub async fn resolve_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+    Some(resolve_context(state, headers).await?.user_id)
+}
+
+pub async fn require_scoped_user(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<Uuid, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    let context = resolve_context(state, headers)
+        .await
+        .ok_or_else(unauthorized)?;
+    if !context.allows(scope) {
+        return Err(forbidden_scope(scope));
     }
-    state.auth_cache.has_scope(&hash_key(&token), scope)
+    Ok(context.user_id)
+}
+
+/// First-party account operations are never authorized by a third-party OAuth grant.
+pub async fn require_account_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+    let context = resolve_context(state, headers).await?;
+    (!matches!(context.kind, CredentialKind::OAuth(_))).then_some(context.user_id)
+}
+
+pub async fn require_session_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
+    let context = resolve_context(state, headers).await?;
+    (context.kind == CredentialKind::Session).then_some(context.user_id)
+}
+
+pub async fn require_scope(state: &AppState, headers: &HeaderMap, scope: &str) -> bool {
+    resolve_context(state, headers)
+        .await
+        .is_some_and(|context| context.allows(scope))
 }
 
 /// Shared 403 body for an authenticated OAuth client that did not grant the
@@ -160,6 +242,35 @@ pub fn unauthorized() -> (axum::http::StatusCode, axum::Json<serde_json::Value>)
         axum::http::StatusCode::UNAUTHORIZED,
         axum::Json(serde_json::json!({ "error": "authentication required" })),
     )
+}
+
+/// Trust forwarding information only from an explicitly configured proxy. Walk
+/// from the nearest hop so a client cannot prepend a fabricated address.
+pub fn client_ip(
+    peer: std::net::IpAddr,
+    headers: &HeaderMap,
+    trusted: &[std::net::IpAddr],
+) -> std::net::IpAddr {
+    if !trusted.contains(&peer) {
+        return peer;
+    }
+    let Some(raw) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
+        return peer;
+    };
+    let Ok(hops) = raw
+        .split(',')
+        .map(|value| value.trim().parse::<std::net::IpAddr>())
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return peer;
+    };
+    if hops.len() > 32 {
+        return peer;
+    }
+    hops.into_iter()
+        .rev()
+        .find(|ip| !trusted.contains(ip))
+        .unwrap_or(peer)
 }
 
 /// Check the per-IP limit for an auth-sensitive endpoint (login, register, API key
@@ -232,4 +343,55 @@ pub fn payment_required() -> (axum::http::StatusCode, axum::Json<serde_json::Val
             "error": "trial expired or subscription inactive — see /users/current for status"
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwarding_headers_require_a_trusted_peer_and_ignore_forged_prefixes() {
+        let peer = "10.0.0.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.99, 198.51.100.7, 10.0.0.2".parse().unwrap(),
+        );
+        assert_eq!(client_ip(peer, &headers, &[]), peer);
+        assert_eq!(
+            client_ip(peer, &headers, &[peer, "10.0.0.2".parse().unwrap()]),
+            "198.51.100.7".parse::<std::net::IpAddr>().unwrap()
+        );
+        headers.insert("x-forwarded-for", "invalid".parse().unwrap());
+        assert_eq!(client_ip(peer, &headers, &[peer]), peer);
+    }
+
+    #[test]
+    fn oauth_grants_cannot_inherit_account_privileges() {
+        for scopes in [vec![], vec!["read_goals".to_string()]] {
+            let context = AuthContext {
+                user_id: Uuid::nil(),
+                kind: CredentialKind::OAuth(scopes),
+            };
+            assert!(!context.allows("write_logged_time"));
+            assert!(!context.allows("export_data"));
+            assert!(!context.allows("manage_integrations"));
+        }
+        let context = AuthContext {
+            user_id: Uuid::nil(),
+            kind: CredentialKind::OAuth(vec!["read_goals".into()]),
+        };
+        assert!(context.allows("read_goals"));
+    }
+
+    #[test]
+    fn sessions_issued_in_the_same_second_are_independently_revocable() {
+        let secret = "test-only-long-secret-for-jwt-signing";
+        let user = Uuid::now_v7();
+        let first = issue_session_token(user, secret).unwrap();
+        let second = issue_session_token(user, secret).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(verify_session_token(&first, secret), Some(user));
+        assert_eq!(verify_session_token(&first, "wrong-secret"), None);
+    }
 }

@@ -98,6 +98,7 @@ impl IntegrationService {
         provider: &str,
         request: CreateIntegrationRequest,
     ) -> Result<IntegrationConnection> {
+        super::require_background_processor()?;
         let provider = provider_def(provider)?;
         let display_name = request.display_name.trim();
         if display_name.is_empty() || display_name.len() > 160 {
@@ -187,6 +188,7 @@ impl IntegrationService {
     }
 
     pub async fn request_sync(&self, user_id: Uuid, id: Uuid) -> Result<bool> {
+        super::require_background_processor()?;
         let postgres = self.required()?;
         let changed = postgres
             .client()

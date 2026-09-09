@@ -100,6 +100,7 @@ pub struct ClientCapabilities {
 
 #[derive(Debug, Serialize)]
 pub struct FeatureCapability {
+    pub available: bool,
     pub key: String,
     pub status: String,
     pub api: String,
@@ -372,6 +373,24 @@ pub fn router(app_state: Arc<AppState>) -> Router {
 }
 
 /// Public capability discovery endpoint used by clients and the plugin directory.
+fn feature_available(key: &str, postgres: bool) -> bool {
+    match key {
+        "data_exports" | "daily_weekly_monthly_reports" | "calendar_integrations" => false,
+        "postgres_transactional_store"
+        | "personal_organizations"
+        | "goals_crud"
+        | "oauth_pkce_and_device_flow"
+        | "git_commit_pr_analytics"
+        | "public_profiles_and_embeds"
+        | "private_leaderboards"
+        | "organization_analytics"
+        | "sso_oidc_saml"
+        | "scim"
+        | "seat_billing_entitlements" => postgres,
+        _ => true,
+    }
+}
+
 pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope<CapabilityData>> {
     let inventory: Value = serde_json::from_str(WAKATIME_ROUTE_INVENTORY)
         .expect("wakatime-api-routes.json must remain valid JSON");
@@ -427,8 +446,16 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                 .features
                 .into_iter()
                 .map(|feature| FeatureCapability {
+                    available: feature_available(&feature.key, state.postgres.is_some()),
+                    status: if matches!(
+                        feature.key.as_str(),
+                        "data_exports" | "daily_weekly_monthly_reports" | "calendar_integrations"
+                    ) {
+                        "partial".to_string()
+                    } else {
+                        feature.status
+                    },
                     key: feature.key,
-                    status: feature.status,
                     api: feature.api,
                 })
                 .collect(),
@@ -443,7 +470,9 @@ pub async fn me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Value>>, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let user = state
         .user_service
         .get_current(user_id)
@@ -461,7 +490,7 @@ pub async fn analytics(
     headers: HeaderMap,
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AnalyticsData>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_stats")?;
+    let user_id = require_scope(&state, &headers, "read_stats").await?;
     let (start, end) = resolve_range(query.start, query.end)?;
     let summary = state
         .summary_service
@@ -482,7 +511,7 @@ pub async fn ai_effectiveness(
     headers: HeaderMap,
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AiEffectivenessData>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_ai_analytics")?;
+    let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
     let (start, end) = resolve_range(query.start, query.end)?;
     let stats = state
         .ai_stats_service
@@ -566,7 +595,7 @@ pub async fn follow_up_event(
     headers: HeaderMap,
     Json(input): Json<HumanFollowUpEventRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "write_logged_time")?;
+    let user_id = require_scope(&state, &headers, "write_logged_time").await?;
     state
         .follow_up_service
         .record(user_id, input)
@@ -586,7 +615,7 @@ pub async fn follow_up_stats(
     headers: HeaderMap,
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<HumanFollowUpStats>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_ai_analytics")?;
+    let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
     let (start_date, end_date) = resolve_range(query.start, query.end)?;
     let range = ResolvedRange::parse(&start_date, &end_date, query.timezone.as_deref())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -607,7 +636,7 @@ pub async fn goals_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<Goal>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_goals")?;
+    let user_id = require_scope(&state, &headers, "read_goals").await?;
     let goals = state
         .goal_service
         .list_for_user(user_id)
@@ -621,7 +650,7 @@ pub async fn goals_create(
     headers: HeaderMap,
     Json(input): Json<CreateGoalRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Goal>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "write_goals")?;
+    let user_id = require_scope(&state, &headers, "write_goals").await?;
     ensure_pg_identity(&state, user_id).await?;
     let goal = state
         .goal_service
@@ -645,7 +674,7 @@ pub async fn goals_delete(
     headers: HeaderMap,
     Path(goal_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "write_goals")?;
+    let user_id = require_scope(&state, &headers, "write_goals").await?;
     let deleted = state
         .goal_service
         .delete(user_id, goal_id)
@@ -663,7 +692,7 @@ pub async fn goals_get(
     headers: HeaderMap,
     Path(goal_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Goal>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_goals")?;
+    let user_id = require_scope(&state, &headers, "read_goals").await?;
     let goal = state
         .goal_service
         .get(user_id, goal_id)
@@ -679,7 +708,7 @@ pub async fn goals_update(
     Path(goal_id): Path<Uuid>,
     Json(input): Json<UpdateGoalRequest>,
 ) -> Result<Json<V2Envelope<Goal>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "write_goals")?;
+    let user_id = require_scope(&state, &headers, "write_goals").await?;
     let goal = state
         .goal_service
         .update(user_id, goal_id, input)
@@ -703,7 +732,7 @@ pub async fn goals_progress(
     headers: HeaderMap,
     Path(goal_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<GoalProgress>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_goals")?;
+    let user_id = require_scope(&state, &headers, "read_goals").await?;
     let progress = state
         .goal_service
         .progress(user_id, goal_id)
@@ -727,7 +756,7 @@ pub async fn exports_create(
     headers: HeaderMap,
     Json(input): Json<CreateExportRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ExportJob>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "export_data")?;
+    let user_id = require_scope(&state, &headers, "export_data").await?;
     ensure_pg_identity(&state, user_id).await?;
     let job = state
         .export_service
@@ -747,7 +776,7 @@ pub async fn exports_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<ExportJob>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "export_data")?;
+    let user_id = require_scope(&state, &headers, "export_data").await?;
     let jobs = state
         .export_service
         .list(user_id)
@@ -761,7 +790,7 @@ pub async fn exports_get(
     headers: HeaderMap,
     Path(export_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<ExportJob>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "export_data")?;
+    let user_id = require_scope(&state, &headers, "export_data").await?;
     let job = state
         .export_service
         .get(user_id, export_id)
@@ -776,7 +805,7 @@ pub async fn exports_cancel(
     headers: HeaderMap,
     Path(export_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "export_data")?;
+    let user_id = require_scope(&state, &headers, "export_data").await?;
     if state
         .export_service
         .cancel(user_id, export_id)
@@ -795,7 +824,9 @@ pub async fn profile_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<PublicProfile>>, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let profile = state
         .profile_service
         .get_profile(user_id)
@@ -809,7 +840,9 @@ pub async fn profile_update(
     headers: HeaderMap,
     Json(input): Json<UpdateProfileRequest>,
 ) -> Result<Json<V2Envelope<PublicProfile>>, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let profile = state
         .profile_service
@@ -830,7 +863,9 @@ pub async fn share_links_create(
     headers: HeaderMap,
     Json(input): Json<CreateShareLinkRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ShareLink>>), ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let link = state
         .profile_service
@@ -850,7 +885,9 @@ pub async fn share_links_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<ShareLink>>>, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let links = state
         .profile_service
         .list_share_links(user_id)
@@ -864,7 +901,9 @@ pub async fn share_links_delete(
     headers: HeaderMap,
     Path(link_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     if state
         .profile_service
         .revoke_share_link(user_id, link_id)
@@ -884,7 +923,9 @@ pub async fn report_schedules_create(
     headers: HeaderMap,
     Json(input): Json<CreateReportScheduleRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ReportSchedule>>), ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let schedule = state
         .report_service
@@ -904,7 +945,9 @@ pub async fn report_schedules_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<ReportSchedule>>>, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let schedules = state
         .report_service
         .list(user_id)
@@ -918,7 +961,9 @@ pub async fn report_schedules_delete(
     headers: HeaderMap,
     Path(schedule_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(ApiError::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     if state
         .report_service
         .delete(user_id, schedule_id)
@@ -945,7 +990,7 @@ pub async fn integration_connect(
     Path(provider): Path<String>,
     Json(input): Json<CreateIntegrationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<IntegrationConnection>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    let user_id = require_scope(&state, &headers, "manage_integrations").await?;
     ensure_pg_identity(&state, user_id).await?;
     let connection = state
         .integration_service
@@ -971,7 +1016,7 @@ pub async fn integrations_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<IntegrationConnection>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    let user_id = require_scope(&state, &headers, "manage_integrations").await?;
     let connections = state
         .integration_service
         .list(user_id)
@@ -985,7 +1030,7 @@ pub async fn integration_status(
     headers: HeaderMap,
     Path(integration_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<IntegrationConnection>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    let user_id = require_scope(&state, &headers, "manage_integrations").await?;
     let connection = state
         .integration_service
         .status(user_id, integration_id)
@@ -1000,7 +1045,7 @@ pub async fn integration_sync(
     headers: HeaderMap,
     Path(integration_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    let user_id = require_scope(&state, &headers, "manage_integrations").await?;
     if state
         .integration_service
         .request_sync(user_id, integration_id)
@@ -1018,7 +1063,7 @@ pub async fn integration_disconnect(
     headers: HeaderMap,
     Path(integration_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "manage_integrations")?;
+    let user_id = require_scope(&state, &headers, "manage_integrations").await?;
     let provider = state
         .integration_service
         .disconnect(user_id, integration_id)
@@ -1039,7 +1084,7 @@ pub async fn organizations_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<Organization>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
     let organizations = state
         .organizations_service
         .list_for_user(user_id)
@@ -1053,7 +1098,9 @@ pub async fn organizations_create(
     headers: HeaderMap,
     Json(input): Json<CreateOrganizationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Organization>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let organization = state
         .organizations_service
@@ -1080,7 +1127,7 @@ pub async fn organization_get(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Organization>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
     let organization = state
         .organizations_service
         .get(user_id, organization_id)
@@ -1096,7 +1143,9 @@ pub async fn organization_update(
     Path(organization_id): Path<Uuid>,
     Json(input): Json<UpdateOrganizationRequest>,
 ) -> Result<Json<V2Envelope<Organization>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let organization = state
         .organizations_service
         .update(user_id, organization_id, input)
@@ -1119,7 +1168,7 @@ pub async fn organization_members(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<OrganizationMember>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_org_members")?;
+    let user_id = require_scope(&state, &headers, "read_org_members").await?;
     let members = state
         .organizations_service
         .members(user_id, organization_id)
@@ -1134,7 +1183,9 @@ pub async fn organization_add_member(
     Path(organization_id): Path<Uuid>,
     Json(input): Json<AddOrganizationMemberRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationMember>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "read_org_members")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let member = state
         .organizations_service
         .add_member(user_id, organization_id, input)
@@ -1157,7 +1208,9 @@ pub async fn organization_remove_member(
     headers: HeaderMap,
     Path((organization_id, member_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_org_members")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     if state
         .organizations_service
         .remove_member(user_id, organization_id, member_user_id)
@@ -1175,7 +1228,7 @@ pub async fn organization_teams(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<OrganizationTeam>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
     let teams = state
         .organizations_service
         .teams(user_id, organization_id)
@@ -1190,7 +1243,9 @@ pub async fn organization_create_team(
     Path(organization_id): Path<Uuid>,
     Json(input): Json<CreateOrganizationTeamRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationTeam>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     let team = state
         .organizations_service
         .create_team(user_id, organization_id, input)
@@ -1213,7 +1268,7 @@ pub async fn organization_analytics(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<OrganizationAnalytics>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_org_dashboards")?;
+    let user_id = require_scope(&state, &headers, "read_org_dashboards").await?;
     let analytics = state
         .organizations_service
         .analytics(user_id, organization_id)
@@ -1231,7 +1286,7 @@ pub async fn organization_audit_logs(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<Value>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_org_dashboards")?;
+    let user_id = require_scope(&state, &headers, "read_org_dashboards").await?;
     let logs = state
         .organizations_service
         .audit_logs(user_id, organization_id)
@@ -1245,7 +1300,7 @@ pub async fn organization_billing(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<OrganizationBilling>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
     let billing = state
         .billing_service
         .organization(user_id, organization_id)
@@ -1259,7 +1314,7 @@ pub async fn organization_invoices(
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<Invoice>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_orgs")?;
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
     let invoices = state
         .billing_service
         .invoices(user_id, organization_id)
@@ -1272,7 +1327,7 @@ pub async fn leaderboards_list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<Leaderboard>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
     let boards = state
         .leaderboard_service
         .list(user_id)
@@ -1286,7 +1341,9 @@ pub async fn leaderboards_create(
     headers: HeaderMap,
     Json(input): Json<CreateLeaderboardRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Leaderboard>>), ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let board = state
         .leaderboard_service
@@ -1310,7 +1367,7 @@ pub async fn leaderboard_get(
     headers: HeaderMap,
     Path(leaderboard_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Leaderboard>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
     let board = state
         .leaderboard_service
         .get(user_id, leaderboard_id)
@@ -1325,7 +1382,7 @@ pub async fn leaderboard_members(
     headers: HeaderMap,
     Path(leaderboard_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<LeaderboardMember>>>, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
     let members = state
         .leaderboard_service
         .members(user_id, leaderboard_id)
@@ -1340,7 +1397,9 @@ pub async fn leaderboard_add_member(
     Path(leaderboard_id): Path<Uuid>,
     Json(input): Json<LeaderboardMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     if state
         .leaderboard_service
         .add_member(user_id, leaderboard_id, input)
@@ -1360,7 +1419,9 @@ pub async fn leaderboard_remove_member(
     headers: HeaderMap,
     Path((leaderboard_id, member_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = require_scope(&state, &headers, "read_private_leaderboards")?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
     if state
         .leaderboard_service
         .remove_member(user_id, leaderboard_id, member_user_id)
@@ -1380,7 +1441,7 @@ fn envelope<T>(data: T, timezone: &str, coverage: Option<Value>) -> V2Envelope<T
             request_id: Uuid::now_v7(),
             generated_at: Utc::now().to_rfc3339(),
             timezone: timezone.to_string(),
-            data_freshness: "realtime",
+            data_freshness: "unknown",
             coverage,
         },
     }
@@ -1430,13 +1491,15 @@ async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), ApiEr
         .map_err(ApiError::service_unavailable)
 }
 
-fn require_scope(
+async fn require_scope(
     state: &AppState,
     headers: &HeaderMap,
     scope: &'static str,
 ) -> Result<Uuid, ApiError> {
-    let user_id = auth::resolve_user_id(state, headers).ok_or_else(ApiError::unauthorized)?;
-    if !auth::require_scope(state, headers, scope) {
+    let user_id = auth::resolve_user_id(state, headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if !auth::require_scope(state, headers, scope).await {
         return Err(ApiError::forbidden_scope(scope));
     }
     Ok(user_id)

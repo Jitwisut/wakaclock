@@ -211,8 +211,10 @@ pub async fn create(
     headers: HeaderMap,
     Json(payload): Json<HeartbeatPayload>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "write_logged_time").await {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     require_active_access(&state, user_id).await?;
@@ -250,12 +252,20 @@ pub async fn create_bulk(
     headers: HeaderMap,
     Json(payloads): Json<Vec<HeartbeatPayload>>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "write_logged_time").await {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     require_active_access(&state, user_id).await?;
 
+    if payloads.len() > 1000 {
+        return Err(app_error(
+            StatusCode::BAD_REQUEST,
+            "at most 1000 heartbeats per request",
+        ));
+    }
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
         .map(|p| payload_to_heartbeat(p, user_id))
@@ -307,8 +317,10 @@ pub async fn delete_bulk(
     headers: HeaderMap,
     Json(payload): Json<DeleteBulkPayload>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "write_logged_time").await {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     if payload.heartbeat_ids.len() > 1000 {
@@ -346,8 +358,10 @@ pub async fn list(
     let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
 
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time") {
+    let user_id = auth::resolve_user_id(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    if !auth::require_scope(&state, &headers, "read_logged_time").await {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 

@@ -465,7 +465,41 @@ pub fn status() -> AgentServiceReport {
 /// unavailable; the legacy status report keeps its historical best-effort
 /// boolean through `status()`.
 pub fn running_probe() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // A LaunchAgent can be alive while the sandbox denies `kill -0` against
+        // its PID. Ask launchd for the service state first; the lock remains the
+        // fallback used by tests and by non-launchd invocations.
+        launchd_running_probe().or_else(|_| running_probe_at(lock_path()))
+    }
+    #[cfg(not(target_os = "macos"))]
     running_probe_at(lock_path())
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_running_probe() -> Result<bool, String> {
+    let domain = format!("gui/{}/{}", uid(), SERVICE_LABEL);
+    let output = Command::new("launchctl")
+        .args(["print", &domain])
+        .output()
+        .map_err(|error| format!("could not query launchd: {error}"))?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        if message.contains("could not find service") || message.contains("service not found") {
+            return Ok(false);
+        }
+        return Err("launchd service query failed".to_string());
+    }
+    parse_launchd_state(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_launchd_state(output: &str) -> Result<bool, String> {
+    let state = output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("state = "))
+        .ok_or_else(|| "launchd service state was unavailable".to_string())?;
+    Ok(state == "running")
 }
 
 fn running_probe_at(path: PathBuf) -> Result<bool, String> {
@@ -786,5 +820,13 @@ mod tests {
         assert!(!running_probe_at(lock).unwrap());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_state_parser_reports_running_without_pid_probe() {
+        assert!(super::parse_launchd_state("state = running\npid = 123\n").unwrap());
+        assert!(!super::parse_launchd_state("state = waiting\n").unwrap());
+        assert!(super::parse_launchd_state("pid = 123\n").is_err());
     }
 }

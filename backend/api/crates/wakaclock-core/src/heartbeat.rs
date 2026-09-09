@@ -689,6 +689,13 @@ impl Heartbeat {
         if has_identity && !verified_identity {
             // The identity itself is evidence that the heartbeat is AI activity;
             // stripping it must never reclassify the work as human.
+            // `Unknown` is the resolver's pre-policy value for this legacy shape.
+            // Once the identity has been stripped, use the canonical inferred-AI
+            // bucket so the legacy boolean and actor enum remain consistent at
+            // every transport boundary.
+            if self.actor_type == ActorType::Unknown {
+                self.actor_type = ActorType::AiInferred;
+            }
             self.is_ai_generated = true;
             self.ai_agent = None;
             self.ai_provider = None;
@@ -706,6 +713,9 @@ impl Heartbeat {
         } else if self.is_ai_generated && self.ai_agent.is_none() {
             // Historical/observer rows may arrive already unattributed.  Normalize
             // their label without inventing an agent identity.
+            if self.actor_type == ActorType::Unknown {
+                self.actor_type = ActorType::AiInferred;
+            }
             self.ai_provider = None;
             self.ai_model = None;
             self.ai_confidence = Some("inferred".to_string());
@@ -1295,6 +1305,8 @@ mod tests {
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         assert_eq!(heartbeat.ai_confidence.as_deref(), Some("inferred"));
+        assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
+        assert!(heartbeat.validate().is_ok());
     }
 
     #[test]
@@ -1339,6 +1351,8 @@ mod tests {
         assert!(heartbeat.ai_provider.is_none());
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
+        assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
+        assert!(heartbeat.validate().is_ok());
     }
 
     #[test]

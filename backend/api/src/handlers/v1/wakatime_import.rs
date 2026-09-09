@@ -16,10 +16,13 @@ pub async fn run(
     headers: HeaderMap,
     Json(payload): Json<WakaTimeImportRequest>,
 ) -> Result<Json<WakaTimeImportResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user_id = auth::resolve_user_id(&state, &headers).ok_or_else(auth::unauthorized)?;
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(auth::unauthorized)?;
+    auth::check_analytics_rate_limit(&state, user_id)?;
     let result = state
         .wakatime_import_service
-        .run(user_id, &payload.file_path)
+        .run(user_id, &payload.dump_json)
         .await
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
 
@@ -27,7 +30,7 @@ pub async fn run(
         status: "ok".to_string(),
         data: WakaTimeImportData {
             user_id,
-            file_path: payload.file_path,
+            import_id: result.import_id,
             imported_heartbeats: result.imported_heartbeats,
             skipped_heartbeats: result.skipped_heartbeats,
         },

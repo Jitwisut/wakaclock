@@ -48,7 +48,7 @@ export interface V2Capabilities {
     vscode: string;
     wakatime_protocol: string;
   };
-  features: Array<{ api: string; key: string; status: string }>;
+  features: Array<{ api: string; available?: boolean; key: string; status: string }>;
   postgres_enabled: boolean;
   presence_v2_available: boolean;
   privacy: {
@@ -617,7 +617,11 @@ export interface GenerateApiKeyData {
   user_id: string;
 }
 
-/** `api_key` is always null on reads: plaintext keys are returned only once by POST. */
+/**
+ * `api_key` is the caller's active key when the server holds a sealed copy
+ * (ATOAXIS_KMS_KEY_ID configured), otherwise null — keys issued without a master
+ * key, or by a ClickHouse-only deployment, are shown only once by POST.
+ */
 // ---------------------------------------------------------------------------
 // GET /dashboard/analytics — every value carries the metric it counts and the unit
 // it is measured in, because the cards mix seconds, lines and currency.
@@ -1127,15 +1131,14 @@ export interface ReprocessResponse {
 }
 
 // ---------------------------------------------------------------------------
-// POST /import/wakatime — file_path is a SERVER-SIDE filesystem path, not an upload
+// POST /import/wakatime — uploaded JSON contents
 // ---------------------------------------------------------------------------
 export interface WakaTimeImportRequest {
-  file_path: string;
-  user_id: string;
+  dump_json: string;
 }
 
 export interface WakaTimeImportData {
-  file_path: string;
+  import_id: string;
   imported_heartbeats: number;
   skipped_heartbeats: number;
   user_id: string;
