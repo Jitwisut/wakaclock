@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { useMutation } from '@tanstack/react-query';
+import { EyeIcon, EyeOffIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,7 @@ export type AuthMode = 'login' | 'register';
 export function AuthForm({ mode, onSuccess }: { mode: AuthMode; onSuccess: () => void }) {
   const [username, setUsername] = React.useState('');
   const [password, setPassword] = React.useState('');
+  const [showPassword, setShowPassword] = React.useState(false);
   const setSession = useWakaclockUserStore((state) => state.setSession);
   const errorId = React.useId();
 
@@ -74,19 +76,34 @@ export function AuthForm({ mode, onSuccess }: { mode: AuthMode; onSuccess: () =>
         <Label className="text-xs tracking-[0.14em] uppercase" htmlFor={`${mode}-password`}>
           Password
         </Label>
-        <Input
-          aria-describedby={mode === 'register' ? `${mode}-password-hint` : undefined}
-          aria-invalid={failed || undefined}
-          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          className="h-11"
-          id={`${mode}-password`}
-          minLength={mode === 'register' ? 8 : undefined}
-          name="password"
-          onChange={(event) => setPassword(event.target.value)}
-          required
-          type="password"
-          value={password}
-        />
+        <div className="relative">
+          <Input
+            aria-describedby={mode === 'register' ? `${mode}-password-hint` : undefined}
+            aria-invalid={failed || undefined}
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            className="h-11 pr-12"
+            id={`${mode}-password`}
+            minLength={mode === 'register' ? 8 : undefined}
+            name="password"
+            onChange={(event) => setPassword(event.target.value)}
+            required
+            type={showPassword ? 'text' : 'password'}
+            value={password}
+          />
+          <button
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            aria-pressed={showPassword}
+            className="absolute top-0 right-0 flex size-11 items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2"
+            onClick={() => setShowPassword((value) => !value)}
+            type="button"
+          >
+            {showPassword ? (
+              <EyeOffIcon aria-hidden className="size-4" />
+            ) : (
+              <EyeIcon aria-hidden className="size-4" />
+            )}
+          </button>
+        </div>
         {mode === 'register' ? (
           <p className="text-muted-foreground text-xs" id={`${mode}-password-hint`}>
             At least 8 characters. No email address and no payment details are asked for.

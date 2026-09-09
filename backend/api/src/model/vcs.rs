@@ -66,10 +66,23 @@ pub struct Commit {
     pub hash: String,
     pub branch: Option<String>,
     pub author_external_id: Option<String>,
+    pub author_email: Option<String>,
     pub authored_at: Option<DateTime<Utc>>,
     pub committed_at: Option<DateTime<Utc>>,
     pub message_length: Option<i32>,
     pub attribution_method: &'static str,
+}
+
+/// A commit with the coding time charged to it. `coverage` says whether `coding_seconds`
+/// is a measurement or a placeholder — see `CommitCoverage` in `services::vcs_attribution`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitAnalytics {
+    pub ai_seconds: f64,
+    pub coding_seconds: f64,
+    pub commit: Commit,
+    pub coverage: &'static str,
+    pub window_end: Option<f64>,
+    pub window_start: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,4 +107,11 @@ pub struct PullRequestAnalytics {
     pub review_seconds: Option<f64>,
     pub ai_lines: Option<u64>,
     pub coverage: String,
+    /// Seconds inside `coding_seconds` whose actor is `ai_verified`. A subset, not an
+    /// addition.
+    pub ai_seconds: Option<f64>,
+    /// How many of `total_commits` produced a measured number, so a partially linked PR
+    /// is not read as a fully measured one.
+    pub attributed_commits: usize,
+    pub total_commits: usize,
 }

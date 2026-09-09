@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod dashboard_analytics;
 pub mod data_dumps;
 pub mod durations;
+pub mod early_access;
 pub mod external_durations;
 pub mod goals;
 pub mod heartbeats;
@@ -40,6 +41,7 @@ use std::sync::Arc;
 
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/early-access", post(early_access::create).layer(early_access::body_limit()))
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route(

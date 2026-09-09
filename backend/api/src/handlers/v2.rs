@@ -266,6 +266,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(crate::handlers::vcs::project_mapping),
         )
         .route("/commits", get(crate::handlers::vcs::commits))
+        .route(
+            "/commits/analytics",
+            get(crate::handlers::vcs::commit_analytics),
+        )
         .route("/pull-requests", get(crate::handlers::vcs::pull_requests))
         .route(
             "/pull-requests/:pull_request_id/analytics",

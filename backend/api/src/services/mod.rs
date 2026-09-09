@@ -37,4 +37,5 @@ pub mod summary;
 pub mod team;
 pub mod user;
 pub mod vcs;
+pub mod vcs_attribution;
 pub mod wakatime_import;

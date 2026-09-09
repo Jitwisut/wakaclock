@@ -85,6 +85,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <>
       <HeroSection locale={locale} />
+      <DashboardPreviewSection locale={locale} />
       <EditorWallSection locale={locale} />
       <div className="mx-auto max-w-3xl px-4 md:px-6">
         {/*
@@ -182,7 +183,6 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         </Section>
       </div>
       <ComparisonSection locale={locale} />
-      <DashboardPreviewSection locale={locale} />
       <FeatureGridSection locale={locale} />
       <QuickStartSection locale={locale} />
       <PricingSection locale={locale} />

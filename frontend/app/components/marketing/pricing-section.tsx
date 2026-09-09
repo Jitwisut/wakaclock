@@ -124,7 +124,8 @@ export function PricingSection({ locale = 'en' }: { locale?: SiteLocale }) {
       >
         <div className="mb-6 flex items-baseline gap-2">
           <span
-            className="text-5xl font-semibold tracking-tight"
+            className="mkt-price-change text-5xl font-semibold tracking-tight"
+            key={price}
             style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
           >
             ${price}

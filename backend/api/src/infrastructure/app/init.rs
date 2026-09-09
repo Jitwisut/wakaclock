@@ -256,10 +256,6 @@ pub async fn create_app_state() -> Result<AppState> {
         postgres.clone(),
         authorization_service.clone(),
     ));
-    let vcs_service = Arc::new(VcsService::new(
-        postgres.clone(),
-        authorization_service.clone(),
-    ));
     let billing_service = Arc::new(BillingService::new(
         postgres.clone(),
         authorization_service.clone(),
@@ -284,6 +280,13 @@ pub async fn create_app_state() -> Result<AppState> {
     let activity_timeline_service = Arc::new(ActivityTimelineService::new(
         clickhouse.clone(),
         bridge_config,
+    ));
+    // Constructed after the timeline: commit and pull-request attribution reads the
+    // canonical timeline rather than deriving its own durations.
+    let vcs_service = Arc::new(VcsService::new(
+        postgres.clone(),
+        authorization_service.clone(),
+        activity_timeline_service.clone(),
     ));
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone(), bridge_config));
     let integration_service = Arc::new(IntegrationService::new(postgres.clone()));

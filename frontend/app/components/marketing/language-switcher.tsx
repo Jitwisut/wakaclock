@@ -14,7 +14,7 @@ export function LanguageSwitcher({ locale }: { locale: SiteLocale }) {
   return (
     <Link
       aria-label={targetLocale === 'th' ? 'อ่านภาษาไทย' : 'Read in English'}
-      className="mkt-pixel-press mkt-pixel-shadow-sm inline-flex h-11 items-center border-2 px-3 text-xs font-bold"
+      className="mkt-pixel-press mkt-pixel-shadow-sm inline-flex h-11 shrink-0 items-center border-2 px-3 text-xs font-bold whitespace-nowrap"
       href={localizedPath(targetLocale, basePath)}
       style={{
         background: 'var(--mkt-bg-sunken)',
