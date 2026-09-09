@@ -5,6 +5,8 @@ import { ActivityTimelineChart } from '@/components/wakaclock/analytics/activity
 import { AnalyticsFrame } from '@/components/wakaclock/analytics/analytics-frame';
 import { BreakdownList } from '@/components/wakaclock/analytics/breakdown-list';
 import { SourceSummary } from '@/components/wakaclock/analytics/source-summary';
+import { TimelineStudio } from '@/components/wakaclock/analytics/timeline-studio';
+import styles from '@/components/wakaclock/analytics/timeline-studio.module.css';
 
 export default function ActivityTimelinePage() {
   return (
@@ -13,7 +15,8 @@ export default function ActivityTimelinePage() {
       title="Activity Timeline"
     >
       {({ data, filters, setFilter }) => (
-        <div className="space-y-4">
+        <div className={styles.board}>
+          <TimelineStudio data={data} />
           <SourceSummary
             data={data}
             onSelect={(source) => setFilter('source', source)}
@@ -24,7 +27,8 @@ export default function ActivityTimelinePage() {
           {data.summary.total_seconds === 0 ? (
             <Card>
               <CardContent className="text-muted-foreground p-8 text-center text-sm">
-                No canonical activity matches the current filters. Change or reset a filter to continue exploring.
+                No canonical activity matches the current filters. Change or reset a filter to
+                continue exploring.
               </CardContent>
             </Card>
           ) : (

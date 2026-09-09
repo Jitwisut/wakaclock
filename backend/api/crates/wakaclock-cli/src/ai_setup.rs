@@ -1564,14 +1564,14 @@ fn ensure_codex_managed_hooks(config: &str, hook_dir: &Path) -> String {
     }
     if !updated.contains(sweep) {
         updated.push_str(&format!(
-            "\n{sweep}\n[[hooks.PreToolUse]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n\n[[hooks.PostToolUse]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*\"\n[[hooks.PostToolUse.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n",
+            "\n{sweep}\n[[hooks.PreToolUse]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n\n[[hooks.PostToolUse]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*\"\n[[hooks.PostToolUse.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n",
             toml_quote(&paths[1].1),
             toml_quote(&paths[2].1)
         ));
     }
     if !updated.contains(failure) {
         updated.push_str(&format!(
-            "\n{failure}\n[[hooks.PostToolUseFailure]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*\"\n[[hooks.PostToolUseFailure.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n",
+            "\n{failure}\n[[hooks.PostToolUseFailure]]\nmatcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*\"\n[[hooks.PostToolUseFailure.hooks]]\ntype = \"command\"\ncommand = {}\ntimeout = 60\n",
             toml_quote(&paths[3].1)
         ));
     }
@@ -1625,6 +1625,14 @@ fn refresh_codex_managed_commands(config: &str, hook_dir: &Path) -> String {
         }
         if trimmed == "matcher = \"apply_patch\"" {
             *line = line.replace("\"apply_patch\"", "\"^apply_patch$\"");
+            continue;
+        }
+        // Desktop wraps shell and nested tool calls in `exec`. Refresh existing
+        // managed installs too; appending new blocks only fixes fresh installs.
+        if trimmed
+            == "matcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*\""
+        {
+            *line = line.replace("code_mode_exec|", "code_mode_exec|exec|functions[.]exec|");
             continue;
         }
         let Some(command_start) = line.find("command") else {
@@ -1746,6 +1754,20 @@ mod tests {
         );
         assert!(first.contains("heartbeat-hook.sh"));
         let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn codex_setup_upgrades_bridge_matchers_only_in_managed_blocks() {
+        let old =
+            "matcher = \"Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*\"";
+        let config = format!("# AtoAxis managed AI shell sweep hooks\n[[hooks.PreToolUse]]\n{old}\n\n# user-owned hook\n[[hooks.PreToolUse]]\n{old}\n");
+        let updated = ensure_codex_managed_hooks(&config, Path::new("/bundle/codex"));
+        assert!(updated.contains("code_mode_exec|exec|functions[.]exec|mcp__.*"));
+        assert!(updated.contains(&format!("# user-owned hook\n[[hooks.PreToolUse]]\n{old}")));
+        assert_eq!(
+            updated,
+            ensure_codex_managed_hooks(&updated, Path::new("/bundle/codex"))
+        );
     }
 
     #[test]

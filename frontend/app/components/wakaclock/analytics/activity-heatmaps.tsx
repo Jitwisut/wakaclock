@@ -1,8 +1,14 @@
 'use client';
 
+import { useState } from 'react';
+
+import { Activity, CalendarDays, Trophy } from 'lucide-react';
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import type { AnalyticsDurationSplit, AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { formatDurationShort } from '@/lib/wakaclock/format';
+
+import styles from './activity-heatmaps.module.css';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const DAY_MS = 86_400_000;
@@ -77,7 +83,7 @@ function heatStyle(value: number, max: number) {
   const strength = heatStrength(value, max);
   return strength === 0
     ? { backgroundColor: 'var(--muted)' }
-    : { backgroundColor: `color-mix(in oklab, var(--primary) ${strength}%, transparent)` };
+    : { backgroundColor: `color-mix(in oklab, var(--primary) ${strength}%, var(--muted))` };
 }
 
 export function buildCalendarWeeks(data: AnalyticsExplorerResponse): WeekColumn[] {
@@ -160,7 +166,7 @@ function HeatLegend() {
               strength === 0
                 ? { backgroundColor: 'var(--muted)' }
                 : {
-                    backgroundColor: `color-mix(in oklab, var(--primary) ${strength}%, transparent)`,
+                    backgroundColor: `color-mix(in oklab, var(--primary) ${strength}%, var(--muted))`,
                   }
             }
           />
@@ -178,62 +184,92 @@ function CalendarActivityGrid({
   data: AnalyticsExplorerResponse;
   onSelectDate: (date: string) => void;
 }) {
+  const [inspectedDate, setInspectedDate] = useState<null | string>(null);
   const weeks = buildCalendarWeeks(data);
+  const inspected = weeks
+    .flatMap((week) => week.cells)
+    .find((cell) => cell.date === inspectedDate && cell.inRange);
   const max = Math.max(0, ...data.calendar_heatmap.map((cell) => cell.total_seconds));
 
   return (
-    <div className="overflow-x-auto pb-2">
-      <div className="min-w-max">
-        <div className="mb-1.5 ml-10 flex gap-1">
-          {weeks.map((week, index) => {
-            const previous = weeks[index - 1]?.monthLabel;
-            const showLabel = week.monthLabel && week.monthLabel !== previous;
-            return (
-              <div className="text-muted-foreground w-3 text-[10px]" key={week.key}>
-                {showLabel ? <span className="block w-8">{week.monthLabel}</span> : null}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="flex gap-2">
-          <div className="text-muted-foreground grid grid-rows-7 gap-1 text-[10px]">
-            {WEEKDAYS.map((day, index) => (
-              <div className="flex h-3 w-8 items-center" key={day}>
-                {index % 2 === 0 ? day : ''}
-              </div>
-            ))}
+    <div className={styles.calendar}>
+      <div className={styles.scroll}>
+        <div className={styles.matrix}>
+          <div className={styles.months}>
+            {weeks.map((week, index) => {
+              const previous = weeks[index - 1]?.monthLabel;
+              const showLabel = week.monthLabel && week.monthLabel !== previous;
+              return (
+                <div className={styles.month} key={week.key}>
+                  {showLabel ? <span className="block w-8">{week.monthLabel}</span> : null}
+                </div>
+              );
+            })}
           </div>
 
-          <div className="flex gap-1">
-            {weeks.map((week) => (
-              <div className="grid grid-rows-7 gap-1" key={week.key}>
-                {week.cells.map((cell) => {
-                  if (!cell.inRange) {
-                    return <span className="size-3" key={cell.date} />;
-                  }
-                  return (
-                    <button
-                      aria-label={`${cell.date}: ${formatDurationShort(cell.total_seconds)}`}
-                      className="border-border focus-visible:ring-ring size-3 rounded-[2px] border transition-transform hover:scale-125 focus-visible:ring-2 focus-visible:outline-none"
-                      key={cell.date}
-                      onClick={() => onSelectDate(cell.date)}
-                      style={heatStyle(cell.total_seconds, max)}
-                      title={`${cell.date}\nTotal ${formatDurationShort(cell.total_seconds)}\nHuman ${formatDurationShort(cell.human_seconds)}\nAI ${formatDurationShort(cell.ai_seconds)}`}
-                      type="button"
-                    />
-                  );
-                })}
-              </div>
-            ))}
+          <div className="flex gap-2">
+            <div className={styles.weekdays}>
+              {WEEKDAYS.map((day) => (
+                <div className={styles.dayLabel} key={day}>
+                  {day}
+                </div>
+              ))}
+            </div>
+
+            <div className={styles.columns}>
+              {weeks.map((week) => (
+                <div className={styles.week} key={week.key}>
+                  {week.cells.map((cell) => {
+                    if (!cell.inRange) {
+                      return <span className={styles.spacer} key={cell.date} />;
+                    }
+                    return (
+                      <button
+                        aria-label={`${cell.date}: ${formatDurationShort(cell.total_seconds)}`}
+                        className={styles.tile}
+                        data-active={cell.total_seconds > 0}
+                        key={cell.date}
+                        onClick={() => onSelectDate(cell.date)}
+                        onFocus={() => setInspectedDate(cell.date)}
+                        onMouseEnter={() => setInspectedDate(cell.date)}
+                        style={heatStyle(cell.total_seconds, max)}
+                        title={`${cell.date}\nTotal ${formatDurationShort(cell.total_seconds)}\nHuman ${formatDurationShort(cell.human_seconds)}\nAI ${formatDurationShort(cell.ai_seconds)}`}
+                        type="button"
+                      />
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
+      </div>
+      <div aria-live="polite" className={styles.readout}>
+        <span>
+          {inspected?.inRange &&
+          inspected.date >= data.range.start &&
+          inspected.date <= data.range.end
+            ? inspected.date
+            : 'SELECT A PIXEL'}
+        </span>
+        <strong>
+          {inspected && inspected.date >= data.range.start && inspected.date <= data.range.end
+            ? formatDurationShort(inspected.total_seconds)
+            : 'Explore your activity'}
+        </strong>
+        <span>Hover or focus to inspect · Click to open that day</span>
       </div>
     </div>
   );
 }
 
-function WeeklyActivityChart({ data }: { data: AnalyticsExplorerResponse }) {
+function WeeklyActivityChart({
+  data,
+  onSelectDate,
+}: {
+  data: AnalyticsExplorerResponse;
+  onSelectDate: (date: string) => void;
+}) {
   const points = buildLatestWeek(data);
   const max = Math.max(1, ...points.map((point) => point.totalSeconds));
 
@@ -241,20 +277,27 @@ function WeeklyActivityChart({ data }: { data: AnalyticsExplorerResponse }) {
     <Card>
       <CardHeader className="pb-3">
         <CardTitle>Weekly Activity</CardTitle>
-        <CardDescription>Tracked time for the latest Monday–Sunday week in this range.</CardDescription>
+        <CardDescription>
+          Latest Monday–Sunday week. Only days in your selected range are included.
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex h-52 items-end gap-2 border-b px-2 pt-5">
+        <div className={styles.barPlot}>
           {points.map((point) => {
-            const height = point.totalSeconds > 0 ? Math.max(8, (point.totalSeconds / max) * 100) : 3;
+            const height =
+              point.totalSeconds > 0 ? Math.max(8, (point.totalSeconds / max) * 100) : 0;
             return (
               <div className="flex h-full min-w-0 flex-1 flex-col justify-end" key={point.date}>
-                <div
+                <span className={styles.barValue}>{formatDurationShort(point.totalSeconds)}</span>
+                <button
                   aria-label={`${point.date}: ${formatDurationShort(point.totalSeconds)}`}
-                  className="bg-primary/80 hover:bg-primary relative w-full rounded-t-sm transition-colors"
-                  role="img"
+                  className={styles.bar}
+                  data-empty={point.totalSeconds === 0}
+                  disabled={point.date < data.range.start || point.date > data.range.end}
+                  onClick={() => onSelectDate(point.date)}
                   style={{ height: `${height}%` }}
                   title={`${point.date}\n${formatDurationShort(point.totalSeconds)}`}
+                  type="button"
                 />
               </div>
             );
@@ -262,7 +305,7 @@ function WeeklyActivityChart({ data }: { data: AnalyticsExplorerResponse }) {
         </div>
         <div className="text-muted-foreground grid grid-cols-7 px-2 pt-2 text-center text-xs">
           {points.map((point) => (
-            <span key={point.date}>{point.label.slice(0, 1)}</span>
+            <span key={point.date}>{point.label}</span>
           ))}
         </div>
       </CardContent>
@@ -273,65 +316,38 @@ function WeeklyActivityChart({ data }: { data: AnalyticsExplorerResponse }) {
 function MonthlyProgressChart({ data }: { data: AnalyticsExplorerResponse }) {
   const points = buildMonthlyActivity(data);
   const max = Math.max(1, ...points.map((point) => point.totalSeconds));
-  const width = 100;
-  const height = 44;
-  const coordinates = points.map((point, index) => {
-    const x = points.length <= 1 ? width / 2 : (index / (points.length - 1)) * width;
-    const y = height - (point.totalSeconds / max) * (height - 6) - 3;
-    return { ...point, x, y };
-  });
-  const polyline = coordinates.map((point) => `${point.x},${point.y}`).join(' ');
-  const area = coordinates.length > 0 ? `0,${height} ${polyline} ${width},${height}` : '';
-
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle>Monthly Progress</CardTitle>
-        <CardDescription>Monthly tracked-time trend within the selected date range.</CardDescription>
+        <CardDescription>
+          Time recorded in each month of this range. Partial months are included.
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="relative h-52 border-b border-l">
-          {coordinates.length > 0 ? (
-            <svg
-              aria-label="Monthly tracked-time trend"
-              className="absolute inset-0 size-full overflow-visible"
-              preserveAspectRatio="none"
-              role="img"
-              viewBox={`0 0 ${width} ${height}`}
-            >
-              <polygon className="fill-primary/10" points={area} />
-              <polyline
-                className="stroke-primary"
-                fill="none"
-                points={polyline}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="1.5"
-                vectorEffect="non-scaling-stroke"
-              />
-              {coordinates.map((point) => (
-                <circle
-                  className="fill-primary"
-                  cx={point.x}
-                  cy={point.y}
-                  key={point.key}
-                  r="1.4"
-                  vectorEffect="non-scaling-stroke"
-                >
-                  <title>{`${point.key}: ${formatDurationShort(point.totalSeconds)}`}</title>
-                </circle>
-              ))}
-            </svg>
-          ) : null}
-        </div>
-        <div
-          className="text-muted-foreground grid pt-2 text-center text-xs"
-          style={{ gridTemplateColumns: `repeat(${Math.max(points.length, 1)}, minmax(0, 1fr))` }}
-        >
+        <div className={styles.monthly}>
           {points.map((point) => (
-            <span className="truncate" key={point.key}>{point.label}</span>
+            <div className={styles.monthRow} key={point.key}>
+              <div className={styles.monthHeading}>
+                <span>
+                  {point.label} <small>{point.key.slice(0, 4)}</small>
+                </span>
+                <strong>{formatDurationShort(point.totalSeconds)}</strong>
+              </div>
+              <div
+                aria-label={`${point.key}: ${formatDurationShort(point.totalSeconds)}`}
+                className={styles.track}
+                role="img"
+              >
+                <div
+                  className={styles.trackFill}
+                  style={{ width: `${(point.totalSeconds / max) * 100}%` }}
+                />
+              </div>
+            </div>
           ))}
         </div>
+        <p className={styles.scaleNote}>Bars scale to the busiest month in this range.</p>
       </CardContent>
     </Card>
   );
@@ -344,15 +360,55 @@ export function ActivityHeatmapBoard({
   data: AnalyticsExplorerResponse;
   onSelectDate: (date: string) => void;
 }) {
+  const activeDays = data.calendar_heatmap.filter((day) => day.total_seconds > 0);
+  const total = activeDays.reduce((sum, day) => sum + day.total_seconds, 0);
+  const best = activeDays.reduce<(typeof activeDays)[number] | null>(
+    (winner, day) => (!winner || day.total_seconds > winner.total_seconds ? day : winner),
+    null
+  );
   return (
-    <div className="space-y-4">
+    <div className={styles.board}>
+      <div className={styles.intro}>
+        <div>
+          <span className={styles.kicker}>ACTIVITY ARCADE / YOUR FOCUS MAP</span>
+          <h2>Every pixel tells a story.</h2>
+          <p>Discover your rhythm, one day at a time.</p>
+        </div>
+        <div aria-hidden="true" className={styles.pixelArt}>
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+      <div className={styles.stats}>
+        <div>
+          <Activity aria-hidden size={18} />
+          <span>Tracked time</span>
+          <strong>{formatDurationShort(total)}</strong>
+        </div>
+        <div>
+          <CalendarDays aria-hidden size={18} />
+          <span>Active days</span>
+          <strong>
+            {activeDays.length}
+            <small> days</small>
+          </strong>
+        </div>
+        <div>
+          <Trophy aria-hidden size={18} />
+          <span>Peak day · {best?.date ?? '—'}</span>
+          <strong>{best ? formatDurationShort(best.total_seconds) : '—'}</strong>
+        </div>
+      </div>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <CardTitle>Activity heatmap</CardTitle>
               <CardDescription className="mt-1">
-                Daily tracked time across the selected range. Click a day to drill down.
+                Each pixel is one day. Color intensity is relative to the busiest day in this range.
               </CardDescription>
             </div>
             <HeatLegend />
@@ -364,7 +420,7 @@ export function ActivityHeatmapBoard({
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <WeeklyActivityChart data={data} />
+        <WeeklyActivityChart data={data} onSelectDate={onSelectDate} />
         <MonthlyProgressChart data={data} />
       </div>
     </div>

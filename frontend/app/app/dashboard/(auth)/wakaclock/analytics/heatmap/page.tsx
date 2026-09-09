@@ -8,7 +8,7 @@ import { SourceSummary } from '@/components/wakaclock/analytics/source-summary';
 export default function ActivityHeatmapPage() {
   return (
     <AnalyticsFrame
-      description="Find active days and productive time-of-day patterns after applying the same project, language, category and source filters."
+      description="Explore your coding rhythm through pixel maps and dimensional charts. Filter your projects, compare days, and discover your busiest moments."
       title="Activity Heatmap"
     >
       {({ data, filters, setFilter, setRange }) => (

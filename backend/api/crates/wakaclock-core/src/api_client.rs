@@ -87,6 +87,9 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
     } else if lower.contains("401")
         || lower.contains("unauthorized")
         || lower.contains("invalid api key")
+        || lower.contains("api key was rejected")
+        || lower.contains("api key rejected")
+        || lower.contains("authentication failed")
     {
         DeliveryFailureKind::Auth401
     } else if lower.contains("400")
@@ -831,5 +834,13 @@ mod tests {
         assert_eq!(sanitized["ai_agent"], "codex");
         assert_eq!(sanitized["ai_provider"], "openai");
         assert_eq!(sanitized["ai_model"], "gpt-test");
+    }
+
+    #[test]
+    fn classifies_authentication_error_from_local_config() {
+        assert_eq!(
+            classify_delivery_failure("Authentication failed: API key was rejected by the server"),
+            DeliveryFailureKind::Auth401
+        );
     }
 }

@@ -43,6 +43,7 @@ function HeartbeatsPanel() {
     queryKey: wakaclockKeys.heartbeats(userId, date, timezone ?? undefined),
     queryFn: () => getHeartbeats(userId, date, timezone ?? undefined),
     enabled: Boolean(userId && timezone),
+    refetchInterval: 5000,
   });
 
   const rows = data?.data ?? [];
@@ -52,7 +53,8 @@ function HeartbeatsPanel() {
       <CardHeader>
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Quest journal — {data?.total ?? 0} entries today</CardTitle>
+            <CardTitle>Quest journal — {data?.total ?? 0} entries</CardTitle>
+            <p className="text-muted-foreground mt-1 text-xs">Updates every 5 seconds</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Popover>

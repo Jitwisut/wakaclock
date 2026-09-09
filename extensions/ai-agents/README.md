@@ -85,21 +85,21 @@ command = "/absolute/path/to/extensions/ai-agents/codex/heartbeat-hook.sh"
 timeout = 60
 
 [[hooks.PreToolUse]]
-matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/git-sweep-before.sh"
 timeout = 60
 
 [[hooks.PostToolUse]]
-matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*"
 [[hooks.PostToolUse.hooks]]
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/git-sweep-after.sh"
 timeout = 60
 
 [[hooks.PostToolUseFailure]]
-matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|mcp__.*"
+matcher = "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*"
 [[hooks.PostToolUseFailure.hooks]]
 type = "command"
 command = "/absolute/path/to/extensions/ai-agents/codex/tool-abort.sh"

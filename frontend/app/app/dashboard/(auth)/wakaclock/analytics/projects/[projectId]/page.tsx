@@ -1,14 +1,13 @@
 'use client';
 
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ActivityTimelineChart } from '@/components/wakaclock/analytics/activity-timeline-chart';
 import { AnalyticsEmptyState } from '@/components/wakaclock/analytics/analytics-empty-state';
 import { AnalyticsFrame } from '@/components/wakaclock/analytics/analytics-frame';
 import { BreakdownList } from '@/components/wakaclock/analytics/breakdown-list';
+import { ProjectStudio } from '@/components/wakaclock/analytics/project-studio';
+import styles from '@/components/wakaclock/analytics/project-studio.module.css';
 import { SourceSummary } from '@/components/wakaclock/analytics/source-summary';
 
 export default function AnalyticsProjectDetailPage() {
@@ -16,29 +15,27 @@ export default function AnalyticsProjectDetailPage() {
 
   return (
     <AnalyticsFrame
-      description="One stable project identity, filtered by date, language, editor, category and activity source."
+      description="Explore the time, languages and tools behind your project."
       lockedProjectId={projectId}
-      title="Project Drill-down"
+      title="Project Studio"
     >
       {({ data, filters, setFilter }) => {
         const project = data.filter_options.projects.find((item) => item.key === projectId);
         return (
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardDescription>Stable project ID · {projectId}</CardDescription>
-                <CardTitle>{project?.name ?? 'Project'}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                <Button asChild size="sm" variant="outline">
-                  <Link href={`/dashboard/wakaclock/projects/${projectId}?start=${filters.start}&end=${filters.end}`}>Open files & branches view</Link>
-                </Button>
-              </CardContent>
-            </Card>
+          <div className={styles.board}>
+            <ProjectStudio
+              data={data}
+              filesHref={`/dashboard/wakaclock/projects/${projectId}?start=${filters.start}&end=${filters.end}&timezone=${encodeURIComponent(filters.timezone)}`}
+              name={project?.name ?? 'Project'}
+              onLanguage={(language) => setFilter('language', language)}
+              selectedLanguage={filters.language}
+            />
             <SourceSummary
               data={data}
               onSelect={(source) => setFilter('source', source)}
+              onSelectActor={(actorType) => setFilter('actor_type', actorType)}
               selected={filters.source}
+              selectedActor={filters.actorType}
             />
             {data.summary.total_seconds === 0 && (
               <AnalyticsEmptyState message="No activity for this project matches the current filters." />

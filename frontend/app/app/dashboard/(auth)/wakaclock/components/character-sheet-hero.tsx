@@ -1,6 +1,8 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { ArrowUpRight, Sparkles } from 'lucide-react';
+import Link from 'next/link';
 
 import { ActiveDaysBadge } from '@/components/wakaclock/rpg/active-days-badge';
 import { TodayQuestCard } from '@/components/wakaclock/rpg/today-quest-card';
@@ -8,6 +10,8 @@ import { XpBar } from '@/components/wakaclock/rpg/xp-bar';
 import { getAllTime, getStatusBar } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import styles from '../overview.module.css';
 
 /**
  * The Overview page's "character sheet" — Level/XP (derived from the all-time total,
@@ -37,17 +41,50 @@ export function CharacterSheetHero() {
   });
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-      <div className="border-border bg-card flex flex-col justify-center gap-3 border-2 p-4 lg:col-span-2">
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <XpBar isLoading={allTime.isLoading} totalSeconds={allTime.data?.data.total_seconds ?? 0} />
+    <div className={styles.heroGrid}>
+      <section aria-labelledby="focus-heading" className={styles.hero}>
+        <div className={styles.heroCopy}>
+          <span className={styles.eyebrow}>
+            <Sparkles aria-hidden size={14} /> PLAYER ONE · READY TO CODE
+          </span>
+          <h2 id="focus-heading">
+            Build your skills.
+            <br />
+            <span>Unlock your next level.</span>
+          </h2>
+          <p>
+            Turn everyday focus into lasting progress. Your next level starts with a little time
+            today.
+          </p>
+          <Link className={styles.heroLink} href="/dashboard/wakaclock/analytics/timeline">
+            Explore your activity <ArrowUpRight aria-hidden size={16} />
+          </Link>
+        </div>
+        <div aria-hidden="true" className={styles.scene}>
+          <div className={styles.gridFloor} />
+          <div className={styles.gridBack} />
+          <div className={styles.console}>
+            <span>&gt;_</span>
+          </div>
+          <div className={styles.satellite} />
+          <div className={styles.spark} />
+          <div className={styles.platform} />
+        </div>
+        <div className={styles.progress}>
+          <XpBar
+            isLoading={allTime.isLoading}
+            totalSeconds={allTime.data?.data.total_seconds ?? 0}
+          />
           <ActiveDaysBadge
             days={allTime.data?.data.days_with_activity ?? 0}
             isLoading={allTime.isLoading}
           />
         </div>
-      </div>
-      <TodayQuestCard isLoading={statusBar.isLoading} todaySeconds={statusBar.data?.total_seconds ?? 0} />
+      </section>
+      <TodayQuestCard
+        isLoading={statusBar.isLoading}
+        todaySeconds={statusBar.data?.total_seconds ?? 0}
+      />
     </div>
   );
 }

@@ -167,6 +167,24 @@ class CodexCliCampaignTest(unittest.TestCase):
             self.assertIn("campaign_identity_not_isolated", summary["blockers"])
             self.assertTrue(all(status == "not_run" for status in summary["scenarios"].values()))
 
+    def test_shared_transcript_home_is_blocked_even_with_isolated_api(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory)
+            personal = sandbox / "personal-codex"
+            personal.mkdir()
+            fake_codex = sandbox / "codex"
+            make_executable(fake_codex, "#!/usr/bin/env python3\nraise RuntimeError('must not run')\n")
+            for selected in (personal, personal / "nested"):
+                with self.subTest(selected=selected):
+                    summary = self.run_driver(
+                        ["--execute", "--campaign-api-key", "throwaway-key",
+                         "--codex", str(fake_codex), "--codex-home", str(selected)],
+                        sandbox,
+                        {"CODEX_HOME": str(personal)},
+                    )
+                    self.assertIn("campaign_transcript_home_not_isolated", summary["blockers"])
+                    self.assertTrue(all(value == "not_run" for value in summary["scenarios"].values()))
+
     def test_campaign_api_key_satisfies_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             summary = self.run_driver(
