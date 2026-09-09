@@ -16,6 +16,8 @@ const PRESENCE_MIGRATION: &str = include_str!("../../migrations/postgres/002_pre
 const AI_DIAGNOSTICS_MIGRATION: &str =
     include_str!("../../migrations/postgres/003_ai_diagnostics.sql");
 
+const EARLY_ACCESS_MIGRATION: &str = include_str!("../../migrations/postgres/004_early_access.sql");
+
 pub struct PostgresClient {
     client: Client,
 }
@@ -52,7 +54,11 @@ impl PostgresClient {
         self.client
             .batch_execute(AI_DIAGNOSTICS_MIGRATION)
             .await
-            .context("failed to apply PostgreSQL AI diagnostics migration")
+            .context("failed to apply PostgreSQL AI diagnostics migration")?;
+        self.client
+            .batch_execute(EARLY_ACCESS_MIGRATION)
+            .await
+            .context("failed to apply PostgreSQL Early Access migration")
     }
 
     pub async fn health_check(&self) -> Result<()> {

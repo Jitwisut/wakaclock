@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
+import { env } from '@/lib/env';
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { MKT_BORDER } from './tokens';
@@ -43,32 +44,49 @@ export function EarlyAccessForm({
   const copy = COPY[locale];
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
+  const inFlight = useRef(false);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPending(true);
     setError(false);
 
     const form = event.currentTarget;
     const formData = new FormData(form);
-    const encodedFormData = new URLSearchParams();
-    formData.forEach((value, key) => {
-      encodedFormData.append(key, typeof value === 'string' ? value : value.name);
-    });
+    const payload = {
+      email: String(formData.get('email') || '').trim(),
+      interest: String(formData.get('interest') || 'solo'),
+      locale,
+      source_page: sourcePage,
+      consent: formData.get('consent') === 'yes',
+      bot_field: String(formData.get('bot-field') || ''),
+    };
 
     try {
-      const response = await fetch('/__forms.html', {
-        body: encodedFormData.toString(),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Netlify Forms responded with ${response.status}`);
+      const response = await fetch(
+        `${env.NEXT_PUBLIC_WAKACLOCK_API_URL.replace(/\/$/, '')}/api/v1/early-access`,
+        {
+          body: JSON.stringify(payload),
+          headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          signal: AbortSignal.timeout(15_000),
+        }
+      );
+      const result: unknown = response.ok ? await response.json() : null;
+      if (
+        !result ||
+        typeof result !== 'object' ||
+        !('accepted' in result) ||
+        result.accepted !== true
+      ) {
+        throw new Error('Signup was not accepted');
       }
 
       window.location.assign(localizedPath(locale, '/early-access/success'));
     } catch {
+      inFlight.current = false;
       setPending(false);
       setError(true);
     }
@@ -100,15 +118,7 @@ export function EarlyAccessForm({
           </p>
         ) : null}
 
-        <form
-          className="mt-8 space-y-5"
-          data-netlify="true"
-          data-netlify-honeypot="bot-field"
-          method="POST"
-          name="early-access"
-          onSubmit={handleSubmit}
-        >
-          <input name="form-name" type="hidden" value="early-access" />
+        <form className="mt-8 space-y-5" method="POST" name="early-access" onSubmit={handleSubmit}>
           <input name="locale" type="hidden" value={locale} />
           <input name="source_page" type="hidden" value={sourcePage} />
 
@@ -117,8 +127,10 @@ export function EarlyAccessForm({
               {copy.email}
             </label>
             <input
+              autoComplete="email"
               className="mt-2 w-full border-2 bg-transparent px-4 py-3 text-sm outline-none"
               id={`${locale}-early-access-email`}
+              maxLength={254}
               name="email"
               placeholder="you@example.com"
               required

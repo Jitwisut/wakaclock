@@ -1,3 +1,7 @@
+'use client';
+
+import { useState } from 'react';
+
 import type { SiteLocale } from '@/lib/seo/site';
 
 import { COMPATIBLE_EDITORS } from './editor-wall.data';
@@ -31,8 +35,13 @@ function MarqueeRow({ reverse = false }: { reverse?: boolean }) {
 }
 
 export function EditorWallSection({ locale = 'en' }: { locale?: SiteLocale }) {
+  const [paused, setPaused] = useState(false);
+  const playback =
+    locale === 'th'
+      ? ['หยุดแถบ editor', 'เล่นแถบ editor']
+      : ['Pause editor strip', 'Play editor strip'];
   return (
-    <section className="mkt-reveal py-14">
+    <section className="mkt-reveal py-14" data-marquee-paused={paused}>
       <p className="mb-8 text-center text-sm font-medium" style={{ color: 'var(--mkt-fg-muted)' }}>
         {locale === 'th'
           ? 'ใช้ editor เหล่านี้กับ WakaTime plugin อยู่แล้วหรือไม่? ชี้มายัง AtoAxis ได้โดยไม่ต้องติดตั้ง extension ใหม่'
@@ -50,6 +59,17 @@ export function EditorWallSection({ locale = 'en' }: { locale?: SiteLocale }) {
           <li key={name}>{name}</li>
         ))}
       </ul>
+      <div className="mb-5 flex justify-center">
+        <button
+          aria-pressed={paused}
+          className="min-h-11 cursor-pointer border-2 px-4 text-xs"
+          onClick={() => setPaused((value) => !value)}
+          style={{ borderColor: 'var(--mkt-border-soft)' }}
+          type="button"
+        >
+          {playback[paused ? 1 : 0]}
+        </button>
+      </div>
       <div className="space-y-3">
         <MarqueeRow />
         <MarqueeRow reverse />

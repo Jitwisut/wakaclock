@@ -30,7 +30,7 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
   const copy = HOME_COPY[locale];
   const ctaCopy = CTA_COPY[locale];
   return (
-    <section className="mx-auto max-w-6xl px-4 pt-20 pb-16 md:px-6 md:pt-28 md:pb-24">
+    <section className="mkt-hero-stage mx-auto max-w-6xl px-4 pt-14 pb-12 md:px-6 md:pt-20 md:pb-20">
       <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-8">
         {/* min-w-0: the config panel's longest line would otherwise set the grid
             column's min-content width and push the whole hero past the viewport. */}
@@ -64,7 +64,9 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
             className="mt-4 max-w-xl text-base text-pretty md:text-lg"
             style={{ color: 'var(--mkt-fg-muted)' }}
           >
-            {copy.heroLead}
+            {locale === 'th'
+              ? 'เห็นเวลาที่ใช้ โปรเจกต์ที่เดินหน้า และสัดส่วนโค้ดจาก AI ในไทม์ไลน์เดียว พร้อมประวัติครบถ้วนและข้อมูลที่ยังระบุผู้เขียนไม่ได้อย่างชัดเจน'
+              : 'See your time, your projects, and AI contributions in one timeline. Keep your complete history, with missing attribution clearly marked.'}
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">

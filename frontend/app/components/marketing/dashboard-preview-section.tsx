@@ -49,10 +49,7 @@ export function DashboardPreviewSection({ locale = 'en' }: { locale?: SiteLocale
           source: 'Data source: illustrative AtoAxis sample, not customer data.',
         };
   return (
-    <section
-      className="mkt-reveal mx-auto max-w-5xl px-4 py-20 md:px-6"
-      id="worked-example"
-    >
+    <section className="mkt-reveal mx-auto max-w-5xl px-4 py-20 md:px-6" id="worked-example">
       <div className="mb-10 text-center">
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
@@ -109,11 +106,14 @@ export function DashboardPreviewSection({ locale = 'en' }: { locale?: SiteLocale
             </p>
             <div className="flex h-32 items-end gap-3">
               {WEEKLY_BARS.map((bar) => (
-                <div className="flex flex-1 flex-col items-center gap-2" key={bar.en}>
+                <div
+                  className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
+                  key={bar.en}
+                >
                   <div
-                    className="w-full"
+                    className="mkt-chart-bar w-full shrink-0"
                     style={{
-                      height: `${bar.pct}%`,
+                      height: `${bar.pct * 0.96}px`,
                       background: 'var(--mkt-accent)',
                       opacity: 0.85,
                     }}

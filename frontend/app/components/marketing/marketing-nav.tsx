@@ -61,7 +61,10 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
         className="mkt-pixel-shadow mx-auto flex max-w-6xl items-center justify-between border-[3px] px-3 py-2.5 md:px-5"
         style={BAR_SURFACE}
       >
-        <Link className="flex items-center gap-2 px-1 py-1.5" href={localizedPath(locale, '/')}>
+        <Link
+          className="flex shrink-0 items-center gap-2 px-1 py-1.5 whitespace-nowrap"
+          href={localizedPath(locale, '/')}
+        >
           <TimerIcon aria-hidden className="size-5" style={{ color: MKT_ACCENT }} />
           <span
             className="text-base font-bold tracking-tight"
@@ -72,19 +75,15 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
           <LinkPending indicatorClassName="mkt-blink" label={copy.loading} />
         </Link>
 
-        {/*
-          Seven links, a language switcher and two buttons only just clear 1024px, which is
-          exactly where this nav appears. The links run at the tighter `px-2` through the lg
-          range and relax to `px-3` at xl, where there is room to spare.
-        */}
-        <nav aria-label={copy.primary} className="hidden items-center gap-1 lg:flex">
+        {/* Thai labels require more space; keep the compact menu through tablet widths. */}
+        <nav aria-label={copy.primary} className="hidden items-center gap-1 xl:flex">
           {NAV_LINKS.map((link) => {
             const active = isNavLinkActive(pathname, link.href);
 
             return (
               <Link
                 aria-current={active ? 'page' : undefined}
-                className="border-b-[3px] px-2 py-2 text-sm font-medium transition-colors duration-150 hover:text-[var(--mkt-accent)] xl:px-3"
+                className="border-b-[3px] px-2 py-2 text-sm font-medium whitespace-nowrap transition-colors duration-150 hover:text-[var(--mkt-accent)] xl:px-3"
                 href={localizedPath(locale, link.href)}
                 key={link.href}
                 style={{
@@ -116,7 +115,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
             aria-controls="marketing-mobile-menu"
             aria-expanded={open}
             aria-label={open ? copy.close : copy.open}
-            className="mkt-pixel-press mkt-pixel-shadow-sm flex size-11 shrink-0 cursor-pointer items-center justify-center border-2 lg:hidden"
+            className="mkt-pixel-press mkt-pixel-shadow-sm flex size-11 shrink-0 cursor-pointer items-center justify-center border-2 xl:hidden"
             onClick={() => setOpen((value) => !value)}
             style={{
               background: open ? MKT_ACCENT : 'var(--mkt-bg-sunken)',
@@ -137,7 +136,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
       {open ? (
         <nav
           aria-label={copy.primary}
-          className="mkt-pixel-shadow mx-auto mt-3 max-w-6xl border-[3px] p-2 lg:hidden"
+          className="mkt-menu-enter mkt-pixel-shadow mx-auto mt-3 max-h-[calc(100dvh-8rem)] max-w-6xl overflow-y-auto overscroll-contain border-[3px] p-2 xl:hidden"
           id="marketing-mobile-menu"
           style={BAR_SURFACE}
         >
