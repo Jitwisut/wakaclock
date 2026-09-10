@@ -86,10 +86,6 @@ pub struct JobQueueConfig {
 }
 
 impl JobQueueConfig {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the RabbitMQ adapter (plan R1)")
-    )]
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -300,7 +296,7 @@ impl BrokerConfig {
         if let Some(job_queue) = &self.job_queue {
             tracing::warn!(
                 url = %job_queue.redacted_url(),
-                "{JOB_QUEUE_URL} is set but no RabbitMQ adapter exists in this build; it is unused"
+                "{JOB_QUEUE_URL} is set but nothing in this build connects to RabbitMQ yet; it is unused"
             );
             if !job_queue.tls() && !is_loopback_host(&job_queue.host) {
                 tracing::warn!(

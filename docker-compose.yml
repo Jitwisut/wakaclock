@@ -55,15 +55,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # Brokers are opt-in (`make infra-brokers-up`): the server has no Kafka or AMQP
-  # adapter yet, so nothing connects to them. Remove the profile once one lands.
-
   # Kafka-compatible event bus for telemetry ingestion. The PostgreSQL outbox
-  # relays background jobs to RabbitMQ, not to this bus.
+  # relays background jobs to RabbitMQ, not to this bus. Opt-in (`make infra-kafka-up`)
+  # until the Kafka adapter lands (plan K1); remove the profile then.
   redpanda:
     image: redpandadata/redpanda:v24.1.8
     container_name: wakaclock_redpanda
-    profiles: ["brokers"]
+    profiles: ["kafka"]
     restart: unless-stopped
     command:
       - redpanda
@@ -87,7 +85,6 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: wakaclock_rabbitmq
-    profiles: ["brokers"]
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-wakaclock}

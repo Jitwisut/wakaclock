@@ -184,6 +184,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 20
+      rabbitmq:
+        image: rabbitmq:3.13
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend/api
@@ -194,7 +203,10 @@ jobs:
         env:
           CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
           POSTGRES_TEST_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_test
-        run: cargo test --workspace -- --ignored --test-threads=1
+          RABBITMQ_TEST_URL: amqp://guest:guest@127.0.0.1:5672/%2f
+        # The broker-restart test runs `docker restart` on a named container; CI's
+        # service container cannot be restarted from inside the job, so it is skipped.
+        run: cargo test --workspace -- --ignored --test-threads=1 --skip survive_a_broker_restart
       - name: Build API for cross-replica security regression tests
         run: cargo build -p wakaclock-server --bin wakaclock-server
       - name: Install PostgreSQL test client

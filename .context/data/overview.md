@@ -15,8 +15,10 @@ code path must handle `None` by degrading, never by unwrapping.**
 
 Redis is connected only for Presence v2 (`PRESENCE_V2_ENABLED`). RabbitMQ and
 Redpanda settings are parsed and validated by
-[../../backend/api/src/config/brokers.rs](../../backend/api/src/config/brokers.rs),
-but no adapter connects to them yet. Qdrant is referenced only by dead code —
+[../../backend/api/src/config/brokers.rs](../../backend/api/src/config/brokers.rs).
+The RabbitMQ adapter exists
+([../../backend/api/src/infrastructure/rabbitmq.rs](../../backend/api/src/infrastructure/rabbitmq.rs))
+but nothing constructs it at runtime yet; Redpanda has no adapter. Qdrant is referenced only by dead code —
 [../dead-code.md](../dead-code.md).
 
 ## ClickHouse — shape

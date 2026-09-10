@@ -25,16 +25,17 @@ dead.
 
 ## Infrastructure declared but not yet connected by the server
 
-`make infra-up` starts PostgreSQL, ClickHouse and Redis; RabbitMQ and Redpanda
-are opt-in via `make infra-brokers-up` (compose profile `brokers`) until an
-adapter uses them. The Rust server currently uses ClickHouse and optionally
+`make infra-up` starts PostgreSQL, ClickHouse, Redis and RabbitMQ; Redpanda is
+opt-in via `make infra-kafka-up` (compose profile `kafka`) until the Kafka
+adapter lands. The Rust server currently uses ClickHouse and optionally
 PostgreSQL; Redis, RabbitMQ and Redpanda are represented by provider-neutral
-contracts but still need production adapters:
+contracts, and only RabbitMQ has an adapter so far:
 
 | Service | Reality |
 | --- | --- |
 | Redis | `presence_store.rs` is deliberately in-memory; `CacheStore`/lock contracts are live but no provider adapter is wired yet. |
-| RabbitMQ / Redpanda | Contracts in `contracts.rs` and settings in `config/brokers.rs` are live; no adapter connects yet (plan R1/K1 in `plans/plan-kafka-rabbitmq-adoption.md`). |
+| RabbitMQ | `infrastructure/rabbitmq.rs` implements `JobPublisher`/`JobConsumer` and is tested against a real broker, but nothing constructs it at runtime yet — the outbox relay (R2) and worker runtime (R3) will. |
+| Redpanda | Contracts in `contracts.rs` and settings in `config/brokers.rs` only; no adapter yet (plan K1). |
 | Qdrant (`docker-compose.dev.yaml`) | Referenced only from the dead `model/v1` tree. |
 
 Actually used: **ClickHouse** (required) and **PostgreSQL** (optional). See

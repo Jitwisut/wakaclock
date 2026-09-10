@@ -7,7 +7,8 @@
 |---|---|
 | P0.1 Contract | ✅ 2026-09-11 — `contracts.rs` ตาม D1–D4 + fixture `fixtures/message-envelopes/*-v1.json` (12 tests) |
 | P0.2 Config | ✅ 2026-09-11 — `config/brokers.rs` (15 tests); ตั้งค่าไม่ครบหรือขอโหมดที่ยังไม่มีจะไม่ยอม boot |
-| อื่น ๆ | ยังไม่เริ่ม |
+| R1 RabbitMQ adapter | ✅ 2026-09-11 — `infrastructure/rabbitmq.rs`; integration tests 8 ตัวผ่านกับ RabbitMQ 3.13.7 และ 4.1.8 (รันซ้ำสองรอบไม่มีของค้าง) รวม restart broker |
+| อื่น ๆ | ยังไม่เริ่ม (ถัดไป: R2) |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -219,7 +220,7 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
   `x-delivery-limit`, retry ผ่าน delay queue ที่มี TTL (5s / 30s / 2m / 10m ตาม §9.22)
 - publisher confirm, manual ack, prefetch ต่อ queue
 - เพิ่ม service container `rabbitmq` ใน CI job ที่รัน ignored tests
-- **ถอด profile `brokers` ออกจาก `docker-compose.yml`** และคืน `rabbitmq`/`redpanda` เข้า `make infra-up`
+- คืน `rabbitmq` เข้า `make infra-up`; `redpanda` ยังอยู่หลัง profile `kafka` (`make infra-kafka-up`) จนถึง K1 — ตามหลักที่ว่าไม่รัน container ที่ยังไม่มีโค้ดใช้
 - แก้ `.context/dead-code.md:35` และ `.context/data/overview.md:16` ที่บอกว่าไม่มีโค้ดต่อ broker
 - เกณฑ์ผ่าน: ignored integration tests กับ RabbitMQ จริง — confirm, redelivery หลัง nack,
   DLQ หลังครบจำนวนครั้ง, restart broker ระหว่างมีงานแล้วงานไม่หาย

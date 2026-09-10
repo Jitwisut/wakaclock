@@ -39,6 +39,8 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 `CLICKHOUSE_TEST_URL`, `CLICKHOUSE_TEST_USER`, `CLICKHOUSE_TEST_PASSWORD`,
 `CLICKHOUSE_TEST_DATABASE` — used by
 [../backend/api/src/test_support.rs](../backend/api/src/test_support.rs).
+`RABBITMQ_TEST_URL` and `RABBITMQ_TEST_RESTART_CONTAINER` — used by the RabbitMQ
+adapter tests in [../backend/api/src/infrastructure/rabbitmq.rs](../backend/api/src/infrastructure/rabbitmq.rs).
 
 ### Client crates (CLI / language server / extensions)
 
