@@ -19,7 +19,7 @@ export function CtaSection({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <section className="mkt-reveal mx-auto max-w-4xl px-4 py-20 md:px-6">
       <div
-        className="mkt-pixel-shadow border-[3px] px-8 py-14 text-center md:px-16"
+        className="mkt-cta-panel mkt-pixel-shadow border-[3px] px-8 py-14 text-center md:px-16"
         style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
       >
         <h2

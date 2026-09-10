@@ -1,11 +1,6 @@
 import type { SiteLocale } from '@/lib/seo/site';
 
-/**
- * No per-card icon here on purpose. Six abstract glyphs above six headings carry no
- * information the heading does not already carry, and at this density they read as
- * decoration competing with the text. A hard rule in the accent colour marks each card
- * instead, which is cheaper to scan and consistent with the pixel surface language.
- */
+/** Numbered cards keep the capabilities easy to scan without decorative icons. */
 
 const FEATURES = [
   {
@@ -79,7 +74,8 @@ export function FeatureGridSection({ locale = 'en' }: { locale?: SiteLocale }) {
     locale === 'th'
       ? {
           heading: 'AtoAxis ติดตามอะไรบ้าง',
-          subtitle: 'ไม่ใช่แค่เวลาที่ผ่านไป แต่รวม project, language, วิธีเขียนโค้ด และแหล่งข้อมูล',
+          subtitle:
+            'เห็นภาพงานครบขึ้น ตั้งแต่เวลาที่ใช้ โปรเจกต์และภาษา ไปจนถึงการมีส่วนร่วมของ AI',
         }
       : {
           heading: 'What AtoAxis tracks',
@@ -101,17 +97,15 @@ export function FeatureGridSection({ locale = 'en' }: { locale?: SiteLocale }) {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {features.map((feature) => (
+        {features.map((feature, index) => (
           <div
-            className="mkt-pixel-shadow border-[3px] p-6"
+            className="mkt-feature-card"
             key={feature.title}
             style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
           >
-            <span
-              aria-hidden
-              className="mb-4 block h-1 w-10"
-              style={{ background: 'var(--mkt-accent)' }}
-            />
+            <span aria-hidden="true" className="mkt-feature-number">
+              0{index + 1} / ATOAXIS
+            </span>
             <h3 className="text-base font-semibold">{feature.title}</h3>
             <p className="mt-2 text-sm" style={{ color: 'var(--mkt-fg-muted)' }}>
               {feature.description}

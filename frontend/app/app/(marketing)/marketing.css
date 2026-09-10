@@ -1,26 +1,4 @@
-/*
- * Scoped design tokens for the marketing site only. Deliberately isolated from
- * app/themes.css (the dashboard's preset system) via the `.wakaclock-marketing`
- * class wrapper — nothing here can affect the authenticated app.
- *
- * Art direction: "Retro Pixel 3D", the same one the authenticated dashboard ships as
- * its default preset (`[data-theme-preset='retro-pixel']` in app/themes.css). The palette
- * is re-derived from that preset's scales rather than invented here, so a visitor who
- * signs up lands in a product that looks like the site that sold it: white paper surfaces
- * carrying the faintest green cast, one green primary, zero border-radius, and hard
- * unblurred offset shadows instead of soft blur.
- *
- * Green on white, not green-on-green: the base scale sits at chroma 0.003–0.018 so the
- * surfaces read as white and the green is spent where it means something — the accent, the
- * terminal text and the drawn outlines. A tinted background would compete with the accent
- * and flatten exactly the hierarchy the accent exists to create.
- *
- * Two deliberate divergences from the dashboard preset, both accessibility-driven:
- *   1. `--mkt-accent` is dark enough (L 0.5) that white button labels clear 4.5:1, and it
- *      doubles as a text colour on the white background.
- *   2. Body copy is Space Mono / IBM Plex Sans Thai, never the pixel display face —
- *      see components/marketing/marketing-layout-frame.tsx for why.
- */
+/* Modern marketing surfaces, scoped away from the authenticated dashboard. */
 
 .wakaclock-marketing {
   --font-mkt-display: var(--font-mkt-pixel);
@@ -31,9 +9,8 @@
   --mkt-bg-elevated: oklch(1 0 0);
   --mkt-bg-sunken: oklch(0.963 0.012 158);
 
-  /* Pixel art outlines are hard ink, not hairlines: one strong border token for the
-     drawn outline, one soft token for dividers that should recede. */
-  --mkt-border: oklch(0.24 0.03 158);
+  /* Quiet outlines separate cards; softer dividers keep long content readable. */
+  --mkt-border: oklch(0.86 0.018 158);
   --mkt-border-soft: oklch(0.9 0.018 158);
 
   --mkt-fg: oklch(0.18 0.025 158);
@@ -158,138 +135,60 @@
   color: var(--mkt-fg);
 }
 
-/*
- * Sharp corners everywhere. `--radius` is a dashboard token and does not reach this
- * subtree, and Tailwind's `rounded-full` ignores it anyway, so the reset is the only
- * thing that actually guarantees pixel corners across shadcn primitives and utility
- * classes alike. Scoped to the marketing wrapper, so the dashboard is untouched.
- */
-.wakaclock-marketing *:not(svg):not(svg *) {
-  border-radius: 0 !important;
+/* Rounded surfaces and quiet elevation retain the shared component class names. */
+.wakaclock-marketing {
+  line-height: 1.7;
 }
-
-/* ---------------------------------------------------------------------------
- * Pixel-3D surface language
- * ------------------------------------------------------------------------ */
-
-/* A panel "sits" on a hard offset shadow rather than casting a soft blur. */
-.mkt-pixel-shadow {
-  box-shadow: 4px 4px 0 var(--mkt-shadow);
+.wakaclock-marketing :is(h1, h2, h3) {
+  text-wrap: balance;
+  line-height: 1.2;
 }
-
-.mkt-pixel-shadow-sm {
-  box-shadow: 3px 3px 0 var(--mkt-shadow);
+.wakaclock-marketing p {
+  text-wrap: pretty;
 }
-
-.mkt-pixel-shadow-lg {
-  box-shadow: 6px 6px 0 var(--mkt-shadow);
+.wakaclock-marketing :is(.border-2, .border-\[3px\]) {
+  border-width: 1px;
+  border-radius: 4px;
 }
-
-/* Raised, pressable surface: bevelled edges plus the offset shadow. */
+.mkt-pixel-shadow,
+.mkt-pixel-shadow-sm,
+.mkt-pixel-shadow-lg,
 .mkt-pixel-raised {
-  box-shadow:
-    inset 2px 2px 0 var(--mkt-bevel-light),
-    inset -2px -2px 0 var(--mkt-bevel-dark),
-    4px 4px 0 var(--mkt-shadow);
+  box-shadow: 0 12px 40px oklch(0.2 0.03 158 / 6%);
 }
-
-/* Sunken well — the conceptual opposite of a button (inputs, code frames). */
 .mkt-pixel-sunken {
-  box-shadow:
-    inset 2px 2px 0 var(--mkt-bevel-dark),
-    inset -1px -1px 0 var(--mkt-bevel-light);
+  box-shadow: inset 0 1px 3px oklch(0.2 0.03 158 / 6%);
 }
-
-/*
- * Pressable illusion. Hover lifts the surface away from its static shadow; press sinks
- * it into it and inverts the bevel. Movement is transform-only (compositor friendly)
- * and the element keeps its footprint, so nothing around it reflows.
- */
 .mkt-pixel-press {
   transition:
-    transform 120ms steps(2, jump-none),
-    box-shadow 120ms steps(2, jump-none),
-    background-color 150ms ease-out,
-    color 150ms ease-out;
+    transform 220ms ease,
+    box-shadow 220ms ease,
+    background-color 220ms ease;
 }
-
-@media (hover: hover) {
-  .mkt-pixel-press:hover {
-    transform: translate(-2px, -2px);
-    box-shadow:
-      inset 2px 2px 0 var(--mkt-bevel-light),
-      inset -2px -2px 0 var(--mkt-bevel-dark),
-      6px 6px 0 var(--mkt-shadow);
-  }
-}
-
-.mkt-pixel-press:active {
-  transform: translate(2px, 2px);
-  box-shadow:
-    inset -2px -2px 0 var(--mkt-bevel-light),
-    inset 2px 2px 0 var(--mkt-bevel-dark);
-}
-
-/*
- * Every shadcn button rendered inside the marketing subtree, reskinned through the
- * `data-slot` attribute the primitives already emit — the same technique the dashboard
- * preset uses, so `components/ui/button.tsx` (vendor) is never edited. Buttons read as
- * raised and physically sink on press, which is the primary "yes, that click
- * registered" signal on this site.
- */
-.wakaclock-marketing [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']) {
-  border: 2px solid var(--mkt-border);
-  box-shadow:
-    inset 2px 2px 0 var(--mkt-bevel-light),
-    inset -2px -2px 0 var(--mkt-bevel-dark),
-    3px 3px 0 var(--mkt-shadow);
-  font-family: var(--font-mkt-display), var(--font-mkt-body), monospace;
-  letter-spacing: 0.01em;
+.wakaclock-marketing [data-slot='button'] {
+  border-radius: 999px;
+  min-height: 44px;
+  font-family: inherit;
   transition:
-    transform 120ms steps(2, jump-none),
-    box-shadow 120ms steps(2, jump-none);
+    transform 220ms ease,
+    box-shadow 220ms ease;
 }
-
-@media (hover: hover) {
-  .wakaclock-marketing
-    [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']):hover {
-    transform: translate(-1px, -1px);
-    box-shadow:
-      inset 2px 2px 0 var(--mkt-bevel-light),
-      inset -2px -2px 0 var(--mkt-bevel-dark),
-      4px 4px 0 var(--mkt-shadow);
-  }
+.wakaclock-marketing [data-slot='button'][data-variant='outline'] {
+  border: 1px solid var(--mkt-border);
 }
-
-.wakaclock-marketing [data-slot='button']:not([data-variant='link']):active {
-  transform: translate(3px, 3px);
-  box-shadow:
-    inset -2px -2px 0 var(--mkt-bevel-light),
-    inset 2px 2px 0 var(--mkt-bevel-dark);
+.wakaclock-marketing :is(input, textarea, select) {
+  border-radius: 12px;
 }
-
-.wakaclock-marketing [data-slot='input'],
-.wakaclock-marketing [data-slot='textarea'],
-.wakaclock-marketing [data-slot='select-trigger'] {
-  border: 2px solid var(--mkt-border);
-  box-shadow:
-    inset 2px 2px 0 var(--mkt-bevel-dark),
-    inset -1px -1px 0 var(--mkt-bevel-light);
-}
-
-/*
- * Keyboard focus is a hard double outline rather than a soft ring: at radius 0 a blurred
- * ring reads as a rendering artefact, and the offset outline stays visible on both the
- * cream and the near-black surfaces without depending on the accent colour alone.
- */
-.wakaclock-marketing a:focus-visible,
-.wakaclock-marketing button:focus-visible,
-.wakaclock-marketing [data-slot='button']:focus-visible,
-.wakaclock-marketing summary:focus-visible,
-.wakaclock-marketing input:focus-visible,
-.wakaclock-marketing textarea:focus-visible {
+.wakaclock-marketing :is(a, button, summary, input, textarea, select):focus-visible {
   outline: 3px solid var(--mkt-accent);
-  outline-offset: 2px;
+  outline-offset: 4px;
+}
+@media (hover: hover) {
+  .mkt-pixel-press:hover,
+  .wakaclock-marketing [data-slot='button']:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px oklch(0.2 0.03 158 / 12%);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -466,7 +365,7 @@
   border-radius: 18px;
   background: var(--mkt-bg-elevated);
   box-shadow:
-    8px 8px 0 var(--mkt-border-soft),
+    0 2px 8px #064c1808,
     0 24px 64px #064c1810;
 }
 .mkt-studio-heading,
@@ -722,4 +621,486 @@
 
 [data-marquee-paused='true'] .wakaclock-marquee-track {
   animation-play-state: paused;
+}
+
+/* Editorial rhythm: a spacious opening, then compact, scannable chapters. */
+.wakaclock-marketing .mkt-hero-stage {
+  padding-top: clamp(64px, 9vw, 128px);
+  padding-bottom: clamp(64px, 8vw, 112px);
+}
+.mkt-hero-eyebrow {
+  border-radius: 999px;
+  background: var(--mkt-accent-soft);
+  color: var(--mkt-accent);
+  display: inline-flex;
+  padding: 8px 14px;
+  margin-bottom: 24px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.mkt-hero-scroll {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 32px;
+  font-size: 12px;
+  color: var(--mkt-fg-muted);
+}
+.mkt-hero-scroll span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--mkt-border);
+  border-radius: 50%;
+}
+.mkt-story-grid {
+  display: grid;
+  gap: 24px;
+  padding-top: 64px;
+  padding-bottom: 64px;
+}
+.mkt-story-grid > section {
+  margin-top: 0;
+  padding: clamp(24px, 3vw, 40px);
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 24px;
+  background: var(--mkt-bg-elevated);
+}
+.mkt-story-grid > section:first-child {
+  background: var(--mkt-accent-soft);
+}
+.mkt-story-grid h2 {
+  max-width: 26ch;
+}
+.mkt-story-grid li {
+  padding-block: 5px;
+}
+.mkt-feature-card {
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 4px;
+  padding: 32px;
+  transition:
+    transform 250ms ease,
+    box-shadow 250ms ease;
+}
+.mkt-feature-number {
+  display: block;
+  margin-bottom: 32px;
+  font:
+    500 12px var(--font-mkt-body),
+    monospace;
+  color: var(--mkt-accent);
+}
+@media (min-width: 768px) {
+  .mkt-story-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mkt-story-grid > section:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+  .mkt-story-grid > section:first-child {
+    grid-column: 1 / -1;
+  }
+  .mkt-story-grid > section:first-child > div > ul {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 40px;
+  }
+}
+@media (hover: hover) {
+  .mkt-feature-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 18px 48px #064c1810;
+  }
+}
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .mkt-feature-card {
+      animation: mkt-reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 90%;
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mkt-feature-card,
+  .wakaclock-marketing [data-slot='button'] {
+    transition: none;
+  }
+  .mkt-feature-card:hover,
+  .wakaclock-marketing [data-slot='button']:hover {
+    transform: none;
+  }
+}
+
+/* Depth without changing the layout or requiring WebGL. */
+.wakaclock-marketing .mkt-studio,
+.wakaclock-marketing .mkt-feature-card,
+.wakaclock-marketing .mkt-story-grid > section {
+  box-shadow:
+    inset 0 1px 0 var(--mkt-bevel-light),
+    0 5px 0 var(--mkt-border-soft),
+    0 16px 28px oklch(0.15 0.03 158 / 8%),
+    0 36px 70px oklch(0.15 0.03 158 / 5%);
+  transform-origin: center top;
+}
+.wakaclock-marketing .mkt-story-grid > section {
+  transition: box-shadow 300ms ease;
+}
+.wakaclock-marketing[data-motion-ready] :is(.mkt-reveal, .mkt-feature-card) {
+  animation: none;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .wakaclock-marketing .mkt-feature-card:hover {
+    transform: perspective(1000px) translateY(-8px) rotateX(3deg) rotateY(-2deg);
+    box-shadow:
+      inset 0 1px 0 var(--mkt-bevel-light),
+      2px 7px 0 var(--mkt-border-soft),
+      0 28px 50px oklch(0.15 0.03 158 / 14%);
+  }
+}
+@keyframes mkt-depth-scroll {
+  from {
+    transform: perspective(1400px) rotateX(7deg) rotateY(-5deg) translateY(0);
+  }
+  to {
+    transform: perspective(1400px) rotateX(0) rotateY(2deg) translateY(-32px);
+  }
+}
+@keyframes mkt-light-scroll {
+  from {
+    transform: translateY(-30px) scale(0.85);
+  }
+  to {
+    transform: translateY(60px) scale(1.15);
+  }
+}
+@supports (animation-timeline: view()) {
+  @media (min-width: 768px) and (prefers-reduced-motion: no-preference) {
+    .wakaclock-marketing .mkt-hero-stage {
+      view-timeline-name: --marketing-hero;
+    }
+    .wakaclock-marketing .mkt-hero-panel {
+      animation: mkt-depth-scroll linear both;
+      animation-timeline: --marketing-hero;
+      animation-range: exit 0% exit 100%;
+    }
+    .wakaclock-marketing .mkt-hero-stage::before {
+      animation: mkt-light-scroll linear both;
+      animation-timeline: --marketing-hero;
+      animation-range: exit 0% exit 100%;
+    }
+  }
+}
+
+/* Public-page reading layouts, shared by both locales. */
+.mkt-page-shell {
+  min-width: 0;
+}
+.mkt-page-intro {
+  padding: clamp(28px, 5vw, 64px);
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 28px;
+  background:
+    radial-gradient(ellipse at top right, var(--mkt-accent-soft), transparent 65%),
+    var(--mkt-bg-elevated);
+  box-shadow:
+    0 5px 0 var(--mkt-border-soft),
+    0 24px 64px oklch(0.15 0.03 158 / 6%);
+}
+.mkt-page-intro h1 {
+  max-width: 24ch;
+  font-size: clamp(30px, 4.5vw, 56px);
+}
+.mkt-page-intro > p:last-child {
+  max-width: 68ch;
+  line-height: 1.85;
+}
+.mkt-reading-layout {
+  display: grid;
+  gap: 28px;
+  margin-top: 56px;
+  align-items: start;
+}
+.mkt-page-content {
+  min-width: 0;
+}
+.mkt-page-index {
+  padding: 24px;
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 20px;
+  background: var(--mkt-bg-elevated);
+}
+.mkt-index-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mkt-accent);
+  margin-bottom: 16px;
+}
+.mkt-page-index ol {
+  display: grid;
+  gap: 4px;
+}
+.mkt-page-index a {
+  display: flex;
+  gap: 12px;
+  padding: 10px 8px;
+  font-size: 12px;
+  line-height: 1.65;
+  border-radius: 8px;
+  color: var(--mkt-fg-muted);
+}
+.mkt-page-index a:hover {
+  background: var(--mkt-accent-soft);
+  color: var(--mkt-fg);
+}
+.mkt-page-index a span {
+  font-family: var(--font-mkt-body), monospace;
+  color: var(--mkt-accent);
+}
+.mkt-page-content > .mkt-content-section {
+  margin-top: 0;
+  margin-bottom: 28px;
+  padding: clamp(24px, 3.5vw, 40px);
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 20px;
+  background: var(--mkt-bg-elevated);
+  box-shadow:
+    0 4px 0 var(--mkt-border-soft),
+    0 16px 40px oklch(0.15 0.03 158 / 4%);
+}
+.mkt-page-content > .mkt-content-section:target {
+  border-color: var(--mkt-accent);
+}
+.mkt-page-content .mkt-content-section > div {
+  font-size: 15px;
+  line-height: 1.9;
+}
+.mkt-page-content ul {
+  line-height: 1.9;
+}
+.mkt-page-content pre {
+  max-width: 100%;
+}
+.mkt-related > ul {
+  display: grid;
+  gap: 16px;
+}
+.mkt-related > ul > li {
+  margin: 0;
+  min-width: 0;
+}
+.mkt-related a {
+  height: 100%;
+  padding: 24px;
+}
+.mkt-related a > span:first-child {
+  text-decoration: none;
+  font-size: 16px;
+}
+.mkt-related a > span:last-child {
+  margin-top: 12px;
+  line-height: 1.8;
+}
+.mkt-page-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--mkt-border-soft);
+  margin-top: 48px;
+  padding-top: 24px;
+  color: var(--mkt-fg-muted);
+  font-size: 12px;
+}
+.mkt-page-provenance > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.mkt-page-provenance a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.mkt-signup-section > div {
+  background:
+    radial-gradient(ellipse at top right, var(--mkt-accent-soft), transparent 65%),
+    var(--mkt-bg-elevated);
+  box-shadow:
+    0 6px 0 var(--mkt-border-soft),
+    0 24px 60px oklch(0.15 0.03 158 / 8%);
+}
+.mkt-success-panel {
+  max-width: 720px;
+  margin: 24px auto;
+  padding: clamp(28px, 6vw, 64px);
+  text-align: center;
+  border: 1px solid var(--mkt-border-soft);
+  border-radius: 28px;
+  background: var(--mkt-bg-elevated);
+  box-shadow:
+    0 6px 0 var(--mkt-border-soft),
+    0 24px 60px oklch(0.15 0.03 158 / 8%);
+}
+.mkt-success-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 28px;
+  border-radius: 20px;
+  color: var(--mkt-accent);
+  background: var(--mkt-accent-soft);
+  font-size: 32px;
+}
+.mkt-campaign-intro {
+  display: grid;
+  gap: 24px;
+  align-items: center;
+}
+.mkt-campaign-intro > p:first-child {
+  justify-self: start;
+  margin-bottom: 0;
+}
+.mkt-campaign-intro > p,
+.mkt-campaign-intro > div {
+  margin: 0;
+}
+.mkt-campaign-intro > div {
+  justify-content: flex-start;
+}
+@media (min-width: 1024px) {
+  .mkt-reading-layout {
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 40px;
+  }
+  .mkt-page-index {
+    position: sticky;
+    top: 112px;
+    max-height: calc(100dvh - 144px);
+    overflow-y: auto;
+  }
+  .mkt-campaign-intro {
+    grid-template-columns: 1.1fr 0.9fr;
+    column-gap: 64px;
+  }
+  .mkt-campaign-intro > p:first-child {
+    grid-column: 1 / -1;
+  }
+  .mkt-campaign-intro h1 {
+    grid-column: 1;
+    grid-row: 2 / 5;
+  }
+  .mkt-campaign-intro > p:not(:first-child),
+  .mkt-campaign-intro > div {
+    grid-column: 2;
+  }
+  .mkt-campaign-intro > p:last-child {
+    padding: 20px;
+    border-radius: 16px;
+    background: var(--mkt-accent-soft);
+  }
+}
+@media (min-width: 768px) {
+  .mkt-related > ul {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mkt-signup-section form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .mkt-signup-section form > * {
+    margin-top: 0;
+  }
+  .mkt-signup-section form > label,
+  .mkt-signup-section form > button {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Surface shapes follow content purpose instead of wrapping every section in a card. */
+.wakaclock-marketing .mkt-page-intro {
+  border-radius: 0;
+  box-shadow: none;
+}
+.wakaclock-marketing .mkt-page-editorial .mkt-page-intro {
+  padding: 16px 0 40px;
+  border: 0;
+  border-bottom: 2px solid var(--mkt-fg);
+  background: none;
+}
+.wakaclock-marketing .mkt-page-product .mkt-page-intro {
+  border: 0;
+  border-left: 4px solid var(--mkt-accent);
+  background: linear-gradient(110deg, var(--mkt-accent-soft), transparent);
+}
+.wakaclock-marketing .mkt-page-utility .mkt-page-intro {
+  border-radius: 8px;
+  border-top: 3px solid var(--mkt-accent);
+  background: var(--mkt-bg-elevated);
+}
+.wakaclock-marketing .mkt-page-index {
+  padding: 8px 0 8px 20px;
+  border: 0;
+  border-left: 1px solid var(--mkt-border);
+  border-radius: 0;
+  background: transparent;
+}
+.wakaclock-marketing .mkt-page-index a {
+  border-radius: 2px;
+}
+.wakaclock-marketing .mkt-page-content > .mkt-content-section {
+  padding: 12px 0 36px;
+  border: 0;
+  border-bottom: 1px solid var(--mkt-border-soft);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.wakaclock-marketing .mkt-page-product .mkt-page-content > .mkt-content-section {
+  padding: 24px;
+  border-left: 2px solid var(--mkt-border-soft);
+  background: var(--mkt-bg-elevated);
+}
+.wakaclock-marketing .mkt-page-content > .mkt-content-section:target {
+  border-color: var(--mkt-accent);
+}
+.wakaclock-marketing .mkt-story-grid > section {
+  border: 0;
+  border-top: 1px solid var(--mkt-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wakaclock-marketing .mkt-story-grid > section:first-child {
+  border-top: 3px solid var(--mkt-accent);
+  background: var(--mkt-accent-soft);
+}
+.wakaclock-marketing .mkt-related a {
+  padding: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--mkt-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wakaclock-marketing .mkt-faq-section dl > div {
+  padding: 24px 0;
+  border: 0;
+  border-bottom: 1px solid var(--mkt-border-soft);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.wakaclock-marketing .mkt-cta-panel {
+  border-radius: 24px 4px 24px 4px;
+}
+.wakaclock-marketing .mkt-signup-section > div {
+  border-radius: 12px;
+}
+.wakaclock-marketing .mkt-success-panel {
+  border-radius: 8px;
 }

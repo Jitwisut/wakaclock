@@ -4,7 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 import { JsonLd } from '@/components/seo/json-ld';
-import { breadcrumbSchema, faqSchema, graph } from '@/lib/seo/schema';
+import { breadcrumbSchema, faqSchema, graph, webPageSchema } from '@/lib/seo/schema';
 import {
   createMarketingMetadata,
   localizedPath,
@@ -87,7 +87,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
       <HeroSection locale={locale} />
       <DashboardPreviewSection locale={locale} />
       <EditorWallSection locale={locale} />
-      <div className="mx-auto max-w-3xl px-4 md:px-6">
+      <div className="mkt-story-grid mx-auto max-w-6xl px-4 md:px-6">
         {/*
           Headings are phrased as questions on purpose. They are the questions a visitor
           actually arrives with, and they are also what an answer engine matches a query
@@ -332,6 +332,13 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
       */}
       <JsonLd
         data={graph(
+          webPageSchema({
+            path: '/',
+            locale,
+            name: copy.title.replace('\n', ' '),
+            description: copy.description,
+            sections: copy.tableOfContents.map(({ id, label }) => ({ id, name: label })),
+          }),
           faqSchema(copy.faq),
           breadcrumbSchema([{ name: locale === 'th' ? 'หน้าหลัก' : 'Home', path: '/' }])
         )}

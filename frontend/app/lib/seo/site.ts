@@ -246,6 +246,8 @@ export function createMarketingMetadata({
     },
     openGraph: {
       type: 'website',
+      locale: locale === 'th' ? 'th_TH' : 'en_US',
+      alternateLocale: [locale === 'th' ? 'en_US' : 'th_TH'],
       siteName: SITE_NAME,
       title: displayTitle,
       description,
