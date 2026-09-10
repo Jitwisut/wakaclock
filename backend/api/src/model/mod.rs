@@ -4,6 +4,7 @@ pub mod ai_stats;
 pub mod ai_usage;
 pub mod all_time;
 pub mod analytics_explorer;
+pub mod async_job;
 pub mod auth;
 pub mod billing;
 pub mod coworking_session;

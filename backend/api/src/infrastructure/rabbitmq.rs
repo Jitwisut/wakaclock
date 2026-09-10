@@ -77,6 +77,14 @@ impl JobTopology {
         }
     }
 
+    /// A namespaced topology for tests that share one broker. `prefix` should end with
+    /// a separator, e.g. `"jobs-e2e-<uuid>."`.
+    pub fn namespaced(prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+        }
+    }
+
     fn name(&self, base: &str) -> String {
         format!("{}{base}", self.prefix)
     }
@@ -158,13 +166,8 @@ pub struct RabbitMqJobQueue {
 }
 
 impl RabbitMqJobQueue {
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "tests connect through connect_with and a namespaced topology"
-        )
-    )]
+    /// Connects with the production topology. The in-process relay (R2) calls this;
+    /// tests use [`Self::connect_with`] and a namespaced topology.
     pub async fn connect(config: &JobQueueConfig) -> InfrastructureResult<Self> {
         Self::connect_with(config.url(), JobTopology::production()).await
     }

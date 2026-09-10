@@ -1,6 +1,7 @@
 pub mod app;
 pub mod contracts;
 pub mod database;
+pub mod job_relay;
 pub mod logger;
 pub mod postgres;
 pub mod presence_store;

@@ -28,8 +28,10 @@ Grouped by concern (see `handlers/v1/mod.rs` for the authoritative list):
 ## v2 — Phase 10
 
 `/capabilities`, `/me`, `/me/analytics`, `/me/ai/effectiveness`, `/me/goals`,
-`/exports`, `/profile`, `/share-links`, `/integrations/*`, `/ai/follow-up*`,
-and VCS routes delegating to
+`/exports`, `/jobs/:job_id` (background-job status, plan R2 — account-only, like
+the `POST /api/v1/reprocess` that creates the jobs; not reachable by a
+third-party OAuth grant), `/profile`,
+`/share-links`, `/integrations/*`, `/ai/follow-up*`, and VCS routes delegating to
 [../../backend/api/src/handlers/vcs.rs](../../backend/api/src/handlers/vcs.rs).
 
 ## Handler pattern — Existing Convention

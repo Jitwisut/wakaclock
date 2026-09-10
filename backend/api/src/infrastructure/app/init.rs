@@ -43,6 +43,7 @@ use crate::services::goals::GoalService;
 use crate::services::heartbeat::HeartbeatService;
 use crate::services::insights::InsightsService;
 use crate::services::integrations::IntegrationService;
+use crate::services::jobs::JobService;
 use crate::services::keystroke_stats::KeystrokeStatsService;
 use crate::services::leaderboards::LeaderboardService;
 use crate::services::oauth::OAuthService;
@@ -107,6 +108,7 @@ pub struct AppState {
     pub external_duration_service: Arc<ExternalDurationService>,
     pub follow_up_service: Arc<FollowUpService>,
     pub export_service: Arc<ExportService>,
+    pub job_service: Arc<JobService>,
     pub profile_service: Arc<ProfileService>,
     pub report_service: Arc<ReportService>,
     pub activity_timeline_service: Arc<ActivityTimelineService>,
@@ -284,6 +286,7 @@ pub async fn create_app_state() -> Result<AppState> {
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
     let follow_up_service = Arc::new(FollowUpService::new(follow_up_repo.clone()));
     let export_service = Arc::new(ExportService::new(postgres.clone()));
+    let job_service = Arc::new(JobService::new(postgres.clone()));
     let profile_service = Arc::new(ProfileService::new(postgres.clone()));
     let report_service = Arc::new(ReportService::new(postgres.clone()));
     let activity_timeline_service = Arc::new(ActivityTimelineService::new(
@@ -391,6 +394,7 @@ pub async fn create_app_state() -> Result<AppState> {
         external_duration_service,
         follow_up_service,
         export_service,
+        job_service,
         profile_service,
         report_service,
         activity_timeline_service,

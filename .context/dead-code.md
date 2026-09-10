@@ -29,12 +29,12 @@ dead.
 opt-in via `make infra-kafka-up` (compose profile `kafka`) until the Kafka
 adapter lands. The Rust server currently uses ClickHouse and optionally
 PostgreSQL; Redis, RabbitMQ and Redpanda are represented by provider-neutral
-contracts, and only RabbitMQ has an adapter so far:
+contracts, and RabbitMQ now has an adapter and a runtime driver:
 
 | Service | Reality |
 | --- | --- |
 | Redis | `presence_store.rs` is deliberately in-memory; `CacheStore`/lock contracts are live but no provider adapter is wired yet. |
-| RabbitMQ | `infrastructure/rabbitmq.rs` implements `JobPublisher`/`JobConsumer` and is tested against a real broker, but nothing constructs it at runtime yet — the outbox relay (R2) and worker runtime (R3) will. |
+| RabbitMQ | `infrastructure/rabbitmq.rs` implements `JobPublisher`/`JobConsumer`; the in-process outbox relay (`infrastructure/job_relay.rs`, plan R2) drives it. The `JobConsumer` half is still unused until the worker runtime (R3). `src/bin/outbox-relay.rs` is a stub that errors on purpose. |
 | Redpanda | Contracts in `contracts.rs` and settings in `config/brokers.rs` only; no adapter yet (plan K1). |
 | Qdrant (`docker-compose.dev.yaml`) | Referenced only from the dead `model/v1` tree. |
 

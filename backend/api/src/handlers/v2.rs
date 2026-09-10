@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::ai_stats::AiStatsData;
+use crate::model::async_job::AsyncJobView;
 use crate::model::billing::{Invoice, OrganizationBilling};
 use crate::model::date_range::ResolvedRange;
 use crate::model::export::{CreateExportRequest, ExportJob};
@@ -245,6 +246,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/me/goals/:goal_id/progress", get(goals_progress))
         .route("/exports", get(exports_list).post(exports_create))
         .route("/exports/:export_id", get(exports_get).delete(exports_cancel))
+        .route("/jobs/:job_id", get(jobs_get))
         .route("/profile", get(profile_get).patch(profile_update))
         .route("/share-links", get(share_links_list).post(share_links_create))
         .route("/share-links/:link_id", delete(share_links_delete))
@@ -818,6 +820,31 @@ pub async fn exports_cancel(
             "export job not found or already finished",
         ))
     }
+}
+
+/// GET /api/v2/jobs/:job_id — the caller's own background job. Returns state and a
+/// sanitized error code only; a job belonging to another account, or a system job,
+/// is a 404.
+///
+/// Account-only, like `POST /api/v1/reprocess` that creates these jobs: a third-party
+/// OAuth grant must not read job state (and, once R5 fills `result`, whatever it
+/// carries). When export jobs land in R5 and an `export_data` grant legitimately needs
+/// to poll, move this to a scope-per-`JobKind` check.
+pub async fn jobs_get(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(job_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<AsyncJobView>>, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let job = state
+        .job_service
+        .get(user_id, job_id)
+        .await
+        .map_err(ApiError::service_unavailable)?
+        .ok_or_else(|| ApiError::not_found("job not found"))?;
+    Ok(Json(envelope(job, "UTC", None)))
 }
 
 pub async fn profile_get(

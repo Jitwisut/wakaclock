@@ -294,9 +294,9 @@ impl BrokerConfig {
             );
         }
         if let Some(job_queue) = &self.job_queue {
-            tracing::warn!(
+            tracing::info!(
                 url = %job_queue.redacted_url(),
-                "{JOB_QUEUE_URL} is set but nothing in this build connects to RabbitMQ yet; it is unused"
+                "{JOB_QUEUE_URL} is set; the outbox relay connects to RabbitMQ when POSTGRES_URL is also configured (plan R2)"
             );
             if !job_queue.tls() && !is_loopback_host(&job_queue.host) {
                 tracing::warn!(

@@ -19,6 +19,7 @@ pub mod goals;
 pub mod heartbeat;
 pub mod insights;
 pub mod integrations;
+pub mod jobs;
 pub mod keystroke_stats;
 pub mod leaderboards;
 pub mod oauth;

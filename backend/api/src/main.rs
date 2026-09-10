@@ -137,6 +137,17 @@ async fn main() -> Result<()> {
     app_state.user_service.migrate_legacy_credentials().await?;
     drop(migration_guard);
 
+    // Outbox relay: turns `async_jobs` rows into RabbitMQ messages (plan R2). It runs
+    // in-process because the crate has no library target a standalone binary could
+    // share services with. Started only when a job queue and PostgreSQL are both
+    // configured; every replica runs one and they coordinate through SKIP LOCKED.
+    if app_state.postgres.is_some() {
+        if let Some(job_queue) = app_state.config.brokers.job_queue.clone() {
+            infrastructure::job_relay::spawn(app_state.job_service.clone(), job_queue);
+            info!("Outbox relay started");
+        }
+    }
+
     // Reconcile active Redis projections into ClickHouse even when no browser is currently
     // connected. This closes sessions after lease expiry and provides the recovery timeout
     // boundary for an API restart without making analytics a dependency of live room joins.

@@ -8,7 +8,8 @@
 | P0.1 Contract | ✅ 2026-09-11 — `contracts.rs` ตาม D1–D4 + fixture `fixtures/message-envelopes/*-v1.json` (12 tests) |
 | P0.2 Config | ✅ 2026-09-11 — `config/brokers.rs` (15 tests); ตั้งค่าไม่ครบหรือขอโหมดที่ยังไม่มีจะไม่ยอม boot |
 | R1 RabbitMQ adapter | ✅ 2026-09-11 — `infrastructure/rabbitmq.rs`; integration tests 8 ตัวผ่านกับ RabbitMQ 3.13.7 และ 4.1.8 (รันซ้ำสองรอบไม่มีของค้าง) รวม restart broker |
-| อื่น ๆ | ยังไม่เริ่ม (ถัดไป: R2) |
+| R2 Job foundation + relay | ✅ 2026-09-11 — migration `007_async_jobs.sql`, `services/jobs.rs`, `infrastructure/job_relay.rs`, `GET /api/v2/jobs/:job_id`; 5 PG-backed tests (idempotency, foreign-row isolation, partial-pass double-publish safety, sweeper, broker e2e) รันซ้ำสองรอบผ่าน |
+| อื่น ๆ | ยังไม่เริ่ม (ถัดไป: R3) |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -225,17 +226,23 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 - เกณฑ์ผ่าน: ignored integration tests กับ RabbitMQ จริง — confirm, redelivery หลัง nack,
   DLQ หลังครบจำนวนครั้ง, restart broker ระหว่างมีงานแล้วงานไม่หาย
 
-**R2 — Job foundation ใน PostgreSQL** (1–2 PR)
-- migration `async_jobs` + `JobService` (สร้างงานพร้อม idempotency key, state transition ที่ตรวจเงื่อนไข)
-- เขียนงาน + `outbox_events` ใน transaction เดียว (D5)
-- `outbox-relay` ทำงานจริง: `SELECT … FOR UPDATE SKIP LOCKED LIMIT n` → publish + confirm → ตั้ง `published_at`
-- sweeper: งาน `running` ที่ lease หมดอายุ → นำกลับเข้าคิวผ่าน outbox, `attempt + 1`
-- endpoint สถานะงานพร้อมตรวจ ownership (ทำตาม `.context/workflows/adding-endpoint.md`)
-- เกณฑ์ผ่าน: kill relay/RabbitMQ กลางทาง → งานไม่หายและไม่ซ้ำ; Idempotency-Key ซ้ำได้ `job_id` เดิม
+**R2 — Job foundation ใน PostgreSQL** (ทำแล้ว)
+- migration `007_async_jobs.sql` + `JobService::create` (idempotency key ต่อ `(user_id, kind, key)`) → job row + outbox row ใน transaction เดียว (D5)
+- `JobService::relay_once`: `SELECT … FROM outbox_events WHERE aggregate_type = 'async_job' … FOR UPDATE SKIP LOCKED` → `publish` + confirm → ตั้ง `published_at`; หยุดที่ publish แรกที่ล้มเหลวแล้ว commit เท่าที่สำเร็จ; row ที่ decode ไม่ได้ log แล้วข้าม
+- **poison row ยังไม่ block คิวจริงเฉพาะเมื่อจำนวนน้อยกว่า batch:** row ที่ decode ไม่ได้คง `published_at IS NULL` ตลอดไป และ `ORDER BY created_at LIMIT n` จะดึงมันกลับมาทุกรอบ — สะสมครบ `RELAY_BATCH` เมื่อไหร่ real job หยุดไหล โอกาสต่ำ (มีแต่ `create` ที่เขียน row พวกนี้) แต่ต้องมีคอลัมน์ `failed_at`/DLQ ให้ relay ทิ้ง poison row — ทำใน R3
+- `JobService::sweep_once`: job `running` ที่ `lease_expires_at` เลยเวลา → re-enqueue ผ่าน outbox row ใหม่ `attempt + 1`; ครบ `JOB_RETRY_DELAYS.len()` → `dead_lettered`
+- `GET /api/v2/jobs/:job_id` ตรวจ ownership (`user_id = caller`); system job และ job ของคนอื่นเป็น 404
+- **ต่างจากแผนเดิม:** relay รันใน process ของ `wakaclock-server` (spawn จาก `main.rs` เมื่อมี `ATOAXIS_JOB_QUEUE_URL` + `POSTGRES_URL`) ไม่ใช่ binary แยก เพราะ crate ไม่มี library target ให้ `src/bin/*` แชร์ services ได้ `src/bin/outbox-relay.rs` เหลือไว้เป็น stub ที่ error ชี้มาที่นี่ **binary แยกต้องมี lib target ก่อน — เป็น PR ของตัวเอง ทำก่อนหรือระหว่าง R3**
+- worker-side transitions (claim/complete/fail) ย้ายไป R3 เพราะยังไม่มีผู้เรียกจนกว่า worker จะมี; `JobService::create` มี `#[expect(dead_code)]` จน R4 ต่อเข้า `/reprocess`
+- เกณฑ์ผ่าน (ทำแล้ว): partial relay pass ที่ publish ล้มเหลว → row ที่ confirm แล้วถูก mark, ที่เหลือ retry รอบหน้า, ไม่ publish ซ้ำ (path นี้ commit สะอาด); foreign outbox row (`aggregate_type` อื่น) ไม่ถูกแตะ; Idempotency-Key ซ้ำได้ `job_id` เดิมและไม่เขียน outbox เพิ่ม
+- **การรับประกันคือ at-least-once ไม่ใช่ exactly-once:** process ตายหลัง publish ถูก confirm แต่ก่อน `tx.commit()` → `published_at` rollback → รอบถัดไป publish ซ้ำ นี่คือเหตุผลที่ `JobEnvelope` ถือ `job_id` คงที่ และ worker ของ R3 ต้อง idempotent ต่อ `job_id`; งานไม่หาย
 
-**R3 — Worker runtime** (1 PR)
+**R3 — Worker runtime** (1 PR, + ตัดสินเรื่อง lib target)
+- ตัดสินก่อน: เพิ่ม `src/lib.rs` ให้ worker เป็น process แยก (ต้องแก้ `#![expect(dead_code)]` หลายจุดที่ contracts/rabbitmq/brokers ถือไว้) หรือรัน worker loop ใน process เดียวกับ API แบบที่ relay ทำใน R2 — เลือกอย่างหลังถ้าอยากเลี่ยง refactor ใหญ่ใน PR นี้
 - แทน `worker_runtime.rs` ด้วย runtime จริง: ลงทะเบียน processor ต่อ routing key, concurrency = prefetch,
-  ต่อ lease ใน PG, แยก error ชั่วคราว/ถาวร, graceful shutdown (หยุดรับ → รองานที่ทำอยู่ → nack ที่เหลือ)
+  claim job → เขียน `async_jobs.status = 'running'` + `lease_expires_at` (ตัวที่ sweeper ของ R2 คอยดู) → complete/fail, แยก error ชั่วคราว/ถาวร, graceful shutdown (หยุดรับ → รองานที่ทำอยู่ → nack ที่เหลือ)
+- claim/complete/fail transitions ของ `JobService` (ยังไม่มีใน R2) เพิ่มที่นี่
+- **worker ต้อง dedupe ต่อ `job_id`** (relay เป็น at-least-once — ดู R2): claim ที่เจอ `async_jobs.status` เป็น `succeeded`/`running` อยู่แล้วให้ ack ทิ้งโดยไม่รัน processor ซ้ำ
 - readiness = เชื่อมต่อได้ + มี processor
 - `require_background_processor()` เปลี่ยนเป็นตรวจราย job type จาก registry และส่งผลไปที่
   capabilities (F12) — feature ที่ worker ยังไม่พร้อมยังตอบ 503 ต่อไป
