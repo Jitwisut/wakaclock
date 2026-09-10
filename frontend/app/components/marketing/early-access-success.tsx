@@ -19,16 +19,21 @@ export function EarlyAccessSuccess({ locale = 'en' }: { locale?: SiteLocale }) {
         };
   return (
     <PageShell>
-      <PageTitle>{copy.title}</PageTitle>
-      <p className="mt-5 text-lg leading-relaxed" style={{ color: 'var(--mkt-fg-muted)' }}>
-        {copy.body}
-      </p>
-      <Link
-        className="mt-8 inline-block underline underline-offset-4"
-        href={localizedPath(locale, '/')}
-      >
-        {copy.back}
-      </Link>
+      <div className="mkt-success-panel">
+        <div aria-hidden="true" className="mkt-success-mark">
+          ✓
+        </div>
+        <PageTitle>{copy.title}</PageTitle>
+        <p className="mt-5 text-lg leading-relaxed" style={{ color: 'var(--mkt-fg-muted)' }}>
+          {copy.body}
+        </p>
+        <Link
+          className="mt-8 inline-block underline underline-offset-4"
+          href={localizedPath(locale, '/')}
+        >
+          {copy.back}
+        </Link>
+      </div>
     </PageShell>
   );
 }

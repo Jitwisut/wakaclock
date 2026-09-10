@@ -8,8 +8,20 @@ export const MUTED_TEXT = { color: 'var(--mkt-fg-muted)' } as const;
 
 /** Shared layout primitives for the content-heavy marketing and docs pages. */
 
-export function PageShell({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto max-w-3xl px-4 py-16 md:px-6 md:py-20">{children}</div>;
+export function PageShell({
+  children,
+  variant = 'editorial',
+}: {
+  children: React.ReactNode;
+  variant?: 'editorial' | 'product' | 'utility';
+}) {
+  return (
+    <div
+      className={`mkt-page-shell mkt-page-${variant} mx-auto max-w-6xl px-4 py-16 md:px-6 md:py-20`}
+    >
+      {children}
+    </div>
+  );
 }
 
 /**
@@ -93,7 +105,10 @@ export function Section({
   reveal?: boolean;
 }) {
   return (
-    <section className={reveal ? 'mkt-reveal mt-14' : 'mt-14'} id={id}>
+    <section
+      className={reveal ? 'mkt-content-section mkt-reveal mt-14' : 'mkt-content-section mt-14'}
+      id={id}
+    >
       <h2 className="text-xl font-semibold tracking-tight md:text-2xl">{heading}</h2>
       <div className="mt-4 space-y-4 text-sm leading-relaxed">{children}</div>
     </section>
@@ -158,7 +173,10 @@ export function RelatedLinks({
   links: readonly { description: string; href: string; label: string }[];
 }) {
   return (
-    <section className="mt-16 border-t pt-8" style={{ borderColor: 'var(--mkt-border)' }}>
+    <section
+      className="mkt-related mt-16 border-t pt-8"
+      style={{ borderColor: 'var(--mkt-border)' }}
+    >
       <h2 className="text-base font-semibold">{heading}</h2>
       <ul className="mt-4 space-y-3">
         {links.map((link) => (
@@ -166,7 +184,7 @@ export function RelatedLinks({
             <Link
               className="mkt-pixel-press mkt-pixel-shadow-sm block border-2 p-4"
               href={link.href}
-              style={{ background: 'var(--mkt-bg-elevated)', borderColor: 'var(--mkt-border)' }}
+              style={{ borderColor: 'var(--mkt-border)' }}
             >
               <span className="text-sm font-semibold underline underline-offset-4">
                 {link.label}

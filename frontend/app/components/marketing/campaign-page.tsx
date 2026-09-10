@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import { JsonLd } from '@/components/seo/json-ld';
 import { Button } from '@/components/ui/button';
-import { breadcrumbSchema, type FaqEntry, faqSchema, graph } from '@/lib/seo/schema';
+import { breadcrumbSchema, type FaqEntry, faqSchema, graph, webPageSchema } from '@/lib/seo/schema';
 import {
   createMarketingMetadata,
   localizedPath,
@@ -168,7 +168,7 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
 
   return (
     <>
-      <section className="mx-auto max-w-4xl px-4 pt-16 pb-12 text-center md:px-6 md:pt-24">
+      <section className="mkt-campaign-intro mx-auto max-w-6xl px-4 pt-16 pb-12 md:px-6 md:pt-24">
         <p
           className="mkt-pixel-shadow-sm mb-6 inline-flex items-center gap-2 border-2 px-3 py-1.5 text-xs font-bold"
           style={{
@@ -236,7 +236,7 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
                to read, which an abstract glyph cannot, and it keeps the card free of
                decoration that would repeat what the heading already says. */
             <li
-              className="mkt-pixel-shadow flex gap-4 border-[3px] p-6"
+              className="mkt-feature-card flex gap-4"
               key={value.title}
               style={{ background: MKT_BG_ELEVATED, borderColor: MKT_BORDER }}
             >
@@ -292,7 +292,16 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
       <FaqSection entries={copy.faq} heading={copy.faqHeading} id="join-faq" locale={locale} />
       {/* Rendered last, not first: see the note in marketing-home-page.tsx. */}
       <JsonLd
-        data={graph(breadcrumbSchema(breadcrumbs), faqSchema(copy.faq as readonly FaqEntry[]))}
+        data={graph(
+          webPageSchema({
+            path: '/join',
+            locale,
+            name: copy.title.replace('\n', ' '),
+            description: copy.lead,
+          }),
+          breadcrumbSchema(breadcrumbs),
+          faqSchema(copy.faq as readonly FaqEntry[])
+        )}
       />
     </>
   );

@@ -15,12 +15,12 @@ const CTA_COPY = {
   en: {
     cta: 'Join early access',
     compare: 'Compare with WakaTime',
-    note: 'Planned hosted launch. Nothing to deploy. English and Thai support.',
+    note: 'Hosted service planned. Available in English and Thai.',
   },
   th: {
     cta: 'เข้าร่วม Early Access',
     compare: 'เปรียบเทียบกับ WakaTime',
-    note: 'แผน hosted ที่วางไว้ ไม่ต้อง deploy เอง รองรับทั้งภาษาอังกฤษและไทย',
+    note: 'เตรียมเปิดให้ใช้งานแบบ hosted รองรับภาษาไทยและอังกฤษ',
   },
 } as const;
 
@@ -40,15 +40,10 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
             display type ahead of the actual opening paragraph, which is the text a search
             or answer engine lifts as the page's snippet.
           */}
-          <div
-            className="mb-6 inline-flex max-w-full flex-wrap items-center gap-1.5 border-2 px-3 py-1 text-[0.7rem] font-medium sm:text-xs"
-            style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
-          >
-            {copy.badge}
-          </div>
+          <div className="mkt-hero-eyebrow">{copy.badge}</div>
 
           <h1
-            className="text-[1.75rem] leading-[1.15] font-bold tracking-tight text-balance break-words sm:text-4xl md:text-5xl lg:text-[3.4rem]"
+            className="text-[1.75rem] leading-[1.1] font-bold tracking-tight text-balance break-words sm:text-4xl md:text-5xl lg:text-[3.8rem]"
             style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
           >
             {copy.title.split('\n')[0]}
@@ -86,6 +81,12 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
           <p className="mt-4 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
             {ctaCopy.note}
           </p>
+          <a className="mkt-hero-scroll" href="#features">
+            <span aria-hidden="true">↓</span>
+            {locale === 'th'
+              ? 'เลื่อนลง แล้วรู้จักงานของคุณให้มากขึ้น'
+              : 'Scroll to see your work more clearly'}
+          </a>
         </div>
 
         <HeroPanel locale={locale} />

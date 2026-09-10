@@ -8,12 +8,15 @@ import {
   howToSchema,
   type HowToStep,
   organizationSchema,
+  webPageSchema,
 } from '@/lib/seo/schema';
 import {
   createMarketingMetadata,
   localizedPath,
   ORGANIZATION,
+  SITE_NAME,
   type SiteLocale,
+  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { ComparisonSection } from './comparison-section';
@@ -131,6 +134,39 @@ function howToSteps(sections: readonly MarketingSectionCopy[]): HowToStep[] {
     .filter((step) => step.text.length > 0);
 }
 
+function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale: SiteLocale }) {
+  return (
+    <aside className="mkt-page-index">
+      <nav aria-label={locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}>
+        <p className="mkt-index-label">{locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}</p>
+        <ol>
+          {copy.sections.map((section, index) => (
+            <li key={section.id}>
+              <a href={`#${section.id}`}>
+                <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+                {section.heading}
+              </a>
+            </li>
+          ))}
+          {copy.faq ? (
+            <li>
+              <a href="#faq">{copy.faq.heading}</a>
+            </li>
+          ) : null}
+        </ol>
+      </nav>
+    </aside>
+  );
+}
+
+function pageVariant(path: MarketingPageKey) {
+  if (path === '/contact' || path === '/early-access') return 'utility';
+  if (path.startsWith('/docs') || ['/about', '/privacy', '/terms'].includes(path)) {
+    return 'editorial';
+  }
+  return 'product';
+}
+
 export function LocalizedMarketingPage({
   path,
   locale,
@@ -143,7 +179,16 @@ export function LocalizedMarketingPage({
     ...entry,
     path: localizedPath(locale, entry.path),
   }));
-  const schemas = [breadcrumbSchema(breadcrumbs)];
+  const schemas = [
+    breadcrumbSchema(breadcrumbs),
+    webPageSchema({
+      path,
+      locale,
+      name: copy.title,
+      description: copy.lead,
+      sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
+    }),
+  ];
   if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
   if (copy.schema === 'organization') schemas.push(organizationSchema());
   if (copy.howTo) {
@@ -166,29 +211,52 @@ export function LocalizedMarketingPage({
 
   return (
     <>
-      <PageShell>
+      <PageShell variant={pageVariant(path)}>
         <Breadcrumbs entries={breadcrumbs} locale={locale} />
-        {copy.badge ? (
-          <p
-            className="mb-5 inline-flex border-2 px-3 py-1 text-xs font-medium"
-            style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
-          >
-            {copy.badge}
-          </p>
-        ) : null}
-        <PageTitle>{copy.title}</PageTitle>
-        <LeadAnswer>{copy.lead}</LeadAnswer>
-        {pricing ? (
-          <>
-            {renderSections(firstSections)}
-            <PricingSection locale={locale} />
-          </>
-        ) : (
-          renderSections(firstSections)
-        )}
-        {copy.component?.kind === 'comparison' ? <ComparisonSection locale={locale} /> : null}
-        {trailingSections.length > 0 ? renderSections(trailingSections) : null}
+        <header className="mkt-page-intro">
+          {copy.badge ? (
+            <p
+              className="mb-5 inline-flex border-2 px-3 py-1 text-xs font-medium"
+              style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
+            >
+              {copy.badge}
+            </p>
+          ) : null}
+          <PageTitle>{copy.title}</PageTitle>
+          <LeadAnswer>{copy.lead}</LeadAnswer>
+        </header>
+        <div className="mkt-reading-layout">
+          <PageIndex copy={copy} locale={locale} />
+          <div className="mkt-page-content">
+            {pricing ? (
+              <>
+                {renderSections(firstSections)}
+                <PricingSection locale={locale} />
+              </>
+            ) : (
+              renderSections(firstSections)
+            )}
+            {copy.component?.kind === 'comparison' ? <ComparisonSection locale={locale} /> : null}
+            {trailingSections.length > 0 ? renderSections(trailingSections) : null}
+          </div>
+        </div>
         {renderRelated(copy, locale)}
+        <footer className="mkt-page-provenance">
+          <p>
+            {locale === 'th' ? 'เผยแพร่โดย' : 'Published by'} {SITE_NAME}
+          </p>
+          <div>
+            <a href={localizedPath(locale, '/about')}>
+              {locale === 'th' ? 'รู้จักทีมผู้พัฒนา' : 'Meet the team'}
+            </a>
+            <a href={SOURCE_REPOSITORY_URL} rel="noopener noreferrer" target="_blank">
+              {locale === 'th' ? 'ดูซอร์สโค้ดผลิตภัณฑ์' : 'Explore the product source'}
+            </a>
+            <a href={localizedPath(locale, '/contact')}>
+              {locale === 'th' ? 'สอบถามข้อมูล' : 'Ask a question'}
+            </a>
+          </div>
+        </footer>
       </PageShell>
       {copy.form ? <EarlyAccessForm locale={locale} sourcePage={`${locale}${path}`} /> : null}
       {copy.faq ? (

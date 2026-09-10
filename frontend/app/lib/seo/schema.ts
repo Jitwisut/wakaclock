@@ -1,11 +1,13 @@
 import {
   absoluteUrl,
+  localizedPath,
   ORGANIZATION,
   PRODUCT_ANSWER,
   SITE_MODIFIED,
   SITE_NAME,
   SITE_TAGLINE,
   SITE_URL,
+  type SiteLocale,
   SOURCE_REPOSITORY_URL,
 } from './site';
 
@@ -179,4 +181,39 @@ export function breadcrumbSchema(entries: readonly BreadcrumbEntry[]): JsonLdVal
  */
 export function graph(...nodes: JsonLdValue[]): JsonLdValue {
   return { '@context': 'https://schema.org', '@graph': nodes };
+}
+
+/** Page identity and section links come from the same copy the visitor can read. */
+export function webPageSchema({
+  path,
+  locale,
+  name,
+  description,
+  sections = [],
+}: {
+  description: string;
+  locale: SiteLocale;
+  name: string;
+  path: string;
+  sections?: readonly { id: string; name: string }[];
+}): JsonLdValue {
+  const url = absoluteUrl(localizedPath(locale, path));
+  const pageTypes: Record<string, string> = { '/about': 'AboutPage', '/contact': 'ContactPage' };
+  const pageType = pageTypes[path] ?? 'WebPage';
+  return {
+    '@type': pageType,
+    '@id': `${url}#webpage`,
+    url,
+    name,
+    description,
+    inLanguage: locale === 'th' ? 'th-TH' : 'en',
+    isPartOf: { '@id': absoluteUrl('/#website') },
+    publisher: { '@id': ORGANIZATION_ID },
+    hasPart: sections.map((section) => ({
+      '@type': 'WebPageElement',
+      '@id': `${url}#${section.id}`,
+      url: `${url}#${section.id}`,
+      name: section.name,
+    })),
+  };
 }

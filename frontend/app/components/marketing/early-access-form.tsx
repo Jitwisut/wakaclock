@@ -95,12 +95,12 @@ export function EarlyAccessForm({
   return (
     <section
       aria-labelledby="early-access-heading"
-      className="mx-auto max-w-3xl px-4 py-20 md:px-6"
+      className="mkt-signup-section mkt-reveal mx-auto max-w-5xl px-4 py-20 md:px-6"
       id="early-access"
     >
       <div
         className="mkt-pixel-shadow border-[3px] p-8 md:p-10"
-        style={{ borderColor: MKT_BORDER, background: 'var(--mkt-bg-elevated)' }}
+        style={{ borderColor: MKT_BORDER }}
       >
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"

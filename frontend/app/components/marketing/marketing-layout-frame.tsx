@@ -11,6 +11,7 @@ import {
 import type { SiteLocale } from '@/lib/seo/site';
 
 import { MarketingFooter } from './marketing-footer';
+import { MarketingMotion } from './marketing-motion';
 import { MarketingNav } from './marketing-nav';
 
 /** Shared local display face. Keeping the asset local makes Netlify builds deterministic. */
@@ -51,11 +52,12 @@ export function MarketingLayoutFrame({
         fontFamily:
           locale === 'th'
             ? 'var(--font-mkt-thai), sans-serif'
-            : 'var(--font-mkt-body), ui-monospace, monospace',
+            : 'var(--font-mkt-pixel), sans-serif',
       }}
     >
       <JsonLd data={SITE_GRAPH} />
       <MarketingNav locale={locale} />
+      <MarketingMotion />
       <main className="flex-1">{children}</main>
       <MarketingFooter locale={locale} />
       {process.env.NODE_ENV === 'production' ? <GoogleAnalyticsInit locale={locale} /> : null}

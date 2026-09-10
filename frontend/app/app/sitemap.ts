@@ -1,4 +1,4 @@
-import { absoluteUrl, PUBLIC_ROUTE_DEFINITIONS } from '@/lib/seo/site';
+import { absoluteUrl, localizedPath, PUBLIC_ROUTE_DEFINITIONS } from '@/lib/seo/site';
 
 import type { MetadataRoute } from 'next';
 
@@ -13,5 +13,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return PUBLIC_ROUTE_DEFINITIONS.map((route) => ({
     ...(route.lastModified ? { lastModified: route.lastModified } : {}),
     url: absoluteUrl(route.path),
+    alternates: {
+      languages: {
+        en: absoluteUrl(
+          route.locale === 'th' ? route.path.replace(/^\/th(?=\/|$)/, '') || '/' : route.path
+        ),
+        th: absoluteUrl(route.locale === 'th' ? route.path : localizedPath('th', route.path)),
+      },
+    },
   }));
 }

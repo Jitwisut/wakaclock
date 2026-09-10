@@ -36,7 +36,11 @@ export function FaqSection({
   locale?: SiteLocale;
 }) {
   return (
-    <section className="mkt-reveal mx-auto max-w-3xl px-4 py-20 md:px-6" id={id} lang={locale}>
+    <section
+      className="mkt-faq-section mkt-reveal mx-auto max-w-3xl px-4 py-20 md:px-6"
+      id={id}
+      lang={locale}
+    >
       <h2
         className="mb-10 text-center text-3xl font-semibold tracking-tight md:text-4xl"
         style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
@@ -49,7 +53,7 @@ export function FaqSection({
           <div
             className="mkt-pixel-shadow border-[3px] p-6"
             key={key}
-            style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
+            style={{ borderColor: 'var(--mkt-border)' }}
           >
             <dt className="text-base font-semibold">{entry.question}</dt>
             <dd className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mkt-fg-muted)' }}>

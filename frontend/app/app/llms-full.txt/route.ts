@@ -3,7 +3,14 @@ import {
   type MarketingBlock,
   PAGE_COPY,
 } from '@/components/marketing/marketing-copy';
-import { absoluteUrl, PRODUCT_ANSWER, SITE_NAME } from '@/lib/seo/site';
+import {
+  absoluteUrl,
+  localizedPath,
+  ORGANIZATION,
+  PRODUCT_ANSWER,
+  SITE_NAME,
+  type SiteLocale,
+} from '@/lib/seo/site';
 
 /**
  * /llms-full.txt — the full text of every public page, for answer engines.
@@ -36,7 +43,7 @@ function renderBlock(block: MarketingBlock): string {
       return [label, '```', block.value, '```'].filter(Boolean).join('\n');
     }
     case 'email': {
-      return `${block.before}hello@atoaxis.com${block.after ?? ''}`;
+      return `${block.before}${ORGANIZATION.email}${block.after ?? ''}`;
     }
     default: {
       return '';
@@ -44,8 +51,8 @@ function renderBlock(block: MarketingBlock): string {
   }
 }
 
-function renderPage(path: string): string {
-  const copy = PAGE_COPY[path as (typeof MARKETING_PAGE_KEYS)[number]]?.en;
+function renderPage(path: string, locale: SiteLocale): string {
+  const copy = PAGE_COPY[path as (typeof MARKETING_PAGE_KEYS)[number]]?.[locale];
   if (!copy) return '';
 
   const sections = copy.sections
@@ -67,9 +74,9 @@ function renderPage(path: string): string {
         .join('\n\n')}`
     : '';
 
-  const thaiUrl = absoluteUrl(`/th${path}`);
+  const translatedUrl = absoluteUrl(localizedPath(locale === 'en' ? 'th' : 'en', path));
 
-  return `## ${copy.title}\n\nURL: ${absoluteUrl(path)}\nThai version: ${thaiUrl}\n\n${copy.lead}\n\n${sections}${faq}`;
+  return `## ${copy.title}\n\nURL: ${absoluteUrl(localizedPath(locale, path))}\nLanguage: ${locale}\nTranslation: ${translatedUrl}\n\n${copy.lead}\n\n${sections}${faq}`;
 }
 
 const BODY = `# ${SITE_NAME} — full text
@@ -86,7 +93,7 @@ as a current capability. Figures that cannot be derived — AI token totals and 
 cost without provider-reported usage and a known price — are reported as unknown with a
 coverage percentage rather than as zero.
 
-${MARKETING_PAGE_KEYS.map((path) => renderPage(path))
+${MARKETING_PAGE_KEYS.flatMap((path) => [renderPage(path, 'en'), renderPage(path, 'th')])
   .filter(Boolean)
   .join('\n\n---\n\n')}
 `;
