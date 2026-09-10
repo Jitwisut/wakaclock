@@ -175,6 +175,7 @@ pub async fn create_app_state() -> Result<AppState> {
 
     // โหลด Config
     let config = Config::from_env().context("Failed to load application configuration")?;
+    config.brokers.log_startup_summary();
     let config = Arc::new(config);
 
     // สร้าง ClickHouse Client

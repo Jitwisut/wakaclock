@@ -1,14 +1,16 @@
 # แผนนำ Kafka และ RabbitMQ มาใช้งานจริง
 
-**สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้ เขียน 2026-09-10 บน branch
-`hardening/backend-audit-2026-09-09`
+**สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้ เขียน 2026-09-10; งานอยู่บน branch
+`feature/broker-adoption` (worktree `.worktrees/broker-adoption`)
 
 | ขั้น | สถานะ |
 |---|---|
 | P0.1 Contract | ✅ 2026-09-11 — `contracts.rs` ตาม D1–D4 + fixture `fixtures/message-envelopes/*-v1.json` (12 tests) |
+| P0.2 Config | ✅ 2026-09-11 — `config/brokers.rs` (15 tests); ตั้งค่าไม่ครบหรือขอโหมดที่ยังไม่มีจะไม่ยอม boot |
 | อื่น ๆ | ยังไม่เริ่ม |
 
-การตัดสินใจที่ได้แล้ว: **production ใช้ managed** (2026-09-11)
+การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
+**งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
 
 > คำว่า "broker" ใน [ROADMAP.md](ROADMAP.md) และ `docs/ai-activity-broker.md` หมายถึง
 > AI activity broker ฝั่ง client ไม่เกี่ยวกับเอกสารนี้ ในเอกสารนี้ใช้ชื่อ Kafka/RabbitMQ ตรง ๆ
@@ -197,8 +199,9 @@ record ที่ค้างอยู่ใน Kafka สำหรับ id ท�
 
 **P0.1 Contract** — แก้ `contracts.rs` ตาม D1–D4, envelope fixture test, บันทึกใน §9.22 ว่า
 ส่วนไหนถูกแทนโดยเอกสารนี้
-**P0.2 Config/CI/build** — struct config สำหรับ Kafka/RabbitMQ (ไม่ตั้งค่า = ทำงานแบบวันนี้ทุกประการ),
-`cmake` ใน Dockerfile, CI job ที่รัน ignored tests เพิ่ม service container `rabbitmq` + `redpanda`
+**P0.2 Config** — struct config สำหรับ Kafka/RabbitMQ (ไม่ตั้งค่า = ทำงานแบบวันนี้ทุกประการ)
+ส่วน `cmake` ใน Dockerfile และ CI service container ย้ายไปอยู่กับ adapter ที่ใช้มัน (R1 = `rabbitmq`,
+K1 = `redpanda` + `cmake`) เพราะถ้าเพิ่มตอนนี้จะไม่มีอะไรใช้และตรวจไม่ได้ว่าถูก
 
 Env ที่เสนอ (ชื่อเท่านั้น; ต้องเพิ่มใน `.context/environment.md` ตอน implement):
 `ATOAXIS_JOB_QUEUE_URL`, `ATOAXIS_EVENT_BUS_URL` (มีแล้ว), `ATOAXIS_EVENT_BUS_SASL_MECHANISM`,
@@ -215,6 +218,7 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 - ประกาศ topology แบบ idempotent: exchange, DLX, quorum queue ต่อ routing key พร้อม
   `x-delivery-limit`, retry ผ่าน delay queue ที่มี TTL (5s / 30s / 2m / 10m ตาม §9.22)
 - publisher confirm, manual ack, prefetch ต่อ queue
+- เพิ่ม service container `rabbitmq` ใน CI job ที่รัน ignored tests
 - **ถอด profile `brokers` ออกจาก `docker-compose.yml`** และคืน `rabbitmq`/`redpanda` เข้า `make infra-up`
 - แก้ `.context/dead-code.md:35` และ `.context/data/overview.md:16` ที่บอกว่าไม่มีโค้ดต่อ broker
 - เกณฑ์ผ่าน: ignored integration tests กับ RabbitMQ จริง — confirm, redelivery หลัง nack,
@@ -246,6 +250,7 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
   การเปลี่ยนเป็น `202` + job status จึงไม่มีหน้า dashboard ที่ต้องย้ายตาม — ผู้เรียกที่เหลือคือ CLI/สคริปต์
   ซึ่งต้องตรวจก่อนเปลี่ยน default
 - `projection.rebuild` ที่แตกออกมาได้ child job id แบบ deterministic
+- ถอดเงื่อนไข `ReprocessMode::Job` ออกจาก `BrokerConfig::ensure_supported` ใน PR นี้ (K3/K4 ทำแบบเดียวกันกับ `IngestMode`)
 - เกณฑ์ผ่าน: restart worker กลางงานแล้วทำต่อได้ผลเท่าเดิม; งานซ้ำไม่ทำให้ rebuild ขนานกัน;
   ปิดข้อ "reprocess ยังไม่ใช่ durable job" ของ F10
 
@@ -281,7 +286,8 @@ publish ไม่ได้ ต้องเพิ่มการตอบ 400 ท
 **K1 — Kafka producer adapter** (1 PR)
 `infrastructure/kafka.rs` implement `EventBus` ด้วย `rdkafka`: `acks=all`, `enable.idempotence=true`,
 compression, `linger.ms` ต่ำ, delivery timeout; key = `user_id`; สคริปต์สร้าง topic สำหรับ dev (`rpk`)
-และเอกสาร config สำหรับ production — ignored tests กับ Redpanda
+และเอกสาร config สำหรับ production — ignored tests กับ Redpanda; เพิ่ม `cmake` ใน `backend/api/Dockerfile`
+และ service container `redpanda` ใน CI
 
 **K2 — Consumer `heartbeat-ingest`** (1–2 PR)
 - bin ใหม่ (หรือเปลี่ยนชื่อ `heartbeat-enrichment` ที่เป็น stub) consumer group
@@ -323,9 +329,10 @@ compression, `linger.ms` ต่ำ, delivery timeout; key = `user_id`; สคร
 ## สิ่งที่ต้องให้คุณตัดสินใจก่อนเริ่ม
 
 1. ~~**Hosting production:** managed (แนะนำ) หรือ self-host~~ → **managed** (ตัดสินแล้ว 2026-09-11)
-2. **ยอมรับส่วนที่ต่างจาก §9.22:** outbox แทนการรอ confirm (D5), verify mode แทน shadow table (K3)
-   — ยังไม่ได้ตอบ; doc comment ใน `contracts.rs` (P0.1) เขียนตาม D5 ไว้แล้ว ถ้าไม่ยอมรับต้องแก้ comment เหล่านั้น
-3. **งานแรก:** `analytics.reprocess` (แนะนำ) — ยังไม่ได้ตอบ; ต้องได้คำตอบก่อน R4
+2. ~~**ยอมรับส่วนที่ต่างจาก §9.22:** outbox แทนการรอ confirm (D5), verify mode แทน shadow table (K3)~~
+   → **ยอมรับ** (2026-09-11)
+3. ~~**งานแรก:** `analytics.reprocess` (แนะนำ)~~ → **ยอมรับ** (2026-09-11)
+4. **ผู้ให้บริการ managed:** ยังไม่ได้เลือก — config ใน P0.2 เป็นแบบกลาง (SASL/TLS, `amqps://`) ต้องเลือกก่อน R1/K1 ขึ้น production
 
 ## ความเสี่ยงที่รู้อยู่
 

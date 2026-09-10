@@ -1,3 +1,5 @@
+pub mod brokers;
+
 use anyhow::{Context, Result};
 use axum::http::{HeaderValue, Uri};
 use serde::{Deserialize, Serialize};
@@ -76,6 +78,10 @@ pub struct Config {
     /// reading below WakaTime. `None` — `AGENT_IDLE_TIMEOUT_MINUTES=off` — puts every
     /// source back on one timeline and gives up the attribution split with it.
     pub agent_idle_timeout_seconds: Option<f64>,
+    /// Kafka/RabbitMQ settings. Skipped by serde because it carries broker
+    /// credentials; `Default` is "no brokers", which is today's behaviour.
+    #[serde(skip)]
+    pub brokers: brokers::BrokerConfig,
 }
 
 const DEV_JWT_SECRET: &str = "wakaclock-dev-secret-change-me";
@@ -111,6 +117,11 @@ impl Config {
         // set explicitly.
         let idle_timeout_seconds = parse_idle_timeout(std::env::var("IDLE_TIMEOUT_MINUTES").ok())?;
         let public_app_url = parse_public_app_url(std::env::var("ATOAXIS_APP_URL").ok())?;
+        let postgres_url = std::env::var("POSTGRES_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let brokers = brokers::BrokerConfig::from_env(postgres_url.is_some())?;
 
         Ok(Self {
             server: ServerConfig {
@@ -130,10 +141,7 @@ impl Config {
                     .unwrap_or_else(|_| "wakaclock".to_string()),
             },
             postgres: PostgresConfig {
-                url: std::env::var("POSTGRES_URL")
-                    .or_else(|_| std::env::var("DATABASE_URL"))
-                    .ok()
-                    .filter(|value| !value.trim().is_empty()),
+                url: postgres_url,
                 max_connections: std::env::var("POSTGRES_MAX_CONNECTIONS")
                     .unwrap_or_else(|_| "16".to_string())
                     .parse()
@@ -169,6 +177,7 @@ impl Config {
                 std::env::var("AGENT_IDLE_TIMEOUT_MINUTES").ok(),
                 idle_timeout_seconds,
             )?,
+            brokers,
         })
     }
 }

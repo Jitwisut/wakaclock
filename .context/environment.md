@@ -23,8 +23,13 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `INTERNAL_API_SECRET` | no | Unset ⇒ `POST /api/v1/internal/subscription` returns 404 rather than being reachable uncredentialed. |
 | `IDLE_TIMEOUT_MINUTES` | no | Max pause between proven activity intervals. `0` disables idle bridging. |
 | `AGENT_IDLE_TIMEOUT_MINUTES` | no | Agent-only bridge allowance. Keep the default for WakaTime-compatible `total_seconds`; set `0` when consumers should rely on measured `ai_coding_seconds` instead of bridging agent pauses. |
-| `ATOAXIS_EVENT_BUS_URL` | no | Kafka-compatible telemetry bootstrap for workers. |
-| `ATOAXIS_JOB_QUEUE_URL` | no | RabbitMQ-compatible job queue URL used by worker binaries. |
+| `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Parsed in [../backend/api/src/config/brokers.rs](../backend/api/src/config/brokers.rs); no adapter reads it yet, so setting it only logs a warning. |
+| `ATOAXIS_EVENT_BUS_SASL_MECHANISM`, `ATOAXIS_EVENT_BUS_SASL_USERNAME`, `ATOAXIS_EVENT_BUS_SASL_PASSWORD` | no | All three or none. Mechanism `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`. Refused without `ATOAXIS_EVENT_BUS_URL`. |
+| `ATOAXIS_EVENT_BUS_TLS` | no | Defaults to `true` when SASL is set, else `false`; SASL with `false` is refused. |
+| `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. Never printed unredacted; a plaintext URL to a non-local host logs a warning. No adapter reads it yet. |
+| `ATOAXIS_INGEST_MODE` | no | `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL` and **refuses to boot** until the Kafka ingest path lands. |
+| `ATOAXIS_INGEST_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`. Required for `kafka` mode; ignored (not refused) in other modes so a rollback deploy can leave it set. |
+| `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`, and **refuses to boot** until the reprocess worker lands. |
 | `ATOAXIS_REDIS_URL` | no | Redis-compatible cache/lock provider. |
 | `ATOAXIS_OBJECT_STORE_BUCKET` | no | S3-compatible export artifact bucket. |
 | `ATOAXIS_KMS_KEY_ID` | no | KMS/Vault key identifier for credential sealing. |
