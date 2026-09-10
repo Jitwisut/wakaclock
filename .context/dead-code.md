@@ -34,7 +34,7 @@ contracts but still need production adapters:
 | Service | Reality |
 | --- | --- |
 | Redis | `presence_store.rs` is deliberately in-memory; `CacheStore`/lock contracts are live but no provider adapter is wired yet. |
-| RabbitMQ / Redpanda | `EventBus`/`JobQueue` contracts are live; provider adapters remain a Phase 10 task. |
+| RabbitMQ / Redpanda | Contracts in `contracts.rs` and settings in `config/brokers.rs` are live; no adapter connects yet (plan R1/K1 in `plans/plan-kafka-rabbitmq-adoption.md`). |
 | Qdrant (`docker-compose.dev.yaml`) | Referenced only from the dead `model/v1` tree. |
 
 Actually used: **ClickHouse** (required) and **PostgreSQL** (optional). See

@@ -13,8 +13,11 @@ Two datastores, split by purpose. Migration mechanics: [migrations.md](migration
 `POSTGRES_URL` unset ⇒ `AppState.postgres` is `None`. **Every Postgres-backed
 code path must handle `None` by degrading, never by unwrapping.**
 
-Redis, RabbitMQ, Redpanda and Qdrant appear in the compose files but no Rust
-code connects to them — [../dead-code.md](../dead-code.md).
+Redis is connected only for Presence v2 (`PRESENCE_V2_ENABLED`). RabbitMQ and
+Redpanda settings are parsed and validated by
+[../../backend/api/src/config/brokers.rs](../../backend/api/src/config/brokers.rs),
+but no adapter connects to them yet. Qdrant is referenced only by dead code —
+[../dead-code.md](../dead-code.md).
 
 ## ClickHouse — shape
 
