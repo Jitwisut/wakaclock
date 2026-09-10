@@ -4074,6 +4074,15 @@ Phase 9 is complete only when:
 
 ### 9.22 — Kafka event backbone and RabbitMQ job architecture
 
+> **Superseded in part (2026-09-11).** The active plan for this section is
+> [`plans/plan-kafka-rabbitmq-adoption.md`](plans/plan-kafka-rabbitmq-adoption.md); it wins
+> where they conflict. Already replaced: the envelope field names (the code keeps
+> `tenant_id`/`event_version`/`idempotency_key` and adds `event_type`/`received_at`/`source`),
+> RabbitMQ routing keys (extended with `export.generate`, `report.deliver`, `integration.sync`,
+> `account.delete`, `billing.reconcile`), job state in PostgreSQL rather than ClickHouse, and a
+> transactional outbox instead of answering `202` only after a publisher confirm. The live
+> contract is `backend/api/src/infrastructure/contracts.rs`.
+
 Phase 9 must support horizontal API and worker scaling without turning ClickHouse into the
 backpressure boundary for every connected editor. Kafka and RabbitMQ are both part of the
 production architecture, but they solve different problems and must not carry duplicate copies
