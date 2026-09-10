@@ -34,7 +34,10 @@ the obvious approach was rejected (see `hash_key` in `middleware/auth.rs`, the
 
 **Tests.** Inline `#[cfg(test)] mod tests` in the file under test. No `tests/`
 directory. Pure decision functions split from async DB adapters so they test
-without a database.
+without a database. Cross-language or wire-format fixtures live in the
+repository-root `fixtures/` directory and are loaded with a relative
+`include_str!` (`fixtures/ai-attribution/`, `fixtures/message-envelopes/`) —
+moving either side breaks the path at compile time.
 
 **Formatting.** [../rustfmt.toml](../rustfmt.toml), [../clippy.toml](../clippy.toml).
 `cargo clippy -- -D warnings` must pass.
