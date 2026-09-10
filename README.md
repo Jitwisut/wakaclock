@@ -92,8 +92,11 @@ cd frontend/app && npm run dev
 ```
 
 The API listens on `http://localhost:8080`, the dashboard on
-`http://localhost:3000`, ClickHouse UI on `http://localhost:5521` and RabbitMQ
-management on `http://localhost:15672`.
+`http://localhost:3000` and ClickHouse UI on `http://localhost:5521`.
+
+Redpanda and RabbitMQ are not started by `make infra-up`: the API has no Kafka
+or AMQP adapter yet. Start them explicitly with `make infra-brokers-up` (RabbitMQ
+management then listens on `http://localhost:15672`).
 
 ## API overview
 

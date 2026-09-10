@@ -25,12 +25,16 @@ env-setup: ## Create local environment files from checked-in examples
 	@test -f $(BACKEND_DIR)/.env || printf '%s\n' 'SERVER_HOST=127.0.0.1' 'SERVER_PORT=8000' 'CLICKHOUSE_URL=http://localhost:8123' > $(BACKEND_DIR)/.env
 
 .PHONY: infra-up
-infra-up: ## Start PostgreSQL, ClickHouse, Redis, Redpanda and RabbitMQ
-	@$(COMPOSE) -f docker-compose.yml up -d postgres clickhouse redis redpanda rabbitmq
+infra-up: ## Start PostgreSQL, ClickHouse and Redis
+	@$(COMPOSE) -f docker-compose.yml up -d postgres clickhouse redis
+
+.PHONY: infra-brokers-up
+infra-brokers-up: ## Start Redpanda and RabbitMQ (opt-in; no server adapter uses them yet)
+	@$(COMPOSE) -f docker-compose.yml --profile brokers up -d redpanda rabbitmq
 
 .PHONY: infra-down
-infra-down: ## Stop local infrastructure containers
-	@$(COMPOSE) -f docker-compose.yml down
+infra-down: ## Stop local infrastructure containers, including opt-in brokers
+	@$(COMPOSE) -f docker-compose.yml --profile brokers down
 
 .PHONY: dev
 dev: ## Start infrastructure and both local applications

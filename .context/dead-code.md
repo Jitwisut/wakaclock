@@ -25,9 +25,11 @@ dead.
 
 ## Infrastructure declared but not yet connected by the server
 
-`make infra-up` starts the standard local services. The Rust server currently
-uses ClickHouse and optionally PostgreSQL; Redis, RabbitMQ and Redpanda are
-represented by provider-neutral contracts but still need production adapters:
+`make infra-up` starts PostgreSQL, ClickHouse and Redis; RabbitMQ and Redpanda
+are opt-in via `make infra-brokers-up` (compose profile `brokers`) until an
+adapter uses them. The Rust server currently uses ClickHouse and optionally
+PostgreSQL; Redis, RabbitMQ and Redpanda are represented by provider-neutral
+contracts but still need production adapters:
 
 | Service | Reality |
 | --- | --- |

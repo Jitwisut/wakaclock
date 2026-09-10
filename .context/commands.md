@@ -51,8 +51,9 @@ Netlify and CI use `npm ci`; do not regenerate a pnpm or yarn lockfile.
 ## Infrastructure
 
 ```bash
-make infra-up        # Postgres, ClickHouse, Redis, Redpanda, RabbitMQ
-make infra-down
+make infra-up        # Postgres, ClickHouse, Redis
+make infra-brokers-up  # Redpanda, RabbitMQ — opt-in, `brokers` compose profile
+make infra-down      # stops everything, brokers included
 make logs
 make help
 ```
@@ -60,6 +61,10 @@ make help
 `docker-compose.yml` is the supported local stack. The old
 `docker-compose.dev.yaml` and e-commerce/Caddy/Qdrant services are legacy
 template material and are not referenced by the live Makefile or server.
+
+Redpanda and RabbitMQ sit behind the `brokers` compose profile because no
+server code connects to them yet (see [dead-code.md](dead-code.md)). When a
+Kafka or AMQP adapter lands, move them back into `infra-up` and drop the profile.
 
 The root Makefile now points at `backend/api` and `frontend/app`; its `check`,
 `test`, `build`, `lint` and `ci` targets are the local equivalents of the
