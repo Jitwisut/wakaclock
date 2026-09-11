@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { FeatureGallery } from '@/components/marketing/feature-gallery';
@@ -6,6 +6,11 @@ import { FeatureGallery } from '@/components/marketing/feature-gallery';
 afterEach(() => vi.restoreAllMocks());
 
 it('moves one card at a time, respects reduced motion, and disables controls at the edges', () => {
+  let paint: FrameRequestCallback = () => {};
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    paint = callback;
+    return 1;
+  });
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320);
   vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1008);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -28,6 +33,7 @@ it('moves one card at a time, respects reduced motion, and disables controls at 
   expect(rail.scrollBy).toHaveBeenCalledWith({ left: 344, behavior: 'auto' });
   rail.scrollLeft = 688;
   fireEvent.scroll(rail);
+  act(() => paint(16));
   expect(next).toBeDisabled();
   expect(previous).toBeEnabled();
   fireEvent.click(previous);

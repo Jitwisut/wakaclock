@@ -109,7 +109,7 @@ export default function RootLayout({
   // next-themes updates these root attributes from client-side theme state
   // before hydration; the server cannot render that localStorage/system value.
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html data-scroll-behavior="smooth" lang="en" suppressHydrationWarning>
       <head>
         {/* The signed-in app talks to the API origin immediately after navigation. */}
         <link href="https://api.atoaxis.com" rel="dns-prefetch" />
