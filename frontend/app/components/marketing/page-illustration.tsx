@@ -71,6 +71,7 @@ export function PageIllustration({ path, locale }: { locale: SiteLocale; path: s
       <Image
         alt={art.alt[locale]}
         height={1024}
+        preload={path === '/ai-coding-tracker' || path === '/integrations'}
         sizes="(max-width: 767px) 76vw, 340px"
         src={art.src}
         width={1536}

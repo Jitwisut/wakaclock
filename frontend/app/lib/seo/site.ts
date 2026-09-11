@@ -183,10 +183,25 @@ export interface PublicRouteDefinition {
  * deploy rather than from the copy — teaches it to ignore the field entirely. Add an
  * entry when you change that page's words, not when you touch its component.
  */
+const AUDIT_REVIEW_DATE = '2026-09-11';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/': '2026-09-05',
+  '/': AUDIT_REVIEW_DATE,
+  '/teams': AUDIT_REVIEW_DATE,
+  '/developer-analytics': AUDIT_REVIEW_DATE,
+  '/ai-coding-tracker': AUDIT_REVIEW_DATE,
+  '/wakatime-alternative': AUDIT_REVIEW_DATE,
   '/ai-cost-tracking': '2026-08-23',
 };
+
+export function contentModified(path: string, locale: SiteLocale): string | undefined {
+  // The September audit updated English copy only.
+  if (locale === 'th') {
+    if (path === '/') return '2026-09-05';
+    if (path === '/ai-cost-tracking') return '2026-08-23';
+    return undefined;
+  }
+  return ROUTE_CONTENT_DATES[path];
+}
 
 /**
  * The newest date above, used as the site-wide `dateModified` in structured data.
@@ -207,7 +222,7 @@ export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [
   ...EN_PUBLIC_ROUTES.map((path) => ({
     locale: 'th' as const,
     path: localizedPath('th', path),
-    ...(ROUTE_CONTENT_DATES[path] ? { lastModified: ROUTE_CONTENT_DATES[path] } : {}),
+    ...(contentModified(path, 'th') ? { lastModified: contentModified(path, 'th') } : {}),
   })),
 ];
 

@@ -471,9 +471,9 @@ export const TH_HOME = {
 
 const teams = local(
   {
-    metadataTitle: 'Team Coding Presence in Early Access',
+    metadataTitle: 'Coding Presence for Remote Teams — Early Access',
     description:
-      'AtoAxis coding presence is an Early Access prototype: live rooms and recorded co-working sessions from editor activity, with assigned team and organisation seats still to come.',
+      'Explore AtoAxis coding presence for remote teams: opt-in prototype rooms and co-working sessions. Organisation seats and billing are still in development.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'Teams', path: '/teams' },
@@ -691,7 +691,7 @@ const developerAnalytics = local(
       { name: 'Home', path: '/' },
       { name: 'Developer analytics', path: '/developer-analytics' },
     ],
-    title: 'Developer analytics',
+    title: 'Developer analytics and coding metrics',
     lead: `${SITE_NAME} turns editor heartbeats into total time, daily averages and breakdowns by project, language, editor, operating system and branch. Every view can be filtered and drilled into, and it also reports keystrokes, characters and AI-attributed lines.`,
     sections: [
       section('Metrics available', 'metrics', [
@@ -1027,7 +1027,7 @@ page(
       { name: 'Home', path: '/' },
       { name: 'WakaTime alternative', path: '/wakatime-alternative' },
     ],
-    title: 'A WakaTime alternative with your full history',
+    title: 'WakaTime alternative for developer time tracking',
     lead: `${SITE_NAME} implements the WakaTime API, so an existing plugin can point to it with one config change. Every account keeps complete coding history, while AI token and cost metrics remain available only when provider usage and a known price are present.`,
     sections: [
       section('What is an alternative?', 'what-is', [
