@@ -1801,36 +1801,21 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
 
 // The remaining pages use the same strongly typed section model. Keeping their copy here,
 // rather than in route files, prevents the Thai pages from silently becoming short adapters.
-const headingLabel = (headings: string[], index: number) => headings[index % headings.length];
+//
+// Every `generic()` page now supplies its own `faqEntries` — real, specific answers written
+// against this page's content — rather than the placeholder "see the section above" text a
+// generated `faqCount` used to produce. Keep writing real entries for any new page.
 const genericFaq = (
   locale: SiteLocale,
-  headings: string[],
-  count?: number,
   entries?: readonly FaqEntry[]
 ): MarketingPageCopy['faq'] => {
-  const faqHeading = locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย';
-  if (entries) return faq(faqHeading, entries);
-  if (!count) return undefined;
-
-  return faq(
-    faqHeading,
-    Array.from({ length: count }, (_, index) => ({
-      question:
-        locale === 'en'
-          ? `${headingLabel(headings, index)}: common question`
-          : `${headingLabel(headings, index)}: คำถามที่พบบ่อย`,
-      answer:
-        locale === 'en'
-          ? 'See the section above for the current product behavior and data limits.'
-          : 'ดูรายละเอียดในส่วนด้านบนสำหรับพฤติกรรมและขอบเขตข้อมูลปัจจุบัน',
-    }))
-  );
+  if (!entries) return undefined;
+  return faq(locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย', entries);
 };
 const generic = (
   path: MarketingPageKey,
   en: {
     description: string;
-    faqCount?: number;
     faqEntries?: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
@@ -1839,7 +1824,6 @@ const generic = (
   },
   th: {
     description: string;
-    faqCount?: number;
     faqEntries?: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
@@ -1873,7 +1857,7 @@ const generic = (
     component: path === '/pricing' ? { kind: 'pricing', afterSectionId: null } : undefined,
     schema: path === '/about' ? 'organization' : undefined,
     related: genericRelated(path, locale),
-    faq: genericFaq(locale, value.headings, value.faqCount, value.faqEntries),
+    faq: genericFaq(locale, value.faqEntries),
   });
   simplePages[path] = local(make(en, 'en'), make(th, 'th'));
 };
@@ -2728,7 +2712,38 @@ generic(
       'Settings',
       'Limitations',
     ],
-    faqCount: 6,
+    faqEntries: [
+      {
+        question: 'What does the extension actually track?',
+        answer:
+          'File, project, branch, language and editor metadata, plus save, debug and build activity and keystroke/character counts. It never sends file contents.',
+      },
+      {
+        question: 'What do I need before installing it?',
+        answer:
+          'VS Code 1.90 or newer, wakaclock-cli on PATH (or a configured wakaclock.cliPath), and an API key generated from the dashboard.',
+      },
+      {
+        question: 'Where is my API key stored?',
+        answer:
+          "In VS Code's secret storage after running Wakaclock: Set API Key — never in settings.json, so it is never synced or committed with your editor config.",
+      },
+      {
+        question: 'Why does the status bar show zero?',
+        answer:
+          'The extension cannot find wakaclock-cli. Run Wakaclock: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
+      },
+      {
+        question: 'Does it track other apps or browser tabs?',
+        answer:
+          'No. It tracks file activity only, inside VS Code. There are no app, domain or URL heartbeats.',
+      },
+      {
+        question: 'Which AI agents does it attribute?',
+        answer:
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI have bundled hooks. Cursor and Copilot need a provider-specific adapter first.',
+      },
+    ],
   },
   {
     title: 'VS Code time tracking extension',
@@ -2742,7 +2757,38 @@ generic(
       'Settings',
       'ข้อจำกัด',
     ],
-    faqCount: 6,
+    faqEntries: [
+      {
+        question: 'extension ติดตามอะไรบ้าง?',
+        answer:
+          'Metadata ของไฟล์ โปรเจกต์ branch ภาษา และ editor รวมถึงกิจกรรม save, debug, build และ keystroke/character counts โดยไม่ส่งเนื้อหาไฟล์',
+      },
+      {
+        question: 'ต้องมีอะไรก่อนติดตั้ง?',
+        answer:
+          'VS Code 1.90 ขึ้นไป, wakaclock-cli ใน PATH (หรือกำหนด wakaclock.cliPath) และ API key ที่สร้างจาก dashboard',
+      },
+      {
+        question: 'API key เก็บไว้ที่ไหน?',
+        answer:
+          'เก็บใน secret storage ของ VS Code หลังรันคำสั่ง Wakaclock: Set API Key ไม่เคยเก็บใน settings.json จึงไม่ถูก sync หรือ commit ไปกับ config อื่น',
+      },
+      {
+        question: 'ทำไม status bar ถึงขึ้นศูนย์?',
+        answer:
+          'extension หา wakaclock-cli ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+      },
+      {
+        question: 'ติดตามแอปอื่นหรือ browser tab ด้วยหรือไม่?',
+        answer:
+          'ไม่ ติดตามเฉพาะกิจกรรมกับไฟล์ใน VS Code เท่านั้น ไม่มี heartbeat ประเภท app, domain หรือ URL',
+      },
+      {
+        question: 'รองรับ AI agent ตัวใดบ้าง?',
+        answer:
+          'Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI มี hook ให้พร้อมใช้ ส่วน Cursor และ Copilot ต้องมี adapter เฉพาะของผู้ให้บริการก่อน',
+      },
+    ],
   }
 );
 generic(
@@ -2834,7 +2880,41 @@ generic(
       'How data travels',
       'Retention and deletion',
     ],
-    faqCount: 7,
+    faqEntries: [
+      {
+        question: 'What fields does a heartbeat actually contain?',
+        answer:
+          'File path and save state, project and Git branch, language, editor, OS and machine, line/cursor/keystroke/character counts, activity category, AI fields and timestamps.',
+      },
+      {
+        question: 'Is my source code ever sent?',
+        answer: 'No. There is no field for source code, diffs or patches.',
+      },
+      {
+        question: 'Are AI prompts or responses stored?',
+        answer:
+          'No. AI heartbeats store a flag, the agent name and line counts. Provider-reported token usage may be stored as usage metadata; prompt and response text never is.',
+      },
+      {
+        question: 'Why is the file path treated as sensitive?',
+        answer:
+          'A path can carry a client name, an unreleased product or your own name in a home directory. It is used to derive the project, language and file breakdown, and is never shown to anyone else.',
+      },
+      {
+        question: 'How does data travel from my editor to the server?',
+        answer:
+          'The editor hands buffered activity to the local wakaclock-cli, which sends it over HTTPS authenticated with your API key. Heartbeat data is not sent to third-party analytics or advertising services.',
+      },
+      {
+        question: 'How long is my data retained?',
+        answer:
+          'Heartbeats are kept while the account is active rather than aged out after a window. Deletion of an account or its data can be requested by email.',
+      },
+      {
+        question: 'What happens if I revoke my API key?',
+        answer: 'New data stops immediately; revoking a key does not delete data that already exists.',
+      },
+    ],
   },
   {
     title: 'Privacy และข้อมูลที่เก็บ',
@@ -2848,7 +2928,41 @@ generic(
       'ข้อมูลเดินทางอย่างไร',
       'การเก็บรักษาและลบ',
     ],
-    faqCount: 7,
+    faqEntries: [
+      {
+        question: 'heartbeat มี field อะไรบ้าง?',
+        answer:
+          'File path และสถานะ save, project และ Git branch, language, editor, OS และ machine, line/cursor/keystroke/character counts, activity category, AI fields และ timestamp',
+      },
+      {
+        question: 'ระบบส่ง source code ของฉันไปด้วยหรือไม่?',
+        answer: 'ไม่ ไม่มี field สำหรับ source code, diff หรือ patch',
+      },
+      {
+        question: 'เก็บ prompt หรือ response ของ AI หรือไม่?',
+        answer:
+          'ไม่ AI heartbeat เก็บเพียง flag ชื่อ agent และ line counts ส่วน provider-reported token usage อาจเก็บเป็น usage metadata แต่ไม่เก็บ prompt หรือ response text',
+      },
+      {
+        question: 'ทำไม file path ถึงถือเป็นข้อมูลอ่อนไหว?',
+        answer:
+          'path อาจมีชื่อลูกค้า ชื่อผลิตภัณฑ์ที่ยังไม่เปิดตัว หรือชื่อคุณเองใน home directory ใช้เพื่อหาโปรเจกต์ ภาษา และ breakdown เท่านั้น และไม่ถูกแสดงให้ใครเห็น',
+      },
+      {
+        question: 'ข้อมูลเดินทางจาก editor ไปยัง server อย่างไร?',
+        answer:
+          'editor ส่งกิจกรรมที่ buffer ไว้ให้ wakaclock-cli ในเครื่อง แล้ว CLI ส่งผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ข้อมูล heartbeat ไม่ถูกส่งไปยัง analytics หรือโฆษณาของบุคคลที่สาม',
+      },
+      {
+        question: 'เก็บข้อมูลไว้นานแค่ไหน?',
+        answer:
+          'heartbeat ถูกเก็บไว้ตราบเท่าที่บัญชียังใช้งานอยู่ ไม่ถูกตัดเมื่อพ้นช่วงเวลาหนึ่ง ขอลบบัญชีหรือข้อมูลได้ทางอีเมล',
+      },
+      {
+        question: 'ถ้าเพิกถอน API key จะเกิดอะไรขึ้น?',
+        answer: 'ข้อมูลใหม่จะหยุดทันที แต่การเพิกถอนไม่ลบข้อมูลที่มีอยู่แล้ว',
+      },
+    ],
   }
 );
 generic(
@@ -2938,7 +3052,38 @@ generic(
       'Verify tracking',
       'Troubleshooting',
     ],
-    faqCount: 6,
+    faqEntries: [
+      {
+        question: 'What do I need before the first heartbeat?',
+        answer:
+          'An editor AtoAxis can hear from, wakaclock-cli on your machine, an API key and outbound HTTPS. Undelivered heartbeats queue locally and resend later.',
+      },
+      {
+        question: 'How do I get an API key?',
+        answer:
+          'Open Settings in the dashboard, find the API key panel and choose Generate key. During Early Access, keys are issued to people on the list rather than at signup.',
+      },
+      {
+        question: 'How do I connect VS Code?',
+        answer:
+          'Install "AtoAxis — Developer Time Tracking", then run Wakaclock: Set API Key from the Command Palette.',
+      },
+      {
+        question: 'How do I connect an editor that already has a WakaTime plugin?',
+        answer:
+          'Change api_url and api_key in that plugin’s existing settings file. AtoAxis implements the WakaTime heartbeat API, so no new extension is needed.',
+      },
+      {
+        question: 'How do I verify tracking worked?',
+        answer:
+          'Run wakaclock-cli status and wakaclock-cli today, check the VS Code status bar, or open the dashboard Overview page once the first heartbeat has landed.',
+      },
+      {
+        question: 'My total is not increasing — what should I check first?',
+        answer:
+          'Confirm wakaclock-cli is on PATH or wakaclock.cliPath is set, then run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
+      },
+    ],
   },
   {
     title: 'เริ่มต้นใช้งาน',
@@ -2951,7 +3096,37 @@ generic(
       'ตรวจสอบ tracking',
       'แก้ปัญหาเบื้องต้น',
     ],
-    faqCount: 6,
+    faqEntries: [
+      {
+        question: 'ต้องมีอะไรก่อนส่ง heartbeat แรก?',
+        answer:
+          'editor ที่ AtoAxis รับข้อมูลได้, wakaclock-cli ในเครื่อง, API key และการเชื่อมต่อ HTTPS ขาออก heartbeat ที่ส่งไม่สำเร็จจะถูกคิวไว้แล้วส่งใหม่ภายหลัง',
+      },
+      {
+        question: 'สร้าง API key ได้อย่างไร?',
+        answer:
+          'เปิดหน้า Settings ใน dashboard แล้วกด Generate key ที่แผง API key ช่วง Early Access เราออก key ให้เฉพาะผู้ที่อยู่ในรายชื่อ ไม่ได้ออกทันทีตอนสมัคร',
+      },
+      {
+        question: 'เชื่อม VS Code อย่างไร?',
+        answer: 'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน Wakaclock: Set API Key จาก Command Palette',
+      },
+      {
+        question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
+        answer:
+          'แก้ api_url และ api_key ในไฟล์ settings ของ plugin เดิม เพราะ AtoAxis รองรับ WakaTime heartbeat API จึงไม่ต้องติดตั้ง extension ใหม่',
+      },
+      {
+        question: 'ตรวจสอบได้อย่างไรว่า tracking ทำงาน?',
+        answer:
+          'รัน wakaclock-cli status และ wakaclock-cli today ดู status bar ของ VS Code หรือเปิดหน้า Overview ใน dashboard หลังมี heartbeat แรกแล้ว',
+      },
+      {
+        question: 'ยอดไม่เพิ่มขึ้น ควรตรวจอะไรก่อน?',
+        answer:
+          'ตรวจว่า wakaclock-cli อยู่ใน PATH หรือกำหนด wakaclock.cliPath แล้ว จากนั้นรัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
+      },
+    ],
   }
 );
 generic(
@@ -2961,12 +3136,51 @@ generic(
     description: `Learn why ${SITE_NAME} exists and who builds it.`,
     lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
     headings: ['Why we are building it', 'Current status', 'Who builds it'],
+    faqEntries: [
+      {
+        question: `Is ${SITE_NAME} affiliated with ATOSS, Atto or Axis ERP?`,
+        answer: 'No. The name is spelled A-t-o-A-x-i-s and is unrelated to those products.',
+      },
+      {
+        question: 'Who builds AtoAxis?',
+        answer: 'A team of fourth-year students designs, builds and operates the hosted service.',
+      },
+      {
+        question: 'What is actually working today?',
+        answer:
+          'Heartbeat ingestion, duration analytics by project/language/editor/branch, AI attribution hooks, and a first-party VS Code extension.',
+      },
+      {
+        question: 'What is not ready yet?',
+        answer:
+          'Billing and checkout, assigned team and organisation seats, and adapters for Cursor and Copilot.',
+      },
+    ],
   },
   {
     title: `เกี่ยวกับ ${SITE_NAME}`,
     description: `รู้จักเหตุผลและผู้พัฒนา ${SITE_NAME}`,
     lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาโดยนักศึกษาปี 4 ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
     headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้พัฒนา'],
+    faqEntries: [
+      {
+        question: `${SITE_NAME} เกี่ยวข้องกับ ATOSS, Atto หรือ Axis ERP หรือไม่?`,
+        answer: 'ไม่เกี่ยวข้อง สะกดว่า A-t-o-A-x-i-s และเป็นคนละผลิตภัณฑ์กัน',
+      },
+      {
+        question: `ใครเป็นผู้พัฒนา ${SITE_NAME}?`,
+        answer: 'ทีมนักศึกษาปี 4 เป็นผู้ออกแบบ พัฒนา และดูแลบริการ hosted นี้',
+      },
+      {
+        question: 'ตอนนี้ใช้งานได้จริงส่วนไหนบ้าง?',
+        answer:
+          'การรับ heartbeat, analytics แบบ duration ตาม project/language/editor/branch, AI attribution hooks และ extension สำหรับ VS Code ที่เราดูแลเอง',
+      },
+      {
+        question: 'ส่วนไหนยังไม่พร้อม?',
+        answer: 'ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
+      },
+    ],
   }
 );
 generic(
@@ -2977,6 +3191,27 @@ generic(
     lead: 'Ask about Early Access, hosted analytics, integrations or privacy.',
     headings: ['Topics we can help with'],
     form: 'contact',
+    faqEntries: [
+      {
+        question: 'Who reads the contact form?',
+        answer: 'A real person on the team building the product, not an automated support queue.',
+      },
+      {
+        question: 'Can you tell me if my editor is compatible?',
+        answer:
+          'Yes. Name the editor you use and whether it already has a WakaTime plugin, and you will get a direct answer with the setting to change.',
+      },
+      {
+        question: 'Can I ask about a specific heartbeat field?',
+        answer:
+          'Yes, though the privacy page already lists every field a heartbeat can and cannot contain, and answers most of these questions faster than waiting for a reply.',
+      },
+      {
+        question: 'Do you offer account-specific support here?',
+        answer:
+          'This form answers product questions. Early Access does not yet have a separate account support channel.',
+      },
+    ],
   },
   {
     title: 'ติดต่อ AtoAxis',
@@ -2984,6 +3219,25 @@ generic(
     lead: 'สอบถามเรื่อง Early Access, hosted analytics, integrations หรือ privacy',
     headings: ['หัวข้อที่สอบถามได้'],
     form: 'contact',
+    faqEntries: [
+      {
+        question: 'ใครเป็นคนอ่านฟอร์มติดต่อนี้?',
+        answer: 'คนในทีมที่พัฒนาผลิตภัณฑ์อ่านเองจริง ไม่ใช่คิวระบบอัตโนมัติ',
+      },
+      {
+        question: 'ถามได้ไหมว่า editor ของฉันใช้ได้หรือเปล่า?',
+        answer:
+          'ได้ ระบุชื่อ editor และบอกว่ามี WakaTime plugin อยู่แล้วหรือไม่ จะได้คำตอบตรงพร้อม setting ที่ต้องแก้',
+      },
+      {
+        question: 'ถามเรื่อง field ใน heartbeat ได้ไหม?',
+        answer: 'ได้ แต่หน้า privacy มีรายการ field ทั้งหมดอยู่แล้ว และตอบคำถามส่วนใหญ่ได้เร็วกว่าการรอคำตอบ',
+      },
+      {
+        question: 'มีช่องทาง support สำหรับบัญชีโดยเฉพาะหรือไม่?',
+        answer: 'ฟอร์มนี้ตอบคำถามเกี่ยวกับผลิตภัณฑ์ ช่วง Early Access ยังไม่มีช่องทาง support แยกสำหรับบัญชี',
+      },
+    ],
   }
 );
 generic(
@@ -2993,12 +3247,49 @@ generic(
     description: 'Early Access, hosted service and acceptable-use terms.',
     lead: `These preliminary terms describe the ${SITE_NAME} Early Access website.`,
     headings: ['Early Access', 'Hosted service and data', 'Acceptable use', 'Questions'],
+    faqEntries: [
+      {
+        question: 'Does joining Early Access create a paid account?',
+        answer: 'No. It registers interest only; no account is created and no payment is taken.',
+      },
+      {
+        question: 'Who owns the activity data I send?',
+        answer: 'You do. It is not sold, shared with advertisers, or used as training material.',
+      },
+      {
+        question: 'Can I share one API key across a team?',
+        answer: 'No. One key identifies one account; sharing it is against the acceptable-use rules.',
+      },
+      {
+        question: 'Will these terms change before launch?',
+        answer:
+          'Yes. These are preliminary terms and will be replaced before the product becomes payable.',
+      },
+    ],
   },
   {
     title: `ข้อกำหนด ${SITE_NAME}`,
     description: 'ข้อกำหนด Early Access hosted service และ acceptable use',
     lead: `ข้อกำหนดเบื้องต้นนี้อธิบายเว็บไซต์ ${SITE_NAME} ในช่วง Early Access`,
     headings: ['Early Access', 'Hosted service และข้อมูล', 'การใช้งานที่ยอมรับได้', 'คำถาม'],
+    faqEntries: [
+      {
+        question: 'เข้าร่วม Early Access สร้างบัญชีแบบชำระเงินหรือไม่?',
+        answer: 'ไม่ เป็นเพียงการแสดงความสนใจ ไม่มีการสร้างบัญชีและไม่มีการเรียกเก็บเงิน',
+      },
+      {
+        question: 'ข้อมูลกิจกรรมที่ส่งไปเป็นของใคร?',
+        answer: 'เป็นของคุณ ไม่ถูกขาย ไม่ถูกแบ่งให้ผู้โฆษณา และไม่ถูกใช้เป็นข้อมูลฝึกโมเดล',
+      },
+      {
+        question: 'แชร์ API key เดียวกันในทีมได้หรือไม่?',
+        answer: 'ไม่ได้ key หนึ่งดวงระบุถึงบัญชีเดียว การแชร์ขัดกับกฎการใช้งานที่ยอมรับได้',
+      },
+      {
+        question: 'ข้อกำหนดนี้จะเปลี่ยนก่อนเปิดตัวหรือไม่?',
+        answer: 'จะเปลี่ยน นี่เป็นข้อกำหนดเบื้องต้นและจะถูกแทนที่ก่อนที่ผลิตภัณฑ์จะเริ่มมีค่าใช้จ่าย',
+      },
+    ],
   }
 );
 generic(
@@ -3009,6 +3300,20 @@ generic(
     lead: 'Register interest in hosted developer time tracking and launch updates.',
     headings: [],
     form: 'early-access',
+    faqEntries: [
+      {
+        question: 'Does joining charge me anything?',
+        answer: 'No. Joining the list creates no charge and collects no payment details.',
+      },
+      {
+        question: 'When do I get an API key?',
+        answer: 'Keys are issued to people on the list as Early Access opens, not automatically at signup.',
+      },
+      {
+        question: 'What is the planned price once checkout opens?',
+        answer: `$${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year for one complete plan.`,
+      },
+    ],
   },
   {
     title: 'เข้าร่วม AtoAxis Early Access',
@@ -3016,6 +3321,20 @@ generic(
     lead: 'ลงทะเบียนความสนใจใน hosted developer time tracking และข่าวการเปิดตัว',
     headings: [],
     form: 'early-access',
+    faqEntries: [
+      {
+        question: 'เข้าร่วมแล้วมีค่าใช้จ่ายหรือไม่?',
+        answer: 'ไม่มี การเข้าร่วมรายการไม่มีค่าใช้จ่ายและไม่มีการเก็บข้อมูลการชำระเงิน',
+      },
+      {
+        question: 'จะได้ API key เมื่อไร?',
+        answer: 'key จะออกให้ผู้ที่อยู่ในรายชื่อเมื่อ Early Access เปิด ไม่ได้ออกทันทีตอนลงทะเบียน',
+      },
+      {
+        question: 'ราคาที่วางไว้เมื่อเปิด checkout คือเท่าไร?',
+        answer: `$${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี สำหรับแผนเดียวที่ครบทุกฟีเจอร์`,
+      },
+    ],
   }
 );
 

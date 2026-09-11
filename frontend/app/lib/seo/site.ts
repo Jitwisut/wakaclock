@@ -184,6 +184,8 @@ export interface PublicRouteDefinition {
  * entry when you change that page's words, not when you touch its component.
  */
 const AUDIT_REVIEW_DATE = '2026-09-11';
+/** Round 3 of the SEOScore audit response — see docs/seoscore-audit-2026-09-12-round-3.md. */
+const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': AUDIT_REVIEW_DATE,
   '/teams': AUDIT_REVIEW_DATE,
@@ -194,14 +196,28 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/integrations': AUDIT_REVIEW_DATE,
   '/docs': AUDIT_REVIEW_DATE,
   '/ai-cost-tracking': '2026-08-23',
+  '/about': AUDIT_REVIEW_DATE_ROUND_3,
+  '/contact': AUDIT_REVIEW_DATE_ROUND_3,
+  '/terms': AUDIT_REVIEW_DATE_ROUND_3,
+  '/privacy': AUDIT_REVIEW_DATE_ROUND_3,
+  '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
+  '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
+  '/integrations/vscode': AUDIT_REVIEW_DATE_ROUND_3,
+  '/join': AUDIT_REVIEW_DATE_ROUND_3,
+};
+/** Thai-only content dates, for pages whose Thai copy changed independently of English. */
+const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
+  '/wakatime-alternative': AUDIT_REVIEW_DATE_ROUND_3,
+  '/ai-coding-tracker': AUDIT_REVIEW_DATE_ROUND_3,
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {
-  // The September audit updated English copy only.
+  // The September 11 audit updated English copy only; round 3 (September 12) added
+  // Thai-specific fixes to these two paths without touching their English copy.
   if (locale === 'th') {
     if (path === '/') return AUDIT_REVIEW_DATE;
     if (path === '/ai-cost-tracking') return '2026-08-23';
-    return undefined;
+    return TH_ROUTE_CONTENT_DATES[path];
   }
   return ROUTE_CONTENT_DATES[path];
 }

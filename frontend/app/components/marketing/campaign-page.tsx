@@ -4,11 +4,14 @@ import { JsonLd } from '@/components/seo/json-ld';
 import { Button } from '@/components/ui/button';
 import { breadcrumbSchema, type FaqEntry, faqSchema, graph, webPageSchema } from '@/lib/seo/schema';
 import {
+  contentModified,
   createMarketingMetadata,
   localizedPath,
   PRICING,
+  SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
+  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { EarlyAccessForm } from './early-access-form';
@@ -89,6 +92,27 @@ const COPY = {
           'Full team and organisation dashboards are still in development, though opt-in leaderboards and a presence prototype exist where the server runs PostgreSQL. Only the VS Code plugin is first-party, and Cursor and Copilot need adapters before their activity is attributed.',
       },
     ],
+    factsHeading: 'Key facts',
+    facts: [
+      ['Status', 'Early Access — a waiting list, not a checkout.'],
+      ['Planned price', `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year, one plan.`],
+      ['Protocol', 'WakaTime API, so an existing compatible plugin keeps working.'],
+      ['History', 'Complete coding history included, with no rolling window.'],
+    ] as const,
+    sourcesHeading: 'Sources and review',
+    sources: [
+      { href: '/pricing', label: 'AtoAxis pricing page', note: 'the planned monthly and annual figures' },
+      {
+        href: '/wakatime-alternative',
+        label: 'AtoAxis WakaTime alternative guide',
+        note: 'a fuller migration comparison',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis implementation',
+        note: 'verifiable evidence for the claims on this page',
+      },
+    ] as const,
   },
   th: {
     badge: 'Early Access ไม่ต้องใช้บัตร',
@@ -143,6 +167,27 @@ const COPY = {
           'dashboard สำหรับทีมและองค์กรเต็มรูปแบบยังอยู่ระหว่างพัฒนา แต่มี leaderboard แบบ opt-in และ presence prototype เมื่อ server รัน PostgreSQL plugin ที่เราดูแลเองมีเฉพาะ VS Code ส่วน Cursor และ Copilot ต้องมี adapter ก่อนจึงจะ attribute งานได้',
       },
     ],
+    factsHeading: 'ข้อมูลสำคัญ',
+    facts: [
+      ['สถานะ', 'Early Access คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน'],
+      ['ราคาที่วางไว้', `$${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แผนเดียว`],
+      ['Protocol', 'รองรับ WakaTime API ทำให้ plugin เดิมยังใช้ได้'],
+      ['ประวัติ', 'เก็บประวัติการเขียนโค้ดครบถ้วน ไม่จำกัดช่วงเวลา'],
+    ] as const,
+    sourcesHeading: 'แหล่งอ้างอิงและการตรวจทาน',
+    sources: [
+      { href: '/pricing', label: 'หน้าราคา AtoAxis', note: 'ราคารายเดือนและรายปีที่วางไว้' },
+      {
+        href: '/wakatime-alternative',
+        label: 'คู่มือเทียบทางเลือก WakaTime',
+        note: 'การเปรียบเทียบการย้ายระบบแบบละเอียด',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'ซอร์สโค้ดผลิตภัณฑ์',
+        note: 'หลักฐานที่ตรวจสอบข้อความในหน้านี้ได้',
+      },
+    ] as const,
   },
 } as const;
 
@@ -164,6 +209,7 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
     { name: locale === 'th' ? 'หน้าหลัก' : 'Home', path: localizedPath(locale, '/') },
     { name: copy.breadcrumb, path: localizedPath(locale, '/join') },
   ];
+  const reviewDate = contentModified('/join', locale) ?? SITE_MODIFIED;
 
   return (
     <>
@@ -278,6 +324,45 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
             {copy.priceNote}
           </Link>
         </div>
+      </section>
+
+      <section
+        aria-labelledby="join-facts-title"
+        className="mx-auto my-16 max-w-4xl px-4 md:px-6"
+        id="join-facts"
+      >
+        <h2 className="text-2xl font-semibold tracking-tight" id="join-facts-title">
+          {copy.factsHeading}
+        </h2>
+        <dl className="mt-4 divide-y divide-current/15">
+          {copy.facts.map(([term, definition]) => (
+            <div className="grid gap-2 py-4 sm:grid-cols-[10rem_1fr]" key={term}>
+              <dt className="font-semibold">{term}:</dt>
+              <dd>{definition}</dd>
+            </div>
+          ))}
+        </dl>
+        <h3 className="mt-8 text-lg font-semibold">{copy.sourcesHeading}</h3>
+        <p className="mt-3 text-sm" style={{ color: MKT_FG_MUTED }}>
+          {locale === 'th' ? 'ตรวจทานเมื่อ ' : 'Reviewed '}
+          <time dateTime={reviewDate}>{reviewDate}</time>.
+        </p>
+        <ul className="mt-4 space-y-3">
+          {copy.sources.map((source) => (
+            <li key={source.href}>
+              {source.href.startsWith('/') ? (
+                <Link className="underline" href={localizedPath(locale, source.href)}>
+                  {source.label}
+                </Link>
+              ) : (
+                <a className="underline" href={source.href} rel="noopener noreferrer">
+                  {source.label}
+                </a>
+              )}
+              : {source.note}.
+            </li>
+          ))}
+        </ul>
       </section>
 
       <QuickStartSection locale={locale} />

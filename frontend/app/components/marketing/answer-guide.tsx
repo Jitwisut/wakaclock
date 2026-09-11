@@ -1,4 +1,7 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- The overflow table region must be keyboard-scrollable. */
+/* eslint-disable sonarjs/no-duplicate-string -- Source labels like "AtoAxis implementation" and
+   "For example, " openers are meant to repeat verbatim across guides; see the same disable in
+   marketing-copy.ts. */
 import Link from 'next/link';
 
 import {
@@ -67,7 +70,40 @@ const DEFAULT_SOURCES: readonly GuideSource[] = [
   },
 ];
 
-const GUIDES: Record<string, Guide> = {
+/**
+ * Thai default sources deliberately omit the WakaTime developer link that
+ * `DEFAULT_SOURCES` carries. `/th/wakatime-alternative` already sits at the highest
+ * brand-keyword density on the site (round 2 rewrote its body copy for exactly this
+ * reason), so a shared fallback should not add another repetition of the word.
+ */
+const THAI_DEFAULT_SOURCES: readonly GuideSource[] = [
+  {
+    href: SOURCE_REPOSITORY_URL,
+    label: 'ซอร์สโค้ดผลิตภัณฑ์',
+    note: 'หลักฐานพฤติกรรมจริงและขอบเขตข้อมูล',
+  },
+  {
+    href: '/docs/getting-started',
+    label: 'คู่มือเริ่มต้นใช้งาน AtoAxis',
+    note: 'ขั้นตอนสร้างบัญชีและเชื่อม editor',
+  },
+  {
+    href: 'https://dora.dev/guides/dora-metrics/',
+    label: 'DORA software delivery metrics',
+    note: 'มุมมองผลลัพธ์การส่งมอบซอฟต์แวร์ ซึ่งแยกจากกิจกรรมใน editor',
+  },
+];
+
+const THAI_DEFAULT_TABLE: GuideTable = {
+  caption: 'วิธีตีความข้อมูลกิจกรรมการเขียนโค้ด',
+  columns: ['สัญญาณ', 'ช่วยให้เข้าใจ', 'ไม่สามารถยืนยัน'],
+  rows: [
+    ['Editor heartbeat', 'กิจกรรมที่ระบบบันทึกได้', 'เวลาทำงานทั้งหมด'],
+    ['Attributed changes', 'ที่มาของการเปลี่ยนแปลงที่มีหลักฐาน', 'คุณภาพโค้ดหรือเวลาที่ประหยัดได้'],
+  ],
+};
+
+const EN_GUIDES: Record<string, Guide> = {
   '/': {
     heading: 'What should you know about AtoAxis?',
     answer:
@@ -293,6 +329,277 @@ const GUIDES: Record<string, Guide> = {
       ],
     },
   },
+  '/about': {
+    heading: 'Who builds AtoAxis, and can you verify that?',
+    answer:
+      'AtoAxis is built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.',
+    facts: [
+      ['Team', 'A fourth-year student team designs, builds and operates the hosted service.'],
+      ['Status', 'Early Access: heartbeat ingestion and analytics run; billing and team seats do not.'],
+      ['Working today', 'Heartbeat ingestion, project and language analytics, and AI attribution.'],
+      ['Verification', 'Product claims can be checked against the public source repository.'],
+    ],
+    question: 'How should you verify a claim made on this site?',
+    example:
+      'For example, before trusting a capability described on the pricing or integrations page, check it against the source repository link in this section or ask a specific question through the contact page. A team publishing its own source and a working contact channel is a verifiable claim; a marketing statement alone is not.',
+    recommendation:
+      'Treat this page as the entity record for AtoAxis, not as a sales pitch: it names who operates the service and what is actually running today. Use the contact page for questions this page does not answer, and check the "Not yet" items on this page before assuming a team or billing feature already exists.',
+    sources: [
+      {
+        href: '/contact',
+        label: 'AtoAxis contact page',
+        note: 'the reachable channel for product questions',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis implementation',
+        note: 'verifiable evidence for the claims on this page',
+      },
+      {
+        href: '/privacy',
+        label: 'AtoAxis privacy page',
+        note: 'the data boundary the team commits to',
+      },
+    ],
+    table: {
+      caption: 'AtoAxis status, by area',
+      columns: ['Area', 'Status', 'Where to verify'],
+      rows: [
+        ['Heartbeat ingestion and analytics', 'Working', 'Product source repository'],
+        ['AI attribution hooks', 'Working, 5 agents', 'Integrations page'],
+        ['Billing, team and organisation seats', 'In development', 'This page, "Current status"'],
+      ],
+    },
+  },
+  '/contact': {
+    heading: 'How do you get a specific answer from AtoAxis?',
+    answer:
+      'A real person reads the contact inbox, so a specific question about Early Access, editors, AI tracking, privacy or migration gets a specific answer rather than an automated reply.',
+    facts: [
+      ['Channel', 'Email, read by the team building the product, not a support queue.'],
+      ['Answerable today', 'Early Access timing, editor compatibility, AI hook coverage, privacy fields.'],
+      ['Response scope', 'Product questions; account-specific support requires an active account.'],
+      ['Alternative first stop', 'Check the documentation and privacy pages before writing in.'],
+    ],
+    question: 'What should you include in your message?',
+    example:
+      'For example, "does the JetBrains WakaTime plugin work with AtoAxis" gets a direct yes-or-no answer with the setting to change. "Does your tool work with my setup" without naming the editor cannot get a precise answer, because the correct integration path depends on which client you already use.',
+    recommendation:
+      'Name your editor, your question topic and what you already tried before writing in. Read the getting-started guide first if your question is about connecting a client: it answers the most common setup questions without waiting for a reply.',
+    sources: [
+      {
+        href: '/docs/getting-started',
+        label: 'AtoAxis setup documentation',
+        note: 'answers most connection questions without contacting support',
+      },
+      {
+        href: '/privacy',
+        label: 'AtoAxis privacy page',
+        note: 'the field-level answer to most data questions',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis implementation',
+        note: 'the source behind every claim this page and the contact form describe',
+      },
+    ],
+  },
+  '/terms': {
+    heading: 'What do the current AtoAxis terms actually commit you to?',
+    answer:
+      'These are preliminary Early Access terms. Joining the list registers interest only: no account is created, no payment is taken and no service level is promised.',
+    facts: [
+      ['Nature', 'Preliminary terms for an Early Access website, not a paid-service contract.'],
+      ['Joining the list', 'Not a purchase; creates no obligation on either side.'],
+      ['Data ownership', 'You keep ownership of the activity data your machines send.'],
+      ['Change expectation', 'Planned or in-development features may change before launch.'],
+    ],
+    question: 'How should you treat a feature described as "planned" or "in development" here?',
+    example:
+      'For example, a feature listed as in development on the about page is not covered by these terms as a delivered capability, even if it is mentioned. Treat "planned" language as a roadmap statement, not a commitment with a delivery date, and re-read the terms again once checkout actually opens.',
+    recommendation:
+      'Read the acceptable-use section before sending activity from automation or shared accounts, since one API key identifies one account. Contact the team if a clause is unclear rather than assuming a common industry default; these terms will be replaced before the product becomes payable, and the current wording is the one that applies today.',
+    sources: [
+      {
+        href: '/privacy',
+        label: 'AtoAxis privacy page',
+        note: 'the data-handling commitments referenced by these terms',
+      },
+      {
+        href: '/contact',
+        label: 'AtoAxis contact page',
+        note: 'where to ask about a specific clause',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis implementation',
+        note: 'what the hosted service actually does today',
+      },
+    ],
+  },
+  '/privacy': {
+    heading: 'What does an AtoAxis heartbeat actually contain?',
+    answer:
+      'A heartbeat carries file, project, branch, language and editor metadata plus counts. It never carries source code, diffs, AI prompts, responses, passwords or screenshots.',
+    facts: [
+      ['Collected', 'File path, project, branch, language, editor, OS and keystroke/character counts.'],
+      ['Never collected', 'Source code, diffs, AI prompt or response text, passwords, screenshots.'],
+      ['Transport', 'The editor hands activity to the local CLI; only the CLI sends HTTPS requests.'],
+      ['Retention', 'Kept while the account is active; deletion can be requested by email.'],
+    ],
+    question: 'How can you verify the privacy boundary yourself, rather than take the claim on faith?',
+    example:
+      'For example, run the CLI with logging enabled and inspect what it actually sends over the network, or read the heartbeat handler in the linked source repository. Both show the same field list this page describes: metadata and counts, with no field defined anywhere for file contents or AI transcript text.',
+    recommendation:
+      'Read "What is never collected" before connecting a sensitive project, and request deletion by email if you stop using the service. Revoking an API key stops new data immediately but does not delete history already stored; use the deletion request for that.',
+    sources: [
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis heartbeat handler source',
+        note: 'the exact fields a heartbeat request can contain',
+      },
+      {
+        href: '/docs/getting-started',
+        label: 'AtoAxis setup documentation',
+        note: 'where the API key and CLI described here come from',
+      },
+      {
+        href: '/terms',
+        label: 'AtoAxis terms',
+        note: 'the commitments that apply to this data',
+      },
+    ],
+    table: {
+      caption: 'What is, and is not, in a heartbeat',
+      columns: ['Category', 'In a heartbeat', 'Never in a heartbeat'],
+      rows: [
+        ['File', 'Path, language, save state', 'File contents or diffs'],
+        ['Project', 'Project name, Git branch', 'Repository contents'],
+        ['AI activity', 'Agent flag, line counts', 'Prompt or response text'],
+      ],
+    },
+  },
+  '/early-access': {
+    heading: 'What actually happens when you join AtoAxis Early Access?',
+    answer:
+      'Joining the list registers your interest and adds you to launch updates. It is not a purchase: no payment method is collected and no subscription starts.',
+    facts: [
+      ['What joining does', 'Adds you to the Early Access list and launch-update emails.'],
+      ['What it does not do', 'Collect payment details or start a trial or subscription.'],
+      ['Key issuance', 'Keys are issued to people on the list, not automatically at signup.'],
+      ['Planned pricing', `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year once checkout opens.`],
+    ],
+    question: 'How is joining Early Access different from a normal product signup?',
+    example:
+      'For example, signing up for a live product usually creates an account you can log into immediately. Joining this list does neither: there is no dashboard access until a key is issued, and no charge occurs at any point in the process described on this page.',
+    recommendation:
+      'Join if you want to be notified when keys are issued and pricing is finalized. Read the pricing page for the current planned figures and the terms page for what "planned" and "in development" mean before assuming a specific launch date.',
+    sources: [
+      {
+        href: '/pricing',
+        label: 'AtoAxis pricing page',
+        note: 'the planned monthly and annual figures',
+      },
+      {
+        href: '/terms',
+        label: 'AtoAxis terms',
+        note: 'what joining the list does and does not commit you to',
+      },
+      {
+        href: '/join',
+        label: 'AtoAxis Early Access campaign page',
+        note: 'the same offer with the full feature list',
+      },
+      {
+        href: 'https://wakatime.com/pricing',
+        label: 'WakaTime pricing',
+        note: 'a primary source for visitors comparing Early Access against an existing service',
+      },
+    ],
+  },
+  '/docs/getting-started': {
+    heading: 'What do you need before your first AtoAxis heartbeat?',
+    answer:
+      'Three things: an editor AtoAxis can hear from, wakaclock-cli to deliver heartbeats, and an API key that identifies your account.',
+    facts: [
+      ['Editor', 'VS Code 1.90+ with the first-party extension, or any WakaTime-compatible editor.'],
+      ['CLI', 'wakaclock-cli on PATH, or an absolute path in the wakaclock.cliPath setting.'],
+      ['API key', 'Generated from the dashboard once Early Access issues your account access.'],
+      ['Offline handling', 'Undelivered heartbeats queue in ~/.wakaclock/queue.db and resend later.'],
+    ],
+    question: 'How do you confirm the first heartbeat actually arrived, rather than assume it did?',
+    example:
+      'For example, run wakaclock-cli status to confirm the server is reachable and the key is accepted, then run wakaclock-cli today to read the total the server has counted. Neither command reads your local files; both ask the server for what it has actually recorded.',
+    recommendation:
+      'Change one setting at a time when troubleshooting: verify the server URL, then the CLI path, then the key, rather than editing all three before checking whether the first one fixed it. Read the VS Code integration guide next if you use that editor, or the integrations overview for any other WakaTime-compatible client.',
+    sources: [
+      {
+        href: '/integrations/vscode',
+        label: 'AtoAxis VS Code integration guide',
+        note: 'first-party extension settings and commands',
+      },
+      {
+        href: WAKATIME_DEVELOPER_URL,
+        label: 'WakaTime API documentation',
+        note: 'the heartbeat protocol compatible editor plugins use',
+      },
+      {
+        href: SOURCE_REPOSITORY_URL,
+        label: 'AtoAxis CLI source',
+        note: 'the exact behavior of the commands in this guide',
+      },
+    ],
+    table: {
+      caption: 'First-heartbeat verification commands',
+      columns: ['Command', 'What it checks', 'Reads local files?'],
+      rows: [
+        ['wakaclock-cli status', 'Server reachable, API key accepted', 'No'],
+        ['wakaclock-cli today', "Today's server-counted total", 'No'],
+      ],
+    },
+  },
+  '/integrations/vscode': {
+    heading: 'What does the AtoAxis VS Code extension actually send?',
+    answer:
+      'File, project, branch, language and editor metadata plus save, debug and build activity and keystroke counts — routed through wakaclock-cli, never file contents.',
+    facts: [
+      ['Requirement', 'VS Code 1.90 or newer, plus wakaclock-cli on PATH or a configured path.'],
+      ['Key storage', 'Stored in VS Code secret storage via a command, never in settings.json.'],
+      ['Data sent', 'File, project, branch, language and editor metadata, plus activity counts.'],
+      ['Limitation', 'File activity only — no app, domain or URL heartbeats, unlike a browser tracker.'],
+    ],
+    question: 'How do you confirm the extension is reporting correctly after installing it?',
+    example:
+      "For example, type in a file, then check the VS Code status bar: it should show today's total and refresh roughly every 15 seconds. If it stays at zero, the extension cannot find wakaclock-cli, and the fix is Wakaclock: Configure CLI Path, not reinstalling the extension.",
+    recommendation:
+      'Set wakaclock.cliPath explicitly if the binary is not on your PATH before assuming the extension itself is broken. Use Wakaclock: Send Heartbeat Now to flush buffered activity immediately when you need to verify a change without waiting for the normal save-triggered cadence.',
+    sources: [
+      {
+        href: '/docs/getting-started',
+        label: 'AtoAxis getting-started guide',
+        note: 'the account and API key steps this extension depends on',
+      },
+      {
+        href: '/privacy',
+        label: 'AtoAxis privacy page',
+        note: 'the exact metadata fields this extension can send',
+      },
+      {
+        href: WAKATIME_DEVELOPER_URL,
+        label: 'WakaTime API documentation',
+        note: 'the protocol this extension speaks to the server',
+      },
+    ],
+    table: {
+      caption: 'AtoAxis VS Code extension settings',
+      columns: ['Setting', 'Purpose', 'Default'],
+      rows: [
+        ['wakaclock.cliPath', 'Absolute path to the CLI binary', 'Resolved from PATH'],
+        ['wakaclock.statusBarEnabled', "Show today's total in the status bar", 'Enabled'],
+        ['wakaclock.trackDebugSessions', 'Emit heartbeats for debug sessions', 'Enabled'],
+      ],
+    },
+  },
 };
 
 const THAI_HOME_GUIDE: Guide = {
@@ -341,15 +648,67 @@ const THAI_HOME_GUIDE: Guide = {
   },
 };
 
+/**
+ * Thai guides for `/wakatime-alternative` and `/ai-coding-tracker`.
+ *
+ * Before this, `hasAnswerGuide` returned `path === '/'` for every Thai path, so these two
+ * pages rendered no key takeaways, sources or comparison table at all even though their
+ * English counterparts had all three — the gap behind their much lower AEO/GEO scores.
+ * `/th/wakatime-alternative` already carries the highest brand-keyword density on the
+ * site, so this copy names the current product once and otherwise says "ระบบเดิม"
+ * ("your existing system") rather than repeating "WakaTime".
+ */
+const TH_GUIDES: Record<string, Guide> = {
+  '/': THAI_HOME_GUIDE,
+  '/wakatime-alternative': {
+    heading: 'ควรพิจารณาอะไรก่อนย้ายจากระบบติดตามเวลาเดิม?',
+    answer:
+      'เทียบความเข้ากันได้ของ editor การเข้าถึงประวัติ การย้ายข้อมูล และความครอบคลุมของ AI attribution ก่อนเปลี่ยนเครื่องมือติดตามเวลาเขียนโค้ด',
+    facts: [
+      ['ความเข้ากันได้', 'AtoAxis รองรับ WakaTime API จึงใช้ editor plugin เดิมที่มีอยู่ได้ทันที'],
+      ['การย้ายข้อมูล', 'นำเข้าไฟล์ export จากระบบเดิมได้ ควรตรวจผลลัพธ์ก่อนเชื่อถือตัวเลข'],
+      ['ประวัติ', 'ทุกบัญชีเก็บประวัติการเขียนโค้ดแบบครบถ้วน ไม่ตัดเหลือเฉพาะช่วงล่าสุด'],
+      ['สถานะ', 'อยู่ในช่วง Early Access ราคาที่ประกาศไว้ยังไม่ใช่ checkout ที่เปิดใช้จริง'],
+    ],
+    question: 'ควรประเมินการย้ายระบบอย่างไรให้ปลอดภัย?',
+    example:
+      'ตัวอย่างเช่น เชื่อม editor ตัวเดียวก่อน แล้วตรวจโปรเจกต์และช่วงเวลาที่คุ้นเคยก่อนย้ายงานประจำทั้งหมดมาที่นี่ ตรวจชื่อภาษา ชื่อโปรเจกต์ และช่วงวันที่ให้ตรงกับที่คาดไว้ การนำเข้าเป็นการพาประวัติเดิมมาต่อเนื่องเท่านั้น ไม่ได้สร้างหลักฐาน AI attribution ที่ข้อมูลเดิมไม่เคยมีมาก่อน',
+    recommendation:
+      'เลือกตามหลักฐานที่ต้องตรวจสอบและ client ที่ใช้งานจริง เก็บไฟล์ export ไว้ระหว่างตรวจสอบผลลัพธ์ บริการที่ตั้งตัวมานานอาจเหมาะกับทีมที่ต้องการระบบจัดการสมาชิกที่ครบแล้ววันนี้ เพราะฟีเจอร์ทีมและองค์กรของ AtoAxis ยังอยู่ระหว่างพัฒนา',
+    // No `sources`/`table` override: the component falls back to THAI_DEFAULT_SOURCES and
+    // THAI_DEFAULT_TABLE for any Thai guide that doesn't need its own.
+  },
+  '/ai-coding-tracker': {
+    heading: 'เครื่องมือติดตาม AI coding วัดอะไรบ้าง?',
+    answer:
+      'เครื่องมือติดตาม AI coding บันทึกการเปลี่ยนแปลงโค้ดที่มีหลักฐานที่มาและกิจกรรมของ agent ส่วนที่ไม่มีหลักฐานเพียงพอควรแสดงเป็นงานที่ยังไม่ทราบที่มา แทนที่จะนับรวมเป็นของคนเขียนไปเลย',
+    facts: [
+      ['AI attribution', 'Hook หรือ client ระบุ agent ที่เกี่ยวข้องกับการเปลี่ยนแปลงแต่ละครั้ง'],
+      ['กิจกรรมของคน', 'Keystroke และ character ที่ editor สังเกตได้ เป็นสัญญาณกิจกรรมของคน'],
+      ['ยังไม่ทราบที่มา', 'การเปลี่ยนแปลงที่ไม่มีหลักฐานเพียงพอจะถูกแยกไว้เป็นหมวดต่างหาก'],
+      ['การอ่านผล', 'ควรดู coverage ควบคู่กับยอดรวม เพราะหลักฐานที่ขาดหายไม่ใช่ข้อพิสูจน์ว่าเป็นคนเขียน'],
+    ],
+    question: 'ควรตีความรายงาน AI contribution อย่างไร?',
+    example:
+      'ตัวอย่างสมมติ ไม่ใช่ข้อมูลลูกค้า: ชุดการเปลี่ยนแปลงหนึ่งมี 100 บรรทัดที่เพิ่มเข้ามา หลักฐานระบุว่า 40 บรรทัดมาจาก AI, 35 บรรทัดมาจากกิจกรรมของคน และเหลือ 25 บรรทัดที่ยังไม่มีหลักฐานเพียงพอ ควรรายงานครบทั้งสามหมวด การนับ 25 บรรทัดที่ไม่ทราบที่มาว่าเป็นของคนจะซ่อน coverage ที่ขาดหายไป ตัวเลขตัวอย่างนี้ใช้อธิบายวิธีตีความเท่านั้น ไม่ใช่ผลวัดของผลิตภัณฑ์',
+    recommendation:
+      'ใช้ attribution เพื่อเข้าใจ workflow ของตัวเองและมองหาจุดที่ยังไม่มีเครื่องมือวัด ตรวจ hook ที่รองรับก่อนเทียบตัวเลขระหว่าง agent จำนวนบรรทัดอธิบายการเปลี่ยนแปลง ไม่ได้ยืนยันความถูกต้อง การดูแลรักษาได้ เวลาที่ประหยัดได้ หรือมูลค่าทางธุรกิจของโค้ดที่ AI สร้างขึ้น',
+  },
+};
+
+function guideFor(path: string, locale: SiteLocale): Guide | undefined {
+  return locale === 'th' ? TH_GUIDES[path] : EN_GUIDES[path];
+}
+
 export function hasAnswerGuide(path: string, locale: SiteLocale): boolean {
-  return locale === 'th' ? path === '/' : Boolean(GUIDES[path]);
+  return Boolean(guideFor(path, locale));
 }
 
 export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path: string }) {
-  const guide = locale === 'th' && path === '/' ? THAI_HOME_GUIDE : GUIDES[path];
+  const guide = guideFor(path, locale);
   if (!guide) return null;
-  const sources = guide.sources ?? DEFAULT_SOURCES;
-  const table = guide.table ?? DEFAULT_TABLE;
+  const sources = guide.sources ?? (locale === 'th' ? THAI_DEFAULT_SOURCES : DEFAULT_SOURCES);
+  const table = guide.table ?? (locale === 'th' ? THAI_DEFAULT_TABLE : DEFAULT_TABLE);
   const reviewDate = contentModified(path, locale) ?? SITE_MODIFIED;
   return (
     <section
