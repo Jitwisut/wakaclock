@@ -15,6 +15,7 @@ import {
   SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
+import { AnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { CtaSection } from './cta-section';
 import { DashboardPreviewSection } from './dashboard-preview-section';
@@ -316,6 +317,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         </Section>
       </div>
       <CtaSection locale={locale} />
+      {locale === 'en' ? <AnswerGuide path="/" /> : null}
       {/*
         JSON-LD is rendered last, after the visible content, and that position is load
         bearing rather than stylistic.

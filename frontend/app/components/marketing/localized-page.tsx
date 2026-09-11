@@ -19,6 +19,7 @@ import {
   SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
+import { AnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { EarlyAccessForm } from './early-access-form';
 import { FaqSection } from './faq-section';
@@ -154,6 +155,17 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
               <a href="#faq">{copy.faq.heading}</a>
             </li>
           ) : null}
+          {locale === 'en' &&
+          [
+            '/teams',
+            '/developer-analytics',
+            '/ai-coding-tracker',
+            '/wakatime-alternative',
+          ].includes(copy.breadcrumbs.at(-1)?.path ?? '') ? (
+            <li>
+              <a href="#answer-guide">Key takeaways and sources</a>
+            </li>
+          ) : null}
         </ol>
       </nav>
     </aside>
@@ -269,6 +281,7 @@ export function LocalizedMarketingPage({
           </div>
         </div>
         <PlacedIllustration locale={locale} path={path} placement="closing" />
+        {locale === 'en' ? <AnswerGuide path={path} /> : null}
         {renderRelated(copy, locale)}
         <footer className="mkt-page-provenance">
           <p>

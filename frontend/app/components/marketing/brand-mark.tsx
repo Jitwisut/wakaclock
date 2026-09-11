@@ -8,6 +8,7 @@ export function BrandMark() {
       aria-hidden="true"
       className="axis-brand-mark"
       height={36}
+      loading="eager"
       sizes="36px"
       src="/atoaxis-symbol-v2.png"
       width={36}

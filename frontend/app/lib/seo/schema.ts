@@ -1,5 +1,6 @@
 import {
   absoluteUrl,
+  contentModified,
   localizedPath,
   ORGANIZATION,
   PRODUCT_ANSWER,
@@ -207,6 +208,8 @@ export function webPageSchema({
     name,
     description,
     inLanguage: locale === 'th' ? 'th-TH' : 'en',
+    ...(contentModified(path, locale) ? { dateModified: contentModified(path, locale) } : {}),
+    author: { '@id': ORGANIZATION_ID },
     isPartOf: { '@id': absoluteUrl('/#website') },
     publisher: { '@id': ORGANIZATION_ID },
     hasPart: sections.map((section) => ({
