@@ -9,11 +9,14 @@ const originalObserver = window.IntersectionObserver;
 
 it('pins only a hero that fits the viewport and releases it when the viewport no longer fits', () => {
   vi.stubGlobal('CSS', { supports: () => true });
-  vi.spyOn(window, 'matchMedia').mockReturnValue({
-    matches: false,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  } as unknown as MediaQueryList);
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query) =>
+      ({
+        matches: query.includes('min-width: 1024px'),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList
+  );
   let height = 400;
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
     this: HTMLElement
@@ -61,6 +64,34 @@ it('keeps content readable and disables enhancement when reduced motion is reque
   expect(screen.getByTestId('marketing')).not.toHaveAttribute('data-motion-ready');
 });
 
+it('never pins the hero on mobile even when it fits in the visible viewport', () => {
+  vi.stubGlobal('CSS', { supports: () => true });
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query) =>
+      ({
+        matches: query.includes('max-width: 1023px'),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList
+  );
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    height: 400,
+    top: 0,
+  } as DOMRect);
+  render(
+    <div className="wakaclock-marketing">
+      <header className="axis-nav" />
+      <MarketingMotion />
+      <section className="axis-hero" data-testid="hero">
+        <div className="axis-hero-stage">Stable mobile hero</div>
+      </section>
+    </div>
+  );
+
+  expect(screen.getByTestId('hero')).toHaveAttribute('data-pinned', 'false');
+  expect(screen.getByText('Stable mobile hero')).toBeVisible();
+});
+
 it('observes below-fold content and releases observers and active animations on unmount', () => {
   const observe = vi.fn();
   const disconnect = vi.fn();
@@ -94,6 +125,10 @@ it('observes below-fold content and releases observers and active animations on 
   expect(observe).toHaveBeenCalledWith(section);
   enter([{ isIntersecting: true, target: section }]);
   expect(section.animate).toHaveBeenCalledOnce();
+  expect(section.animate).toHaveBeenCalledWith(
+    expect.any(Array),
+    expect.objectContaining({ fill: 'backwards' })
+  );
   expect(unobserve).toHaveBeenCalledWith(section);
   unmount();
   expect(disconnect).toHaveBeenCalledOnce();

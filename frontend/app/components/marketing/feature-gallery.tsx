@@ -11,17 +11,28 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
   useEffect(() => {
     const element = rail.current;
     if (!element) return;
-    const update = () =>
-      setEdges({
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const next = {
         start: element.scrollLeft <= 2,
         end: element.scrollLeft + element.clientWidth >= element.scrollWidth - 2,
-      });
+      };
+      setEdges((previous) =>
+        previous.start === next.start && previous.end === next.end ? previous : next
+      );
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
     update();
-    element.addEventListener('scroll', update, { passive: true });
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    element.addEventListener('scroll', schedule, { passive: true });
+    const observer =
+      typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
     observer?.observe(element);
     return () => {
-      element.removeEventListener('scroll', update);
+      window.cancelAnimationFrame(frame);
+      element.removeEventListener('scroll', schedule);
       observer?.disconnect();
     };
   }, []);

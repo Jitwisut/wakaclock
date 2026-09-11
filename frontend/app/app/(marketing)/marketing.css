@@ -38,6 +38,7 @@
   color-scheme: light;
   line-height: 1.65;
   isolation: isolate;
+  overflow-x: clip;
   overflow-wrap: break-word;
   & :is(h1, h2, h3) {
     font-family: var(--font-mkt-display), sans-serif;
@@ -1279,7 +1280,7 @@
     bottom: calc(100% + 12px);
     right: 0;
     width: min(360px, calc(100vw - 40px));
-    max-height: 55dvh;
+    max-height: min(55svh, 460px);
     overflow-y: auto;
     overscroll-behavior: contain;
     background: white;
@@ -1373,23 +1374,25 @@
       animation: axis-enter 400ms ease both;
     }
   }
-  @supports (animation-timeline: view()) {
-    .wakaclock-marketing {
-      & .axis-hero[data-pinned='true'] .mkt-studio {
-        animation: axis-product-camera linear both;
-        animation-timeline: --axis-opening;
-        animation-range: contain 0% contain 100%;
-      }
-      & :is(.mkt-page-art, .mkt-workspace-art) {
-        animation: axis-image-reveal linear both;
-        animation-timeline: view();
-        animation-range: entry 0% cover 35%;
-      }
-      & .axis-feature-row,
-      & .axis-pricing-detail li {
-        animation: axis-card-reveal linear both;
-        animation-timeline: view();
-        animation-range: entry 0% cover 30%;
+  @media (min-width: 1024px) {
+    @supports (animation-timeline: view()) {
+      .wakaclock-marketing {
+        & .axis-hero[data-pinned='true'] .mkt-studio {
+          animation: axis-product-camera linear both;
+          animation-timeline: --axis-opening;
+          animation-range: contain 0% contain 100%;
+        }
+        & :is(.mkt-page-art, .mkt-workspace-art) {
+          animation: axis-image-reveal linear both;
+          animation-timeline: view();
+          animation-range: entry 0% cover 35%;
+        }
+        & .axis-feature-row,
+        & .axis-pricing-detail li {
+          animation: axis-card-reveal linear both;
+          animation-timeline: view();
+          animation-range: entry 0% cover 30%;
+        }
       }
     }
   }
@@ -1431,6 +1434,22 @@
 }
 @media (max-width: 1023px) {
   .wakaclock-marketing {
+    & .axis-nav {
+      background: #fafbf9fa;
+      backdrop-filter: none;
+    }
+    & .axis-hero,
+    & .axis-hero[data-pinned='true'] {
+      height: auto;
+    }
+    & .axis-hero-stage,
+    & .axis-hero[data-pinned='true'] .axis-hero-stage {
+      position: relative;
+      top: auto;
+    }
+    & .wakaclock-marquee-track {
+      animation: none;
+    }
     & .mkt-studio {
       padding: 28px;
       gap: 24px;
@@ -1460,7 +1479,7 @@
     & .axis-nav-expanded {
       display: block;
       padding-block: 20px 32px;
-      max-height: calc(100dvh - 60px);
+      max-height: calc(100svh - 60px);
     }
     & .axis-nav-expanded li a {
       font-size: 25px;
@@ -1563,6 +1582,10 @@
       flex-basis: 82vw;
       min-height: 420px;
       padding: 28px 24px 0;
+    }
+    & .axis-feature-list {
+      overscroll-behavior-inline: contain;
+      -webkit-overflow-scrolling: touch;
     }
     & .axis-feature-row h3 {
       font-size: 27px;
@@ -1737,6 +1760,52 @@
     }
     & .axis-footer-grid nav a {
       min-height: 44px;
+    }
+  }
+}
+@media (max-width: 479px) {
+  .wakaclock-marketing {
+    --axis-gutter: 18px;
+    & .axis-wordmark {
+      font-size: 18px;
+    }
+    & .axis-brand-mark {
+      width: 32px;
+      height: 32px;
+    }
+    & .axis-hero-title {
+      font-size: clamp(36px, 11vw, 48px);
+    }
+    & .mkt-hero-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    & .mkt-hero-actions [data-slot='button'] {
+      width: 100%;
+    }
+    & .mkt-studio {
+      padding: 18px;
+    }
+    & .mkt-studio-heading,
+    & .mkt-studio-footer {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    & .axis-feature-row {
+      flex-basis: calc(100vw - 48px);
+      min-height: 390px;
+    }
+    & #worked-example .grid {
+      grid-template-columns: 1fr;
+    }
+    & .axis-pricing-offer {
+      padding: 22px 18px;
+    }
+    & .mkt-price-change {
+      font-size: 62px;
+    }
+    & .axis-footer-grid {
+      grid-template-columns: 1fr;
     }
   }
 }
