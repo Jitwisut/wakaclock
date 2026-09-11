@@ -64,8 +64,8 @@ export function PricingSection({ locale = 'en' }: { locale?: SiteLocale }) {
   const price = annual ? PRICING.annualUsd : PRICING.monthlyUsd;
 
   return (
-    <section className="mkt-reveal mx-auto max-w-3xl px-4 py-20 md:px-6" id="pricing">
-      <div className="mb-10 text-center">
+    <section className="axis-pricing axis-section mkt-reveal" id="pricing">
+      <div className="axis-pricing-intro">
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
@@ -77,86 +77,83 @@ export function PricingSection({ locale = 'en' }: { locale?: SiteLocale }) {
         </p>
       </div>
 
-      <div
-        aria-label={copy.billing}
-        className="mb-8 inline-flex w-full items-center justify-center"
-        role="group"
-      >
-        <button
-          aria-pressed={!annual}
-          className="cursor-pointer border-2 border-r-0 px-5 py-2 text-sm font-semibold transition-colors"
-          data-selected={!annual}
-          onClick={() => setAnnual(false)}
-          style={{
-            background: annual ? 'transparent' : 'var(--mkt-bg-elevated)',
-            borderColor: 'var(--mkt-border)',
-            color: annual ? MKT_FG_MUTED : 'var(--mkt-fg)',
-          }}
-          type="button"
-        >
-          {copy.monthly}
-        </button>
-        <button
-          aria-pressed={annual}
-          className="cursor-pointer border-2 px-5 py-2 text-sm font-semibold transition-colors"
-          data-selected={annual}
-          onClick={() => setAnnual(true)}
-          style={{
-            background: annual ? 'var(--mkt-bg-elevated)' : 'transparent',
-            borderColor: 'var(--mkt-border)',
-            color: annual ? 'var(--mkt-fg)' : MKT_FG_MUTED,
-          }}
-          type="button"
-        >
-          {copy.annual}
-          <span
-            className="ml-1.5 px-2 py-0.5 text-xs font-semibold"
-            style={{ background: 'var(--mkt-accent-soft)', color: MKT_ACCENT }}
+      <div className="axis-pricing-offer">
+        <div aria-label={copy.billing} className="axis-billing" role="group">
+          <button
+            aria-pressed={!annual}
+            className="cursor-pointer border-2 border-r-0 px-5 py-2 text-sm font-semibold transition-colors"
+            data-selected={!annual}
+            onClick={() => setAnnual(false)}
+            style={{
+              background: annual ? 'transparent' : 'var(--mkt-bg-elevated)',
+              borderColor: 'var(--mkt-border)',
+              color: annual ? MKT_FG_MUTED : 'var(--mkt-fg)',
+            }}
+            type="button"
           >
-            {copy.save}
-          </span>
-        </button>
-      </div>
-
-      <div
-        className="mkt-pixel-shadow border-[3px] p-8 md:p-10"
-        style={{ borderColor: MKT_ACCENT, background: 'var(--mkt-bg-elevated)' }}
-      >
-        <div className="mb-6 flex items-baseline gap-2">
-          <span
-            className="mkt-price-change text-5xl font-semibold tracking-tight"
-            key={price}
-            style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
+            {copy.monthly}
+          </button>
+          <button
+            aria-pressed={annual}
+            className="cursor-pointer border-2 px-5 py-2 text-sm font-semibold transition-colors"
+            data-selected={annual}
+            onClick={() => setAnnual(true)}
+            style={{
+              background: annual ? 'var(--mkt-bg-elevated)' : 'transparent',
+              borderColor: 'var(--mkt-border)',
+              color: annual ? 'var(--mkt-fg)' : MKT_FG_MUTED,
+            }}
+            type="button"
           >
-            ${price}
-          </span>
-          <span style={{ color: MKT_FG_MUTED }}>{annual ? copy.periodYear : copy.periodMonth}</span>
+            {copy.annual}
+            <span
+              className="ml-1.5 px-2 py-0.5 text-xs font-semibold"
+              style={{ background: 'var(--mkt-accent-soft)', color: MKT_ACCENT }}
+            >
+              {copy.save}
+            </span>
+          </button>
         </div>
 
-        <ul className="mb-8 space-y-3">
-          {copy.included.map((item) => (
-            <li className="flex items-start gap-2.5 text-sm" key={item}>
-              <CheckIcon
-                aria-hidden
-                className="mt-0.5 size-4 shrink-0"
-                style={{ color: MKT_ACCENT }}
-              />
-              {item}
-            </li>
-          ))}
-        </ul>
+        <div className="axis-pricing-detail">
+          <div className="mb-6 flex items-baseline gap-2">
+            <span
+              className="mkt-price-change text-5xl font-semibold tracking-tight"
+              key={price}
+              style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
+            >
+              ${price}
+            </span>
+            <span style={{ color: MKT_FG_MUTED }}>
+              {annual ? copy.periodYear : copy.periodMonth}
+            </span>
+          </div>
 
-        <Button
-          asChild
-          className="w-full"
-          size="lg"
-          style={{ background: MKT_ACCENT, color: 'var(--mkt-accent-fg)' }}
-        >
-          <Link href={localizedPath(locale, '/early-access')}>{copy.cta}</Link>
-        </Button>
-        <p className="mt-3 text-center text-xs" style={{ color: MKT_FG_MUTED }}>
-          {copy.note}
-        </p>
+          <ul className="mb-8 space-y-3">
+            {copy.included.map((item) => (
+              <li className="flex items-start gap-2.5 text-sm" key={item}>
+                <CheckIcon
+                  aria-hidden
+                  className="mt-0.5 size-4 shrink-0"
+                  style={{ color: MKT_ACCENT }}
+                />
+                {item}
+              </li>
+            ))}
+          </ul>
+
+          <Button
+            asChild
+            className="w-full"
+            size="lg"
+            style={{ background: MKT_ACCENT, color: 'var(--mkt-accent-fg)' }}
+          >
+            <Link href={localizedPath(locale, '/early-access')}>{copy.cta}</Link>
+          </Button>
+          <p className="mt-3 text-center text-xs" style={{ color: MKT_FG_MUTED }}>
+            {copy.note}
+          </p>
+        </div>
       </div>
     </section>
   );

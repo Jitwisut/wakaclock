@@ -59,7 +59,7 @@ export function HeroPanel({ locale = 'en' }: { locale?: SiteLocale }) {
           </button>
         ))}
       </div>
-      <div className="mkt-studio-scene" key={`${mode}-${replay}`}>
+      <div className="mkt-studio-scene" key={replay}>
         <div className="mkt-studio-editor">
           <div className="mkt-studio-file">
             <Code2Icon aria-hidden size={15} />

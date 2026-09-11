@@ -41,7 +41,7 @@ export function EditorWallSection({ locale = 'en' }: { locale?: SiteLocale }) {
       ? ['หยุดแถบ editor', 'เล่นแถบ editor']
       : ['Pause editor strip', 'Play editor strip'];
   return (
-    <section className="mkt-reveal py-14" data-marquee-paused={paused}>
+    <section className="axis-editor-wall mkt-reveal" data-marquee-paused={paused}>
       <p className="mb-8 text-center text-sm font-medium" style={{ color: 'var(--mkt-fg-muted)' }}>
         {locale === 'th'
           ? 'ใช้ editor เหล่านี้กับ WakaTime plugin อยู่แล้วหรือไม่? ชี้มายัง AtoAxis ได้โดยไม่ต้องติดตั้ง extension ใหม่'

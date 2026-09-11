@@ -36,32 +36,37 @@ export function FaqSection({
   locale?: SiteLocale;
 }) {
   return (
-    <section
-      className="mkt-faq-section mkt-reveal mx-auto max-w-3xl px-4 py-20 md:px-6"
-      id={id}
-      lang={locale}
-    >
+    <section className="mkt-faq-section axis-section" id={id} lang={locale}>
       <h2
-        className="mb-10 text-center text-3xl font-semibold tracking-tight md:text-4xl"
+        className="mkt-reveal text-3xl font-semibold tracking-tight md:text-4xl"
         style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
       >
         {heading}
       </h2>
 
-      <dl className="space-y-6">
-        {keyEntries(entries).map(({ entry, key }) => (
-          <div
-            className="mkt-pixel-shadow border-[3px] p-6"
+      <div className="axis-faq-list">
+        {keyEntries(entries).map(({ entry, key }, index) => (
+          <details
+            className="axis-faq-row mkt-reveal"
             key={key}
+            open={index === 0}
             style={{ borderColor: 'var(--mkt-border)' }}
           >
-            <dt className="text-base font-semibold">{entry.question}</dt>
-            <dd className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--mkt-fg-muted)' }}>
+            <summary className="axis-faq-question">
+              <span>{entry.question}</span>
+              <span aria-hidden="true" className="axis-faq-toggle">
+                +
+              </span>
+            </summary>
+            <p
+              className="axis-faq-answer text-sm leading-relaxed"
+              style={{ color: 'var(--mkt-fg-muted)' }}
+            >
               {entry.answer}
-            </dd>
-          </div>
+            </p>
+          </details>
         ))}
-      </dl>
+      </div>
     </section>
   );
 }

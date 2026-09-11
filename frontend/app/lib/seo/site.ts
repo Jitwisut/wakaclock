@@ -100,7 +100,7 @@ export const ORGANIZATION = {
   // No separate registered entity exists yet (student project) — the product name
   // doubles as the legal/publisher name in structured data until that changes.
   legalName: SITE_NAME,
-  logo: absoluteUrl('/atoaxis-logo.png'),
+  logo: absoluteUrl('/atoaxis-symbol-v2.png'),
   name: SITE_NAME,
   url: SITE_URL,
 } as const;

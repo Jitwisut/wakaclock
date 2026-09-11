@@ -66,8 +66,8 @@ export function QuickStartSection({ locale = 'en' }: { locale?: SiteLocale }) {
   const copy = COPY[locale];
 
   return (
-    <section className="mkt-reveal mx-auto max-w-6xl px-4 py-20 md:px-6" id="quick-start">
-      <div className="mb-12 text-center">
+    <section className="axis-setup axis-section" id="quick-start">
+      <div className="axis-section-heading mkt-reveal">
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
@@ -79,45 +79,43 @@ export function QuickStartSection({ locale = 'en' }: { locale?: SiteLocale }) {
         </p>
       </div>
 
-      <ol className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <ol className="axis-setup-steps">
         {copy.steps.map((step, index) => (
-          <li
-            className="mkt-pixel-shadow flex flex-col border-[3px] p-6"
-            key={step.title}
-            style={{ background: 'var(--mkt-bg-elevated)', borderColor: 'var(--mkt-border)' }}
-          >
+          <li className="axis-setup-step mkt-reveal" key={step.title}>
             <span
               aria-hidden
-              className="mb-4 inline-flex size-10 items-center justify-center border-2 text-sm font-bold"
+              className="axis-step-number"
               style={{
-                background: 'var(--mkt-accent)',
+                background: 'transparent',
                 borderColor: 'var(--mkt-border)',
-                color: 'var(--mkt-accent-fg)',
+                color: 'var(--mkt-accent)',
                 fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace',
               }}
             >
               {String(index + 1).padStart(2, '0')}
             </span>
             <h3 className="text-base font-bold">{step.title}</h3>
-            <p className="mt-2 flex-1 text-sm" style={{ color: 'var(--mkt-fg-muted)' }}>
-              {step.body}
-            </p>
-            <code
-              className="mkt-scanlines mt-4 block overflow-x-auto border-2 p-3 text-xs"
-              style={{
-                background: 'var(--mkt-code-bg)',
-                borderColor: 'var(--mkt-border)',
-                color: 'var(--mkt-code-fg)',
-                fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
-              }}
-            >
-              {step.command}
-            </code>
+            <div className="axis-step-detail">
+              <p className="mt-2 flex-1 text-sm" style={{ color: 'var(--mkt-fg-muted)' }}>
+                {step.body}
+              </p>
+              <code
+                className="mkt-scanlines mt-4 block overflow-x-auto border-2 p-3 text-xs"
+                style={{
+                  background: 'var(--mkt-code-bg)',
+                  borderColor: 'var(--mkt-border)',
+                  color: 'var(--mkt-code-fg)',
+                  fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
+                }}
+              >
+                {step.command}
+              </code>
+            </div>
           </li>
         ))}
       </ol>
 
-      <div className="mt-8 flex flex-col items-center gap-3">
+      <div className="axis-setup-footer">
         <Button asChild size="lg" variant="outline">
           <Link href={localizedPath(locale, '/docs/getting-started')}>{copy.cta}</Link>
         </Button>

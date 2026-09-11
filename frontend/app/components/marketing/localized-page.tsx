@@ -28,6 +28,7 @@ import {
   type MarketingSectionCopy,
   PAGE_COPY,
 } from './marketing-copy';
+import { PageIllustration } from './page-illustration';
 import { PricingSection } from './pricing-section';
 import {
   Breadcrumbs,
@@ -167,6 +168,25 @@ function pageVariant(path: MarketingPageKey) {
   return 'product';
 }
 
+function PlacedIllustration({
+  locale,
+  path,
+  placement,
+}: {
+  locale: SiteLocale;
+  path: MarketingPageKey;
+  placement: 'body' | 'closing' | 'intro';
+}) {
+  const positions: Record<string, string> = {
+    '/ai-coding-tracker': 'intro',
+    '/integrations': 'intro',
+    '/ai-cost-tracking': 'body',
+    '/developer-analytics': 'body',
+    '/teams': 'closing',
+  };
+  return positions[path] === placement ? <PageIllustration locale={locale} path={path} /> : null;
+}
+
 export function LocalizedMarketingPage({
   path,
   locale,
@@ -208,23 +228,27 @@ export function LocalizedMarketingPage({
     comparisonIndex >= 0 ? copy.sections.slice(0, comparisonIndex + 1) : copy.sections;
   const trailingSections = comparisonIndex >= 0 ? copy.sections.slice(comparisonIndex + 1) : [];
   const pricing = copy.component?.kind === 'pricing';
+  const introArt = path === '/ai-coding-tracker' || path === '/integrations';
 
   return (
     <>
       <PageShell variant={pageVariant(path)}>
         <Breadcrumbs entries={breadcrumbs} locale={locale} />
-        <header className="mkt-page-intro">
-          {copy.badge ? (
-            <p
-              className="mb-5 inline-flex border-2 px-3 py-1 text-xs font-medium"
-              style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
-            >
-              {copy.badge}
-            </p>
-          ) : null}
-          <PageTitle>{copy.title}</PageTitle>
-          <LeadAnswer>{copy.lead}</LeadAnswer>
-        </header>
+        <div className={introArt ? 'mkt-illustrated-intro' : undefined} data-page={path}>
+          <header className="mkt-page-intro">
+            {copy.badge ? (
+              <p
+                className="mb-5 inline-flex border-2 px-3 py-1 text-xs font-medium"
+                style={{ borderColor: 'var(--mkt-border)', color: 'var(--mkt-fg-muted)' }}
+              >
+                {copy.badge}
+              </p>
+            ) : null}
+            <PageTitle>{copy.title}</PageTitle>
+            <LeadAnswer>{copy.lead}</LeadAnswer>
+          </header>
+          <PlacedIllustration locale={locale} path={path} placement="intro" />
+        </div>
         <div className="mkt-reading-layout">
           <PageIndex copy={copy} locale={locale} />
           <div className="mkt-page-content">
@@ -234,12 +258,17 @@ export function LocalizedMarketingPage({
                 <PricingSection locale={locale} />
               </>
             ) : (
-              renderSections(firstSections)
+              <>
+                {renderSections(firstSections.slice(0, 1))}
+                <PlacedIllustration locale={locale} path={path} placement="body" />
+                {renderSections(firstSections.slice(1))}
+              </>
             )}
             {copy.component?.kind === 'comparison' ? <ComparisonSection locale={locale} /> : null}
             {trailingSections.length > 0 ? renderSections(trailingSections) : null}
           </div>
         </div>
+        <PlacedIllustration locale={locale} path={path} placement="closing" />
         {renderRelated(copy, locale)}
         <footer className="mkt-page-provenance">
           <p>

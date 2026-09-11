@@ -8,6 +8,40 @@ import { usePathname } from 'next/navigation';
 export function MarketingMotion() {
   const marker = useRef<globalThis.HTMLSpanElement>(null);
   const pathname = usePathname();
+  const lastPath = useRef(pathname);
+
+  useEffect(() => {
+    const root = marker.current?.closest('.wakaclock-marketing');
+    const hero = root?.querySelector<globalThis.HTMLElement>('.axis-hero');
+    const stage = hero?.querySelector<globalThis.HTMLElement>('.axis-hero-stage');
+    if (!hero || !stage) return;
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const nav = root?.querySelector('.axis-nav');
+    const measure = () => {
+      const top = nav?.getBoundingClientRect().height ?? 82;
+      const { height } = stage.getBoundingClientRect();
+      const fits = height > 0 && height <= window.innerHeight - top - 8;
+      const supported = window.CSS?.supports?.('animation-timeline: view()') ?? false;
+      hero.dataset.pinned = String(!preference.matches && fits && supported);
+      hero.style.setProperty('--hero-stage-height', `${height}px`);
+      hero.style.setProperty('--hero-top', `${top}px`);
+    };
+    const observer =
+      typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
+    observer?.observe(stage);
+    if (nav) observer?.observe(nav);
+    measure();
+    window.addEventListener('resize', measure);
+    preference.addEventListener('change', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      preference.removeEventListener('change', measure);
+      delete hero.dataset.pinned;
+      hero.style.removeProperty('--hero-stage-height');
+      hero.style.removeProperty('--hero-top');
+    };
+  }, [pathname]);
 
   useEffect(() => {
     const root = marker.current?.closest<globalThis.HTMLElement>('.wakaclock-marketing');
@@ -26,6 +60,15 @@ export function MarketingMotion() {
       stop();
       if (preference.matches) return;
       root.dataset.motionReady = 'true';
+      const main = root.querySelector('main');
+      if (lastPath.current !== pathname && typeof main?.animate === 'function') {
+        const transition = main.animate([{ opacity: 0.65 }, { opacity: 1 }], {
+          duration: 240,
+          easing: 'ease-out',
+        });
+        animations.add(transition);
+        transition.onfinish = () => animations.delete(transition);
+      }
       const compact = window.matchMedia('(max-width: 767px)').matches;
       observer = new IntersectionObserver(
         (entries) => {
@@ -33,17 +76,32 @@ export function MarketingMotion() {
             if (!entry.isIntersecting) return;
             observer?.unobserve(entry.target);
             if (typeof entry.target.animate !== 'function') return;
+            const staggerStep = compact ? 45 : 80;
+            const heading = entry.target.matches('h1,h2,h3');
+            const picture = entry.target.matches('figure, .mkt-page-art, .mkt-workspace-art');
+            let from = { clipPath: 'inset(0 0 0 0)', transform: 'translateY(18px)' };
+            if (heading) {
+              from = { clipPath: 'inset(0 0 95% 0)', transform: 'translateY(24px)' };
+            } else if (picture) {
+              from = {
+                clipPath: 'inset(6% 4% 6% 4%)',
+                transform: 'perspective(1200px) rotateX(4deg) scale(.97)',
+              };
+            }
             const animation = entry.target.animate(
-              [
-                {
-                  opacity: 0.15,
-                  transform: compact
-                    ? 'translateY(24px)'
-                    : 'perspective(1200px) translateY(56px) rotateX(8deg) scale(0.97)',
-                },
-                { opacity: 1, transform: 'perspective(1200px) translateY(0) rotateX(0) scale(1)' },
-              ],
-              { duration: compact ? 550 : 850, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+              [from, { clipPath: 'inset(0 0 0 0)', transform: 'none' }],
+              {
+                duration: compact ? 650 : 1100,
+                delay: entry.target.matches(
+                  '.axis-chapter-copy > *, .axis-pricing-detail li, .axis-section-heading > *, .axis-setup-step > *'
+                )
+                  ? Math.min(
+                      3,
+                      [...(entry.target.parentElement?.children ?? [])].indexOf(entry.target)
+                    ) * staggerStep
+                  : 0,
+                easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+              }
             );
             animations.add(animation);
             animation.onfinish = () => animations.delete(animation);
@@ -52,15 +110,34 @@ export function MarketingMotion() {
         { rootMargin: '0px 0px -32px 0px', threshold: 0 }
       );
       root
-        .querySelectorAll('.mkt-reveal, .mkt-story-grid > section, .mkt-feature-card')
+        .querySelectorAll(
+          '.mkt-reveal, main h2, main h3, .axis-chapter-copy > *, .axis-pricing-detail li, .axis-section-heading > *, .mkt-page-intro > *, .axis-setup-step > *'
+        )
         .forEach((element) => {
-          // Avoid animating both a card and its container, or the initial viewport.
-          if (element.querySelector('.mkt-feature-card')) return;
+          // Animate the innermost reveal only; leave the initial viewport undisturbed.
+          if (
+            element.querySelector(
+              '.mkt-reveal, h2, h3, .axis-chapter-copy, .axis-pricing-detail, .axis-section-heading'
+            )
+          ) {
+            return;
+          }
+          if (element.matches('.axis-setup-step')) return;
+          // Scroll-scrubbed surfaces have their own timeline; avoid two transforms.
+          if (
+            window.CSS?.supports?.('animation-timeline: view()') &&
+            element.matches(
+              '.axis-feature-row, .axis-pricing-detail li, .mkt-workspace-art, .mkt-page-art'
+            )
+          ) {
+            return;
+          }
           if (element.getBoundingClientRect().top < window.innerHeight) return;
           observer?.observe(element);
         });
     };
     start();
+    lastPath.current = pathname;
     preference.addEventListener('change', start);
     return () => {
       stop();

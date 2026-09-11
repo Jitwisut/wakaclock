@@ -1,7 +1,8 @@
-import { TimerIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { localizedPath, SITE_NAME, type SiteLocale } from '@/lib/seo/site';
+
+import { BrandMark } from './brand-mark';
 
 const MKT_FG_MUTED = 'var(--mkt-fg-muted)';
 
@@ -65,14 +66,14 @@ const LEGAL_LINKS = [
 
 export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
-    <footer className="border-t" style={{ borderColor: 'var(--mkt-border)' }}>
-      <div className="mx-auto max-w-6xl px-4 py-12 md:px-6">
-        <div className="grid gap-8 sm:grid-cols-3">
+    <footer className="axis-footer">
+      <div className="axis-footer-inner">
+        <div className="axis-footer-grid">
           <div>
             <div className="flex items-center gap-2">
-              <TimerIcon aria-hidden className="size-4" style={{ color: 'var(--mkt-accent)' }} />
+              <BrandMark />
               <span
-                className="text-sm font-semibold"
+                className="axis-footer-name"
                 style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
               >
                 {SITE_NAME}

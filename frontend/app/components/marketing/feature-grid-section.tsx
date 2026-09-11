@@ -1,6 +1,8 @@
 import type { SiteLocale } from '@/lib/seo/site';
 
-/** Numbered cards keep the capabilities easy to scan without decorative icons. */
+import { FeatureGallery } from './feature-gallery';
+
+/** Numbered editorial rows expose capabilities without a wall of cards. */
 
 const FEATURES = [
   {
@@ -83,8 +85,8 @@ export function FeatureGridSection({ locale = 'en' }: { locale?: SiteLocale }) {
             'Not just elapsed time: which project and language, how the code was written, and where the data lives.',
         };
   return (
-    <section className="mkt-reveal mx-auto max-w-6xl px-4 py-20 md:px-6" id="features">
-      <div className="mb-12 text-center">
+    <section className="axis-features axis-section" id="features">
+      <div className="axis-section-heading mkt-reveal">
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
@@ -96,13 +98,9 @@ export function FeatureGridSection({ locale = 'en' }: { locale?: SiteLocale }) {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <FeatureGallery locale={locale}>
         {features.map((feature, index) => (
-          <div
-            className="mkt-feature-card"
-            key={feature.title}
-            style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
-          >
+          <article className="axis-feature-row mkt-reveal" key={feature.title}>
             <span aria-hidden="true" className="mkt-feature-number">
               0{index + 1} / ATOAXIS
             </span>
@@ -110,9 +108,16 @@ export function FeatureGridSection({ locale = 'en' }: { locale?: SiteLocale }) {
             <p className="mt-2 text-sm" style={{ color: 'var(--mkt-fg-muted)' }}>
               {feature.description}
             </p>
-          </div>
+            <div aria-hidden="true" className="axis-capability-visual">
+              <i />
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
+          </article>
         ))}
-      </div>
+      </FeatureGallery>
     </section>
   );
 }
