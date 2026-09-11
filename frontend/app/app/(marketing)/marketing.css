@@ -266,8 +266,30 @@
   }
   /* Centered product opening and an actual working illustration. */
   & .axis-opening {
+    position: relative;
+    isolation: isolate;
+    overflow: clip;
     text-align: center;
     padding: 72px var(--axis-gutter) 40px;
+    background:
+      radial-gradient(ellipse at 15% 20%, #e2f5af80, transparent 55%),
+      radial-gradient(ellipse at 90% 65%, #93e8c050, transparent 55%), #fafbf9;
+  }
+  & .axis-opening::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    width: min(76vw, 960px);
+    aspect-ratio: 1;
+    border: 1px solid #17704418;
+    border-radius: 50%;
+    left: 50%;
+    top: 12%;
+    transform: translateX(-50%) scaleY(0.55) rotate(-18deg);
+    box-shadow:
+      0 0 0 48px #17704404,
+      0 0 0 96px #17704403;
   }
   & .axis-hero-inner {
     max-width: 1050px;
@@ -278,6 +300,18 @@
     font-weight: 600;
     margin-bottom: 22px;
     color: var(--mkt-accent);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  & .mkt-hero-eyebrow::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #267343;
+    box-shadow: 0 0 0 5px #26734312;
   }
   & .axis-hero-title {
     font-size: clamp(46px, 6.3vw, 86px);
@@ -322,7 +356,9 @@
   & .axis-hero {
     position: relative;
     view-timeline-name: --axis-opening;
-    background: linear-gradient(#fafbf9, #eaf0e9);
+    background:
+      radial-gradient(ellipse at 50% 35%, #c8ed9b, transparent 65%),
+      linear-gradient(#fafbf9, #eaf0e9);
   }
   & .axis-hero-stage {
     padding: 28px var(--axis-gutter) 70px;
@@ -343,7 +379,9 @@
     width: 100%;
     max-width: 940px;
     margin: auto;
-    background: linear-gradient(125deg, #132c1e, #091810);
+    background:
+      radial-gradient(ellipse at 100% 0%, #36634680, transparent 65%),
+      linear-gradient(125deg, #132c1e, #091810);
     border: 8px solid #26372d;
     border-radius: 22px;
     padding: 32px 44px;
@@ -643,7 +681,7 @@
     color: #f4fff7;
   }
   & .axis-feature-row:nth-child(3n) {
-    background: #dfeddf;
+    background: linear-gradient(145deg, #e8f5bb, #cfecd8);
   }
   & .axis-capability-visual {
     display: flex;
@@ -916,13 +954,29 @@
     padding: 0 48px 26px 0;
   }
   & .axis-cta {
-    background: #e6f1e7;
+    position: relative;
+    isolation: isolate;
+    overflow: clip;
+    background:
+      radial-gradient(ellipse at 15% 100%, #e3f593, transparent 65%),
+      radial-gradient(ellipse at 100% 0%, #8cddb6, transparent 65%), #e6f1e7;
     padding: 90px var(--axis-gutter);
     text-align: center;
   }
   & .axis-cta-inner {
+    position: relative;
     max-width: 800px;
     margin: auto;
+  }
+  & .axis-cta::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    inset: 15% -15%;
+    border-block: 1px solid #17704420;
+    border-radius: 50%;
+    transform: rotate(-12deg);
   }
   & .axis-cta h2 {
     font-size: clamp(36px, 4.5vw, 60px);
@@ -940,9 +994,14 @@
     border-radius: 999px;
     padding: 12px 24px;
     min-height: 48px;
+    box-shadow: 0 8px 24px #176b4424;
+    transition:
+      transform 240ms ease,
+      box-shadow 240ms ease;
   }
   & .axis-cta-arrow {
     font-size: 22px;
+    transition: transform 240ms ease;
   }
   /* Content pages use a product opening and restrained reading columns. */
   & .mkt-page-shell {
@@ -955,6 +1014,7 @@
     text-align: center;
     max-width: 1000px;
     margin: auto;
+    background: radial-gradient(ellipse at 50% 45%, #def1c655, transparent 72%);
   }
   & .axis-page-title {
     font-size: clamp(40px, 5.4vw, 72px);
@@ -1335,6 +1395,11 @@
     transform: perspective(1400px) rotateX(0) scale(1);
   }
 }
+@keyframes axis-orbit-drift {
+  to {
+    transform: translateX(-50%) scaleY(0.55) rotate(8deg);
+  }
+}
 @keyframes axis-image-reveal {
   from {
     clip-path: inset(7% 4%);
@@ -1377,6 +1442,14 @@
   @media (min-width: 1024px) {
     @supports (animation-timeline: view()) {
       .wakaclock-marketing {
+        & .axis-opening {
+          view-timeline-name: --axis-prologue;
+        }
+        & .axis-opening::before {
+          animation: axis-orbit-drift linear both;
+          animation-timeline: --axis-prologue;
+          animation-range: exit 0% exit 100%;
+        }
         & .axis-hero[data-pinned='true'] .mkt-studio {
           animation: axis-product-camera linear both;
           animation-timeline: --axis-opening;
@@ -1412,6 +1485,13 @@
   }
   @media (hover: hover) {
     .wakaclock-marketing {
+      & .axis-cta-link:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 14px 32px #176b4433;
+      }
+      & .axis-cta-link:hover .axis-cta-arrow {
+        transform: translate(3px, -3px);
+      }
       & [data-slot='button']:hover {
         transform: translateY(-2px);
       }
