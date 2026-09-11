@@ -109,7 +109,7 @@ export function softwareApplicationSchema(): JsonLdValue {
       'Breakdown by project, programming language, editor, branch and operating system',
       'Complete coding history on every account, not a limited recent window',
       'AI, human and Unattributed line attribution with reported coverage',
-      'Per-agent AI provenance with bundled hooks for Claude Code, Codex CLI and Gemini CLI',
+      'Per-agent AI provenance with bundled integrations for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI',
       'Estimated AI token cost per project from versioned effective prices',
       'WakaTime API compatibility and WakaTime data-export import',
     ],

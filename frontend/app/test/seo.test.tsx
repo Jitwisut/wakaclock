@@ -333,6 +333,21 @@ describe('marketing metadata', () => {
     ]);
     expect(metadata.twitter).toMatchObject({ card: 'summary_large_image' });
   });
+
+  it('does not append the site name twice when a page title already contains it', () => {
+    const metadata = createMarketingMetadata({
+      description: 'Documentation for the product.',
+      path: '/docs',
+      title: 'AtoAxis developer time tracking documentation',
+    });
+
+    expect(metadata.title).toEqual({
+      absolute: 'AtoAxis developer time tracking documentation',
+    });
+    expect(metadata.openGraph).toMatchObject({
+      title: 'AtoAxis developer time tracking documentation',
+    });
+  });
 });
 
 describe('robots', () => {

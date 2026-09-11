@@ -45,7 +45,7 @@ export function MarketingNav({ locale = 'en' }: { locale?: SiteLocale }) {
     <header className="axis-nav" data-open={open} ref={header}>
       <div className="axis-nav-bar">
         <Link className="axis-wordmark" href={localizedPath(locale, '/')}>
-          <BrandMark />
+          <BrandMark preload />
           {SITE_NAME}
           <LinkPending indicatorClassName="mkt-blink" label={copy.loading} />
         </Link>

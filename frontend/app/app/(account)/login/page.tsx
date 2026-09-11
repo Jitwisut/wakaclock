@@ -5,7 +5,10 @@ import { AuthScreen } from '@/components/auth/auth-screen';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Sign in',
+  title: { absolute: 'Sign in to your AtoAxis account' },
+  description:
+    'Sign in to your AtoAxis account to view coding time, project activity and attribution reports.',
+  alternates: { canonical: '/login' },
   robots: { index: false, follow: false, nocache: true },
 };
 

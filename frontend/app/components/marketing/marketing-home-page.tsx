@@ -317,7 +317,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         </Section>
       </div>
       <CtaSection locale={locale} />
-      {locale === 'en' ? <AnswerGuide path="/" /> : null}
+      <AnswerGuide locale={locale} path="/" />
       {/*
         JSON-LD is rendered last, after the visible content, and that position is load
         bearing rather than stylistic.
