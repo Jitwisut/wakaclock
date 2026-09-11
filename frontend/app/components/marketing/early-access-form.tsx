@@ -98,10 +98,7 @@ export function EarlyAccessForm({
       className="mkt-signup-section mkt-reveal mx-auto max-w-5xl px-4 py-20 md:px-6"
       id="early-access"
     >
-      <div
-        className="mkt-pixel-shadow border-[3px] p-8 md:p-10"
-        style={{ borderColor: MKT_BORDER }}
-      >
+      <div className="axis-signup-layout" style={{ borderColor: MKT_BORDER }}>
         <h2
           className="text-3xl font-semibold tracking-tight md:text-4xl"
           id="early-access-heading"

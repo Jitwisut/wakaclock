@@ -156,10 +156,16 @@ export function ComparisonSection({ locale = 'en' }: { locale?: SiteLocale }) {
         </p>
       </div>
 
+      {/* Overflow regions need focus so keyboard users can scroll the full table. */}
+      {/* eslint-disable jsx-a11y/no-noninteractive-tabindex */}
       <div
+        aria-label={copy.caption}
         className="mkt-pixel-shadow overflow-x-auto border-[3px]"
+        role="region"
         style={{ borderColor: 'var(--mkt-border)', background: 'var(--mkt-bg-elevated)' }}
+        tabIndex={0}
       >
+        {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
         <table className="w-full min-w-[36rem] text-sm">
           <caption className="sr-only">{copy.caption}</caption>
           <thead>

@@ -15,13 +15,7 @@ export function PageShell({
   children: React.ReactNode;
   variant?: 'editorial' | 'product' | 'utility';
 }) {
-  return (
-    <div
-      className={`mkt-page-shell mkt-page-${variant} mx-auto max-w-6xl px-4 py-16 md:px-6 md:py-20`}
-    >
-      {children}
-    </div>
-  );
+  return <div className={`mkt-page-shell mkt-page-${variant}`}>{children}</div>;
 }
 
 /**
@@ -68,7 +62,7 @@ export function Breadcrumbs({
 export function PageTitle({ children }: { children: React.ReactNode }) {
   return (
     <h1
-      className="text-3xl font-semibold tracking-tight text-balance md:text-4xl"
+      className="axis-page-title"
       style={{ fontFamily: 'var(--font-mkt-display), var(--font-mkt-body), monospace' }}
     >
       {children}
@@ -82,7 +76,7 @@ export function PageTitle({ children }: { children: React.ReactNode }) {
  */
 export function LeadAnswer({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-5 text-lg leading-relaxed text-pretty" style={MUTED_TEXT}>
+    <p className="axis-page-lead" style={MUTED_TEXT}>
       {children}
     </p>
   );
@@ -110,7 +104,7 @@ export function Section({
       id={id}
     >
       <h2 className="text-xl font-semibold tracking-tight md:text-2xl">{heading}</h2>
-      <div className="mt-4 space-y-4 text-sm leading-relaxed">{children}</div>
+      <div className="axis-chapter-copy space-y-4 text-sm leading-relaxed">{children}</div>
     </section>
   );
 }
@@ -182,7 +176,7 @@ export function RelatedLinks({
         {links.map((link) => (
           <li key={link.href}>
             <Link
-              className="mkt-pixel-press mkt-pixel-shadow-sm block border-2 p-4"
+              className="axis-related-link"
               href={link.href}
               style={{ borderColor: 'var(--mkt-border)' }}
             >

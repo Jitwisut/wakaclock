@@ -26,6 +26,7 @@ import { EN_HOME, TH_HOME } from './marketing-copy';
 import { PricingSection } from './pricing-section';
 import { Bullets, MUTED_TEXT, Section } from './prose';
 import { QuickStartSection } from './quick-start-section';
+import { WorkspaceIllustrationSection } from './workspace-illustration-section';
 
 const HOME_COPY = { en: EN_HOME, th: TH_HOME } as const;
 
@@ -85,9 +86,14 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <>
       <HeroSection locale={locale} />
-      <DashboardPreviewSection locale={locale} />
       <EditorWallSection locale={locale} />
-      <div className="mkt-story-grid mx-auto max-w-6xl px-4 md:px-6">
+      <WorkspaceIllustrationSection locale={locale} />
+      <FeatureGridSection locale={locale} />
+      <div className="axis-product-walkthrough">
+        <DashboardPreviewSection locale={locale} />
+      </div>
+      <QuickStartSection locale={locale} />
+      <div className="axis-briefing mkt-story-grid">
         {/*
           Headings are phrased as questions on purpose. They are the questions a visitor
           actually arrives with, and they are also what an answer engine matches a query
@@ -183,8 +189,6 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         </Section>
       </div>
       <ComparisonSection locale={locale} />
-      <FeatureGridSection locale={locale} />
-      <QuickStartSection locale={locale} />
       <PricingSection locale={locale} />
       <FaqSection
         entries={copy.faq}
@@ -196,7 +200,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
         is deciding, and the honest form of that is naming who should not buy as clearly
         as who should.
       */}
-      <div className="mx-auto max-w-3xl px-4 md:px-6">
+      <div className="axis-evidence">
         <Section heading={accountability.heading} id="accountability">
           <div className="flex items-start gap-4">
             {/*
@@ -211,9 +215,9 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
             <figure className="w-16 shrink-0 text-center">
               <Image
                 alt={`${SITE_NAME} product mark`}
-                className="size-16 border-2 object-cover"
+                className="size-16 object-contain"
                 height={64}
-                src="/atoaxis-logo-mark.png"
+                src="/atoaxis-symbol-v2.png"
                 width={64}
               />
               <figcaption className="mt-1 text-[0.65rem]" style={MUTED_TEXT}>

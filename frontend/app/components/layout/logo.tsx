@@ -49,12 +49,12 @@ const Logo = React.forwardRef<HTMLImageElement, LogoProps>(
     return (
       <Image
         alt={altText}
-        className={`me-1 rounded-[5px] transition-all group-data-collapsible:size-6 group-data-[collapsible=icon]:size-8 ${className ?? ''}`}
+        className={`me-1 object-contain transition-all group-data-collapsible:size-6 group-data-[collapsible=icon]:size-8 ${className ?? ''}`}
         data-slot="logo"
         data-testid={testId}
         height={30}
         ref={ref}
-        src="/atoaxis-logo-mark.png"
+        src="/atoaxis-symbol-v2.png"
         width={30}
       />
     );

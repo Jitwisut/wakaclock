@@ -13,6 +13,7 @@ import type { SiteLocale } from '@/lib/seo/site';
 import { MarketingFooter } from './marketing-footer';
 import { MarketingMotion } from './marketing-motion';
 import { MarketingNav } from './marketing-nav';
+import { MarketingScrollIndex } from './marketing-scroll-index';
 
 /** Shared local display face. Keeping the asset local makes Netlify builds deterministic. */
 const pixelDisplay = localFont({
@@ -56,9 +57,15 @@ export function MarketingLayoutFrame({
       }}
     >
       <JsonLd data={SITE_GRAPH} />
+      <a className="axis-skip" href="#marketing-content">
+        {locale === 'th' ? 'ข้ามไปเนื้อหา' : 'Skip to content'}
+      </a>
       <MarketingNav locale={locale} />
       <MarketingMotion />
-      <main className="flex-1">{children}</main>
+      <main className="axis-main flex-1" id="marketing-content" tabIndex={-1}>
+        {children}
+      </main>
+      <MarketingScrollIndex locale={locale} />
       <MarketingFooter locale={locale} />
       {process.env.NODE_ENV === 'production' ? <GoogleAnalyticsInit locale={locale} /> : null}
     </div>

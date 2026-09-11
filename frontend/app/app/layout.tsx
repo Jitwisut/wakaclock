@@ -14,10 +14,10 @@ import './globals.css';
 
 /**
  * `theme-color` tints the mobile browser chrome; it carries no ranking weight. The value
- * is the same slate the PWA manifest declares, so the two never drift apart.
+ * matches the green brand color used by the PWA manifest.
  */
 export const viewport: Viewport = {
-  themeColor: '#0f172a',
+  themeColor: '#177044',
 };
 
 /**
@@ -94,8 +94,9 @@ export const metadata: Metadata = {
     google: 'RA0nx3aI674qLp5GwkgzJPk3-7a7ulAAaDNcBgvtLs4',
   },
   icons: {
-    icon: '/favicon.ico',
-    apple: '/apple-icon',
+    icon: { url: '/atoaxis-symbol-v2.png', type: 'image/png', sizes: '1254x1254' },
+    shortcut: '/atoaxis-symbol-v2.png',
+    apple: { url: '/atoaxis-symbol-v2.png', sizes: '1254x1254' },
   },
   manifest: '/manifest.webmanifest',
 };

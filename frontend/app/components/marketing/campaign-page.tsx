@@ -17,7 +17,6 @@ import { QuickStartSection } from './quick-start-section';
 import {
   MKT_ACCENT,
   MKT_ACCENT_FG,
-  MKT_BG_ELEVATED,
   MKT_BORDER,
   MKT_DISPLAY_FONT,
   MKT_FG,
@@ -223,7 +222,7 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
         </p>
       </section>
 
-      <section className="mkt-reveal mx-auto max-w-6xl px-4 py-16 md:px-6">
+      <section className="axis-campaign-values mkt-reveal">
         <h2
           className="mb-10 text-center text-3xl font-semibold tracking-tight md:text-4xl"
           style={{ fontFamily: MKT_DISPLAY_FONT }}
@@ -235,18 +234,12 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
             /* Numbered rather than iconified: the count tells the reader how much is left
                to read, which an abstract glyph cannot, and it keeps the card free of
                decoration that would repeat what the heading already says. */
-            <li
-              className="mkt-feature-card flex gap-4"
-              key={value.title}
-              style={{ background: MKT_BG_ELEVATED, borderColor: MKT_BORDER }}
-            >
+            <li className="axis-campaign-value" key={value.title}>
               <span
                 aria-hidden
                 className="inline-flex size-10 shrink-0 items-center justify-center border-2 text-sm font-bold"
                 style={{
-                  background: MKT_ACCENT,
-                  borderColor: MKT_BORDER,
-                  color: MKT_ACCENT_FG,
+                  color: MKT_ACCENT,
                   fontFamily: MKT_DISPLAY_FONT,
                 }}
               >
@@ -263,7 +256,7 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
         </ul>
       </section>
 
-      <section className="mkt-reveal mx-auto max-w-3xl px-4 py-10 md:px-6">
+      <section className="axis-campaign-price mkt-reveal">
         <div
           className="mkt-pixel-shadow border-[3px] p-8 text-center"
           style={{ background: 'var(--mkt-bg-sunken)', borderColor: MKT_BORDER }}
