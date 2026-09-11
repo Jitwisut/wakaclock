@@ -190,13 +190,16 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/developer-analytics': AUDIT_REVIEW_DATE,
   '/ai-coding-tracker': AUDIT_REVIEW_DATE,
   '/wakatime-alternative': AUDIT_REVIEW_DATE,
+  '/pricing': AUDIT_REVIEW_DATE,
+  '/integrations': AUDIT_REVIEW_DATE,
+  '/docs': AUDIT_REVIEW_DATE,
   '/ai-cost-tracking': '2026-08-23',
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {
   // The September audit updated English copy only.
   if (locale === 'th') {
-    if (path === '/') return '2026-09-05';
+    if (path === '/') return AUDIT_REVIEW_DATE;
     if (path === '/ai-cost-tracking') return '2026-08-23';
     return undefined;
   }
@@ -246,7 +249,9 @@ export function createMarketingMetadata({
   const displayTitle = title.includes(SITE_NAME) ? title : `${title} | ${SITE_NAME}`;
 
   return {
-    title,
+    // The root layout appends the site name through its title template. Titles that
+    // already name AtoAxis must be absolute or Next renders "AtoAxis … | AtoAxis".
+    title: title.includes(SITE_NAME) ? { absolute: title } : title,
     description,
     alternates: {
       canonical: canonicalPath,

@@ -60,10 +60,12 @@ describe('AuthScreen', () => {
   it('renders the sign-in form without any dashboard chrome', () => {
     renderScreen('login');
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Pick the log');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Sign in to AtoAxis');
     expect(screen.getByLabelText('Username')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled();
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Account page information' })).toHaveTextContent(
+      'Privacy'
+    );
     expect(screen.queryByText('Overview')).not.toBeInTheDocument();
   });
 

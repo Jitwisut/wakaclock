@@ -1,4 +1,4 @@
-/* eslint-disable sonarjs/cognitive-complexity, sonarjs/no-all-duplicated-branches, sonarjs/no-duplicate-string, sonarjs/no-nested-conditional */
+/* eslint-disable sonarjs/cognitive-complexity, sonarjs/no-all-duplicated-branches, sonarjs/no-duplicate-string */
 
 import type { FaqEntry } from '@/lib/seo/schema';
 import { PRICING, SITE_NAME, type SiteLocale } from '@/lib/seo/site';
@@ -180,8 +180,8 @@ export const EN_HOME = {
    * A spec block: label and value, no prose around it.
    *
    * Every figure is countable in the repository rather than rounded for effect — the nine
-   * languages are the nine grammars in `wakaclock-ast/src/languages.rs`, the three agents
-   * are the three bundled hook sets under `extensions/ai-agents`. If either changes, this
+   * languages are the nine grammars in `wakaclock-ast/src/languages.rs`, and the five agents
+   * are the five bundled adapters under `extensions/ai-agents`. If either changes, this
    * block is wrong until it is changed with them.
    */
   atAGlance: {
@@ -195,7 +195,10 @@ export const EN_HOME = {
       },
       { label: 'Protocol', value: 'WakaTime API, including WakaTime export import' },
       { label: 'First-party editor client', value: 'VS Code' },
-      { label: 'AI agents with bundled hooks', value: '3 — Claude Code, Codex CLI, Gemini CLI' },
+      {
+        label: 'AI agents with bundled hooks',
+        value: '5 — Claude Code, Codex CLI, Gemini CLI, Kilo Code, Kimi Code CLI',
+      },
       {
         label: 'Languages verified by parsing',
         value: '9 — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++, Objective-C',
@@ -219,7 +222,7 @@ export const EN_HOME = {
   ],
   sources: {
     heading: 'How do we verify these claims?',
-    intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up: 9 languages are verified by parsing rather than guessed from a file extension, and 3 AI agents ship with a bundled hook rather than being claimed without one. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
+    intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up: 9 languages are verified by parsing rather than guessed from a file extension, and 5 AI agents ship with a bundled hook or adapter rather than being claimed without one. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
     items: [
       {
         claim: `${SITE_NAME} implements the WakaTime API, so an editor with an existing WakaTime plugin can send to it.`,
@@ -359,7 +362,10 @@ export const TH_HOME = {
       },
       { label: 'โปรโตคอล', value: 'WakaTime API รวมถึงการนำเข้า WakaTime export' },
       { label: 'editor ที่เราดูแลเอง', value: 'VS Code' },
-      { label: 'AI agent ที่มี hooks ให้', value: '3 ตัว — Claude Code, Codex CLI, Gemini CLI' },
+      {
+        label: 'AI agent ที่มี hooks ให้',
+        value: '5 ตัว — Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
+      },
       {
         label: 'ภาษาที่ยืนยันด้วยการ parse',
         value: '9 ภาษา — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++, Objective-C',
@@ -382,7 +388,7 @@ export const TH_HOME = {
   ],
   sources: {
     heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',
-    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 3 AI agent ที่มี hooks ให้จริงพร้อมใช้งาน ไม่ใช่แค่กล่าวอ้างลอย ๆ โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
+    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่ตรวจสอบได้ใน repository โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
     items: [
       {
         claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
@@ -1549,14 +1555,14 @@ const baseRelated = (en: MarketingLinkCopy[], th: MarketingLinkCopy[], heading?:
 emptyPagePair(
   '/integrations',
   {
-    metadataTitle: 'Editor Integrations',
+    metadataTitle: 'Developer Time Tracking Integrations',
     description:
-      'Connect VS Code with the AtoAxis extension or use a WakaTime-compatible plugin with the hosted API.',
+      'Connect VS Code, WakaTime-compatible editor plugins and supported AI coding agents to AtoAxis while keeping source code and prompts out of heartbeats.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'Integrations', path: '/integrations' },
     ],
-    title: 'Editor integrations',
+    title: 'Developer time tracking integrations',
     lead: 'Connect the editor you already use. VS Code has a first-party extension; other editors can use their WakaTime-compatible plugin and point its api_url at the hosted API.',
     sections: [
       section('First-party integrations', 'first-party', [
@@ -1635,6 +1641,33 @@ emptyPagePair(
       ],
       'Start here'
     ).en,
+    faq: faq('Integration questions', [
+      {
+        question: 'Which editor integration should I start with?',
+        answer:
+          'Use the first-party AtoAxis extension for VS Code. For Neovim, JetBrains, Vim and other supported editors, keep the WakaTime-compatible plugin and point its api_url at AtoAxis.',
+      },
+      {
+        question: 'Which AI coding agents have bundled hooks?',
+        answer:
+          'The setup flow includes hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI.',
+      },
+      {
+        question: 'Do integrations send source code or AI conversations?',
+        answer:
+          'No. Heartbeats contain metadata and counts. Source code, prompts and responses are not part of the heartbeat payload.',
+      },
+      {
+        question: 'Can I use an existing WakaTime-compatible plugin?',
+        answer:
+          'Yes. Configure its api_url and api_key for AtoAxis. The fields available still depend on what that plugin sends.',
+      },
+      {
+        question: 'Are Cursor and Copilot attributed yet?',
+        answer:
+          'No. Their activity needs provider-specific adapters, so AtoAxis does not claim attribution for them today.',
+      },
+    ]),
   },
   {
     metadataTitle: 'Editor Integrations',
@@ -1721,6 +1754,33 @@ emptyPagePair(
       ],
       'เริ่มต้นที่นี่'
     ).th,
+    faq: faq('คำถามเรื่อง Integration', [
+      {
+        question: 'ควรเริ่มจาก editor integration ตัวไหน?',
+        answer:
+          'ถ้าใช้ VS Code ให้เริ่มจาก AtoAxis extension ส่วน Neovim, JetBrains, Vim และ editor อื่นที่รองรับ ให้ใช้ WakaTime-compatible plugin เดิมแล้วตั้ง api_url มาที่ AtoAxis',
+      },
+      {
+        question: 'มี hook สำหรับ AI coding agent ตัวใดบ้าง?',
+        answer:
+          'ขั้นตอน setup มี hook สำหรับ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
+      },
+      {
+        question: 'Integration ส่ง source code หรือบทสนทนา AI หรือไม่?',
+        answer:
+          'ไม่ Heartbeat มีเฉพาะ metadata และ counts โดยไม่มี source code, prompt หรือ response อยู่ใน payload',
+      },
+      {
+        question: 'ใช้ WakaTime-compatible plugin เดิมได้หรือไม่?',
+        answer:
+          'ได้ ตั้ง api_url และ api_key ของ plugin ให้ชี้มาที่ AtoAxis โดย field ที่มีจะยังขึ้นกับสิ่งที่ plugin นั้นส่ง',
+      },
+      {
+        question: 'ตอนนี้รองรับ attribution ของ Cursor และ Copilot หรือยัง?',
+        answer:
+          'ยัง กิจกรรมของทั้งคู่ต้องใช้ adapter เฉพาะผู้ให้บริการ AtoAxis จึงยังไม่อ้างว่าแยก attribution ได้',
+      },
+    ]),
   }
 );
 
@@ -1741,11 +1801,37 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
 
 // The remaining pages use the same strongly typed section model. Keeping their copy here,
 // rather than in route files, prevents the Thai pages from silently becoming short adapters.
+const headingLabel = (headings: string[], index: number) => headings[index % headings.length];
+const genericFaq = (
+  locale: SiteLocale,
+  headings: string[],
+  count?: number,
+  entries?: readonly FaqEntry[]
+): MarketingPageCopy['faq'] => {
+  const faqHeading = locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย';
+  if (entries) return faq(faqHeading, entries);
+  if (!count) return undefined;
+
+  return faq(
+    faqHeading,
+    Array.from({ length: count }, (_, index) => ({
+      question:
+        locale === 'en'
+          ? `${headingLabel(headings, index)}: common question`
+          : `${headingLabel(headings, index)}: คำถามที่พบบ่อย`,
+      answer:
+        locale === 'en'
+          ? 'See the section above for the current product behavior and data limits.'
+          : 'ดูรายละเอียดในส่วนด้านบนสำหรับพฤติกรรมและขอบเขตข้อมูลปัจจุบัน',
+    }))
+  );
+};
 const generic = (
   path: MarketingPageKey,
   en: {
     description: string;
     faqCount?: number;
+    faqEntries?: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1754,6 +1840,7 @@ const generic = (
   th: {
     description: string;
     faqCount?: number;
+    faqEntries?: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1786,25 +1873,10 @@ const generic = (
     component: path === '/pricing' ? { kind: 'pricing', afterSectionId: null } : undefined,
     schema: path === '/about' ? 'organization' : undefined,
     related: genericRelated(path, locale),
-    faq: value.faqCount
-      ? faq(
-          locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย',
-          Array.from({ length: value.faqCount }, (_, index) => ({
-            question:
-              locale === 'en'
-                ? `${headingLabel(value.headings, index)}: common question`
-                : `${headingLabel(value.headings, index)}: คำถามที่พบบ่อย`,
-            answer:
-              locale === 'en'
-                ? 'See the section above for the current product behavior and data limits.'
-                : 'ดูรายละเอียดในส่วนด้านบนสำหรับพฤติกรรมและขอบเขตข้อมูลปัจจุบัน',
-          }))
-        )
-      : undefined,
+    faq: genericFaq(locale, value.headings, value.faqCount, value.faqEntries),
   });
   simplePages[path] = local(make(en, 'en'), make(th, 'th'));
 };
-const headingLabel = (headings: string[], index: number) => headings[index % headings.length];
 /**
  * Hand-written blocks for the sections a reader actually follows step by step, keyed by
  * `path#sectionIndex`. Everything not listed here still falls through to the generic
@@ -1839,6 +1911,50 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'VS Code integration: extension ส่งอะไร มี settings อะไร และมีข้อจำกัดอะไร',
               'AI coding tracker: วิธี attribute งานจาก Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
               'Privacy: field ใน heartbeat ทั้งหมด และ field ที่ไม่มีอยู่จริง',
+            ]
+      ),
+    ],
+  ],
+
+  [
+    '/docs#1',
+    (en) => [
+      p(
+        en
+          ? 'Use the getting-started guide when you are connecting the service for the first time. It explains the account, API key and client requirements before it asks you to change editor settings. The guide then follows the data path from your editor to the first heartbeat visible in the dashboard, so each step has a result you can check before moving on.'
+          : 'ใช้คู่มือเริ่มต้นใช้งานเมื่อต้องการเชื่อมบริการเป็นครั้งแรก คู่มืออธิบายบัญชี API key และ client ที่ต้องมีก่อนแก้ settings ของ editor จากนั้นจะพาตรวจเส้นทางข้อมูลตั้งแต่ editor จนเห็น heartbeat แรกใน dashboard ทำให้ตรวจผลแต่ละขั้นตอนได้ก่อนทำขั้นตอนต่อไป'
+      ),
+      code(
+        'wakaclock-cli config set-key YOUR_API_KEY\nwakaclock-cli status',
+        en ? 'First verification commands' : 'คำสั่งตรวจสอบเบื้องต้น'
+      ),
+      p(
+        en
+          ? 'Keep the key out of repositories and shared terminal logs. If the first record does not appear, check the server URL and CLI path before installing another client. Changing one variable at a time makes the failing boundary easier to identify.'
+          : 'อย่าเก็บ key ไว้ใน repository หรือ terminal log ที่แชร์ร่วมกัน หากข้อมูลแรกยังไม่ปรากฏ ให้ตรวจ server URL และ CLI path ก่อนติดตั้ง client เพิ่ม การเปลี่ยนทีละจุดช่วยให้หาขอบเขตที่มีปัญหาได้ง่ายขึ้น'
+      ),
+    ],
+  ],
+
+  [
+    '/docs#2',
+    (en) => [
+      p(
+        en
+          ? 'Read the integrations overview to choose a client path, then open the VS Code page for first-party settings and commands. Editors with an existing WakaTime plugin use the same heartbeat protocol, but the plugin decides which optional fields it sends. Read the privacy page for a field-by-field account of metadata that may reach the service and content that never belongs in a heartbeat.'
+          : 'อ่านภาพรวม integrations เพื่อเลือกวิธีเชื่อม client จากนั้นเปิดหน้า VS Code สำหรับ settings และคำสั่งของ extension ที่เราดูแลเอง Editor ที่มี WakaTime plugin ใช้ heartbeat protocol เดียวกัน แต่ plugin เป็นผู้กำหนด optional fields ที่ส่ง อ่านหน้า privacy เพื่อดู metadata ที่อาจถึงบริการและข้อมูลที่ไม่ควรอยู่ใน heartbeat'
+      ),
+      bullets(
+        en
+          ? [
+              'Integration evidence: client settings, commands and known limitations',
+              'Privacy evidence: heartbeat fields, transport and deletion boundaries',
+              'AI evidence: supported hooks, attribution classes and coverage limits',
+            ]
+          : [
+              'หลักฐาน integration: settings, commands และข้อจำกัดของ client',
+              'หลักฐาน privacy: fields ใน heartbeat การรับส่ง และขอบเขตการลบ',
+              'หลักฐาน AI: hooks ที่รองรับ กลุ่ม attribution และข้อจำกัดของ coverage',
             ]
       ),
     ],
@@ -2444,6 +2560,11 @@ const genericBlocks = (
   }
   if (path === '/pricing' && index === 0) {
     return [
+      p(
+        en
+          ? `The planned plan is designed as one complete product rather than a ladder of feature gates. At $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year, it is intended to include the full coding history, analysis views and import tools described below. These are planned Early Access terms; checkout is not open and joining the list does not create a subscription.`
+          : `แผนที่วางไว้เป็นผลิตภัณฑ์แบบครบชุด ไม่ได้แบ่งฟีเจอร์สำคัญไว้ตามระดับราคา ราคาเป้าหมายคือ $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี โดยตั้งใจให้รวมประวัติการเขียนโค้ดทั้งหมด หน้าวิเคราะห์ และเครื่องมือนำเข้าตามรายการด้านล่าง ขณะนี้ยังเป็นเงื่อนไขช่วง Early Access ระบบ checkout ยังไม่เปิด และการเข้าร่วมรายการยังไม่ก่อให้เกิดการสมัครสมาชิก`
+      ),
       bullets(
         en
           ? [
@@ -2461,6 +2582,29 @@ const genericBlocks = (
               'AI เทียบ human attribution fields',
               'project rules, merge และ WakaTime import',
               'Goals และ leaderboards แบบ opt-in เมื่อ server รัน PostgreSQL',
+            ]
+      ),
+    ];
+  }
+  if (path === '/pricing' && index === 1) {
+    return [
+      p(
+        en
+          ? `Billing is not active during Early Access. The public target is $${PRICING.monthlyUsd} when paying month to month or $${PRICING.annualUsd} for a year, a planned difference of $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} compared with twelve monthly payments. Final checkout terms will be shown before anyone is charged.`
+          : `ช่วง Early Access ยังไม่มีการเรียกเก็บเงิน ราคาเป้าหมายที่ประกาศไว้คือ $${PRICING.monthlyUsd} เมื่อจ่ายรายเดือน หรือ $${PRICING.annualUsd} สำหรับหนึ่งปี ซึ่งต่างจากการจ่ายรายเดือนครบสิบสองครั้ง $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} เงื่อนไขสุดท้ายจะแสดงใน checkout ให้ตรวจสอบก่อนมีการเรียกเก็บเงิน`
+      ),
+      sub(en ? 'What joining Early Access means' : 'การเข้าร่วม Early Access หมายถึงอะไร'),
+      bullets(
+        en
+          ? [
+              'No payment details are collected on the marketing site today',
+              'Joining the list does not start a trial or subscription',
+              'Availability and final terms will be communicated before checkout opens',
+            ]
+          : [
+              'เว็บไซต์การตลาดยังไม่เก็บข้อมูลการชำระเงิน',
+              'การเข้าร่วมรายการไม่เริ่ม trial หรือ subscription',
+              'ระบบจะแจ้งวันเปิดใช้งานและเงื่อนไขสุดท้ายก่อนเปิด checkout',
             ]
       ),
     ];
@@ -2604,18 +2748,76 @@ generic(
 generic(
   '/pricing',
   {
-    title: 'Pricing',
-    description: `Planned pricing: $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year.`,
-    lead: 'Checkout is not open during Early Access and nothing is charged now.',
-    headings: ['What the plan covers', 'Billing and availability'],
-    faqCount: 6,
+    title: 'Developer time tracking pricing',
+    description: `Review AtoAxis planned pricing: $${PRICING.monthlyUsd} monthly or $${PRICING.annualUsd} annually for complete coding history and developer analytics. Checkout is not open yet.`,
+    lead: `AtoAxis plans one hosted developer time tracking plan at $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year. Checkout is not open during Early Access, so joining the list creates no charge.`,
+    headings: ['What does the plan include?', 'When will billing become available?'],
+    faqEntries: [
+      {
+        question: 'Is AtoAxis checkout open now?',
+        answer:
+          'No. Checkout is not open during Early Access, and joining the list does not create a subscription or charge.',
+      },
+      {
+        question: 'What is the planned monthly price?',
+        answer: `The published target is $${PRICING.monthlyUsd} per month for the complete hosted plan. Final terms will be shown before checkout opens.`,
+      },
+      {
+        question: 'What is the planned annual price?',
+        answer: `The published target is $${PRICING.annualUsd} per year, which is $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} less than twelve planned monthly payments.`,
+      },
+      {
+        question: 'What is intended to be included?',
+        answer:
+          'The planned plan includes unlimited projects and heartbeats, complete coding history, filterable analytics, AI attribution, project rules, WakaTime import, goals and supported leaderboards.',
+      },
+      {
+        question: 'Is there a free tier?',
+        answer:
+          'A permanent free tier is not currently listed. Early Access has no active checkout, so no payment is collected today.',
+      },
+      {
+        question: 'Will joining Early Access charge me?',
+        answer:
+          'No. Joining Early Access only records your interest. It does not start a paid plan or collect payment details.',
+      },
+    ],
   },
   {
     title: 'ราคา',
     description: `ราคาแผนที่วางไว้ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี`,
     lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
-    faqCount: 6,
+    faqEntries: [
+      {
+        question: 'ตอนนี้ AtoAxis เปิด checkout แล้วหรือยัง?',
+        answer:
+          'ยัง ช่วง Early Access ยังไม่เปิด checkout และการเข้าร่วมรายการไม่สร้าง subscription หรือค่าใช้จ่าย',
+      },
+      {
+        question: 'ราคารายเดือนที่วางไว้เท่าไร?',
+        answer: `ราคาเป้าหมายที่ประกาศไว้คือ $${PRICING.monthlyUsd} ต่อเดือนสำหรับ hosted plan แบบครบชุด โดยจะแสดงเงื่อนไขสุดท้ายก่อนเปิด checkout`,
+      },
+      {
+        question: 'ราคารายปีที่วางไว้เท่าไร?',
+        answer: `ราคาเป้าหมายคือ $${PRICING.annualUsd} ต่อปี ซึ่งน้อยกว่าการจ่ายรายเดือนครบสิบสองครั้ง $${PRICING.monthlyUsd * 12 - PRICING.annualUsd}`,
+      },
+      {
+        question: 'แผนนี้ตั้งใจรวมอะไรบ้าง?',
+        answer:
+          'แผนที่วางไว้รวมโปรเจกต์และ heartbeat ไม่จำกัด ประวัติทั้งหมด analytics, AI attribution, project rules, WakaTime import, goals และ leaderboards ที่รองรับ',
+      },
+      {
+        question: 'มี free tier หรือไม่?',
+        answer:
+          'ขณะนี้ยังไม่ได้ประกาศ free tier แบบถาวร และในช่วง Early Access ยังไม่มี checkout จึงยังไม่มีการเก็บเงิน',
+      },
+      {
+        question: 'เข้าร่วม Early Access แล้วจะถูกเรียกเก็บเงินหรือไม่?',
+        answer:
+          'ไม่ การเข้าร่วมเป็นเพียงการแจ้งความสนใจ ไม่เริ่มแผนแบบชำระเงินและไม่เก็บข้อมูลการชำระเงิน',
+      },
+    ],
   }
 );
 generic(
@@ -2652,16 +2854,75 @@ generic(
 generic(
   '/docs',
   {
-    title: 'AtoAxis documentation',
-    description: 'Documentation for setup, editor integration and heartbeat privacy.',
-    lead: 'Connect an editor and understand the hosted product through these guides.',
-    headings: ['Start here'],
+    title: 'AtoAxis developer time tracking documentation',
+    description:
+      'Use AtoAxis documentation to connect an editor, verify coding activity, configure compatible integrations and understand heartbeat privacy boundaries.',
+    lead: 'AtoAxis documentation explains how you connect an editor, verify your first heartbeat and understand the metadata used for developer time tracking.',
+    headings: [
+      'What is included in the documentation?',
+      'How do you start tracking coding time?',
+      'Where can you verify integrations and privacy?',
+    ],
+    faqEntries: [
+      {
+        question: 'Where should a new AtoAxis user start?',
+        answer:
+          'Start with Getting started, which covers the account, API key, editor connection and first verified heartbeat in order.',
+      },
+      {
+        question: 'Where are editor settings documented?',
+        answer:
+          'Use the VS Code integration guide for first-party commands and settings, or the integrations overview for WakaTime-compatible editors.',
+      },
+      {
+        question: 'Where can I check exactly what a heartbeat contains?',
+        answer:
+          'The privacy guide lists the metadata fields that may be sent and the sensitive content that is never included.',
+      },
+      {
+        question: 'Does the documentation cover AI coding activity?',
+        answer:
+          'Yes. The AI coding tracker guide explains supported agent hooks, attribution categories, token coverage and unknown cost handling.',
+      },
+      {
+        question: 'Can I verify behavior against the implementation?',
+        answer:
+          'Yes. The documentation links to the public source repository and identifies the shipped CLI commands, configuration paths and integration boundaries.',
+      },
+    ],
   },
   {
     title: 'เอกสาร AtoAxis',
     description: 'เอกสาร setup, editor integration และ heartbeat privacy',
     lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
     headings: ['เริ่มต้นที่นี่'],
+    faqEntries: [
+      {
+        question: 'ผู้ใช้ AtoAxis ใหม่ควรเริ่มที่ไหน?',
+        answer:
+          'เริ่มจากคู่มือเริ่มต้นใช้งาน ซึ่งเรียงขั้นตอนตั้งแต่บัญชี API key การเชื่อม editor ไปจนถึงการยืนยัน heartbeat แรก',
+      },
+      {
+        question: 'การตั้งค่า editor อยู่ในเอกสารใด?',
+        answer:
+          'ใช้คู่มือ VS Code integration สำหรับ command และ settings ของ extension หรือดูหน้ารวม integrations สำหรับ editor ที่รองรับ WakaTime protocol',
+      },
+      {
+        question: 'ตรวจสอบได้ที่ไหนว่า heartbeat มีข้อมูลอะไร?',
+        answer:
+          'คู่มือ Privacy แสดง field ของ metadata ที่อาจส่ง และรายการข้อมูลอ่อนไหวที่ไม่อยู่ใน heartbeat',
+      },
+      {
+        question: 'เอกสารครอบคลุม AI coding activity หรือไม่?',
+        answer:
+          'ครอบคลุม คู่มือ AI coding tracker อธิบาย agent hooks ที่รองรับ หมวด attribution, token coverage และการจัดการ cost ที่ไม่ทราบค่า',
+      },
+      {
+        question: 'ตรวจสอบข้อมูลกับ implementation ได้หรือไม่?',
+        answer:
+          'ได้ เอกสารเชื่อมไปยัง source repository สาธารณะและระบุ CLI command, config path และขอบเขต integration ที่มีอยู่จริง',
+      },
+    ],
   }
 );
 generic(

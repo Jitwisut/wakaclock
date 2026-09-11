@@ -32,7 +32,7 @@ function safeDestination(next: null | string): string {
 const COPY = {
   login: {
     eyebrow: 'Welcome back',
-    heading: 'Pick the log\nback up.',
+    heading: 'Sign in to\nAtoAxis.',
     lede: 'Sign in to see today’s total, this month’s projects and how much of it you actually typed.',
     switchPrompt: 'No account yet?',
     switchLabel: 'Create one',
@@ -88,9 +88,18 @@ export function AuthScreen({ mode }: { mode: AuthMode }) {
 
   return (
     <div className="grid min-h-screen lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]">
+      <a
+        className="focus:bg-background focus:text-foreground sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2"
+        href="#auth-content"
+      >
+        {mode === 'login' ? 'Skip to sign-in form' : 'Skip to registration form'}
+      </a>
       <SignalPanel mode={mode} />
 
-      <main className="flex items-center justify-center px-6 py-14 sm:px-10 lg:px-16">
+      <main
+        className="flex items-center justify-center px-6 py-14 sm:px-10 lg:px-16"
+        id="auth-content"
+      >
         <div className="w-full max-w-sm">
           {/* Below lg the decorative panel is gone, taking the wordmark with it — and a
               sign-in page that never names the product is disorienting when you arrive
@@ -151,6 +160,16 @@ export function AuthScreen({ mode }: { mode: AuthMode }) {
               Back to atoaxis.com
             </Link>
           </p>
+          <nav
+            aria-label="Account page information"
+            className="auth-rise text-muted-foreground mt-5 flex flex-wrap gap-x-4 gap-y-2 text-xs"
+            style={{ '--auth-delay': '500ms' } as React.CSSProperties}
+          >
+            <Link href="/about">About</Link>
+            <Link href="/contact">Contact</Link>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/terms">Terms</Link>
+          </nav>
         </div>
       </main>
     </div>

@@ -6,20 +6,36 @@ import { webPageSchema } from '@/lib/seo/schema';
 import { contentModified } from '@/lib/seo/site';
 
 describe('audit answer guides', () => {
-  it.each(['/', '/teams', '/developer-analytics', '/wakatime-alternative', '/ai-coding-tracker'])(
-    'renders extractable facts, a comparison and attributed sources on %s',
-    (path) => {
-      const { container } = render(<AnswerGuide path={path} />);
-      expect(container.querySelectorAll('dt')).toHaveLength(4);
-      expect(container.querySelectorAll('dd')).toHaveLength(4);
-      expect(container.querySelector('table caption')).not.toBeNull();
-      expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
-        contentModified(path, 'en')
-      );
-      expect(container.querySelector('a[href="https://wakatime.com/developers"]')).not.toBeNull();
-      expect(container.textContent).toContain('illustrative, not customer research');
-    }
-  );
+  it.each([
+    '/',
+    '/teams',
+    '/developer-analytics',
+    '/wakatime-alternative',
+    '/ai-coding-tracker',
+    '/pricing',
+    '/integrations',
+    '/docs',
+  ])('renders extractable facts, a comparison and attributed sources on %s', (path) => {
+    const { container } = render(<AnswerGuide path={path} />);
+    expect(container.querySelectorAll('dt')).toHaveLength(4);
+    expect(container.querySelectorAll('dd')).toHaveLength(4);
+    expect(container.querySelector('table caption')).not.toBeNull();
+    expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
+      contentModified(path, 'en')
+    );
+    expect(container.querySelectorAll('a[href^="https://"]')).not.toHaveLength(0);
+    expect(container.textContent).toContain('illustrative, not customer research');
+  });
+
+  it('renders a Thai answer, table and sources on the Thai homepage', () => {
+    const { container } = render(<AnswerGuide locale="th" path="/" />);
+
+    expect(container.textContent).toContain('สรุปสาระสำคัญ');
+    expect(container.querySelectorAll('dt')).toHaveLength(4);
+    expect(container.querySelector('table caption')?.textContent).toContain('ตีความ');
+    expect(container.querySelector('time')?.getAttribute('datetime')).toBe('2026-09-11');
+    expect(container.textContent).toContain('ไม่ใช่งานวิจัยหรือข้อมูลลูกค้า');
+  });
 
   it('does not invent a content update for untouched translations', () => {
     const page = { path: '/teams', name: 'Teams', description: 'Team prototype' };
