@@ -1,7 +1,7 @@
 -- Owner-triggered background jobs (plans/plan-kafka-rabbitmq-adoption.md, R2).
 --
 -- State is authoritative in this table. Creating a job also writes one row into
--- outbox_events in the same transaction; the in-process relay
+-- outbox_events in the same transaction; the dedicated job-worker relay
 -- (src/infrastructure/job_relay.rs) turns that row into a RabbitMQ message. A job
 -- never depends on the broker being reachable at create time.
 BEGIN;

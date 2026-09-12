@@ -156,10 +156,6 @@ pub enum IngestCohort {
 }
 
 impl IngestCohort {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the Kafka ingest switch (plan K4)")
-    )]
     pub fn includes(&self, user_id: Uuid) -> bool {
         match self {
             IngestCohort::All => true,
@@ -258,20 +254,14 @@ impl BrokerConfig {
         })
     }
 
-    /// Refuses modes whose implementation has not landed yet. Each later PR removes
-    /// its own line here in the same change that makes the mode real.
+    /// Refuses modes whose implementation has not landed yet. Kafka remains gated until
+    /// K1-K4; the RabbitMQ job worker is now available for R3/R4.
     fn ensure_supported(&self) -> Result<()> {
         if self.ingest.mode != IngestMode::Direct {
             anyhow::bail!(
                 "{INGEST_MODE}={} is not available in this build: the Kafka producer and \
                  consumer have not landed (plan K1-K4). Unset it or use `direct`.",
                 self.ingest.mode.as_str()
-            );
-        }
-        if self.reprocess_mode != ReprocessMode::Sync {
-            anyhow::bail!(
-                "{REPROCESS_MODE}=job is not available in this build: the job worker has not \
-                 landed (plan R1-R4). Unset it or use `sync`."
             );
         }
         Ok(())
@@ -296,7 +286,7 @@ impl BrokerConfig {
         if let Some(job_queue) = &self.job_queue {
             tracing::info!(
                 url = %job_queue.redacted_url(),
-                "{JOB_QUEUE_URL} is set; the outbox relay connects to RabbitMQ when POSTGRES_URL is also configured (plan R2)"
+                "{JOB_QUEUE_URL} is set; the dedicated job-worker connects to RabbitMQ when POSTGRES_URL is also configured (plan R3)"
             );
             if !job_queue.tls() && !is_loopback_host(&job_queue.host) {
                 tracing::warn!(
@@ -628,7 +618,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(job.ensure_supported().is_err());
+        assert!(job.ensure_supported().is_ok());
     }
 
     #[test]

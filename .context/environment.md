@@ -26,10 +26,15 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Parsed in [../backend/api/src/config/brokers.rs](../backend/api/src/config/brokers.rs); no adapter reads it yet, so setting it only logs a warning. |
 | `ATOAXIS_EVENT_BUS_SASL_MECHANISM`, `ATOAXIS_EVENT_BUS_SASL_USERNAME`, `ATOAXIS_EVENT_BUS_SASL_PASSWORD` | no | All three or none. Mechanism `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`. Refused without `ATOAXIS_EVENT_BUS_URL`. |
 | `ATOAXIS_EVENT_BUS_TLS` | no | Defaults to `true` when SASL is set, else `false`; SASL with `false` is refused. |
-| `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. With `POSTGRES_URL` also set, `main.rs` starts the in-process outbox relay (plan R2). Never printed unredacted; a plaintext URL to a non-local host logs a warning. |
+| `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. The API uses PostgreSQL as the job/outbox source of truth; the dedicated `job-worker` process runs the outbox relay and processors. Never printed unredacted; a plaintext URL to a non-local host logs a warning. |
 | `ATOAXIS_INGEST_MODE` | no | `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL` and **refuses to boot** until the Kafka ingest path lands. |
 | `ATOAXIS_INGEST_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`. Required for `kafka` mode; ignored (not refused) in other modes so a rollback deploy can leave it set. |
-| `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`, and **refuses to boot** until the reprocess worker lands. |
+| `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`; requests require `Idempotency-Key` and return `202` while `job-worker` processes them. |
+| `ATOAXIS_JOB_WORKER_PREFETCH` | no | Worker concurrency/prefetch; defaults to `4`. |
+| `ATOAXIS_JOB_LEASE_SECONDS` | no | Lease duration for a claimed job; defaults to `300`. |
+| `ATOAXIS_JOB_RENEW_SECONDS` | no | Lease renewal interval; defaults to `60`. |
+| `ATOAXIS_JOB_SHUTDOWN_SECONDS` | no | Grace period for in-flight jobs during shutdown; defaults to `30`. |
+| `ATOAXIS_JOB_WORKER_HEALTH_HOST`, `ATOAXIS_JOB_WORKER_HEALTH_PORT` | no | Worker liveness/readiness listener; defaults to `0.0.0.0:8081`. |
 | `ATOAXIS_REDIS_URL` | no | Redis-compatible cache/lock provider. |
 | `ATOAXIS_OBJECT_STORE_BUCKET` | no | S3-compatible export artifact bucket. |
 | `ATOAXIS_KMS_KEY_ID` | no | KMS/Vault key identifier for credential sealing. |

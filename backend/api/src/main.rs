@@ -4,18 +4,9 @@ use std::{sync::Arc, time::Duration};
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer};
 use tracing::{error, info};
 
-mod config;
-mod handlers;
-mod helpers;
-mod infrastructure;
-mod middleware;
-mod model;
-mod repository;
-mod services;
-#[cfg(test)]
-mod test_support;
-use config::CorsOrigins;
-use infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
+use wakaclock_server::config::CorsOrigins;
+use wakaclock_server::handlers;
+use wakaclock_server::infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
 
 fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
     match origins {
@@ -35,7 +26,12 @@ fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
                     Method::PATCH,
                     Method::DELETE,
                 ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .allow_headers([
+                    header::AUTHORIZATION,
+                    header::CONTENT_TYPE,
+                    header::HeaderName::from_static("idempotency-key"),
+                ])
+                .expose_headers([header::LOCATION])
         }
     }
 }
@@ -137,16 +133,9 @@ async fn main() -> Result<()> {
     app_state.user_service.migrate_legacy_credentials().await?;
     drop(migration_guard);
 
-    // Outbox relay: turns `async_jobs` rows into RabbitMQ messages (plan R2). It runs
-    // in-process because the crate has no library target a standalone binary could
-    // share services with. Started only when a job queue and PostgreSQL are both
-    // configured; every replica runs one and they coordinate through SKIP LOCKED.
-    if app_state.postgres.is_some() {
-        if let Some(job_queue) = app_state.config.brokers.job_queue.clone() {
-            infrastructure::job_relay::spawn(app_state.job_service.clone(), job_queue);
-            info!("Outbox relay started");
-        }
-    }
+    // Background jobs are handled by the dedicated `job-worker` process. The API only
+    // writes PostgreSQL job/outbox rows, so a worker restart never loses an accepted job
+    // and an API replica does not compete with workers for RabbitMQ consumer slots.
 
     // Reconcile active Redis projections into ClickHouse even when no browser is currently
     // connected. This closes sessions after lease expiry and provides the recovery timeout
@@ -356,6 +345,34 @@ mod tests {
                 Some(&HeaderValue::from_str(origin).unwrap())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reprocess_job_headers_are_allowed_by_preflight() {
+        let response = cors_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://www.atoaxis.com")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "content-type, idempotency-key",
+                    )
+                    .body(Body::empty())
+                    .expect("job preflight request is valid"),
+            )
+            .await
+            .expect("CORS layer should return a response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let allowed = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(allowed.contains("idempotency-key"));
     }
 
     #[tokio::test]

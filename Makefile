@@ -45,6 +45,10 @@ dev: ## Start infrastructure and both local applications
 dev-backend: ## Run the Rust API in development mode
 	@cd $(BACKEND_DIR) && $(CARGO) run --bin wakaclock-server
 
+.PHONY: dev-job-worker
+dev-job-worker: ## Run the RabbitMQ outbox relay and job worker
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin job-worker
+
 .PHONY: dev-frontend
 dev-frontend: ## Run the Next.js application in development mode
 	@cd $(FRONTEND_DIR) && $(NPM) run dev

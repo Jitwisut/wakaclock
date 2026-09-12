@@ -34,7 +34,7 @@ contracts, and RabbitMQ now has an adapter and a runtime driver:
 | Service | Reality |
 | --- | --- |
 | Redis | `presence_store.rs` is deliberately in-memory; `CacheStore`/lock contracts are live but no provider adapter is wired yet. |
-| RabbitMQ | `infrastructure/rabbitmq.rs` implements `JobPublisher`/`JobConsumer`; the in-process outbox relay (`infrastructure/job_relay.rs`, plan R2) drives it. The `JobConsumer` half is still unused until the worker runtime (R3). `src/bin/outbox-relay.rs` is a stub that errors on purpose. |
+| RabbitMQ | `infrastructure/rabbitmq.rs` implements `JobPublisher`/`JobConsumer`; the dedicated `src/bin/job-worker.rs` runs the outbox relay and `analytics.reprocess` processor (plans R3/R4). `src/bin/outbox-relay.rs` remains a legacy stub that errors on purpose. |
 | Redpanda | Contracts in `contracts.rs` and settings in `config/brokers.rs` only; no adapter yet (plan K1). |
 | Qdrant (`docker-compose.dev.yaml`) | Referenced only from the dead `model/v1` tree. |
 

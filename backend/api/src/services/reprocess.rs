@@ -237,6 +237,14 @@ impl ReprocessService {
         }
     }
 
+    /// Validate a queued request before it is written to PostgreSQL. The synchronous
+    /// path calls the same rule at the start of `run`; exposing this small pure check
+    /// keeps the job endpoint from accepting an invalid range that would only fail in
+    /// the worker later.
+    pub fn validate_request(start: &str, end: &str) -> Result<()> {
+        validate_date_range(start, end)
+    }
+
     async fn write_audit(
         &self,
         data: &ReprocessData,
