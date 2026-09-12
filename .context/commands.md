@@ -51,8 +51,9 @@ Netlify and CI use `npm ci`; do not regenerate a pnpm or yarn lockfile.
 ## Infrastructure
 
 ```bash
-make infra-up        # Postgres, ClickHouse, Redis, Redpanda, RabbitMQ
-make infra-down
+make infra-up        # Postgres, ClickHouse, Redis, RabbitMQ
+make infra-kafka-up  # Redpanda — opt-in, `kafka` compose profile
+make infra-down      # stops everything, Redpanda included
 make logs
 make help
 ```
@@ -60,6 +61,23 @@ make help
 `docker-compose.yml` is the supported local stack. The old
 `docker-compose.dev.yaml` and e-commerce/Caddy/Qdrant services are legacy
 template material and are not referenced by the live Makefile or server.
+
+Redpanda sits behind the `kafka` compose profile because no server code connects
+to it yet (see [dead-code.md](dead-code.md)). When the Kafka adapter lands (plan
+K1), move it into `infra-up` and drop the profile.
+
+RabbitMQ adapter tests are opt-in like the ClickHouse ones and need their own
+URL, never the application's `ATOAXIS_JOB_QUEUE_URL`:
+
+```bash
+cd backend/api && RABBITMQ_TEST_URL='amqp://guest:guest@127.0.0.1:5672/%2f' \
+  cargo test --bin wakaclock-server rabbitmq -- --ignored --test-threads=1 \
+  --skip survive_a_broker_restart
+```
+
+`jobs_and_scheduled_retries_survive_a_broker_restart` runs `docker restart` on the
+container named by `RABBITMQ_TEST_RESTART_CONTAINER`; point it only at a disposable
+broker. CI skips it by name.
 
 The root Makefile now points at `backend/api` and `frontend/app`; its `check`,
 `test`, `build`, `lint` and `ci` targets are the local equivalents of the

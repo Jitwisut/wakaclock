@@ -19,6 +19,11 @@ const AI_DIAGNOSTICS_MIGRATION: &str =
     include_str!("../../migrations/postgres/003_ai_diagnostics.sql");
 
 const EARLY_ACCESS_MIGRATION: &str = include_str!("../../migrations/postgres/004_early_access.sql");
+const CREDENTIAL_MIGRATIONS_MIGRATION: &str =
+    include_str!("../../migrations/postgres/005_credential_migrations.sql");
+const API_KEY_READBACK_MIGRATION: &str =
+    include_str!("../../migrations/postgres/006_api_key_readback.sql");
+const ASYNC_JOBS_MIGRATION: &str = include_str!("../../migrations/postgres/007_async_jobs.sql");
 
 pub struct PostgresClient {
     pool: Pool,
@@ -99,14 +104,9 @@ impl PostgresClient {
             ("presence", PRESENCE_MIGRATION),
             ("AI diagnostics", AI_DIAGNOSTICS_MIGRATION),
             ("early access", EARLY_ACCESS_MIGRATION),
-            (
-                "credential migrations",
-                include_str!("../../migrations/postgres/005_credential_migrations.sql"),
-            ),
-            (
-                "API key readback",
-                include_str!("../../migrations/postgres/006_api_key_readback.sql"),
-            ),
+            ("credential migrations", CREDENTIAL_MIGRATIONS_MIGRATION),
+            ("API key readback", API_KEY_READBACK_MIGRATION),
+            ("async jobs", ASYNC_JOBS_MIGRATION),
         ] {
             client
                 .batch_execute(sql)
@@ -217,5 +217,10 @@ mod tests {
         }
         assert!(AI_DIAGNOSTICS_MIGRATION.contains("ai_diagnostics_devices"));
         assert!(AI_DIAGNOSTICS_MIGRATION.contains("expires_at"));
+        assert!(ASYNC_JOBS_MIGRATION.contains("CREATE TABLE IF NOT EXISTS async_jobs"));
+        assert!(
+            ASYNC_JOBS_MIGRATION.contains("async_jobs_idempotency_idx"),
+            "async_jobs migration is missing the idempotency-key unique index"
+        );
     }
 }

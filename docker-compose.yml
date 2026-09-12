@@ -55,10 +55,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # Kafka-compatible event bus for heartbeat ingestion and PostgreSQL outbox delivery.
+  # Kafka-compatible event bus for telemetry ingestion. The PostgreSQL outbox
+  # relays background jobs to RabbitMQ, not to this bus. Opt-in (`make infra-kafka-up`)
+  # until the Kafka adapter lands (plan K1); remove the profile then.
   redpanda:
     image: redpandadata/redpanda:v24.1.8
     container_name: wakaclock_redpanda
+    profiles: ["kafka"]
     restart: unless-stopped
     command:
       - redpanda

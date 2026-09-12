@@ -129,6 +129,9 @@ regex = { workspace = true }
 # Terminal parsing
 clap = { version = "4.5.43", features = ["derive"] }
 deadpool-postgres = "0.14.1"
+# RabbitMQ job queue (plans/plan-kafka-rabbitmq-adoption.md, R1). ring + webpki roots match
+# the PostgreSQL TLS setup, so no second crypto provider enters the binary through lapin.
+lapin = { version = "4.11", default-features = false, features = ["tokio", "rustls--ring", "rustls-webpki-roots-certs"] }
 tokio-postgres-rustls = "0.13.0"
 
 [dev-dependencies]

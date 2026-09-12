@@ -95,6 +95,9 @@ The API listens on `http://localhost:8080`, the dashboard on
 `http://localhost:3000`, ClickHouse UI on `http://localhost:5521` and RabbitMQ
 management on `http://localhost:15672`.
 
+Redpanda is not started by `make infra-up`: the API has no Kafka adapter yet.
+Start it explicitly with `make infra-kafka-up`.
+
 ## API overview
 
 WakaTime clients authenticate with Basic API key or Bearer OAuth. AtoAxis v2

@@ -13,8 +13,15 @@ Two datastores, split by purpose. Migration mechanics: [migrations.md](migration
 `POSTGRES_URL` unset ⇒ `AppState.postgres` is `None`. **Every Postgres-backed
 code path must handle `None` by degrading, never by unwrapping.**
 
-Redis, RabbitMQ, Redpanda and Qdrant appear in the compose files but no Rust
-code connects to them — [../dead-code.md](../dead-code.md).
+Redis is connected only for Presence v2 (`PRESENCE_V2_ENABLED`). RabbitMQ and
+Redpanda settings are parsed and validated by
+[../../backend/api/src/config/brokers.rs](../../backend/api/src/config/brokers.rs).
+The RabbitMQ adapter
+([../../backend/api/src/infrastructure/rabbitmq.rs](../../backend/api/src/infrastructure/rabbitmq.rs))
+is driven at runtime by the in-process outbox relay (plan R2), started from
+`main.rs` when `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL` are both set. Redpanda
+has no adapter. Qdrant is referenced only by dead code —
+[../dead-code.md](../dead-code.md).
 
 ## ClickHouse — shape
 
@@ -56,10 +63,14 @@ a rollup, make sure the reprocess path can rebuild it.
 
 ## PostgreSQL — shape
 
-One migration file:
-[../../backend/api/migrations/postgres/001_phase10_foundation.sql](../../backend/api/migrations/postgres/001_phase10_foundation.sql),
-`include_str!`-embedded into the binary. Owns identity, access, OAuth,
-integrations, productivity configuration, billing and audit state.
+Numbered migration files under
+[../../backend/api/migrations/postgres/](../../backend/api/migrations/postgres/),
+each `include_str!`-embedded and applied in order by `PostgresClient::migrate()`.
+`001_phase10_foundation.sql` owns identity, access, OAuth, integrations,
+productivity configuration, billing and audit state; later files add columns and
+tables (`007_async_jobs.sql` is the background-job table, plan R2). A new file is
+inert until it is added to the list in `PostgresClient::migrate()`; the whole set
+re-runs every boot, so every statement must stay idempotent.
 
 IDs are **UUIDv7 supplied by the application**, not by a database extension, so
 inserts stay time-sortable. Generate them in Rust; do not add a `gen_random_uuid()`

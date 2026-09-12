@@ -49,7 +49,7 @@ cd frontend/app && npm run validate  # typecheck + lint:strict + tests
 cd frontend/app && npm run test:run
 
 # Infrastructure
-make infra-up                        # ClickHouse, Postgres, Redis, Redpanda, RabbitMQ
+make infra-up                        # ClickHouse, Postgres, Redis, RabbitMQ (Redpanda: make infra-kafka-up)
 ```
 
 Full list and known-broken targets: [.context/commands.md](.context/commands.md)

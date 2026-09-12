@@ -1,0 +1,12 @@
+{
+  "event_id": "hb:0190f3a1-7c2e-7b4a-9d1e-2f6a8c3b5d70:2",
+  "event_version": 1,
+  "event_type": "heartbeat.recorded",
+  "tenant_id": "0190f3a1-0000-7000-8000-000000000001",
+  "occurred_at": "2026-09-10T03:15:00Z",
+  "received_at": "2026-09-10T03:15:01.250Z",
+  "source": "vscode",
+  "trace_id": "hb:0190f3a1-7c2e-7b4a-9d1e-2f6a8c3b5d70:2",
+  "idempotency_key": "hb:0190f3a1-7c2e-7b4a-9d1e-2f6a8c3b5d70:2",
+  "payload": {}
+}

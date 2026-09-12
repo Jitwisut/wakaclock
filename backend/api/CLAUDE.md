@@ -51,8 +51,11 @@ and an integration test before production rollout.
   configuration, billing and OAuth state.
 - ClickHouse is the source of truth for telemetry analytics.
 - Redis is cache/lock only; it is never the sole copy of product data.
-- Every queue message carries `event_id`, `event_version`, `tenant_id`,
-  `occurred_at`, `trace_id` and `idempotency_key`.
+- Every queue message carries `event_id`, `event_version`, `event_type`,
+  `tenant_id`, `occurred_at`, `received_at`, `trace_id` and `idempotency_key`
+  (`src/infrastructure/contracts.rs`). `event_id` is derived from the source
+  record (`StableEventId`), never generated at publish time, so retries and
+  redeliveries stay the same event.
 - Do not store or log source code, prompts, AI responses, diffs, API keys or
   OAuth refresh tokens. Use metadata and coverage reasons instead.
 - Credentials must pass through `CredentialVault`, and every provider sync is
