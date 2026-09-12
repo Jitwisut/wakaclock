@@ -7,11 +7,6 @@
 //! domain code or weakening tenant checks. The decisions behind this shape are
 //! recorded in `plans/plan-kafka-rabbitmq-adoption.md` (D1–D4).
 
-#![expect(
-    dead_code,
-    reason = "provider-neutral contracts are linked by deployment-specific adapters"
-)]
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -393,12 +388,37 @@ pub trait EventConsumer: Send + Sync {
 }
 
 /// Publishes jobs to RabbitMQ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobPublishTarget {
+    Primary,
+    Retry(Duration),
+    DeadLetter(String),
+}
+
 #[async_trait]
 pub trait JobPublisher: Send + Sync {
     /// Returns after a publisher confirm. The outbox relay marks its row published
     /// only after this returns `Ok`; a crash in between republishes the same
     /// `job_id`, which the worker's completed-job check makes harmless.
     async fn publish(&self, job: &JobEnvelope) -> InfrastructureResult<()>;
+
+    /// Publishes an outbox row to its durable destination. The default keeps simple
+    /// test publishers source-compatible while real broker adapters explicitly
+    /// support retry and dead-letter exchanges.
+    async fn publish_to(
+        &self,
+        job: &JobEnvelope,
+        target: &JobPublishTarget,
+    ) -> InfrastructureResult<()> {
+        match target {
+            JobPublishTarget::Primary => self.publish(job).await,
+            JobPublishTarget::Retry(_) | JobPublishTarget::DeadLetter(_) => {
+                Err(InfrastructureError::Unavailable(
+                    "job publisher does not support the requested outbox target".to_string(),
+                ))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

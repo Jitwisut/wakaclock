@@ -1,21 +1,23 @@
 //! Owner-triggered background jobs (plans/plan-kafka-rabbitmq-adoption.md, R2, D5).
 //!
 //! PostgreSQL is authoritative for job state. Creating a job writes its `async_jobs`
-//! row and one `outbox_events` row in the same transaction; the in-process relay
-//! ([`crate::infrastructure::job_relay`]) turns each outbox row into a RabbitMQ
-//! message. A broker outage therefore delays jobs, it does not lose them.
+//! row and one `outbox_events` row in the same transaction; the relay owned by the
+//! dedicated `job-worker` process ([`crate::infrastructure::job_relay`]) turns each
+//! outbox row into a RabbitMQ message. A broker outage therefore delays jobs, it does
+//! not lose them.
 //!
-//! The worker-side transitions (claim, complete, fail) land with the worker runtime
-//! in R3. This module only creates jobs, reads them, relays the outbox and re-enqueues
-//! a job whose worker lease elapsed.
+//! Worker-side transitions are fenced by an owner token and an expiring lease. Retry
+//! and dead-letter state changes write a targeted outbox row in the same transaction,
+//! so acknowledging the current delivery cannot lose the next one.
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 use crate::infrastructure::contracts::{
-    InfrastructureError, JobEnvelope, JobKind, JobPublisher, JOB_RETRY_DELAYS, SYSTEM_TENANT_ID,
+    InfrastructureError, JobEnvelope, JobKind, JobPublishTarget, JobPublisher, JOB_RETRY_DELAYS,
+    SYSTEM_TENANT_ID,
 };
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::async_job::{AsyncJobView, CreatedJob, JobStatus};
@@ -38,11 +40,8 @@ pub struct JobService {
 #[derive(Debug, Default)]
 pub struct RelayOutcome {
     pub published: usize,
-    /// Rows that did not deserialize into a `JobEnvelope`. Left in place and logged,
-    /// never silently dropped; a pass skips past them to the rows behind. They stay
-    /// `published_at IS NULL` and are re-fetched every pass, so once `poison` reaches
-    /// `RELAY_BATCH` no real job is published again — a `failed_at`/DLQ column to retire
-    /// them is R3. Only `create` writes these, so in practice `poison` stays 0.
+    /// Rows with an invalid envelope or delivery target. They are retired with a
+    /// sanitized failure code so they cannot starve valid rows behind them.
     pub poison: usize,
     pub broker_error: Option<InfrastructureError>,
 }
@@ -51,6 +50,41 @@ pub struct RelayOutcome {
 pub struct SweepOutcome {
     pub requeued: usize,
     pub dead_lettered: usize,
+}
+
+/// Durable job payload returned only to the worker that successfully changed a
+/// queued row to running. Identity and parameters come from PostgreSQL, never from
+/// the broker payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedJob {
+    pub id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub kind: JobKind,
+    pub attempt: i16,
+    pub params: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    Claimed(ClaimedJob),
+    /// A matching delivery is already protected by a live worker lease.
+    AlreadyRunning,
+    /// The job has reached a terminal public state, so a duplicate delivery is safe
+    /// to acknowledge without executing it again.
+    Terminal(JobStatus),
+    /// PostgreSQL has already advanced beyond this delivery's attempt.
+    StaleAttempt,
+    /// The ID is unknown or the broker kind/tenant does not match PostgreSQL.
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionOutcome {
+    Applied,
+    /// The same terminal/retry transition was durably applied by an earlier call.
+    AlreadyApplied,
+    /// The row is missing, another owner holds it, or this worker's lease expired.
+    LostLease,
 }
 
 impl JobService {
@@ -67,13 +101,6 @@ impl JobService {
     /// Creates a job and, in the same transaction, the outbox row the relay will
     /// publish. A repeated `idempotency_key` for the same account and kind returns the
     /// job the first call created and writes nothing new.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired to POST /api/v1/reprocess in R4; R2 delivers the mechanism"
-        )
-    )]
     pub async fn create(
         &self,
         user_id: Option<Uuid>,
@@ -122,9 +149,15 @@ impl JobService {
         let tenant_id = user_id.unwrap_or(SYSTEM_TENANT_ID);
         let envelope = JobEnvelope::new(job_id, kind, tenant_id, params)
             .map_err(|error| anyhow!("build job envelope: {error}"))?;
-        insert_outbox_row(&tx, job_id, routing_key, &envelope)
-            .await
-            .context("insert the job's outbox row")?;
+        insert_outbox_row(
+            &tx,
+            job_id,
+            routing_key,
+            &envelope,
+            &OutboxDelivery::Primary,
+        )
+        .await
+        .context("insert the job's outbox row")?;
         tx.commit().await?;
 
         Ok(CreatedJob {
@@ -152,6 +185,274 @@ impl JobService {
         row.as_ref().map(view_from_row).transpose()
     }
 
+    /// Atomically fences one queued delivery with a worker-owned lease. A duplicate,
+    /// stale or mismatched envelope never receives the authoritative job parameters.
+    pub async fn claim(
+        &self,
+        envelope: &JobEnvelope,
+        lease_owner: Uuid,
+        lease_for: Duration,
+    ) -> Result<ClaimOutcome> {
+        envelope
+            .validate()
+            .map_err(|error| anyhow!("claim invalid job envelope: {error}"))?;
+        let lease_seconds = lease_seconds(lease_for)?;
+        let lease_seconds_f64 = lease_seconds as f64;
+        let attempt = i16::try_from(envelope.attempt)
+            .map_err(|_| anyhow!("job attempt exceeds PostgreSQL SMALLINT"))?;
+        let user_id =
+            (envelope.event.tenant_id != SYSTEM_TENANT_ID).then_some(envelope.event.tenant_id);
+        let postgres = self.required()?;
+
+        let claimed = postgres
+            .client()
+            .query_opt(
+                "UPDATE async_jobs
+                 SET status = 'running', started_at = COALESCE(started_at, now()),
+                     finished_at = NULL, error_code = NULL,
+                     lease_owner = $4,
+                     lease_expires_at = now() + ($5::double precision * interval '1 second')
+                 WHERE id = $1 AND kind = $2 AND attempt = $3 AND status = 'queued'
+                   AND user_id IS NOT DISTINCT FROM $6
+                 RETURNING id, user_id, kind, attempt, params",
+                &[
+                    &envelope.job_id,
+                    &envelope.kind.routing_key(),
+                    &attempt,
+                    &lease_owner,
+                    &lease_seconds_f64,
+                    &user_id,
+                ],
+            )
+            .await
+            .context("claim async job")?;
+        if let Some(row) = claimed {
+            return Ok(ClaimOutcome::Claimed(claimed_job_from_row(&row)?));
+        }
+
+        let current = postgres
+            .client()
+            .query_opt(
+                "SELECT user_id, kind, status, attempt FROM async_jobs WHERE id = $1",
+                &[&envelope.job_id],
+            )
+            .await
+            .context("classify an unclaimed async job")?;
+        let Some(current) = current else {
+            return Ok(ClaimOutcome::Rejected);
+        };
+        if current.get::<_, Option<Uuid>>("user_id") != user_id
+            || current.get::<_, String>("kind") != envelope.kind.routing_key()
+        {
+            return Ok(ClaimOutcome::Rejected);
+        }
+        if current.get::<_, i16>("attempt") != attempt {
+            return Ok(ClaimOutcome::StaleAttempt);
+        }
+        let status = parse_status(&current.get::<_, String>("status"))?;
+        Ok(match status {
+            JobStatus::Running | JobStatus::Queued => ClaimOutcome::AlreadyRunning,
+            terminal => ClaimOutcome::Terminal(terminal),
+        })
+    }
+
+    /// Extends only the still-live lease owned by this exact job attempt. Once a
+    /// lease expires, its former owner can never revive it.
+    pub async fn renew_lease(
+        &self,
+        job_id: Uuid,
+        attempt: i16,
+        lease_owner: Uuid,
+        lease_for: Duration,
+    ) -> Result<bool> {
+        let lease_seconds = lease_seconds(lease_for)?;
+        let lease_seconds_f64 = lease_seconds as f64;
+        let changed = self
+            .required()?
+            .client()
+            .execute(
+                "UPDATE async_jobs
+                 SET lease_expires_at = now() + ($4::double precision * interval '1 second')
+                 WHERE id = $1 AND attempt = $2 AND status = 'running'
+                   AND lease_owner = $3 AND lease_expires_at > now()",
+                &[&job_id, &attempt, &lease_owner, &lease_seconds_f64],
+            )
+            .await
+            .context("renew async job lease")?;
+        Ok(changed == 1)
+    }
+
+    /// Completes a job only while this worker still owns its unexpired lease.
+    pub async fn complete(
+        &self,
+        job_id: Uuid,
+        attempt: i16,
+        lease_owner: Uuid,
+        result: Value,
+    ) -> Result<TransitionOutcome> {
+        let postgres = self.required()?;
+        let changed = postgres
+            .client()
+            .execute(
+                "UPDATE async_jobs
+                 SET status = 'succeeded', result = $4, error_code = NULL,
+                     finished_at = now(), lease_owner = NULL, lease_expires_at = NULL
+                 WHERE id = $1 AND attempt = $2 AND status = 'running'
+                   AND lease_owner = $3 AND lease_expires_at > now()",
+                &[&job_id, &attempt, &lease_owner, &result],
+            )
+            .await
+            .context("complete async job")?;
+        if changed == 1 {
+            return Ok(TransitionOutcome::Applied);
+        }
+        classify_transition(postgres, job_id, attempt, JobStatus::Succeeded).await
+    }
+
+    /// Schedules a retry through the transactional outbox. The worker acknowledges
+    /// the current RabbitMQ delivery only after this commits; it must not publish a
+    /// retry itself. Exhausting the fixed retry budget atomically dead-letters instead.
+    pub async fn schedule_retry(
+        &self,
+        job_id: Uuid,
+        attempt: i16,
+        lease_owner: Uuid,
+        error_code: &'static str,
+    ) -> Result<TransitionOutcome> {
+        validate_error_code(error_code)?;
+        let postgres = self.required()?;
+        let mut client = postgres.transaction_client().await?;
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_opt(
+                "SELECT user_id, kind, params, status, attempt
+                 FROM async_jobs
+                 WHERE id = $1 AND attempt = $2 AND status = 'running'
+                   AND lease_owner = $3 AND lease_expires_at > now()
+                 FOR UPDATE",
+                &[&job_id, &attempt, &lease_owner],
+            )
+            .await
+            .context("lock async job for retry")?;
+        let Some(row) = row else {
+            tx.rollback().await?;
+            return classify_retry_transition(postgres, job_id, attempt).await;
+        };
+
+        let kind_key = row.get::<_, String>("kind");
+        let kind = JobKind::from_routing_key(&kind_key)
+            .ok_or_else(|| anyhow!("unrecognized async_jobs.kind: {kind_key}"))?;
+        let user_id = row.get::<_, Option<Uuid>>("user_id");
+        let params = row.get::<_, Value>("params");
+        let mut envelope =
+            JobEnvelope::new(job_id, kind, user_id.unwrap_or(SYSTEM_TENANT_ID), params)
+                .map_err(|error| anyhow!("rebuild retry job envelope: {error}"))?;
+
+        if attempt >= MAX_ATTEMPTS {
+            envelope.attempt = attempt.max(0) as u16;
+            tx.execute(
+                "UPDATE async_jobs
+                 SET status = 'dead_lettered', error_code = 'retries_exhausted',
+                     finished_at = now(), lease_owner = NULL, lease_expires_at = NULL
+                 WHERE id = $1",
+                &[&job_id],
+            )
+            .await
+            .context("dead-letter an exhausted async job")?;
+            insert_outbox_row(
+                &tx,
+                job_id,
+                kind.routing_key(),
+                &envelope,
+                &OutboxDelivery::DeadLetter("retries_exhausted"),
+            )
+            .await?;
+        } else {
+            let next_attempt = attempt + 1;
+            let delay = JOB_RETRY_DELAYS[usize::try_from(attempt).unwrap_or(usize::MAX)];
+            envelope.attempt = next_attempt as u16;
+            tx.execute(
+                "UPDATE async_jobs
+                 SET status = 'queued', attempt = $2, started_at = NULL,
+                     finished_at = NULL, error_code = $3,
+                     lease_owner = NULL, lease_expires_at = NULL
+                 WHERE id = $1",
+                &[&job_id, &next_attempt, &error_code],
+            )
+            .await
+            .context("schedule async job retry")?;
+            insert_outbox_row(
+                &tx,
+                job_id,
+                kind.routing_key(),
+                &envelope,
+                &OutboxDelivery::Retry(delay),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(TransitionOutcome::Applied)
+    }
+
+    /// Permanently fails a job and writes its DLQ publication to the same transaction.
+    pub async fn dead_letter(
+        &self,
+        job_id: Uuid,
+        attempt: i16,
+        lease_owner: Uuid,
+        error_code: &'static str,
+    ) -> Result<TransitionOutcome> {
+        validate_error_code(error_code)?;
+        let postgres = self.required()?;
+        let mut client = postgres.transaction_client().await?;
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_opt(
+                "SELECT user_id, kind, params FROM async_jobs
+                 WHERE id = $1 AND attempt = $2 AND status = 'running'
+                   AND lease_owner = $3 AND lease_expires_at > now()
+                 FOR UPDATE",
+                &[&job_id, &attempt, &lease_owner],
+            )
+            .await
+            .context("lock async job for dead-letter")?;
+        let Some(row) = row else {
+            tx.rollback().await?;
+            return classify_transition(postgres, job_id, attempt, JobStatus::DeadLettered).await;
+        };
+        let kind_key = row.get::<_, String>("kind");
+        let kind = JobKind::from_routing_key(&kind_key)
+            .ok_or_else(|| anyhow!("unrecognized async_jobs.kind: {kind_key}"))?;
+        let user_id = row.get::<_, Option<Uuid>>("user_id");
+        let mut envelope = JobEnvelope::new(
+            job_id,
+            kind,
+            user_id.unwrap_or(SYSTEM_TENANT_ID),
+            row.get("params"),
+        )
+        .map_err(|error| anyhow!("rebuild dead-letter job envelope: {error}"))?;
+        envelope.attempt = attempt.max(0) as u16;
+        tx.execute(
+            "UPDATE async_jobs
+             SET status = 'dead_lettered', error_code = $2, finished_at = now(),
+                 lease_owner = NULL, lease_expires_at = NULL
+             WHERE id = $1",
+            &[&job_id, &error_code],
+        )
+        .await
+        .context("dead-letter async job")?;
+        insert_outbox_row(
+            &tx,
+            job_id,
+            kind.routing_key(),
+            &envelope,
+            &OutboxDelivery::DeadLetter(error_code),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(TransitionOutcome::Applied)
+    }
+
     /// Publishes one batch of unpublished `async_job` outbox rows. Stops at the first
     /// publish failure and commits the rows it already marked, so the caller reconnects
     /// and the rest are retried on the next pass. `FOR UPDATE SKIP LOCKED` lets every
@@ -166,8 +467,11 @@ impl JobService {
         let tx = client.transaction().await?;
         let rows = tx
             .query(
-                "SELECT id, payload FROM outbox_events
-                 WHERE published_at IS NULL AND aggregate_type = $1
+                "SELECT id, aggregate_id, payload, delivery_target,
+                        retry_delay_seconds, failure_code
+                 FROM outbox_events
+                 WHERE published_at IS NULL AND failed_at IS NULL
+                   AND available_at <= now() AND aggregate_type = $1
                  ORDER BY created_at
                  LIMIT $2
                  FOR UPDATE SKIP LOCKED",
@@ -179,24 +483,32 @@ impl JobService {
         let mut outcome = RelayOutcome::default();
         for row in &rows {
             let outbox_id: Uuid = row.get("id");
+            let job_id: Uuid = row.get("aggregate_id");
             let payload: Value = row.get("payload");
             let envelope: JobEnvelope = match serde_json::from_value(payload) {
                 Ok(envelope) => envelope,
-                Err(error) => {
-                    // JobService::create is the only writer, so this is a bug or
-                    // tampering. Leave the row and log it every pass rather than drop a
-                    // job silently; `continue` skips past it to the rows behind. See
-                    // RelayOutcome::poison for the batch-size stall this can still cause
-                    // (retiring poison rows is R3).
-                    tracing::error!(%outbox_id, %error, "async_job outbox row does not deserialize");
+                Err(_) => {
+                    retire_poison_outbox(&tx, outbox_id, job_id, "invalid_job_envelope").await?;
+                    tracing::error!(%outbox_id, "retired invalid async_job outbox envelope");
                     outcome.poison += 1;
                     continue;
                 }
             };
-            match publisher.publish(&envelope).await {
+            let target = match outbox_target_from_row(row) {
+                Ok(target) => target,
+                Err(code) => {
+                    retire_poison_outbox(&tx, outbox_id, job_id, code).await?;
+                    tracing::error!(%outbox_id, failure_code = code, "retired invalid async_job outbox target");
+                    outcome.poison += 1;
+                    continue;
+                }
+            };
+            match publisher.publish_to(&envelope, &target).await {
                 Ok(()) => {
                     tx.execute(
-                        "UPDATE outbox_events SET published_at = now() WHERE id = $1",
+                        "UPDATE outbox_events
+                         SET published_at = now(), publish_attempts = publish_attempts + 1
+                         WHERE id = $1",
                         &[&outbox_id],
                     )
                     .await
@@ -204,6 +516,13 @@ impl JobService {
                     outcome.published += 1;
                 }
                 Err(error) => {
+                    tx.execute(
+                        "UPDATE outbox_events
+                         SET publish_attempts = publish_attempts + 1 WHERE id = $1",
+                        &[&outbox_id],
+                    )
+                    .await
+                    .context("record failed async_job outbox publish")?;
                     outcome.broker_error = Some(error);
                     break;
                 }
@@ -247,15 +566,30 @@ impl JobService {
             };
 
             if attempt >= MAX_ATTEMPTS {
+                let params: Value = row.get("params");
+                let tenant_id = user_id.unwrap_or(SYSTEM_TENANT_ID);
+                let mut envelope = JobEnvelope::new(job_id, kind, tenant_id, params)
+                    .map_err(|error| anyhow!("rebuild exhausted job envelope: {error}"))?;
+                envelope.attempt = attempt.max(0) as u16;
                 tx.execute(
                     "UPDATE async_jobs
                      SET status = 'dead_lettered', finished_at = now(),
-                         error_code = 'lease_expired', lease_expires_at = NULL
+                         error_code = 'lease_expired', lease_owner = NULL,
+                         lease_expires_at = NULL
                      WHERE id = $1",
                     &[&job_id],
                 )
                 .await
                 .context("dead-letter a job that exhausted its lease retries")?;
+                insert_outbox_row(
+                    &tx,
+                    job_id,
+                    kind.routing_key(),
+                    &envelope,
+                    &OutboxDelivery::DeadLetter("lease_expired"),
+                )
+                .await
+                .context("insert the expired job's dead-letter outbox row")?;
                 outcome.dead_lettered += 1;
                 continue;
             }
@@ -264,7 +598,8 @@ impl JobService {
             tx.execute(
                 "UPDATE async_jobs
                  SET status = 'queued', attempt = $2, started_at = NULL,
-                     lease_expires_at = NULL
+                     lease_owner = NULL, lease_expires_at = NULL,
+                     error_code = 'lease_expired'
                  WHERE id = $1",
                 &[&job_id, &next_attempt],
             )
@@ -276,9 +611,16 @@ impl JobService {
             let mut envelope = JobEnvelope::new(job_id, kind, tenant_id, params)
                 .map_err(|error| anyhow!("rebuild job envelope: {error}"))?;
             envelope.attempt = next_attempt.max(0) as u16;
-            insert_outbox_row(&tx, job_id, kind.routing_key(), &envelope)
-                .await
-                .context("insert the re-enqueue outbox row")?;
+            let delay = JOB_RETRY_DELAYS[usize::try_from(attempt).unwrap_or(usize::MAX)];
+            insert_outbox_row(
+                &tx,
+                job_id,
+                kind.routing_key(),
+                &envelope,
+                &OutboxDelivery::Retry(delay),
+            )
+            .await
+            .context("insert the re-enqueue outbox row")?;
             outcome.requeued += 1;
         }
         tx.commit().await?;
@@ -286,24 +628,197 @@ impl JobService {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum OutboxDelivery {
+    Primary,
+    Retry(Duration),
+    DeadLetter(&'static str),
+}
+
 async fn insert_outbox_row(
     tx: &tokio_postgres::Transaction<'_>,
     job_id: Uuid,
     routing_key: &str,
     envelope: &JobEnvelope,
+    delivery: &OutboxDelivery,
 ) -> Result<()> {
+    let (target, retry_delay_seconds, failure_code): (&str, Option<i32>, Option<&'static str>) =
+        match delivery {
+            OutboxDelivery::Primary => ("primary", None, None),
+            OutboxDelivery::Retry(delay) => {
+                let seconds = i32::try_from(delay.as_secs())
+                    .map_err(|_| anyhow!("job retry delay exceeds PostgreSQL INTEGER"))?;
+                ("retry", Some(seconds), None)
+            }
+            OutboxDelivery::DeadLetter(code) => ("dead_letter", None, Some(*code)),
+        };
     tx.execute(
-        "INSERT INTO outbox_events (id, aggregate_type, aggregate_id, event_type, payload)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO outbox_events
+             (id, aggregate_type, aggregate_id, event_type, payload,
+              delivery_target, retry_delay_seconds, failure_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         &[
             &Uuid::now_v7(),
             &OUTBOX_AGGREGATE,
             &job_id,
             &routing_key,
             &serde_json::to_value(envelope)?,
+            &target,
+            &retry_delay_seconds,
+            &failure_code,
         ],
     )
     .await?;
+    Ok(())
+}
+
+fn lease_seconds(duration: Duration) -> Result<i64> {
+    let seconds = i64::try_from(duration.as_secs())
+        .map_err(|_| anyhow!("job lease duration exceeds PostgreSQL BIGINT"))?;
+    if seconds == 0 {
+        return Err(anyhow!("job lease duration must be at least one second"));
+    }
+    Ok(seconds)
+}
+
+fn claimed_job_from_row(row: &tokio_postgres::Row) -> Result<ClaimedJob> {
+    let kind_key = row.get::<_, String>("kind");
+    let kind = JobKind::from_routing_key(&kind_key)
+        .ok_or_else(|| anyhow!("unrecognized async_jobs.kind: {kind_key}"))?;
+    Ok(ClaimedJob {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        kind,
+        attempt: row.get("attempt"),
+        params: row.get("params"),
+    })
+}
+
+async fn classify_transition(
+    postgres: &PostgresClient,
+    job_id: Uuid,
+    attempt: i16,
+    expected: JobStatus,
+) -> Result<TransitionOutcome> {
+    let row = postgres
+        .client()
+        .query_opt(
+            "SELECT status, attempt FROM async_jobs WHERE id = $1",
+            &[&job_id],
+        )
+        .await
+        .context("classify async job transition")?;
+    let Some(row) = row else {
+        return Ok(TransitionOutcome::LostLease);
+    };
+    let status = parse_status(&row.get::<_, String>("status"))?;
+    Ok(
+        if status == expected && row.get::<_, i16>("attempt") == attempt {
+            TransitionOutcome::AlreadyApplied
+        } else {
+            TransitionOutcome::LostLease
+        },
+    )
+}
+
+async fn classify_retry_transition(
+    postgres: &PostgresClient,
+    job_id: Uuid,
+    previous_attempt: i16,
+) -> Result<TransitionOutcome> {
+    let row = postgres
+        .client()
+        .query_opt(
+            "SELECT status, attempt FROM async_jobs WHERE id = $1",
+            &[&job_id],
+        )
+        .await
+        .context("classify async job retry transition")?;
+    let Some(row) = row else {
+        return Ok(TransitionOutcome::LostLease);
+    };
+    let status = parse_status(&row.get::<_, String>("status"))?;
+    let attempt = row.get::<_, i16>("attempt");
+    Ok(
+        if status == JobStatus::DeadLettered && attempt == previous_attempt
+            || status == JobStatus::Queued && previous_attempt.checked_add(1) == Some(attempt)
+        {
+            TransitionOutcome::AlreadyApplied
+        } else {
+            TransitionOutcome::LostLease
+        },
+    )
+}
+
+fn outbox_target_from_row(
+    row: &tokio_postgres::Row,
+) -> std::result::Result<JobPublishTarget, &'static str> {
+    match row.get::<_, String>("delivery_target").as_str() {
+        "primary" => Ok(JobPublishTarget::Primary),
+        "retry" => {
+            let seconds = row
+                .get::<_, Option<i32>>("retry_delay_seconds")
+                .ok_or("missing_retry_delay")?;
+            let delay = u64::try_from(seconds)
+                .ok()
+                .map(Duration::from_secs)
+                .filter(|delay| JOB_RETRY_DELAYS.contains(delay))
+                .ok_or("invalid_retry_delay")?;
+            Ok(JobPublishTarget::Retry(delay))
+        }
+        "dead_letter" => {
+            let code = row
+                .get::<_, Option<String>>("failure_code")
+                .filter(|code| is_sanitized_error_code(code))
+                .ok_or("missing_failure_code")?;
+            Ok(JobPublishTarget::DeadLetter(code))
+        }
+        _ => Err("invalid_delivery_target"),
+    }
+}
+
+fn validate_error_code(code: &'static str) -> Result<()> {
+    if is_sanitized_error_code(code) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "job error code must be a sanitized fixed identifier"
+        ))
+    }
+}
+
+fn is_sanitized_error_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 64
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+async fn retire_poison_outbox(
+    tx: &tokio_postgres::Transaction<'_>,
+    outbox_id: Uuid,
+    job_id: Uuid,
+    failure_code: &'static str,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE outbox_events
+         SET failed_at = now(), failure_code = $2,
+             publish_attempts = publish_attempts + 1
+         WHERE id = $1",
+        &[&outbox_id, &failure_code],
+    )
+    .await
+    .context("retire poison async_job outbox row")?;
+    tx.execute(
+        "UPDATE async_jobs
+         SET status = 'dead_lettered', finished_at = now(), error_code = $2,
+             lease_owner = NULL, lease_expires_at = NULL
+         WHERE id = $1 AND status IN ('queued', 'running')",
+        &[&job_id, &failure_code],
+    )
+    .await
+    .context("dead-letter job owning a poison outbox row")?;
     Ok(())
 }
 
@@ -338,6 +853,7 @@ mod tests {
     /// rows it confirmed.
     struct ScriptedPublisher {
         accepted: Mutex<Vec<Uuid>>,
+        targets: Mutex<Vec<JobPublishTarget>>,
         fail_after: usize,
     }
 
@@ -345,12 +861,17 @@ mod tests {
         fn new(fail_after: usize) -> Self {
             Self {
                 accepted: Mutex::new(Vec::new()),
+                targets: Mutex::new(Vec::new()),
                 fail_after,
             }
         }
 
         async fn accepted(&self) -> Vec<Uuid> {
             self.accepted.lock().await.clone()
+        }
+
+        async fn targets(&self) -> Vec<JobPublishTarget> {
+            self.targets.lock().await.clone()
         }
     }
 
@@ -363,6 +884,15 @@ mod tests {
             }
             accepted.push(job.job_id);
             Ok(())
+        }
+
+        async fn publish_to(
+            &self,
+            job: &JobEnvelope,
+            target: &JobPublishTarget,
+        ) -> Result<(), InfrastructureError> {
+            self.targets.lock().await.push(target.clone());
+            self.publish(job).await
         }
     }
 
@@ -423,6 +953,19 @@ mod tests {
             .get("done")
     }
 
+    #[test]
+    fn worker_transition_inputs_are_bounded_and_sanitized() {
+        assert_eq!(lease_seconds(Duration::from_secs(1)).unwrap(), 1);
+        assert!(lease_seconds(Duration::ZERO).is_err());
+        assert!(validate_error_code("clickhouse_unavailable").is_ok());
+        assert!(validate_error_code("").is_err());
+        assert!(validate_error_code("secret=value").is_err());
+        assert!(validate_error_code(
+            "this_error_code_is_deliberately_longer_than_the_storage_contract_allows"
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     #[ignore = "requires POSTGRES_TEST_URL"]
     async fn create_is_idempotent_per_key_and_writes_one_outbox_row() {
@@ -464,6 +1007,260 @@ mod tests {
             .expect("count outbox rows")
             .get("n");
         assert_eq!(outbox_rows, 1, "the deduplicated call must write nothing");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires POSTGRES_TEST_URL"]
+    async fn claim_lease_and_complete_are_fenced_and_idempotent() {
+        let postgres = test_postgres().await;
+        let user_id = seed_user(&postgres).await;
+        let service = JobService::new(Some(postgres.clone()));
+        let params = serde_json::json!({ "start": "2026-03-01", "end": "2026-03-02" });
+        let created = service
+            .create(
+                Some(user_id),
+                JobKind::AnalyticsReprocess,
+                params.clone(),
+                None,
+            )
+            .await
+            .expect("create job");
+        let envelope = JobEnvelope::new(
+            created.id,
+            JobKind::AnalyticsReprocess,
+            user_id,
+            params.clone(),
+        )
+        .expect("job envelope");
+        let owner = Uuid::now_v7();
+        let other = Uuid::now_v7();
+
+        let claimed = service
+            .claim(&envelope, owner, Duration::from_secs(300))
+            .await
+            .expect("claim");
+        assert_eq!(
+            claimed,
+            ClaimOutcome::Claimed(ClaimedJob {
+                id: created.id,
+                user_id: Some(user_id),
+                kind: JobKind::AnalyticsReprocess,
+                attempt: 0,
+                params,
+            })
+        );
+        assert_eq!(
+            service
+                .claim(&envelope, other, Duration::from_secs(300))
+                .await
+                .expect("duplicate claim"),
+            ClaimOutcome::AlreadyRunning
+        );
+        assert!(!service
+            .renew_lease(created.id, 0, other, Duration::from_secs(300))
+            .await
+            .expect("wrong-owner renew"));
+        assert!(service
+            .renew_lease(created.id, 0, owner, Duration::from_secs(300))
+            .await
+            .expect("owner renew"));
+        assert_eq!(
+            service
+                .complete(created.id, 0, other, serde_json::json!({ "ok": false }))
+                .await
+                .expect("wrong-owner completion"),
+            TransitionOutcome::LostLease
+        );
+        let result = serde_json::json!({ "ok": true });
+        assert_eq!(
+            service
+                .complete(created.id, 0, owner, result.clone())
+                .await
+                .expect("completion"),
+            TransitionOutcome::Applied
+        );
+        assert_eq!(
+            service
+                .complete(created.id, 0, owner, serde_json::json!({ "changed": true }))
+                .await
+                .expect("duplicate completion"),
+            TransitionOutcome::AlreadyApplied
+        );
+        assert_eq!(
+            service
+                .claim(&envelope, other, Duration::from_secs(300))
+                .await
+                .expect("terminal claim"),
+            ClaimOutcome::Terminal(JobStatus::Succeeded)
+        );
+        let stored: Value = postgres
+            .client()
+            .query_one(
+                "SELECT result FROM async_jobs WHERE id = $1",
+                &[&created.id],
+            )
+            .await
+            .expect("read result")
+            .get("result");
+        assert_eq!(
+            stored, result,
+            "a duplicate completion must not overwrite result"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires POSTGRES_TEST_URL"]
+    async fn retry_transition_and_target_are_atomic_and_idempotent() {
+        let postgres = test_postgres().await;
+        let user_id = seed_user(&postgres).await;
+        let service = JobService::new(Some(postgres.clone()));
+        let params = serde_json::json!({ "start": "2026-04-01", "end": "2026-04-02" });
+        let created = service
+            .create(
+                Some(user_id),
+                JobKind::AnalyticsReprocess,
+                params.clone(),
+                None,
+            )
+            .await
+            .expect("create job");
+        let envelope = JobEnvelope::new(created.id, JobKind::AnalyticsReprocess, user_id, params)
+            .expect("job envelope");
+        let owner = Uuid::now_v7();
+        assert!(matches!(
+            service
+                .claim(&envelope, owner, Duration::from_secs(300))
+                .await
+                .expect("claim"),
+            ClaimOutcome::Claimed(_)
+        ));
+
+        assert_eq!(
+            service
+                .schedule_retry(created.id, 0, owner, "clickhouse_unavailable")
+                .await
+                .expect("schedule retry"),
+            TransitionOutcome::Applied
+        );
+        assert_eq!(
+            service
+                .schedule_retry(created.id, 0, owner, "clickhouse_unavailable")
+                .await
+                .expect("repeat schedule retry"),
+            TransitionOutcome::AlreadyApplied
+        );
+
+        let state = postgres
+            .client()
+            .query_one(
+                "SELECT status, attempt, lease_owner IS NULL AS owner_cleared
+                 FROM async_jobs WHERE id = $1",
+                &[&created.id],
+            )
+            .await
+            .expect("read retry state");
+        assert_eq!(state.get::<_, String>("status"), "queued");
+        assert_eq!(state.get::<_, i16>("attempt"), 1);
+        assert!(state.get::<_, bool>("owner_cleared"));
+
+        let retry_rows = postgres
+            .client()
+            .query(
+                "SELECT delivery_target, retry_delay_seconds, payload
+                 FROM outbox_events
+                 WHERE aggregate_id = $1 AND delivery_target = 'retry'",
+                &[&created.id],
+            )
+            .await
+            .expect("read retry outbox");
+        assert_eq!(
+            retry_rows.len(),
+            1,
+            "a repeated transition writes no duplicate"
+        );
+        assert_eq!(
+            retry_rows[0].get::<_, Option<i32>>("retry_delay_seconds"),
+            Some(5)
+        );
+        let retried: JobEnvelope =
+            serde_json::from_value(retry_rows[0].get("payload")).expect("retry envelope");
+        assert_eq!(retried.attempt, 1);
+
+        let publisher = ScriptedPublisher::new(usize::MAX);
+        let relayed = service
+            .relay_once(&publisher, 64)
+            .await
+            .expect("relay targets");
+        assert_eq!(relayed.published, 2);
+        assert_eq!(
+            publisher.targets().await,
+            vec![
+                JobPublishTarget::Primary,
+                JobPublishTarget::Retry(Duration::from_secs(5)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires POSTGRES_TEST_URL"]
+    async fn poison_outbox_is_retired_without_blocking_the_next_job() {
+        let postgres = test_postgres().await;
+        let user_id = seed_user(&postgres).await;
+        let service = JobService::new(Some(postgres.clone()));
+        let poison = service
+            .create(
+                Some(user_id),
+                JobKind::AnalyticsReprocess,
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .expect("create poison owner");
+        let healthy = service
+            .create(
+                Some(user_id),
+                JobKind::AnalyticsReprocess,
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .expect("create healthy job");
+        postgres
+            .client()
+            .execute(
+                "UPDATE outbox_events SET payload = '{}'::jsonb
+                 WHERE aggregate_id = $1 AND aggregate_type = 'async_job'",
+                &[&poison.id],
+            )
+            .await
+            .expect("corrupt outbox envelope");
+
+        let publisher = ScriptedPublisher::new(usize::MAX);
+        let outcome = service.relay_once(&publisher, 64).await.expect("relay");
+        assert_eq!(outcome.poison, 1);
+        assert_eq!(outcome.published, 1);
+        assert_eq!(publisher.accepted().await, vec![healthy.id]);
+        let retired = postgres
+            .client()
+            .query_one(
+                "SELECT failed_at IS NOT NULL AS failed, failure_code
+                 FROM outbox_events WHERE aggregate_id = $1",
+                &[&poison.id],
+            )
+            .await
+            .expect("read poison row");
+        assert!(retired.get::<_, bool>("failed"));
+        assert_eq!(
+            retired.get::<_, Option<String>>("failure_code").as_deref(),
+            Some("invalid_job_envelope")
+        );
+        let status: String = postgres
+            .client()
+            .query_one("SELECT status FROM async_jobs WHERE id = $1", &[&poison.id])
+            .await
+            .expect("read poison job")
+            .get("status");
+        assert_eq!(status, "dead_lettered");
     }
 
     #[tokio::test]

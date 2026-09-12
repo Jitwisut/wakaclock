@@ -24,6 +24,8 @@ const CREDENTIAL_MIGRATIONS_MIGRATION: &str =
 const API_KEY_READBACK_MIGRATION: &str =
     include_str!("../../migrations/postgres/006_api_key_readback.sql");
 const ASYNC_JOBS_MIGRATION: &str = include_str!("../../migrations/postgres/007_async_jobs.sql");
+const JOB_WORKER_STATE_MIGRATION: &str =
+    include_str!("../../migrations/postgres/008_job_worker_state.sql");
 
 pub struct PostgresClient {
     pool: Pool,
@@ -102,12 +104,16 @@ impl PostgresClient {
         for (name, sql) in [
             ("foundation", FOUNDATION_MIGRATION),
             ("presence", PRESENCE_MIGRATION),
-            ("presence office", include_str!("../../migrations/postgres/007_presence_office.sql")),
+            (
+                "presence office",
+                include_str!("../../migrations/postgres/007_presence_office.sql"),
+            ),
             ("AI diagnostics", AI_DIAGNOSTICS_MIGRATION),
             ("early access", EARLY_ACCESS_MIGRATION),
             ("credential migrations", CREDENTIAL_MIGRATIONS_MIGRATION),
             ("API key readback", API_KEY_READBACK_MIGRATION),
             ("async jobs", ASYNC_JOBS_MIGRATION),
+            ("job worker state", JOB_WORKER_STATE_MIGRATION),
         ] {
             client
                 .batch_execute(sql)
@@ -223,5 +229,10 @@ mod tests {
             ASYNC_JOBS_MIGRATION.contains("async_jobs_idempotency_idx"),
             "async_jobs migration is missing the idempotency-key unique index"
         );
+        assert!(JOB_WORKER_STATE_MIGRATION.contains("lease_owner UUID"));
+        assert!(JOB_WORKER_STATE_MIGRATION.contains("publish_attempts INTEGER"));
+        assert!(JOB_WORKER_STATE_MIGRATION.contains("retry_delay_seconds INTEGER"));
+        assert!(JOB_WORKER_STATE_MIGRATION.contains("failed_at TIMESTAMPTZ"));
+        assert!(JOB_WORKER_STATE_MIGRATION.contains("failure_code TEXT"));
     }
 }

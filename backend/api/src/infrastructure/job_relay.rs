@@ -1,10 +1,9 @@
-//! In-process outbox relay (plans/plan-kafka-rabbitmq-adoption.md, R2).
+//! Dedicated-process outbox relay (plans/plan-kafka-rabbitmq-adoption.md, R2/R3).
 //!
-//! `wakaclock-server` has no library target, so `src/bin/outbox-relay.rs` cannot reach
-//! the services. Until a lib target exists the relay runs as a task inside the API
-//! process, started from `main.rs` only when both `ATOAXIS_JOB_QUEUE_URL` and
-//! `POSTGRES_URL` are set. Every replica runs one; `FOR UPDATE SKIP LOCKED` in
-//! [`JobService::relay_once`] keeps two of them from publishing the same row.
+//! The `job-worker` binary starts this task alongside its processors. The API does not
+//! publish jobs itself; PostgreSQL remains the source of truth and `FOR UPDATE SKIP
+//! LOCKED` in [`JobService::relay_once`] keeps multiple worker replicas from publishing
+//! the same row.
 //!
 //! This module owns the RabbitMQ connection lifecycle — the adapter itself
 //! deliberately does not reconnect. A broker error ends the inner loop, the

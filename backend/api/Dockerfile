@@ -28,11 +28,13 @@ COPY --from=builder /app/target/release/export-worker /usr/local/bin/export-work
 COPY --from=builder /app/target/release/report-worker /usr/local/bin/report-worker
 COPY --from=builder /app/target/release/billing-reconciliation /usr/local/bin/billing-reconciliation
 COPY --from=builder /app/target/release/account-deletion /usr/local/bin/account-deletion
+COPY --from=builder /app/target/release/job-worker /usr/local/bin/job-worker
 
 ENV SERVER_HOST=0.0.0.0 \
     SERVER_PORT=8080
 
 EXPOSE 8080
+EXPOSE 8081
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --fail http://127.0.0.1:8080/health || exit 1
