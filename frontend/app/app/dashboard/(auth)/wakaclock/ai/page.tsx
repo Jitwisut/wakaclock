@@ -22,6 +22,7 @@ import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
+import { formatAiIdentityReason } from '@/lib/wakaclock/ai-display';
 import { getAiDiagnostics, getAiDiagnosticsV2, getAiStats } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
@@ -142,6 +143,45 @@ function AiStatsPanel() {
                     : `Line evidence: ${formatCompactNumber(stats.coverage.attributed_line_changes)} of ${formatCompactNumber(stats.coverage.line_change_denominator)} measured line changes have an explicit actor (${formatPercent(stats.coverage.line_coverage_percent)}).`}
                 </p>
               </div>
+
+              {stats.identity && (
+                <section aria-label="AI identity coverage" className="rounded-md border p-3 text-sm">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="font-medium">AI identity coverage</p>
+                    <p className="text-muted-foreground text-xs">
+                      {formatCompactNumber(stats.identity.confirmed_ai_heartbeats)} confirmed
+                      {stats.identity.confirmed_ai_heartbeat_percentage != null
+                        ? ` (${formatPercent(stats.identity.confirmed_ai_heartbeat_percentage)})`
+                        : ''}{' '}
+                      · {formatCompactNumber(stats.identity.incomplete_ai_heartbeats)} needs review
+                    </p>
+                  </div>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Confirmation rate uses all AI verified heartbeats in this range as the
+                    denominator ({formatCompactNumber(
+                      stats.identity.ai_verified_heartbeat_denominator ??
+                        stats.identity.confirmed_ai_heartbeats +
+                          stats.identity.incomplete_ai_heartbeats
+                    )}).
+                  </p>
+                  {stats.identity.incomplete_ai_heartbeats > 0 && (
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      Incomplete activity stays in the totals. Provider/model names appear in the
+                      confirmed table only when the source evidence is complete.
+                    </p>
+                  )}
+                  {stats.identity.reason_counts.length > 0 && (
+                    <ul className="text-muted-foreground mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                      {stats.identity.reason_counts.map((reason) => (
+                        <li key={reason.reason}>
+                          {formatAiIdentityReason(reason.reason)} ·{' '}
+                          {formatCompactNumber(reason.heartbeats)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
 
               <DashboardPanel id="ai.charts">
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

@@ -55,6 +55,12 @@ pub struct HeartbeatRow {
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
     pub ai_model: Option<String>,
+    pub identity_status: Option<String>,
+    pub identity_reason: Option<String>,
+    pub identity_source: Option<String>,
+    pub identity_schema_version: Option<u8>,
+    pub identity_turn_id: Option<String>,
+    pub identity_message_id: Option<String>,
     pub ai_source: Option<String>,
     pub ai_confidence: Option<String>,
     pub ai_event_id: Option<String>,
@@ -94,6 +100,9 @@ pub struct HeartbeatRow {
     /// revision 0; later full-value corrections append a higher revision for the same
     /// canonical operation and readers must select the max revision before summing.
     pub revision: u32,
+    /// Stable agent session scope. Added at the end so existing ClickHouse rows keep
+    /// their positional layout while the additive migration catches up.
+    pub session_id: Option<String>,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat

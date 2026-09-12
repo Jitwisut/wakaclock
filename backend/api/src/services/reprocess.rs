@@ -316,7 +316,10 @@ impl ReprocessService {
                     heartbeat_id, ast_language, ast_confidence,
                     keystrokes, chars_added, chars_deleted,
                     active_seconds, active_seconds_claimed, activity_segments,
-                    is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
+                    is_ai_generated, ai_agent, ai_provider, ai_model,
+                    identity_status, identity_reason, identity_source,
+                    identity_schema_version, identity_turn_id, identity_message_id,
+                    ai_source,
                     ai_confidence, ai_event_id, ai_change_id,
                     prompt_character_count, input_tokens, output_tokens,
                     cache_read_tokens, cache_write_tokens, ai_subscription_plan,
@@ -325,7 +328,7 @@ impl ReprocessService {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at, actor_type, actor_confidence, revision
+                    created_at, actor_type, actor_confidence, revision, session_id
                 FROM wakaclock.heartbeats_canonical AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC

@@ -128,6 +128,24 @@ pub struct AiEditEvent {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub session_id: Option<String>,
+    /// Stable turn/message grouping supplied by the transcript or native adapter.
+    /// It is optional because older producers do not expose a turn identifier.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    /// Message identifier that directly authored the tool call, when the
+    /// provider exposes one. This is distinct from `tool_event_id` so repair
+    /// can prove the exact message/turn without guessing from the call id.
+    #[serde(default)]
+    pub identity_message_id: Option<String>,
+    /// Optional identity decision produced by an adapter when it has more than
+    /// one evidence record for the same tool call. In particular, `conflict`
+    /// prevents a later layer from silently choosing the newest model value.
+    #[serde(default)]
+    pub identity_status: Option<String>,
+    #[serde(default)]
+    pub identity_reason: Option<String>,
+    #[serde(default)]
+    pub identity_source: Option<String>,
     /// Stable producer operation identity when the source exposes one. This is the
     /// proof-bearing alias key shared by hook/transcript observations; it is never
     /// synthesized from path, time, or line counts.
@@ -226,6 +244,11 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("src/lib.rs"),

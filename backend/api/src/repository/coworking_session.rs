@@ -16,6 +16,12 @@ struct SessionIdRow {
     session_id: Uuid,
 }
 
+#[derive(Debug, Deserialize, Row)]
+pub struct PersonalWindow {
+    pub joined_at: u32,
+    pub left_at: Option<u32>,
+}
+
 pub struct CoworkingSessionRepository {
     client: Arc<ClickHouseClient>,
 }
@@ -365,6 +371,12 @@ impl CoworkingSessionRepository {
         Ok(())
     }
 
+    pub async fn personal_windows(&self, user_id: Uuid, from: u32, to: u32) -> Result<Vec<PersonalWindow>> {
+        Ok(self.client.get_client().query(
+            "SELECT me.joined_at, me.left_at FROM coworking_session_participants AS me FINAL INNER JOIN coworking_sessions AS s FINAL ON s.session_id=me.session_id WHERE me.user_id=? AND me.joined_at<? AND (me.left_at IS NULL OR me.left_at>=?) AND s.started_at<? AND (s.ended_at IS NULL OR s.ended_at>=?)"
+        ).bind(user_id).bind(to).bind(from).bind(to).bind(from).fetch_all::<PersonalWindow>().await?)
+    }
+
     pub async fn history_for_user(
         &self,
         user_id: Uuid,
@@ -581,6 +593,10 @@ mod tests {
             .await
             .expect("history query should parse and use configured database");
         assert!(history.iter().any(|row| row.session_id == session_id));
+        let windows = repo.personal_windows(viewer_id, started_at-10, ended_at+10).await.expect("personal summary query");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].joined_at, started_at);
+        assert_eq!(windows[0].left_at, Some(ended_at));
 
         let summary = repo
             .summary_for_teams(&[team_id], started_at - 10, ended_at + 10)

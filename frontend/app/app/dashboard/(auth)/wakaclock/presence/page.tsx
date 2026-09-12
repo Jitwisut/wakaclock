@@ -5,6 +5,9 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import '@/components/presence/presence-theme.css';
+
+import { OfficeMediaPanel } from '@/components/presence/OfficeMedia';
+import { OfficeTools } from '@/components/presence/OfficeTools';
 import { PixelOfficeDirectory } from '@/components/presence/PixelOfficeDirectory';
 import { PixelOfficeDock } from '@/components/presence/PixelOfficeDock';
 import { PixelOfficeToolRail } from '@/components/presence/PixelOfficeToolRail';
@@ -18,7 +21,9 @@ import {
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useCoworkingHistory } from '@/hooks/use-coworking-history';
+import { useOffice } from '@/hooks/use-office';
 import { useOfficeChrome } from '@/hooks/use-office-chrome';
+import { useOfficeMedia } from '@/hooks/use-office-media';
 import { usePresenceStream } from '@/hooks/use-presence-stream';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useRoomMovement } from '@/hooks/use-room-movement';
@@ -41,7 +46,6 @@ import { toPresenceUser } from '@/types/presence';
 const ROOM_STORAGE_KEY = 'wakaclock.presence.v2.roomId';
 const INVITE_TOKEN_KEY = 'wakaclock.presence.v2.inviteToken';
 
-
 function readInviteContext(): { inviteToken: null | string; roomId: null | string } {
   if (typeof window === 'undefined') return { inviteToken: null, roomId: null };
   const roomId = new URLSearchParams(window.location.search).get('room');
@@ -62,7 +66,8 @@ function PresenceApp() {
   const currentUserId = useWakaclockUserStore((state) => state.userId) ?? '';
   const currentUsername = useWakaclockUserStore((state) => state.username) ?? '';
   const reducedMotion = useReducedMotion();
-  const chrome = useOfficeChrome();
+  const localChrome = useOfficeChrome();
+  const [panel, setPanel] = React.useState<null | string>(null);
   const officeWindowRef = React.useRef<HTMLDivElement>(null);
   const { isLoading: capabilitiesLoading, presenceV2Available } = useCapabilities();
   const [rooms, setRooms] = React.useState<PresenceV2Room[]>([]);
@@ -78,8 +83,37 @@ function PresenceApp() {
   const [error, setError] = React.useState<null | string>(null);
   const history = useCoworkingHistory(Boolean(activeRoom));
   const presenceStream = usePresenceStream(activeRoom?.id ?? null, inviteToken);
-  const { applySnapshot, reconnect, reconnectStopped, snapshot, status: streamStatus } =
-    presenceStream;
+  const {
+    applySnapshot,
+    reconnect,
+    reconnectStopped,
+    snapshot,
+    status: streamStatus,
+  } = presenceStream;
+  const office = useOffice(activeRoom?.id ?? null);
+  const myZone = snapshot?.roster.find((entry) => entry.user_id === currentUserId)?.zone_id ?? null;
+  const media = useOfficeMedia(
+    activeRoom?.id ?? null,
+    myZone,
+    Boolean(office.data?.media_available),
+    snapshot?.roster,
+    currentUserId
+  );
+  const chrome = {
+    ...localChrome,
+    mic: media.mic,
+    camera: media.camera,
+    screenShare: media.screenShare,
+    toggleMic: media.toggleMic,
+    toggleCamera: media.toggleCamera,
+    toggleScreenShare: media.toggleScreenShare,
+    pushReaction: (emoji: string) => {
+      void office
+        .send({ kind: 'reaction', emoji })
+        .catch((requestError) => toast.error(String(requestError)));
+    },
+    reactions: office.data?.reactions ?? [],
+  };
   const connected = streamStatus === 'live';
   const stale = streamStatus === 'stale';
 
@@ -134,30 +168,34 @@ function PresenceApp() {
 
   const users = React.useMemo(
     () =>
-      snapshot?.roster.map((entry) =>
-        toPresenceUser(
+      snapshot?.roster.map((entry) => ({
+        ...toPresenceUser(
           {
             ...entry,
             position: entry.position,
             state: entry.state,
           },
           currentUserId
-        )
-      ) ?? [],
-    [currentUserId, snapshot]
+        ),
+        appearance: office.data?.profiles[entry.user_id],
+      })) ?? [],
+    [currentUserId, snapshot, office.data?.profiles]
   );
 
   const activeSession = snapshot?.sessions.find((session) =>
     session.participants.some((participant) => participant.user_id === currentUserId)
   );
   const previewUnavailable = Boolean(
-    roomPreview?.ended_at || (roomPreview?.expires_at && new Date(roomPreview.expires_at).getTime() <= Date.now())
+    roomPreview?.ended_at ||
+    (roomPreview?.expires_at && new Date(roomPreview.expires_at).getTime() <= Date.now())
   );
   const previousSessionRef = React.useRef<null | PresenceV2Session>(null);
   React.useEffect(() => {
     const previous = previousSessionRef.current;
     if (previous && (!activeSession || previous.session_id !== activeSession.session_id)) {
-      toast.success(`Co-working session ended · ${formatDuration(Math.max(0, Math.floor(Date.now() / 1000) - previous.started_at))}`);
+      toast.success(
+        `Co-working session ended · ${formatDuration(Math.max(0, Math.floor(Date.now() / 1000) - previous.started_at))}`
+      );
     }
     previousSessionRef.current = activeSession ?? null;
   }, [activeSession]);
@@ -319,9 +357,35 @@ function PresenceApp() {
   if (connected) hudConnectionLabel = 'Live';
   else if (stale) hudConnectionLabel = 'Stale';
 
-  const notifyLocked = React.useCallback((label: string) => {
-    toast(`${label} isn't wired up yet — it's a preview of where PixelOffice is heading.`);
-  }, []);
+  const notifyLocked = (label: string) => {
+    if (!activeRoom) {
+      toast('Join a room to use office tools');
+      return;
+    }
+    if (label === 'Floor map') {
+      officeWindowRef.current?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    setPanel(label);
+  };
+  const enterSpace = async (id: string) => {
+    if (!activeRoom || id === activeRoom.id) return;
+    const previous = activeRoom.id;
+    await office.send({ kind: 'space_join', id });
+    const room = await getPresenceRoomV2(id);
+    await joinPresenceRoomV2(id, undefined, getPresenceClientId());
+    try {
+      await leavePresenceRoomV2(previous);
+    } catch (requestError) {
+      await leavePresenceRoomV2(id).catch(() => undefined);
+      throw requestError;
+    }
+    setActiveRoom(room);
+    setPanel(null);
+    setInviteId(null);
+    setInviteUrl(null);
+    window.localStorage.setItem(ROOM_STORAGE_KEY, id);
+  };
 
   let content: React.ReactNode;
   if (capabilitiesLoading || presenceV2Available === false) {
@@ -396,6 +460,42 @@ function PresenceApp() {
         username={currentUsername || null}
       />
 
+      {activeRoom && (
+        <div aria-label="Office tools" className="mb-3 flex flex-wrap gap-2">
+          {[
+            'Floor map',
+            'Party members',
+            'Chat',
+            'Floors',
+            'Meeting chambers',
+            'Quests & sprints',
+            'Sprite customizer',
+            'Office settings',
+          ].map((label) => (
+            <button
+              className="border px-3 py-2 text-xs"
+              key={label}
+              onClick={() => notifyLocked(label)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {activeRoom && panel && (
+        <OfficeTools
+          key={`${activeRoom.id}-${panel}`}
+          office={office}
+          onClose={() => setPanel(null)}
+          onRenamed={(name) => setActiveRoom((r) => (r ? { ...r, name } : r))}
+          onSpace={enterSpace}
+          panel={panel}
+          roomId={activeRoom.id}
+          userId={currentUserId}
+          users={users}
+        />
+      )}
       <div className="flex gap-3">
         <div className="hidden sm:block">
           <PixelOfficeToolRail onLockedFeature={notifyLocked} />
@@ -404,6 +504,7 @@ function PresenceApp() {
         {inRoom && snapshot ? (
           <div className="hidden xl:block">
             <PixelOfficeDirectory
+              onChat={() => setPanel('Chat')}
               onReact={chrome.pushReaction}
               reducedMotion={reducedMotion}
               users={users}
@@ -413,6 +514,28 @@ function PresenceApp() {
         ) : null}
       </div>
 
+      {activeRoom && (
+        <div aria-label="Office reactions" className="my-3 flex flex-wrap gap-2 xl:hidden">
+          {[
+            ['👏', 'Clap'],
+            ['☕', 'Coffee break'],
+            ['✋', 'Wave'],
+            ['🔥', 'Fire'],
+            ['❤️', 'Love it'],
+          ].map(([emoji, label]) => (
+            <button
+              aria-label={label}
+              className="border px-3 py-2"
+              key={emoji}
+              onClick={() => chrome.pushReaction(emoji)}
+              type="button"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+      {activeRoom && <OfficeMediaPanel media={media} />}
       <div className="relative mt-3">
         <div
           aria-hidden
@@ -428,6 +551,7 @@ function PresenceApp() {
           canReturnToDesk={Boolean(activeSession)}
           chrome={chrome}
           fullscreenTargetRef={officeWindowRef}
+          mediaReady={media.ready && !media.busy}
           onLockedFeature={notifyLocked}
           onReturnToDesk={handleReturnToSession}
         />

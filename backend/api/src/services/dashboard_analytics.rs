@@ -386,7 +386,7 @@ fn normalized_dimension(column: &str) -> String {
 }
 
 fn normalized_ai_model_dimension() -> &'static str {
-    "if(actor_type = 'ai_verified' AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
+    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ai_model, 'Unattributed AI')"
 }
 
 /// Group daily totals into Monday–Sunday, always emitting all seven days.
@@ -589,7 +589,7 @@ mod tests {
     fn inferred_ai_models_are_grouped_as_unattributed() {
         assert_eq!(
             normalized_ai_model_dimension(),
-            "if(actor_type = 'ai_verified' AND NOT empty(ifNull(ai_agent, '')) AND lower(ifNull(ai_confidence, '')) = 'verified' AND lower(ifNull(ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
+    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ai_model, 'Unattributed AI')"
         );
     }
 

@@ -39,6 +39,14 @@ pub struct AiAgentItem {
     pub actor_type: String,
     pub provider: Option<String>,
     pub model: Option<String>,
+    /// Completeness of the evidence for the provider/model tuple. Optional so
+    /// clients can still consume pre-identity servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_source: Option<String>,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
     pub human_lines_added: u64,
@@ -106,8 +114,32 @@ pub struct AiStatsData {
     pub unattributed_heartbeat_percentage: f64,
     /// Explicit actor/line partitions. This field is additive to the legacy totals above.
     pub coverage: AiStatsCoverage,
+    /// Identity partitions are additive to the legacy actor totals. Incomplete
+    /// rows remain counted here and in `agents` so no activity disappears.
+    pub identity: AiIdentitySummary,
     pub agents: Vec<AiAgentItem>,
     pub daily: Vec<AiDailyItem>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct AiIdentitySummary {
+    pub confirmed_ai_heartbeats: u64,
+    /// All heartbeats whose canonical actor is `ai_verified`, including rows
+    /// with partial or conflicting identity evidence. This is the denominator
+    /// for the confirmation percentage.
+    pub ai_verified_heartbeat_denominator: u64,
+    pub confirmed_ai_heartbeat_percentage: f64,
+    pub incomplete_ai_heartbeats: u64,
+    pub incomplete_ai_lines_added: u64,
+    pub incomplete_ai_lines_deleted: u64,
+    pub conflict_heartbeats: u64,
+    pub reason_counts: Vec<AiIdentityReasonCount>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AiIdentityReasonCount {
+    pub reason: String,
+    pub heartbeats: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +188,9 @@ pub struct AiAgentRow {
     pub actor_type: String,
     pub provider: Option<String>,
     pub model: Option<String>,
+    pub identity_status: Option<String>,
+    pub identity_reason: Option<String>,
+    pub identity_source: Option<String>,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
     pub human_lines_added: u64,

@@ -270,6 +270,9 @@ export interface AiAgentItem {
   heartbeat_count: number;
   human_lines_added: number;
   human_lines_deleted: number;
+  identity_reason?: null | string;
+  identity_source?: null | string;
+  identity_status?: null | string;
   model?: null | string;
   provider?: null | string;
   /** Legacy spelling retained while older servers roll forward. */
@@ -310,6 +313,7 @@ export interface AiStatsData {
   coverage?: AiStatsCoverage;
   daily: AiDailyItem[];
   human_heartbeat_percentage: number;
+  identity?: AiIdentitySummary;
   total_ai_inferred_lines_added: number;
   total_ai_inferred_lines_deleted: number;
   total_ai_lines_added: number;
@@ -324,6 +328,18 @@ export interface AiStatsData {
   total_unknown_lines_added: number;
   total_unknown_lines_deleted: number;
   unknown_heartbeat_percentage: number;
+}
+
+export interface AiIdentitySummary {
+  /** Denominator is every canonical ai_verified heartbeat, including incomplete/conflict rows. */
+  ai_verified_heartbeat_denominator?: number;
+  confirmed_ai_heartbeat_percentage?: number;
+  confirmed_ai_heartbeats: number;
+  conflict_heartbeats: number;
+  incomplete_ai_heartbeats: number;
+  incomplete_ai_lines_added: number;
+  incomplete_ai_lines_deleted: number;
+  reason_counts: Array<{ heartbeats: number; reason: string }>;
 }
 
 export type AiStatsCoverageStatus = 'complete' | 'no_activity' | 'partial';
@@ -972,6 +988,12 @@ export interface HeartbeatItem {
   entity_type: string;
   human_lines_added?: null | number;
   human_lines_deleted?: null | number;
+  identity_message_id?: null | string;
+  identity_reason?: null | string;
+  identity_schema_version?: null | number;
+  identity_source?: null | string;
+  identity_status?: null | string;
+  identity_turn_id?: null | string;
   is_write: boolean;
   language: null | string;
   line_number: null | number;
@@ -979,6 +1001,7 @@ export interface HeartbeatItem {
   machine: string;
   operating_system: string;
   project: null | string;
+  session_id?: null | string;
   time: number;
   unattributed_lines_added?: null | number;
   unattributed_lines_deleted?: null | number;
@@ -1016,6 +1039,12 @@ export interface HeartbeatPayload {
   entity_type: EntityType;
   human_lines_added?: number;
   human_lines_deleted?: number;
+  identity_message_id?: string;
+  identity_reason?: string;
+  identity_schema_version?: number;
+  identity_source?: string;
+  identity_status?: string;
+  identity_turn_id?: string;
   is_ai_generated?: boolean;
   is_write?: boolean;
   keystrokes?: number;
@@ -1025,6 +1054,7 @@ export interface HeartbeatPayload {
   machine?: string;
   operating_system?: string;
   project?: string;
+  session_id?: string;
   time: number;
   unattributed_lines_added?: number;
   unattributed_lines_deleted?: number;

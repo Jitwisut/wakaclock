@@ -54,16 +54,16 @@ impl HeartbeatService {
         // reporting less time than it observed, and that used to be invisible.
         let mut clamped_claims = 0u32;
         let mut clamped_seconds = 0.0f64;
-        let mut batch_heartbeat_revisions = HashMap::new();
-        let mut batch_event_revisions = HashMap::new();
-        let mut batch_change_revisions = HashMap::new();
+        let mut batch_heartbeat_revisions = HashMap::<(String, Option<String>), u32>::new();
+        let mut batch_event_revisions = HashMap::<(String, Option<String>), u32>::new();
+        let mut batch_change_revisions = HashMap::<(String, Option<String>), u32>::new();
         let candidate_heartbeat_ids: Vec<String> = heartbeats
             .iter()
             .filter_map(|heartbeat| heartbeat.heartbeat_id.clone())
             .collect();
         let existing_heartbeat_revisions = self
             .repo
-            .existing_heartbeat_revisions(user_id, &candidate_heartbeat_ids)
+            .existing_heartbeat_revisions_scoped(user_id, &candidate_heartbeat_ids)
             .await?;
         let candidate_event_ids: Vec<String> = heartbeats
             .iter()
@@ -73,8 +73,14 @@ impl HeartbeatService {
             .repo
             .existing_ai_event_revisions(user_id, &candidate_event_ids)
             .await?;
+        // `ai_change_id` is the tool-level reference and may be shared by a
+        // multi-file operation. Per-file `ai_event_id` already provides the
+        // revision/dedup key for those rows; consulting the shared change id here
+        // would drop every file after the first one in a bulk request. Keep the
+        // legacy change-id fallback only for rows that have no event id.
         let candidate_change_ids: Vec<String> = heartbeats
             .iter()
+            .filter(|heartbeat| heartbeat.ai_event_id.is_none())
             .filter_map(|heartbeat| heartbeat.ai_change_id.clone())
             .collect();
         let existing_change_revisions = self
@@ -83,8 +89,9 @@ impl HeartbeatService {
             .await?;
         for (batch_index, mut hb) in heartbeats.into_iter().enumerate() {
             if let Some(heartbeat_id) = hb.heartbeat_id.as_ref() {
-                let stored_revision = existing_heartbeat_revisions.get(heartbeat_id).copied();
-                let batch_revision = batch_heartbeat_revisions.get(heartbeat_id).copied();
+                let heartbeat_key = (heartbeat_id.clone(), hb.session_id.clone());
+                let stored_revision = existing_heartbeat_revisions.get(&heartbeat_key).copied();
+                let batch_revision = batch_heartbeat_revisions.get(&heartbeat_key).copied();
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
@@ -111,14 +118,15 @@ impl HeartbeatService {
                         );
                     }
                 }
-                batch_heartbeat_revisions.insert(heartbeat_id.clone(), hb.revision);
+                batch_heartbeat_revisions.insert(heartbeat_key, hb.revision);
             }
             // Bulk retries can contain the same AI event twice. De-duplicate within
             // the request before it reaches ClickHouse; the opaque id is supplied by
             // the agent hook and is not derived from source content.
             if let Some(event_id) = hb.ai_event_id.as_ref() {
-                let stored_revision = existing_event_revisions.get(event_id).copied();
-                let batch_revision = batch_event_revisions.get(event_id).copied();
+                let event_key = (event_id.clone(), hb.session_id.clone());
+                let stored_revision = existing_event_revisions.get(&event_key).copied();
+                let batch_revision = batch_event_revisions.get(&event_key).copied();
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
@@ -141,35 +149,38 @@ impl HeartbeatService {
                         );
                     }
                 }
-                batch_event_revisions.insert(event_id.clone(), hb.revision);
+                batch_event_revisions.insert(event_key, hb.revision);
             }
 
-            if let Some(change_id) = hb.ai_change_id.as_ref() {
-                let stored_revision = existing_change_revisions.get(change_id).copied();
-                let batch_revision = batch_change_revisions.get(change_id).copied();
-                if stored_revision.is_some_and(|revision| hb.revision <= revision)
-                    || batch_revision.is_some_and(|revision| hb.revision <= revision)
-                {
-                    continue;
-                }
-                if hb.revision > 0 && stored_revision.is_none() {
-                    anyhow::bail!(
-                        "correction revision {} has no stored base for ai_change_id {}",
-                        hb.revision,
-                        change_id
-                    );
-                }
-                if let Some(revision) = stored_revision {
-                    if hb.revision != revision.saturating_add(1) {
+            if hb.ai_event_id.is_none() {
+                if let Some(change_id) = hb.ai_change_id.as_ref() {
+                    let change_key = (change_id.clone(), hb.session_id.clone());
+                    let stored_revision = existing_change_revisions.get(&change_key).copied();
+                    let batch_revision = batch_change_revisions.get(&change_key).copied();
+                    if stored_revision.is_some_and(|revision| hb.revision <= revision)
+                        || batch_revision.is_some_and(|revision| hb.revision <= revision)
+                    {
+                        continue;
+                    }
+                    if hb.revision > 0 && stored_revision.is_none() {
                         anyhow::bail!(
-                            "correction revision {} must follow stored revision {} for ai_change_id {}",
+                            "correction revision {} has no stored base for ai_change_id {}",
                             hb.revision,
-                            revision,
                             change_id
                         );
                     }
+                    if let Some(revision) = stored_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                hb.revision,
+                                revision,
+                                change_id
+                            );
+                        }
+                    }
+                    batch_change_revisions.insert(change_key, hb.revision);
                 }
-                batch_change_revisions.insert(change_id.clone(), hb.revision);
             }
 
             // Do not use a time/path/line fingerprint as authoritative identity. Those
@@ -323,6 +334,12 @@ impl HeartbeatService {
                 ai_agent: hb.ai_agent,
                 ai_provider: hb.ai_provider,
                 ai_model: hb.ai_model,
+                identity_status: hb.identity_status,
+                identity_reason: hb.identity_reason,
+                identity_source: hb.identity_source,
+                identity_schema_version: hb.identity_schema_version,
+                identity_turn_id: hb.identity_turn_id,
+                identity_message_id: hb.identity_message_id,
                 ai_source: hb.ai_source,
                 ai_confidence: hb.ai_confidence,
                 ai_event_id: hb.ai_event_id,
@@ -357,6 +374,7 @@ impl HeartbeatService {
                 paste_same_workspace_actions: hb.paste_same_workspace_actions,
                 paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
                 revision: hb.revision,
+                session_id: hb.session_id,
             };
 
             rows.push(row);

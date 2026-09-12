@@ -10,8 +10,14 @@ const withBundleAnalyzer = bundleAnalyzer({
 });
 
 const developmentScriptPolicy = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : '';
-const developmentConnectPolicy =
-  process.env.NODE_ENV === 'development' ? ' http: ws: wss:' : '';
+const developmentConnectPolicy = process.env.NODE_ENV === 'development' ? ' http: ws: wss:' : '';
+
+const mediaOrigin = process.env.NEXT_PUBLIC_LIVEKIT_URL
+  ? new URL(process.env.NEXT_PUBLIC_LIVEKIT_URL).origin
+  : '';
+const mediaConnectPolicy = mediaOrigin
+  ? ` ${mediaOrigin} ${mediaOrigin.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:')}`
+  : '';
 
 /**
  * Next's static App Router output contains inline bootstrap/RSC scripts, so a nonce-only
@@ -28,7 +34,8 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${developmentConnectPolicy} https://api.atoaxis.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.posthog.com`,
+  `connect-src 'self'${developmentConnectPolicy}${mediaConnectPolicy} https://api.atoaxis.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.posthog.com`,
+  "media-src 'self' blob:",
   "worker-src 'self' blob:",
 ].join('; ');
 
@@ -114,7 +121,7 @@ const nextConfig: NextConfig = {
           },
           {
             key: 'Permissions-Policy',
-            value: 'camera=(), microphone=(), geolocation=()',
+            value: 'camera=(self), microphone=(self), display-capture=(self), geolocation=()',
           },
         ],
       },

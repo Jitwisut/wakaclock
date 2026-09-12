@@ -1,5 +1,7 @@
 import type { PresenceRosterEntry, PresenceState } from '@/lib/wakaclock/types';
 
+import type { SpriteAppearance } from './sprite';
+
 /**
  * UI-layer presence types. Deliberately a thin, presentation-shaped layer over the real
  * API types (`PresenceRosterEntry` etc. in `lib/wakaclock/types.ts`) rather than a
@@ -14,6 +16,7 @@ import type { PresenceRosterEntry, PresenceState } from '@/lib/wakaclock/types';
  * backend-side needs to change for this to be true.
  */
 export interface PresenceUser {
+  appearance?: SpriteAppearance;
   avatar?: string;
   id: string;
   isCurrentUser: boolean;

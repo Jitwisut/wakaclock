@@ -1,4 +1,5 @@
 pub mod account_analytics;
+pub mod ai_identity;
 pub mod ai_diagnostics;
 pub mod ai_stats;
 pub mod ai_usage;
@@ -57,6 +58,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(heartbeats::create_bulk).delete(heartbeats::delete_bulk),
         )
         .route("/ai/usage", post(ai_usage::ingest))
+        .route("/ai/identity/repair", post(ai_identity::repair))
         .route("/ai/diagnostics", post(ai_diagnostics::ingest))
         .route("/ai/diagnostics/v2", post(ai_diagnostics::ingest_v2))
         .route("/analytics/rebuild", post(account_analytics::rebuild))

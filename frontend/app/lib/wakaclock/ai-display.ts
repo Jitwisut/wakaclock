@@ -1,6 +1,21 @@
 import type { ActorType, AiAdapterFreshnessV2, AiAgentItem, AiRuntimeHealth } from './types';
 
-const PLACEHOLDER_VALUES = new Set(['', 'null', 'undefined', 'unknown', '<unknown>']);
+const PLACEHOLDER_VALUES = new Set([
+  '',
+  'null',
+  'undefined',
+  'unknown',
+  '<unknown>',
+  'none',
+  'n/a',
+  'na',
+  'not reported',
+  'not available',
+  'model_not_reported',
+  'provider_not_reported',
+  'no model',
+  'no provider',
+]);
 
 export const AI_LABELS = {
   aiAgentNotReported: 'AI agent not reported',
@@ -18,6 +33,15 @@ export interface AiRepairGuidance {
   label: string;
   tone: 'neutral' | 'success' | 'warning';
 }
+
+export const AI_IDENTITY_REASON_LABELS: Record<string, string> = {
+  conflicting_evidence: 'Conflicting evidence',
+  context_unavailable: 'Turn context unavailable',
+  internal_marker: 'Internal model marker',
+  missing_agent: 'Agent not reported',
+  missing_model: 'Model not reported',
+  missing_provider: 'Provider not reported',
+};
 
 /**
  * Translate bounded diagnostic metadata into a user-facing repair action. The server
@@ -270,6 +294,39 @@ export function formatAiProviderModel(
   return `${normalizedProvider ?? AI_LABELS.providerNotReported} / ${normalizedModel ?? AI_LABELS.modelNotReported}`;
 }
 
+/** A row is safe for the primary model table only when the new API explicitly
+ * marked the tuple confirmed. Missing metadata keeps legacy clients readable,
+ * while server responses always include a status for new rows. */
+export function isConfirmedAiIdentity(
+  agent: Pick<
+    AiAgentItem,
+    'actor_type' | 'agent' | 'identity_reason' | 'identity_status' | 'model' | 'provider'
+  >
+): boolean {
+  if (agent.actor_type !== 'ai_verified') return false;
+  const hasTuple = Boolean(
+    usableIdentityValue(agent.agent) &&
+      usableIdentityValue(agent.provider) &&
+      usableIdentityValue(agent.model)
+  );
+  if (agent.identity_status) {
+    return (
+      agent.identity_status.trim().toLowerCase() === 'confirmed' &&
+      !usableIdentityValue(agent.identity_reason) &&
+      hasTuple
+    );
+  }
+  // Compatibility with pre-identity API responses. New server rows always carry
+  // an explicit status; the fallback keeps older dashboards readable without
+  // treating a placeholder as a model name.
+  return hasTuple;
+}
+
+export function formatAiIdentityReason(reason?: null | string): string {
+  if (!reason) return 'Identity evidence is incomplete';
+  return AI_IDENTITY_REASON_LABELS[reason] ?? 'Identity evidence needs review';
+}
+
 export function formatIntegrationProviderModel(
   provider?: null | string,
   model?: null | string
@@ -284,5 +341,33 @@ export function formatIntegrationProviderModel(
 
 function formatModelMetadata(value?: null | string): null | string {
   const normalized = normalizeAiMetadata(value);
-  return normalized?.toLowerCase() === '<synthetic>' ? AI_LABELS.internalModelMarker : normalized;
+  return normalized &&
+    ['<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker'].includes(
+      normalized.toLowerCase()
+    )
+    ? AI_LABELS.internalModelMarker
+    : normalized;
+}
+
+function usableIdentityValue(value?: null | string): null | string {
+  const normalized = normalizeAiMetadata(value);
+  if (!normalized) return null;
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === '<synthetic>' ||
+    lowered === 'synthetic' ||
+    lowered === 'internal model marker' ||
+    lowered === 'internal_model_marker' ||
+    lowered === 'model not reported' ||
+    lowered === 'provider not reported' ||
+    lowered === 'not reported' ||
+    lowered === 'not available' ||
+    lowered === 'model_not_reported' ||
+    lowered === 'provider_not_reported' ||
+    lowered === 'no model' ||
+    lowered === 'no provider'
+  ) {
+    return null;
+  }
+  return normalized;
 }

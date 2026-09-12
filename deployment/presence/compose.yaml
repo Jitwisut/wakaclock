@@ -1,0 +1,12 @@
+# Local media service only. PostgreSQL, Redis and the API use the existing development stack.
+# These development credentials must never be used on a public server.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    command: --config /etc/livekit.yaml
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:7882:7882/udp"
+    volumes:
+      - ./livekit.local.yaml:/etc/livekit.yaml:ro

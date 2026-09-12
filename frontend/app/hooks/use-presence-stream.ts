@@ -19,7 +19,11 @@ export function usePresenceStream(roomId: null | string, inviteToken?: null | st
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
 
   const applySnapshot = React.useCallback((next: PresenceV2Snapshot) => {
-    setSnapshot((current) => (!current || next.version >= current.version ? next : current));
+    setSnapshot((current) =>
+      !current || next.room.id !== current.room.id || next.version >= current.version
+        ? next
+        : current
+    );
   }, []);
 
   React.useEffect(() => {
@@ -43,10 +47,13 @@ export function usePresenceStream(roomId: null | string, inviteToken?: null | st
       }
       attempts += 1;
       const delay = [1000, 2000, 5000, 10_000][Math.min(attempts - 1, 3)] ?? 30_000;
-      retryTimer = window.setTimeout(() => {
-        retryTimer = null;
-        void connect();
-      }, delay + Math.round(Math.random() * 250));
+      retryTimer = window.setTimeout(
+        () => {
+          retryTimer = null;
+          void connect();
+        },
+        delay + Math.round(Math.random() * 250)
+      );
     };
 
     const connect = async () => {
@@ -66,6 +73,7 @@ export function usePresenceStream(roomId: null | string, inviteToken?: null | st
           setStatus('live');
         });
         source.addEventListener('snapshot', (event) => {
+          if (disposed) return;
           try {
             applySnapshot(JSON.parse(event.data) as PresenceV2Snapshot);
             setStatus('live');
@@ -99,5 +107,11 @@ export function usePresenceStream(roomId: null | string, inviteToken?: null | st
     setReconnectNonce((value) => value + 1);
   }, []);
 
-  return { applySnapshot, reconnect, reconnectStopped, snapshot, status };
+  return {
+    applySnapshot,
+    reconnect,
+    reconnectStopped,
+    snapshot: snapshot?.room.id === roomId ? snapshot : null,
+    status,
+  };
 }

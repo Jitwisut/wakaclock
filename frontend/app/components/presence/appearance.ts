@@ -1,17 +1,17 @@
 /** Stable, independently seeded traits keep each coworker's character recognizable. */
-export type SpriteAccessory = 'beanie' | 'cap' | 'glasses' | 'headset' | 'none';
-export type SpriteHairStyle = 'bob' | 'bun' | 'curls' | 'spiky' | 'swept';
-export type SpriteOutfit = 'hoodie' | 'jacket' | 'overalls';
+import type {
+  SpriteAccessory,
+  SpriteAppearance,
+  SpriteHairStyle,
+  SpriteOutfit,
+} from '@/types/sprite';
 
-export interface SpriteAppearance {
-  accentColor: string;
-  accessory: SpriteAccessory;
-  hairColor: string;
-  hairStyle: SpriteHairStyle;
-  outfit: SpriteOutfit;
-  shirtColor: string;
-  skinColor: string;
-}
+export type {
+  SpriteAccessory,
+  SpriteAppearance,
+  SpriteHairStyle,
+  SpriteOutfit,
+} from '@/types/sprite';
 
 const SHIRT_PALETTE = [
   '#568be0',

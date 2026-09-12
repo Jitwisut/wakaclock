@@ -29,12 +29,14 @@ interface PixelOfficeDockProps {
   canReturnToDesk: boolean;
   chrome: OfficeChrome;
   fullscreenTargetRef: React.RefObject<HTMLElement | null>;
+  mediaReady?: boolean;
   onLockedFeature: (label: string) => void;
   onReturnToDesk: () => void;
 }
 
 function DockButton({
   active,
+  disabled,
   children,
   label,
   onClick,
@@ -42,6 +44,7 @@ function DockButton({
 }: {
   active?: boolean;
   children: React.ReactNode;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
   tone?: 'danger' | 'neutral';
@@ -53,6 +56,7 @@ function DockButton({
       aria-label={label}
       aria-pressed={active}
       className="presence-pixel-shadow-sm presence-pixel-press flex items-center gap-2 border-2 px-3 py-2 text-xs font-bold"
+      disabled={disabled}
       onClick={onClick}
       style={{ background, borderColor }}
       title={label}
@@ -65,6 +69,7 @@ function DockButton({
 
 export function PixelOfficeDock({
   canReturnToDesk,
+  mediaReady = false,
   chrome,
   fullscreenTargetRef,
   onLockedFeature,
@@ -81,14 +86,14 @@ export function PixelOfficeDock({
           className="flex size-9 items-center justify-center border-2 text-[10px] font-bold"
           style={{ background: panel, borderColor: live, color: live, fontFamily: headingFont }}
         >
-          LV3
+          POD
         </span>
         <div className="leading-tight">
           <p className="text-xs font-bold" style={{ fontFamily: headingFont }}>
-            Spatial audio
+            Pod audio
           </p>
           <p className="text-[10px] font-bold" style={{ color: live }}>
-            ● Low-latency proximity engine
+            {mediaReady ? '● Connected to your pod' : 'Join a pod · connect media'}
           </p>
         </div>
       </div>
@@ -96,6 +101,7 @@ export function PixelOfficeDock({
       <div className="flex flex-wrap items-center gap-2">
         <DockButton
           active={!chrome.mic}
+          disabled={!mediaReady && !chrome.mic}
           label={chrome.mic ? 'Mute microphone' : 'Unmute microphone'}
           onClick={chrome.toggleMic}
           tone="danger"
@@ -110,6 +116,7 @@ export function PixelOfficeDock({
 
         <DockButton
           active={chrome.camera}
+          disabled={!mediaReady && !chrome.camera}
           label={chrome.camera ? 'Turn camera off' : 'Turn camera on'}
           onClick={chrome.toggleCamera}
         >
@@ -123,6 +130,7 @@ export function PixelOfficeDock({
 
         <DockButton
           active={chrome.screenShare}
+          disabled={!mediaReady && !chrome.screenShare}
           label={chrome.screenShare ? 'Stop sharing screen' : 'Share screen'}
           onClick={chrome.toggleScreenShare}
         >

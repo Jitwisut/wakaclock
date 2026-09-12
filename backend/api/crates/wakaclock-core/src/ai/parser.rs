@@ -65,6 +65,87 @@ pub struct ParserCursor {
     pub byte_offset: u64,
     pub last_record_id: Option<String>,
     pub last_record_time: Option<DateTime<Utc>>,
+    /// Parser context is checkpointed with the byte cursor so a bounded read or
+    /// process restart cannot borrow a model from a different turn/session. Older
+    /// checkpoints deserialize with `None`; adapters then rebuild a bounded prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ParserContext>,
+}
+
+/// Serializable, adapter-neutral transcript context. Codex uses `turns` and
+/// `pending_calls`; Claude Code uses the same pending-call shape for `tool_use_id`.
+/// Only metadata needed to pair a completed edit is retained — never prompts,
+/// responses, patches or source code.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ParserContext {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub session_cwd: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Why provider evidence is incomplete, when a transcript explicitly
+    /// reported an internal/synthetic marker.
+    #[serde(default)]
+    pub provider_reason: Option<String>,
+    /// The transcript reported two different providers for this session. Keep
+    /// the conflict bit even when normalization drops both values so a later
+    /// file edit cannot silently inherit whichever record happened to be last.
+    #[serde(default)]
+    pub provider_conflict: bool,
+    #[serde(default)]
+    pub current_turn_id: Option<String>,
+    #[serde(default)]
+    pub turns: Vec<ParserTurnContext>,
+    #[serde(default)]
+    pub pending_calls: Vec<ParserPendingCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParserTurnContext {
+    pub id: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Why the turn's model evidence is incomplete, when a provider marker such
+    /// as `<synthetic>` was explicitly reported.  This is metadata-only and lets
+    /// repair distinguish a marker from a genuinely absent field after restart.
+    #[serde(default)]
+    pub identity_reason: Option<String>,
+    /// The same turn carried incompatible model evidence.
+    #[serde(default)]
+    pub identity_conflict: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParserPendingCall {
+    pub id: String,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    /// Message identifier that owns this call when the transcript exposes one.
+    /// It is kept separately from the tool/call id because a message can contain
+    /// several tool uses and repair must never substitute one for the other.
+    #[serde(default)]
+    pub identity_message_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub identity_reason: Option<String>,
+    /// The call's direct/turn evidence conflicted before its completion record.
+    #[serde(default)]
+    pub identity_conflict: bool,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Kept for backwards compatibility with checkpoints written by an older
+    /// parser. New checkpoints leave this empty and rewind to the call record so
+    /// source/patch text is never persisted in parser state.
+    #[serde(default)]
+    pub input: Option<String>,
+    #[serde(default)]
+    pub occurred_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub offset_before: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +283,7 @@ mod tests {
             byte_offset: 3000,
             last_record_id: Some("r1".to_string()),
             last_record_time: Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap()),
+            context: None,
         };
         let behind = TranscriptLag::measure(4096, Some(&cursor));
         assert_eq!(behind.lag_bytes, 1096);

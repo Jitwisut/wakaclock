@@ -88,7 +88,7 @@ export function PresencePlayer({
    * `pointercancel`, a release the browser reports outside the floor) still commits
    * where the character was actually dragged to instead of throwing the drag away. */
   const lastPreview = React.useRef<{ x: number; y: number } | null>(null);
-  const appearance = appearanceFor(user.id);
+  const appearance = user.appearance ?? appearanceFor(user.id);
   const pendingPosition =
     localPosition?.serverX === user.x && localPosition.serverY === user.y ? localPosition : null;
   const safeX = pendingPosition?.x ?? finiteOr(user.x, SAFE_CENTRE);

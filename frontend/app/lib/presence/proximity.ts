@@ -9,11 +9,17 @@ import type { PresenceUser } from '@/types/presence';
  */
 export const PROXIMITY_THRESHOLD_PERCENT = 9;
 
-export function calculateDistance(a: Pick<PresenceUser, 'x' | 'y'>, b: Pick<PresenceUser, 'x' | 'y'>): number {
+export function calculateDistance(
+  a: Pick<PresenceUser, 'x' | 'y'>,
+  b: Pick<PresenceUser, 'x' | 'y'>
+): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-export function isNearby(a: Pick<PresenceUser, 'x' | 'y'>, b: Pick<PresenceUser, 'x' | 'y'>): boolean {
+export function isNearby(
+  a: Pick<PresenceUser, 'x' | 'y'>,
+  b: Pick<PresenceUser, 'x' | 'y'>
+): boolean {
   return calculateDistance(a, b) < PROXIMITY_THRESHOLD_PERCENT;
 }
 
@@ -21,4 +27,13 @@ export function isNearby(a: Pick<PresenceUser, 'x' | 'y'>, b: Pick<PresenceUser,
  * "nearby" state and for deciding who to report a co-working session with. */
 export function findNearbyUsers(user: PresenceUser, others: PresenceUser[]): PresenceUser[] {
   return others.filter((other) => other.id !== user.id && isNearby(user, other));
+}
+
+/** Audible falloff inside an authorized pod; access isolation is enforced by the media server. */
+export function podAudioVolume(
+  a: Pick<PresenceUser, 'x' | 'y'>,
+  b: Pick<PresenceUser, 'x' | 'y'>
+): number {
+  const distance = calculateDistance(a, b);
+  return Number.isFinite(distance) ? Math.max(0.2, 1 - distance / 35) : 0;
 }

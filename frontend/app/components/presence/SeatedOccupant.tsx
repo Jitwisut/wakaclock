@@ -25,7 +25,7 @@ export function SeatedOccupant({
   return (
     <div className="pointer-events-none flex w-max flex-col items-center">
       <DeskWorkstation
-        appearance={appearanceFor(user.id)}
+        appearance={user.appearance ?? appearanceFor(user.id)}
         reducedMotion={reducedMotion}
         screenTone={screenTone}
         size={92}

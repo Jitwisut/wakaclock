@@ -1,28 +1,20 @@
 'use client';
 
-/**
- * The left icon rail from the reference prototype. Every entry except "Map"
- * (which just re-focuses the floor you are already on) is a visual-only shell —
- * there is no multi-floor navigation, party roster page or meeting-chamber
- * system behind Presence yet, so those call `onLockedFeature` and the page
- * surfaces a "coming soon" toast.
- */
 interface RailItem {
   emoji: string;
   key: string;
   label: string;
-  locked: boolean;
   notify?: boolean;
 }
 
 const ITEMS: RailItem[] = [
-  { emoji: '🗺️', key: 'map', label: 'Floor map', locked: false },
-  { emoji: '👥', key: 'party', label: 'Party members', locked: true },
-  { emoji: '📡', key: 'chambers', label: 'Meeting chambers', locked: true, notify: true },
-  { emoji: '📜', key: 'quests', label: 'Quests & sprints', locked: true },
+  { emoji: '🗺️', key: 'map', label: 'Floor map' },
+  { emoji: '👥', key: 'party', label: 'Party members' },
+  { emoji: '📡', key: 'chambers', label: 'Meeting chambers', notify: false },
+  { emoji: '📜', key: 'quests', label: 'Quests & sprints' },
 ];
 
-const SETTINGS: RailItem = { emoji: '⚙️', key: 'settings', label: 'Office settings', locked: true };
+const SETTINGS: RailItem = { emoji: '⚙️', key: 'settings', label: 'Office settings' };
 
 const panel = 'var(--presence-panel)';
 const border = 'var(--presence-border)';
@@ -61,7 +53,7 @@ export function PixelOfficeToolRail({
   onLockedFeature: (label: string) => void;
 }) {
   const activate = (item: RailItem) => {
-    if (item.locked) onLockedFeature(item.label);
+    onLockedFeature(item.label);
   };
 
   return (

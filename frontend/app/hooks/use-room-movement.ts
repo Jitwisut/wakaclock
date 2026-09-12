@@ -15,10 +15,13 @@ interface UseRoomMovementArgs {
 
 export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRoomMovementArgs) {
   const sequenceRef = React.useRef(0);
+  const generationRef = React.useRef(0);
   const timerRef = React.useRef<null | number>(null);
-  const pendingRef = React.useRef<
-    { position: { x: number; y: number }; roomId: string; zoneId: null | string } | null
-  >(null);
+  const pendingRef = React.useRef<{
+    position: { x: number; y: number };
+    roomId: string;
+    zoneId: null | string;
+  } | null>(null);
 
   const move = React.useCallback(
     (position: { x: number; y: number }) => {
@@ -38,6 +41,7 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
         pendingRef.current = null;
         timerRef.current = null;
         if (!pending) return;
+        const generation = generationRef.current;
         sequenceRef.current += 1;
         void updatePresenceMemberV2(pending.roomId, {
           client_id: getPresenceClientId(),
@@ -45,8 +49,13 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
           position: pending.position,
           zone_id: pending.zoneId,
         })
-          .then(onSnapshot)
-          .catch(() => onError?.());
+          .then((next) => {
+            if (generation === generationRef.current) onSnapshot(next);
+            return next;
+          })
+          .catch(() => {
+            if (generation === generationRef.current) onError?.();
+          });
       };
       flush();
       timerRef.current = window.setTimeout(() => {
@@ -58,6 +67,7 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
   );
 
   React.useEffect(() => {
+    generationRef.current += 1;
     pendingRef.current = null;
     sequenceRef.current = 0;
     if (timerRef.current !== null) {
@@ -65,6 +75,7 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
       timerRef.current = null;
     }
     return () => {
+      generationRef.current += 1;
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     };
   }, [roomId]);

@@ -2,7 +2,11 @@ use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventS
 use crate::ai::jsonl::JsonlCursorReader;
 use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
+};
+use crate::ai::{
+    is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
+    REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
 };
 use crate::ai::patch::{count_unified_diff_lines, parse_apply_patch};
 use crate::ai::path::resolve_within_workspace;
@@ -148,7 +152,12 @@ impl AiActivityParser for CodexParser {
         })?;
         let source_path = PathBuf::from(&cursor.source_path);
 
-        let mut reader = JsonlCursorReader::open(&source_path, cursor.byte_offset).map_err(
+        // Checkpoints written before identity context existed are replayed from a
+        // bounded prefix. Events before the old cursor are suppressed, but their
+        // session/turn/call metadata rebuilds the context needed by the unread tail.
+        let replay_prefix = cursor.context.is_none() && cursor.byte_offset > 0;
+        let read_offset = if replay_prefix { 0 } else { cursor.byte_offset };
+        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(
             |error| match error.kind() {
                 std::io::ErrorKind::NotFound => AiParseError::NotFound {
                     path: cursor.source_path.clone(),
@@ -162,11 +171,31 @@ impl AiActivityParser for CodexParser {
 
         let mut events = Vec::new();
         let mut warnings = Vec::new();
-        let mut turn_context: HashMap<String, TurnContext> = HashMap::new();
-        let mut session_id: Option<String> = None;
-        let mut session_cwd: Option<PathBuf> = None;
-        let mut session_provider: Option<String> = None;
-        let mut last_offset = cursor.byte_offset;
+        let saved_context = cursor.context.clone().unwrap_or_default();
+        let mut turn_context: HashMap<String, TurnContext> = saved_context
+            .turns
+            .iter()
+            .map(|turn| {
+                (
+                    turn.id.clone(),
+                    TurnContext {
+                        cwd: turn.cwd.clone().map(PathBuf::from),
+                        model: normalize_identity_model(turn.model.as_deref()),
+                        identity_reason: turn.identity_reason.clone(),
+                        identity_conflict: turn.identity_conflict,
+                    },
+                )
+            })
+            .collect();
+        let mut session_id: Option<String> = saved_context.session_id.clone();
+        let mut session_cwd: Option<PathBuf> = saved_context.session_cwd.clone().map(PathBuf::from);
+        let mut session_provider: Option<String> = saved_context
+            .provider
+            .as_deref()
+            .and_then(|provider| normalize_identity_provider(Some(provider)));
+        let mut session_provider_reason = saved_context.provider_reason.clone();
+        let mut session_provider_conflict = saved_context.provider_conflict;
+        let mut last_offset = read_offset;
         let mut last_record_time: Option<DateTime<Utc>> = cursor.last_record_time;
         let mut last_record_id: Option<String> = cursor.last_record_id.clone();
         // `response_item` records (the real apply_patch call/output pair — see below)
@@ -174,14 +203,30 @@ impl AiActivityParser for CodexParser {
         // `turn_context` record precedes the response_items generated within that
         // turn in the transcript's own timestamp order, so tracking "the most
         // recently seen turn" is the correlation the format actually offers.
-        let mut current_turn_id: Option<String> = None;
+        let mut current_turn_id: Option<String> = saved_context.current_turn_id.clone();
         // A `custom_tool_call` (the apply_patch call itself, carrying the patch text)
         // is matched to its `custom_tool_call_output` (proof the call completed) by
-        // `call_id`. Known limitation: this map is local to one parse batch, so a
-        // call/output pair split across a batch boundary is lost rather than carried
-        // over. The parser now rewinds the returned cursor to the first pending
-        // call instead, so the next bounded pass replays the pair safely.
-        let mut pending_apply_patch: HashMap<String, PendingApplyPatch> = HashMap::new();
+        // `call_id`. A pending call is checkpointed by stable references and the
+        // cursor is rewound while its result is missing, so the next bounded pass
+        // can re-read the call without persisting patch/source text.
+        let mut pending_apply_patch: HashMap<String, PendingApplyPatch> = saved_context
+            .pending_calls
+            .iter()
+            .filter_map(|pending| {
+                Some((
+                    pending.id.clone(),
+                    PendingApplyPatch {
+                        input: pending.input.clone()?,
+                        turn_id: pending.turn_id.clone(),
+                        model: normalize_identity_model(pending.model.as_deref()),
+                        identity_reason: pending.identity_reason.clone(),
+                        timestamp: pending.occurred_at?,
+                        offset_before: pending.offset_before?,
+                        identity_conflict: pending.identity_conflict,
+                    },
+                ))
+            })
+            .collect();
         let mut completed_apply_patch = std::collections::HashSet::new();
         let mut failed_apply_patch = std::collections::HashSet::new();
 
@@ -225,9 +270,47 @@ impl AiActivityParser for CodexParser {
                         // `id` and the older `session_id` compatibility field. A
                         // serde alias rejects that valid shape as a duplicate;
                         // decode both explicitly and prefer the canonical `id`.
-                        session_id = meta.id.or(meta.session_id);
+                        let next_session_id = meta.id.or(meta.session_id);
+                        if session_id
+                            .as_deref()
+                            .zip(next_session_id.as_deref())
+                            .is_some_and(|(current, next)| current != next)
+                        {
+                            // Session and turn identity are scoped together. A
+                            // resumed transcript may contain more than one
+                            // session; never let a pending call or model from the
+                            // previous session explain the next session's edit.
+                            turn_context.clear();
+                            pending_apply_patch.clear();
+                            completed_apply_patch.clear();
+                            failed_apply_patch.clear();
+                            session_provider = None;
+                            session_provider_reason = None;
+                            session_provider_conflict = false;
+                            current_turn_id = None;
+                        }
+                        session_id = next_session_id;
                         session_cwd = meta.cwd.map(PathBuf::from);
-                        session_provider = meta.model_provider;
+                        let provider = normalize_identity_provider(meta.model_provider.as_deref());
+                        let provider_marker = meta
+                            .model_provider
+                            .as_deref()
+                            .is_some_and(is_internal_marker);
+                        if let (Some(previous), Some(next)) =
+                            (session_provider.as_deref(), provider.as_deref())
+                        {
+                            if previous != next {
+                                session_provider_conflict = true;
+                                session_provider = None;
+                                session_provider_reason =
+                                    Some(REASON_CONFLICTING_EVIDENCE.to_string());
+                            }
+                        } else if !session_provider_conflict && provider.is_some() {
+                            session_provider = provider;
+                            session_provider_reason = None;
+                        } else if !session_provider_conflict && provider_marker {
+                            session_provider_reason = Some(REASON_INTERNAL_MARKER.to_string());
+                        }
                     }
                 }
                 "turn_context" => {
@@ -235,13 +318,44 @@ impl AiActivityParser for CodexParser {
                         serde_json::from_value(record.payload);
                     if let Ok(turn) = parsed {
                         current_turn_id = Some(turn.turn_id.clone());
-                        turn_context.insert(
-                            turn.turn_id,
-                            TurnContext {
-                                cwd: turn.cwd.map(PathBuf::from),
-                                model: turn.model,
-                            },
-                        );
+                        let model = normalize_identity_model(turn.model.as_deref());
+                        let model_marker = turn
+                            .model
+                            .as_deref()
+                            .is_some_and(is_internal_marker);
+                        let cwd = turn.cwd.map(PathBuf::from);
+                        if let Some(previous) = turn_context.get_mut(&turn.turn_id) {
+                            if let (Some(previous_model), Some(next_model)) =
+                                (previous.model.as_deref(), model.as_deref())
+                            {
+                                if previous_model != next_model {
+                                    previous.identity_conflict = true;
+                                    previous.model = None;
+                                    previous.identity_reason =
+                                        Some(REASON_CONFLICTING_EVIDENCE.to_string());
+                                }
+                            } else if !previous.identity_conflict && model.is_some() {
+                                previous.model = model;
+                                previous.identity_reason = None;
+                            } else if !previous.identity_conflict && model_marker {
+                                previous.identity_reason =
+                                    Some(REASON_INTERNAL_MARKER.to_string());
+                            }
+                            if previous.cwd.is_none() {
+                                previous.cwd = cwd;
+                            }
+                        } else {
+                            turn_context.insert(
+                                turn.turn_id,
+                                TurnContext {
+                                    cwd,
+                                    model,
+                                    identity_reason: model_marker
+                                        .then(|| REASON_INTERNAL_MARKER.to_string()),
+                                    identity_conflict: false,
+                                },
+                            );
+                        }
                     }
                 }
                 "event_msg" => {
@@ -265,6 +379,9 @@ impl AiActivityParser for CodexParser {
                         }
                     };
                     last_record_id = Some(parsed.call_id.clone());
+                    if failed_apply_patch.contains(&parsed.call_id) {
+                        continue;
+                    }
                     if !parsed.success {
                         pending_apply_patch.remove(&parsed.call_id);
                         failed_apply_patch.insert(parsed.call_id.clone());
@@ -277,13 +394,30 @@ impl AiActivityParser for CodexParser {
                     if completed_apply_patch.contains(&parsed.call_id) {
                         continue;
                     }
-                    pending_apply_patch.remove(&parsed.call_id);
+                    let pending = pending_apply_patch.remove(&parsed.call_id);
                     completed_apply_patch.insert(parsed.call_id.clone());
-                    let turn = parsed.turn_id.as_ref().and_then(|id| turn_context.get(id));
+                    let event_turn_id = parsed
+                        .turn_id
+                        .clone()
+                        .or_else(|| pending.as_ref().and_then(|call| call.turn_id.clone()));
+                    let turn = event_turn_id.as_ref().and_then(|id| turn_context.get(id));
                     let project_root = turn
                         .and_then(|t| t.cwd.clone())
                         .or_else(|| session_cwd.clone());
-                    let model = turn.and_then(|t| t.model.clone());
+                    let model = turn
+                        .and_then(|t| t.model.clone())
+                        .or_else(|| pending.as_ref().and_then(|call| call.model.clone()));
+                    let identity_reason = turn
+                        .and_then(|t| t.identity_reason.clone())
+                        .or_else(|| {
+                            pending
+                                .as_ref()
+                                .and_then(|call| call.identity_reason.clone())
+                        })
+                        .or_else(|| session_provider_reason.clone());
+                    let identity_conflict = session_provider_conflict
+                        || pending.as_ref().is_some_and(|call| call.identity_conflict)
+                        || turn.is_some_and(|turn| turn.identity_conflict);
 
                     for (raw_path, change) in parsed.changes {
                         let delta = change
@@ -291,6 +425,12 @@ impl AiActivityParser for CodexParser {
                             .as_deref()
                             .map(count_unified_diff_lines)
                             .unwrap_or_default();
+                        if delta.added == 0 && delta.deleted == 0 {
+                            // A success envelope without a diff does not prove a
+                            // file mutation. Keep the heartbeat ledger free of
+                            // zero-line phantom edits.
+                            continue;
+                        }
                         let entity = resolve_entity(&raw_path, project_root.as_deref());
                         let previous_entity = change
                             .previous_path
@@ -307,14 +447,30 @@ impl AiActivityParser for CodexParser {
                                 *kind != BrokerChangeKind::Rename || previous_entity.is_some()
                             })
                             .unwrap_or(BrokerChangeKind::Modify);
+                        if replay_prefix && line.offset_before < cursor.byte_offset {
+                            continue;
+                        }
                         events.push(AiEditEvent {
                             event_id: opaque_file_event_id("codex-v1", &parsed.call_id, &raw_path),
                             agent: "codex".to_string(),
-                            provider: session_provider
-                                .clone()
-                                .or_else(|| Some("openai".to_string())),
-                            model: model.clone(),
+                            provider: (!identity_conflict).then(|| session_provider.clone()).flatten(),
+                            model: (!identity_conflict)
+                                .then(|| normalize_identity_model(model.as_deref()))
+                                .flatten(),
                             session_id: session_id.clone(),
+                            turn_id: event_turn_id.clone(),
+                            identity_message_id: None,
+                            identity_status: identity_conflict
+                                .then(|| IdentityStatus::Conflict.as_str().to_string())
+                                .or_else(|| {
+                                    identity_reason.as_ref().map(|_| {
+                                        IdentityStatus::Partial.as_str().to_string()
+                                    })
+                                }),
+                            identity_reason: identity_conflict
+                                .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+                                .or(identity_reason.clone()),
+                            identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
                             tool_event_id: Some(parsed.call_id.clone()),
                             occurred_at: record.timestamp,
                             entity,
@@ -379,13 +535,53 @@ impl AiActivityParser for CodexParser {
                                 {
                                     continue;
                                 }
+                                let turn_id = current_turn_id.clone();
+                                let turn = turn_id
+                                    .as_ref()
+                                    .and_then(|turn_id| turn_context.get(turn_id));
+                                let reported_model = turn.and_then(|turn| turn.model.clone());
+                                let mut identity_reason = turn
+                                    .and_then(|turn| turn.identity_reason.clone());
+                                let mut model = reported_model.clone();
+                                let mut identity_conflict = session_provider_conflict
+                                    || turn.is_some_and(|turn| turn.identity_conflict);
+                                let mut timestamp = record.timestamp;
+                                let mut offset_before = line.offset_before;
+                                if let Some(previous) = pending_apply_patch.get(&call_id) {
+                                    if previous.turn_id != turn_id
+                                        || (previous.model.is_some()
+                                            && reported_model.is_some()
+                                            && previous.model != reported_model)
+                                    {
+                                        identity_conflict = true;
+                                    }
+                                    if previous.identity_conflict {
+                                        identity_conflict = true;
+                                    }
+                                    // Some clients repeat a custom_tool_call after
+                                    // streaming metadata has been normalized away. Preserve
+                                    // a model already tied to this call when the duplicate
+                                    // has no model, and keep the earliest location for a
+                                    // restart-safe checkpoint.
+                                    if model.is_none() {
+                                        model = previous.model.clone();
+                                    }
+                                    if identity_reason.is_none() {
+                                        identity_reason = previous.identity_reason.clone();
+                                    }
+                                    timestamp = std::cmp::min(previous.timestamp, timestamp);
+                                    offset_before = previous.offset_before.min(offset_before);
+                                }
                                 pending_apply_patch.insert(
                                     call_id,
                                     PendingApplyPatch {
                                         input,
-                                        turn_id: current_turn_id.clone(),
-                                        timestamp: record.timestamp,
-                                        offset_before: line.offset_before,
+                                        turn_id,
+                                        model,
+                                        identity_reason,
+                                        timestamp,
+                                        offset_before,
+                                        identity_conflict,
                                     },
                                 );
                             }
@@ -425,7 +621,16 @@ impl AiActivityParser for CodexParser {
                             let project_root = turn
                                 .and_then(|t| t.cwd.clone())
                                 .or_else(|| session_cwd.clone());
-                            let model = turn.and_then(|t| t.model.clone());
+                            let model = turn
+                                .and_then(|t| t.model.clone())
+                                .or_else(|| pending.model.clone());
+                            let identity_reason = turn
+                                .and_then(|turn| turn.identity_reason.clone())
+                                .or_else(|| pending.identity_reason.clone())
+                                .or_else(|| session_provider_reason.clone());
+                            let identity_conflict = session_provider_conflict
+                                || pending.identity_conflict
+                                || turn.is_some_and(|turn| turn.identity_conflict);
 
                             let mut path_occurrences = HashMap::<String, usize>::new();
                             for change in parse_apply_patch(&pending.input) {
@@ -445,6 +650,9 @@ impl AiActivityParser for CodexParser {
                                 };
                                 *occurrence += 1;
                                 let entity = resolve_entity(&change.path, project_root.as_deref());
+                                if replay_prefix && line.offset_before < cursor.byte_offset {
+                                    continue;
+                                }
                                 events.push(AiEditEvent {
                                     event_id: opaque_file_event_id(
                                         "codex-v2",
@@ -452,11 +660,28 @@ impl AiActivityParser for CodexParser {
                                         &change.path,
                                     ),
                                     agent: "codex".to_string(),
-                                    provider: session_provider
-                                        .clone()
-                                        .or_else(|| Some("openai".to_string())),
-                                    model: model.clone(),
+                                    provider: (!identity_conflict)
+                                        .then(|| session_provider.clone())
+                                        .flatten(),
+                                    model: (!identity_conflict)
+                                        .then(|| normalize_identity_model(model.as_deref()))
+                                        .flatten(),
                                     session_id: session_id.clone(),
+                                    turn_id: pending.turn_id.clone(),
+                                    identity_message_id: None,
+                                    identity_status: identity_conflict
+                                        .then(|| IdentityStatus::Conflict.as_str().to_string())
+                                        .or_else(|| {
+                                            identity_reason.as_ref().map(|_| {
+                                                IdentityStatus::Partial.as_str().to_string()
+                                            })
+                                        }),
+                                    identity_reason: identity_conflict
+                                        .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+                                        .or(identity_reason.clone()),
+                                    identity_source: Some(
+                                        AiEventSource::Transcript.as_str().to_string(),
+                                    ),
                                     tool_event_id: Some(call_id.clone()),
                                     occurred_at: pending.timestamp,
                                     entity,
@@ -494,6 +719,85 @@ impl AiActivityParser for CodexParser {
             last_offset = offset;
         }
 
+        // Keep the active turn and every pending call's turn ahead of the bounded
+        // cache.  HashMap iteration order is deliberately unspecified; taking the
+        // first 128 entries could otherwise evict the exact context needed to
+        // attribute a completion after a restart.  The remaining historical turns
+        // are only a fallback for records that arrive without an explicit turn id.
+        let mut required_turn_ids = Vec::new();
+        if let Some(turn_id) = current_turn_id.as_ref() {
+            required_turn_ids.push(turn_id.clone());
+        }
+        for pending in pending_apply_patch.values() {
+            if let Some(turn_id) = pending.turn_id.as_ref() {
+                if !required_turn_ids.iter().any(|required| required == turn_id) {
+                    required_turn_ids.push(turn_id.clone());
+                }
+            }
+        }
+        let mut serialized_turns = Vec::with_capacity(128.min(turn_context.len()));
+        for turn_id in &required_turn_ids {
+            if let Some(turn) = turn_context.get(turn_id) {
+                serialized_turns.push(ParserTurnContext {
+                    id: turn_id.clone(),
+                    cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                    model: turn.model.clone(),
+                    identity_reason: turn.identity_reason.clone(),
+                    identity_conflict: turn.identity_conflict,
+                });
+            }
+        }
+        for (id, turn) in turn_context.iter() {
+            if serialized_turns.len() >= 128
+                || serialized_turns.iter().any(|saved| saved.id.as_str() == id.as_str())
+            {
+                continue;
+            }
+            serialized_turns.push(ParserTurnContext {
+                id: id.clone(),
+                cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                model: turn.model.clone(),
+                identity_reason: turn.identity_reason.clone(),
+                identity_conflict: turn.identity_conflict,
+            });
+        }
+        let serialized_pending = pending_apply_patch
+            .iter()
+            .map(|(id, pending)| ParserPendingCall {
+                id: id.clone(),
+                turn_id: pending.turn_id.clone(),
+                identity_message_id: None,
+                model: pending.model.clone().or_else(|| {
+                    pending
+                        .turn_id
+                        .as_ref()
+                        .and_then(|turn_id| turn_context.get(turn_id).and_then(|turn| turn.model.clone()))
+                }),
+                identity_reason: pending.identity_reason.clone().or_else(|| {
+                    pending
+                        .turn_id
+                        .as_ref()
+                        .and_then(|turn_id| turn_context.get(turn_id))
+                        .and_then(|turn| turn.identity_reason.clone())
+                }),
+                identity_conflict: pending.identity_conflict,
+                cwd: pending
+                    .turn_id
+                    .as_ref()
+                    .and_then(|turn_id| turn_context.get(turn_id))
+                    .and_then(|turn| turn.cwd.as_ref())
+                    .map(|path| path.to_string_lossy().into_owned()),
+                // The cursor is rewound to `offset_before` while a call is
+                // pending, so the next pass re-reads the call and reconstructs
+                // its patch locally.  Do not persist patch/source text in the
+                // checkpoint; only the stable references and correlation data
+                // belong in parser state.
+                input: None,
+                occurred_at: Some(pending.timestamp),
+                offset_before: Some(pending.offset_before),
+            })
+            .collect();
+
         Ok(ParseBatch {
             events,
             next_cursor: ParserCursor {
@@ -502,6 +806,16 @@ impl AiActivityParser for CodexParser {
                 byte_offset: last_offset,
                 last_record_id,
                 last_record_time,
+                context: Some(ParserContext {
+                    session_id,
+                    session_cwd: session_cwd.map(|path| path.to_string_lossy().into_owned()),
+                    provider: session_provider,
+                    provider_reason: session_provider_reason,
+                    provider_conflict: session_provider_conflict,
+                    current_turn_id,
+                    turns: serialized_turns,
+                    pending_calls: serialized_pending,
+                }),
             },
             warnings,
         })
@@ -577,6 +891,8 @@ fn parse_json_string_prefix(input: &str) -> Option<(String, usize)> {
 struct TurnContext {
     cwd: Option<PathBuf>,
     model: Option<String>,
+    identity_reason: Option<String>,
+    identity_conflict: bool,
 }
 
 /// A `response_item` record's payload. Only the fields this parser actually reads —
@@ -607,8 +923,11 @@ struct ResponseItemPayload {
 struct PendingApplyPatch {
     input: String,
     turn_id: Option<String>,
+    model: Option<String>,
+    identity_reason: Option<String>,
     timestamp: DateTime<Utc>,
     offset_before: u64,
+    identity_conflict: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -816,6 +1135,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
 
         let batch = parser
@@ -851,6 +1171,144 @@ mod tests {
         assert_eq!(new_module.lines_deleted, Some(0));
 
         assert_ne!(greeting.event_id, new_module.event_id);
+    }
+
+    #[test]
+    fn patch_completion_without_turn_reference_does_not_use_latest_model() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-missing-turn-{}.jsonl",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "session-a", "cwd": "/workspace", "model_provider": "openai"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:01Z",
+                "type": "turn_context",
+                "payload": {"turn_id": "turn-a", "cwd": "/workspace", "model": "gpt-5.6-sol"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:02Z",
+                "type": "turn_context",
+                "payload": {"turn_id": "turn-b", "cwd": "/workspace", "model": "gpt-5.6-luna"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:03Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "patch_apply_end",
+                    "call_id": "call-no-turn",
+                    "success": true,
+                    "changes": {
+                        "/workspace/src/lib.rs": {
+                            "unified_diff": "@@ -1 +1 @@\n-old\n+new\n"
+                        }
+                    }
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        let event = &batch.events[0];
+        assert_eq!(event.model, None);
+        assert_eq!(event.turn_id, None);
+        assert_eq!(event.provider.as_deref(), Some("openai"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn internal_turn_model_marker_is_reported_as_partial_identity() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-internal-model-{}.jsonl",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "marker-session", "cwd": "/workspace", "model_provider": "openai"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:01Z",
+                "type": "turn_context",
+                "payload": {"turn_id": "marker-turn", "cwd": "/workspace", "model": "<synthetic>"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-09-06T10:00:02Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "patch_apply_end",
+                    "call_id": "marker-call",
+                    "turn_id": "marker-turn",
+                    "success": true,
+                    "changes": {
+                        "/workspace/src/lib.rs": {
+                            "unified_diff": "@@ -1 +1 @@\n-old\n+new\n"
+                        }
+                    }
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].model, None);
+        assert_eq!(batch.events[0].identity_status.as_deref(), Some("partial"));
+        assert_eq!(
+            batch.events[0].identity_reason.as_deref(),
+            Some(REASON_INTERNAL_MARKER)
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -892,6 +1350,7 @@ mod tests {
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -923,6 +1382,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
 
         let batch = parser
@@ -1004,6 +1464,7 @@ mod tests {
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1032,6 +1493,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
 
         let batch = parser
@@ -1095,6 +1557,7 @@ mod tests {
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1141,6 +1604,7 @@ mod tests {
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1179,6 +1643,7 @@ mod tests {
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1229,8 +1694,9 @@ mod tests {
                     source_path: path.to_string_lossy().into_owned(),
                     file_identity: None,
                     byte_offset: 0,
-                    last_record_id: None,
-                    last_record_time: None,
+        last_record_id: None,
+        last_record_time: None,
+        context: None,
                 }),
             )
             .unwrap();
@@ -1281,8 +1747,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-            last_record_id: None,
-            last_record_time: None,
+        last_record_id: None,
+        last_record_time: None,
+        context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -1299,8 +1766,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-            last_record_id: None,
-            last_record_time: None,
+        last_record_id: None,
+        last_record_time: None,
+        context: None,
         };
         let first_batch = parser
             .parse_since(&ParseContext::default(), Some(&first_cursor))
@@ -1334,6 +1802,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))

@@ -47,6 +47,7 @@ pub mod editor_capability;
 pub mod event;
 pub mod follow_up;
 pub mod gemini;
+pub mod identity;
 mod jsonl;
 pub mod parser;
 pub mod patch;
@@ -85,14 +86,25 @@ pub use editor_capability::{
     editor_capability_catalog, AiEvidence, CapabilityStatus, EditorCapability, InputEvidence,
 };
 pub use event::{
-    is_known_agent_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
+    is_known_agent_id, is_safe_event_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
     KNOWN_AGENT_IDS,
+};
+pub use identity::{
+    is_internal_marker, is_placeholder, normalize_agent as normalize_identity_agent,
+    normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
+    normalize_identity_status,
+    normalize_model as normalize_identity_model, normalize_provider as normalize_identity_provider,
+    resolve_identity, IdentityResolution, IdentityStatus, IDENTITY_SCHEMA_VERSION,
+    MAX_IDENTITY_REFERENCE_BYTES,
+    REASON_CONFLICTING_EVIDENCE, REASON_CONTEXT_UNAVAILABLE, REASON_INTERNAL_MARKER,
+    REASON_MISSING_AGENT, REASON_MISSING_MODEL, REASON_MISSING_PROVIDER,
 };
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor, TranscriptLag,
+    ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
+    TranscriptLag,
 };
 pub use patch::{
     count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,

@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use crate::ai::{normalize_identity_model, normalize_identity_provider};
 
 /// One model request's usage, keyed by the provider's own message id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,11 +126,6 @@ struct TranscriptIteration {
     output_tokens: Option<u64>,
 }
 
-/// A model string the provider uses for non-billable internal turns. Recording it as a real model
-/// would put a nonexistent model in the pricing join; the row is kept (its tokens are real) with
-/// the model left unknown, which prices as NULL rather than zero.
-const SYNTHETIC_MODEL: &str = "<synthetic>";
-
 /// Parses every usage record from a Claude Code transcript, deduplicated by message id.
 ///
 /// Deduplication is not an optimisation — it is required for correctness. The transcript logs the
@@ -168,10 +164,10 @@ pub fn parse_gemini_usage_str(contents: &str) -> Vec<AiUsageRecord> {
                 .map(|record| record.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            return parse_generic_usage_str(&normalized, "gemini-cli", Some("google"));
+            return parse_generic_usage_str(&normalized, "gemini-cli", None);
         }
     }
-    parse_generic_usage_str(contents, "gemini-cli", Some("google"))
+    parse_generic_usage_str(contents, "gemini-cli", None)
 }
 
 /// Codex emits per-turn `event_msg`/`token_count` records. This deliberately reads
@@ -183,7 +179,7 @@ pub fn parse_codex_usage(transcript: &Path) -> std::io::Result<Vec<AiUsageRecord
 }
 
 pub fn parse_codex_usage_str(contents: &str) -> Vec<AiUsageRecord> {
-    parse_generic_usage_str(contents, "codex", Some("openai"))
+    parse_generic_usage_str(contents, "codex", None)
 }
 
 fn parse_generic_usage_str(
@@ -274,7 +270,12 @@ fn parse_generic_usage_str(
                     first_string_value(payload, &["model", "model_name", "modelName"])
                 })
             })
-            .filter(|value| !value.starts_with('<'));
+            .and_then(|value| normalize_identity_model(Some(&value)));
+        let explicit_provider = first_string_value(&value, &["provider", "provider_id", "providerId"])
+            .or_else(|| value.get("payload").and_then(|payload| {
+                first_string_value(payload, &["provider", "provider_id", "providerId"])
+            }))
+            .and_then(|value| normalize_identity_provider(Some(&value)));
         let input = first_u64_value(
             usage,
             &[
@@ -321,7 +322,7 @@ fn parse_generic_usage_str(
             ai_session_id: session.clone(),
             occurred_at,
             agent: agent.to_string(),
-            provider: provider.map(str::to_string),
+            provider: explicit_provider.or_else(|| provider.and_then(|value| normalize_identity_provider(Some(value)))),
             model,
             prompt_count,
             prompt_character_count: (prompt_count > 0)
@@ -472,8 +473,8 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
             ai_session_id: session_id,
             occurred_at,
             agent: "claude-code".to_string(),
-            provider: Some("anthropic".to_string()),
-            model: message.model.filter(|model| model != SYNTHETIC_MODEL),
+            provider: normalize_identity_provider(Some("anthropic")),
+            model: normalize_identity_model(message.model.as_deref()),
             prompt_count,
             prompt_character_count: (prompt_count > 0)
                 .then_some(prompt_character_count.unwrap_or(0)),

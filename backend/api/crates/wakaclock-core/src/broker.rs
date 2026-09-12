@@ -7,8 +7,11 @@
 
 use crate::{
     ai::{
-        event::is_safe_event_id, normalize_agent_id, normalize_model_id, normalize_provider_id,
-        AiConfidence, AiEventSource,
+        event::is_safe_event_id, is_internal_marker, normalize_agent_id, normalize_model_id,
+        normalize_provider_id, normalize_identity_model, normalize_identity_provider,
+        normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
+        normalize_identity_status, AiConfidence, AiEventSource, REASON_CONFLICTING_EVIDENCE,
+        REASON_INTERNAL_MARKER,
     },
     error::AppError,
     heartbeat::{resolve_attribution, ActorType, AttributionInput},
@@ -35,6 +38,70 @@ pub const BROKER_ID_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 /// remain readable as v1; new rows carry a stream identity and sequence.
 pub const AI_SIDECAR_SCHEMA_VERSION: u8 = 2;
 const AI_SIDECAR_STREAM_KEY: &str = "ai-events";
+
+/// SQLite broker rows keep the public `event_id` unchanged, but the same opaque
+/// tool id may be reused after an agent starts a new session.  Namespace the local
+/// storage key with that session scope so one session cannot turn the other into a
+/// duplicate or conflict.  A missing session keeps the legacy key for backwards
+/// compatibility with rows written before session metadata existed.
+pub fn scoped_storage_event_id(event_id: &str, session_id: Option<&str>) -> String {
+    match session_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(session_id) => format!("{event_id}|session:{session_id}"),
+        None => event_id.to_string(),
+    }
+}
+
+/// Pick the SQLite key for an incoming event while keeping the public event id
+/// stable. The first event for a session keeps the legacy key; if that key is
+/// already occupied by another/unknown session, the new row is namespaced. This
+/// preserves old direct lookups and lets a reused id coexist with historical rows.
+fn storage_event_id_for_ingest(
+    conn: &Connection,
+    event: &BrokerEventV1,
+) -> Result<String, AppError> {
+    let Some(session_id) = event
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(event.event_id.clone());
+    };
+    let scoped = scoped_storage_event_id(&event.event_id, Some(session_id));
+    let exact_payload: Option<Option<String>> = conn
+        .query_row(
+            "SELECT normalized_payload_json FROM broker_events WHERE event_id = ?1",
+            params![event.event_id],
+            |row| {
+                let payload: Option<String> = row.get(0)?;
+                Ok(payload.and_then(|json| {
+                    serde_json::from_str::<BrokerEventV1>(&json)
+                        .ok()
+                        .and_then(|existing| existing.session_id)
+                }))
+            },
+        )
+        .optional()?;
+    if let Some(existing_session) = exact_payload {
+        if existing_session.as_deref() == Some(session_id) {
+            return Ok(event.event_id.clone());
+        }
+        return Ok(scoped);
+    }
+    let scoped_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM broker_events WHERE event_id = ?1",
+            params![scoped],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    Ok(if scoped_exists {
+        scoped
+    } else {
+        event.event_id.clone()
+    })
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +233,11 @@ pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
     "provider",
     "model",
     "session_id",
+    "turn_id",
+    "identity_message_id",
+    "identity_status",
+    "identity_reason",
+    "identity_source",
     "source",
     "confidence",
     "actor_type",
@@ -299,6 +371,24 @@ pub struct BrokerEventV1 {
     pub model: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Optional turn/message grouping reference. It is metadata-only and is used
+    /// to keep model evidence attached to the turn that produced the edit.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    /// Message identifier that directly authored the tool call, when the
+    /// producer can expose one. It is separate from `tool_event_id` because a
+    /// message may contain several tool calls.
+    #[serde(default)]
+    pub identity_message_id: Option<String>,
+    /// Adapter-side identity decision. `conflict` is preserved through the
+    /// broker so the API cannot collapse contradictory transcript evidence into
+    /// a latest-wins model label.
+    #[serde(default)]
+    pub identity_status: Option<String>,
+    #[serde(default)]
+    pub identity_reason: Option<String>,
+    #[serde(default)]
+    pub identity_source: Option<String>,
     pub source: AiEventSource,
     pub confidence: AiConfidence,
     #[serde(default)]
@@ -420,18 +510,43 @@ impl BrokerEventV1 {
         }
         self.event_id = clean_required("event_id", self.event_id)?;
         self.agent = normalize_agent_id(&clean_required("agent", self.agent)?);
+        // Normalize sentinels such as `Model not reported` and `<synthetic>` to
+        // missing before the producer-level validation.  A marker is an absence
+        // of evidence, not a malformed event and must not become a model label.
+        let provider_marker = self.provider.as_deref().is_some_and(is_internal_marker);
+        let model_marker = self.model.as_deref().is_some_and(is_internal_marker);
         self.provider = self
             .provider
             .as_deref()
-            .map(normalize_provider_id)
+            .and_then(|value| normalize_identity_provider(Some(value)))
+            .map(|value| normalize_provider_id(&value))
             .transpose()
             .map_err(|error| AppError::Validation(error.to_string()))?;
         self.model = self
             .model
             .as_deref()
-            .map(normalize_model_id)
+            .and_then(|value| normalize_identity_model(Some(value)))
+            .map(|value| normalize_model_id(&value))
             .transpose()
             .map_err(|error| AppError::Validation(error.to_string()))?;
+        self.identity_status = normalize_identity_status(self.identity_status.as_deref());
+        self.identity_reason = normalize_identity_reason(self.identity_reason.as_deref());
+        self.identity_source = normalize_identity_source(self.identity_source.as_deref());
+        self.session_id = normalize_identity_reference(self.session_id.as_deref());
+        self.turn_id = normalize_identity_reference(self.turn_id.as_deref());
+        self.identity_message_id =
+            normalize_identity_reference(self.identity_message_id.as_deref());
+        self.tool_event_id = normalize_identity_reference(self.tool_event_id.as_deref());
+        if self.identity_status.as_deref() == Some("conflict") {
+            // A conflict is a first-class diagnostic state. Never let one side of
+            // contradictory evidence survive normalization as the canonical tuple.
+            self.provider = None;
+            self.model = None;
+            self.identity_reason = Some(REASON_CONFLICTING_EVIDENCE.to_string());
+        } else if provider_marker || model_marker {
+            self.identity_status = Some("partial".to_string());
+            self.identity_reason = Some(REASON_INTERNAL_MARKER.to_string());
+        }
         self.entity = normalize_absolute_path("entity", &self.entity)?;
         // Legacy adapters occasionally used `session:relative/path` as their
         // event identity.  The identity crosses the broker boundary and must be
@@ -857,11 +972,23 @@ impl BrokerStore {
         &mut self,
         event_id: &str,
     ) -> Result<BrokerSidecarCursor, AppError> {
+        self.reserve_sidecar_cursor_scoped(event_id, None)
+    }
+
+    /// Session-scoped variant used by the broker process.  Keep the public event id
+    /// in the sidecar payload, but use a composite local key so a reused tool id in a
+    /// different session receives its own sequence and is never hidden as a retry.
+    pub fn reserve_sidecar_cursor_scoped(
+        &mut self,
+        event_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<BrokerSidecarCursor, AppError> {
         if event_id.trim().is_empty() {
             return Err(AppError::Validation(
                 "sidecar event_id cannot be empty".to_string(),
             ));
         }
+        let storage_event_id = scoped_storage_event_id(event_id, session_id);
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -878,7 +1005,7 @@ impl BrokerStore {
                  FROM broker_sidecar_events AS e
                  JOIN broker_sidecar_state AS s ON s.stream_key = e.stream_key
                  WHERE e.stream_key = ?1 AND e.event_id = ?2",
-                params![AI_SIDECAR_STREAM_KEY, event_id],
+                params![AI_SIDECAR_STREAM_KEY, storage_event_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -911,7 +1038,7 @@ impl BrokerStore {
             "INSERT INTO broker_sidecar_events
              (event_id, stream_key, sequence, written_at)
              VALUES (?1, ?2, ?3, NULL)",
-            params![event_id, AI_SIDECAR_STREAM_KEY, sequence],
+            params![storage_event_id, AI_SIDECAR_STREAM_KEY, sequence],
         )?;
         tx.execute(
             "UPDATE broker_sidecar_state SET next_sequence = ?2 WHERE stream_key = ?1",
@@ -929,10 +1056,24 @@ impl BrokerStore {
     /// so a process crash before the append leaves the same sequence available for the
     /// next retry instead of allocating a second identity.
     pub fn mark_sidecar_written(&self, event_id: &str) -> Result<(), AppError> {
+        self.mark_sidecar_written_scoped(event_id, None)
+    }
+
+    /// Mark a session-scoped sidecar append complete.
+    pub fn mark_sidecar_written_scoped(
+        &self,
+        event_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        let storage_event_id = scoped_storage_event_id(event_id, session_id);
         self.conn.execute(
             "UPDATE broker_sidecar_events SET written_at = ?3
              WHERE stream_key = ?1 AND event_id = ?2 AND written_at IS NULL",
-            params![AI_SIDECAR_STREAM_KEY, event_id, Utc::now().timestamp()],
+            params![
+                AI_SIDECAR_STREAM_KEY,
+                storage_event_id,
+                Utc::now().timestamp()
+            ],
         )?;
         Ok(())
     }
@@ -955,12 +1096,13 @@ impl BrokerStore {
         let json = serde_json::to_string(&event)?;
         let hash = event.payload_hash()?;
         let now = Utc::now().timestamp();
+        let storage_event_id = storage_event_id_for_ingest(&self.conn, &event)?;
         let inserted = self.conn.execute(
             "INSERT INTO broker_events
              (event_id, schema_version, normalized_payload_json, payload_hash, status, received_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)
              ON CONFLICT(event_id) DO NOTHING",
-            params![event.event_id, event.schema_version, json, hash, now],
+            params![storage_event_id, event.schema_version, json, hash, now],
         )?;
         if inserted > 0 {
             return Ok(BrokerIngestOutcome::Accepted);
@@ -970,7 +1112,7 @@ impl BrokerStore {
             .conn
             .query_row(
                 "SELECT payload_hash FROM broker_events WHERE event_id = ?1",
-                params![event.event_id],
+                params![storage_event_id],
                 |row| row.get(0),
             )
             .optional()?;
@@ -1054,10 +1196,34 @@ impl BrokerStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut existing = Vec::with_capacity(normalized.len());
         let mut hashes = Vec::with_capacity(normalized.len());
+        let mut storage_ids = Vec::with_capacity(normalized.len());
         let mut seen_hashes = HashMap::with_capacity(normalized.len());
+        // `storage_event_id_for_ingest` can only inspect rows already committed
+        // before this transaction. Keep the session scope chosen for events in
+        // this batch as well, otherwise two new sessions reusing the same opaque
+        // tool id would both tentatively select the legacy key before insertion.
+        let mut storage_sessions: HashMap<String, Option<String>> =
+            HashMap::with_capacity(normalized.len());
         for event in normalized {
             let hash = event.payload_hash()?;
-            if let Some(previous_hash) = seen_hashes.get(&event.event_id) {
+            let mut storage_event_id = storage_event_id_for_ingest(&tx, event)?;
+            if let Some(previous_session) = storage_sessions.get(&storage_event_id) {
+                if previous_session.as_deref() != event.session_id.as_deref()
+                    && event.session_id.is_some()
+                {
+                    // A public id has already been assigned to another session
+                    // in this transaction. Namespace this event while keeping
+                    // the wire-level event id unchanged.
+                    storage_event_id = scoped_storage_event_id(
+                        &event.event_id,
+                        event.session_id.as_deref(),
+                    );
+                }
+            }
+            storage_sessions
+                .entry(storage_event_id.clone())
+                .or_insert_with(|| event.session_id.clone());
+            if let Some(previous_hash) = seen_hashes.get(&storage_event_id) {
                 if previous_hash != &hash {
                     return Err(AppError::Conflict(format!(
                         "broker batch contains conflicting payloads for event_id: {}",
@@ -1065,16 +1231,18 @@ impl BrokerStore {
                     )));
                 }
                 hashes.push(hash);
+                storage_ids.push(storage_event_id);
                 existing.push(BrokerIngestOutcome::Duplicate);
                 continue;
             }
-            seen_hashes.insert(event.event_id.clone(), hash.clone());
+            seen_hashes.insert(storage_event_id.clone(), hash.clone());
             hashes.push(hash.clone());
+            storage_ids.push(storage_event_id.clone());
 
             let payload_hash: Option<String> = tx
                 .query_row(
                     "SELECT payload_hash FROM broker_events WHERE event_id = ?1",
-                    params![event.event_id],
+                    params![storage_event_id],
                     |row| row.get(0),
                 )
                 .optional()?;
@@ -1092,7 +1260,12 @@ impl BrokerStore {
         }
 
         let now = Utc::now().timestamp();
-        for ((event, outcome), hash) in normalized.iter().zip(existing.iter()).zip(hashes.iter()) {
+        for (((event, outcome), hash), storage_event_id) in normalized
+            .iter()
+            .zip(existing.iter())
+            .zip(hashes.iter())
+            .zip(storage_ids.iter())
+        {
             if *outcome != BrokerIngestOutcome::Accepted {
                 continue;
             }
@@ -1101,7 +1274,7 @@ impl BrokerStore {
                 "INSERT INTO broker_events
                  (event_id, schema_version, normalized_payload_json, payload_hash, status, received_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
-                params![event.event_id, event.schema_version, json, hash, now],
+                params![storage_event_id, event.schema_version, json, hash, now],
             )?;
         }
         tx.commit()?;
@@ -1418,6 +1591,11 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: Some("session-1".to_string()),
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             source: AiEventSource::AgentHook,
             confidence: AiConfidence::Verified,
             actor_type: None,
@@ -1475,6 +1653,21 @@ mod tests {
         assert_eq!(event.agent, "kilo-code");
         assert_eq!(event.provider.as_deref(), Some("deepseek"));
         assert_eq!(event.model.as_deref(), Some("deepseek-v4-pro"));
+    }
+
+    #[test]
+    fn broker_drops_internal_model_markers_and_keeps_the_reason() {
+        let mut event = sample_event("internal-model-marker");
+        event.model = Some("<synthetic>".to_string());
+
+        let event = event.normalize().unwrap();
+
+        assert_eq!(event.model, None);
+        assert_eq!(event.identity_status.as_deref(), Some("partial"));
+        assert_eq!(
+            event.identity_reason.as_deref(),
+            Some(REASON_INTERNAL_MARKER)
+        );
     }
 
     #[test]
@@ -1879,6 +2072,32 @@ mod tests {
     }
 
     #[test]
+    fn identical_tool_ids_in_different_sessions_are_independent() {
+        let path = temp_db("session-scoped-dedup");
+        let store = BrokerStore::open_at(&path).unwrap();
+        let mut first = sample_event("reused-tool-id");
+        first.session_id = Some("session-a".to_string());
+        let mut second = first.clone();
+        second.session_id = Some("session-b".to_string());
+
+        assert_eq!(store.ingest(&first).unwrap(), BrokerIngestOutcome::Accepted);
+        assert_eq!(store.ingest(&second).unwrap(), BrokerIngestOutcome::Accepted);
+        assert_eq!(store.ingest(&first).unwrap(), BrokerIngestOutcome::Duplicate);
+
+        let mut conflicting_second = second;
+        conflicting_second.lines_added = Some(99);
+        assert_eq!(
+            store.ingest(&conflicting_second).unwrap(),
+            BrokerIngestOutcome::Conflict
+        );
+        assert_eq!(store.stats().unwrap().pending, 2);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("db-wal"));
+        let _ = fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
     fn sidecar_cursor_is_monotonic_idempotent_and_survives_reopen() {
         let path = temp_db("sidecar-cursor");
         let mut store = BrokerStore::open_at(&path).unwrap();
@@ -1902,6 +2121,28 @@ mod tests {
         let third = reopened.reserve_sidecar_cursor("sidecar-three").unwrap();
         assert_eq!(third.stream_id, first.stream_id);
         assert_eq!(third.sequence, 3);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("db-wal"));
+        let _ = fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn sidecar_sequences_are_scoped_when_a_tool_id_is_reused() {
+        let path = temp_db("sidecar-session-scope");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let first = store
+            .reserve_sidecar_cursor_scoped("reused-tool", Some("session-a"))
+            .unwrap();
+        store
+            .mark_sidecar_written_scoped("reused-tool", Some("session-a"))
+            .unwrap();
+        let second = store
+            .reserve_sidecar_cursor_scoped("reused-tool", Some("session-b"))
+            .unwrap();
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert!(!second.already_written);
+
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("db-wal"));
         let _ = fs::remove_file(path.with_extension("db-shm"));

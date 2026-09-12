@@ -1,0 +1,12 @@
+port: 7880
+bind_addresses: ["0.0.0.0"]
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+  node_ip: 127.0.0.1
+keys:
+  devkey: local-presence-development-secret-change-before-deploy
+room:
+  max_participants: 30
+  empty_timeout: 60

@@ -3,7 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
-use crate::ai::is_known_agent_id;
+use crate::ai::{
+    is_known_agent_id, normalize_identity_model, normalize_identity_reason,
+    normalize_identity_provider, normalize_identity_reference, normalize_identity_source,
+    normalize_identity_status, resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION,
+    REASON_CONFLICTING_EVIDENCE,
+};
 
 pub const CLIPBOARD_TRACKING_VERSION: u8 = 1;
 pub const MAX_CLIPBOARD_COUNTER: u32 = 10_000_000;
@@ -470,6 +475,11 @@ pub struct Heartbeat {
     /// must carry the same value so the server can accept a heartbeat at most once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_id: Option<String>,
+    /// Stable agent session scope. This is kept separate from the tool/turn/message
+    /// references so repair and canonical aggregation cannot match an event from a
+    /// different session when a producer reuses an opaque tool id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub ast_language: Option<String>,
     pub ast_confidence: Option<f32>,
     pub keystrokes: Option<u32>,
@@ -514,6 +524,20 @@ pub struct Heartbeat {
     pub ai_provider: Option<String>,
     /// Model reported by the agent, when the integration exposes it.
     pub ai_model: Option<String>,
+    /// Evidence completeness for the agent/provider/model tuple. This is separate
+    /// from `actor_type`: an AI edit may be verified while its model is missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_schema_version: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_message_id: Option<String>,
     /// How the client obtained the attribution (`agent_hook`, `ide_telemetry`, ...).
     pub ai_source: Option<String>,
     /// Confidence label rather than a guessed probability. Unknown integrations must
@@ -593,6 +617,7 @@ impl Heartbeat {
             feature_id: None,
             feature_name: None,
             heartbeat_id: None,
+            session_id: None,
             ast_language: None,
             ast_confidence: None,
             keystrokes: None,
@@ -616,6 +641,12 @@ impl Heartbeat {
             ai_agent: None,
             ai_provider: None,
             ai_model: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            identity_schema_version: None,
+            identity_turn_id: None,
+            identity_message_id: None,
             ai_source: None,
             ai_confidence: None,
             ai_event_id: None,
@@ -659,15 +690,90 @@ impl Heartbeat {
     /// The method is deliberately idempotent so it can run in the CLI, API client,
     /// and server ingestion service without changing already-sanitized payloads.
     pub fn enforce_attribution_policy(&mut self) {
+        // Identity metadata is bounded, enum-like metadata.  Drop values that do
+        // not belong to the shared contract before using them in any decision so
+        // a legacy client cannot smuggle transcript content through a diagnostic
+        // field or make an arbitrary source look trusted.
+        self.identity_status = normalize_identity_status(self.identity_status.as_deref());
+        self.identity_reason = normalize_identity_reason(self.identity_reason.as_deref());
+        self.identity_source = normalize_identity_source(self.identity_source.as_deref());
+        self.session_id = normalize_identity_reference(self.session_id.as_deref());
+        self.identity_turn_id = normalize_identity_reference(self.identity_turn_id.as_deref());
+        self.identity_message_id = normalize_identity_reference(self.identity_message_id.as_deref());
+
+        let declared_identity_status = self.identity_status.clone();
+        let declared_identity_reason = self.identity_reason.clone();
+        let declared_identity_source = self
+            .identity_source
+            .as_deref()
+            .or(self.ai_source.as_deref());
+        let normalized_identity_source = normalize_identity_source(declared_identity_source);
         let has_identity =
             self.ai_agent.is_some() || self.ai_provider.is_some() || self.ai_model.is_some();
-        let verified_source = self
-            .ai_source
+        // A parser can observe contradictory provider/model records for one
+        // tool call. Preserve that explicit conflict only when it came through
+        // a trusted identity source; otherwise the normal resolver below treats
+        // the client claim as untrusted metadata and strips it.
+        let explicit_identity_conflict = self.identity_status.as_deref() == Some("conflict")
+            && normalized_identity_source
+                .as_deref()
+                .is_some_and(|source| {
+                    matches!(
+                        source,
+                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                    )
+                });
+        let trusted_reported_reason = matches!(
+            declared_identity_status.as_deref(),
+            Some("partial" | "unavailable")
+        )
+        .then(|| declared_identity_reason.clone())
+        .flatten()
+        .filter(|reason| reason != REASON_CONFLICTING_EVIDENCE)
+        .filter(|_| {
+            normalized_identity_source
+                .as_deref()
+                .is_some_and(|source| {
+                    matches!(
+                        source,
+                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                    )
+                })
+        });
+        let identity = resolve_identity(
+            self.ai_agent.as_deref(),
+            &[self.ai_provider.as_deref()],
+            &[self.ai_model.as_deref()],
+            normalized_identity_source.as_deref(),
+            self.ai_confidence.as_deref(),
+        );
+        if explicit_identity_conflict {
+            self.identity_status = Some(IdentityStatus::Conflict.as_str().to_string());
+            self.identity_reason = Some(REASON_CONFLICTING_EVIDENCE.to_string());
+            self.identity_source = normalized_identity_source.clone();
+            self.identity_schema_version = Some(IDENTITY_SCHEMA_VERSION);
+            self.ai_agent = identity.agent.clone();
+            // Never expose one side of a conflict as the canonical tuple.
+            self.ai_provider = None;
+            self.ai_model = None;
+        } else if has_identity || self.is_ai_generated {
+            self.identity_status = Some(identity.status.as_str().to_string());
+            self.identity_reason = if identity.status == IdentityStatus::Confirmed {
+                None
+            } else {
+                trusted_reported_reason.or_else(|| identity.reason.map(str::to_string))
+            };
+            self.identity_source = normalized_identity_source.clone();
+            self.identity_schema_version = Some(IDENTITY_SCHEMA_VERSION);
+            self.ai_agent = identity.agent.clone();
+            self.ai_provider = identity.provider.clone();
+            self.ai_model = identity.model.clone();
+        }
+        let verified_source = normalized_identity_source
             .as_deref()
-            .map(|source| source.trim().to_ascii_lowercase())
             .is_some_and(|source| {
                 matches!(
-                    source.as_str(),
+                    source,
                     "agent_hook" | "mcp" | "structured_mcp" | "transcript"
                 )
             });
@@ -676,17 +782,29 @@ impl Heartbeat {
             .as_deref()
             .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"));
 
+        // A trusted adapter/transport plus a known agent proves who made the
+        // change even when the provider or model field is absent. Keep that
+        // partial tuple for the unresolved section; only an untrusted observer
+        // claim is stripped from the public payload.
+        let trusted_agent_evidence = verified_source
+            && self
+                .ai_agent
+                .as_deref()
+                .is_some_and(|agent| is_known_agent_id(agent));
+
         // A provider/model without a client name is not an identity either. Keep
         // those fields coupled to the named agent so a malformed legacy payload
         // cannot expose partial attribution metadata.
-        let verified_identity = self
-            .ai_agent
-            .as_deref()
-            .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
+        let verified_identity = !explicit_identity_conflict
+            && identity.status == IdentityStatus::Confirmed
+            && self
+                .ai_agent
+                .as_deref()
+                .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && verified_source
             && verified_confidence;
 
-        if has_identity && !verified_identity {
+        if has_identity && !verified_identity && !trusted_agent_evidence {
             // The identity itself is evidence that the heartbeat is AI activity;
             // stripping it must never reclassify the work as human.
             // `Unknown` is the resolver's pre-policy value for this legacy shape.
@@ -697,6 +815,10 @@ impl Heartbeat {
                 self.actor_type = ActorType::AiInferred;
             }
             self.is_ai_generated = true;
+            // The source is an untrusted observer, so do not expose its labels as
+            // identity. The unresolved UI still receives a counted AI row and the
+            // stable reason code; a trusted adapter is required before any label
+            // becomes visible.
             self.ai_agent = None;
             self.ai_provider = None;
             self.ai_model = None;
@@ -706,6 +828,15 @@ impl Heartbeat {
             // evidence (paths, process names, prompts and diffs) is local-only.
             self.ai_source = Some("observer".to_string());
             self.attribution_source = None;
+        } else if has_identity && trusted_agent_evidence {
+            // Keep the actor tier independent from tuple completeness. A missing
+            // model is an identity-status problem, not evidence that a human or
+            // unknown actor made the edit.
+            self.actor_type = ActorType::AiVerified;
+            self.is_ai_generated = true;
+            if self.ai_confidence.is_none() {
+                self.ai_confidence = Some("verified".to_string());
+            }
         } else if has_identity {
             // A verified identity is authoritative even when an old client forgot
             // the redundant boolean flag.
@@ -713,13 +844,27 @@ impl Heartbeat {
         } else if self.is_ai_generated && self.ai_agent.is_none() {
             // Historical/observer rows may arrive already unattributed.  Normalize
             // their label without inventing an agent identity.
-            if self.actor_type == ActorType::Unknown {
+            // A legacy `ai_verified` enum without a named agent is not enough to
+            // prove an actor identity. Keep the activity in the AI totals, but move
+            // it to the inferred tier so the UI cannot mistake it for a verified
+            // adapter event.
+            if matches!(self.actor_type, ActorType::Unknown | ActorType::AiVerified) {
                 self.actor_type = ActorType::AiInferred;
             }
-            self.ai_provider = None;
-            self.ai_model = None;
+            self.ai_provider = identity.provider;
+            self.ai_model = identity.model;
             self.ai_confidence = Some("inferred".to_string());
             self.attribution_confidence = None;
+        } else if !has_identity && !self.is_ai_generated {
+            // Identity fields are AI-only metadata.  Ignore a forged or stale
+            // `identity_status` sent alongside an ordinary Human/Unknown heartbeat
+            // instead of allowing it to survive into history responses.
+            self.identity_status = None;
+            self.identity_reason = None;
+            self.identity_source = None;
+            self.identity_schema_version = None;
+            self.identity_turn_id = None;
+            self.identity_message_id = None;
         }
     }
 
@@ -729,19 +874,40 @@ impl Heartbeat {
     pub fn has_verified_ai_identity(&self) -> bool {
         self.is_ai_generated
             && self
+                .identity_status
+                .as_deref()
+                .is_some_and(|status| status.trim().eq_ignore_ascii_case(IdentityStatus::Confirmed.as_str()))
+            && self
+                .identity_reason
+                .as_deref()
+                .map(|reason| reason.trim().is_empty())
+                .unwrap_or(true)
+            && self
                 .ai_agent
                 .as_deref()
                 .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
             && self
+                .ai_provider
+                .as_deref()
+                .is_some_and(|provider| normalize_identity_provider(Some(provider)).is_some())
+            && self
+                .ai_model
+                .as_deref()
+                .is_some_and(|model| normalize_identity_model(Some(model)).is_some())
+            && self
                 .ai_confidence
                 .as_deref()
                 .is_some_and(|confidence| confidence.trim().eq_ignore_ascii_case("verified"))
-            && self.ai_source.as_deref().is_some_and(|source| {
-                matches!(
-                    source.trim().to_ascii_lowercase().as_str(),
-                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                )
-            })
+            && self
+                .identity_source
+                .as_deref()
+                .or(self.ai_source.as_deref())
+                .is_some_and(|source| {
+                    matches!(
+                        source.trim().to_ascii_lowercase().as_str(),
+                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                    )
+                })
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -1332,6 +1498,59 @@ mod tests {
     }
 
     #[test]
+    fn verified_agent_without_model_stays_ai_verified_and_is_marked_partial() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.ai_agent = Some("codex".to_string());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_source = Some("transcript".to_string());
+        heartbeat.ai_confidence = Some("verified".to_string());
+
+        heartbeat.enforce_attribution_policy();
+
+        assert_eq!(heartbeat.actor_type, ActorType::AiVerified);
+        assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.identity_status.as_deref(), Some("partial"));
+        assert_eq!(heartbeat.identity_reason.as_deref(), Some("missing_model"));
+        assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
+        assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        assert!(heartbeat.ai_model.is_none());
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn trusted_internal_marker_reason_survives_transport_normalization() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.ai_agent = Some("codex".to_string());
+        heartbeat.ai_provider = Some("openai".to_string());
+        heartbeat.ai_source = Some("transcript".to_string());
+        heartbeat.ai_confidence = Some("verified".to_string());
+        heartbeat.identity_status = Some("partial".to_string());
+        heartbeat.identity_reason = Some(crate::ai::REASON_INTERNAL_MARKER.to_string());
+        heartbeat.identity_source = Some("transcript".to_string());
+
+        heartbeat.enforce_attribution_policy();
+
+        assert_eq!(heartbeat.actor_type, ActorType::AiVerified);
+        assert_eq!(heartbeat.identity_status.as_deref(), Some("partial"));
+        assert_eq!(
+            heartbeat.identity_reason.as_deref(),
+            Some(crate::ai::REASON_INTERNAL_MARKER)
+        );
+        assert!(heartbeat.ai_model.is_none());
+        heartbeat.validate().unwrap();
+    }
+
+    #[test]
     fn provider_only_identity_is_unattributed_even_with_verified_labels() {
         let mut heartbeat = Heartbeat::new(
             Uuid::nil(),
@@ -1353,6 +1572,27 @@ mod tests {
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
         assert!(heartbeat.validate().is_ok());
+    }
+
+    #[test]
+    fn ai_verified_without_a_named_agent_is_downgraded_to_inferred() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.actor_type = ActorType::AiVerified;
+        heartbeat.actor_confidence = 1.0;
+        heartbeat.is_ai_generated = true;
+
+        heartbeat.enforce_attribution_policy();
+
+        assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
+        assert!(heartbeat.is_ai_generated);
+        assert_eq!(heartbeat.identity_status.as_deref(), Some("unavailable"));
+        assert_eq!(heartbeat.identity_reason.as_deref(), Some("context_unavailable"));
+        heartbeat.validate().unwrap();
     }
 
     #[test]

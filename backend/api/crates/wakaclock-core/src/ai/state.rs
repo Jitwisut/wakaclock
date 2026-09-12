@@ -244,6 +244,40 @@ impl AiAttributionState {
         Ok(())
     }
 
+    /// Commit a parser checkpoint together with the events that were delivered from
+    /// that checkpoint. Keeping both writes in one SQLite transaction means a crash
+    /// can only leave the old cursor (which is replay-safe) or the new cursor plus
+    /// every delivered event ID; it can never advance past an event without its
+    /// dedup marker.
+    pub fn save_cursor_and_mark_delivered(
+        &mut self,
+        parser_id: &str,
+        cursor: &ParserCursor,
+        event_ids: &[String],
+    ) -> Result<(), AppError> {
+        let cursor_json = serde_json::to_string(cursor)?;
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now().timestamp();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO parser_state (parser_id, cursor_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(parser_id) DO UPDATE SET
+                cursor_json = excluded.cursor_json,
+                updated_at = excluded.updated_at",
+            params![parser_id, cursor_json, now_rfc3339],
+        )?;
+        for event_id in event_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO delivered_events (event_id, parser_id, delivered_at)
+                 VALUES (?1, ?2, ?3)",
+                params![event_id, parser_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Every `event_id` in `candidates` that has **not** already been marked
     /// delivered — the set a caller should actually build heartbeats for. Plan.md 8.6:
     /// "Enforce `event_id` uniqueness locally so transcript replay, hook retry and
@@ -697,6 +731,11 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: None,
             session_id: None,
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             tool_event_id: None,
             occurred_at: chrono::Utc::now(),
             entity: StdPathBuf::from("src/lib.rs"),
@@ -731,6 +770,7 @@ mod tests {
             byte_offset: 1234,
             last_record_id: Some("toolu_1".to_string()),
             last_record_time: Some(chrono::Utc::now()),
+            context: None,
         };
         state.save_cursor("claude-code", &cursor).unwrap();
         let loaded = state.load_cursor("claude-code").unwrap().unwrap();
@@ -749,6 +789,7 @@ mod tests {
             byte_offset: 10,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let second = ParserCursor {
             byte_offset: 20,
@@ -757,6 +798,35 @@ mod tests {
         state.save_cursor("codex", &first).unwrap();
         state.save_cursor("codex", &second).unwrap();
         assert_eq!(state.load_cursor("codex").unwrap().unwrap().byte_offset, 20);
+    }
+
+    #[test]
+    fn cursor_and_delivery_checkpoint_commit_together() {
+        let path = temp_db_path("cursor-delivery-transaction");
+        let _ = std::fs::remove_file(&path);
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+        let cursor = ParserCursor {
+            source_path: "session.jsonl".to_string(),
+            file_identity: None,
+            byte_offset: 42,
+            last_record_id: Some("call-1".to_string()),
+            last_record_time: None,
+            context: Some(crate::ai::parser::ParserContext::default()),
+        };
+        state
+            .save_cursor_and_mark_delivered(
+                "codex:session.jsonl",
+                &cursor,
+                &["event-1".to_string(), "event-1".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(state.load_cursor("codex:session.jsonl").unwrap(), Some(cursor));
+        let undelivered = state
+            .filter_undelivered(&["event-1".to_string(), "event-2".to_string()])
+            .unwrap();
+        assert!(!undelivered.contains("event-1"));
+        assert!(undelivered.contains("event-2"));
     }
 
     #[test]

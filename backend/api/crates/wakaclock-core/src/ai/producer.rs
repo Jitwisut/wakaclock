@@ -48,8 +48,26 @@ impl ProducerIdentity {
     ) -> Result<Self, ProducerError> {
         Ok(Self {
             client_id: normalize_client_id(client_id.as_ref())?,
-            provider_id: provider_id.map(normalize_provider_id).transpose()?,
-            model_id: model_id.map(normalize_model_id).transpose()?,
+            provider_id: provider_id
+                .map(|value| {
+                    let trimmed = value.trim();
+                    if (trimmed.contains("://") || trimmed.contains('/'))
+                        && provider_for_endpoint(trimmed).is_none()
+                    {
+                        return Err(ProducerError::InvalidField {
+                            field: "provider_id",
+                        });
+                    }
+                    crate::ai::normalize_identity_provider(Some(trimmed))
+                        .map(|value| normalize_provider_id(&value))
+                        .transpose()
+                })
+                .transpose()?
+                .flatten(),
+            model_id: model_id
+                .and_then(|value| crate::ai::normalize_identity_model(Some(value)))
+                .map(|value| normalize_model_id(&value))
+                .transpose()?,
         })
     }
 }
@@ -235,6 +253,11 @@ pub fn build_file_change_event(input: ProducerFileChange) -> Result<BrokerEventV
         provider: input.identity.provider_id,
         model: input.identity.model_id,
         session_id,
+        turn_id: None,
+        identity_message_id: None,
+        identity_status: None,
+        identity_reason: None,
+        identity_source: None,
         source: input.source,
         confidence: input.confidence,
         // Let the broker derive the canonical actor from the source/confidence

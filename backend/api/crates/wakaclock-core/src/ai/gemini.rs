@@ -14,6 +14,7 @@ use crate::ai::parser::{
 };
 use crate::ai::patch::{count_content_lines, count_unified_diff_lines};
 use crate::ai::path::resolve_within_workspace;
+use crate::ai::{normalize_identity_model, normalize_identity_provider};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::fs;
@@ -216,6 +217,7 @@ impl AiActivityParser for GeminiCliParser {
                 byte_offset: offset,
                 last_record_id: last_id,
                 last_record_time: last_time,
+                context: cursor.context.clone(),
             },
             warnings,
         })
@@ -253,6 +255,7 @@ fn parse_json_document(path: &Path, cursor: &ParserCursor) -> Result<ParseBatch,
             byte_offset: contents.len() as u64,
             last_record_id: None,
             last_record_time: None,
+            context: cursor.context.clone(),
         },
         warnings: Vec::new(),
     })
@@ -294,9 +297,16 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
     Some(AiEditEvent {
         event_id,
         agent: "gemini-cli".to_string(),
-        provider: Some("google".to_string()),
-        model: first_string(value, &["model", "model_name", "modelName"]),
+        provider: normalize_identity_provider(Some("google")),
+        model: normalize_identity_model(
+            first_string(value, &["model", "model_name", "modelName"]).as_deref(),
+        ),
         session_id: first_string(value, &["session_id", "sessionId", "session"]),
+        turn_id: first_string(value, &["turn_id", "turnId"]),
+        identity_message_id: first_string(value, &["message_id", "messageId"]),
+        identity_status: None,
+        identity_reason: None,
+        identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
         tool_event_id: Some(operation_id),
         occurred_at,
         entity,
@@ -378,6 +388,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let first = parser
             .parse_since(&ParseContext::default(), Some(&cursor))

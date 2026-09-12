@@ -13,6 +13,227 @@ tree-sitter-typescript = "0.23"
 tree-sitter-go = "0.23"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
+# Pinned below 0.7: the 0.7.x grammar is tree-sitter ABI 15, which the pinned
+# tree-sitter 0.24 runtime cannot load (set_language fails at runtime). 0.6.x
+# ships ABI 14. Revisit when the workspace tree-sitter pin moves to >= 0.25.
+tree-sitter-swift = ">=0.6, <0.7"
+tree-sitter-java = "0.23"
+# `tree-sitter-kotlin-ng` (not the older `tree-sitter-kotlin`) — matches the
+# same `LANGUAGE: LanguageFn` binding style as every other grammar here and
+# is ABI 14, same as the runtime pin.
+tree-sitter-kotlin-ng = "1"
+# Pinned to 0.0.4 exactly: 0.1.0+ moved to tree-sitter ABI 15 (same
+# incompatibility as tree-sitter-swift above). 0.0.4 is ABI 14 but predates
+# the `LanguageFn` binding, so it's called via `tree_sitter_dart::language()`
+# instead of `LANGUAGE.into()`.
+tree-sitter-dart = "0.0.4"
+# Exact-pinned: 0.23.5 is tree-sitter ABI 15 (same class of break as Swift's
+# 0.7.x and Dart's 0.1.0+), but this one broke ABI *within* the 0.23.x line —
+# 0.23.1 is ABI 14, 0.23.5 isn't. A bare "0.23" range would silently pick up
+# the broken one on the next `cargo update`.
+tree-sitter-c-sharp = "=0.23.1"
+tree-sitter-ruby = "=0.23.1"
+# Exact-pinned for the same reason as C# above: 0.24.2 is ABI 15, 0.23.11 (the
+# newest release before it) is ABI 14. Uses the combined-grammar `LANGUAGE_PHP`
+# export, which also parses the embedded-HTML parts of a `.php` file, rather
+# than `LANGUAGE_PHP_ONLY` (PHP-only source with no `<?php` tag).
+tree-sitter-php = "=0.23.11"
+# Not `tree-sitter-sql` (0.0.2, the only release): that crate predates the
+# `tree-sitter-language` FFI shim and links its own `tree-sitter = "0.19"`
+# directly, which conflicts at compile time with this crate's `tree-sitter
+# 0.24` — a real `Language` struct with two incompatible layouts on the same
+# build, not just an ABI-string mismatch. `tree-sitter-sequel` is the
+# actively-maintained derekstride/tree-sitter-sql grammar (crates.io name
+# differs from its repo name); Rust module is `tree_sitter_sequel`. ABI 14, no
+# further pin needed. No dependency extraction: SQL has no import/use
+# statement, so `extract_dependencies` returns `vec![]` for it, same as `Text`.
+tree-sitter-sequel = "0.3"
+# Exact-pinned: 0.4.1+ is ABI 15; 0.2.0 is the newest ABI-14 release.
+tree-sitter-lua = "=0.2.0"
+# Exact-pinned: 0.25.10+ is ABI 15; 0.25.9 is the newest ABI-14 release (a much
+# more mature grammar than the early 0.1.0/0.2.0 releases — this crate's
+# versioning jumped straight from 0.2.0 to 0.24.x with a grammar rewrite).
+tree-sitter-powershell = "=0.25.9"
+tree-sitter-r = "=1.3.0"
+# Exact-pinned: 1.2.12+ is ABI 15; 1.2.10 is the newest ABI-14 release.
+tree-sitter-solidity = "=1.2.10"
+# Links `tree-sitter` directly (predates the `tree-sitter-language` shim) but
+# with an unbounded `>=0.22.0` requirement rather than a narrow one — unlike
+# `tree-sitter-sql`'s incompatible pinned `"0.19"`, this unifies fine with the
+# workspace's `tree-sitter 0.24`. Old binding (`fn language() -> Language`).
+tree-sitter-fish = "=3.6.0"
+# Exports `LANGUAGE_GLSL`/`LANGUAGE_HLSL`, not the bare `LANGUAGE` most other
+# grammars here use.
+tree-sitter-glsl = "=0.2.0"
+tree-sitter-hlsl = "=0.2.0"
+# HCL has no ABI-14-compatible release to depend on (its only release, 1.1.0,
+# is ABI 15) — detected via the static tier in detector.rs instead, no crate.
+#
+# --- Backend/general-purpose batch ---
+# None of the 13 below get dependency extraction (`extract_dependencies`
+# returns `vec![]` for all) — added for detection only; revisit per-language
+# if that's wanted later.
+tree-sitter-elixir = "=0.3.5"
+tree-sitter-erlang = "=0.20.0"
+tree-sitter-groovy = "=0.1.2"
+tree-sitter-haskell = "=0.23.1"
+tree-sitter-d = "=0.8.2"
+tree-sitter-scheme = "=0.24.7"
+tree-sitter-commonlisp = "=0.4.1"
+# Exact-pinned: 0.26.2 (latest) is ABI 15; 0.24.1 is the newest ABI-14 release.
+tree-sitter-scala = "=0.24.1"
+# 0.1.0 — the only ABI-14 release; every later one (0.2.1+) is ABI 15. A much
+# older, less mature grammar than the other pins here; re-check coverage on
+# real F# code if detection quality looks off.
+tree-sitter-fsharp = "=0.1.0"
+# Exact-pinned: 0.24.0+ is ABI 15; 0.23.2 is the newest ABI-14 release. Also
+# builds `.mli` interface files (`LANGUAGE_OCAML_INTERFACE`) alongside `.ml`
+# (`LANGUAGE_OCAML`) — see languages.rs.
+tree-sitter-ocaml = "=0.23.2"
+tree-sitter-racket = "=0.24.7"
+# Crystal, Perl and Nim each have exactly one crates.io release and it's ABI
+# 15 with no older release to fall back to — static tier.
+#
+# Clojure (0.1.0, its only release) is ABI 14 but depends on `tree-sitter =
+# "0.25.6"` directly (not the `tree-sitter-language` shim) — a narrow caret
+# range that excludes this workspace's `tree-sitter 0.24` and fails to
+# compile, the same class of problem as `tree-sitter-sql` (see the comment
+# above `tree-sitter-sequel`) — static tier.
+#
+# Elm and Emacs Lisp (`tree-sitter-elisp`) are a *third* variant of that same
+# problem, and it cost a full `cargo build` failure to find: every ABI-14
+# release of each (elm through 5.6.6/5.7.0, elisp through 1.5.0) predates
+# both crates' move to the `tree-sitter-language` shim, and pins a direct
+# `tree-sitter = "0.20.x"` dependency instead. Cargo's `links = "tree-sitter"`
+# manifest key means only one version of the native tree-sitter library can
+# exist in the whole build — so this doesn't fail as a Rust type mismatch
+# (that's the SQL crate's failure mode) but as a hard dependency-resolution
+# error ("failed to select a version for `tree-sitter`") the moment `cargo
+# build` tries to unify it with every other grammar's `^0.24`. There is no
+# ABI-14 release of either crate that also satisfies 0.24 — not a version to
+# walk back to, an entirely absent option — so both are static tier. The
+# general lesson: an old-binding-style crate (`fn language() -> Language`)
+# is a signal to check its OWN `tree-sitter` requirement before picking a
+# version, not just that version's ABI.
+#
+# PureScript, ReScript, Reason, Factor, Fennel, Io, J, Fancy, Boo, Mirah,
+# Dylan, Eiffel, Fantom, BeanShell, ColdFusion, Mojo, Motoko, Ballerina and Q
+# have no tree-sitter crate published to crates.io at all (checked by name
+# and a few plausible aliases) — also static tier.
+#
+# --- Infra-as-code/build batch ---
+# No dependency extraction for any of these 4 (`extract_dependencies` returns
+# `vec![]`) — detection only, same as the Backend/general-purpose batch.
+tree-sitter-bicep = "=1.1.0"
+tree-sitter-cmake = "=0.7.4"
+# Bazel's BUILD/BUILD.bazel/WORKSPACE files and .bzl libraries are written in
+# Starlark — there's no separate "Bazel" grammar, this crate's `LANGUAGE` is
+# what parses them. Catalog also lists "Starlark" as its own (currently
+# undetected) language; this pin only wires up the "Bazel" name via the
+# special filenames and `.bzl` extension in languages.rs/detector.rs, not a
+# general `.star` mapping — deliberate scope match to what was asked for.
+tree-sitter-starlark = "=1.3.0"
+# ABI 13 — one below the ABI-14 pin everything else here targets, but
+# tree-sitter's compatibility is backward (a runtime built for ABI N also
+# loads ABI < N grammars), and this is the crate's only release, so there
+# was nothing to pick between; confirmed by a successful build, not just
+# read from the version number.
+tree-sitter-nix = "=0.3.0"
+# BitBake has 4 releases, every one of them ABI 14 *and* every one pinning
+# `tree-sitter = "~0.20.10"` directly (not the `tree-sitter-language` shim) —
+# the exact Elm/Emacs-Lisp `links = "tree-sitter"` failure mode from the
+# Backend/general-purpose batch, not a version to walk back to. Static tier
+# instead. Meson, Dhall, ApacheConf and Augeas have no tree-sitter crate
+# published to crates.io at all — also static tier.
+#
+# --- Systems/low-level + Scripting/shell-adjacent batch ---
+# No dependency extraction for any of these 5 (`extract_dependencies` returns
+# `vec![]`) — detection only, same as every batch since Backend/general-purpose.
+tree-sitter-asm = "=0.24.0"
+# Exact-pinned: 0.6.0 (latest) is ABI 15; 0.5.1 is the newest ABI-14 release.
+tree-sitter-fortran = "=0.5.1"
+tree-sitter-ada = "=0.1.0"
+tree-sitter-pascal = "=0.10.2"
+tree-sitter-verilog = "=1.0.3"
+# COBOL, VHDL, SystemVerilog, LLVM, Cython, Alloy, AMPL — Systems/low-level's
+# static-tier remainder — and Batchfile, AutoHotkey, AutoIt, Awk, sed, Tcl,
+# LiveScript, ActionScript, AspectJ, Raku — all of Scripting/shell-adjacent —
+# are covered in detector.rs's static tier, not here: `tree-sitter-cobol`
+# 0.1.0 (its only release) isn't a grammar at all, just a placeholder crate
+# with a `src/main.rs` and no parser; VHDL and LLVM each have exactly one
+# release and it's ABI 15 with nothing to fall back to (the HCL pattern);
+# SystemVerilog, Batchfile (`tree-sitter-batch`) and AutoHotkey are each ABI
+# 15 in *every* released version, all the way back to 0.1.0 — never had an
+# ABI-14 release to walk back to, not merely one that predates the
+# `tree-sitter-language` shim; Cython, Alloy, AMPL, AutoIt, Awk, sed, Tcl,
+# LiveScript, ActionScript, AspectJ and Raku have no tree-sitter crate
+# published to crates.io at all (checked by name and plausible aliases).
+#
+# --- Final batch: Query/data, Scientific, Shader/graphics, Academic/niche,
+# --- Templating, Markup/doc — everything left in the catalog after this is
+# --- either genuinely uncovered by tree-sitter's ecosystem or was a
+# --- placeholder/unusable crate, see the long comment below. No dependency
+# --- extraction for any of these 13 (`extract_dependencies` returns `vec![]`).
+tree-sitter-julia = "=0.23.1"
+tree-sitter-sas = "=0.4.2"
+tree-sitter-gdscript = "=6.1.0"
+tree-sitter-prolog = "=0.1.0"
+tree-sitter-agda = "=1.3.3"
+tree-sitter-diff = "=0.1.0"
+# Old binding (`fn language() -> Language`), but its direct `tree-sitter`
+# requirement is `">=0.21.0"` — unbounded, unifies fine (the Fish pattern),
+# confirmed by a successful build.
+tree-sitter-vim = "=0.4.0"
+# Exact-pinned: 0.25.2 (latest) is ABI 15; 0.24.1 is the newest ABI-14 release.
+tree-sitter-sparql = "=0.24.1"
+# Exact-pinned: 0.3.0+ is ABI 15; 0.2.0 is the newest ABI-14 release.
+tree-sitter-proto = "=0.2.0"
+# Exact-pinned: 0.21.1 (latest) is ABI 15; 0.21.0 is the newest ABI-14
+# release. Exports `LANGUAGE_CUDA`, not the bare `LANGUAGE` most grammars
+# here use (same shape as GLSL/HLSL above).
+tree-sitter-cuda = "=0.21.0"
+# Exact-pinned: 0.24.0 (latest) is ABI 15; 0.23.0 is the newest ABI-14 release.
+tree-sitter-arduino = "=0.23.0"
+# ABI 14, but pins `tree-sitter` directly to `"~0.24.0"` (not the shim) —
+# unlike Elm/Emacs-Lisp/BitBake/Org/OpenSCAD/Squirrel below, that narrow
+# range happens to include this workspace's exact `tree-sitter 0.24.7` pin,
+# so it isn't the usual dead end. Old binding (`fn language() -> Language`).
+tree-sitter-sourcepawn = "=0.7.8"
+# No new dependency: reuses `tree-sitter-starlark` (already pulled in for
+# Bazel above) — `.star` files are Starlark with no Bazel-specific framing,
+# same grammar, different catalog name for the result.
+#
+# Matlab, Gnuplot, Squirrel, Lean4 (Lean), Org and OpenSCAD each have a
+# published crate that turned out unusable on inspection, not just a bare
+# name miss: Matlab and Gnuplot are ABI 15 in *every* released version,
+# checked back to each crate's oldest release — never had an ABI-14 release,
+# the SystemVerilog/Batchfile/AutoHotkey pattern from the batch above.
+# Squirrel, Lean4 (`tree-sitter-lean4`) and Org each pin `tree-sitter`
+# directly to a narrow range excluding 0.24 in *every* release checked
+# (Squirrel: `~0.20.9` across all 3; Lean4: `0.25` across all 14; Org:
+# `>= 0.19, < 0.21` across all 4) — the Elm/Emacs-Lisp/BitBake pattern, but
+# with no version where ABI and dependency range are both compatible at
+# once, the way SourcePawn 0.7.8 above has. OpenSCAD's every release pins a
+# `0.19`/`0.20`-range `tree-sitter` dependency the same way. LaTeX
+# (`tree-sitter-latex`) has exactly one release and it's ABI 15 — the
+# HCL/VHDL pattern. All seven are static tier instead — see detector.rs.
+#
+# --- CSV/GraphQL/Puppet/Nu/Zig, from diffing against Chroma (WakaTime's own
+# --- detector) rather than the catalog list — see the language-coverage
+# --- section of crates.md for how that comparison was done. No dependency
+# --- extraction for Puppet/Zig.
+tree-sitter-puppet = "=1.3.0"
+tree-sitter-zig = "=1.1.2"
+# CSV (every release pins `tree-sitter = "~0.20.10"` directly, excluding
+# 0.24 — the Elm/Emacs-Lisp pattern) and GraphQL (ABI 15 in every release,
+# 0.1.0 through 0.2.1 — the SystemVerilog/Batchfile pattern) are static tier
+# instead. Nu (Nushell) has no tree-sitter crate published to crates.io at
+# all — also static tier.
+#
+# --- Haxe/Standard ML/VB.net/Sass/reStructuredText, second Chroma-diff batch.
+tree-sitter-rst = "=0.2.0"
+# Haxe, Standard ML, VB.net and Sass have no tree-sitter crate published to
+# crates.io at all (checked by name and plausible aliases) — static tier.
 dashmap = "6"
 parking_lot = "0.12"
 tracing = { workspace = true }

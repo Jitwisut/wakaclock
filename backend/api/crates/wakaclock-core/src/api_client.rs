@@ -1,5 +1,10 @@
 use crate::{
-    ai::{AiDiagnosticsReport, AiDiagnosticsReportV2, AiUsageIngestReport, AiUsageRecord},
+    ai::{
+        normalize_identity_agent, normalize_identity_model, normalize_identity_provider,
+        normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
+        normalize_identity_status, resolve_identity, AiDiagnosticsReport, AiDiagnosticsReportV2,
+        AiUsageIngestReport, AiUsageRecord, IDENTITY_SCHEMA_VERSION,
+    },
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
@@ -156,6 +161,49 @@ pub struct RepairDayReport {
     pub revision_id: Option<String>,
     pub applied: bool,
     #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Metadata-only correction for one already-ingested AI activity event.  The
+/// server uses `ai_event_id` to locate the canonical heartbeat and copies its
+/// measured values into the next revision; this payload never carries prompts,
+/// patches, source text, or a replacement activity duration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiIdentityCorrection {
+    pub ai_event_id: String,
+    pub agent: String,
+    pub provider: String,
+    pub model: String,
+    pub source: String,
+    /// Optional stable session scope. When present, the server must match both
+    /// `ai_event_id` and this value so a reused tool id cannot repair another session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiIdentityRepairRequest {
+    pub repair_run_id: String,
+    pub corrections: Vec<AiIdentityCorrection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiIdentityRepairReport {
+    pub repair_run_id: String,
+    pub requested: u64,
+    pub matched: u64,
+    pub corrected: u64,
+    pub unchanged: u64,
+    pub unresolved: u64,
+    pub conflicts: u64,
+    pub preserved_heartbeats: u64,
+    pub preserved_lines_added: u64,
+    pub preserved_lines_deleted: u64,
+    pub applied: bool,
     pub dry_run: bool,
 }
 
@@ -411,6 +459,26 @@ impl ApiClient {
             .await?)
     }
 
+    /// Apply identity-only corrections against existing canonical heartbeats.
+    /// Retrying the same request is idempotent: the server returns `unchanged`
+    /// once the canonical row already carries the requested tuple.
+    pub async fn repair_ai_identity(
+        &self,
+        request: &AiIdentityRepairRequest,
+    ) -> AppResult<AiIdentityRepairReport> {
+        let response = self
+            .client
+            .post(format!("{}/api/v1/ai/identity/repair", self.config.server_url))
+            .json(request)
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        Ok(response
+            .error_for_status()?
+            .json::<AiIdentityRepairReport>()
+            .await?)
+    }
+
     /// Turns a 401 into a message that actually says what to do about it, instead of
     /// letting it fall through to `error_for_status()` and print as an opaque
     /// `Http(reqwest::Error { kind: Status(401, None), .. })` — which was indistinguishable
@@ -613,40 +681,97 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
         .get("is_ai_generated")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let string_value = |key: &str| {
-        object
+    let raw_agent = queued_string_value(object, "ai_agent").map(str::to_string);
+    let raw_provider = queued_string_value(object, "ai_provider").map(str::to_string);
+    let raw_model = queued_string_value(object, "ai_model").map(str::to_string);
+    let agent = normalize_identity_agent(raw_agent.as_deref());
+    let provider = normalize_identity_provider(raw_provider.as_deref());
+    let model = normalize_identity_model(raw_model.as_deref());
+    let has_identity = raw_agent.is_some() || raw_provider.is_some() || raw_model.is_some();
+    let source = queued_string_value(object, "ai_source").map(|value| value.to_ascii_lowercase());
+    let identity_source = normalize_identity_source(queued_string_value(object, "identity_source"))
+        .or_else(|| normalize_identity_source(source.as_deref()));
+    let identity_status = normalize_identity_status(queued_string_value(object, "identity_status"));
+    let _identity_reason = normalize_identity_reason(queued_string_value(object, "identity_reason"));
+    for key in ["identity_turn_id", "identity_message_id"] {
+        let normalized = object
             .get(key)
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    };
-    let has_identity = ["ai_agent", "ai_provider", "ai_model"]
-        .iter()
-        .any(|key| string_value(key).is_some());
-    let source = string_value("ai_source").map(|value| value.to_ascii_lowercase());
-    let confidence = string_value("ai_confidence");
-    let verified = string_value("ai_agent").is_some()
-        && confidence.is_some_and(|value| value.eq_ignore_ascii_case("verified"))
-        && source.as_deref().is_some_and(|value| {
+            .and_then(|value| normalize_identity_reference(Some(value)))
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+        object.insert(key.to_string(), normalized);
+    }
+    let confidence = queued_string_value(object, "ai_confidence");
+    let trusted_source = identity_source
+        .as_deref()
+        .or(source.as_deref())
+        .is_some_and(|value| {
             matches!(
                 value,
                 "agent_hook" | "mcp" | "structured_mcp" | "transcript"
             )
         });
-    let legacy_inferred = string_value("actor_type").is_some_and(|value| {
+    let explicit_conflict = identity_status.as_deref() == Some("conflict") && trusted_source;
+    let resolution = if has_identity || is_ai {
+        Some(resolve_identity(
+            agent.as_deref(),
+            &[provider.as_deref()],
+            &[model.as_deref()],
+            identity_source.as_deref().or(source.as_deref()),
+            confidence,
+        ))
+    } else {
+        None
+    };
+    let verified = resolution
+        .as_ref()
+        .is_some_and(|identity| identity.status.as_str() == "confirmed")
+        && !explicit_conflict
+        && trusted_source;
+    let trusted_partial = agent.is_some() && trusted_source;
+    let legacy_inferred = queued_string_value(object, "actor_type").is_some_and(|value| {
         matches!(
             value.to_ascii_lowercase().as_str(),
             "ai_inferred" | "inferred" | "correlated"
         )
     });
-    let legacy_unknown = string_value("actor_type").is_some_and(|value| {
+    let legacy_unknown = queued_string_value(object, "actor_type").is_some_and(|value| {
         matches!(
             value.to_ascii_lowercase().as_str(),
             "unknown" | "unattributed"
         )
     });
 
-    if (has_identity && !verified) || legacy_inferred || (legacy_unknown && (has_identity || is_ai))
+    if explicit_conflict {
+        // Preserve the conflict diagnostic while removing both sides of the
+        // contradictory tuple. A queue flush must not silently turn it into a
+        // latest-wins model label.
+        object.insert(
+            "ai_agent".to_string(),
+            agent.map(Value::String).unwrap_or(Value::Null),
+        );
+        object.insert("ai_provider".to_string(), Value::Null);
+        object.insert("ai_model".to_string(), Value::Null);
+        object.insert(
+            "identity_status".to_string(),
+            Value::String("conflict".to_string()),
+        );
+        object.insert(
+            "identity_reason".to_string(),
+            Value::String("conflicting_evidence".to_string()),
+        );
+        object.insert(
+            "identity_source".to_string(),
+            identity_source.map(Value::String).unwrap_or(Value::Null),
+        );
+        object.insert(
+            "identity_schema_version".to_string(),
+            Value::Number(serde_json::Number::from(IDENTITY_SCHEMA_VERSION)),
+        );
+    } else if (has_identity && !verified && !trusted_partial)
+        || legacy_inferred
+        || (legacy_unknown && (has_identity || is_ai))
     {
         object.insert("is_ai_generated".to_string(), Value::Bool(true));
         for key in ["ai_agent", "ai_provider", "ai_model"] {
@@ -662,17 +787,105 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
         );
         object.insert("attribution_source".to_string(), Value::Null);
         object.insert("attribution_confidence".to_string(), Value::Null);
-    } else if is_ai && string_value("ai_agent").is_none() {
-        for key in ["ai_provider", "ai_model"] {
-            object.insert(key.to_string(), Value::Null);
+        object.insert(
+            "identity_status".to_string(),
+            Value::String("unavailable".to_string()),
+        );
+        object.insert(
+            "identity_reason".to_string(),
+            Value::String("context_unavailable".to_string()),
+        );
+        object.insert("identity_source".to_string(), Value::Null);
+        object.insert(
+            "identity_schema_version".to_string(),
+            Value::Number(serde_json::Number::from(IDENTITY_SCHEMA_VERSION)),
+        );
+    } else if let Some(identity) = resolution {
+        // Persist the same normalized status/reason that a live typed heartbeat
+        // receives. This also removes marker values from old queued JSON before
+        // they reach the server.
+        object.insert(
+            "ai_agent".to_string(),
+            agent.map(Value::String).unwrap_or(Value::Null),
+        );
+        object.insert(
+            "ai_provider".to_string(),
+            provider.map(Value::String).unwrap_or(Value::Null),
+        );
+        object.insert(
+            "ai_model".to_string(),
+            model.map(Value::String).unwrap_or(Value::Null),
+        );
+        object.insert(
+            "identity_status".to_string(),
+            Value::String(identity.status.as_str().to_string()),
+        );
+        object.insert(
+            "identity_reason".to_string(),
+            identity
+                .reason
+                .map(|reason| Value::String(reason.to_string()))
+                .unwrap_or(Value::Null),
+        );
+        object.insert(
+            "identity_schema_version".to_string(),
+            Value::Number(serde_json::Number::from(IDENTITY_SCHEMA_VERSION)),
+        );
+        object.insert(
+            "identity_source".to_string(),
+            identity_source.map(Value::String).unwrap_or(Value::Null),
+        );
+        if is_ai && identity.status.as_str() == "unavailable" {
+            object.insert(
+                "ai_confidence".to_string(),
+                Value::String("inferred".to_string()),
+            );
         }
+    } else if is_ai {
+        object.insert("ai_provider".to_string(), Value::Null);
+        object.insert("ai_model".to_string(), Value::Null);
         object.insert(
             "ai_confidence".to_string(),
             Value::String("inferred".to_string()),
         );
+        object.insert(
+            "identity_status".to_string(),
+            Value::String("unavailable".to_string()),
+        );
+        object.insert(
+            "identity_reason".to_string(),
+            Value::String("context_unavailable".to_string()),
+        );
+        object.insert(
+            "identity_schema_version".to_string(),
+            Value::Number(serde_json::Number::from(IDENTITY_SCHEMA_VERSION)),
+        );
+        object.insert("identity_source".to_string(), Value::Null);
+    } else {
+        // Identity metadata is meaningful only for an AI activity. Clear stale
+        // values in a legacy queue row so they cannot reappear on a Human/Unknown
+        // history response after a retry.
+        for key in [
+            "identity_status",
+            "identity_reason",
+            "identity_source",
+            "identity_schema_version",
+            "identity_turn_id",
+            "identity_message_id",
+        ] {
+            object.insert(key.to_string(), Value::Null);
+        }
     }
 
     payload
+}
+
+fn queued_string_value<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 struct FilteredHeartbeats {
@@ -834,6 +1047,26 @@ mod tests {
         assert_eq!(sanitized["ai_agent"], "codex");
         assert_eq!(sanitized["ai_provider"], "openai");
         assert_eq!(sanitized["ai_model"], "gpt-test");
+        assert_eq!(sanitized["identity_status"], "confirmed");
+    }
+
+    #[test]
+    fn queued_internal_model_marker_becomes_partial_identity() {
+        let payload = serde_json::json!({
+            "is_ai_generated": true,
+            "ai_agent": "codex",
+            "ai_provider": "openai",
+            "ai_model": "Model not reported",
+            "ai_source": "transcript",
+            "ai_confidence": "verified"
+        });
+
+        let sanitized = sanitize_queued_heartbeat_payload(payload);
+        assert_eq!(sanitized["ai_agent"], "codex");
+        assert_eq!(sanitized["ai_provider"], "openai");
+        assert!(sanitized["ai_model"].is_null());
+        assert_eq!(sanitized["identity_status"], "partial");
+        assert_eq!(sanitized["identity_reason"], "missing_model");
     }
 
     #[test]
@@ -842,5 +1075,28 @@ mod tests {
             classify_delivery_failure("Authentication failed: API key was rejected by the server"),
             DeliveryFailureKind::Auth401
         );
+    }
+
+    #[test]
+    fn identity_repair_payload_is_metadata_only_and_round_trips() {
+        let request = AiIdentityRepairRequest {
+            repair_run_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            corrections: vec![AiIdentityCorrection {
+                ai_event_id: "codex-v1:event".to_string(),
+                agent: "codex".to_string(),
+                provider: "openai".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+                source: "transcript".to_string(),
+                session_id: Some("session-1".to_string()),
+                turn_id: Some("turn-1".to_string()),
+                message_id: Some("call-1".to_string()),
+            }],
+        };
+        let value = serde_json::to_value(&request).expect("serializes");
+        let object = value.as_object().expect("object");
+        for forbidden in ["prompt", "response", "patch", "content", "source_text", "time"] {
+            assert!(!object.contains_key(forbidden));
+        }
+        assert_eq!(serde_json::from_value::<AiIdentityRepairRequest>(value).unwrap(), request);
     }
 }

@@ -4,17 +4,26 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::ai_stats::{
-    AiAgentItem, AiAgentRow, AiCoverageStatus, AiDailyItem, AiDailyRow, AiStatsCoverage,
-    AiStatsData, AiStatsResponse, AiTotalsRow, AiUsageMetricsRow, AI_STATS_SCHEMA_VERSION,
+    AiAgentItem, AiAgentRow, AiCoverageStatus, AiDailyItem, AiDailyRow, AiIdentityReasonCount,
+    AiIdentitySummary, AiStatsCoverage, AiStatsData, AiStatsResponse, AiTotalsRow,
+    AiUsageMetricsRow, AI_STATS_SCHEMA_VERSION,
 };
 use crate::repository::canonical::canonical_winner_relation;
-use wakaclock_core::ai::KNOWN_AGENT_IDS;
-
+use wakaclock_core::ai::{KNOWN_AGENT_IDS, KNOWN_PROVIDER_IDS};
 // Keep the dashboard conservative when reading rows written by older clients. The
 // raw heartbeat remains the audit record, while this projection prevents arbitrary
 // labels (for example integration-test names) from becoming named verified agents.
 // Unknown labels can still contribute to the unattributed bucket, but a legacy
 // evidence field must never promote the canonical `unknown` actor to AI.
+
+fn ai_evidence_expr() -> &'static str {
+    "lower(trim(ifNull(h.ai_agent, ''))) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+     OR lower(trim(ifNull(h.ai_event_id, ''))) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
+     OR coalesce(h.ai_lines_added, 0) > 0
+     OR coalesce(h.ai_lines_deleted, 0) > 0
+     OR lower(trim(ifNull(h.ai_source, ''))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')"
+}
+
 fn known_agent_ids_sql() -> String {
     KNOWN_AGENT_IDS
         .iter()
@@ -23,31 +32,46 @@ fn known_agent_ids_sql() -> String {
         .join(", ")
 }
 
-fn verified_identity_expr() -> String {
-    let known_agent_ids = known_agent_ids_sql();
-    format!(
-        "h.actor_type = 'ai_verified'
-         AND nullIf(trim(ifNull(h.ai_agent, '')), '') IS NOT NULL
-         AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agent_ids})
-         AND lower(trim(ifNull(h.ai_confidence, ''))) = 'verified'
-         AND lower(trim(ifNull(h.ai_source, ''))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')"
-    )
-}
-
-fn ai_evidence_expr() -> &'static str {
-    "lower(ifNull(h.ai_agent, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
-     OR lower(ifNull(h.ai_event_id, '')) NOT IN ('', 'unknown', '<unknown>', 'null', 'undefined')
-     OR coalesce(h.ai_lines_added, 0) > 0
-     OR coalesce(h.ai_lines_deleted, 0) > 0
-     OR lower(ifNull(h.ai_source, '')) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')"
+fn known_provider_ids_sql() -> String {
+    KNOWN_PROVIDER_IDS
+        .iter()
+        .map(|provider| format!("'{provider}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn effective_actor_type_expr() -> String {
-    let verified_identity = verified_identity_expr();
+    let known_agents = known_agent_ids_sql();
+    let known_providers = known_provider_ids_sql();
     format!(
         "multiIf(
-            h.actor_type = 'ai_verified' AND NOT ({verified_identity}),
-            if(({ai_evidence}), 'ai_inferred', 'unknown'),
+            h.actor_type = 'ai_verified' AND (
+                (
+                    lower(trim(ifNull(h.identity_status, ''))) = 'confirmed'
+                    AND lower(trim(ifNull(h.identity_reason, ''))) = ''
+                    AND lower(trim(ifNull(h.ai_provider, ''))) IN ({known_providers})
+                    AND lower(trim(ifNull(h.ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'none', 'n/a', 'na', 'not reported', 'not available', 'model_not_reported', 'provider_not_reported', 'no model', 'no provider', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker')
+                    AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agents})
+                    AND lower(trim(ifNull(h.ai_confidence, ''))) IN ('verified', 'correlated')
+                    AND lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')
+                )
+                OR (
+                    lower(trim(ifNull(h.identity_status, ''))) IN ('partial', 'conflict')
+                    AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agents})
+                    AND lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')
+                )
+                OR (
+                    lower(trim(ifNull(h.identity_status, ''))) = ''
+                    AND lower(trim(ifNull(h.ai_provider, ''))) IN ({known_providers})
+                    AND lower(trim(ifNull(h.ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'none', 'n/a', 'na', 'not reported', 'not available', 'model_not_reported', 'provider_not_reported', 'no model', 'no provider', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker')
+                    AND lower(trim(ifNull(h.ai_agent, ''))) IN ({known_agents})
+                    AND lower(trim(ifNull(h.ai_confidence, ''))) IN ('verified', 'correlated')
+                    AND lower(trim(ifNull(h.ai_source, ''))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript')
+                )
+            ), 'ai_verified',
+            h.actor_type = 'ai_verified' AND ({ai_evidence}), 'ai_inferred',
+            h.actor_type = 'ai_inferred', 'ai_inferred',
+            h.actor_type = 'unknown' AND h.is_ai_generated = 1 AND ({ai_evidence}), 'ai_inferred',
             h.actor_type
         )",
         ai_evidence = ai_evidence_expr(),
@@ -75,6 +99,7 @@ impl AiStatsService {
         let totals = self.fetch_totals(user_id, start, end).await?;
         let usage = self.fetch_usage_metrics(user_id, start, end).await?;
         let agents = self.fetch_agents(user_id, start, end).await?;
+        let identity = identity_summary(&agents);
         let daily = self.fetch_daily(user_id, start, end).await?;
 
         let ai_heartbeat_percentage = percentage(totals.ai_heartbeats, totals.total_heartbeats);
@@ -122,6 +147,7 @@ impl AiStatsService {
                 unknown_heartbeat_percentage,
                 unattributed_heartbeat_percentage,
                 coverage: coverage_from_totals(&totals),
+                identity,
                 agents: agents
                     .into_iter()
                     .map(|row| AiAgentItem {
@@ -129,6 +155,9 @@ impl AiStatsService {
                         actor_type: row.actor_type,
                         provider: row.provider,
                         model: row.model,
+                        identity_status: row.identity_status,
+                        identity_reason: row.identity_reason,
+                        identity_source: row.identity_source,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
                         human_lines_added: row.human_lines_added,
@@ -229,8 +258,22 @@ impl AiStatsService {
                         'unknown'
                     ) AS agent,
                     h.effective_actor_type AS actor_type,
-                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(h.ai_provider), ''), NULL) AS provider,
-                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(h.ai_model), ''), NULL) AS model,
+                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(ifNull(h.ai_provider, '')), ''), NULL) AS provider,
+                    if(h.effective_actor_type = 'ai_verified', nullIf(trim(ifNull(h.ai_model, '')), ''), NULL) AS model,
+                    if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
+                        coalesce(nullIf(lower(trim(ifNull(h.identity_status, ''))), ''), 'unavailable'),
+                        'unavailable') AS identity_status,
+                    if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
+                        multiIf(
+                            lower(trim(ifNull(h.identity_reason, ''))) IN ('missing_agent', 'missing_provider', 'missing_model', 'internal_marker', 'context_unavailable', 'conflicting_evidence'),
+                            lower(trim(ifNull(h.identity_reason, ''))),
+                            'context_unavailable'
+                        ), NULL) AS identity_reason,
+                    if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
+                        if(lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'),
+                            lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))),
+                            NULL
+                        ), NULL) AS identity_source,
                     sumIf(coalesce(h.ai_lines_added, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
                     sumIf(coalesce(h.ai_lines_deleted, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
                     sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
@@ -246,7 +289,7 @@ impl AiStatsService {
                     SELECT h.*, {effective_actor_type} AS effective_actor_type
                     FROM {relation}
                 ) AS h
-                GROUP BY agent, actor_type, provider, model
+                GROUP BY agent, actor_type, provider, model, identity_status, identity_reason, identity_source
                 ORDER BY ai_lines_added DESC, agent ASC, model ASC
                 ",
         );
@@ -372,6 +415,69 @@ fn coverage_from_totals(totals: &AiTotalsRow) -> AiStatsCoverage {
     }
 }
 
+/// Summarize identity completeness from the same canonical agent rows returned to
+/// the client. Grouping after the canonical-winner query keeps corrections from
+/// changing heartbeat/line totals or producing duplicate reason counts.
+fn identity_summary(rows: &[AiAgentRow]) -> AiIdentitySummary {
+    let mut summary = AiIdentitySummary::default();
+    let mut reasons = std::collections::BTreeMap::<String, u64>::new();
+    for row in rows
+        .iter()
+        .filter(|row| matches!(row.actor_type.as_str(), "ai_verified" | "ai_inferred"))
+    {
+        let status = row
+            .identity_status
+            .as_deref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "unavailable".to_string());
+        let reason = row
+            .identity_reason
+            .as_deref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
+        if row.actor_type == "ai_verified" {
+            summary.ai_verified_heartbeat_denominator = summary
+                .ai_verified_heartbeat_denominator
+                .saturating_add(row.heartbeat_count);
+        }
+        // A status string alone is not enough to certify a row.  The actor
+        // projection must also keep it in the verified bucket; malformed or
+        // legacy rows with `identity_status = confirmed` but an inferred actor
+        // remain visible as incomplete evidence.
+        if row.actor_type == "ai_verified" && status == "confirmed" && reason.is_none() {
+            summary.confirmed_ai_heartbeats = summary
+                .confirmed_ai_heartbeats
+                .saturating_add(row.heartbeat_count);
+            continue;
+        }
+        summary.incomplete_ai_heartbeats = summary
+            .incomplete_ai_heartbeats
+            .saturating_add(row.heartbeat_count);
+        summary.incomplete_ai_lines_added = summary
+            .incomplete_ai_lines_added
+            .saturating_add(row.ai_lines_added);
+        summary.incomplete_ai_lines_deleted = summary
+            .incomplete_ai_lines_deleted
+            .saturating_add(row.ai_lines_deleted);
+        if status == "conflict" {
+            summary.conflict_heartbeats = summary
+                .conflict_heartbeats
+                .saturating_add(row.heartbeat_count);
+        }
+        let reason = reason.unwrap_or_else(|| "context_unavailable".to_string());
+        *reasons.entry(reason).or_default() += row.heartbeat_count;
+    }
+    summary.reason_counts = reasons
+        .into_iter()
+        .map(|(reason, heartbeats)| AiIdentityReasonCount { reason, heartbeats })
+        .collect();
+    summary.confirmed_ai_heartbeat_percentage = percentage(
+        summary.confirmed_ai_heartbeats,
+        summary.ai_verified_heartbeat_denominator,
+    );
+    summary
+}
+
 fn percentage(part: u64, total: u64) -> f64 {
     if total == 0 {
         0.0
@@ -388,8 +494,8 @@ fn validate_date(date: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{coverage_from_totals, effective_actor_type_expr};
-    use crate::model::ai_stats::{AiCoverageStatus, AiTotalsRow};
+    use super::{coverage_from_totals, effective_actor_type_expr, identity_summary};
+    use crate::model::ai_stats::{AiAgentRow, AiCoverageStatus, AiTotalsRow};
 
     fn totals() -> AiTotalsRow {
         AiTotalsRow {
@@ -415,10 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn effective_actor_projection_does_not_promote_unknown_rows() {
+    fn effective_actor_projection_preserves_partial_verified_rows() {
         let expression = effective_actor_type_expr();
-        assert!(expression.contains("h.actor_type = 'ai_verified' AND NOT"));
-        assert!(!expression.contains("h.actor_type = 'unknown' AND"));
+        assert!(expression.contains("h.identity_status, ''))) = 'confirmed'"));
+        assert!(expression.contains("h.identity_status, ''))) IN ('partial', 'conflict')"));
+        assert!(expression.contains("h.actor_type = 'unknown' AND h.is_ai_generated = 1"));
     }
 
     #[test]
@@ -459,5 +566,52 @@ mod tests {
         assert_eq!(coverage.status, AiCoverageStatus::NoActivity);
         assert_eq!(coverage.line_change_denominator, 0);
         assert_eq!(coverage.line_coverage_percent, None);
+    }
+
+    #[test]
+    fn identity_summary_keeps_partial_verified_rows_and_reasons() {
+        let rows = vec![
+            AiAgentRow {
+                agent: "codex".into(),
+                actor_type: "ai_verified".into(),
+                provider: Some("openai".into()),
+                model: None,
+                identity_status: Some("partial".into()),
+                identity_reason: Some("missing_model".into()),
+                identity_source: Some("transcript".into()),
+                ai_lines_added: 12,
+                ai_lines_deleted: 3,
+                human_lines_added: 0,
+                human_lines_deleted: 0,
+                unattributed_lines_added: 0,
+                unattributed_lines_deleted: 0,
+                heartbeat_count: 4,
+            },
+            AiAgentRow {
+                agent: "codex".into(),
+                actor_type: "ai_verified".into(),
+                provider: Some("openai".into()),
+                model: Some("gpt-5.6-sol".into()),
+                identity_status: Some("confirmed".into()),
+                identity_reason: None,
+                identity_source: Some("transcript".into()),
+                ai_lines_added: 5,
+                ai_lines_deleted: 1,
+                human_lines_added: 0,
+                human_lines_deleted: 0,
+                unattributed_lines_added: 0,
+                unattributed_lines_deleted: 0,
+                heartbeat_count: 2,
+            },
+        ];
+
+        let summary = identity_summary(&rows);
+        assert_eq!(summary.confirmed_ai_heartbeats, 2);
+        assert_eq!(summary.incomplete_ai_heartbeats, 4);
+        assert_eq!(summary.incomplete_ai_lines_added, 12);
+        assert_eq!(summary.incomplete_ai_lines_deleted, 3);
+        assert_eq!(summary.conflict_heartbeats, 0);
+        assert_eq!(summary.reason_counts[0].reason, "missing_model");
+        assert_eq!(summary.reason_counts[0].heartbeats, 4);
     }
 }

@@ -309,6 +309,8 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: Some("session-1".to_string()),
+            turn_id: None,
+            identity_message_id: None,
             source: AiEventSource::AgentHook,
             confidence: AiConfidence::Verified,
             actor_type: None,

@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { listCoworkingHistoryV2 } from '@/lib/wakaclock/endpoints-v2';
+import { personalPresenceSummary } from '@/lib/wakaclock/office';
 import { getBrowserTimezone } from '@/lib/wakaclock/presence-client';
 import type { PresenceHistoryItem } from '@/lib/wakaclock/types';
 
@@ -39,26 +40,14 @@ export function useCoworkingHistory(enabled = true) {
       const weekStart = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
       const [todayHistory, weekHistory] = await Promise.all([
         listCoworkingHistoryV2({ from: todayKey, limit: 20, timezone, to: todayKey }),
-        listCoworkingHistoryV2({
+        personalPresenceSummary({
           from: dateKey(weekStart, timezone),
-          limit: 100,
           timezone,
           to: todayKey,
         }),
       ]);
       setItems(todayHistory.items);
-      setWeeklySummary({
-        activeDays: new Set(
-          weekHistory.items.map((item) =>
-            dateKey(new Date(item.your_joined_at * 1000), timezone)
-          )
-        ).size,
-        durationSeconds: weekHistory.items.reduce(
-          (total, item) => total + item.duration_seconds,
-          0
-        ),
-        sessions: weekHistory.items.length,
-      });
+      setWeeklySummary(weekHistory);
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'History is unavailable');

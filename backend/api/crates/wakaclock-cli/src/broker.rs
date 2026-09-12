@@ -86,6 +86,11 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         provider: event.provider.clone(),
         model: event.model.clone(),
         session_id: event.session_id.clone(),
+        turn_id: event.turn_id.clone(),
+        identity_message_id: event.identity_message_id.clone(),
+        identity_status: event.identity_status.clone(),
+        identity_reason: event.identity_reason.clone(),
+        identity_source: event.identity_source.clone(),
         source: event.source.clone(),
         confidence: event.confidence.clone(),
         actor_type: None,
@@ -95,7 +100,7 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         active_seconds: Some(active_seconds.clamp(0.0, MAX_ACTIVITY_GAP_SECONDS)),
         transport: None,
         tool: None,
-        tool_event_id: None,
+        tool_event_id: event.tool_event_id.clone(),
         // Transcript discovery is async/replayed, minutes or longer after the edit, so
         // there is no live env to declare an editor from — let `build_ai_heartbeat`'s
         // fallback (env, else agent name) decide when this is eventually processed.
@@ -327,6 +332,11 @@ async fn process_record(
         provider: event.provider.clone(),
         model: event.model.clone(),
         session_id: event.session_id.clone(),
+        turn_id: event.turn_id.clone(),
+        identity_message_id: event.identity_message_id.clone(),
+        identity_status: event.identity_status.clone(),
+        identity_reason: event.identity_reason.clone(),
+        identity_source: event.identity_source.clone(),
         tool_event_id: event.tool_event_id.clone(),
         occurred_at: event.occurred_at,
         entity: PathBuf::from(&event.entity),
@@ -354,7 +364,12 @@ async fn process_record(
     }
     heartbeat.heartbeat_id = Some(event.heartbeat_id());
     heartbeat.ai_change_id = event.tool_event_id.clone();
-    heartbeat.actor_type = event.actor_type.unwrap_or(ActorType::Unknown);
+    // `BrokerEventV1::normalize` resolves the actor when the event enters the
+    // durable inbox. Keep the actor inferred by `build_ai_heartbeat` for old
+    // inbox rows that predate the enum fields; defaulting an absent value to
+    // `Unknown` here used to erase a verified transcript identity just before
+    // upload.
+    heartbeat.actor_type = event.actor_type.unwrap_or(heartbeat.actor_type);
     heartbeat.actor_confidence = event.actor_confidence.unwrap_or_else(|| {
         heartbeat
             .actor_type
@@ -393,7 +408,11 @@ async fn process_record(
     }
 
     let state = AiAttributionState::open()?;
-    state.mark_delivered(&event.event_id, "broker")?;
+    let delivery_id = wakaclock_core::broker::scoped_storage_event_id(
+        &event.event_id,
+        event.session_id.as_deref(),
+    );
+    state.mark_delivered(&delivery_id, "broker")?;
     agent_service::record_heartbeat();
     Ok(())
 }
@@ -406,7 +425,10 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join("ai-events.jsonl");
     let mut store = BrokerStore::open()?;
-    let cursor = store.reserve_sidecar_cursor(&event.event_id)?;
+    let cursor = store.reserve_sidecar_cursor_scoped(
+        &event.event_id,
+        event.session_id.as_deref(),
+    )?;
     if cursor.already_written {
         return Ok(());
     }
@@ -430,8 +452,12 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         "provider": event.provider,
         "model": event.model,
         "session_id": event.session_id,
+        "identity_message_id": event.identity_message_id,
         "source": event.source.as_str(),
         "confidence": event.confidence.as_str(),
+        "identity_status": event.identity_status,
+        "identity_reason": event.identity_reason,
+        "identity_source": event.identity_source,
         "actor_type": event.actor_type,
         "actor_confidence": event.actor_confidence,
         "transport": event.transport,
@@ -443,7 +469,7 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     });
     writeln!(file, "{}", serde_json::to_string(&payload)?)?;
     drop(file);
-    store.mark_sidecar_written(&event.event_id)?;
+    store.mark_sidecar_written_scoped(&event.event_id, event.session_id.as_deref())?;
     set_private_permissions(&path)?;
     Ok(())
 }
@@ -999,6 +1025,11 @@ mod tests {
             provider: Some("anthropic".to_string()),
             model: None,
             session_id: Some("session".to_string()),
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             source: AiEventSource::AgentHook,
             confidence: AiConfidence::Verified,
             actor_type: None,
@@ -1021,6 +1052,11 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: None,
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             tool_event_id: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/lib.rs"),
@@ -1052,6 +1088,11 @@ mod tests {
             provider: Some("openai".to_string()),
             model: None,
             session_id: Some("session".to_string()),
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
             tool_event_id: Some("call-rename".to_string()),
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/new.rs"),

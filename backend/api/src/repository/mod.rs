@@ -13,3 +13,5 @@ pub mod project_identity;
 pub mod project_merge;
 pub mod project_rule;
 pub mod team;
+
+pub mod presence_office;

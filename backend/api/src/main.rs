@@ -213,6 +213,20 @@ async fn main() -> Result<()> {
         });
     }
 
+    if app_state.config.presence_v2_enabled {
+        let media_state=app_state.clone();
+        tokio::spawn(async move {
+            let mut ticker=tokio::time::interval(Duration::from_secs(5));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                if let Err(error)=handlers::presence_v2::office::reconcile_media(&media_state).await {
+                    tracing::warn!(%error,"presence media permission reconciliation failed");
+                }
+            }
+        });
+    }
+
     // 3. Setup router
     let api_v1 = handlers::v1::router(app_state.clone());
     let api_v2 = handlers::v2::router(app_state.clone());

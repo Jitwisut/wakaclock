@@ -235,6 +235,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             "/presence/rooms/:room_id/invites/:invite_id",
             delete(crate::handlers::presence_v2::revoke_invite),
         )
+        .route("/presence/history/summary", get(crate::handlers::presence_v2::office::personal_summary))
+        .route("/presence/rooms/:room_id/office", get(crate::handlers::presence_v2::office::snapshot).post(crate::handlers::presence_v2::office::command))
+        .route("/presence/rooms/:room_id/messages", get(crate::handlers::presence_v2::office::messages))
+        .route("/presence/rooms/:room_id/media-token", post(crate::handlers::presence_v2::office::media_token))
         .route("/me/ai/effectiveness", get(ai_effectiveness))
         .route("/ai/follow-up-events", post(follow_up_event))
         .route("/ai/follow-up", get(follow_up_stats))

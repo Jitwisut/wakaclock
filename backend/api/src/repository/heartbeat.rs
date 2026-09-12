@@ -53,6 +53,12 @@ impl HeartbeatRepository {
                     ai_agent Nullable(String),
                     ai_provider Nullable(String),
                     ai_model Nullable(String),
+                    identity_status Nullable(String),
+                    identity_reason Nullable(String),
+                    identity_source Nullable(String),
+                    identity_schema_version Nullable(UInt8),
+                    identity_turn_id Nullable(String),
+                    identity_message_id Nullable(String),
                     ai_source Nullable(String),
                     ai_confidence Nullable(String),
                     ai_event_id Nullable(String),
@@ -109,7 +115,8 @@ impl HeartbeatRepository {
                     paste_same_file_actions Nullable(UInt32),
                     paste_same_workspace_actions Nullable(UInt32),
                     paste_external_or_unknown_actions Nullable(UInt32),
-                    revision UInt32 DEFAULT 0
+                    revision UInt32 DEFAULT 0,
+                    session_id Nullable(String)
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -147,6 +154,12 @@ impl HeartbeatRepository {
         for column in [
             "ai_provider Nullable(String)",
             "ai_model Nullable(String)",
+            "identity_status Nullable(String)",
+            "identity_reason Nullable(String)",
+            "identity_source Nullable(String)",
+            "identity_schema_version Nullable(UInt8)",
+            "identity_turn_id Nullable(String)",
+            "identity_message_id Nullable(String)",
             "ai_source Nullable(String)",
             "ai_confidence Nullable(String)",
             "ai_event_id Nullable(String)",
@@ -218,6 +231,7 @@ impl HeartbeatRepository {
             "paste_same_workspace_actions Nullable(UInt32)",
             "paste_external_or_unknown_actions Nullable(UInt32)",
             "revision UInt32 DEFAULT 0",
+            "session_id Nullable(String)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -346,6 +360,7 @@ impl HeartbeatRepository {
             "paste_same_workspace_actions Nullable(UInt32)",
             "paste_external_or_unknown_actions Nullable(UInt32)",
             "revision UInt32 DEFAULT 0",
+            "session_id Nullable(String)",
         ] {
             let sql = format!(
                 "ALTER TABLE wakaclock.heartbeats_incoming ADD COLUMN IF NOT EXISTS {column}"
@@ -360,6 +375,12 @@ impl HeartbeatRepository {
         for column in [
             "ai_provider Nullable(String)",
             "ai_model Nullable(String)",
+            "identity_status Nullable(String)",
+            "identity_reason Nullable(String)",
+            "identity_source Nullable(String)",
+            "identity_schema_version Nullable(UInt8)",
+            "identity_turn_id Nullable(String)",
+            "identity_message_id Nullable(String)",
             "ai_source Nullable(String)",
             "ai_confidence Nullable(String)",
             "ai_event_id Nullable(String)",
@@ -440,6 +461,49 @@ impl HeartbeatRepository {
             .execute()
             .await
             .context("Failed to create heartbeat tombstones")?;
+
+        // Metadata-only identity repair audit.  The correction rows themselves live
+        // in `heartbeats` as the next revision; these tables make the repair run and
+        // before/after identity tuple inspectable without retaining transcript text,
+        // prompts, patches, or source code.
+        ch_client
+            .query(
+                "CREATE TABLE IF NOT EXISTS wakaclock.ai_identity_repair_runs (
+                    repair_run_id UUID,
+                    user_id UUID,
+                    requested UInt32,
+                    matched UInt32,
+                    corrected UInt32,
+                    unchanged UInt32,
+                    unresolved UInt32,
+                    conflicts UInt32,
+                    preserved_heartbeats UInt32,
+                    preserved_lines_added UInt64,
+                    preserved_lines_deleted UInt64,
+                    applied UInt8,
+                    created_at DateTime
+                 ) ENGINE = MergeTree
+                 ORDER BY (user_id, created_at, repair_run_id)",
+            )
+            .execute()
+            .await
+            .context("Failed to create AI identity repair run audit")?;
+        ch_client
+            .query(
+                "CREATE TABLE IF NOT EXISTS wakaclock.ai_identity_repair_corrections (
+                    repair_run_id UUID,
+                    user_id UUID,
+                    ai_event_id String,
+                    before_json String,
+                    after_json String,
+                    revision UInt32,
+                    created_at DateTime
+                 ) ENGINE = MergeTree
+                 ORDER BY (user_id, ai_event_id, revision)",
+            )
+            .execute()
+            .await
+            .context("Failed to create AI identity repair correction audit")?;
 
         // Every read-side consumer uses this projection so a correction revision
         // replaces the original operation before durations or line counts are summed.
@@ -550,28 +614,69 @@ impl HeartbeatRepository {
             .collect())
     }
 
-    /// Return the highest revision already stored for each AI event ID.
-    pub async fn existing_ai_event_revisions(
+    /// Session-scoped revision lookup for AI heartbeats. AI compatibility IDs are
+    /// derived from an opaque event id and a producer is allowed to reuse that id
+    /// in a new session; grouping by `(heartbeat_id, session_id)` prevents one
+    /// session's correction from suppressing the other session's activity.
+    pub async fn existing_heartbeat_revisions_scoped(
         &self,
         user_id: uuid::Uuid,
         candidates: &[String],
-    ) -> Result<HashMap<String, u32>> {
+    ) -> Result<HashMap<(String, Option<String>), u32>> {
         if candidates.is_empty() {
             return Ok(HashMap::new());
         }
         #[derive(serde::Deserialize, clickhouse::Row)]
         struct RevisionRow {
-            ai_event_id: String,
+            heartbeat_id: String,
+            session_id: Option<String>,
             revision: u32,
         }
         let rows = self
             .client
             .get_client()
             .query(
-                "SELECT assumeNotNull(ai_event_id) AS ai_event_id, max(revision) AS revision
+                "SELECT heartbeat_id, session_id, max(revision) AS revision
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                 GROUP BY heartbeat_id, session_id",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<RevisionRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse scoped heartbeat revision query failed: {error}")
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ((row.heartbeat_id, row.session_id), row.revision))
+            .collect())
+    }
+
+    /// Return the highest revision already stored for each AI event ID.
+    pub async fn existing_ai_event_revisions(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<HashMap<(String, Option<String>), u32>> {
+        if candidates.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct RevisionRow {
+            ai_event_id: String,
+            session_id: Option<String>,
+            revision: u32,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT assumeNotNull(ai_event_id) AS ai_event_id, session_id, max(revision) AS revision
                  FROM wakaclock.heartbeats
                  WHERE user_id = ? AND ai_event_id IS NOT NULL AND ai_event_id IN ?
-                 GROUP BY ai_event_id",
+                 GROUP BY ai_event_id, session_id",
             )
             .bind(user_id)
             .bind(candidates)
@@ -582,7 +687,7 @@ impl HeartbeatRepository {
             })?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.ai_event_id, row.revision))
+            .map(|row| ((row.ai_event_id, row.session_id), row.revision))
             .collect())
     }
 
@@ -593,23 +698,24 @@ impl HeartbeatRepository {
         &self,
         user_id: uuid::Uuid,
         candidates: &[String],
-    ) -> Result<HashMap<String, u32>> {
+    ) -> Result<HashMap<(String, Option<String>), u32>> {
         if candidates.is_empty() {
             return Ok(HashMap::new());
         }
         #[derive(serde::Deserialize, clickhouse::Row)]
         struct RevisionRow {
             ai_change_id: String,
+            session_id: Option<String>,
             revision: u32,
         }
         let rows = self
             .client
             .get_client()
             .query(
-                "SELECT assumeNotNull(ai_change_id) AS ai_change_id, max(revision) AS revision
+                "SELECT assumeNotNull(ai_change_id) AS ai_change_id, session_id, max(revision) AS revision
                  FROM wakaclock.heartbeats
                  WHERE user_id = ? AND ai_change_id IS NOT NULL AND ai_change_id IN ?
-                 GROUP BY ai_change_id",
+                 GROUP BY ai_change_id, session_id",
             )
             .bind(user_id)
             .bind(candidates)
@@ -620,7 +726,7 @@ impl HeartbeatRepository {
             })?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.ai_change_id, row.revision))
+            .map(|row| ((row.ai_change_id, row.session_id), row.revision))
             .collect())
     }
 
@@ -657,6 +763,60 @@ impl HeartbeatRepository {
     /// The stored `date` column is UTC-oriented and is retained for existing
     /// projections. Filtering by raw timestamp bounds instead makes a selected
     /// browser day correct for Asia/Bangkok, DST zones, and every other IANA timezone.
+    pub async fn get_by_ai_event_ids(
+        &self,
+        user_id: uuid::Uuid,
+        candidates: &[String],
+    ) -> Result<Vec<HeartbeatRow>> {
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.ai_event_id IS NOT NULL AND h.ai_event_id IN ?",
+            "h",
+        );
+        let query = format!(
+            "SELECT
+                    user_id, entity, entity_type, time, date,
+                    project, project_id, branch, head_revision, repository_id,
+                    language, dependencies,
+                    lines, line_number, cursor_position,
+                    is_write, category, editor, operating_system,
+                    machine, user_agent, machine_name_hash, hostname_hash, timezone,
+                    feature_id, feature_name,
+                    heartbeat_id, ast_language, ast_confidence,
+                    keystrokes, chars_added, chars_deleted,
+                    active_seconds, active_seconds_claimed, activity_segments,
+                    is_ai_generated, ai_agent, ai_provider, ai_model,
+                    identity_status, identity_reason, identity_source,
+                    identity_schema_version, identity_turn_id, identity_message_id,
+                    ai_source,
+                    ai_confidence, ai_event_id, ai_change_id,
+                    prompt_character_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, ai_subscription_plan,
+                    token_source, attribution_source, attribution_confidence,
+                    ai_event_fingerprint,
+                    ai_lines_added, ai_lines_deleted,
+                    human_lines_added, human_lines_deleted,
+                    unattributed_lines_added, unattributed_lines_deleted,
+                    created_at, actor_type, actor_confidence,
+                    clipboard_tracking_version, copy_actions, paste_actions,
+                    copied_chars, copied_lines, pasted_chars, pasted_lines,
+                    paste_same_file_actions, paste_same_workspace_actions,
+                    paste_external_or_unknown_actions, revision, session_id
+                FROM {relation}
+                ORDER BY time ASC"
+        );
+        self.client
+            .get_client()
+            .query(&query)
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<HeartbeatRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
+    }
+
     pub async fn get_by_date(
         &self,
         user_id: uuid::Uuid,
@@ -682,7 +842,10 @@ impl HeartbeatRepository {
                     heartbeat_id, ast_language, ast_confidence,
                     keystrokes, chars_added, chars_deleted,
                     active_seconds, active_seconds_claimed, activity_segments,
-                    is_ai_generated, ai_agent, ai_provider, ai_model, ai_source,
+                    is_ai_generated, ai_agent, ai_provider, ai_model,
+                    identity_status, identity_reason, identity_source,
+                    identity_schema_version, identity_turn_id, identity_message_id,
+                    ai_source,
                     ai_confidence, ai_event_id, ai_change_id,
                     prompt_character_count, input_tokens, output_tokens,
                     cache_read_tokens, cache_write_tokens, ai_subscription_plan,
@@ -695,7 +858,7 @@ impl HeartbeatRepository {
                     clipboard_tracking_version, copy_actions, paste_actions,
                     copied_chars, copied_lines, pasted_chars, pasted_lines,
                     paste_same_file_actions, paste_same_workspace_actions,
-                    paste_external_or_unknown_actions, revision
+                    paste_external_or_unknown_actions, revision, session_id
                 FROM {relation}
                 ORDER BY time ASC"
         );

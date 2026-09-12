@@ -214,6 +214,12 @@ impl PresenceRepository {
         if room.ended_at.is_some() || room.expires_at.is_some_and(|expires| expires <= Utc::now()) {
             return Ok(false);
         }
+        // A child room must never outlive the parent office's authorization.
+        if let Some(row) = self.postgres.query_opt("SELECT parent_id FROM presence_spaces WHERE room_id=$1", &[&room.id]).await? {
+            let parent_id: Uuid = row.get(0);
+            let Some(parent) = self.get(parent_id).await? else { return Ok(false); };
+            if !Box::pin(self.can_join(&parent, user_id)).await? { return Ok(false); }
+        }
         match room.kind {
             PresenceRoomKind::Team => {
                 let team_id = room
@@ -250,6 +256,15 @@ impl PresenceRepository {
                 Ok(allowed.is_some())
             }
         }
+    }
+
+    pub async fn can_manage(&self, room: &PresenceRoom, user_id: Uuid) -> Result<bool> {
+        if !self.can_join(room,user_id).await? { return Ok(false); }
+        if room.owner_user_id==Some(user_id) { return Ok(true); }
+        if let Some(team)=room.team_id {
+            return Ok(self.postgres.query_opt("SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2 AND role='lead'", &[&team,&user_id]).await?.is_some());
+        }
+        Ok(false)
     }
 
     pub async fn grant(&self, room_id: Uuid, user_id: Uuid) -> Result<()> {

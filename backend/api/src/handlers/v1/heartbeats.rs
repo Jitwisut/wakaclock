@@ -14,7 +14,9 @@ use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::date_range::ResolvedRange;
 use crate::model::heartbeat::HeartbeatRow;
-use wakaclock_core::ai::is_known_agent_id;
+use wakaclock_core::ai::{
+    is_internal_marker, is_known_agent_id, is_placeholder, normalize_identity_provider,
+};
 use wakaclock_core::heartbeat::{
     resolve_attribution, ActivitySegment, ActorType, AttributionInput, Category, EntityType,
     Heartbeat, MAX_HEARTBEAT_REVISION,
@@ -59,6 +61,10 @@ pub struct HeartbeatPayload {
     pub feature_name: Option<String>,
     #[serde(default)]
     pub heartbeat_id: Option<String>,
+    /// Stable agent session scope used to prevent repair/canonical joins from
+    /// crossing sessions that happen to reuse a tool event id.
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub ast_language: Option<String>,
     pub ast_confidence: Option<f32>,
     pub keystrokes: Option<u32>,
@@ -75,6 +81,18 @@ pub struct HeartbeatPayload {
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
     pub ai_model: Option<String>,
+    #[serde(default)]
+    pub identity_status: Option<String>,
+    #[serde(default)]
+    pub identity_reason: Option<String>,
+    #[serde(default)]
+    pub identity_source: Option<String>,
+    #[serde(default)]
+    pub identity_schema_version: Option<u8>,
+    #[serde(default)]
+    pub identity_turn_id: Option<String>,
+    #[serde(default)]
+    pub identity_message_id: Option<String>,
     pub ai_source: Option<String>,
     pub ai_confidence: Option<String>,
     pub ai_event_id: Option<String>,
@@ -163,6 +181,12 @@ pub struct HeartbeatItem {
     pub ai_agent: Option<String>,
     pub ai_provider: Option<String>,
     pub ai_model: Option<String>,
+    pub identity_status: Option<String>,
+    pub identity_reason: Option<String>,
+    pub identity_source: Option<String>,
+    pub identity_schema_version: Option<u8>,
+    pub identity_turn_id: Option<String>,
+    pub identity_message_id: Option<String>,
     pub ai_source: Option<String>,
     pub ai_confidence: Option<String>,
     pub ai_event_id: Option<String>,
@@ -176,6 +200,7 @@ pub struct HeartbeatItem {
     pub operating_system: String,
     pub machine: String,
     pub heartbeat_id: Option<String>,
+    pub session_id: Option<String>,
     pub activity_segments: Vec<ActivitySegment>,
     /// Compatibility actor label retained for old API consumers.
     pub actor_type: String,
@@ -384,6 +409,9 @@ pub async fn list(
                 r.actor_confidence,
                 row_has_ai_evidence(&r),
                 verified_identity,
+                r.identity_status.as_deref(),
+                r.identity_source.as_deref(),
+                r.ai_agent.as_deref(),
                 r.ai_source.as_deref(),
                 r.ai_confidence.as_deref(),
             );
@@ -404,6 +432,12 @@ pub async fn list(
                     r.ai_agent = None;
                     r.ai_provider = None;
                     r.ai_model = None;
+                    r.identity_status = None;
+                    r.identity_reason = None;
+                    r.identity_source = None;
+                    r.identity_schema_version = None;
+                    r.identity_turn_id = None;
+                    r.identity_message_id = None;
                     r.ai_confidence = None;
                     r.ai_source = None;
                 }
@@ -431,11 +465,18 @@ pub async fn list(
                 ast_confidence: r.ast_confidence,
                 active_seconds: r.active_seconds,
                 heartbeat_id: r.heartbeat_id,
+                session_id: r.session_id,
                 activity_segments: serde_json::from_str(&r.activity_segments).unwrap_or_default(),
                 is_ai_generated: projection.is_ai_generated,
                 ai_agent: r.ai_agent,
                 ai_provider: r.ai_provider,
                 ai_model: r.ai_model,
+                identity_status: r.identity_status,
+                identity_reason: r.identity_reason,
+                identity_source: r.identity_source,
+                identity_schema_version: r.identity_schema_version,
+                identity_turn_id: r.identity_turn_id,
+                identity_message_id: r.identity_message_id,
                 ai_source: r.ai_source,
                 ai_confidence: r.ai_confidence,
                 ai_event_id: r.ai_event_id,
@@ -501,11 +542,28 @@ fn project_history_attribution(
     stored_confidence: f32,
     has_ai_evidence: bool,
     verified_identity: bool,
+    identity_status: Option<&str>,
+    identity_source: Option<&str>,
+    ai_agent: Option<&str>,
     ai_source: Option<&str>,
     ai_confidence: Option<&str>,
 ) -> HistoryAttributionProjection {
+    let trusted_partial_identity = matches!(
+        identity_status.map(|value| value.trim().to_ascii_lowercase()).as_deref(),
+        Some("partial" | "conflict")
+    ) && ai_agent.is_some_and(is_known_agent_id)
+        && identity_source
+            .or(ai_source)
+            .is_some_and(is_verified_ai_source);
     let actor_type = match stored_actor_type {
         ActorType::AiVerified if verified_identity => ActorType::AiVerified,
+        // Identity completeness is a separate dimension. A transcript can prove
+        // that a known AI agent made the edit while the provider/model is missing;
+        // keep that actor evidence as AI verified and expose the missing tuple via
+        // `identity_status` instead of silently downgrading the activity.
+        ActorType::AiVerified if has_ai_evidence && trusted_partial_identity => {
+            ActorType::AiVerified
+        }
         ActorType::AiVerified if has_ai_evidence => ActorType::AiInferred,
         ActorType::AiVerified => ActorType::Unknown,
         actor_type => actor_type,
@@ -536,14 +594,47 @@ fn project_history_attribution(
 fn row_has_verified_identity(row: &HeartbeatRow) -> bool {
     row.is_ai_generated
         && row
+            .identity_status
+            .as_deref()
+            .is_some_and(|status| status.trim().eq_ignore_ascii_case("confirmed"))
+        && row
+            .identity_reason
+            .as_deref()
+            .map(|reason| reason.trim().is_empty())
+            .unwrap_or(true)
+        && row
             .ai_agent
             .as_deref()
             .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
         && row
+            .ai_provider
+            .as_deref()
+            .is_some_and(|provider| {
+                normalize_identity_provider(Some(provider)).is_some()
+                    && !provider.trim().is_empty()
+                    && !is_internal_marker(provider)
+                    && !is_placeholder(provider)
+            })
+        && row
+            .ai_model
+            .as_deref()
+            .is_some_and(|model| {
+                !model.trim().is_empty()
+                    && !is_internal_marker(model)
+                    && !is_placeholder(model)
+            })
+        && row
             .ai_confidence
             .as_deref()
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
-        && row.ai_source.as_deref().is_some_and(is_verified_ai_source)
+            .is_some_and(|value| {
+                value.trim().eq_ignore_ascii_case("verified")
+                    || value.trim().eq_ignore_ascii_case("correlated")
+            })
+        && row
+            .identity_source
+            .as_deref()
+            .or(row.ai_source.as_deref())
+            .is_some_and(is_verified_ai_source)
 }
 
 fn row_has_ai_evidence(row: &HeartbeatRow) -> bool {
@@ -559,10 +650,13 @@ fn row_has_ai_evidence(row: &HeartbeatRow) -> bool {
 }
 
 fn has_non_sentinel_value(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "unknown" | "<unknown>" | "null" | "undefined"
-    )
+    let value = value.trim();
+    !value.is_empty()
+        && !is_internal_marker(value)
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "unknown" | "<unknown>" | "null" | "undefined" | "not reported"
+        )
 }
 
 fn is_verified_ai_source(value: &str) -> bool {
@@ -699,6 +793,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         feature_id: p.feature_id,
         feature_name: p.feature_name,
         heartbeat_id: p.heartbeat_id,
+        session_id: p.session_id,
         ast_language: p.ast_language,
         ast_confidence: p.ast_confidence,
         keystrokes: p.keystrokes,
@@ -728,6 +823,12 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         ai_agent: p.ai_agent,
         ai_provider: p.ai_provider,
         ai_model: p.ai_model,
+        identity_status: p.identity_status,
+        identity_reason: p.identity_reason,
+        identity_source: p.identity_source,
+        identity_schema_version: p.identity_schema_version,
+        identity_turn_id: p.identity_turn_id,
+        identity_message_id: p.identity_message_id,
         ai_source: p.ai_source,
         ai_confidence: p.ai_confidence,
         ai_event_id: p.ai_event_id,
@@ -792,15 +893,33 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         heartbeat.ai_confidence = Some("verified".to_string());
     }
 
-    // Apply the same policy before validation and project resolution so old clients
-    // cannot persist an unverified agent name through either single or bulk ingest.
-    heartbeat.enforce_attribution_policy();
+    // Seed the heartbeat with the resolver's actor decision before applying the
+    // shared policy.  The policy may then downgrade an untrusted identity to
+    // inferred AI (or retain a trusted partial identity), and its result must be
+    // the value that is persisted.  Do not overwrite it with the pre-policy
+    // resolver result afterwards: that would re-promote a stripped legacy label.
     heartbeat.actor_type = resolution.actor_type;
     heartbeat.actor_confidence = resolution.confidence;
     // Unknown is deliberately separate from inferred AI. Keeping this legacy flag
     // derived from the canonical enum prevents `validate()` from accepting a row
     // whose dashboard bucket disagrees with its transport boolean.
     heartbeat.is_ai_generated = resolution.actor_type.is_ai();
+    // Apply the same policy before validation and project resolution so old clients
+    // cannot persist an unverified agent name through either single or bulk ingest.
+    heartbeat.enforce_attribution_policy();
+    // A legacy payload that only *names* an AI tool, without declaring an AI
+    // activity flag or carrying a trusted adapter proof, remains unknown.  The
+    // metadata is stripped above, but the server must not turn a weak observer
+    // claim into an AI count merely because it passed through this endpoint.
+    // Explicit `is_ai_generated: true` rows continue to use the inferred bucket.
+    if resolution.actor_type == ActorType::Unknown
+        && legacy_is_ai_generated != Some(true)
+        && !has_verified_resolver_evidence
+    {
+        heartbeat.actor_type = ActorType::Unknown;
+        heartbeat.actor_confidence = 0.0;
+        heartbeat.is_ai_generated = false;
+    }
     Ok(heartbeat)
 }
 
@@ -893,7 +1012,8 @@ mod tests {
             "ai_model": "gpt-test",
             "ai_source": "agent_hook",
             "ai_confidence": "verified",
-            "ai_lines_added": 3
+            "ai_lines_added": 3,
+            "session_id": "codex-session-1"
         }))
         .unwrap();
 
@@ -903,6 +1023,7 @@ mod tests {
         assert_eq!(heartbeat.actor_confidence, 1.0);
         assert_eq!(heartbeat.ai_agent.as_deref(), Some("codex"));
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
+        assert_eq!(heartbeat.session_id.as_deref(), Some("codex-session-1"));
         heartbeat.validate().unwrap();
     }
 
@@ -1105,6 +1226,9 @@ mod tests {
                 case.stored_confidence,
                 case.has_ai_evidence,
                 case.verified_identity,
+                None,
+                None,
+                None,
                 Some("mcp"),
                 Some("verified"),
             );
@@ -1151,6 +1275,12 @@ mod tests {
             ai_agent: None,
             ai_provider: None,
             ai_model: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            identity_schema_version: None,
+            identity_turn_id: None,
+            identity_message_id: None,
             ai_source: None,
             ai_confidence: None,
             ai_event_id: None,
@@ -1164,6 +1294,7 @@ mod tests {
             operating_system: "macos".to_string(),
             machine: "dev".to_string(),
             heartbeat_id: None,
+            session_id: None,
             activity_segments: Vec::new(),
             actor_type: "human".to_string(),
             actor_confidence: 1.0,

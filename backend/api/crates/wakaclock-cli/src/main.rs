@@ -25,18 +25,23 @@ use wakaclock_core::ai::topology_handoff::{
 };
 use wakaclock_core::{
     ai::{
-        editor_capability_catalog, normalize_agent_id, normalize_client_id, normalize_model_id,
+        editor_capability_catalog, is_known_agent_id, normalize_agent_id, normalize_client_id,
+        normalize_model_id,
         normalize_provider_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
+        normalize_identity_reference,
         AdapterFreshnessV2, AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence,
         AiDiagnosticsReportV2, AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple,
         ClaudeCodeParser, CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext,
         DiscoveryResult, DiscoveryState, EditorSurface, ExecutionSurface, GeminiCliParser,
         MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
         RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag, VerificationStatus,
-        FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
+        resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION, REASON_CONFLICTING_EVIDENCE,
+        REASON_INTERNAL_MARKER, FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
     },
-    api_client::ApiClient,
-    broker::BrokerEventV1,
+    api_client::{
+        AiIdentityCorrection, AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
+    },
+    broker::{scoped_storage_event_id, BrokerEventV1},
     config::Config,
     error::AppError,
     git,
@@ -547,6 +552,36 @@ enum AiAction {
         #[arg(long)]
         transcript: Option<PathBuf>,
     },
+    /// Audit and optionally repair provider/model identity from local
+    /// transcripts. Dry-run is the default and never writes local or remote
+    /// state; `--apply` sends only metadata corrections for events that have
+    /// a complete, trusted tuple.
+    #[command(name = "repair", visible_alias = "repair-identity")]
+    Repair {
+        /// Restrict the report to one supported transcript adapter.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Scan one exact transcript instead of discovered sources. Requires
+        /// `--agent` so the parser cannot be guessed from the file contents.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
+        /// Inclusive lower bound as RFC3339 or YYYY-MM-DD (UTC).
+        #[arg(long)]
+        from: Option<String>,
+        /// Exclusive upper bound as RFC3339 or YYYY-MM-DD (UTC). A date-only
+        /// value includes that whole calendar day.
+        #[arg(long)]
+        to: Option<String>,
+        /// Append identity revisions on the server for matched events. The
+        /// server copies measured values from the canonical row unchanged.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Explicitly select the read-only mode (the default).
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -663,6 +698,12 @@ struct GenericAiEventInput {
     model: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    /// Optional message-level proof for producers that can expose the parent
+    /// assistant message separately from the tool call id.
+    #[serde(default)]
+    identity_message_id: Option<String>,
     #[serde(default)]
     occurred_at: Option<chrono::DateTime<chrono::Utc>>,
     entity: PathBuf,
@@ -858,6 +899,8 @@ impl LegacyAiEventInput {
             provider: self.provider.or(self.legacy_provider),
             model: self.model.or(self.legacy_model),
             session_id: self.session_id,
+            turn_id: None,
+            identity_message_id: None,
             occurred_at,
             entity: self.entity,
             project_root: self.project_root,
@@ -1587,6 +1630,33 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     true,
                     from_start,
                     transcript.as_deref(),
+                )
+                .await?
+            }
+            AiAction::Repair {
+                agent,
+                transcript,
+                from,
+                to,
+                apply,
+                dry_run,
+                json,
+            } => {
+                if apply && dry_run {
+                    return Err("choose exactly one of --dry-run or --apply".into());
+                }
+                if transcript.is_some() && agent.is_none() {
+                    return Err("--transcript requires --agent".into());
+                }
+                run_ai_identity_repair(
+                    &config,
+                    &api_client,
+                    agent.as_deref(),
+                    transcript.as_deref(),
+                    from.as_deref(),
+                    to.as_deref(),
+                    apply,
+                    json,
                 )
                 .await?
             }
@@ -3045,6 +3115,7 @@ mod ai_sync_isolation_tests {
                 byte_offset: 0,
                 last_record_id: None,
                 last_record_time: None,
+                context: None,
             },
             warnings: Vec::new(),
         })
@@ -3576,6 +3647,386 @@ fn resolve_named_command(names: &[String]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+#[derive(Debug, Serialize)]
+struct AiIdentityRepairCandidateReport {
+    event_id: String,
+    agent: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    identity_status: String,
+    identity_reason: Option<String>,
+    identity_source: Option<String>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    identity_message_id: Option<String>,
+    tool_event_id: Option<String>,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+    lines_added: u32,
+    lines_deleted: u32,
+    has_reference: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AiIdentityRepairCliReport {
+    repair_run_id: String,
+    dry_run: bool,
+    apply_requested: bool,
+    agent: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    parser_versions: Vec<String>,
+    transcripts_scanned: Vec<String>,
+    event_count: u64,
+    heartbeat_count: u64,
+    lines_added: u64,
+    lines_deleted: u64,
+    confirmed_candidates: u64,
+    candidates_with_reference: u64,
+    status_counts: BTreeMap<String, u64>,
+    reason_counts: BTreeMap<String, u64>,
+    truncated_candidates: bool,
+    warnings: Vec<String>,
+    candidates: Vec<AiIdentityRepairCandidateReport>,
+    remote: Option<AiIdentityRepairReport>,
+}
+
+/// Parse a date/range bound without consulting server time. Date-only bounds are
+/// UTC calendar dates; the upper bound is exclusive so `--to 2026-09-11`
+/// includes that entire day.
+fn parse_identity_repair_bound(
+    value: Option<&str>,
+    end_bound: bool,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, Box<dyn Error>> {
+    let Some(raw) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(timestamp.with_timezone(&chrono::Utc)));
+    }
+    let date = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .map_err(|_| format!("invalid repair bound `{raw}`; use RFC3339 or YYYY-MM-DD"))?;
+    let date = if end_bound {
+        date.checked_add_signed(chrono::Duration::days(1))
+            .ok_or("repair end date is outside the supported range")?
+    } else {
+        date
+    };
+    Ok(Some(
+        date.and_hms_opt(0, 0, 0)
+            .ok_or("repair bound could not be converted to midnight")?
+            .and_utc(),
+    ))
+}
+
+/// Read local transcripts, produce an evidence report, and optionally send only
+/// complete identity tuples to the metadata-only repair endpoint.  The parser is
+/// always seeded at byte zero and walked to EOF, so this command is independent of
+/// the live sync cursor and can safely be repeated after a restart.
+async fn run_ai_identity_repair(
+    _config: &Config,
+    api_client: &ApiClient,
+    agent_filter: Option<&str>,
+    transcript_override: Option<&Path>,
+    from: Option<&str>,
+    to: Option<&str>,
+    apply: bool,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let normalized_agent = agent_filter.map(normalize_agent_id);
+    if let Some(agent) = normalized_agent.as_deref() {
+        if !matches!(agent, "codex" | "claude-code" | "gemini-cli") {
+            return Err(format!("unsupported AI repair agent: {agent}").into());
+        }
+    }
+    let from_bound = parse_identity_repair_bound(from, false)?;
+    let to_bound = parse_identity_repair_bound(to, true)?;
+    if let (Some(start), Some(end)) = (from_bound, to_bound) {
+        if start >= end {
+            return Err("repair --from must be earlier than --to".into());
+        }
+    }
+
+    let context = ai_discovery_context()?;
+    // Event ids are opaque to the server and some adapters scope/reuse them per
+    // session. Keep the local repair inventory keyed by the stable session scope
+    // as well, otherwise one transcript could silently replace another before the
+    // metadata-only correction is sent.
+    let mut events_by_id = BTreeMap::<(String, String, String), AiEditEvent>::new();
+    let mut parser_versions = Vec::new();
+    let mut transcripts_scanned = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (id, parser) in supported_ai_parsers() {
+        if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
+        let paths = if let Some(path) = transcript_override {
+            let canonical = path.canonicalize()?;
+            if !canonical.is_file() {
+                return Err(format!("transcript is not a file: {}", canonical.display()).into());
+            }
+            vec![canonical]
+        } else {
+            parser
+                .discover_sources(&context)
+                .into_iter()
+                .filter_map(|result| match result.state {
+                    DiscoveryState::TranscriptFound { path } => Some(path),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for path in paths {
+            let path = path.canonicalize().unwrap_or(path);
+            transcripts_scanned.push(path.to_string_lossy().into_owned());
+            let file_identity = transcript_identity(&path);
+            let mut cursor = ParserCursor {
+                source_path: path.to_string_lossy().into_owned(),
+                file_identity,
+                byte_offset: 0,
+                last_record_id: None,
+                last_record_time: None,
+                context: None,
+            };
+            let file_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            let mut iterations = 0usize;
+            loop {
+                iterations += 1;
+                if iterations > 10_000 {
+                    warnings.push(format!(
+                        "{id}: stopped after 10,000 parser batches for {}",
+                        path.display()
+                    ));
+                    break;
+                }
+                let previous_offset = cursor.byte_offset;
+                let batch = parser
+                    .parse_since(&ParseContext::default(), Some(&cursor))
+                    .map_err(|error| format!("{id}: {}: {error}", path.display()))?;
+                for event in batch.events {
+                    if from_bound.is_some_and(|start| event.occurred_at < start)
+                        || to_bound.is_some_and(|end| event.occurred_at >= end)
+                    {
+                        continue;
+                    }
+                    let event_key = (
+                        event.agent.clone(),
+                        event.session_id.clone().unwrap_or_default(),
+                        event.event_id.clone(),
+                    );
+                    events_by_id.entry(event_key).or_insert(event);
+                }
+                if !batch.warnings.is_empty() {
+                    warnings.extend(batch.warnings.into_iter().map(|warning| {
+                        format!(
+                            "{id}: {}",
+                            warning.message
+                        )
+                    }));
+                }
+                let next_cursor = batch.next_cursor;
+                let pending = next_cursor
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| !context.pending_calls.is_empty());
+                let progressed = next_cursor.byte_offset > previous_offset
+                    || next_cursor.context != cursor.context;
+                cursor = next_cursor;
+                if cursor.byte_offset >= file_len && !pending {
+                    break;
+                }
+                // An incomplete call at EOF deliberately rewinds to its start. There
+                // is no more input to resolve in this pass, so leave it unresolved.
+                if !progressed {
+                    break;
+                }
+            }
+        }
+    }
+
+    transcripts_scanned.sort();
+    transcripts_scanned.dedup();
+    parser_versions.sort();
+    parser_versions.dedup();
+
+    let mut status_counts = BTreeMap::<String, u64>::new();
+    let mut reason_counts = BTreeMap::<String, u64>::new();
+    let mut lines_added = 0u64;
+    let mut lines_deleted = 0u64;
+    let mut candidates_with_reference = 0u64;
+    let mut confirmed_candidates = 0u64;
+    let mut corrections = Vec::new();
+    let mut candidate_reports = Vec::new();
+    const MAX_REPORTED_CANDIDATES: usize = 10_000;
+
+    for event in events_by_id.values() {
+        let mut identity = resolve_identity(
+            Some(&event.agent),
+            &[event.provider.as_deref()],
+            &[event.model.as_deref()],
+            Some(event.source.as_str()),
+            Some(event.confidence.as_str()),
+        );
+        // The parser may have seen contradictory model/provider records for the
+        // same tool call. Preserve that decision during repair; recomputing from
+        // the already-collapsed tuple must never turn a conflict into a guessed
+        // confirmed model.
+        if event
+            .identity_status
+            .as_deref()
+            .is_some_and(|status| status.trim().eq_ignore_ascii_case("conflict"))
+        {
+            identity.status = IdentityStatus::Conflict;
+            identity.reason = Some(REASON_CONFLICTING_EVIDENCE);
+            identity.provider = None;
+            identity.model = None;
+            identity.source = event.identity_source.clone().or(identity.source);
+        } else if identity.status != IdentityStatus::Confirmed
+            && event
+                .identity_reason
+                .as_deref()
+                .is_some_and(|reason| reason.eq_ignore_ascii_case(REASON_INTERNAL_MARKER))
+        {
+            // The parser deliberately discarded an internal/synthetic model
+            // label. Preserve that diagnosis in the dry-run baseline instead of
+            // collapsing it into the less specific `missing_model` reason.
+            identity.reason = Some(REASON_INTERNAL_MARKER);
+            identity.source = event.identity_source.clone().or(identity.source);
+        }
+        let status = identity.status.as_str().to_string();
+        *status_counts.entry(status.clone()).or_default() += 1;
+        if let Some(reason) = identity.reason {
+            *reason_counts.entry(reason.to_string()).or_default() += 1;
+        }
+        let has_reference = event.session_id.is_some()
+            || event.turn_id.is_some()
+            || event.identity_message_id.is_some()
+            || event.tool_event_id.is_some();
+        if has_reference {
+            candidates_with_reference += 1;
+        }
+        let added = u64::from(event.lines_added.unwrap_or(0));
+        let deleted = u64::from(event.lines_deleted.unwrap_or(0));
+        lines_added = lines_added.saturating_add(added);
+        lines_deleted = lines_deleted.saturating_add(deleted);
+
+        if identity.status == IdentityStatus::Confirmed
+            && identity.agent.as_deref().is_some_and(is_known_agent_id)
+        {
+            if let (Some(agent), Some(provider), Some(model), Some(source)) = (
+                identity.agent.clone(),
+                identity.provider.clone(),
+                identity.model.clone(),
+                identity.source.clone(),
+            ) {
+                confirmed_candidates += 1;
+                corrections.push(AiIdentityCorrection {
+                    ai_event_id: event.event_id.clone(),
+                    agent,
+                    provider,
+                    model,
+                    source,
+                    session_id: event.session_id.clone(),
+                    turn_id: event.turn_id.clone(),
+                    message_id: event.identity_message_id.clone(),
+                });
+            }
+        }
+
+        if candidate_reports.len() < MAX_REPORTED_CANDIDATES {
+            candidate_reports.push(AiIdentityRepairCandidateReport {
+                event_id: event.event_id.clone(),
+                agent: identity.agent,
+                provider: identity.provider,
+                model: identity.model,
+                identity_status: status,
+                identity_reason: identity.reason.map(str::to_string),
+                identity_source: identity.source,
+                session_id: event.session_id.clone(),
+                turn_id: event.turn_id.clone(),
+                identity_message_id: event.identity_message_id.clone(),
+                tool_event_id: event.tool_event_id.clone(),
+                occurred_at: event.occurred_at,
+                lines_added: event.lines_added.unwrap_or(0),
+                lines_deleted: event.lines_deleted.unwrap_or(0),
+                has_reference,
+            });
+        }
+    }
+
+    let repair_run_id = Uuid::new_v4().to_string();
+    let remote = if apply && !corrections.is_empty() {
+        Some(
+            api_client
+                .repair_ai_identity(&AiIdentityRepairRequest {
+                    repair_run_id: repair_run_id.clone(),
+                    corrections,
+                })
+                .await?,
+        )
+    } else {
+        None
+    };
+    let report = AiIdentityRepairCliReport {
+        repair_run_id,
+        dry_run: !apply,
+        apply_requested: apply,
+        agent: normalized_agent,
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        parser_versions,
+        transcripts_scanned,
+        event_count: events_by_id.len() as u64,
+        heartbeat_count: events_by_id.len() as u64,
+        lines_added,
+        lines_deleted,
+        confirmed_candidates,
+        candidates_with_reference,
+        status_counts,
+        reason_counts,
+        truncated_candidates: events_by_id.len() > MAX_REPORTED_CANDIDATES,
+        warnings,
+        candidates: candidate_reports,
+        remote,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Repair run: {}", report.repair_run_id);
+        println!("Mode: {}", if report.dry_run { "dry-run" } else { "apply" });
+        println!("Transcripts scanned: {}", report.transcripts_scanned.len());
+        println!("Events / heartbeats observed: {}", report.event_count);
+        println!("Lines added / deleted: {} / {}", report.lines_added, report.lines_deleted);
+        println!("Confirmed identity candidates: {}", report.confirmed_candidates);
+        println!("Candidates with stable references: {}", report.candidates_with_reference);
+        println!("Identity statuses: {:?}", report.status_counts);
+        println!("Identity reasons: {:?}", report.reason_counts);
+        if let Some(remote) = &report.remote {
+            println!(
+                "Server correction: {} corrected, {} unchanged, {} unresolved, {} conflicts",
+                remote.corrected, remote.unchanged, remote.unresolved, remote.conflicts
+            );
+            println!(
+                "Preserved heartbeats / lines: {} / +{} -{}",
+                remote.preserved_heartbeats,
+                remote.preserved_lines_added,
+                remote.preserved_lines_deleted
+            );
+        } else if report.apply_requested {
+            println!("Server correction: no complete candidates to apply");
+        } else {
+            println!("No data changed. Re-run with --apply after reviewing this report.");
+        }
+        if !report.warnings.is_empty() {
+            println!("Warnings: {}", report.warnings.len());
+        }
+    }
+    Ok(())
+}
+
 async fn run_ai_sync(
     config: &Config,
     api_client: &ApiClient,
@@ -3695,6 +4146,7 @@ async fn run_ai_sync(
                     byte_offset: 0,
                     last_record_id: None,
                     last_record_time: None,
+                    context: None,
                 },
             };
 
@@ -3750,16 +4202,23 @@ async fn run_ai_sync(
                 }
             }
 
-            let candidate_ids: Vec<String> = batch
+            let candidate_keys: Vec<String> = batch
                 .events
                 .iter()
-                .map(|event| event.event_id.clone())
+                .map(|event| {
+                    scoped_storage_event_id(&event.event_id, event.session_id.as_deref())
+                })
                 .collect();
-            let undelivered = state.filter_undelivered(&candidate_ids)?;
+            let undelivered = state.filter_undelivered(&candidate_keys)?;
             let new_events: Vec<&AiEditEvent> = batch
                 .events
                 .iter()
-                .filter(|event| undelivered.contains(&event.event_id))
+                .filter(|event| {
+                    undelivered.contains(&scoped_storage_event_id(
+                        &event.event_id,
+                        event.session_id.as_deref(),
+                    ))
+                })
                 .collect();
             let mut new_events = new_events;
             new_events.sort_by_key(|event| event.occurred_at);
@@ -3848,12 +4307,23 @@ async fn run_ai_sync(
                 // Only acknowledge events that actually entered the submitted
                 // broker batch. Invalid path/project pairs are intentionally
                 // skipped above and must not be recorded as delivered locally.
-                for event in submitted_events {
-                    state.mark_delivered(&event.event_id, &cursor_key)?;
-                }
+                let submitted_event_ids: Vec<String> = submitted_events
+                    .iter()
+                    .map(|event| {
+                        scoped_storage_event_id(&event.event_id, event.session_id.as_deref())
+                    })
+                    .collect();
+                state.save_cursor_and_mark_delivered(
+                    &cursor_key,
+                    &batch.next_cursor,
+                    &submitted_event_ids,
+                )?;
+            } else {
+                // Advance a context checkpoint even when every parsed event was
+                // already delivered. This keeps turn/provider metadata current
+                // without creating another activity row.
+                state.save_cursor(&cursor_key, &batch.next_cursor)?;
             }
-
-            state.save_cursor(&cursor_key, &batch.next_cursor)?;
         }
     }
 
@@ -4273,6 +4743,8 @@ fn tool_change_input(
             .session_id
             .clone()
             .or_else(|| after_input.session_id.clone()),
+        turn_id: None,
+        identity_message_id: None,
         occurred_at: Some(occurred_at),
         entity: change.entity.clone(),
         project_root: Some(before.workspace_root.clone()),
@@ -4340,12 +4812,18 @@ async fn run_ai_tool_after(
         .iter()
         .map(generic_ai_edit_event)
         .collect::<Result<Vec<_>, _>>()?;
-    let ids: Vec<String> = events.iter().map(|event| event.event_id.clone()).collect();
+    let ids: Vec<String> = events
+        .iter()
+        .map(|event| scoped_storage_event_id(&event.event_id, event.session_id.as_deref()))
+        .collect();
     let undelivered = state.filter_undelivered(&ids)?;
 
     let mut pending: Vec<(&AiEditEvent, &GenericAiEventInput)> = Vec::new();
     for (event, event_input) in events.iter().zip(inputs.iter()) {
-        if !undelivered.contains(&event.event_id) {
+        if !undelivered.contains(&scoped_storage_event_id(
+            &event.event_id,
+            event.session_id.as_deref(),
+        )) {
             continue;
         }
         pending.push((event, event_input));
@@ -4382,7 +4860,8 @@ async fn run_ai_tool_after(
     let report = submit_events_with_optional_handoff(config, api_client, &broker_events).await?;
 
     for (event, _) in &pending {
-        state.mark_delivered(&event.event_id, "tool_snapshot")?;
+        let delivery_id = scoped_storage_event_id(&event.event_id, event.session_id.as_deref());
+        state.mark_delivered(&delivery_id, "tool_snapshot")?;
     }
     state.delete_tool_session(&before.tool_event_id)?;
     if report.accepted > 0 || report.duplicate > 0 {
@@ -4491,6 +4970,14 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
                 .as_ref()
                 .map(|topology| topology.session_id.clone())
         }),
+        turn_id: normalize_optional_text(input.turn_id.clone()),
+        identity_message_id: input
+            .identity_message_id
+            .clone()
+            .and_then(|value| normalize_identity_reference(Some(&value))),
+        identity_status: None,
+        identity_reason: None,
+        identity_source: None,
         tool_event_id: normalize_optional_text(input.tool_event_id.clone()),
         occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
         entity,
@@ -4553,6 +5040,11 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         provider: event.provider,
         model: event.model,
         session_id: event.session_id,
+        turn_id: event.turn_id,
+        identity_message_id: event.identity_message_id,
+        identity_status: event.identity_status.clone(),
+        identity_reason: event.identity_reason.clone(),
+        identity_source: event.identity_source.clone(),
         source: event.source,
         confidence: event.confidence,
         actor_type: input.actor_type,
@@ -4643,7 +5135,12 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
             .unwrap_or_else(|| "legacy-ai".to_string()),
         provider: heartbeat.ai_provider.clone(),
         model: heartbeat.ai_model.clone(),
-        session_id: None,
+        session_id: heartbeat.session_id.clone(),
+        turn_id: heartbeat.identity_turn_id.clone(),
+        identity_message_id: heartbeat.identity_message_id.clone(),
+        identity_status: heartbeat.identity_status.clone(),
+        identity_reason: heartbeat.identity_reason.clone(),
+        identity_source: heartbeat.identity_source.clone(),
         source,
         confidence,
         actor_type: Some(heartbeat.actor_type),
@@ -5002,6 +5499,7 @@ pub(crate) fn build_ai_heartbeat(
     // hook runner, a desktop AI app) simply has no editor to report.
     heartbeat.editor = detect_editor_env().unwrap_or_else(|| event.agent.clone());
     heartbeat.heartbeat_id = Some(format!("ai:{}", event.event_id));
+    heartbeat.session_id = event.session_id.clone();
     heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
     heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
 
@@ -5024,6 +5522,25 @@ pub(crate) fn build_ai_heartbeat(
     heartbeat.ai_source = Some(event.source.as_str().to_string());
     heartbeat.ai_confidence = Some(event.confidence.as_str().to_string());
     heartbeat.ai_event_id = Some(event.event_id.clone());
+    let identity = resolve_identity(
+        Some(&event.agent),
+        &[event.provider.as_deref()],
+        &[event.model.as_deref()],
+        Some(event.source.as_str()),
+        Some(event.confidence.as_str()),
+    );
+    heartbeat.identity_status = event
+        .identity_status
+        .clone()
+        .or_else(|| Some(identity.status.as_str().to_string()));
+    heartbeat.identity_reason = event
+        .identity_reason
+        .clone()
+        .or_else(|| identity.reason.map(str::to_string));
+    heartbeat.identity_source = event.identity_source.clone().or(identity.source);
+    heartbeat.identity_schema_version = Some(IDENTITY_SCHEMA_VERSION);
+    heartbeat.identity_turn_id = event.turn_id.clone();
+    heartbeat.identity_message_id = event.identity_message_id.clone();
     heartbeat.ai_lines_added = event.lines_added;
     heartbeat.ai_lines_deleted = event.lines_deleted;
     let attribution = resolve_attribution(AttributionInput {
@@ -5493,6 +6010,8 @@ mod generic_ai_ingress_tests {
             provider: Some("openai".to_string()),
             model: Some("gpt".to_string()),
             session_id: Some("session-1".to_string()),
+            turn_id: None,
+            identity_message_id: None,
             occurred_at: Some(chrono::Utc::now()),
             entity: std::env::temp_dir()
                 .join("wakaclock-ingress")

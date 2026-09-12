@@ -50,7 +50,7 @@ pub struct CustomRuleRequest {
 
 /// Version this catalog value so historical heartbeats can be reprocessed with
 /// the same aliases and clients can diagnose registry drift.
-const LANGUAGE_REGISTRY_VERSION: &str = "atoaxis-linguist-2026-08-24.1";
+const LANGUAGE_REGISTRY_VERSION: &str = "atoaxis-linguist-2026-08-24.3";
 
 /// GET /meta.  Keep this stable and deliberately free of deployment secrets.
 pub async fn meta() -> Json<CatalogResponse<Value>> {
@@ -408,6 +408,7 @@ const LANGUAGES: &[&str] = &[
     "Common Lisp",
     "Crystal",
     "CSS",
+    "CSV",
     "Cuda",
     "Cython",
     "D",
@@ -434,11 +435,13 @@ const LANGUAGES: &[&str] = &[
     "GLSL",
     "Gnuplot",
     "Go",
+    "GraphQL",
     "Groovy",
     "HACL",
     "Haml",
     "Handlebars",
     "Haskell",
+    "Haxe",
     "HCL",
     "HLSL",
     "Hoon",
@@ -476,6 +479,7 @@ const LANGUAGES: &[&str] = &[
     "Motoko",
     "Nim",
     "Nix",
+    "Nu",
     "Nunjucks",
     "Objective-C",
     "OCaml",
@@ -491,6 +495,7 @@ const LANGUAGES: &[&str] = &[
     "Prolog",
     "Protobuf",
     "Pug",
+    "Puppet",
     "PureScript",
     "Python",
     "Q",
@@ -499,10 +504,12 @@ const LANGUAGES: &[&str] = &[
     "Raku",
     "Reason",
     "ReScript",
+    "reStructuredText",
     "Roff",
     "Ruby",
     "Rust",
     "SAS",
+    "Sass",
     "Scala",
     "Scheme",
     "SCSS",
@@ -515,6 +522,7 @@ const LANGUAGES: &[&str] = &[
     "SPARQL",
     "SQL",
     "Squirrel",
+    "Standard ML",
     "Starlark",
     "Svelte",
     "Swift",
@@ -527,6 +535,7 @@ const LANGUAGES: &[&str] = &[
     "TypeScript",
     "Typst",
     "Vala",
+    "VB.net",
     "Verilog",
     "VHDL",
     "Vim script",

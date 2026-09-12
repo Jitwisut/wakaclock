@@ -34,8 +34,14 @@ export function SubscriptionBadge() {
   if (subscription_status === 'trialing' && daysLeft > 0) {
     return (
       <Badge asChild variant={daysLeft <= 3 ? 'destructive' : 'outline'}>
-        <Link href="/dashboard/wakaclock/settings">
-          Trial: {daysLeft} {daysLeft === 1 ? 'day' : 'days'} left
+        <Link
+          aria-label={`Trial: ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left`}
+          href="/dashboard/wakaclock/settings"
+        >
+          <span className="sm:hidden">{daysLeft}d trial</span>
+          <span className="hidden sm:inline">
+            Trial: {daysLeft} {daysLeft === 1 ? 'day' : 'days'} left
+          </span>
         </Link>
       </Badge>
     );
@@ -43,7 +49,10 @@ export function SubscriptionBadge() {
 
   return (
     <Badge asChild variant="destructive">
-      <Link href="/dashboard/wakaclock/settings">Trial ended — subscribe</Link>
+      <Link aria-label="Trial ended — subscribe" href="/dashboard/wakaclock/settings">
+        <span className="sm:hidden">Subscribe</span>
+        <span className="hidden sm:inline">Trial ended — subscribe</span>
+      </Link>
     </Badge>
   );
 }

@@ -85,7 +85,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
         ref={ref}
         {...props}
       >
-        <div className="flex w-full items-center gap-1 px-4 lg:gap-2">
+        <div className="flex w-full min-w-0 items-center gap-1 px-2 sm:px-4 lg:gap-2">
           <Button
             aria-label={sidebarToggleAriaLabel ?? 'Toggle sidebar'}
             data-testid={`${testId}-sidebar-toggle`}

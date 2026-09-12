@@ -2,7 +2,11 @@ use crate::ai::event::{AiConfidence, AiEditEvent, AiEventSource};
 use crate::ai::jsonl::JsonlCursorReader;
 use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall,
+};
+use crate::ai::{
+    is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
+    REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
 };
 use crate::ai::patch::{
     count_content_lines, count_structured_patch_lines, LineDelta, StructuredPatchHunk,
@@ -168,7 +172,9 @@ impl AiActivityParser for ClaudeCodeParser {
         })?;
         let source_path = PathBuf::from(&cursor.source_path);
 
-        let mut reader = JsonlCursorReader::open(&source_path, cursor.byte_offset).map_err(
+        let replay_prefix = cursor.context.is_none() && cursor.byte_offset > 0;
+        let read_offset = if replay_prefix { 0 } else { cursor.byte_offset };
+        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(
             |error| match error.kind() {
                 std::io::ErrorKind::NotFound => AiParseError::NotFound {
                     path: cursor.source_path.clone(),
@@ -186,8 +192,27 @@ impl AiActivityParser for ClaudeCodeParser {
         // once the matching `user`/tool_result record for the same call arrives later
         // in the stream (plan.md 8.5.2 capability note: model lives on the assistant
         // turn, not on the tool result).
-        let mut pending_tool_uses: HashMap<String, PendingClaudeToolUse> = HashMap::new();
-        let mut last_offset = cursor.byte_offset;
+        let saved_context = cursor.context.clone().unwrap_or_default();
+        let mut pending_tool_uses: HashMap<String, PendingClaudeToolUse> = saved_context
+            .pending_calls
+            .iter()
+            .map(|pending| {
+                (
+                    pending.id.clone(),
+                    PendingClaudeToolUse {
+                        model: normalize_identity_model(pending.model.as_deref()),
+                        identity_reason: pending.identity_reason.clone(),
+                        identity_message_id: pending.identity_message_id.clone(),
+                        project_root: pending.cwd.clone().map(PathBuf::from),
+                        identity_conflict: pending.identity_conflict,
+                        offset_before: pending.offset_before.unwrap_or(cursor.byte_offset),
+                        occurred_at: pending.occurred_at,
+                    },
+                )
+            })
+            .collect();
+        let mut session_id = saved_context.session_id.clone();
+        let mut last_offset = read_offset;
         let mut last_record_time: Option<DateTime<Utc>> = cursor.last_record_time;
         let mut last_record_id: Option<String> = cursor.last_record_id.clone();
 
@@ -220,6 +245,18 @@ impl AiActivityParser for ClaudeCodeParser {
                     continue;
                 }
             };
+            if let Some(next_session_id) = record.session_id.clone() {
+                if session_id
+                    .as_deref()
+                    .is_some_and(|current| current != next_session_id)
+                {
+                    // A transcript file can contain resumed sessions. Pending
+                    // tool IDs are scoped to their session; retaining them across
+                    // a boundary could attach a result to the wrong model.
+                    pending_tool_uses.clear();
+                }
+                session_id = Some(next_session_id);
+            }
 
             match record.record_type.as_str() {
                 "assistant" => {
@@ -238,11 +275,105 @@ impl AiActivityParser for ClaudeCodeParser {
                             && FILE_EDIT_TOOLS.contains(&block.name.as_deref().unwrap_or(""))
                         {
                             if let Some(id) = block.id {
+                                let reported_model =
+                                    normalize_identity_model(message.model.as_deref());
+                                let reported_identity_reason = message
+                                    .model
+                                    .as_deref()
+                                    .filter(|value| is_internal_marker(value))
+                                    .map(|_| REASON_INTERNAL_MARKER.to_string());
+                                let reported_message_id = message
+                                    .id
+                                    .as_deref()
+                                    .and_then(|value| {
+                                        crate::ai::normalize_identity_reference(Some(value))
+                                    });
+                                let mut identity_conflict = false;
+                                let (
+                                    model,
+                                    identity_message_id,
+                                    project_root,
+                                    offset_before,
+                                    occurred_at,
+                                    identity_reason,
+                                ) =
+                                    if let Some(previous) = pending_tool_uses.get(&id) {
+                                        identity_conflict = previous.identity_conflict;
+                                        if previous.model.as_deref() != reported_model.as_deref()
+                                            && previous.model.is_some()
+                                            && reported_model.is_some()
+                                        {
+                                            identity_conflict = true;
+                                        }
+                                        if previous.identity_message_id.as_deref()
+                                            != reported_message_id.as_deref()
+                                            && previous.identity_message_id.is_some()
+                                            && reported_message_id.is_some()
+                                        {
+                                            // A tool id appearing under two assistant
+                                            // messages is ambiguous even when both
+                                            // messages report the same model. Do not
+                                            // silently keep whichever record was read
+                                            // last as the authoring evidence.
+                                            identity_conflict = true;
+                                        }
+
+                                        // Duplicate assistant records are emitted by some
+                                        // Claude clients while a tool call is streamed. Keep
+                                        // the strongest evidence already observed when a
+                                        // later duplicate omits the model or cwd, and retain
+                                        // the earliest record for restart-safe checkpointing.
+                                        let model =
+                                            reported_model.or_else(|| previous.model.clone());
+                                        let identity_reason = model.is_none().then(|| {
+                                            reported_identity_reason
+                                                .clone()
+                                                .or_else(|| previous.identity_reason.clone())
+                                        }).flatten();
+                                        (
+                                            model,
+                                            reported_message_id
+                                                .or_else(|| previous.identity_message_id.clone()),
+                                            record
+                                                .cwd
+                                                .clone()
+                                                .map(PathBuf::from)
+                                                .or_else(|| previous.project_root.clone()),
+                                            previous.offset_before.min(line.offset_before),
+                                            previous.occurred_at.or(record.timestamp),
+                                            identity_reason,
+                                        )
+                                    } else {
+                                        (
+                                            reported_model,
+                                            reported_message_id,
+                                            record.cwd.clone().map(PathBuf::from),
+                                            line.offset_before,
+                                            record.timestamp,
+                                            reported_identity_reason,
+                                        )
+                                    };
+                                if let Some(previous) = pending_tool_uses.get(&id) {
+                                    // Keep a conflict sticky across duplicate records; a
+                                    // later record must not silently downgrade it.
+                                    if previous.identity_conflict {
+                                        identity_conflict = true;
+                                    }
+                                }
                                 pending_tool_uses.insert(
                                     id,
                                     PendingClaudeToolUse {
-                                        model: message.model.clone(),
-                                        project_root: record.cwd.clone().map(PathBuf::from),
+                                        model: (!identity_conflict).then_some(model).flatten(),
+                                        identity_reason: identity_conflict
+                                            .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+                                            .or(identity_reason),
+                                        identity_message_id: (!identity_conflict)
+                                            .then_some(identity_message_id)
+                                            .flatten(),
+                                        project_root,
+                                        identity_conflict,
+                                        offset_before,
+                                        occurred_at,
                                     },
                                 );
                             }
@@ -265,13 +396,19 @@ impl AiActivityParser for ClaudeCodeParser {
                     if block.block_type != "tool_result" {
                         continue;
                     }
-                    if block.is_error.unwrap_or(false) {
-                        continue;
-                    }
                     let Some(tool_use_id) = block.tool_use_id.clone() else {
                         continue;
                     };
                     last_record_id = Some(tool_use_id.clone());
+                    // A tool_result is terminal for this tool_use_id, including
+                    // failures and results that contain no file mutation. Remove
+                    // the pending call before inspecting the optional result body;
+                    // otherwise the cursor would rewind forever and replay the same
+                    // failed/empty call on every sync.
+                    let pending = pending_tool_uses.remove(&tool_use_id);
+                    if block.is_error.unwrap_or(false) {
+                        continue;
+                    }
 
                     let Some(ClaudeToolUseResultValue::Object(result)) =
                         record.tool_use_result.as_ref()
@@ -307,20 +444,47 @@ impl AiActivityParser for ClaudeCodeParser {
                         continue;
                     };
                     last_record_time = Some(timestamp);
-                    let pending = pending_tool_uses.remove(&tool_use_id);
                     let project_root =
                         record.cwd.clone().map(PathBuf::from).or_else(|| {
                             pending.as_ref().and_then(|tool| tool.project_root.clone())
                         });
                     let entity = resolve_entity(&file_path, project_root.as_deref());
-                    let model = pending.and_then(|tool| tool.model);
+                    let identity_conflict = pending
+                        .as_ref()
+                        .is_some_and(|tool| tool.identity_conflict);
+                    // A conflicting assistant message is evidence that we cannot
+                    // safely attribute this edit to either model. Keep the
+                    // activity, but never leak the first model we happened to
+                    // observe into the canonical tuple.
+                    let model = pending
+                        .as_ref()
+                        .filter(|tool| !tool.identity_conflict)
+                        .and_then(|tool| tool.model.clone());
+                    let identity_message_id = pending
+                        .as_ref()
+                        .and_then(|tool| tool.identity_message_id.clone());
+                    let identity_reason = pending
+                        .as_ref()
+                        .and_then(|tool| tool.identity_reason.clone());
 
+                    if replay_prefix && line.offset_before < cursor.byte_offset {
+                        continue;
+                    }
                     events.push(AiEditEvent {
                         event_id: format!("claude-code-v1:{tool_use_id}"),
                         agent: "claude-code".to_string(),
-                        provider: Some("anthropic".to_string()),
-                        model,
-                        session_id: record.session_id.clone(),
+                        provider: (!identity_conflict).then(|| "anthropic".to_string()),
+                        model: normalize_identity_model(model.as_deref()),
+                        session_id: record.session_id.clone().or_else(|| session_id.clone()),
+                        turn_id: None,
+                        identity_message_id,
+                        identity_status: identity_conflict
+                            .then(|| IdentityStatus::Conflict.as_str().to_string())
+                            .or_else(|| identity_reason.as_ref().map(|_| IdentityStatus::Partial.as_str().to_string())),
+                        identity_reason: identity_conflict
+                            .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+                            .or(identity_reason),
+                        identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
                         tool_event_id: Some(tool_use_id.clone()),
                         occurred_at: timestamp,
                         entity,
@@ -339,6 +503,36 @@ impl AiActivityParser for ClaudeCodeParser {
             }
         }
 
+        if let Some(offset) = pending_tool_uses
+            .values()
+            .map(|pending| pending.offset_before)
+            .min()
+        {
+            // If the result has not arrived yet, rewind to the assistant
+            // tool_use record. A later pass can then pair a result appended
+            // after this checkpoint without losing its model context.
+            last_offset = offset;
+        }
+
+        let pending_calls = pending_tool_uses
+            .iter()
+            .map(|(id, pending)| ParserPendingCall {
+                id: id.clone(),
+                turn_id: None,
+                identity_message_id: pending.identity_message_id.clone(),
+                model: pending.model.clone(),
+                identity_reason: pending.identity_reason.clone(),
+                identity_conflict: pending.identity_conflict,
+                cwd: pending
+                    .project_root
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                input: None,
+                occurred_at: pending.occurred_at,
+                offset_before: Some(pending.offset_before),
+            })
+            .collect();
+
         Ok(ParseBatch {
             events,
             next_cursor: ParserCursor {
@@ -347,6 +541,16 @@ impl AiActivityParser for ClaudeCodeParser {
                 byte_offset: last_offset,
                 last_record_id,
                 last_record_time,
+                context: Some(ParserContext {
+                    session_id,
+                    session_cwd: None,
+                    provider: normalize_identity_provider(Some("anthropic")),
+                    provider_reason: None,
+                    provider_conflict: false,
+                    current_turn_id: None,
+                    turns: Vec::new(),
+                    pending_calls,
+                }),
             },
             warnings,
         })
@@ -379,11 +583,20 @@ struct ClaudeRecord {
 #[derive(Debug)]
 struct PendingClaudeToolUse {
     model: Option<String>,
+    identity_reason: Option<String>,
+    identity_message_id: Option<String>,
     project_root: Option<PathBuf>,
+    identity_conflict: bool,
+    offset_before: u64,
+    occurred_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ClaudeMessage {
+    /// Stable assistant message id that owns the tool_use block. Older
+    /// transcripts may omit it or call it `message_id`.
+    #[serde(alias = "message_id")]
+    id: Option<String>,
     model: Option<String>,
     content: Option<ClaudeMessageContent>,
 }
@@ -466,6 +679,7 @@ mod tests {
             "sessionId": "018f0000-aaaa-7000-8000-000000000001",
             "cwd": "/home/dev/example-project",
             "message": {
+                "id": "msg_01ExampleAssistantMessage000001",
                 "model": "claude-sonnet-5",
                 "content": [
                     {"type": "tool_use", "id": tool_use_id, "name": "Edit", "input": {}}
@@ -531,6 +745,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -541,6 +756,10 @@ mod tests {
         assert_eq!(event.lines_added, Some(2));
         assert_eq!(event.lines_deleted, Some(2));
         assert_eq!(event.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(
+            event.identity_message_id.as_deref(),
+            Some("msg_01ExampleAssistantMessage000001")
+        );
         assert_eq!(
             event.event_id,
             "claude-code-v1:toolu_01ExampleEditCallId000001"
@@ -560,6 +779,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -602,11 +822,76 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
             .unwrap();
         assert!(batch.events.is_empty());
+    }
+
+    #[test]
+    fn failed_tool_result_releases_pending_context() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-claude-failed-pending-{}",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": "s-failed",
+                "message": {
+                    "model": "claude-sonnet-5",
+                    "content": [{"type": "tool_use", "id": "edit-failed", "name": "Edit"}]
+                }
+            }),
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "s-failed",
+                "timestamp": "2026-09-06T10:00:00Z",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "edit-failed", "is_error": true}]
+                },
+                "toolUseResult": {
+                    "filePath": "/workspace/src/lib.rs",
+                    "structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 2, "lines": ["-old", "+new", "+line"]}]
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let parser = ClaudeCodeParser::new();
+        let cursor = ParserCursor {
+            source_path: path.to_string_lossy().into_owned(),
+            file_identity: None,
+            byte_offset: 0,
+            last_record_id: None,
+            last_record_time: None,
+            context: None,
+        };
+        let batch = parser
+            .parse_since(&ParseContext::default(), Some(&cursor))
+            .unwrap();
+        assert!(batch.events.is_empty());
+        assert!(batch
+            .next_cursor
+            .context
+            .as_ref()
+            .is_some_and(|context| context.pending_calls.is_empty()));
+        assert_eq!(
+            batch.next_cursor.byte_offset,
+            fs::metadata(&path).unwrap().len()
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -651,6 +936,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -711,6 +997,7 @@ mod tests {
             byte_offset: 0,
             last_record_id: None,
             last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -722,6 +1009,153 @@ mod tests {
         assert_eq!(event.model.as_deref(), Some("claude-sonnet-5"));
         assert_eq!(event.lines_added, Some(2));
         assert_eq!(event.lines_deleted, Some(1));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn internal_model_marker_stays_partial_and_never_becomes_a_model_name() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-claude-internal-model-{}",
+            std::process::id()
+        ));
+        let records = [
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": "marker-session",
+                "cwd": "/workspace",
+                "message": {
+                    "id": "marker-message",
+                    "model": "<synthetic>",
+                    "content": [{"type": "tool_use", "id": "marker-edit", "name": "Edit"}]
+                }
+            }),
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "marker-session",
+                "timestamp": "2026-09-06T10:00:00Z",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "marker-edit"}]
+                },
+                "toolUseResult": {
+                    "filePath": "/workspace/src/lib.rs",
+                    "structuredPatch": [{
+                        "oldStart": 1,
+                        "oldLines": 1,
+                        "newStart": 1,
+                        "newLines": 1,
+                        "lines": ["-old", "+new"]
+                    }]
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let batch = ClaudeCodeParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].model, None);
+        assert_eq!(batch.events[0].identity_status.as_deref(), Some("partial"));
+        assert_eq!(
+            batch.events[0].identity_reason.as_deref(),
+            Some(REASON_INTERNAL_MARKER)
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn reused_tool_id_across_assistant_messages_is_a_conflict() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-claude-message-conflict-{}",
+            std::process::id()
+        ));
+        let assistant = |message_id: &str| {
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": "conflict-session",
+                "cwd": "/workspace",
+                "message": {
+                    "id": message_id,
+                    "model": "claude-sonnet-5",
+                    "content": [{"type": "tool_use", "id": "reused-edit", "name": "Edit"}]
+                }
+            })
+        };
+        let records = [
+            assistant("message-one"),
+            assistant("message-two"),
+            serde_json::json!({
+                "type": "user",
+                "sessionId": "conflict-session",
+                "timestamp": "2026-09-06T10:00:00Z",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "reused-edit"}]
+                },
+                "toolUseResult": {
+                    "filePath": "/workspace/src/lib.rs",
+                    "structuredPatch": [{
+                        "oldStart": 1,
+                        "oldLines": 1,
+                        "newStart": 1,
+                        "newLines": 1,
+                        "lines": ["-old", "+new"]
+                    }]
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+
+        let batch = ClaudeCodeParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].model, None);
+        assert_eq!(batch.events[0].identity_message_id, None);
+        assert_eq!(batch.events[0].identity_status.as_deref(), Some("conflict"));
+        assert_eq!(
+            batch.events[0].identity_reason.as_deref(),
+            Some(REASON_CONFLICTING_EVIDENCE)
+        );
         let _ = fs::remove_file(path);
     }
 }

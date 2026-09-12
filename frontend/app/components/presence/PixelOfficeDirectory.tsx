@@ -60,6 +60,7 @@ interface DirectoryGroup {
 }
 
 export interface PixelOfficeDirectoryProps {
+  onChat?: () => void;
   onReact?: (emoji: string) => void;
   reducedMotion: boolean;
   users: PresenceUser[];
@@ -159,8 +160,8 @@ function PodGroup({ group, reducedMotion }: { group: DirectoryGroup; reducedMoti
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <span className="shrink-0">
                 <PresenceSprite
-                  {...appearanceFor(user.id)}
-                  color={appearanceFor(user.id).shirtColor}
+                  {...(user.appearance ?? appearanceFor(user.id))}
+                  color={(user.appearance ?? appearanceFor(user.id)).shirtColor}
                   reducedMotion
                   size={32}
                   status={user.status}
@@ -179,6 +180,7 @@ function PodGroup({ group, reducedMotion }: { group: DirectoryGroup; reducedMoti
 }
 
 export function PixelOfficeDirectory({
+  onChat,
   onReact,
   reducedMotion,
   users,
@@ -208,7 +210,10 @@ export function PixelOfficeDirectory({
               aria-pressed={active}
               className={`flex-1 border-b-4 px-3 py-2 ${MICRO_LABEL_CLASS}`}
               key={id}
-              onClick={() => setTab(id)}
+              onClick={() => {
+                if (id === 'chat' && onChat) onChat();
+                else setTab(id);
+              }}
               style={{
                 ...headingStyle,
                 borderColor: active ? PRESENCE_DANGER : 'transparent',
@@ -227,7 +232,7 @@ export function PixelOfficeDirectory({
 
       {tab === 'chat' ? (
         <p className="flex-1 p-4 text-xs" style={{ color: PRESENCE_MUTED }}>
-          Chat is coming soon.
+          Open Chat from the office toolbar to send messages.
         </p>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
