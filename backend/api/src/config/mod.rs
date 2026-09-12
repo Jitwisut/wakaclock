@@ -71,6 +71,8 @@ pub struct Config {
     /// without it, every think/read/test pause longer than two minutes silently
     /// vanished from the day's total. Set to `0` to keep the pre-bridging behaviour.
     pub idle_timeout_seconds: f64,
+    #[serde(default)]
+    pub duration_combined_v2: bool,
     /// The same pause allowance for agent-emitted activity, bridged on its own timeline.
     /// Defaults to `idle_timeout_seconds`, which keeps the reported total within 1% of
     /// WakaTime while still attributing human and agent seconds separately. Lower it to
@@ -173,12 +175,31 @@ impl Config {
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             idle_timeout_seconds,
+            duration_combined_v2: parse_duration_mode(
+                std::env::var("DURATION_CALCULATION_MODE").ok(),
+            )?,
             agent_idle_timeout_seconds: parse_agent_idle_timeout(
                 std::env::var("AGENT_IDLE_TIMEOUT_MINUTES").ok(),
                 idle_timeout_seconds,
             )?,
             brokers,
         })
+    }
+}
+
+/// Parse the rollout switch once at boot. Missing and explicit `legacy` both keep the
+/// pre-existing response semantics; only the exact `combined_v2` value enables the
+/// measured-editor union plus measured-AI union. Rejecting typos is safer than silently
+/// changing the user's daily total.
+fn parse_duration_mode(value: Option<String>) -> Result<bool> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("legacy") => Ok(false),
+        Some("combined_v2") => Ok(true),
+        Some(_) => anyhow::bail!("DURATION_CALCULATION_MODE must be legacy or combined_v2"),
     }
 }
 
@@ -363,6 +384,14 @@ mod tests {
             parse_agent_idle_timeout(Some("  ".to_string()), human).unwrap(),
             Some(human)
         );
+    }
+
+    #[test]
+    fn duration_mode_defaults_to_legacy_and_accepts_only_known_values() {
+        assert!(!parse_duration_mode(None).unwrap());
+        assert!(!parse_duration_mode(Some(" legacy ".to_string())).unwrap());
+        assert!(parse_duration_mode(Some("COMBINED_V2".to_string())).unwrap());
+        assert!(parse_duration_mode(Some("canary".to_string())).is_err());
     }
 
     /// Tuning only IDLE_TIMEOUT_MINUTES must not leave the agent stream on a stale

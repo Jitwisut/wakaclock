@@ -32,6 +32,18 @@ export interface AiAgentsTableProps {
   title?: null | string;
 }
 
+function agentGroupKey(agent: AiAgentItem) {
+  return JSON.stringify([
+    agent.actor_type,
+    agent.agent,
+    agent.provider ?? null,
+    agent.model ?? null,
+    agent.identity_status ?? null,
+    agent.identity_reason ?? null,
+    agent.identity_source ?? null,
+  ]);
+}
+
 export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) {
   const confirmed = agents.filter(isConfirmedAiIdentity);
   const unresolvedAi = agents.filter(
@@ -63,9 +75,7 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
           {rows.map((agent) => {
             const isUnattributed = agent.actor_type === 'ai_inferred';
             return (
-              <TableRow
-                key={`${agent.actor_type}:${agent.agent}:${agent.provider ?? ''}:${agent.model ?? ''}:${agent.identity_status ?? ''}:${agent.identity_reason ?? ''}:${agent.identity_source ?? ''}`}
-              >
+              <TableRow key={agentGroupKey(agent)}>
                 <TableCell>{formatActorType(agent.actor_type)}</TableCell>
                 <TableCell className={isUnattributed ? 'text-muted-foreground' : 'font-medium'}>
                   {formatAiAgentName(agent)}
@@ -96,7 +106,7 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
     if (confirmed.length > 0) {
       return (
         <section aria-label="Confirmed AI identities" className="space-y-2">
-          <p className="text-muted-foreground text-xs uppercase tracking-wide">
+          <p className="text-muted-foreground text-xs tracking-wide uppercase">
             AI verified · model confirmed
           </p>
           {table(confirmed)}
@@ -127,23 +137,27 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
       {unresolvedAi.length > 0 && (
         <details className="mt-4 rounded-md border" open={confirmed.length === 0}>
           <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium">
-            AI identity needs review ({unresolvedAi.length} group{unresolvedAi.length === 1 ? '' : 's'})
+            AI identity needs review ({unresolvedAi.length} group
+            {unresolvedAi.length === 1 ? '' : 's'})
           </summary>
           <div className="space-y-2 px-4 pb-4">
             <p className="text-muted-foreground text-xs">
-              These edits remain in the totals. Only the evidence needed to name the model is missing or conflicting.
+              These edits remain in the totals. Only the evidence needed to name the model is
+              missing or conflicting.
             </p>
             <p className="text-muted-foreground text-xs">
-              Run <code className="rounded bg-muted px-1 py-0.5">wakaclock doctor ai</code> to inspect the local adapter evidence. Updating an adapter can improve future events; a historical row stays unresolved when its source evidence was never recorded.
+              Run <code className="bg-muted rounded px-1 py-0.5">wakaclock doctor ai</code> to
+              inspect the local adapter evidence. Updating an adapter can improve future events; a
+              historical row stays unresolved when its source evidence was never recorded.
             </p>
             {table(unresolvedAi)}
             <ul className="text-muted-foreground space-y-1 text-xs">
               {unresolvedAi.map((agent) => (
-                <li
-                  key={`reason:${agent.agent}:${agent.identity_reason ?? ''}:${agent.model ?? ''}:${agent.identity_source ?? ''}`}
-                >
+                <li key={`reason:${agentGroupKey(agent)}`}>
                   {formatAiIdentityReason(agent.identity_reason)}
-                  {agent.provider || agent.model ? ` · ${agent.provider ?? 'provider not reported'} / ${agent.model ?? 'model not reported'}` : ''}
+                  {agent.provider || agent.model
+                    ? ` · ${agent.provider ?? 'provider not reported'} / ${agent.model ?? 'model not reported'}`
+                    : ''}
                 </li>
               ))}
             </ul>
@@ -154,7 +168,8 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
       {otherAuthorship.length > 0 && (
         <details className="mt-4 rounded-md border">
           <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium">
-            Human / unknown authorship ({otherAuthorship.length} group{otherAuthorship.length === 1 ? '' : 's'})
+            Human / unknown authorship ({otherAuthorship.length} group
+            {otherAuthorship.length === 1 ? '' : 's'})
           </summary>
           <div className="px-4 pb-4">{table(otherAuthorship)}</div>
         </details>

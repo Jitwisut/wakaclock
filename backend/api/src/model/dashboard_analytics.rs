@@ -96,6 +96,16 @@ pub struct DashboardCoverage {
 pub struct DashboardSummary {
     pub today_seconds: i64,
     pub today_text: String,
+    /// Optional duration-v2 diagnostics for the selected range. Dashboard totals remain
+    /// integer presentation values, while these fields preserve second precision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
     #[serde(flatten)]
     pub averages: DailyAverages,
     /// `None` for a range with no activity at all — a "best day" of zero would be a

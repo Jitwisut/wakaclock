@@ -151,6 +151,15 @@ async fn send_activity(activity: &TrackedActivity) -> Result<Option<String>, Str
     heartbeat.editor = "AtoAxis Desktop".into();
     heartbeat.operating_system = friendly_os().into();
     heartbeat.machine = std::env::consts::ARCH.into();
+    // Desktop activity is sampled only while a foreground app is active and the
+    // operating-system idle timer is below the configured threshold. Mark it as
+    // human/editor evidence explicitly so combined_v2 keeps the tracker stream in
+    // the WakaTime-comparable union; an Unknown anchor would otherwise contribute
+    // time in legacy mode but disappear when the human and measured-AI streams are
+    // combined.
+    heartbeat.actor_type = wakaclock_core::heartbeat::ActorType::Human;
+    heartbeat.actor_confidence = 1.0;
+    heartbeat.is_ai_generated = false;
 
     let report = ApiClient::new(config)
         .map_err(|error| error.to_string())?

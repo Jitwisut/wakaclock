@@ -79,6 +79,29 @@ impl ResolvedRange {
     /// An absent timezone falls back to UTC rather than the server's local zone: a
     /// server that moves hosts would otherwise silently re-bucket everyone's days.
     pub fn parse(start: &str, end: &str, timezone: Option<&str>) -> Result<Self, RangeError> {
+        Self::parse_with_limit(start, end, timezone, Some(MAX_RANGE_DAYS))
+    }
+
+    /// Parse a range discovered from an all-time activity ledger.
+    ///
+    /// User-selected windows stay capped by [`MAX_RANGE_DAYS`], but an all-time endpoint
+    /// must retain its historical behavior when a user's activity spans more than a year.
+    /// The caller is responsible for using the all-time query path rather than accepting an
+    /// unbounded range directly from request input.
+    pub fn parse_unbounded(
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<Self, RangeError> {
+        Self::parse_with_limit(start, end, timezone, None)
+    }
+
+    fn parse_with_limit(
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+        max_days: Option<i64>,
+    ) -> Result<Self, RangeError> {
         let timezone = parse_timezone(timezone)?;
 
         let start = NaiveDate::parse_from_str(start, "%Y-%m-%d")
@@ -91,10 +114,10 @@ impl ResolvedRange {
         }
 
         let days = (end - start).num_days() + 1;
-        if days > MAX_RANGE_DAYS {
+        if max_days.is_some_and(|max| days > max) {
             return Err(RangeError::TooLong {
                 days,
-                max: MAX_RANGE_DAYS,
+                max: max_days.expect("checked above"),
             });
         }
 
@@ -224,6 +247,12 @@ mod tests {
     fn caps_the_range_length() {
         let result = ResolvedRange::parse("2020-01-01", "2026-01-01", None);
         assert!(matches!(result, Err(RangeError::TooLong { .. })));
+    }
+
+    #[test]
+    fn all_time_ranges_can_span_more_than_the_request_limit() {
+        let range = ResolvedRange::parse_unbounded("2020-01-01", "2026-01-01", None).unwrap();
+        assert!(range.days_included() > MAX_RANGE_DAYS);
     }
 
     /// plan.md 9.7's worked example: the previous period is adjacent and equal-length,

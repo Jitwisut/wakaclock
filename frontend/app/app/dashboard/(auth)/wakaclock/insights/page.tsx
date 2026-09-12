@@ -27,7 +27,8 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RankBadge } from '@/components/wakaclock/rpg/rank-badge';
-import { getInsights } from '@/lib/wakaclock/endpoints';
+import { getBrowserTimezone, getInsights } from '@/lib/wakaclock/endpoints';
+import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { InsightType, StatsRange } from '@/lib/wakaclock/types';
 import { INSIGHT_TYPES, STATS_RANGES } from '@/lib/wakaclock/types';
@@ -52,14 +53,20 @@ function InsightsPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [type, setType] = React.useState<InsightType>('languages');
   const [range, setRange] = React.useState<StatsRange>('last_7_days');
+  const [timezone, setTimezone] = React.useState<null | string>(null);
+
+  React.useEffect(() => {
+    setTimezone(getBrowserTimezone() ?? 'UTC');
+  }, []);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.insights(userId, type, range),
+    queryKey: wakaclockKeys.insights(userId, type, range, timezone ?? undefined),
     queryFn: () => getInsights(userId, type, range),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId && timezone),
   });
 
   const rows = data?.data ?? [];
+  const hasDurationV2 = data?.comparable_seconds != null || data?.ai_additional_seconds != null;
 
   return (
     <Card>
@@ -102,9 +109,25 @@ function InsightsPanel() {
           emptyTitle={`No ${TYPE_LABELS[type].toLowerCase()} recorded`}
           error={error}
           isEmpty={!isLoading && !error && rows.length === 0}
-          isLoading={isLoading}
+          isLoading={timezone === null || isLoading}
         >
           <div className="space-y-6">
+            {hasDurationV2 && (
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+                <div className="bg-muted/30 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {formatDurationShort(data?.comparable_seconds ?? 0)}
+                  </dd>
+                </div>
+                <div className="bg-muted/30 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {formatDurationShort(data?.ai_additional_seconds ?? 0)}
+                  </dd>
+                </div>
+              </dl>
+            )}
             <DashboardPanel id="insights.chart">
               <BreakdownChart data={rows} />
             </DashboardPanel>

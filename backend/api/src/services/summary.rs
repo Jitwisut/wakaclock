@@ -1,14 +1,14 @@
-use anyhow::{Context, Result};
-use chrono::{NaiveDate, TimeZone, Utc};
-use std::collections::BTreeMap;
+use anyhow::Result;
+use chrono::Duration;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
+use crate::model::date_range::ResolvedRange;
 use crate::model::summary::{SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem};
 use crate::services::activity_timeline::{
     heartbeat_count, measured_ai_seconds, totals_by, union_ranges, ActivityTimelineService,
-    BridgeConfig, CanonicalInterval, Dimension, EvidenceSplit, Timeline,
+    BridgeConfig, CanonicalInterval, Dimension, EvidenceSplit,
 };
 
 pub struct SummaryService {
@@ -33,97 +33,126 @@ impl SummaryService {
     /// parts of a day could not add up to the day: over 14 days of real data the two
     /// paths reported 4h24m and 13h18m for the same evidence. See
     /// docs/duration-accuracy-audit.md.
+    /// Same legacy response shape, with an explicit IANA timezone for date boundaries.
+    /// The optional argument keeps WakaTime-compatible callers on UTC while dashboard
+    /// clients can compare a local calendar day without shifting midnight.
+    #[allow(dead_code)]
     pub async fn get_range(
         &self,
         user_id: Uuid,
         start: &str,
         end: &str,
     ) -> Result<SummariesResponse> {
-        validate_date(start)?;
-        validate_date(end)?;
+        self.get_range_in_timezone(user_id, start, end, None).await
+    }
 
-        let (start_epoch, end_epoch) = utc_bounds(start, end)?;
-        let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
-        let raw = timeline.intervals(user_id, start_epoch, end_epoch).await?;
-        let ai_session_ranges = timeline
+    pub async fn get_range_in_timezone(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<SummariesResponse> {
+        let range = ResolvedRange::parse(start, end, timezone)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let timezone_name = range.timezone.to_string();
+
+        let (start_epoch, end_epoch) = range.unix_bounds();
+        let timeline_service = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
+        let ai_session_ranges = timeline_service
             .ai_session_intervals(user_id, start_epoch, end_epoch)
             .await?;
-
-        let timeline = Timeline::build(&raw, self.bridge);
+        let timeline = timeline_service
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
         let measured = timeline.measured.clone();
 
-        // A day owns an interval if the interval starts in it, matching how the daily
-        // totals have always been bucketed. An interval that runs past midnight is not
-        // split, so it counts wholly towards the day the work began in.
-        //
-        // The per-day proven figure is apportioned from the range total by each day's
-        // share of the reported seconds. Re-sweeping per day would be a second O(n^2)
-        // pass, and bridging already makes the days interdependent, so an exact per-day
-        // proven number is not recoverable from a per-day slice anyway.
-        let mut bridged_by_day: BTreeMap<String, Vec<CanonicalInterval>> = BTreeMap::new();
-        for interval in timeline.bridged {
-            bridged_by_day
-                .entry(utc_day(interval.start, start))
-                .or_default()
-                .push(interval);
-        }
-        let range_total: f64 = bridged_by_day
-            .values()
-            .flatten()
-            .map(|interval| interval.end - interval.start)
-            .sum();
-
-        let days = bridged_by_day
-            .into_iter()
-            .map(|(date, intervals)| {
+        // Clip the canonical union at each local midnight. Grouping an interval wholly
+        // by its start timestamp made a session crossing midnight leak into the first
+        // day and made a Bangkok comparison disagree with a UTC report by one segment.
+        // Clipping the already-built union keeps the daily totals additive without a
+        // second bridge sweep.
+        let days = (0..range.days_included())
+            .map(|offset| range.start + Duration::days(offset))
+            .map(|day| {
+                let date = day.to_string();
                 // The response owns each measured interval's seconds by the day in
                 // which the work started, but the additive AI metric is explicitly
                 // range-clipped. Clip before taking its union so a segment crossing
                 // midnight cannot leak seconds into a neighbouring day.
-                let (day_start, day_end) =
-                    utc_bounds(&date, &date).expect("summary dates are validated ISO dates");
+                let day_range = ResolvedRange::parse(&date, &date, Some(&timezone_name))
+                    .expect("summary dates are validated ISO dates");
+                let (day_start, day_end) = day_range.unix_bounds();
+                let intervals = timeline
+                    .bridged
+                    .iter()
+                    .filter_map(|interval| {
+                        let clipped_start = interval.start.max(day_start);
+                        let clipped_end = interval.end.min(day_end);
+                        (clipped_end > clipped_start).then(|| {
+                            let mut clipped = interval.clone();
+                            clipped.start = clipped_start;
+                            clipped.end = clipped_end;
+                            clipped
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 let total: f64 = intervals
                     .iter()
                     .map(|interval| interval.end - interval.start)
                     .sum();
-                let proven = if range_total > 0.0 {
-                    timeline.proven_seconds * (total / range_total)
-                } else {
-                    0.0
-                };
+                let proven = timeline
+                    .measured
+                    .iter()
+                    .filter_map(|interval| {
+                        let clipped_start = interval.start.max(day_start);
+                        let clipped_end = interval.end.min(day_end);
+                        (clipped_end > clipped_start).then_some((clipped_start, clipped_end))
+                    })
+                    .collect::<Vec<_>>();
+                let proven = union_ranges(&proven);
+                let evidence = timeline.add_duration_evidence(
+                    EvidenceSplit::new(proven, &intervals)
+                        .with_ai_coding_seconds(measured_ai_seconds(
+                            &measured
+                                .iter()
+                                .filter_map(|interval| {
+                                    let clipped_start = interval.start.max(day_start);
+                                    let clipped_end = interval.end.min(day_end);
+                                    (clipped_end > clipped_start).then(|| {
+                                        let mut clipped = interval.clone();
+                                        clipped.start = clipped_start;
+                                        clipped.end = clipped_end;
+                                        clipped
+                                    })
+                                })
+                                .collect::<Vec<_>>(),
+                        ))
+                        .with_ai_session_seconds(union_ranges(
+                            &ai_session_ranges
+                                .iter()
+                                .filter_map(|(session_start, session_end)| {
+                                    let clipped_start = (*session_start).max(day_start);
+                                    let clipped_end = (*session_end).min(day_end);
+                                    (clipped_end > clipped_start)
+                                        .then_some((clipped_start, clipped_end))
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                    day_start,
+                    day_end,
+                );
                 SummaryDay {
                     grand_total: SummaryGrandTotal {
                         total_seconds: total,
                         hours: total / 3600.0,
                         text: format_duration(total),
                         heartbeats: heartbeat_count(&intervals),
-                        evidence: EvidenceSplit::new(proven, &intervals)
-                            .with_ai_coding_seconds(measured_ai_seconds(
-                                &measured
-                                    .iter()
-                                    .filter_map(|interval| {
-                                        let clipped_start = interval.start.max(day_start);
-                                        let clipped_end = interval.end.min(day_end);
-                                        (clipped_end > clipped_start).then(|| {
-                                            let mut clipped = interval.clone();
-                                            clipped.start = clipped_start;
-                                            clipped.end = clipped_end;
-                                            clipped
-                                        })
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ))
-                            .with_ai_session_seconds(union_ranges(
-                                &ai_session_ranges
-                                    .iter()
-                                    .filter_map(|(session_start, session_end)| {
-                                        let clipped_start = (*session_start).max(day_start);
-                                        let clipped_end = (*session_end).min(day_end);
-                                        (clipped_end > clipped_start)
-                                            .then_some((clipped_start, clipped_end))
-                                    })
-                                    .collect::<Vec<_>>(),
-                            )),
+                        comparable_seconds: evidence.comparable_seconds,
+                        ai_measured_seconds: evidence.ai_measured_seconds,
+                        ai_additional_seconds: evidence.ai_additional_seconds,
+                        calculation_version: Some(timeline.calculation_version),
+                        evidence,
                     },
                     languages: summary_items(&intervals, Dimension::Language),
                     projects: summary_items(&intervals, Dimension::Project),
@@ -133,7 +162,7 @@ impl SummaryService {
                     date,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         Ok(SummariesResponse {
             start: start.to_string(),
@@ -154,38 +183,6 @@ fn summary_items(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<S
             heartbeats,
         })
         .collect()
-}
-
-/// Inclusive local dates to the UTC epoch window the timeline reads.
-fn utc_bounds(start: &str, end: &str) -> Result<(f64, f64)> {
-    let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d")?;
-    let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d")?;
-    let start_epoch = Utc
-        .from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("valid midnight"))
-        .timestamp() as f64;
-    let end_epoch = Utc
-        .from_utc_datetime(
-            &end_date
-                .succ_opt()
-                .context("end date has no successor")?
-                .and_hms_opt(0, 0, 0)
-                .expect("valid midnight"),
-        )
-        .timestamp() as f64;
-    Ok((start_epoch, end_epoch))
-}
-
-fn utc_day(at: f64, fallback: &str) -> String {
-    Utc.timestamp_opt(at.floor() as i64, 0)
-        .single()
-        .map(|value| value.date_naive().to_string())
-        .unwrap_or_else(|| fallback.to_string())
-}
-
-fn validate_date(date: &str) -> Result<()> {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .context("Invalid date format, expected YYYY-MM-DD")?;
-    Ok(())
 }
 
 fn format_duration(secs: f64) -> String {

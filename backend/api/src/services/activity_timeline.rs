@@ -42,6 +42,9 @@ pub struct ActivityInterval {
     /// `os_daily`. Those aggregate a different algorithm and cannot agree with it.
     pub editor: String,
     pub operating_system: String,
+    /// Machine identity is carried through the timeline so the dashboard's machine
+    /// breakdown uses the same overlap union as every other duration dimension.
+    pub machine: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -64,6 +67,7 @@ pub struct CanonicalInterval {
     pub category: String,
     pub editor: String,
     pub operating_system: String,
+    pub machine: String,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -81,6 +85,7 @@ struct RawActivityRow {
     activity_segments: String,
     editor: String,
     operating_system: String,
+    machine: String,
     actor_type: String,
     actor_confidence: f32,
 }
@@ -94,6 +99,7 @@ struct RawActivityRow {
 /// continuous billed work. See docs/duration-accuracy-audit.md, Finding 2.
 #[derive(Debug, Clone, Copy)]
 pub struct BridgeConfig {
+    pub combined_v2: bool,
     /// WakaTime's timeout, applied to human editor activity. See `Config::idle_timeout_seconds`.
     pub idle_timeout_seconds: f64,
     /// The same knob for agent-emitted activity. `None` puts every source on one
@@ -107,6 +113,7 @@ impl BridgeConfig {
     /// in this module measure against.
     pub fn single(idle_timeout_seconds: f64) -> Self {
         Self {
+            combined_v2: false,
             idle_timeout_seconds,
             agent_idle_timeout_seconds: None,
         }
@@ -116,6 +123,7 @@ impl BridgeConfig {
     /// agent heartbeats contribute their measured evidence and nothing more.
     pub fn split(idle_timeout_seconds: f64, agent_idle_timeout_seconds: f64) -> Self {
         Self {
+            combined_v2: false,
             idle_timeout_seconds,
             agent_idle_timeout_seconds: Some(agent_idle_timeout_seconds),
         }
@@ -145,6 +153,19 @@ impl ActivityTimelineService {
 
     pub fn bridge_config(&self) -> BridgeConfig {
         self.bridge
+    }
+
+    fn query_context_seconds(&self) -> f64 {
+        let mut context = MAX_ACTIVITY_GAP_SECONDS;
+        if self.bridge.idle_timeout_seconds.is_finite() {
+            context = context.max(self.bridge.idle_timeout_seconds.max(0.0));
+        }
+        if let Some(agent_timeout) = self.bridge.agent_idle_timeout_seconds {
+            if agent_timeout.is_finite() {
+                context = context.max(agent_timeout.max(0.0));
+            }
+        }
+        context
     }
 
     /// Returns bounded AI-session intervals for a user and range. Closed sessions use
@@ -205,17 +226,23 @@ impl ActivityTimelineService {
         // contain removed segments after a correction or a partially failed write.
         let mut seen_segments = HashSet::new();
         let mut intervals = Vec::new();
+        let context_seconds = self.query_context_seconds();
+        // All-time callers use `f64::MAX` as an open upper bound. Keep the SQL
+        // parameters finite after adding the boundary context; ClickHouse accepts the
+        // full Float64 range but not every driver serializes `+inf` consistently.
+        let query_start = (start - context_seconds).max(f64::MIN);
+        let query_end = (end + context_seconds).min(f64::MAX);
         let rows = self
             .clickhouse
             .get_client()
             .query(
                 "SELECT entity, time, project, project_id, branch, language, category,
                         heartbeat_id, active_seconds, activity_segments, editor, operating_system,
-                        actor_type, actor_confidence
+                        machine, actor_type, actor_confidence
                  FROM wakaclock.heartbeats_canonical
                  -- A legacy heartbeat stores only its end timestamp plus
-                 -- `active_seconds`. Include one strict window on either side so an
-                 -- interval crossing a day/range boundary is still recovered before
+                 -- `active_seconds`. Include the configured timeout on either side so
+                 -- an interval crossing a day/range boundary is still recovered before
                  -- clipping. Buffered explicit segments can predate the send timestamp
                  -- by hours; include them by their own bounds, not just heartbeat time.
                  WHERE user_id = ? AND (
@@ -226,8 +253,8 @@ impl ActivityTimelineService {
                  ORDER BY time ASC, heartbeat_id ASC",
             )
             .bind(user_id)
-            .bind(start - MAX_ACTIVITY_GAP_SECONDS)
-            .bind(end + MAX_ACTIVITY_GAP_SECONDS)
+            .bind(query_start)
+            .bind(query_end)
             .bind(start)
             .bind(end)
             .fetch_all::<RawActivityRow>()
@@ -236,11 +263,60 @@ impl ActivityTimelineService {
                 anyhow::anyhow!("ClickHouse activity timeline query error: {error}")
             })?;
 
+        // A range query still needs the nearest heartbeat on either side to decide whether
+        // its first/last in-range event belongs to the same WakaTime session. Keep only a
+        // zero-length boundary anchor; measured segments remain clipped to [start, end), so
+        // context can extend a session without leaking time into the requested range.
+        let make_boundary_anchor =
+            |row: &RawActivityRow, heartbeat_id: &str, at: f64, suffix: &str| -> ActivityInterval {
+                ActivityInterval {
+                    segment_id: format!("{heartbeat_id}:{suffix}"),
+                    heartbeat_id: heartbeat_id.to_string(),
+                    start: at,
+                    end: at,
+                    source: normalize_activity_source(None, &row.actor_type).to_string(),
+                    actor_type: row.actor_type.parse().unwrap_or_default(),
+                    actor_confidence: row.actor_confidence,
+                    entity: row.entity.clone(),
+                    project: row.project.clone(),
+                    project_id: row.project_id,
+                    branch: row.branch.clone(),
+                    language: row.language.clone(),
+                    category: row.category.clone(),
+                    editor: row.editor.clone(),
+                    operating_system: row.operating_system.clone(),
+                    machine: row.machine.clone(),
+                }
+            };
+        let mut before_boundary: Option<ActivityInterval> = None;
+        let mut after_boundary: Option<ActivityInterval> = None;
+        let mut has_in_range_evidence = false;
+
         for (row_index, row) in rows.into_iter().enumerate() {
             let heartbeat_id = row
                 .heartbeat_id
                 .clone()
                 .unwrap_or_else(|| format!("legacy-row:{row_index}"));
+            if row.time < start && row.time >= start - context_seconds {
+                // Rows are ordered by time, so the last one wins and is the nearest
+                // predecessor for the requested range.
+                before_boundary = Some(make_boundary_anchor(
+                    &row,
+                    &heartbeat_id,
+                    start,
+                    "boundary-start",
+                ));
+            } else if row.time >= end
+                && row.time <= end + context_seconds
+                && after_boundary.is_none()
+            {
+                after_boundary = Some(make_boundary_anchor(
+                    &row,
+                    &heartbeat_id,
+                    end,
+                    "boundary-end",
+                ));
+            }
             // A heartbeat proves the developer was present at *its own* timestamp, and
             // that is true whatever its segments happen to cover.
             //
@@ -256,6 +332,7 @@ impl ActivityTimelineService {
             // The anchor is zero-length, so it adds no duration by itself — it only lets
             // `bridge_idle_gaps` reach, exactly as a WakaTime heartbeat does.
             if row.time >= start && row.time < end {
+                has_in_range_evidence = true;
                 let anchor_id = format!("{heartbeat_id}:anchor");
                 if seen_segments.insert(anchor_id.clone()) {
                     intervals.push(ActivityInterval {
@@ -274,6 +351,7 @@ impl ActivityTimelineService {
                         category: row.category.clone(),
                         editor: row.editor.clone(),
                         operating_system: row.operating_system.clone(),
+                        machine: row.machine.clone(),
                     });
                 }
             }
@@ -318,6 +396,12 @@ impl ActivityTimelineService {
                 {
                     continue;
                 }
+                // A buffered segment may be the only evidence whose timestamp falls in
+                // the requested range (the heartbeat carrying it can be flushed before
+                // or after the range). Treat that as in-range evidence so a nearby
+                // boundary anchor may extend the same session, while still keeping an
+                // outside-only pair from bridging an otherwise empty range.
+                has_in_range_evidence = true;
                 let segment_id = if segment.segment_id.trim().is_empty() {
                     format!("{heartbeat_id}:{:.6}:{:.6}", segment.start, segment.end)
                 } else {
@@ -343,7 +427,16 @@ impl ActivityTimelineService {
                     category: row.category.clone(),
                     editor: row.editor.clone(),
                     operating_system: row.operating_system.clone(),
+                    machine: row.machine.clone(),
                 });
+            }
+        }
+        if has_in_range_evidence {
+            if let Some(anchor) = before_boundary {
+                intervals.push(anchor);
+            }
+            if let Some(anchor) = after_boundary {
+                intervals.push(anchor);
             }
         }
         Ok(intervals)
@@ -355,10 +448,25 @@ impl ActivityTimelineService {
         start: f64,
         end: f64,
     ) -> Result<Vec<CanonicalInterval>> {
-        let mut intervals =
-            canonicalize_bridged(&self.intervals(user_id, start, end).await?, self.bridge);
-        self.apply_project_merges(user_id, &mut intervals).await?;
-        Ok(intervals)
+        Ok(self.build_timeline(user_id, start, end).await?.bridged)
+    }
+
+    /// Build the authoritative timeline, including project aliases, once for a request.
+    ///
+    /// Callers that need both the legacy-compatible total and the duration-v2 metrics should
+    /// use this method instead of fetching `intervals` and constructing `Timeline` themselves.
+    /// Keeping the merge pass here also means every duration surface groups a renamed project
+    /// under the same identity as `/projects`.
+    pub async fn build_timeline(&self, user_id: Uuid, start: f64, end: f64) -> Result<Timeline> {
+        let mut raw = self.intervals(user_id, start, end).await?;
+        // Resolve aliases before the sweep. Bridged seconds inherit the metadata of the
+        // earlier interval, so applying a merge only after canonicalization could leave
+        // an inferred pause attached to the old project while the measured rows moved to
+        // the new one. The raw evidence is also retained by `Timeline` for project-level
+        // AI metrics, which must union overlapping AI ranges independently of ownership.
+        self.apply_project_merges_to_activity(user_id, &mut raw)
+            .await?;
+        Ok(Timeline::build(&raw, self.bridge))
     }
 
     /// Fold merged project names into their target, for the timeline as well as the
@@ -370,10 +478,10 @@ impl ActivityTimelineService {
     /// this view groups by `project_id` — so renaming alone would leave two rows carrying
     /// the same label. The id has to travel with the name, which is why this reads the
     /// target's persisted identity rather than re-deriving one.
-    async fn apply_project_merges(
+    async fn apply_project_merges_to_activity(
         &self,
         user_id: Uuid,
-        intervals: &mut [CanonicalInterval],
+        intervals: &mut [ActivityInterval],
     ) -> Result<()> {
         if intervals.iter().all(|interval| interval.project.is_none()) {
             return Ok(());
@@ -575,6 +683,7 @@ fn canonicalize_component(intervals: &[ActivityInterval]) -> Vec<CanonicalInterv
             category: owner.category.clone(),
             editor: owner.editor.clone(),
             operating_system: owner.operating_system.clone(),
+            machine: owner.machine.clone(),
         });
     }
     result
@@ -650,6 +759,7 @@ pub fn bridge_idle_gaps_with_anchors(
                     category: anchor.category.clone(),
                     editor: anchor.editor.clone(),
                     operating_system: anchor.operating_system.clone(),
+                    machine: anchor.machine.clone(),
                 })
             }),
     );
@@ -877,6 +987,7 @@ fn anchor_interval(anchor: &ActivityInterval) -> CanonicalInterval {
         category: anchor.category.clone(),
         editor: anchor.editor.clone(),
         operating_system: anchor.operating_system.clone(),
+        machine: anchor.machine.clone(),
     }
 }
 
@@ -887,6 +998,20 @@ fn is_attended(source: &str) -> bool {
     source == "editor"
 }
 
+/// Old desktop clients emitted foreground-app samples before they populated `actor_type`,
+/// leaving real editor evidence as `unknown`/`other`. Keep that one known emitter in the
+/// WakaTime-comparable stream during the migration; a generic `unknown` row must stay out
+/// because it could be an AI or integration event with no reliable human proof.
+fn is_comparable_editor_interval(interval: &ActivityInterval) -> bool {
+    interval.source == "editor"
+        || interval.actor_type == ActorType::Human
+        || (interval.actor_type == ActorType::Unknown
+            && interval
+                .editor
+                .trim()
+                .eq_ignore_ascii_case("atoaxis desktop"))
+}
+
 /// The two views of one range that every duration surface reports together: the time a
 /// client proved, and the WakaTime-compatible total after idle bridging.
 ///
@@ -895,7 +1020,20 @@ fn is_attended(source: &str) -> bool {
 /// for its totals and its best day. Building both from one sweep keeps the cost of the
 /// evidence split at zero.
 pub struct Timeline {
-    /// Seconds a client actually measured: the overlap-free union, no bridging.
+    /// Raw interval evidence after project aliases have been resolved. Keeping this
+    /// alongside the canonical ownership sweep lets project views calculate measured AI
+    /// unions without losing AI ranges that overlap a human editor interval.
+    raw: Vec<ActivityInterval>,
+    comparable_ranges: Vec<(f64, f64)>,
+    ai_ranges: Vec<(f64, f64)>,
+    pub comparable_seconds: f64,
+    pub ai_measured_seconds: f64,
+    pub ai_additional_seconds: f64,
+    pub calculation_version: &'static str,
+    /// Seconds a client actually measured in the duration calculation's evidence streams:
+    /// the overlap-free union, before idle bridging. In `combined_v2`, unresolved `other`
+    /// rows remain available in the raw ledger but are intentionally outside the headline
+    /// formula, so they do not make this partition larger than the reported total.
     pub proven_seconds: f64,
     /// Measured canonical intervals retained so attribution-specific metrics can be
     /// derived without treating idle bridge time as AI coding.
@@ -906,33 +1044,210 @@ pub struct Timeline {
 impl Timeline {
     pub fn build(intervals: &[ActivityInterval], bridge: impl Into<BridgeConfig>) -> Self {
         let bridge = bridge.into();
-        let anchors: Vec<ActivityInterval> = intervals
+        let raw = intervals.to_vec();
+        // `combined_v2` defines the headline as union(editor, measured AI). Keep generic
+        // unknown/integration rows in `raw` for audit and project attribution, but do not
+        // let them inflate the duration evidence partition or re-enter the combined sweep.
+        let duration_intervals: Vec<ActivityInterval> = if bridge.combined_v2 {
+            intervals
+                .iter()
+                .filter(|interval| {
+                    is_comparable_editor_interval(interval)
+                        || (interval.actor_type.is_ai() && interval.end > interval.start)
+                })
+                .cloned()
+                .collect()
+        } else {
+            intervals.to_vec()
+        };
+        let anchors: Vec<ActivityInterval> = duration_intervals
             .iter()
             .filter(|interval| interval.end <= interval.start)
             .cloned()
             .collect();
-        let canonical = canonicalize(intervals);
+        let canonical = canonicalize(&duration_intervals);
         let proven_seconds = total_seconds(&canonical);
         let measured = canonical.clone();
-        let bridged = match bridge.agent_idle_timeout_seconds {
-            Some(agent_idle_timeout_seconds) => bridge_by_attendance(
-                canonical,
-                &anchors,
+        let editor: Vec<_> = intervals
+            .iter()
+            .filter(|row| is_comparable_editor_interval(row))
+            .cloned()
+            .collect();
+        let editor_anchors: Vec<_> = editor
+            .iter()
+            .filter(|row| row.end <= row.start)
+            .cloned()
+            .collect();
+        let comparable = bridge_idle_gaps_with_anchors(
+            canonicalize(&editor),
+            &editor_anchors,
+            bridge.idle_timeout_seconds,
+        );
+        let comparable_seconds = total_seconds(&comparable);
+        let ai_ranges: Vec<_> = intervals
+            .iter()
+            .filter(|row| row.actor_type.is_ai() && row.end > row.start)
+            .map(|row| (row.start, row.end))
+            .collect();
+        let ai_measured_seconds = union_ranges(&ai_ranges);
+        let comparable_ranges: Vec<_> = comparable.iter().map(|row| (row.start, row.end)).collect();
+        let mut combined_ranges = ai_ranges.clone();
+        combined_ranges.extend(comparable_ranges.iter().copied());
+        let ai_additional_seconds = (union_ranges(&combined_ranges) - comparable_seconds).max(0.0);
+        let bridged = if bridge.combined_v2 {
+            // Build editor time before overlaying AI: AI must neither extend an
+            // editor timeout nor erase editor evidence through ownership selection.
+            let editor: Vec<_> = intervals
+                .iter()
+                .filter(|interval| is_comparable_editor_interval(interval))
+                .cloned()
+                .collect();
+            let editor_anchors: Vec<_> = editor
+                .iter()
+                .filter(|interval| interval.end <= interval.start)
+                .cloned()
+                .collect();
+            let comparable = bridge_idle_gaps_with_anchors(
+                canonicalize(&editor),
+                &editor_anchors,
                 bridge.idle_timeout_seconds,
-                agent_idle_timeout_seconds,
-            ),
-            None => bridge_idle_gaps_with_anchors(canonical, &anchors, bridge.idle_timeout_seconds),
+            );
+            let mut combined: Vec<ActivityInterval> = comparable
+                .into_iter()
+                .map(|interval| ActivityInterval {
+                    segment_id: interval.segment_id,
+                    heartbeat_id: interval.heartbeat_id,
+                    start: interval.start,
+                    end: interval.end,
+                    source: interval.source,
+                    actor_type: interval.actor_type,
+                    actor_confidence: interval.actor_confidence,
+                    entity: interval.entity,
+                    project: interval.project,
+                    project_id: interval.project_id,
+                    branch: interval.branch,
+                    language: interval.language,
+                    category: interval.category,
+                    editor: interval.editor,
+                    operating_system: interval.operating_system,
+                    machine: interval.machine,
+                })
+                .collect();
+            combined.extend(
+                intervals
+                    .iter()
+                    .filter(|interval| interval.actor_type.is_ai() && interval.end > interval.start)
+                    .cloned(),
+            );
+            canonicalize(&combined)
+        } else {
+            match bridge.agent_idle_timeout_seconds {
+                Some(agent_idle_timeout_seconds) => bridge_by_attendance(
+                    canonical,
+                    &anchors,
+                    bridge.idle_timeout_seconds,
+                    agent_idle_timeout_seconds,
+                ),
+                None => {
+                    bridge_idle_gaps_with_anchors(canonical, &anchors, bridge.idle_timeout_seconds)
+                }
+            }
         };
         Self {
+            raw,
+            comparable_ranges,
+            ai_ranges,
+            comparable_seconds,
+            ai_measured_seconds,
+            ai_additional_seconds,
+            calculation_version: if bridge.combined_v2 {
+                "combined_v2"
+            } else {
+                "legacy"
+            },
             proven_seconds,
             measured,
             bridged,
         }
     }
 
+    /// Measured AI ranges for one stable project identity. This deliberately reads raw
+    /// evidence rather than `measured`/`bridged`: canonical ownership gives an overlapping
+    /// human editor interval the second, but the AI metric is defined as the independent
+    /// union of observed agent ranges.
+    #[allow(dead_code)]
+    pub fn ai_ranges_for_project(
+        &self,
+        project_id: Uuid,
+        project_name: Option<&str>,
+    ) -> Vec<(f64, f64)> {
+        self.ai_ranges_for_project_on_branch(project_id, project_name, None)
+    }
+
+    /// Measured AI ranges for one project and, when requested, one VCS branch. Branch
+    /// filters need the same identity fallback as project filters; an old heartbeat may
+    /// have no stable project id or may store an empty branch, but it still belongs to the
+    /// displayed `Unknown` bucket when the evidence says so.
+    pub fn ai_ranges_for_project_on_branch(
+        &self,
+        project_id: Uuid,
+        project_name: Option<&str>,
+        branch: Option<&str>,
+    ) -> Vec<(f64, f64)> {
+        self.raw
+            .iter()
+            .filter(|interval| {
+                interval.actor_type.is_ai()
+                    && interval.end > interval.start
+                    && match interval.project_id {
+                        Some(id) => id == project_id,
+                        None => project_name.is_some_and(|name| {
+                            interval.project.as_deref().unwrap_or("Unknown") == name
+                        }),
+                    }
+                    && branch
+                        .is_none_or(|name| interval.branch.as_deref().unwrap_or("Unknown") == name)
+            })
+            .map(|interval| (interval.start, interval.end))
+            .collect()
+    }
+
     pub fn evidence(&self) -> EvidenceSplit {
-        EvidenceSplit::new(self.proven_seconds, &self.bridged)
-            .with_ai_coding_seconds(measured_ai_seconds(&self.measured))
+        let mut evidence = EvidenceSplit::new(self.proven_seconds, &self.bridged)
+            .with_ai_coding_seconds(measured_ai_seconds(&self.measured));
+        evidence.comparable_seconds = Some(self.comparable_seconds);
+        evidence.ai_measured_seconds = Some(self.ai_measured_seconds);
+        evidence.ai_additional_seconds = Some(self.ai_additional_seconds);
+        evidence.calculation_version = Some(self.calculation_version);
+        evidence
+    }
+
+    /// Clip already-built ranges, never rebuild day slices without their neighbours.
+    pub fn add_duration_evidence(
+        &self,
+        mut evidence: EvidenceSplit,
+        start: f64,
+        end: f64,
+    ) -> EvidenceSplit {
+        let clip = |ranges: &[(f64, f64)]| {
+            ranges
+                .iter()
+                .filter_map(|&(a, b)| {
+                    let a = a.max(start);
+                    let b = b.min(end);
+                    (b > a).then_some((a, b))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut combined = clip(&self.comparable_ranges);
+        let comparable = union_ranges(&combined);
+        let ai = clip(&self.ai_ranges);
+        evidence.ai_measured_seconds = Some(union_ranges(&ai));
+        combined.extend(ai);
+        evidence.comparable_seconds = Some(comparable);
+        evidence.ai_additional_seconds = Some((union_ranges(&combined) - comparable).max(0.0));
+        evidence.calculation_version = Some(self.calculation_version);
+        evidence
     }
 }
 
@@ -958,6 +1273,7 @@ pub enum Dimension {
     Branch,
     Editor,
     OperatingSystem,
+    Machine,
     Category,
 }
 
@@ -972,6 +1288,7 @@ impl Dimension {
             Self::Branch => interval.branch.as_deref().unwrap_or_default(),
             Self::Editor => interval.editor.as_str(),
             Self::OperatingSystem => interval.operating_system.as_str(),
+            Self::Machine => interval.machine.as_str(),
             Self::Category => interval.category.as_str(),
         };
         if value.trim().is_empty() {
@@ -1018,6 +1335,14 @@ pub fn totals_by(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<(
 /// the larger of the two, and nothing used to say so.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct EvidenceSplit {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
     pub proven_seconds: f64,
     pub inferred_seconds: f64,
     /// Human editor activity. `attended + agent + other == total`.
@@ -1143,6 +1468,104 @@ pub fn heartbeat_count(intervals: &[CanonicalInterval]) -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn combined_counts_overlap_once_and_does_not_bridge_ai_gaps() {
+        let mut config = BridgeConfig::single(900.0);
+        config.combined_v2 = true;
+        let raw = vec![
+            anchor("a", 0.0),
+            anchor("b", 600.0),
+            interval("ai1", "ai", 500.0, 700.0),
+            interval("ai2", "ai", 800.0, 900.0),
+        ];
+        let timeline = Timeline::build(&raw, config);
+        assert_eq!(total_seconds(&timeline.bridged), 800.0);
+        assert_eq!(timeline.comparable_seconds, 600.0);
+        assert_eq!(timeline.ai_measured_seconds, 300.0);
+        assert_eq!(timeline.ai_additional_seconds, 200.0);
+        assert_eq!(timeline.calculation_version, "combined_v2");
+    }
+
+    #[test]
+    fn combined_completion_only_and_idle_process_have_no_duration() {
+        let mut config = BridgeConfig::single(900.0);
+        config.combined_v2 = true;
+        let raw = vec![anchor_at("a", "ai", 0.0), anchor_at("b", "ai", 600.0)];
+        assert_eq!(total_seconds(&Timeline::build(&raw, config).bridged), 0.0);
+        assert_eq!(total_seconds(&Timeline::build(&[], config).bridged), 0.0);
+    }
+
+    #[test]
+    fn combined_independent_agents_union_and_replay_is_idempotent() {
+        let mut config = BridgeConfig::single(900.0);
+        config.combined_v2 = true;
+        let mut raw = vec![
+            interval("a", "ai", 0.0, 120.0),
+            interval("b", "ai", 60.0, 180.0),
+        ];
+        raw.extend(raw.clone());
+        assert_eq!(total_seconds(&Timeline::build(&raw, config).bridged), 180.0);
+    }
+
+    #[test]
+    fn combined_keeps_legacy_desktop_editor_evidence() {
+        let mut config = BridgeConfig::single(900.0);
+        config.combined_v2 = true;
+        let legacy_desktop = ActivityInterval {
+            editor: "AtoAxis Desktop".to_string(),
+            ..interval("desktop", "other", 0.0, 60.0)
+        };
+
+        let timeline = Timeline::build(&[legacy_desktop], config);
+
+        assert_eq!(timeline.comparable_seconds, 60.0);
+        assert_eq!(total_seconds(&timeline.bridged), 60.0);
+    }
+
+    #[test]
+    fn combined_keeps_unresolved_rows_out_of_the_duration_partition() {
+        let mut config = BridgeConfig::single(900.0);
+        config.combined_v2 = true;
+        let raw = vec![
+            interval("human", "editor", 0.0, 60.0),
+            interval("unknown", "other", 120.0, 240.0),
+            interval("ai", "ai", 300.0, 360.0),
+        ];
+
+        let timeline = Timeline::build(&raw, config);
+        let total = total_seconds(&timeline.bridged);
+        let evidence = timeline.evidence();
+
+        assert_eq!(total, 120.0);
+        assert_eq!(timeline.proven_seconds, 120.0);
+        assert!((evidence.proven_seconds + evidence.inferred_seconds - total).abs() < 1e-6);
+        assert!(
+            (evidence.attended_seconds + evidence.agent_seconds + evidence.other_seconds - total)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn project_ai_ranges_keep_overlaps_hidden_by_canonical_editor_ownership() {
+        let project_id = Uuid::new_v4();
+        let mut human = interval("human", "editor", 0.0, 120.0);
+        human.project_id = Some(project_id);
+        human.project = Some("app".to_string());
+        let mut ai = interval("ai", "ai", 60.0, 180.0);
+        ai.project_id = Some(project_id);
+        ai.project = Some("app".to_string());
+        let timeline = Timeline::build(&[human, ai], BridgeConfig::single(900.0));
+
+        assert_eq!(
+            timeline.ai_ranges_for_project(project_id, Some("app")),
+            vec![(60.0, 180.0)]
+        );
+        // Editor ownership wins the overlap in the canonical display stream, but it
+        // must not erase the independently measured AI range.
+        assert_eq!(timeline.bridged[0].source, "editor");
+    }
+
     /// A heartbeat that proves an instant and no duration.
     fn anchor(id: &str, at: f64) -> ActivityInterval {
         interval(id, "editor", at, at)
@@ -1174,6 +1597,7 @@ mod tests {
             category: "coding".to_string(),
             editor: "vscode".to_string(),
             operating_system: "macos".to_string(),
+            machine: "test".to_string(),
         }
     }
 
@@ -1494,6 +1918,7 @@ mod tests {
             Dimension::Project,
             Dimension::Editor,
             Dimension::OperatingSystem,
+            Dimension::Machine,
             Dimension::Category,
         ] {
             let rows = totals_by(&canonical, dimension);

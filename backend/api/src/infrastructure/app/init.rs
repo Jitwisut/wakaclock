@@ -258,10 +258,11 @@ pub async fn create_app_state() -> Result<AppState> {
         postgres.clone(),
         authorization_service.clone(),
     ));
-    let bridge_config = match config.agent_idle_timeout_seconds {
+    let mut bridge_config = match config.agent_idle_timeout_seconds {
         Some(agent) => BridgeConfig::split(config.idle_timeout_seconds, agent),
         None => BridgeConfig::single(config.idle_timeout_seconds),
     };
+    bridge_config.combined_v2 = config.duration_combined_v2;
     let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(
         clickhouse.clone(),
         bridge_config,

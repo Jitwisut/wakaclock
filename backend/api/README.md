@@ -59,7 +59,11 @@ CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
 
 `ALLOW_INSECURE_JWT_SECRET=1` is for local development only. Never use
 `CORS_ORIGINS=*` for a multi-tenant deployment. `IDLE_TIMEOUT_MINUTES`
-defaults to 15 and controls the WakaTime-style pause bridge.
+defaults to 15 and controls the WakaTime-style pause bridge. Keep
+`DURATION_CALCULATION_MODE=legacy` while collecting a parity baseline; switch to
+`combined_v2` only after the seven-day comparison passes. The new mode exposes the
+WakaTime-comparable, measured-AI, and additional-AI seconds alongside the legacy
+total, and can be rolled back by changing the value back to `legacy` and restarting.
 
 Presence v2 is opt-in during rollout. Setting `PRESENCE_V2_ENABLED=true` requires
 both `POSTGRES_URL` and `REDIS_URL` to be reachable at boot. `redis://` and

@@ -67,9 +67,7 @@ function ProjectCard({ project }: { project: ProjectAnalyticsCard }) {
           </div>
           <div>
             <p className="text-muted-foreground">Unknown</p>
-            <p className="font-medium">
-              {project.unknown.changes.toLocaleString()} lines
-            </p>
+            <p className="font-medium">{project.unknown.changes.toLocaleString()} lines</p>
           </div>
           <div>
             <p className="text-muted-foreground">Coverage</p>
@@ -94,35 +92,29 @@ function ProjectsAnalytics() {
   const { start, end, setRange } = useWakaclockRange(30);
   const [sort, setSort] = React.useState<ProjectSort>('duration');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const {
-    data,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteQuery<
-    ProjectAnalyticsListResponse,
-    Error,
-    InfiniteData<ProjectAnalyticsListResponse>,
-    readonly unknown[],
-    string | undefined
-  >({
-    enabled: Boolean(userId),
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) =>
-      getProjectAnalytics({
-        cursor: pageParam ?? undefined,
-        end,
-        limit: 100,
-        order: 'desc',
-        sort,
-        start,
-        timezone,
-      }),
-    queryKey: [...wakaclockKeys.projectAnalytics(userId, start, end, timezone), sort],
-  });
+  const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+    useInfiniteQuery<
+      ProjectAnalyticsListResponse,
+      Error,
+      InfiniteData<ProjectAnalyticsListResponse>,
+      readonly unknown[],
+      string | undefined
+    >({
+      enabled: Boolean(userId),
+      getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+      initialPageParam: undefined as string | undefined,
+      queryFn: ({ pageParam }) =>
+        getProjectAnalytics({
+          cursor: pageParam ?? undefined,
+          end,
+          limit: 100,
+          order: 'desc',
+          sort,
+          start,
+          timezone,
+        }),
+      queryKey: [...wakaclockKeys.projectAnalytics(userId, start, end, timezone), sort],
+    });
   const pages = data?.pages ?? [];
   const firstPage = pages[0];
   const items = pages.flatMap((page) => page.items);
@@ -175,6 +167,14 @@ function ProjectsAnalytics() {
               <p className="text-muted-foreground text-sm">
                 {firstPage.totals.project_count.toLocaleString()} projects ·{' '}
                 {formatDurationShort(firstPage.totals.total_seconds)} total
+                {firstPage.totals.comparable_seconds !== undefined && (
+                  <>
+                    {' · '}
+                    {formatDurationShort(firstPage.totals.comparable_seconds)} WakaTime-comparable
+                    {' · '}
+                    {formatDurationShort(firstPage.totals.ai_additional_seconds ?? 0)} additional AI
+                  </>
+                )}
               </p>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {items.map((project) => (

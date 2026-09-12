@@ -32,11 +32,20 @@ ALLOWED_FILES = {
     "backend/api/crates/wakaclock-core/src/heartbeat.rs",
     "backend/api/crates/wakaclock-ls/src/main.rs",
     "backend/api/src/handlers/v1/heartbeats.rs",
+    # Identity repair still reads the legacy bit as a guard when an old row has no
+    # actor_type evidence. It must never be used to promote a human row by itself.
+    "backend/api/src/handlers/v1/ai_identity.rs",
     "backend/api/src/model/heartbeat.rs",
     "backend/api/src/repository/analytics.rs",
     "backend/api/src/repository/heartbeat.rs",
     "backend/api/src/repository/project_analytics.rs",
     "backend/api/src/services/heartbeat.rs",
+    # The timeline's ClickHouse lifecycle fixture includes the required legacy column,
+    # while the live duration path reads actor_type and identity evidence.
+    "backend/api/src/services/activity_timeline.rs",
+    # AI stats keep a narrow fallback for historical rows whose actor_type was not
+    # populated; the expression still requires explicit AI evidence before promotion.
+    "backend/api/src/services/ai_stats.rs",
     "backend/api/src/services/reprocess.rs",
     "backend/api/src/services/wakatime_import.rs",
     "frontend/app/lib/wakaclock/types.ts",

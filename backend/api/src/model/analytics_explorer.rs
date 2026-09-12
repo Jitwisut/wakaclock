@@ -82,6 +82,17 @@ impl ExplorerDurationSplit {
 pub struct ExplorerSummary {
     pub active_days: usize,
     pub ai_share_percent: Option<f64>,
+    /// Optional duration-v2 metrics. They are populated for an unfiltered timeline;
+    /// filtered views keep the existing actor split because a filtered range cannot
+    /// safely reuse the unfiltered comparable/AI union.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
     #[serde(flatten)]
     pub duration: ExplorerDurationSplit,
 }

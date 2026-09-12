@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 
-import { getAllTime } from '@/lib/wakaclock/endpoints';
+import { getAllTime, getBrowserTimezone } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { levelProgressForSeconds } from '@/lib/wakaclock/rpg';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -21,9 +21,10 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
  */
 export function SidebarLevelBadge() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const timezone = getBrowserTimezone();
 
   const allTime = useQuery({
-    queryKey: wakaclockKeys.allTime(userId),
+    queryKey: wakaclockKeys.allTime(userId, timezone),
     queryFn: () => getAllTime(userId),
     enabled: Boolean(userId),
   });
@@ -35,7 +36,7 @@ export function SidebarLevelBadge() {
   return (
     <span
       aria-label={`Level ${level}`}
-      className="border-border bg-primary/10 text-primary group-data-[collapsible=icon]:hidden ml-auto shrink-0 border-2 px-1.5 py-0.5 text-[10px] font-bold"
+      className="border-border bg-primary/10 text-primary ml-auto shrink-0 border-2 px-1.5 py-0.5 text-[10px] font-bold group-data-[collapsible=icon]:hidden"
     >
       Lv.{level}
     </span>

@@ -4,23 +4,24 @@ import { useQuery } from '@tanstack/react-query';
 import { ActivityIcon, CalendarDaysIcon, ClockIcon, ZapIcon } from 'lucide-react';
 
 import { StatTile } from '@/components/wakaclock/stat-tile';
-import { getAllTime, getStatusBar } from '@/lib/wakaclock/endpoints';
+import { getAllTime, getBrowserTimezone, getStatusBar } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 export function StatusTiles() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const timezone = getBrowserTimezone();
 
   const statusBar = useQuery({
-    queryKey: wakaclockKeys.statusBar(userId),
+    queryKey: wakaclockKeys.statusBar(userId, timezone),
     queryFn: () => getStatusBar(),
     enabled: Boolean(userId),
     refetchInterval: 60_000,
   });
 
   const allTime = useQuery({
-    queryKey: wakaclockKeys.allTime(userId),
+    queryKey: wakaclockKeys.allTime(userId, timezone),
     queryFn: () => getAllTime(userId),
     enabled: Boolean(userId),
   });

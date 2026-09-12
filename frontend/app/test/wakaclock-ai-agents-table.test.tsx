@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AiAgentsTable } from '@/components/wakaclock/ai-agents-table';
 import type { ActorType, AiAgentItem } from '@/lib/wakaclock/types';
@@ -94,5 +94,38 @@ describe('AiAgentsTable', () => {
 
     expect(screen.getByText('Provider not reported / gpt-5.6-sol')).toBeInTheDocument();
     expect(screen.getByText('openai / Model not reported')).toBeInTheDocument();
+  });
+
+  it('keeps unresolved groups with different identity statuses on unique React keys', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      render(
+        <AiAgentsTable
+          agents={[
+            agent('ai_verified', {
+              agent: 'claude-code',
+              provider: 'anthropic',
+              model: 'claude-opus-5',
+              identity_status: 'confirmed',
+              identity_reason: 'context_unavailable',
+              identity_source: 'transcript',
+            }),
+            agent('ai_verified', {
+              agent: 'claude-code',
+              provider: 'anthropic',
+              model: 'claude-opus-5',
+              identity_status: 'unavailable',
+              identity_reason: 'context_unavailable',
+              identity_source: 'transcript',
+            }),
+          ]}
+        />
+      );
+
+      expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

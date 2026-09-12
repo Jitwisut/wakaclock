@@ -11,6 +11,14 @@ use crate::model::date_range::ResolvedRange;
 use crate::services::activity_timeline::CanonicalInterval;
 use wakaclock_core::heartbeat::{activity_source_matches_filter, ActorType};
 
+#[derive(Debug, Clone, Copy)]
+pub struct ExplorerDurationMetrics {
+    pub comparable_seconds: f64,
+    pub ai_measured_seconds: f64,
+    pub ai_additional_seconds: f64,
+    pub calculation_version: &'static str,
+}
+
 const WEEKDAYS: [&str; 7] = [
     "Monday",
     "Tuesday",
@@ -65,10 +73,24 @@ impl ExplorerFilters {
     }
 }
 
+#[allow(dead_code)]
 pub fn build_explorer_response(
     intervals: &[CanonicalInterval],
     range: &ResolvedRange,
     filters: &ExplorerFilters,
+) -> AnalyticsExplorerResponse {
+    build_explorer_response_with_metrics(intervals, range, filters, None)
+}
+
+/// Build the explorer response and, when the view is unfiltered, expose the metrics from
+/// the same `Timeline` sweep that produced the intervals. Filtered responses intentionally
+/// omit them: reusing range-level metrics after selecting only one actor/project would make
+/// the labels claim a precision the filtered input cannot support.
+pub fn build_explorer_response_with_metrics(
+    intervals: &[CanonicalInterval],
+    range: &ResolvedRange,
+    filters: &ExplorerFilters,
+    metrics: Option<ExplorerDurationMetrics>,
 ) -> AnalyticsExplorerResponse {
     let filter_options = build_filter_options(intervals);
     let filtered = intervals
@@ -97,6 +119,10 @@ pub fn build_explorer_response(
         summary: ExplorerSummary {
             active_days,
             ai_share_percent,
+            comparable_seconds: metrics.map(|value| value.comparable_seconds),
+            ai_measured_seconds: metrics.map(|value| value.ai_measured_seconds),
+            ai_additional_seconds: metrics.map(|value| value.ai_additional_seconds),
+            calculation_version: metrics.map(|value| value.calculation_version),
             duration,
         },
         time_heatmap,
@@ -422,6 +448,7 @@ mod tests {
             category: "coding".to_string(),
             editor: "VS Code".to_string(),
             operating_system: "macOS".to_string(),
+            machine: "test".to_string(),
         }
     }
 

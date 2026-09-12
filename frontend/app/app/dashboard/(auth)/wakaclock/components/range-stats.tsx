@@ -10,7 +10,7 @@ import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { StatTile } from '@/components/wakaclock/stat-tile';
-import { getStats } from '@/lib/wakaclock/endpoints';
+import { getBrowserTimezone, getStats } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { StatsRange } from '@/lib/wakaclock/types';
 import { STATS_RANGES } from '@/lib/wakaclock/types';
@@ -36,9 +36,10 @@ export function RangeStats() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [range, setRange] = React.useState<StatsRange>('last_7_days');
   const [breakdown, setBreakdown] = React.useState<keyof typeof BREAKDOWN_LABELS>('languages');
+  const timezone = getBrowserTimezone();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.stats(userId, range),
+    queryKey: wakaclockKeys.stats(userId, range, timezone),
     queryFn: () => getStats(userId, range),
     enabled: Boolean(userId),
   });
