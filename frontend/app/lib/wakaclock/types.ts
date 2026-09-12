@@ -79,7 +79,11 @@ export const INSIGHT_TYPES: InsightType[] = [
 // ---------------------------------------------------------------------------
 export interface StatusBarResponse {
   agent_health?: unknown;
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
   buffered_seconds?: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
   confirmed_seconds?: number;
   covered_intervals?: Array<{
     end: number;
@@ -102,6 +106,10 @@ export interface StatusBarResponse {
 // GET /all_time_since_today
 // ---------------------------------------------------------------------------
 export interface AllTimeData {
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
   days_with_activity: number;
   hours: number;
   since: null | string;
@@ -137,17 +145,25 @@ export interface BestDay {
  * may legitimately exceed that total. */
 export interface EvidenceSplit {
   agent_seconds: number;
+  ai_additional_seconds?: number;
   ai_coding_seconds: number;
+  ai_measured_seconds?: number;
   ai_session_seconds: number;
   attended_seconds: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
   inferred_seconds: number;
   other_seconds: number;
   proven_seconds: number;
 }
 
 export interface StatsData {
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
   best_day: BestDay | null;
+  calculation_version?: 'combined_v2' | 'legacy';
   categories: StatsBreakdownItem[];
+  comparable_seconds?: number;
   daily_average_seconds: number;
   daily_average_text: string;
   days_included: number;
@@ -181,6 +197,12 @@ export interface SummaryItem {
 }
 
 export interface SummaryGrandTotal {
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
+  /** Additive evidence split; optional for compatibility with older servers. */
+  evidence?: EvidenceSplit;
   heartbeats: number;
   hours: number;
   text: string;
@@ -188,6 +210,8 @@ export interface SummaryGrandTotal {
 }
 
 export interface SummaryDay {
+  /** Category breakdown is additive and may be absent on older servers. */
+  categories?: SummaryItem[];
   date: string;
   editors: SummaryItem[];
   grand_total: SummaryGrandTotal;
@@ -217,6 +241,10 @@ export interface DurationBlock {
 }
 
 export interface DurationsResponse {
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
   data: DurationBlock[];
   date: string;
   total: number;
@@ -252,6 +280,10 @@ export interface InsightItem {
 }
 
 export interface InsightsResponse {
+  ai_additional_seconds?: number;
+  ai_measured_seconds?: number;
+  calculation_version?: 'combined_v2' | 'legacy';
+  comparable_seconds?: number;
   data: InsightItem[];
   end: string;
   range: string;
@@ -722,7 +754,11 @@ export interface DashboardAnalyticsResponse {
   schema_version: number;
   summary: {
     active_day_average_seconds: number;
+    ai_additional_seconds?: number;
+    ai_measured_seconds?: number;
+    calculation_version?: 'combined_v2' | 'legacy';
     calendar_day_average_seconds: number;
+    comparable_seconds?: number;
     most_active_day: { date: string; text: string; total_seconds: number } | null;
     previous_period: PeriodComparison;
     today_seconds: number;
@@ -814,7 +850,14 @@ export interface ProjectAnalyticsListResponse {
   next_cursor: null | string;
   range: { days_included: number; end: string; start: string; timezone: string };
   schema_version: number;
-  totals: { project_count: number; total_seconds: number };
+  totals: {
+    ai_additional_seconds?: number;
+    ai_measured_seconds?: number;
+    calculation_version?: 'combined_v2' | 'legacy';
+    comparable_seconds?: number;
+    project_count: number;
+    total_seconds: number;
+  };
 }
 
 export interface ProjectAiSummary {
@@ -879,7 +922,11 @@ export interface ProjectAnalyticsDetailResponse {
   schema_version: number;
   summary: {
     active_days: number;
+    ai_additional_seconds?: number;
+    ai_measured_seconds?: number;
     all_projects_seconds: number;
+    calculation_version?: 'combined_v2' | 'legacy';
+    comparable_seconds?: number;
     last_activity_at: null | string;
     project_seconds: number;
   };

@@ -17,7 +17,7 @@ import {
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getSummaries } from '@/lib/wakaclock/endpoints';
+import { getBrowserTimezone, getSummaries } from '@/lib/wakaclock/endpoints';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { SummaryDay, SummaryItem } from '@/lib/wakaclock/types';
@@ -34,9 +34,10 @@ function topItem(items: SummaryItem[]) {
 export function SummariesPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const { start, end, setRange } = useWakaclockRange(7);
+  const timezone = getBrowserTimezone();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.summaries(userId, start, end),
+    queryKey: wakaclockKeys.summaries(userId, start, end, timezone),
     queryFn: () => getSummaries(userId, start, end),
     enabled: Boolean(userId),
   });
@@ -46,6 +47,15 @@ export function SummariesPanel() {
     date: day.date,
     seconds: day.grand_total.total_seconds,
   }));
+  const comparableSeconds = days.reduce(
+    (sum, day) => sum + (day.grand_total.comparable_seconds ?? 0),
+    0
+  );
+  const aiAdditionalSeconds = days.reduce(
+    (sum, day) => sum + (day.grand_total.ai_additional_seconds ?? 0),
+    0
+  );
+  const hasDurationV2 = days.some((day) => day.grand_total.comparable_seconds !== undefined);
 
   return (
     <Card>
@@ -101,6 +111,23 @@ export function SummariesPanel() {
                 />
               </AreaChart>
             </ChartContainer>
+
+            {hasDurationV2 && (
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-md border p-3">
+                  <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
+                  <dd className="text-lg font-semibold tabular-nums">
+                    {formatDurationShort(comparableSeconds)}
+                  </dd>
+                </div>
+                <div className="rounded-md border p-3">
+                  <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
+                  <dd className="text-lg font-semibold tabular-nums">
+                    {formatDurationShort(aiAdditionalSeconds)}
+                  </dd>
+                </div>
+              </dl>
+            )}
 
             <div className="overflow-x-auto rounded-md border">
               <Table>

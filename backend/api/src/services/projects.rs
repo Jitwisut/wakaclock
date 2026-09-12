@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
+use crate::model::date_range::ResolvedRange;
 use crate::model::projects::{ProjectItem, ProjectRow, ProjectsResponse};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
@@ -24,16 +25,27 @@ impl ProjectsService {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get_range(
         &self,
         user_id: Uuid,
         start: &str,
         end: &str,
     ) -> Result<ProjectsResponse> {
-        validate_date(start)?;
-        validate_date(end)?;
+        self.get_range_in_timezone(user_id, start, end, None).await
+    }
 
-        let rows = self.fetch_projects(user_id, start, end).await?;
+    pub async fn get_range_in_timezone(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<ProjectsResponse> {
+        let range = ResolvedRange::parse(start, end, timezone)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let rows = self.fetch_projects(user_id, &range).await?;
 
         Ok(ProjectsResponse {
             start: start.to_string(),
@@ -54,10 +66,9 @@ impl ProjectsService {
     async fn fetch_projects(
         &self,
         user_id: Uuid,
-        start: &str,
-        end: &str,
+        range: &ResolvedRange,
     ) -> Result<Vec<ProjectRow>> {
-        let (start_epoch, end_epoch) = day_bounds(start, end)?;
+        let (start_epoch, end_epoch) = range.unix_bounds();
         let merges = self.merge_map(user_id).await?;
         let canonical = self
             .timeline
@@ -121,33 +132,6 @@ impl ProjectsService {
             .map(|row| (row.source_project, row.target_project))
             .collect())
     }
-}
-
-/// Inclusive `YYYY-MM-DD` days as epoch bounds. `/projects` has always spoken in whole
-/// days; only the storage behind it changed.
-fn day_bounds(start: &str, end: &str) -> Result<(f64, f64)> {
-    let start_day = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
-        .context("Invalid date format, expected YYYY-MM-DD")?;
-    let end_day = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d")
-        .context("Invalid date format, expected YYYY-MM-DD")?;
-    Ok((
-        start_day
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp() as f64,
-        (end_day + chrono::Duration::days(1))
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp() as f64,
-    ))
-}
-
-fn validate_date(date: &str) -> Result<()> {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .context("Invalid date format, expected YYYY-MM-DD")?;
-    Ok(())
 }
 
 fn format_duration(secs: f64) -> String {

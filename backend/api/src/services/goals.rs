@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
+use crate::model::date_range::ResolvedRange;
 use crate::model::goal::{CreateGoalRequest, Goal, GoalProgress, UpdateGoalRequest};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 use wakaclock_core::heartbeat::ActorType;
@@ -171,7 +172,9 @@ impl GoalService {
             .clickhouse
             .as_deref()
             .ok_or_else(|| anyhow!("ClickHouse is required to calculate goal progress"))?;
-        let today = chrono::Utc::now().date_naive();
+        let today = ResolvedRange::today_date_string(Some(&goal.timezone))
+            .map_err(|error| anyhow!(error.to_string()))?
+            .parse::<NaiveDate>()?;
         let mut start = goal.starts_on;
         let period_days = match goal.period.as_str() {
             "daily" => 1,
@@ -211,13 +214,14 @@ impl GoalService {
         // docs/duration-accuracy-audit.md, Finding 4.
         let row = match goal.metric.as_str() {
             "heartbeats" => {
+                let (start_epoch, end_epoch) = goal_period_bounds(start, end, &goal.timezone)?;
                 let (query, bind_filter) = progress_query(&goal);
                 let mut request = clickhouse
                     .get_client()
                     .query(&query)
                     .bind(user_id)
-                    .bind(start)
-                    .bind(end);
+                    .bind(start_epoch)
+                    .bind(end_epoch);
                 if let Some(filter) = bind_filter {
                     request = request.bind(filter);
                 }
@@ -227,7 +231,7 @@ impl GoalService {
                     .context("failed to calculate goal progress")?
             }
             _ => {
-                let (start_epoch, end_epoch) = goal_period_bounds(start, end)?;
+                let (start_epoch, end_epoch) = goal_period_bounds(start, end, &goal.timezone)?;
                 let canonical = self
                     .timeline
                     .as_ref()
@@ -321,18 +325,23 @@ fn validate_goal(input: &CreateGoalRequest) -> Result<()> {
     if input.ends_on.is_some_and(|end| end < input.starts_on) {
         return Err(anyhow!("ends_on must be on or after starts_on"));
     }
+    if let Some(timezone) = input.timezone.as_deref() {
+        ResolvedRange::today_date_string(Some(timezone))
+            .map_err(|error| anyhow!(error.to_string()))?;
+    }
     Ok(())
 }
 
 /// Inclusive goal-period days as epoch bounds, matching the `date BETWEEN ? AND ?` the
 /// heartbeat-count metric still uses.
-fn goal_period_bounds(start: chrono::NaiveDate, end: chrono::NaiveDate) -> Result<(f64, f64)> {
-    let to_epoch = |day: chrono::NaiveDate| -> Result<f64> {
-        day.and_hms_opt(0, 0, 0)
-            .map(|naive| naive.and_utc().timestamp() as f64)
-            .ok_or_else(|| anyhow!("invalid goal period boundary {day}"))
-    };
-    Ok((to_epoch(start)?, to_epoch(end + chrono::Duration::days(1))?))
+fn goal_period_bounds(
+    start: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+    timezone: &str,
+) -> Result<(f64, f64)> {
+    let range = ResolvedRange::parse(&start.to_string(), &end.to_string(), Some(timezone))
+        .map_err(|error| anyhow!(error.to_string()))?;
+    Ok(range.unix_bounds())
 }
 
 /// Does this interval count towards the goal?
@@ -382,7 +391,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
             return (
                 "SELECT count() AS value, count() AS samples
                  FROM wakaclock.heartbeats_canonical
-                 WHERE user_id = ? AND date BETWEEN ? AND ?"
+                 WHERE user_id = ? AND time >= ? AND time < ?"
                     .to_string(),
                 None,
             );
@@ -391,7 +400,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
             format!(
                 "SELECT {value_expression} AS value, count() AS samples
                  FROM wakaclock.heartbeats_canonical
-                 WHERE user_id = ? AND date BETWEEN ? AND ?"
+                 WHERE user_id = ? AND time >= ? AND time < ?"
             ),
             None,
         );
@@ -406,7 +415,7 @@ fn progress_query(goal: &Goal) -> (String, Option<String>) {
     let query = format!(
         "SELECT {value_expression} AS value, count() AS samples
          FROM wakaclock.heartbeats_canonical
-         WHERE user_id = ? AND date BETWEEN ? AND ? AND {dimension} = ?"
+         WHERE user_id = ? AND time >= ? AND time < ? AND {dimension} = ?"
     );
     (query, filter)
 }

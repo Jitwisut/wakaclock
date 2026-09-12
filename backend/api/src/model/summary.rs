@@ -15,6 +15,17 @@ pub struct SummaryGrandTotal {
     pub hours: f64,
     pub text: String,
     pub heartbeats: u64,
+    /// Optional duration-v2 diagnostics. They are duplicated at the grand-total level
+    /// so clients that do not render the evidence object can still compare the two
+    /// timelines without changing the legacy fields above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
     /// Additive: `total_seconds` keeps its WakaTime meaning, and this says how much of
     /// it a client actually measured versus how much the idle bridge inferred, and how
     /// much was attended by a human versus produced by an agent.

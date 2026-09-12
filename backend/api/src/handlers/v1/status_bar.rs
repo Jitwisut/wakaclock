@@ -33,6 +33,16 @@ pub struct StatusBarResponse {
     pub last_increment_source: Option<String>,
     #[serde(default)]
     pub discarded_seconds: f64,
+    /// Optional duration-v2 metrics. Keep these at the response root for lightweight
+    /// clients; the same values also live in `evidence` for richer views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
     /// How much of `total_seconds` a client actually measured versus how much the idle
     /// bridge inferred, and how much was attended versus agent-produced. On real data
     /// the inferred half is the larger one; nothing used to say so.
@@ -146,6 +156,10 @@ pub async fn today(
                 last_increment_seconds: last.map(|interval| interval.end - interval.start),
                 last_increment_source: last.map(|interval| interval.source.clone()),
                 discarded_seconds: (raw_seconds - total).max(0.0),
+                comparable_seconds: evidence.comparable_seconds,
+                ai_measured_seconds: evidence.ai_measured_seconds,
+                ai_additional_seconds: evidence.ai_additional_seconds,
+                calculation_version: evidence.calculation_version,
                 evidence,
             })
         }
@@ -163,6 +177,10 @@ pub async fn today(
             last_increment_seconds: None,
             last_increment_source: None,
             discarded_seconds: 0.0,
+            comparable_seconds: None,
+            ai_measured_seconds: None,
+            ai_additional_seconds: None,
+            calculation_version: None,
             evidence: crate::services::activity_timeline::EvidenceSplit::default(),
         }),
     })

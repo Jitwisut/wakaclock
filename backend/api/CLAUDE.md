@@ -73,7 +73,9 @@ CORS_ORIGINS=https://atoaxis.com,https://www.atoaxis.com
 
 `ALLOW_INSECURE_JWT_SECRET=1` and `CORS_ORIGINS=*` are development-only
 overrides. `IDLE_TIMEOUT_MINUTES` defaults to 15, matching WakaTime's default
-pause timeout.
+pause timeout. `DURATION_CALCULATION_MODE` defaults to `legacy`; enable
+`combined_v2` only after the seven-day WakaTime parity audit, and roll back by
+switching it to `legacy` and restarting the API.
 
 ## Contract ownership
 

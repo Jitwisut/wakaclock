@@ -497,10 +497,10 @@ pub async fn analytics(
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AnalyticsData>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_stats").await?;
-    let (start, end) = resolve_range(query.start, query.end)?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let summary = state
         .summary_service
-        .get_range(user_id, &start, &end)
+        .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(envelope(
@@ -518,7 +518,7 @@ pub async fn ai_effectiveness(
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AiEffectivenessData>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
-    let (start, end) = resolve_range(query.start, query.end)?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let stats = state
         .ai_stats_service
         .get_range(user_id, &start, &end)
@@ -622,7 +622,7 @@ pub async fn follow_up_stats(
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<HumanFollowUpStats>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
-    let (start_date, end_date) = resolve_range(query.start, query.end)?;
+    let (start_date, end_date) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let range = ResolvedRange::parse(&start_date, &end_date, query.timezone.as_deref())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let (start, end) = range.unix_bounds();
@@ -1478,8 +1478,15 @@ fn envelope<T>(data: T, timezone: &str, coverage: Option<Value>) -> V2Envelope<T
     }
 }
 
-fn resolve_range(start: Option<String>, end: Option<String>) -> Result<(String, String), ApiError> {
-    let today = Utc::now().date_naive();
+fn resolve_range(
+    start: Option<String>,
+    end: Option<String>,
+    timezone: Option<&str>,
+) -> Result<(String, String), ApiError> {
+    let today = ResolvedRange::today_date_string(timezone)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let today = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
+        .map_err(|_| ApiError::bad_request("today could not be resolved"))?;
     let default_start = today - Duration::days(29);
     let start = start.unwrap_or_else(|| default_start.to_string());
     let end = end.unwrap_or_else(|| today.to_string());

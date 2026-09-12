@@ -83,6 +83,14 @@ pub struct ProjectAnalyticsListResponse {
 pub struct ProjectAnalyticsTotals {
     pub project_count: u64,
     pub total_seconds: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -177,6 +185,14 @@ pub struct ProjectSummary {
     pub all_projects_seconds: i64,
     pub last_activity_at: Option<String>,
     pub project_seconds: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparable_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_measured_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_additional_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_version: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]

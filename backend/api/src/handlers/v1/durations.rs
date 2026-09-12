@@ -36,13 +36,18 @@ pub async fn list(
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 
-    let rows = state
+    let result = state
         .duration_service
-        .get_by_date(user_id, &range)
+        .get_by_date_with_metrics(user_id, &range)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 
-    let data = rows
+    let comparable_seconds = result.comparable_seconds;
+    let ai_measured_seconds = result.ai_measured_seconds;
+    let ai_additional_seconds = result.ai_additional_seconds;
+    let calculation_version = result.calculation_version;
+    let data = result
+        .blocks
         .into_iter()
         .map(|row| DurationBlock {
             start: row.start,
@@ -60,6 +65,10 @@ pub async fn list(
         total: data.len(),
         date,
         data,
+        comparable_seconds: Some(comparable_seconds),
+        ai_measured_seconds: Some(ai_measured_seconds),
+        ai_additional_seconds: Some(ai_additional_seconds),
+        calculation_version: Some(calculation_version),
     }))
 }
 
