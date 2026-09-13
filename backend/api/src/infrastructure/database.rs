@@ -21,9 +21,11 @@ impl ClickHouseClient {
             client = client.with_password(password);
         }
 
-        // Test connection
-        client.query("SELECT 1").execute().await?;
-
+        // Keep construction lazy.  Kafka-mode API replicas intentionally start
+        // while ClickHouse is unavailable; request-path access/project state lives
+        // in PostgreSQL and the heartbeat is durable once Kafka acknowledges it.
+        // Direct/verify startup still probes ClickHouse through the migration pass
+        // in `main`, and health checks continue to report the outage.
         Ok(Self { client })
     }
 

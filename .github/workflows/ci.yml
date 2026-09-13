@@ -79,12 +79,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run unit and service tests
         run: cargo test --workspace
+      - name: Compile Kafka adapter and fact-sink worker
+        run: cargo check -p wakaclock-server --all-targets --features kafka
       - name: Run Phase 2 broker acceptance tests
         run: |
           cargo test -p wakaclock-core broker:: -- --test-threads=1

@@ -26,6 +26,8 @@ const API_KEY_READBACK_MIGRATION: &str =
 const ASYNC_JOBS_MIGRATION: &str = include_str!("../../migrations/postgres/007_async_jobs.sql");
 const JOB_WORKER_STATE_MIGRATION: &str =
     include_str!("../../migrations/postgres/008_job_worker_state.sql");
+const INGEST_STATE_MIGRATION: &str =
+    include_str!("../../migrations/postgres/009_ingest_state.sql");
 
 pub struct PostgresClient {
     pool: Pool,
@@ -114,6 +116,7 @@ impl PostgresClient {
             ("API key readback", API_KEY_READBACK_MIGRATION),
             ("async jobs", ASYNC_JOBS_MIGRATION),
             ("job worker state", JOB_WORKER_STATE_MIGRATION),
+            ("ingest state", INGEST_STATE_MIGRATION),
         ] {
             client
                 .batch_execute(sql)
@@ -234,5 +237,8 @@ mod tests {
         assert!(JOB_WORKER_STATE_MIGRATION.contains("retry_delay_seconds INTEGER"));
         assert!(JOB_WORKER_STATE_MIGRATION.contains("failed_at TIMESTAMPTZ"));
         assert!(JOB_WORKER_STATE_MIGRATION.contains("failure_code TEXT"));
+        assert!(INGEST_STATE_MIGRATION.contains("CREATE TABLE IF NOT EXISTS user_ingest_access"));
+        assert!(INGEST_STATE_MIGRATION.contains("CREATE TABLE IF NOT EXISTS project_rules"));
+        assert!(INGEST_STATE_MIGRATION.contains("project_rules_active_priority_idx"));
     }
 }

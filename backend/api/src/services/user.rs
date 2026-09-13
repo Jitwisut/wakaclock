@@ -9,7 +9,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
+use crate::config::brokers::IngestStateSource;
 use crate::infrastructure::postgres::PostgresClient;
+use crate::repository::ingest_state::IngestStateRepository;
 use crate::infrastructure::secret_box::{SecretBox, KEY_VERSION};
 use crate::middleware::auth;
 use crate::model::auth::AuthData;
@@ -24,6 +26,8 @@ pub struct UserService {
     /// Seals the generated API key so `current_api_key` can return it later.
     /// `None` (no `ATOAXIS_KMS_KEY_ID`) keeps keys hash-only and reads blank.
     secret_box: Option<Arc<SecretBox>>,
+    ingest_state_source: IngestStateSource,
+    ingest_state: Option<Arc<IngestStateRepository>>,
 }
 
 impl UserService {
@@ -36,7 +40,19 @@ impl UserService {
             clickhouse,
             postgres,
             secret_box,
+            ingest_state_source: IngestStateSource::ClickHouse,
+            ingest_state: None,
         }
+    }
+
+    pub fn with_ingest_state(
+        mut self,
+        source: IngestStateSource,
+        postgres: Option<Arc<PostgresClient>>,
+    ) -> Self {
+        self.ingest_state_source = source;
+        self.ingest_state = postgres.map(|value| Arc::new(IngestStateRepository::new(value)));
+        self
     }
 
     /// คืนข้อมูล user ปัจจุบัน — ถ้ายังไม่เคย register (ตาราง users ว่าง)
@@ -215,6 +231,21 @@ impl UserService {
             .await?;
         self.ensure_clickhouse_identity(user_id, username, &password_hash)
             .await?;
+        if matches!(
+            self.ingest_state_source,
+            IngestStateSource::Dual | IngestStateSource::Postgres
+        ) {
+            if let Some(state) = &self.ingest_state {
+                let trial_ends_at = chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    i64::from(default_trial_ends_at()),
+                    0,
+                );
+                state
+                    .upsert_access(user_id, "trialing", trial_ends_at, None)
+                    .await
+                    .context("failed to initialize PostgreSQL ingest access")?;
+            }
+        }
 
         let token = self.issue_session(user_id, jwt_secret).await?;
 
@@ -380,7 +411,8 @@ impl UserService {
             trial_valid: bool,
         }
 
-        let row = self
+        let clickhouse_access = async {
+            let row = self
             .clickhouse
             .get_client()
             .query(
@@ -394,13 +426,34 @@ impl UserService {
             .await
             .map_err(|error| anyhow!("ClickHouse users query error: {error}"))?;
 
-        Ok(match row {
+            Ok::<bool, anyhow::Error>(match row {
             Some(row) => {
                 row.subscription_status == "active"
                     || (row.subscription_status == "trialing" && row.trial_valid)
             }
             None => false,
-        })
+            })
+        };
+
+        match self.ingest_state_source {
+            IngestStateSource::ClickHouse => clickhouse_access.await,
+            IngestStateSource::Postgres => self
+                .ingest_state
+                .as_ref()
+                .context("PostgreSQL ingest state is not configured")?
+                .has_active_access(user_id)
+                .await,
+            IngestStateSource::Dual => {
+                let clickhouse = clickhouse_access.await?;
+                if let Some(postgres) = &self.ingest_state {
+                    let pg = postgres.has_active_access(user_id).await?;
+                    if pg != clickhouse {
+                        tracing::warn!(user_id = %user_id, "ingest access state mismatch between ClickHouse and PostgreSQL");
+                    }
+                }
+                Ok(clickhouse)
+            }
+        }
     }
 
     /// Called by POST /internal/subscription — the seam an externally-integrated
@@ -413,35 +466,96 @@ impl UserService {
         status: &str,
         period_end: Option<u32>,
     ) -> Result<Uuid> {
-        let user_id = self
-            .find_user_id_by_username(username)
-            .await?
-            .ok_or_else(|| anyhow!("no account with that username"))?;
-        let identity = self.existing_identity(user_id).await?;
+        // In PostgreSQL-authoritative mode subscription updates must remain
+        // possible during a ClickHouse outage.  The legacy ClickHouse lookup and
+        // mirror write are retained for direct/dual compatibility.
+        let (user_id, identity) = if self.ingest_state_source == IngestStateSource::Postgres {
+            let user_id = self
+                .find_postgres_user_id_by_username(username)
+                .await?
+                .ok_or_else(|| anyhow!("no account with that username"))?;
+            (user_id, None)
+        } else {
+            let user_id = self
+                .find_user_id_by_username(username)
+                .await?
+                .ok_or_else(|| anyhow!("no account with that username"))?;
+            (user_id, Some(self.existing_identity(user_id).await?))
+        };
 
-        self.clickhouse
-            .get_client()
-            .query(
-                "INSERT INTO wakaclock.users
-                    (user_id, username, email, api_key, api_key_plain, is_active,
-                     password_hash, subscription_status, trial_ends_at,
-                     subscription_period_end)
-                 VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
-            )
-            .bind(user_id)
-            .bind(&identity.username)
-            .bind(&identity.email)
-            .bind(&identity.api_key)
-            .bind("")
-            .bind(&identity.password_hash)
-            .bind(status)
-            .bind(identity.trial_ends_at)
-            .bind(period_end)
-            .execute()
-            .await
-            .map_err(|error| anyhow!("ClickHouse users insert error: {error}"))?;
+        if let Some(identity) = &identity {
+            self.clickhouse
+                .get_client()
+                .query(
+                    "INSERT INTO wakaclock.users
+                        (user_id, username, email, api_key, api_key_plain, is_active,
+                         password_hash, subscription_status, trial_ends_at,
+                         subscription_period_end)
+                     VALUES (?, ?, ?, ?, ?, true, ?, ?, ?, ?)",
+                )
+                .bind(user_id)
+                .bind(&identity.username)
+                .bind(&identity.email)
+                .bind(&identity.api_key)
+                .bind("")
+                .bind(&identity.password_hash)
+                .bind(status)
+                .bind(identity.trial_ends_at)
+                .bind(period_end)
+                .execute()
+                .await
+                .map_err(|error| {
+                    if self.ingest_state_source == IngestStateSource::Dual {
+                        anyhow!("subscription state reconciliation failed")
+                    } else {
+                        anyhow!("ClickHouse users insert error: {error}")
+                    }
+                })?;
+        }
+
+        if matches!(
+            self.ingest_state_source,
+            IngestStateSource::Dual | IngestStateSource::Postgres
+        ) {
+            let state = self
+                .ingest_state
+                .as_ref()
+                .context("PostgreSQL ingest state is not configured")?;
+            let trial = if let Some(identity) = &identity {
+                chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    i64::from(identity.trial_ends_at),
+                    0,
+                )
+            } else {
+                state.get_access(user_id).await?.and_then(|access| access.trial_ends_at)
+            };
+            let period = period_end.and_then(|value| {
+                chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(value), 0)
+            });
+            state
+                .upsert_access(user_id, status, trial, period)
+                .await
+                .map_err(|_| anyhow!("subscription state reconciliation failed"))?;
+        }
 
         Ok(user_id)
+    }
+
+    async fn find_postgres_user_id_by_username(&self, username: &str) -> Result<Option<Uuid>> {
+        let Some(postgres) = &self.postgres else {
+            return Ok(None);
+        };
+        let row = postgres
+            .client()
+            .query_opt(
+                "SELECT id FROM users
+                 WHERE username = $1 AND is_active AND deleted_at IS NULL
+                 LIMIT 1",
+                &[&username],
+            )
+            .await
+            .map_err(|error| anyhow!("PostgreSQL users query error: {error}"))?;
+        Ok(row.map(|row| row.get("id")))
     }
 
     async fn find_user_id_by_username(&self, username: &str) -> Result<Option<Uuid>> {

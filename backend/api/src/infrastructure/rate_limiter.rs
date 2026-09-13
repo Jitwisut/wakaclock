@@ -40,6 +40,9 @@ pub struct AiDiagnosticsRateLimiter {
     inner: Governor<(Uuid, String), DefaultKeyedStateStore<(Uuid, String)>, DefaultClock>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitExceeded;
+
 impl AiDiagnosticsRateLimiter {
     /// Twelve reports per minute with a small startup burst. The CLI normally uploads
     /// only on an explicit doctor command, so this leaves room for retries without
@@ -52,10 +55,10 @@ impl AiDiagnosticsRateLimiter {
         })
     }
 
-    pub fn check(&self, user_id: Uuid, device_id: &str) -> Result<(), ()> {
+    pub fn check(&self, user_id: Uuid, device_id: &str) -> Result<(), RateLimitExceeded> {
         self.inner
             .check_key(&(user_id, device_id.to_string()))
-            .map_err(|_| ())
+            .map_err(|_| RateLimitExceeded)
     }
 }
 
@@ -68,8 +71,8 @@ impl PresenceRateLimiter {
         })
     }
 
-    pub fn check(&self, user_id: Uuid) -> Result<(), ()> {
-        self.inner.check_key(&user_id).map_err(|_| ())
+    pub fn check(&self, user_id: Uuid) -> Result<(), RateLimitExceeded> {
+        self.inner.check_key(&user_id).map_err(|_| RateLimitExceeded)
     }
 }
 
@@ -86,8 +89,8 @@ impl AnalyticsRateLimiter {
         })
     }
 
-    pub fn check(&self, user_id: Uuid) -> Result<(), ()> {
-        self.inner.check_key(&user_id).map_err(|_| ())
+    pub fn check(&self, user_id: Uuid) -> Result<(), RateLimitExceeded> {
+        self.inner.check_key(&user_id).map_err(|_| RateLimitExceeded)
     }
 }
 
@@ -106,8 +109,8 @@ impl AuthRateLimiter {
     /// `Ok(())` if this IP is still within quota, `Err(())` if it should be rejected
     /// with a 429. The wait-time detail from `governor`'s `NotUntil` isn't surfaced —
     /// callers don't need it to return a flat "try again later".
-    pub fn check(&self, ip: IpAddr) -> Result<(), ()> {
-        self.inner.check_key(&ip).map_err(|_| ())
+    pub fn check(&self, ip: IpAddr) -> Result<(), RateLimitExceeded> {
+        self.inner.check_key(&ip).map_err(|_| RateLimitExceeded)
     }
 }
 

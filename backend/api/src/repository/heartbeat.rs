@@ -524,6 +524,17 @@ impl HeartbeatRepository {
 
     /// Insert heartbeats ลงใน ClickHouse
     pub async fn insert_batch(&self, rows: Vec<HeartbeatRow>) -> Result<()> {
+        self.insert_batch_with_token(rows, None).await
+    }
+
+    /// Kafka replay path can provide a stable ClickHouse insert-deduplication
+    /// token.  The setting is deliberately opt-in so direct mode retains its
+    /// historical query shape and materialized-view behaviour.
+    pub async fn insert_batch_with_token(
+        &self,
+        rows: Vec<HeartbeatRow>,
+        token: Option<&str>,
+    ) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -532,6 +543,11 @@ impl HeartbeatRepository {
         let mut insert = ch_client
             .insert("wakaclock.heartbeats")
             .map_err(|e| anyhow::anyhow!("ClickHouse insert Error: {e}"))?;
+        if let Some(token) = token {
+            insert = insert
+                .with_option("async_insert", "0")
+                .with_option("insert_deduplication_token", token);
+        }
 
         for row in rows {
             insert
@@ -549,6 +565,14 @@ impl HeartbeatRepository {
     }
 
     pub async fn insert_activity_intervals(&self, rows: Vec<ActivityIntervalRow>) -> Result<()> {
+        self.insert_activity_intervals_with_token(rows, None).await
+    }
+
+    pub async fn insert_activity_intervals_with_token(
+        &self,
+        rows: Vec<ActivityIntervalRow>,
+        token: Option<&str>,
+    ) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -559,6 +583,11 @@ impl HeartbeatRepository {
             .map_err(|error| {
                 anyhow::anyhow!("ClickHouse activity interval insert error: {error}")
             })?;
+        if let Some(token) = token {
+            insert = insert
+                .with_option("async_insert", "0")
+                .with_option("insert_deduplication_token", token);
+        }
         for row in rows {
             insert.write(&row).await.map_err(|error| {
                 anyhow::anyhow!("ClickHouse activity interval row error: {error}")
@@ -636,11 +665,20 @@ impl HeartbeatRepository {
             .client
             .get_client()
             .query(
-                "SELECT heartbeat_id, session_id, max(revision) AS revision
-                 FROM wakaclock.heartbeats
-                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                "SELECT heartbeat_id, session_id, max(revision) AS revision FROM (
+                     SELECT heartbeat_id, session_id, revision
+                     FROM wakaclock.heartbeats
+                     WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                     UNION ALL
+                     SELECT heartbeat_id, CAST(NULL AS Nullable(String)) AS session_id,
+                            toUInt32(4294967295) AS revision
+                     FROM wakaclock.heartbeat_deletions
+                     WHERE user_id = ? AND heartbeat_id IN ?
+                 )
                  GROUP BY heartbeat_id, session_id",
             )
+            .bind(user_id)
+            .bind(candidates)
             .bind(user_id)
             .bind(candidates)
             .fetch_all::<RevisionRow>()
@@ -652,6 +690,33 @@ impl HeartbeatRepository {
             .into_iter()
             .map(|row| ((row.heartbeat_id, row.session_id), row.revision))
             .collect())
+    }
+
+    pub async fn has_heartbeat_revision(
+        &self,
+        user_id: uuid::Uuid,
+        heartbeat_id: &str,
+        revision: u32,
+    ) -> Result<bool> {
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct FoundRow {
+            found: u8,
+        }
+        let row = self
+            .client
+            .get_client()
+            .query(
+                "SELECT toUInt8(count() > 0) AS found
+                 FROM wakaclock.heartbeats_canonical
+                 WHERE user_id = ? AND heartbeat_id = ? AND revision = ?",
+            )
+            .bind(user_id)
+            .bind(heartbeat_id)
+            .bind(revision)
+            .fetch_one::<FoundRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse heartbeat verification query failed: {error}"))?;
+        Ok(row.found != 0)
     }
 
     /// Return the highest revision already stored for each AI event ID.

@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
+use crate::config::brokers::IngestMode;
 use crate::config::Config;
 use crate::infrastructure::database::ClickHouseClient;
+use crate::infrastructure::contracts::EventBus;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::rate_limiter::{
@@ -41,6 +43,7 @@ use crate::services::external_durations::ExternalDurationService;
 use crate::services::follow_up::FollowUpService;
 use crate::services::goals::GoalService;
 use crate::services::heartbeat::HeartbeatService;
+use crate::services::heartbeat_ingest::HeartbeatIngestService;
 use crate::services::insights::InsightsService;
 use crate::services::integrations::IntegrationService;
 use crate::services::jobs::JobService;
@@ -71,6 +74,10 @@ pub struct AppState {
     /// Transactional product store. Optional only during the ClickHouse-only compatibility
     /// rollout; production deployments should set POSTGRES_URL.
     pub postgres: Option<Arc<PostgresClient>>,
+    /// Optional Kafka event bus.  Direct mode leaves this unset; verify/kafka
+    /// modes are rejected at config validation until the feature is compiled
+    /// and the producer is reachable.
+    pub event_bus: Option<Arc<dyn EventBus>>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     pub presence_rate_limiter: Arc<PresenceRateLimiter>,
@@ -101,6 +108,7 @@ pub struct AppState {
     pub all_time_service: Arc<AllTimeService>,
     pub user_service: Arc<UserService>,
     pub heartbeat_service: Arc<HeartbeatService>,
+    pub heartbeat_ingest_service: Arc<HeartbeatIngestService>,
     pub goal_service: Arc<GoalService>,
     pub duration_service: Arc<DurationService>,
     pub enterprise_service: Arc<EnterpriseService>,
@@ -152,6 +160,11 @@ pub enum HealthStatus {
 impl AppState {
     pub async fn health(&self) -> AppHealth {
         let clickhouse_ok = self.clickhouse.health_check().await.is_ok();
+        // Kafka-cohort API replicas do not need ClickHouse on the request path;
+        // the fact-sink owns that dependency. Keep the health endpoint live during
+        // a ClickHouse outage so the broker-accepting path is not restarted.
+        let clickhouse_required = self.config.brokers.ingest.mode
+            != crate::config::brokers::IngestMode::Kafka;
         let postgres_ok = match &self.postgres {
             Some(postgres) => postgres.health_check().await.is_ok(),
             None => true,
@@ -160,7 +173,7 @@ impl AppState {
             Some(redis) => redis.health_check().await.is_ok(),
             None => true,
         };
-        let status = if clickhouse_ok && postgres_ok && redis_ok {
+        let status = if (clickhouse_ok || !clickhouse_required) && postgres_ok && redis_ok {
             HealthStatus::Ok
         } else {
             HealthStatus::Error
@@ -198,6 +211,40 @@ pub async fn create_app_state() -> Result<AppState> {
                 "POSTGRES_URL is not configured; running in ClickHouse-only compatibility mode"
             );
             None
+        }
+    };
+
+    let event_bus: Option<Arc<dyn EventBus>> = {
+        // Keep the direct compatibility path independent from Kafka even when a
+        // developer leaves broker settings in the environment for an integration
+        // test. Verify/Kafka modes are the only modes that need a live producer at
+        // API startup.
+        if config.brokers.ingest.mode == IngestMode::Direct {
+            None
+        } else {
+            #[cfg(feature = "kafka")]
+            {
+                config
+                    .brokers
+                    .event_bus
+                    .as_ref()
+                    .map(|event_config| {
+                        crate::infrastructure::kafka::KafkaEventBus::connect(
+                            event_config,
+                            "wakaclock-api",
+                        )
+                        .map(|bus| Arc::new(bus) as Arc<dyn EventBus>)
+                    })
+                    .transpose()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?
+            }
+            #[cfg(not(feature = "kafka"))]
+            {
+                if config.brokers.event_bus.is_some() {
+                    tracing::warn!("Kafka event bus configured but server was built without the kafka feature");
+                }
+                None
+            }
         }
     };
 
@@ -281,6 +328,10 @@ pub async fn create_app_state() -> Result<AppState> {
         clickhouse.clone(),
         postgres.clone(),
         credential_secret_box,
+    )
+    .with_ingest_state(
+        config.brokers.ingest_state_source,
+        postgres.clone(),
     ));
     let duration_service = Arc::new(DurationService::new(clickhouse.clone(), bridge_config));
     let external_duration_service =
@@ -328,13 +379,23 @@ pub async fn create_app_state() -> Result<AppState> {
         heartbeat_repo.clone(),
         project_identity_service.clone(),
     ));
+    let heartbeat_ingest_service = Arc::new(HeartbeatIngestService::new(
+        config.clone(),
+        heartbeat_service.clone(),
+        event_bus.clone(),
+    ));
     let goal_service = Arc::new(GoalService::with_clickhouse(
         postgres.clone(),
         clickhouse.clone(),
         bridge_config,
     ));
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone(), bridge_config));
-    let project_rule_service = Arc::new(ProjectRuleService::new(project_rule_repo.clone()));
+    let project_rule_service = Arc::new(
+        ProjectRuleService::new(project_rule_repo.clone()).with_ingest_state(
+            config.brokers.ingest_state_source,
+            postgres.clone(),
+        ),
+    );
     let reprocess_service = Arc::new(ReprocessService::new(
         postgres.clone(),
         clickhouse.clone(),
@@ -360,6 +421,7 @@ pub async fn create_app_state() -> Result<AppState> {
         config,
         clickhouse,
         postgres,
+        event_bus,
         auth_rate_limiter,
         analytics_rate_limiter,
         presence_rate_limiter,
@@ -388,6 +450,7 @@ pub async fn create_app_state() -> Result<AppState> {
         all_time_service,
         user_service,
         heartbeat_service,
+        heartbeat_ingest_service,
         goal_service,
         duration_service,
         enterprise_service,

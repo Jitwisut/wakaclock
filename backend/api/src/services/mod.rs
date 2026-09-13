@@ -17,6 +17,7 @@ pub mod external_durations;
 pub mod follow_up;
 pub mod goals;
 pub mod heartbeat;
+pub mod heartbeat_ingest;
 pub mod insights;
 pub mod integrations;
 pub mod jobs;

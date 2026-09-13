@@ -7,6 +7,8 @@ FRONTEND_DIR ?= frontend/app
 CARGO ?= cargo
 NPM ?= npm
 COMPOSE ?= docker compose
+K0_COMPOSE_PROJECT ?= wakaclock-k0
+K0_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
 
 .DEFAULT_GOAL := help
 
@@ -25,16 +27,36 @@ env-setup: ## Create local environment files from checked-in examples
 	@test -f $(BACKEND_DIR)/.env || printf '%s\n' 'SERVER_HOST=127.0.0.1' 'SERVER_PORT=8000' 'CLICKHOUSE_URL=http://localhost:8123' > $(BACKEND_DIR)/.env
 
 .PHONY: infra-up
-infra-up: ## Start PostgreSQL, ClickHouse, Redis and RabbitMQ
-	@$(COMPOSE) -f docker-compose.yml up -d postgres clickhouse redis rabbitmq
+infra-up: ## Start PostgreSQL, ClickHouse, Redis, RabbitMQ and Redpanda
+	@$(COMPOSE) -f docker-compose.yml up -d postgres clickhouse redis rabbitmq redpanda
 
 .PHONY: infra-kafka-up
-infra-kafka-up: ## Start Redpanda (opt-in until the Kafka adapter lands)
-	@$(COMPOSE) -f docker-compose.yml --profile kafka up -d redpanda
+infra-kafka-up: ## Start Redpanda (compatibility alias for infra-up)
+	@$(COMPOSE) -f docker-compose.yml up -d redpanda
+
+.PHONY: kafka-topics
+kafka-topics: ## Create local Kafka topics with K0/K1 retention defaults
+	@$(COMPOSE) -f docker-compose.yml exec -T redpanda rpk topic create wakaclock.heartbeat.v1 --partitions 3 --replicas 1 --config retention.ms=604800000 || true
+	@$(COMPOSE) -f docker-compose.yml exec -T redpanda rpk topic create wakaclock.ai-usage.v1 --partitions 3 --replicas 1 --config retention.ms=2592000000 || true
+	@$(COMPOSE) -f docker-compose.yml exec -T redpanda rpk topic create wakaclock.ai-edit.v1 --partitions 3 --replicas 1 --config retention.ms=2592000000 || true
+	@$(COMPOSE) -f docker-compose.yml exec -T redpanda rpk topic create wakaclock.identity-change.v1 --partitions 3 --replicas 1 --config retention.ms=2592000000 || true
+	@$(COMPOSE) -f docker-compose.yml exec -T redpanda rpk topic create wakaclock.ingest.dlq.v1 --partitions 3 --replicas 1 --config retention.ms=2592000000 || true
+
+.PHONY: kafka-spike-infra-up
+kafka-spike-infra-up: ## Start isolated Redpanda + ClickHouse 24.10 for the K0 spike
+	@$(COMPOSE) -p $(K0_COMPOSE_PROJECT) -f $(K0_COMPOSE_FILE) up -d
+
+.PHONY: kafka-spike-infra-down
+kafka-spike-infra-down: ## Stop K0 and remove only its test volumes
+	@$(COMPOSE) -p $(K0_COMPOSE_PROJECT) -f $(K0_COMPOSE_FILE) down -v --remove-orphans
+
+.PHONY: kafka-spike
+kafka-spike: ## Run the feature-gated K0 harness against the isolated stack
+	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock_k0}" $(CARGO) run --bin kafka-spike --features kafka-spike
 
 .PHONY: infra-down
-infra-down: ## Stop local infrastructure containers, including opt-in Redpanda
-	@$(COMPOSE) -f docker-compose.yml --profile kafka down
+infra-down: ## Stop local infrastructure containers, including Redpanda
+	@$(COMPOSE) -f docker-compose.yml down
 
 .PHONY: dev
 dev: ## Start infrastructure and both local applications
@@ -49,6 +71,14 @@ dev-backend: ## Run the Rust API in development mode
 dev-job-worker: ## Run the RabbitMQ outbox relay and job worker
 	@cd $(BACKEND_DIR) && $(CARGO) run --bin job-worker
 
+.PHONY: dev-heartbeat-enrichment
+dev-heartbeat-enrichment: ## Run the Kafka heartbeat fact-sink consumer
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin heartbeat-enrichment --features kafka
+
+.PHONY: dev-heartbeat-verifier
+dev-heartbeat-verifier: ## Run the K3 verify-mode Kafka shadow consumer
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin heartbeat-verifier --features kafka
+
 .PHONY: dev-frontend
 dev-frontend: ## Run the Next.js application in development mode
 	@cd $(FRONTEND_DIR) && $(NPM) run dev
@@ -58,7 +88,7 @@ build: build-backend build-frontend ## Build backend and frontend for production
 
 .PHONY: build-backend
 build-backend: ## Build all Rust workspace binaries
-	@cd $(BACKEND_DIR) && $(CARGO) build --workspace --release
+	@cd $(BACKEND_DIR) && $(CARGO) build -p wakaclock-server --bins --release --features kafka
 
 .PHONY: build-frontend
 build-frontend: ## Build the Next.js application

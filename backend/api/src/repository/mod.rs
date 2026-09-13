@@ -6,6 +6,7 @@ pub mod coworking_session;
 pub mod external_durations;
 pub mod follow_up;
 pub mod heartbeat;
+pub mod ingest_state;
 pub mod org;
 pub mod presence;
 pub mod project_analytics;

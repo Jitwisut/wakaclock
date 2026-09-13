@@ -33,6 +33,16 @@ pub enum AppError {
     #[error("HTTP status {status}: {message}")]
     HttpStatus { status: u16, message: String },
 
+    /// Same bounded HTTP error with an optional server-provided retry delay.
+    /// Keeping this separate preserves source compatibility for callers that
+    /// construct/match the original `HttpStatus` variant.
+    #[error("HTTP status {status}: {message}")]
+    HttpStatusRetry {
+        status: u16,
+        message: String,
+        retry_after_seconds: Option<u64>,
+    },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

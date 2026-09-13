@@ -1096,7 +1096,7 @@ impl BrokerStore {
         let json = serde_json::to_string(&event)?;
         let hash = event.payload_hash()?;
         let now = Utc::now().timestamp();
-        let storage_event_id = storage_event_id_for_ingest(&self.conn, &event)?;
+        let storage_event_id = storage_event_id_for_ingest(&self.conn, event)?;
         let inserted = self.conn.execute(
             "INSERT INTO broker_events
              (event_id, schema_version, normalized_payload_json, payload_hash, status, received_at, updated_at)

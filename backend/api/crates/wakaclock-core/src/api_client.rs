@@ -119,6 +119,34 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
     }
 }
 
+/// Whether a failed HTTP delivery should remain in the durable retry queue.
+///
+/// A transport error has no response and is safe to retry.  For an HTTP
+/// response, only the statuses explicitly called out by the ingest contract
+/// are retryable; validation/auth/permission/conflict errors are permanent and
+/// retrying them would create an infinite local queue.
+pub fn is_retryable_delivery_error(error: &AppError) -> bool {
+    match error {
+        AppError::Http(_) => true,
+        AppError::HttpStatus { status, .. } => {
+            *status == 408 || *status == 429 || (500..=599).contains(status)
+        }
+        AppError::HttpStatusRetry { status, .. } => {
+            *status == 408 || *status == 429 || (500..=599).contains(status)
+        }
+        _ => false,
+    }
+}
+
+fn retry_after_seconds(error: &AppError) -> Option<u64> {
+    match error {
+        AppError::HttpStatusRetry {
+            retry_after_seconds, ..
+        } => *retry_after_seconds,
+        _ => None,
+    }
+}
+
 impl DeliveryFailure {
     pub fn kind(&self) -> DeliveryFailureKind {
         classify_delivery_failure(&self.message)
@@ -329,18 +357,25 @@ impl ApiClient {
             }
             Err(error) => {
                 self.record_delivery_failure(&error.to_string());
-                for payload in &payloads {
-                    queue.push(payload)?;
+                if is_retryable_delivery_error(&error) {
+                    for payload in &payloads {
+                        queue.push(payload)?;
+                    }
+                    // Do not persist a failed payload in the local last-heartbeat
+                    // cache: the stable ID must remain retryable, and the durable
+                    // queue already provides the deduplication needed while the
+                    // server is offline.
+                    Ok(SendReport::queued(
+                        0,
+                        deduped,
+                        payloads.len(),
+                        Some(error.to_string()),
+                    ))
+                } else {
+                    // Permanent validation/auth/conflict responses are reported to
+                    // the caller and deliberately never enter the retry queue.
+                    Err(error)
                 }
-                // Do not persist a failed payload in the local last-heartbeat cache:
-                // the stable ID must remain retryable, and the durable queue already
-                // provides the deduplication needed while the server is offline.
-                Ok(SendReport::queued(
-                    0,
-                    deduped,
-                    payloads.len(),
-                    Some(error.to_string()),
-                ))
             }
         }
     }
@@ -527,7 +562,14 @@ impl ApiClient {
                 }
                 Err(error) => {
                     stopped_because = Some(error.to_string());
-                    queue.mark_retry(id)?;
+                    if is_retryable_delivery_error(&error) {
+                        queue.mark_retry_after(id, retry_after_seconds(&error))?;
+                    } else {
+                        // A queued row that now receives a permanent 4xx is
+                        // quarantined by removal.  Keeping it would cause every
+                        // future flush to repeat the same rejected request.
+                        queue.remove(id)?;
+                    }
                     break;
                 }
             }
@@ -564,6 +606,11 @@ impl ApiClient {
             return Ok(response);
         }
 
+        let retry_after_seconds = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
         let body = response.text().await.unwrap_or_default();
         let body = body.trim();
         let message = if body.is_empty() {
@@ -574,9 +621,10 @@ impl ApiClient {
         } else {
             body.chars().take(2_048).collect::<String>()
         };
-        Err(AppError::HttpStatus {
+        Err(AppError::HttpStatusRetry {
             status: status.as_u16(),
             message,
+            retry_after_seconds,
         })
     }
 
@@ -1075,6 +1123,36 @@ mod tests {
             classify_delivery_failure("Authentication failed: API key was rejected by the server"),
             DeliveryFailureKind::Auth401
         );
+    }
+
+    #[test]
+    fn only_transport_and_retryable_statuses_are_queued() {
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 408,
+            message: "timeout".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 429,
+            message: "rate limited".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 503,
+            message: "unavailable".to_string(),
+        }));
+        assert!(!is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 400,
+            message: "invalid heartbeat".to_string(),
+        }));
+        assert!(!is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 401,
+            message: "unauthorized".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatusRetry {
+            status: 503,
+            message: "down".to_string(),
+            retry_after_seconds: Some(5),
+        }));
+        assert!(!is_retryable_delivery_error(&AppError::Conflict("duplicate".to_string())));
     }
 
     #[test]
