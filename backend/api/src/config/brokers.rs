@@ -247,12 +247,13 @@ impl BrokerConfig {
             None | Some("clickhouse") => IngestStateSource::ClickHouse,
             Some("dual") => IngestStateSource::Dual,
             Some("postgres") => IngestStateSource::Postgres,
-            Some(_) => anyhow::bail!(
-                "{INGEST_STATE_SOURCE} must be clickhouse, dual or postgres"
-            ),
+            Some(_) => anyhow::bail!("{INGEST_STATE_SOURCE} must be clickhouse, dual or postgres"),
         };
         if ingest_state_source != IngestStateSource::ClickHouse && !postgres_configured {
-            anyhow::bail!("{INGEST_STATE_SOURCE}={} requires POSTGRES_URL", ingest_state_source.as_str());
+            anyhow::bail!(
+                "{INGEST_STATE_SOURCE}={} requires POSTGRES_URL",
+                ingest_state_source.as_str()
+            );
         }
         if mode != IngestMode::Direct && event_bus.is_none() {
             anyhow::bail!("{INGEST_MODE}={} requires {EVENT_BUS_URL}", mode.as_str());
@@ -262,9 +263,7 @@ impl BrokerConfig {
             anyhow::bail!("{INGEST_MODE}=kafka requires {INGEST_KAFKA_COHORT}");
         }
         if mode == IngestMode::Kafka && ingest_state_source != IngestStateSource::Postgres {
-            anyhow::bail!(
-                "{INGEST_MODE}=kafka requires {INGEST_STATE_SOURCE}=postgres"
-            );
+            anyhow::bail!("{INGEST_MODE}=kafka requires {INGEST_STATE_SOURCE}=postgres");
         }
 
         let reprocess_mode = match get(REPROCESS_MODE).as_deref() {
@@ -308,7 +307,10 @@ impl BrokerConfig {
         }
         #[cfg(feature = "kafka")]
         if self.ingest.mode != IngestMode::Direct && self.event_bus.is_none() {
-            anyhow::bail!("{INGEST_MODE}={} requires {EVENT_BUS_URL}", self.ingest.mode.as_str());
+            anyhow::bail!(
+                "{INGEST_MODE}={} requires {EVENT_BUS_URL}",
+                self.ingest.mode.as_str()
+            );
         }
         Ok(())
     }
@@ -644,7 +646,10 @@ mod tests {
         vars.push((INGEST_MODE, "kafka"));
         assert!(parse(&vars, false).is_err());
         vars.push((INGEST_KAFKA_COHORT, "percent:5"));
-        assert!(parse(&vars, false).is_err(), "Kafka mode requires PostgreSQL state");
+        assert!(
+            parse(&vars, false).is_err(),
+            "Kafka mode requires PostgreSQL state"
+        );
         vars.push((INGEST_STATE_SOURCE, "postgres"));
         assert_eq!(
             parse(&vars, true).unwrap().ingest.kafka_cohort,
@@ -673,6 +678,9 @@ mod tests {
         let mut vars = managed_kafka();
         vars.push((INGEST_MODE, "verify"));
         let verify = parse(&vars, false).unwrap();
+        #[cfg(feature = "kafka")]
+        assert!(verify.ensure_supported().is_ok());
+        #[cfg(not(feature = "kafka"))]
         assert!(verify.ensure_supported().is_err());
 
         let job = parse(

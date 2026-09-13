@@ -5,6 +5,7 @@
 //! makes the authorization decision available while ClickHouse is unavailable.
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -34,8 +35,7 @@ impl IngestStateRepository {
         };
         let now = chrono::Utc::now();
         Ok(state.status == "active"
-            || (state.status == "trialing"
-                && state.trial_ends_at.is_some_and(|value| value > now)))
+            || (state.status == "trialing" && state.trial_ends_at.is_some_and(|value| value > now)))
     }
 
     pub async fn has_user(&self, user_id: Uuid) -> Result<bool> {
@@ -65,6 +65,33 @@ impl IngestStateRepository {
         }))
     }
 
+    /// Load the complete access mirror for the K0.5 backfill/parity command.
+    /// Callers receive only product-state fields; credentials and account labels
+    /// never cross this repository boundary.
+    pub async fn list_access(&self) -> Result<HashMap<Uuid, AccessState>> {
+        let rows = self
+            .postgres
+            .query(
+                "SELECT user_id, status, trial_ends_at, subscription_period_end
+                 FROM user_ingest_access",
+                &[],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get(0),
+                    AccessState {
+                        status: row.get(1),
+                        trial_ends_at: row.get(2),
+                        subscription_period_end: row.get(3),
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub async fn upsert_access(
         &self,
         user_id: Uuid,
@@ -89,17 +116,38 @@ impl IngestStateRepository {
     }
 
     pub async fn list_rules(&self, user_id: Uuid) -> Result<Vec<ProjectRuleRow>> {
-        let rows = self
-            .postgres
-            .query(
-                "SELECT user_id, rule_id, pattern, project_name, priority, is_active,
-                        EXTRACT(EPOCH FROM created_at)::bigint,
-                        EXTRACT(EPOCH FROM updated_at)::bigint
-                 FROM project_rules WHERE user_id=$1
-                 ORDER BY priority DESC, updated_at DESC, rule_id",
-                &[&user_id],
-            )
-            .await?;
+        self.list_rules_query(
+            "SELECT user_id, rule_id, pattern, project_name, priority, is_active,
+                    EXTRACT(EPOCH FROM created_at)::bigint,
+                    EXTRACT(EPOCH FROM updated_at)::bigint
+             FROM project_rules WHERE user_id=$1
+             ORDER BY priority DESC, updated_at DESC, rule_id",
+            &[&user_id],
+        )
+        .await
+    }
+
+    /// Load every mirrored rule for the K0.5 backfill/parity command.  Ordering is
+    /// deterministic so a mismatch report can be compared across runs without
+    /// exposing rule patterns or project names.
+    pub async fn list_rules_all(&self) -> Result<Vec<ProjectRuleRow>> {
+        self.list_rules_query(
+            "SELECT user_id, rule_id, pattern, project_name, priority, is_active,
+                    EXTRACT(EPOCH FROM created_at)::bigint,
+                    EXTRACT(EPOCH FROM updated_at)::bigint
+             FROM project_rules
+             ORDER BY user_id, priority DESC, updated_at DESC, rule_id",
+            &[],
+        )
+        .await
+    }
+
+    async fn list_rules_query(
+        &self,
+        sql: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<Vec<ProjectRuleRow>> {
+        let rows = self.postgres.query(sql, params).await?;
         Ok(rows
             .into_iter()
             .map(|row| ProjectRuleRow {
@@ -116,10 +164,12 @@ impl IngestStateRepository {
     }
 
     pub async fn upsert_rule(&self, row: &ProjectRuleRow) -> Result<()> {
-        let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(row.created_at), 0)
-            .unwrap_or_else(chrono::Utc::now);
-        let updated_at = chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(row.updated_at), 0)
-            .unwrap_or_else(chrono::Utc::now);
+        let created_at =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(row.created_at), 0)
+                .unwrap_or_else(chrono::Utc::now);
+        let updated_at =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(row.updated_at), 0)
+                .unwrap_or_else(chrono::Utc::now);
         self.postgres
             .execute(
                 "INSERT INTO project_rules

@@ -166,19 +166,21 @@ mod enabled {
                             &token,
                         ).await {
                             Ok(_) => committed.push(delivery),
-                            Err(error) if is_permanent(&error.to_string()) => {
-                                if publish_dlq(&bus, &delivery, permanent_category(&error.to_string())).await {
-                                    committed.push(delivery);
+                            Err(error) => {
+                                let error_text = error.to_string();
+                                if let Some(category) = permanent_category(&error_text) {
+                                    if publish_dlq(&bus, &delivery, category).await {
+                                        committed.push(delivery);
+                                    } else {
+                                        tracing::warn!(%error, "heartbeat DLQ publish failed; leaving offset uncommitted");
+                                        backoff_after_batch = true;
+                                        break;
+                                    }
                                 } else {
-                                    tracing::warn!(%error, "heartbeat DLQ publish failed; leaving offset uncommitted");
+                                    tracing::warn!(%error, "heartbeat sink transient failure; leaving offset uncommitted");
                                     backoff_after_batch = true;
                                     break;
                                 }
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, "heartbeat sink transient failure; leaving offset uncommitted");
-                                backoff_after_batch = true;
-                                break;
                             }
                         }
                     }
@@ -230,22 +232,49 @@ mod enabled {
             .is_ok()
     }
 
-    fn is_permanent(error: &str) -> bool {
+    fn permanent_category(error: &str) -> Option<&'static str> {
         let lower = error.to_ascii_lowercase();
-        lower.contains("revision")
-            || lower.contains("no stored base")
-            || lower.contains("invalid")
-            || lower.contains("privacy")
+        if lower.contains("no stored base")
+            || lower.contains("must follow stored revision")
+            || lower.contains("correction revision")
+        {
+            Some("revision_error")
+        } else if lower.contains("privacy") {
+            Some("privacy_contract_violation")
+        } else if lower.contains("heartbeat_id must")
+            || lower.contains("activity segment is invalid")
+            || lower.contains("revision exceeds")
+            || lower.contains("clipboard metrics require")
+            || lower.contains("unsupported clipboard_tracking_version")
+        {
+            Some("invalid_heartbeat")
+        } else {
+            None
+        }
     }
 
-    fn permanent_category(error: &str) -> &'static str {
-        let lower = error.to_ascii_lowercase();
-        if lower.contains("revision") || lower.contains("base") {
-            "revision_error"
-        } else if lower.contains("privacy") {
-            "privacy_contract_violation"
-        } else {
-            "invalid_heartbeat"
+    #[cfg(test)]
+    mod tests {
+        use super::permanent_category;
+
+        #[test]
+        fn only_known_permanent_categories_are_dead_lettered() {
+            assert_eq!(
+                permanent_category("correction revision 1 has no stored base"),
+                Some("revision_error")
+            );
+            assert_eq!(
+                permanent_category("heartbeat_id must be 1..=256 bytes"),
+                Some("invalid_heartbeat")
+            );
+            assert_eq!(
+                permanent_category("privacy contract violation"),
+                Some("privacy_contract_violation")
+            );
+            assert_eq!(
+                permanent_category("ClickHouse broker connection timed out"),
+                None
+            );
         }
     }
 }
