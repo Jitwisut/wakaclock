@@ -127,7 +127,7 @@ fn validate_appearance(value: &Value) -> Result<(), PresenceApiError> {
             return Err(PresenceApiError::bad_request("invalid sprite style"));
         }
     }
-    if value.as_object().map_or(true, |o| o.len() != 7) {
+    if value.as_object().is_none_or(|o| o.len() != 7) {
         return Err(PresenceApiError::bad_request("unexpected sprite fields"));
     }
     Ok(())
@@ -332,22 +332,6 @@ pub async fn media_token(
     )))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn reject_invalid_input() {
-        assert!(text_field("  ", 80).is_err());
-        assert!(text_field(&"x".repeat(2001), 2000).is_err());
-        assert!(validate_appearance(&json!({})).is_err());
-        assert!(serde_json::from_value::<Command>(json!({"kind":"unknown"})).is_err());
-    }
-    #[test]
-    fn accept_sprite() {
-        assert!(validate_appearance(&json!({"accentColor":"#abcdef","hairColor":"#123456","shirtColor":"#112233","skinColor":"#aabbcc","accessory":"none","hairStyle":"bob","outfit":"hoodie"})).is_ok());
-    }
-}
-
 /// Enforce pod boundaries on the media server, including clients that stop cooperating.
 /// ListRooms also discovers media surviving an API restart; no process-local lease is needed.
 pub async fn reconcile_media(state: &AppState) -> anyhow::Result<()> {
@@ -506,4 +490,30 @@ pub async fn personal_summary(
     Ok(Json(envelope(
         json!({"sessions":rows.len(),"durationSeconds":seconds,"activeDays":days.len()}),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_invalid_input() {
+        assert!(text_field("  ", 80).is_err());
+        assert!(text_field(&"x".repeat(2001), 2000).is_err());
+        assert!(validate_appearance(&json!({})).is_err());
+        assert!(serde_json::from_value::<Command>(json!({"kind":"unknown"})).is_err());
+    }
+
+    #[test]
+    fn accept_sprite() {
+        assert!(validate_appearance(&json!({
+            "accentColor":"#abcdef",
+            "hairColor":"#123456",
+            "shirtColor":"#112233",
+            "skinColor":"#aabbcc",
+            "accessory":"none",
+            "hairStyle":"bob",
+            "outfit":"hoodie"
+        })).is_ok());
+    }
 }

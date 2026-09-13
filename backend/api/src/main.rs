@@ -46,6 +46,26 @@ async fn health_endpoint(state: Arc<AppState>) -> (axum::http::StatusCode, axum:
     (status, axum::Json(health))
 }
 
+async fn migrate_clickhouse(state: &AppState) -> Result<()> {
+    info!("Running ClickHouse migrations...");
+    state.heartbeat_repo.migrate().await?;
+    state.project_merge_repo.migrate().await?;
+    state.project_rule_repo.migrate().await?;
+    state.analytics_repo.migrate().await?;
+    state.external_duration_repo.migrate().await?;
+    state.follow_up_repo.migrate().await?;
+    state.account_analytics_repo.migrate().await?;
+    state.ai_usage_repo.migrate().await?;
+    // Must follow heartbeat_repo and analytics_repo: this one widens `heartbeats` and
+    // `project_daily` with a nullable project_id, so both have to exist first.
+    state.project_identity_repo.migrate().await?;
+    state.reprocess_service.migrate().await?;
+    state.org_repo.migrate().await?;
+    state.team_repo.migrate().await?;
+    state.coworking_session_repo.migrate().await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load environment variables early
@@ -65,61 +85,17 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    // 2. Perform Database Migrations
-    info!("Running ClickHouse migrations...");
-    if let Err(e) = app_state.heartbeat_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.project_merge_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.project_rule_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.analytics_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.external_duration_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.follow_up_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.account_analytics_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.ai_usage_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    // Must follow heartbeat_repo and analytics_repo: this one widens `heartbeats` and
-    // `project_daily` with a nullable project_id, so both have to exist first.
-    if let Err(e) = app_state.project_identity_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.reprocess_service.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.org_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.team_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.coworking_session_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
+    // 2. Perform Database Migrations. Kafka mode must be able to start while
+    // ClickHouse is unavailable: the API only needs PostgreSQL state and broker
+    // acknowledgement on that path. The fact-sink owns ClickHouse migrations.
+    let kafka_mode = app_state.config.brokers.ingest.mode
+        == wakaclock_server::config::brokers::IngestMode::Kafka;
+    if !kafka_mode {
+        migrate_clickhouse(&app_state)
+            .await
+            .context("ClickHouse migration failed")?;
+    } else {
+        info!("Skipping ClickHouse migrations while Kafka ingest mode is active");
     }
     if let Some(postgres) = &app_state.postgres {
         info!("Running PostgreSQL Phase 10 foundation migration...");
@@ -130,7 +106,9 @@ async fn main() -> Result<()> {
     }
     info!("Migrations completed successfully.");
 
-    app_state.user_service.migrate_legacy_credentials().await?;
+    if !kafka_mode {
+        app_state.user_service.migrate_legacy_credentials().await?;
+    }
     drop(migration_guard);
 
     // Background jobs are handled by the dedicated `job-worker` process. The API only

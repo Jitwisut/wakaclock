@@ -230,6 +230,25 @@ impl Queue {
     /// Delay a failed row with bounded exponential backoff. The payload remains in
     /// SQLite and is eligible again after 60s, 120s, 240s ... up to one hour.
     pub fn mark_retry(&self, id: i64) -> Result<(), AppError> {
+        self.mark_retry_after(id, None)
+    }
+
+    /// Retry with a server-provided `Retry-After` delay when present, otherwise
+    /// use the bounded local exponential schedule.
+    pub fn mark_retry_after(&self, id: i64, retry_after_seconds: Option<u64>) -> Result<(), AppError> {
+        if let Some(delay) = retry_after_seconds {
+            let delay = delay.min(86_400);
+            self.conn
+                .execute(
+                    "UPDATE heartbeat_queue
+                     SET retry_count = retry_count + 1,
+                         next_retry_at = strftime('%s', 'now') + ?1
+                     WHERE id = ?2",
+                    params![delay as i64, id],
+                )
+                .map_err(AppError::Queue)?;
+            return Ok(());
+        }
         self.conn
             .execute(
                 "UPDATE heartbeat_queue

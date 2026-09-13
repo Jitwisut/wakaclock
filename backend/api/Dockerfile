@@ -3,7 +3,7 @@ FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates cmake \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
@@ -11,7 +11,10 @@ COPY crates ./crates
 COPY src ./src
 COPY migrations ./migrations
 
-RUN cargo build --workspace --release
+# Build the server and workers with Kafka support.  Direct ingest remains the
+# runtime default; enabling the feature only makes the explicitly configured
+# verify/kafka modes available.
+RUN cargo build -p wakaclock-server --bins --release --features kafka
 
 FROM debian:bookworm-slim AS runtime
 
@@ -22,6 +25,7 @@ RUN apt-get update \
 
 COPY --from=builder /app/target/release/wakaclock-server /usr/local/bin/wakaclock-server
 COPY --from=builder /app/target/release/heartbeat-enrichment /usr/local/bin/heartbeat-enrichment
+COPY --from=builder /app/target/release/heartbeat-verifier /usr/local/bin/heartbeat-verifier
 COPY --from=builder /app/target/release/outbox-relay /usr/local/bin/outbox-relay
 COPY --from=builder /app/target/release/integration-sync /usr/local/bin/integration-sync
 COPY --from=builder /app/target/release/export-worker /usr/local/bin/export-worker
@@ -35,6 +39,7 @@ ENV SERVER_HOST=0.0.0.0 \
 
 EXPOSE 8080
 EXPOSE 8081
+EXPOSE 8082
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --fail http://127.0.0.1:8080/health || exit 1

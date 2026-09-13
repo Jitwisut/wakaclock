@@ -1,7 +1,9 @@
 # แผนนำ Kafka และ RabbitMQ มาใช้งานจริง
 
 **สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้; R3/R4 เสร็จใน branch
-`codex/integrate-all-current-work` เมื่อ 2026-09-13 ส่วน Kafka track ยังรอ K0
+`codex/integrate-all-current-work` เมื่อ 2026-09-13 และ Kafka K-P0/K0.5/K1/K2
+มี implementation แบบ feature-gated แล้ว แต่ยังไม่เปิด production จนกว่า isolated
+Redpanda/ClickHouse spike และ parity gate จะผ่าน
 
 | ขั้น | สถานะ |
 |---|---|
@@ -11,7 +13,13 @@
 | R2 Job foundation + relay | ✅ 2026-09-11 — migration `007_async_jobs.sql`, transactional outbox, `services/jobs.rs`, `GET /api/v2/jobs/:job_id`; partial relay, idempotency, sweeper และ broker e2e ผ่าน |
 | R3 Worker runtime | ✅ 2026-09-13 — `job-worker` binary, migration `008_job_worker_state.sql`, lease fencing, retry/DLQ outbox, graceful drain และ health endpoints; PG regressions 8/8 และ RabbitMQ adapter 8/8 ผ่าน |
 | R4 `analytics.reprocess` | ✅ 2026-09-13 — `ATOAXIS_REPROCESS_MODE=job` ตอบ `202` + `Location`/`job_id`, idempotency บังคับ, worker processor ทำงานจริง; sync mode คงเป็นค่าเริ่มต้น |
-| Kafka track (K0–K4) และ R5 งานชนิดอื่น | ยังไม่เริ่ม — ต้องผ่าน spike/adapter และ e2e gate ก่อนเปิดใช้งาน |
+| K-P0 heartbeat ID/retry gate | ✅ validation 1..=256 bytes, server IDs ใน verify/kafka และ permanent 4xx ไม่เข้า retry queue |
+| K0 spike harness + D6 record | 🟡 harness/decision template พร้อม; ต้องรัน isolated Redpanda + ClickHouse จริงก่อนตัดสิน production |
+| K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring |
+| K1 Kafka producer | ✅ `rdkafka` feature, idempotent producer, typed heartbeat envelope, topic/infra config |
+| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, DLQ and health endpoints; e2e/rebalance gate pending |
+| K3 verify + K4 cohort rollout | 🟡 orchestration/config/API response implemented; rollout/load/parity gate pending |
+| R5 งานชนิดอื่น | ยังไม่เริ่ม |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -272,7 +280,7 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 
 ### Kafka track
 
-**K0 — Spike ความถูกต้อง (gate, ไม่มีโค้ด production)**
+**K0 — Spike ความถูกต้อง (gate; harness แยก feature จาก production)**
 รันกับ ClickHouse + Redpanda จริง แล้วบันทึกผลเป็น `docs/kafka-ingest-dedup-spike-<date>.md`:
 1. ส่ง record ของ heartbeat ที่มี id ซ้ำ (consumer ประมวลผล partition ตามลำดับ + ตรวจ revision) →
    ไม่นับซ้ำใน `heartbeats`, `activity_intervals`, `mv_inc_*`
@@ -283,7 +291,9 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 
 6. นับแถวที่ `heartbeat_id` ยาวเกิน `MAX_SOURCE_ID_LEN` (256) ที่มีอยู่แล้ว — ดูข้อจำกัดด้านล่าง
 
-ผลลัพธ์: ตัดสิน D6 เป็นลายลักษณ์อักษร ก่อนเริ่ม K2
+ผลลัพธ์: `backend/api/src/bin/kafka-spike.rs` และ
+`docs/kafka-ingest-dedup-spike-2026-09-13.md` เตรียม isolated topic/decision record
+แล้ว แต่ต้องรันกับ endpoint จริงเพื่อเติม counts และตัดสิน D6 ก่อนเปิด cohort production
 
 **เงื่อนไขก่อน K1/K2:** `StableEventId::heartbeat` ปฏิเสธ id ที่ยาวเกิน 256 bytes แต่
 `Heartbeat::validate` ใน `wakaclock-core` ตรวจแค่ว่า id ไม่ว่าง ในโหมด Kafka heartbeat ที่ id ยาวจะ

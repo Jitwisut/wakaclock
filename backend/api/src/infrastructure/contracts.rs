@@ -8,19 +8,22 @@
 //! recorded in `plans/plan-kafka-rabbitmq-adoption.md` (D1–D4).
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use uuid::Uuid;
+use wakaclock_core::heartbeat::Heartbeat;
 
 /// Wire version of [`EventEnvelope`]. A field may be added without a bump; a
 /// field may not be removed or reinterpreted without one.
 pub const EVENT_ENVELOPE_VERSION: u16 = 1;
+pub const HEARTBEAT_EVENT_TYPE: &str = "heartbeat.recorded";
+pub const MAX_EVENT_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// Upper bound for a source record ID folded into a [`StableEventId`]. Matches
 /// the per-ID bound `DELETE /api/v1/heartbeats.bulk` already enforces, so any ID
 /// a user can delete is also one that can travel through the event bus.
-pub const MAX_SOURCE_ID_LEN: usize = 256;
+pub const MAX_SOURCE_ID_LEN: usize = wakaclock_core::heartbeat::MAX_HEARTBEAT_ID_LEN;
 
 /// Kafka topics. The record key is always the envelope's `tenant_id`, which keeps
 /// one account's events ordered while spreading accounts across partitions.
@@ -286,6 +289,179 @@ impl EventEnvelope {
     }
 }
 
+/// Versioned heartbeat payload carried by Kafka.
+///
+/// The domain heartbeat remains the source of truth for normalization and
+/// validation, but this wrapper gives the broker contract a typed boundary and
+/// prevents the authenticated `user_id` from ever being serialized into a
+/// client-controlled event.  Deserialization adds the tenant ID back only after
+/// the envelope has authenticated it.
+#[derive(Debug, Clone)]
+pub struct HeartbeatEventV1 {
+    pub heartbeat: Heartbeat,
+}
+
+impl HeartbeatEventV1 {
+    pub fn from_heartbeat(mut heartbeat: Heartbeat) -> InfrastructureResult<Self> {
+        heartbeat
+            .validate()
+            .map_err(InfrastructureError::InvalidEnvelope)?;
+        let heartbeat_id = heartbeat.heartbeat_id.as_deref().ok_or_else(|| {
+            InfrastructureError::InvalidEnvelope("heartbeat_id is required for Kafka".to_string())
+        })?;
+        StableEventId::heartbeat(heartbeat_id, heartbeat.revision)?;
+        heartbeat.entity = safe_event_entity(&heartbeat.entity);
+        heartbeat.project_id = None;
+        Ok(Self { heartbeat })
+    }
+
+    pub fn event_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        source: Option<&str>,
+    ) -> InfrastructureResult<EventEnvelope> {
+        let heartbeat_id = self.heartbeat.heartbeat_id.as_deref().ok_or_else(|| {
+            InfrastructureError::InvalidEnvelope("heartbeat_id is required".to_string())
+        })?;
+        let event_id = StableEventId::heartbeat(heartbeat_id, self.heartbeat.revision)?;
+        let occurred_at = timestamp_to_utc(self.heartbeat.time);
+        let payload = serde_json::to_value(self).map_err(InfrastructureError::Serialization)?;
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(InfrastructureError::Serialization)?;
+        if payload_bytes.len() > MAX_EVENT_PAYLOAD_BYTES {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "heartbeat event payload exceeds the broker limit".to_string(),
+            ));
+        }
+        let mut envelope = EventEnvelope::new(
+            event_id,
+            HEARTBEAT_EVENT_TYPE,
+            tenant_id,
+            occurred_at,
+            payload,
+        );
+        envelope.source = normalize_event_source(source);
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn into_heartbeat(self, tenant_id: Uuid) -> Heartbeat {
+        let mut heartbeat = self.heartbeat;
+        heartbeat.user_id = tenant_id;
+        heartbeat
+    }
+
+    /// Validate the relationship between the typed payload and its authenticated
+    /// envelope.  The event ID is the replay identity, so accepting a payload whose
+    /// heartbeat ID/revision does not match it would make an otherwise stable retry
+    /// look like a different logical record to the consumer.
+    pub fn validate_envelope(&self, envelope: &EventEnvelope) -> InfrastructureResult<()> {
+        envelope.validate()?;
+        if envelope.event_type != HEARTBEAT_EVENT_TYPE || envelope.tenant_id == Uuid::nil() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "heartbeat event envelope has an invalid type or tenant".to_string(),
+            ));
+        }
+        let heartbeat_id = self.heartbeat.heartbeat_id.as_deref().ok_or_else(|| {
+            InfrastructureError::InvalidEnvelope("heartbeat_id is required".to_string())
+        })?;
+        let expected = StableEventId::heartbeat(heartbeat_id, self.heartbeat.revision)?;
+        if envelope.event_id != expected || envelope.idempotency_key != expected.as_str() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "heartbeat event identity does not match its payload".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for HeartbeatEventV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::to_value(&self.heartbeat).map_err(serde::ser::Error::custom)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::ser::Error::custom("heartbeat is not an object"))?;
+        object.remove("user_id");
+        object.remove("project_id");
+        // The consumer recomputes the project identity from PostgreSQL rules;
+        // retaining only the resolved display name preserves legacy parity while
+        // preventing a client-supplied project ID from crossing the boundary.
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for HeartbeatEventV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("heartbeat event payload must be an object"))?;
+        if object.contains_key("user_id") {
+            return Err(serde::de::Error::custom(
+                "heartbeat event payload must not contain user_id",
+            ));
+        }
+        object.insert(
+            "user_id".to_string(),
+            serde_json::Value::String(Uuid::nil().to_string()),
+        );
+        let heartbeat: Heartbeat =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        heartbeat.validate().map_err(serde::de::Error::custom)?;
+        if heartbeat.heartbeat_id.is_none() {
+            return Err(serde::de::Error::custom("heartbeat_id is required"));
+        }
+        Ok(Self { heartbeat })
+    }
+}
+
+fn timestamp_to_utc(time: f64) -> DateTime<Utc> {
+    if time.is_finite() && time >= 0.0 {
+        let seconds = time.trunc() as i64;
+        let nanos = ((time.fract().max(0.0)) * 1_000_000_000.0).round() as u32;
+        if let Some(value) = Utc.timestamp_opt(seconds, nanos.min(999_999_999)).single() {
+            return value;
+        }
+    }
+    Utc::now()
+}
+
+/// Keep only a normalized producer label in the envelope.  All other client
+/// strings are intentionally represented as absent rather than copied into the
+/// broker metadata.
+pub fn normalize_event_source(source: Option<&str>) -> Option<String> {
+    let normalized = source?.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "cli" | "vscode" | "agent_hook" | "mcp" | "transcript" | "api"
+    )
+    .then_some(normalized)
+}
+
+pub fn safe_event_entity(entity: &str) -> String {
+    let normalized = entity.replace('\\', "/");
+    let absolute = normalized.starts_with('/')
+        || normalized.starts_with("~/")
+        || normalized.starts_with("file://")
+        || normalized.as_bytes().get(1) == Some(&b':');
+    let traversal = normalized.split('/').any(|part| part == "..");
+    if absolute || traversal {
+        normalized
+            .rsplit('/')
+            .find(|part| !part.is_empty() && *part != "." && *part != "..")
+            .unwrap_or("unknown")
+            .to_string()
+    } else {
+        normalized
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JobEnvelope {
     pub job_id: Uuid,
@@ -539,6 +715,42 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_event_is_typed_and_privacy_safe() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::now_v7(),
+            "/Users/alice/project/src/main.rs".to_string(),
+            wakaclock_core::heartbeat::EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        heartbeat.heartbeat_id = Some("event-1".to_string());
+        let event = HeartbeatEventV1::from_heartbeat(heartbeat).unwrap();
+        let envelope = event.event_for_tenant(Uuid::now_v7(), Some("cli")).unwrap();
+        assert_eq!(envelope.event_type, HEARTBEAT_EVENT_TYPE);
+        assert_eq!(envelope.source.as_deref(), Some("cli"));
+        assert_eq!(envelope.payload["entity"], "main.rs");
+        assert!(envelope.payload.get("user_id").is_none());
+        let decoded: HeartbeatEventV1 = serde_json::from_value(envelope.payload.clone()).unwrap();
+        assert_eq!(decoded.heartbeat.entity, "main.rs");
+        decoded.validate_envelope(&envelope).unwrap();
+    }
+
+    #[test]
+    fn unsafe_event_entities_are_reduced_to_basename_and_sources_allowlisted() {
+        assert_eq!(safe_event_entity("src\\main.rs"), "src/main.rs");
+        assert_eq!(safe_event_entity("../../secrets.env"), "secrets.env");
+        assert_eq!(safe_event_entity("/Users/alice/project/main.rs"), "main.rs");
+        assert_eq!(
+            safe_event_entity("file:///Users/alice/project/main.rs"),
+            "main.rs"
+        );
+        assert_eq!(
+            normalize_event_source(Some("VSCode")),
+            Some("vscode".to_string())
+        );
+        assert_eq!(normalize_event_source(Some("window-title")), None);
+    }
+
+    #[test]
     fn same_heartbeat_revision_always_yields_the_same_event() {
         let tenant_id = Uuid::now_v7();
         let first = EventEnvelope::new(
@@ -558,6 +770,21 @@ mod tests {
         assert_eq!(first.event_id, replay.event_id);
         assert_eq!(first.idempotency_key, replay.idempotency_key);
         assert_eq!(first.event_id.as_str(), "hb:operation-1:0");
+    }
+
+    #[test]
+    fn heartbeat_event_rejects_an_envelope_identity_mismatch() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::now_v7(),
+            "src/main.rs".to_string(),
+            wakaclock_core::heartbeat::EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        heartbeat.heartbeat_id = Some("event-1".to_string());
+        let event = HeartbeatEventV1::from_heartbeat(heartbeat).unwrap();
+        let mut envelope = event.event_for_tenant(Uuid::now_v7(), Some("cli")).unwrap();
+        envelope.event_id = StableEventId::heartbeat("event-2", 0).unwrap();
+        assert!(event.validate_envelope(&envelope).is_err());
     }
 
     #[test]

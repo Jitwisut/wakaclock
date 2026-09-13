@@ -56,12 +56,11 @@ services:
       retries: 5
 
   # Kafka-compatible event bus for telemetry ingestion. The PostgreSQL outbox
-  # relays background jobs to RabbitMQ, not to this bus. Opt-in (`make infra-kafka-up`)
-  # until the Kafka adapter lands (plan K1); remove the profile then.
+  # relays background jobs to RabbitMQ, not to this bus. It is part of the local
+  # baseline so the producer/consumer can be exercised without a second command.
   redpanda:
     image: redpandadata/redpanda:v24.1.8
     container_name: wakaclock_redpanda
-    profiles: ["kafka"]
     restart: unless-stopped
     command:
       - redpanda

@@ -289,7 +289,7 @@ fn error_code(error: &AppError) -> &'static str {
     match error {
         AppError::Validation(_) => "validation",
         AppError::Auth(_) => "auth",
-        AppError::Http(_) | AppError::HttpStatus { .. } => "delivery",
+        AppError::Http(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => "delivery",
         AppError::Queue(_) => "queue",
         AppError::Io(_) => "io",
         AppError::Serde(_) => "serialization",

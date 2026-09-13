@@ -20,6 +20,7 @@ const EVENT_BUS_SASL_PASSWORD: &str = "ATOAXIS_EVENT_BUS_SASL_PASSWORD";
 const JOB_QUEUE_URL: &str = "ATOAXIS_JOB_QUEUE_URL";
 const INGEST_MODE: &str = "ATOAXIS_INGEST_MODE";
 const INGEST_KAFKA_COHORT: &str = "ATOAXIS_INGEST_KAFKA_COHORT";
+const INGEST_STATE_SOURCE: &str = "ATOAXIS_INGEST_STATE_SOURCE";
 const REPROCESS_MODE: &str = "ATOAXIS_REPROCESS_MODE";
 
 #[derive(Debug, Clone, Default)]
@@ -27,7 +28,29 @@ pub struct BrokerConfig {
     pub event_bus: Option<EventBusConfig>,
     pub job_queue: Option<JobQueueConfig>,
     pub ingest: IngestConfig,
+    /// Source of request-path access and project-rule state.  ClickHouse is
+    /// retained as the compatibility default; Kafka mode is deliberately
+    /// rejected unless PostgreSQL is authoritative.
+    pub ingest_state_source: IngestStateSource,
     pub reprocess_mode: ReprocessMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IngestStateSource {
+    #[default]
+    ClickHouse,
+    Dual,
+    Postgres,
+}
+
+impl IngestStateSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClickHouse => "clickhouse",
+            Self::Dual => "dual",
+            Self::Postgres => "postgres",
+        }
+    }
 }
 
 /// Kafka connection. Managed providers (Redpanda Cloud, Confluent, Aiven, MSK) all
@@ -220,12 +243,28 @@ impl BrokerConfig {
             .map(|value| parse_cohort(&value))
             .transpose()
             .with_context(|| format!("{INGEST_KAFKA_COHORT} is invalid"))?;
+        let ingest_state_source = match get(INGEST_STATE_SOURCE).as_deref() {
+            None | Some("clickhouse") => IngestStateSource::ClickHouse,
+            Some("dual") => IngestStateSource::Dual,
+            Some("postgres") => IngestStateSource::Postgres,
+            Some(_) => anyhow::bail!(
+                "{INGEST_STATE_SOURCE} must be clickhouse, dual or postgres"
+            ),
+        };
+        if ingest_state_source != IngestStateSource::ClickHouse && !postgres_configured {
+            anyhow::bail!("{INGEST_STATE_SOURCE}={} requires POSTGRES_URL", ingest_state_source.as_str());
+        }
         if mode != IngestMode::Direct && event_bus.is_none() {
             anyhow::bail!("{INGEST_MODE}={} requires {EVENT_BUS_URL}", mode.as_str());
         }
         // No implicit "everyone": the first Kafka deploy must name who moves.
         if mode == IngestMode::Kafka && kafka_cohort.is_none() {
             anyhow::bail!("{INGEST_MODE}=kafka requires {INGEST_KAFKA_COHORT}");
+        }
+        if mode == IngestMode::Kafka && ingest_state_source != IngestStateSource::Postgres {
+            anyhow::bail!(
+                "{INGEST_MODE}=kafka requires {INGEST_STATE_SOURCE}=postgres"
+            );
         }
 
         let reprocess_mode = match get(REPROCESS_MODE).as_deref() {
@@ -250,19 +289,26 @@ impl BrokerConfig {
             event_bus,
             job_queue,
             ingest: IngestConfig { mode, kafka_cohort },
+            ingest_state_source,
             reprocess_mode,
         })
     }
 
-    /// Refuses modes whose implementation has not landed yet. Kafka remains gated until
-    /// K1-K4; the RabbitMQ job worker is now available for R3/R4.
+    /// Refuses broker modes when the binary was built without the Kafka adapter.
+    /// The default feature set therefore remains a safe direct-only deployment,
+    /// while production images can opt into the fully wired K1–K4 path.
     fn ensure_supported(&self) -> Result<()> {
+        #[cfg(not(feature = "kafka"))]
         if self.ingest.mode != IngestMode::Direct {
             anyhow::bail!(
                 "{INGEST_MODE}={} is not available in this build: the Kafka producer and \
                  consumer have not landed (plan K1-K4). Unset it or use `direct`.",
                 self.ingest.mode.as_str()
             );
+        }
+        #[cfg(feature = "kafka")]
+        if self.ingest.mode != IngestMode::Direct && self.event_bus.is_none() {
+            anyhow::bail!("{INGEST_MODE}={} requires {EVENT_BUS_URL}", self.ingest.mode.as_str());
         }
         Ok(())
     }
@@ -276,11 +322,19 @@ impl BrokerConfig {
             "broker modes"
         );
         if let Some(event_bus) = &self.event_bus {
+            #[cfg(feature = "kafka")]
+            tracing::info!(
+                bootstrap_servers = ?event_bus.bootstrap_servers,
+                tls = event_bus.tls,
+                sasl = event_bus.sasl.as_ref().map(|sasl| sasl.mechanism.as_str()),
+                "{EVENT_BUS_URL} is configured for Kafka"
+            );
+            #[cfg(not(feature = "kafka"))]
             tracing::warn!(
                 bootstrap_servers = ?event_bus.bootstrap_servers,
                 tls = event_bus.tls,
                 sasl = event_bus.sasl.as_ref().map(|sasl| sasl.mechanism.as_str()),
-                "{EVENT_BUS_URL} is set but no Kafka adapter exists in this build; it is unused"
+                "{EVENT_BUS_URL} is set but the Kafka adapter is not compiled; it is unused"
             );
         }
         if let Some(job_queue) = &self.job_queue {
@@ -590,10 +644,21 @@ mod tests {
         vars.push((INGEST_MODE, "kafka"));
         assert!(parse(&vars, false).is_err());
         vars.push((INGEST_KAFKA_COHORT, "percent:5"));
+        assert!(parse(&vars, false).is_err(), "Kafka mode requires PostgreSQL state");
+        vars.push((INGEST_STATE_SOURCE, "postgres"));
         assert_eq!(
-            parse(&vars, false).unwrap().ingest.kafka_cohort,
+            parse(&vars, true).unwrap().ingest.kafka_cohort,
             Some(IngestCohort::Percent(5))
         );
+    }
+
+    #[test]
+    fn kafka_mode_requires_postgres_state_source() {
+        let mut vars = managed_kafka();
+        vars.extend([(INGEST_MODE, "kafka"), (INGEST_KAFKA_COHORT, "all")]);
+        assert!(parse(&vars, true).is_err());
+        vars.push((INGEST_STATE_SOURCE, "postgres"));
+        assert!(parse(&vars, true).is_ok());
     }
 
     #[test]

@@ -12,6 +12,12 @@ use crate::ai::{
 
 pub const CLIPBOARD_TRACKING_VERSION: u8 = 1;
 pub const MAX_CLIPBOARD_COUNTER: u32 = 10_000_000;
+/// Maximum UTF-8 byte length accepted for a stable heartbeat identity.
+///
+/// This is deliberately a byte bound (rather than a character bound): the
+/// identifier is persisted and used as a ClickHouse key, so the transport
+/// contract must be identical for ASCII and multi-byte IDs.
+pub const MAX_HEARTBEAT_ID_LEN: usize = 256;
 
 /// Canonical owner of a heartbeat or file mutation.
 ///
@@ -790,7 +796,7 @@ impl Heartbeat {
             && self
                 .ai_agent
                 .as_deref()
-                .is_some_and(|agent| is_known_agent_id(agent));
+                .is_some_and(is_known_agent_id);
 
         // A provider/model without a client name is not an identity either. Keep
         // those fields coupled to the named agent so a malformed legacy payload
@@ -936,6 +942,11 @@ impl Heartbeat {
         if let Some(heartbeat_id) = self.heartbeat_id.as_deref() {
             if heartbeat_id.trim().is_empty() {
                 return Err("heartbeat_id cannot be empty".to_string());
+            }
+            if heartbeat_id.len() > MAX_HEARTBEAT_ID_LEN {
+                return Err(format!(
+                    "heartbeat_id must be 1..={MAX_HEARTBEAT_ID_LEN} bytes"
+                ));
             }
         }
         if self.revision > MAX_HEARTBEAT_REVISION {
@@ -1285,6 +1296,24 @@ mod tests {
             EntityType::File,
             "wakaclock-cli/1.0".to_string(),
         );
+        assert!(hb.validate().is_err());
+    }
+
+    #[test]
+    fn heartbeat_id_is_bounded_by_utf8_bytes() {
+        let mut hb = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-cli/1.0".to_string(),
+        );
+        hb.heartbeat_id = Some("x".repeat(MAX_HEARTBEAT_ID_LEN));
+        assert!(hb.validate().is_ok());
+        hb.heartbeat_id = Some("x".repeat(MAX_HEARTBEAT_ID_LEN + 1));
+        assert!(hb.validate().is_err());
+
+        // A multi-byte UTF-8 identity is measured by its encoded byte length.
+        hb.heartbeat_id = Some("é".repeat(MAX_HEARTBEAT_ID_LEN / 2 + 1));
         assert!(hb.validate().is_err());
     }
 

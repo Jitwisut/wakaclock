@@ -376,21 +376,18 @@ pub async fn repair(
     // The audit tables are created with the heartbeat schema migration.  Keep the
     // insert best-effort so an older ClickHouse installation can still receive the
     // correction revision; the revision itself is the authoritative record.
-    if let Err(error) = write_audit(
-        &state,
-        repair_run_id,
-        user_id,
+    let audit_summary = AuditSummary {
         requested,
         matched,
-        corrected_rows_len(&audit_rows),
+        corrected: corrected_rows_len(&audit_rows),
         unchanged,
-        requested.saturating_sub(matched),
+        unresolved: requested.saturating_sub(matched),
         conflicts,
         preserved_heartbeats,
         preserved_lines_added,
         preserved_lines_deleted,
-        &audit_rows,
-    )
+    };
+    if let Err(error) = write_audit(&state, repair_run_id, user_id, &audit_summary, &audit_rows)
     .await
     {
         tracing::warn!(%error, %repair_run_id, "AI identity repair audit write failed");
@@ -432,15 +429,7 @@ async fn write_audit(
     state: &AppState,
     repair_run_id: Uuid,
     user_id: Uuid,
-    requested: u64,
-    matched: u64,
-    corrected: u64,
-    unchanged: u64,
-    unresolved: u64,
-    conflicts: u64,
-    preserved_heartbeats: u64,
-    preserved_lines_added: u64,
-    preserved_lines_deleted: u64,
+    summary: &AuditSummary,
     rows: &[(String, String, String, u32)],
 ) -> anyhow::Result<()> {
     let client = state.clickhouse.get_client();
@@ -454,15 +443,15 @@ async fn write_audit(
         )
         .bind(repair_run_id)
         .bind(user_id)
-        .bind(requested as u32)
-        .bind(matched as u32)
-        .bind(corrected as u32)
-        .bind(unchanged as u32)
-        .bind(unresolved as u32)
-        .bind(conflicts as u32)
-        .bind(preserved_heartbeats as u32)
-        .bind(preserved_lines_added)
-        .bind(preserved_lines_deleted)
+        .bind(summary.requested as u32)
+        .bind(summary.matched as u32)
+        .bind(summary.corrected as u32)
+        .bind(summary.unchanged as u32)
+        .bind(summary.unresolved as u32)
+        .bind(summary.conflicts as u32)
+        .bind(summary.preserved_heartbeats as u32)
+        .bind(summary.preserved_lines_added)
+        .bind(summary.preserved_lines_deleted)
         .execute()
         .await?;
     for (event_id, before, after, revision) in rows {
@@ -483,6 +472,18 @@ async fn write_audit(
             .await?;
     }
     Ok(())
+}
+
+struct AuditSummary {
+    requested: u64,
+    matched: u64,
+    corrected: u64,
+    unchanged: u64,
+    unresolved: u64,
+    conflicts: u64,
+    preserved_heartbeats: u64,
+    preserved_lines_added: u64,
+    preserved_lines_deleted: u64,
 }
 
 async fn require_active_access(

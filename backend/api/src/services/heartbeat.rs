@@ -37,6 +37,49 @@ impl HeartbeatService {
         machine: String,
         heartbeats: Vec<Heartbeat>,
     ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(user_id, machine, heartbeats, false, None)
+            .await
+    }
+
+    /// Kafka consumers use the strict projection policy: if raw data is durable
+    /// but an interval insert fails, the source offset must remain uncommitted so
+    /// replay can fill the missing projection.  Direct HTTP keeps its historical
+    /// best-effort interval behaviour through [`Self::process_heartbeats`].
+    pub async fn process_heartbeats_strict(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+    ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(user_id, machine, heartbeats, true, None)
+            .await
+    }
+
+    pub async fn process_heartbeats_strict_with_token(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+        token: &str,
+    ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(
+            user_id,
+            machine,
+            heartbeats,
+            true,
+            Some(token),
+        )
+        .await
+    }
+
+    async fn process_heartbeats_with_policy_and_token(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+        strict_projection: bool,
+        insert_token: Option<&str>,
+    ) -> Result<usize> {
         let mut heartbeats = heartbeats;
         // Sanitize before deriving event/fingerprint identities so retries use the
         // same canonical payload whether they came from a new or legacy client.
@@ -88,37 +131,48 @@ impl HeartbeatService {
             .existing_change_revisions(user_id, &candidate_change_ids)
             .await?;
         for (batch_index, mut hb) in heartbeats.into_iter().enumerate() {
+            let mut duplicate_raw = false;
             if let Some(heartbeat_id) = hb.heartbeat_id.as_ref() {
                 let heartbeat_key = (heartbeat_id.clone(), hb.session_id.clone());
                 let stored_revision = existing_heartbeat_revisions.get(&heartbeat_key).copied();
+                let tombstoned = existing_heartbeat_revisions
+                    .get(&(heartbeat_id.clone(), None))
+                    .is_some_and(|revision| *revision == u32::MAX);
                 let batch_revision = batch_heartbeat_revisions.get(&heartbeat_key).copied();
+                if stored_revision == Some(u32::MAX) || tombstoned {
+                    // A deletion tombstone dominates every delayed/replayed
+                    // heartbeat.  Do not recreate its interval projection.
+                    continue;
+                }
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
-                    continue;
+                    duplicate_raw = true;
                 }
-                if hb.revision > 0
-                    && stored_revision.is_none()
-                    && hb.ai_event_id.is_none()
-                    && hb.ai_change_id.is_none()
-                {
-                    anyhow::bail!(
-                        "correction revision {} has no stored base for heartbeat_id {}",
-                        hb.revision,
-                        heartbeat_id
-                    );
-                }
-                if let Some(revision) = stored_revision {
-                    if hb.revision != revision.saturating_add(1) {
+                if !duplicate_raw {
+                    if hb.revision > 0
+                        && stored_revision.is_none()
+                        && hb.ai_event_id.is_none()
+                        && hb.ai_change_id.is_none()
+                    {
                         anyhow::bail!(
-                            "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                            "correction revision {} has no stored base for heartbeat_id {}",
                             hb.revision,
-                            revision,
                             heartbeat_id
                         );
                     }
+                    if let Some(revision) = stored_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                                hb.revision,
+                                revision,
+                                heartbeat_id
+                            );
+                        }
+                    }
+                    batch_heartbeat_revisions.insert(heartbeat_key, hb.revision);
                 }
-                batch_heartbeat_revisions.insert(heartbeat_key, hb.revision);
             }
             // Bulk retries can contain the same AI event twice. De-duplicate within
             // the request before it reaches ClickHouse; the opaque id is supplied by
@@ -130,26 +184,28 @@ impl HeartbeatService {
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
-                    continue;
+                    duplicate_raw = true;
                 }
-                if hb.revision > 0 && stored_revision.is_none() {
-                    anyhow::bail!(
-                        "correction revision {} has no stored base for ai_event_id {}",
-                        hb.revision,
-                        event_id
-                    );
-                }
-                if let Some(revision) = stored_revision {
-                    if hb.revision != revision.saturating_add(1) {
+                if !duplicate_raw {
+                    if hb.revision > 0 && stored_revision.is_none() {
                         anyhow::bail!(
-                            "correction revision {} must follow stored revision {} for ai_event_id {}",
+                            "correction revision {} has no stored base for ai_event_id {}",
                             hb.revision,
-                            revision,
                             event_id
                         );
                     }
+                    if let Some(revision) = stored_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow stored revision {} for ai_event_id {}",
+                                hb.revision,
+                                revision,
+                                event_id
+                            );
+                        }
+                    }
+                    batch_event_revisions.insert(event_key, hb.revision);
                 }
-                batch_event_revisions.insert(event_key, hb.revision);
             }
 
             if hb.ai_event_id.is_none() {
@@ -160,26 +216,28 @@ impl HeartbeatService {
                     if stored_revision.is_some_and(|revision| hb.revision <= revision)
                         || batch_revision.is_some_and(|revision| hb.revision <= revision)
                     {
-                        continue;
+                        duplicate_raw = true;
                     }
-                    if hb.revision > 0 && stored_revision.is_none() {
-                        anyhow::bail!(
-                            "correction revision {} has no stored base for ai_change_id {}",
-                            hb.revision,
-                            change_id
-                        );
-                    }
-                    if let Some(revision) = stored_revision {
-                        if hb.revision != revision.saturating_add(1) {
+                    if !duplicate_raw {
+                        if hb.revision > 0 && stored_revision.is_none() {
                             anyhow::bail!(
-                                "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                "correction revision {} has no stored base for ai_change_id {}",
                                 hb.revision,
-                                revision,
                                 change_id
                             );
                         }
+                        if let Some(revision) = stored_revision {
+                            if hb.revision != revision.saturating_add(1) {
+                                anyhow::bail!(
+                                    "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                    hb.revision,
+                                    revision,
+                                    change_id
+                                );
+                            }
+                        }
+                        batch_change_revisions.insert(change_key, hb.revision);
                     }
-                    batch_change_revisions.insert(change_key, hb.revision);
                 }
             }
 
@@ -377,7 +435,9 @@ impl HeartbeatService {
                 session_id: hb.session_id,
             };
 
-            rows.push(row);
+            if !duplicate_raw {
+                rows.push(row);
+            }
         }
 
         if clamped_claims > 0 {
@@ -391,10 +451,18 @@ impl HeartbeatService {
         }
 
         let inserted = rows.len();
-        self.repo.insert_batch(rows).await?;
+        self.repo.insert_batch_with_token(rows, insert_token).await?;
         // Raw heartbeat JSON remains the audit source. A projection failure must not
         // make the client retry an already accepted heartbeat; readers can rebuild it.
-        if let Err(error) = self.repo.insert_activity_intervals(interval_rows).await {
+        let interval_token = insert_token.map(|token| format!("{token}:interval"));
+        if let Err(error) = self
+            .repo
+            .insert_activity_intervals_with_token(interval_rows, interval_token.as_deref())
+            .await
+        {
+            if strict_projection {
+                return Err(error);
+            }
             tracing::warn!("activity interval projection failed: {error}");
         }
         Ok(inserted)
