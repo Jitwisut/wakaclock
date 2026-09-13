@@ -15,9 +15,9 @@ Redpanda/ClickHouse spike และ parity gate จะผ่าน
 | R4 `analytics.reprocess` | ✅ 2026-09-13 — `ATOAXIS_REPROCESS_MODE=job` ตอบ `202` + `Location`/`job_id`, idempotency บังคับ, worker processor ทำงานจริง; sync mode คงเป็นค่าเริ่มต้น |
 | K-P0 heartbeat ID/retry gate | ✅ validation 1..=256 bytes, server IDs ใน verify/kafka และ permanent 4xx ไม่เข้า retry queue |
 | K0 spike harness + D6 record | 🟡 harness/decision template พร้อม; ต้องรัน isolated Redpanda + ClickHouse จริงก่อนตัดสิน production |
-| K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring |
+| K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring, value-level access/rule parity report |
 | K1 Kafka producer | ✅ `rdkafka` feature, idempotent producer, typed heartbeat envelope, topic/infra config |
-| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, DLQ and health endpoints; e2e/rebalance gate pending |
+| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, sanitized DLQ classification and health endpoints; e2e/rebalance gate pending |
 | K3 verify + K4 cohort rollout | 🟡 orchestration/config/API response implemented; rollout/load/parity gate pending |
 | R5 งานชนิดอื่น | ยังไม่เริ่ม |
 
