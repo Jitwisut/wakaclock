@@ -4,14 +4,14 @@ use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall,
 };
-use crate::ai::{
-    is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
-    REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
-};
 use crate::ai::patch::{
     count_content_lines, count_structured_patch_lines, LineDelta, StructuredPatchHunk,
 };
 use crate::ai::path::resolve_within_workspace;
+use crate::ai::{
+    is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
+    REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
+};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
@@ -174,8 +174,8 @@ impl AiActivityParser for ClaudeCodeParser {
 
         let replay_prefix = cursor.context.is_none() && cursor.byte_offset > 0;
         let read_offset = if replay_prefix { 0 } else { cursor.byte_offset };
-        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(
-            |error| match error.kind() {
+        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(|error| {
+            match error.kind() {
                 std::io::ErrorKind::NotFound => AiParseError::NotFound {
                     path: cursor.source_path.clone(),
                 },
@@ -183,8 +183,8 @@ impl AiActivityParser for ClaudeCodeParser {
                     path: cursor.source_path.clone(),
                 },
                 _ => AiParseError::Io(error),
-            },
-        )?;
+            }
+        })?;
 
         let mut events = Vec::new();
         let mut warnings = Vec::new();
@@ -282,12 +282,9 @@ impl AiActivityParser for ClaudeCodeParser {
                                     .as_deref()
                                     .filter(|value| is_internal_marker(value))
                                     .map(|_| REASON_INTERNAL_MARKER.to_string());
-                                let reported_message_id = message
-                                    .id
-                                    .as_deref()
-                                    .and_then(|value| {
-                                        crate::ai::normalize_identity_reference(Some(value))
-                                    });
+                                let reported_message_id = message.id.as_deref().and_then(|value| {
+                                    crate::ai::normalize_identity_reference(Some(value))
+                                });
                                 let mut identity_conflict = false;
                                 let (
                                     model,
@@ -296,63 +293,64 @@ impl AiActivityParser for ClaudeCodeParser {
                                     offset_before,
                                     occurred_at,
                                     identity_reason,
-                                ) =
-                                    if let Some(previous) = pending_tool_uses.get(&id) {
-                                        identity_conflict = previous.identity_conflict;
-                                        if previous.model.as_deref() != reported_model.as_deref()
-                                            && previous.model.is_some()
-                                            && reported_model.is_some()
-                                        {
-                                            identity_conflict = true;
-                                        }
-                                        if previous.identity_message_id.as_deref()
-                                            != reported_message_id.as_deref()
-                                            && previous.identity_message_id.is_some()
-                                            && reported_message_id.is_some()
-                                        {
-                                            // A tool id appearing under two assistant
-                                            // messages is ambiguous even when both
-                                            // messages report the same model. Do not
-                                            // silently keep whichever record was read
-                                            // last as the authoring evidence.
-                                            identity_conflict = true;
-                                        }
+                                ) = if let Some(previous) = pending_tool_uses.get(&id) {
+                                    identity_conflict = previous.identity_conflict;
+                                    if previous.model.as_deref() != reported_model.as_deref()
+                                        && previous.model.is_some()
+                                        && reported_model.is_some()
+                                    {
+                                        identity_conflict = true;
+                                    }
+                                    if previous.identity_message_id.as_deref()
+                                        != reported_message_id.as_deref()
+                                        && previous.identity_message_id.is_some()
+                                        && reported_message_id.is_some()
+                                    {
+                                        // A tool id appearing under two assistant
+                                        // messages is ambiguous even when both
+                                        // messages report the same model. Do not
+                                        // silently keep whichever record was read
+                                        // last as the authoring evidence.
+                                        identity_conflict = true;
+                                    }
 
-                                        // Duplicate assistant records are emitted by some
-                                        // Claude clients while a tool call is streamed. Keep
-                                        // the strongest evidence already observed when a
-                                        // later duplicate omits the model or cwd, and retain
-                                        // the earliest record for restart-safe checkpointing.
-                                        let model =
-                                            reported_model.or_else(|| previous.model.clone());
-                                        let identity_reason = model.is_none().then(|| {
+                                    // Duplicate assistant records are emitted by some
+                                    // Claude clients while a tool call is streamed. Keep
+                                    // the strongest evidence already observed when a
+                                    // later duplicate omits the model or cwd, and retain
+                                    // the earliest record for restart-safe checkpointing.
+                                    let model = reported_model.or_else(|| previous.model.clone());
+                                    let identity_reason = model
+                                        .is_none()
+                                        .then(|| {
                                             reported_identity_reason
                                                 .clone()
                                                 .or_else(|| previous.identity_reason.clone())
-                                        }).flatten();
-                                        (
-                                            model,
-                                            reported_message_id
-                                                .or_else(|| previous.identity_message_id.clone()),
-                                            record
-                                                .cwd
-                                                .clone()
-                                                .map(PathBuf::from)
-                                                .or_else(|| previous.project_root.clone()),
-                                            previous.offset_before.min(line.offset_before),
-                                            previous.occurred_at.or(record.timestamp),
-                                            identity_reason,
-                                        )
-                                    } else {
-                                        (
-                                            reported_model,
-                                            reported_message_id,
-                                            record.cwd.clone().map(PathBuf::from),
-                                            line.offset_before,
-                                            record.timestamp,
-                                            reported_identity_reason,
-                                        )
-                                    };
+                                        })
+                                        .flatten();
+                                    (
+                                        model,
+                                        reported_message_id
+                                            .or_else(|| previous.identity_message_id.clone()),
+                                        record
+                                            .cwd
+                                            .clone()
+                                            .map(PathBuf::from)
+                                            .or_else(|| previous.project_root.clone()),
+                                        previous.offset_before.min(line.offset_before),
+                                        previous.occurred_at.or(record.timestamp),
+                                        identity_reason,
+                                    )
+                                } else {
+                                    (
+                                        reported_model,
+                                        reported_message_id,
+                                        record.cwd.clone().map(PathBuf::from),
+                                        line.offset_before,
+                                        record.timestamp,
+                                        reported_identity_reason,
+                                    )
+                                };
                                 if let Some(previous) = pending_tool_uses.get(&id) {
                                     // Keep a conflict sticky across duplicate records; a
                                     // later record must not silently downgrade it.
@@ -449,9 +447,8 @@ impl AiActivityParser for ClaudeCodeParser {
                             pending.as_ref().and_then(|tool| tool.project_root.clone())
                         });
                     let entity = resolve_entity(&file_path, project_root.as_deref());
-                    let identity_conflict = pending
-                        .as_ref()
-                        .is_some_and(|tool| tool.identity_conflict);
+                    let identity_conflict =
+                        pending.as_ref().is_some_and(|tool| tool.identity_conflict);
                     // A conflicting assistant message is evidence that we cannot
                     // safely attribute this edit to either model. Keep the
                     // activity, but never leak the first model we happened to
@@ -480,7 +477,11 @@ impl AiActivityParser for ClaudeCodeParser {
                         identity_message_id,
                         identity_status: identity_conflict
                             .then(|| IdentityStatus::Conflict.as_str().to_string())
-                            .or_else(|| identity_reason.as_ref().map(|_| IdentityStatus::Partial.as_str().to_string())),
+                            .or_else(|| {
+                                identity_reason
+                                    .as_ref()
+                                    .map(|_| IdentityStatus::Partial.as_str().to_string())
+                            }),
                         identity_reason: identity_conflict
                             .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
                             .or(identity_reason),

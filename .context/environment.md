@@ -23,12 +23,17 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `INTERNAL_API_SECRET` | no | Unset ⇒ `POST /api/v1/internal/subscription` returns 404 rather than being reachable uncredentialed. |
 | `IDLE_TIMEOUT_MINUTES` | no | Max pause between proven activity intervals. `0` disables idle bridging. |
 | `AGENT_IDLE_TIMEOUT_MINUTES` | no | Agent-only bridge allowance. Keep the default for WakaTime-compatible `total_seconds`; set `0` when consumers should rely on measured `ai_coding_seconds` instead of bridging agent pauses. |
-| `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Parsed in [../backend/api/src/config/brokers.rs](../backend/api/src/config/brokers.rs); no adapter reads it yet, so setting it only logs a warning. |
+| `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Used by the Kafka producer/consumers when heartbeat or AI usage is in `verify`/`kafka` mode. |
 | `ATOAXIS_EVENT_BUS_SASL_MECHANISM`, `ATOAXIS_EVENT_BUS_SASL_USERNAME`, `ATOAXIS_EVENT_BUS_SASL_PASSWORD` | no | All three or none. Mechanism `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`. Refused without `ATOAXIS_EVENT_BUS_URL`. |
 | `ATOAXIS_EVENT_BUS_TLS` | no | Defaults to `true` when SASL is set, else `false`; SASL with `false` is refused. |
 | `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. The API uses PostgreSQL as the job/outbox source of truth; the dedicated `job-worker` process runs the outbox relay and processors. Never printed unredacted; a plaintext URL to a non-local host logs a warning. |
-| `ATOAXIS_INGEST_MODE` | no | `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL` and **refuses to boot** until the Kafka ingest path lands. |
+| `ATOAXIS_INGEST_MODE` | no | Heartbeat mode: `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL`; `kafka` also needs PostgreSQL state and an explicit cohort. |
 | `ATOAXIS_INGEST_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`. Required for `kafka` mode; ignored (not refused) in other modes so a rollback deploy can leave it set. |
+| `ATOAXIS_AI_USAGE_INGEST_MODE` | no | AI usage mode: `direct` (default) / `verify` / `kafka`, independent from heartbeat mode. |
+| `ATOAXIS_AI_USAGE_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`; required only when AI usage mode is `kafka`, never inferred as `all`. |
+| `ATOAXIS_AI_USAGE_REQUIRE_CONTRACT_V2` | no | Defaults to `false`; when `true`, AI usage clients without `X-AtoAxis-Ai-Usage-Contract: 2` receive `426`. Rollback to direct with this flag unset accepts legacy clients again. |
+| `ATOAXIS_AI_USAGE_KAFKA_BATCH_SIZE`, `ATOAXIS_AI_USAGE_KAFKA_BATCH_WAIT_MS` | no | AI usage consumer batch bounds; defaults `1000` and `500ms`. |
+| `ATOAXIS_AI_USAGE_KAFKA_RETRY_MIN_MS`, `ATOAXIS_AI_USAGE_KAFKA_RETRY_MAX_MS` | no | AI usage consumer retry bounds; defaults `1000ms` and `60000ms`. |
 | `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`; requests require `Idempotency-Key` and return `202` while `job-worker` processes them. |
 | `ATOAXIS_JOB_WORKER_PREFETCH` | no | Worker concurrency/prefetch; defaults to `4`. |
 | `ATOAXIS_JOB_LEASE_SECONDS` | no | Lease duration for a claimed job; defaults to `300`. |

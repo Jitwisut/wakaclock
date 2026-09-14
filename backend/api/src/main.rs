@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer};
 use tracing::{error, info};
@@ -7,6 +7,7 @@ use tracing::{error, info};
 use wakaclock_server::config::CorsOrigins;
 use wakaclock_server::handlers;
 use wakaclock_server::infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
+use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
 
 fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
     match origins {
@@ -30,6 +31,7 @@ fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
                     header::AUTHORIZATION,
                     header::CONTENT_TYPE,
                     header::HeaderName::from_static("idempotency-key"),
+                    header::HeaderName::from_static("x-atoaxis-ai-usage-contract"),
                 ])
                 .expose_headers([header::LOCATION])
         }
@@ -44,6 +46,17 @@ async fn health_endpoint(state: Arc<AppState>) -> (axum::http::StatusCode, axum:
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     };
     (status, axum::Json(health))
+}
+
+async fn metrics_endpoint() -> (StatusCode, [(header::HeaderName, HeaderValue); 1], String) {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+        )],
+        global_kafka_metrics().render_prometheus("api"),
+    )
 }
 
 async fn migrate_clickhouse(state: &AppState) -> Result<()> {
@@ -89,7 +102,9 @@ async fn main() -> Result<()> {
     // ClickHouse is unavailable: the API only needs PostgreSQL state and broker
     // acknowledgement on that path. The fact-sink owns ClickHouse migrations.
     let kafka_mode = app_state.config.brokers.ingest.mode
-        == wakaclock_server::config::brokers::IngestMode::Kafka;
+        == wakaclock_server::config::brokers::IngestMode::Kafka
+        || app_state.config.brokers.ai_usage.mode
+            == wakaclock_server::config::brokers::IngestMode::Kafka;
     if !kafka_mode {
         migrate_clickhouse(&app_state)
             .await
@@ -181,13 +196,15 @@ async fn main() -> Result<()> {
     }
 
     if app_state.config.presence_v2_enabled {
-        let media_state=app_state.clone();
+        let media_state = app_state.clone();
         tokio::spawn(async move {
-            let mut ticker=tokio::time::interval(Duration::from_secs(5));
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                if let Err(error)=handlers::presence_v2::office::reconcile_media(&media_state).await {
+                if let Err(error) =
+                    handlers::presence_v2::office::reconcile_media(&media_state).await
+                {
                     tracing::warn!(%error,"presence media permission reconciliation failed");
                 }
             }
@@ -246,6 +263,30 @@ async fn main() -> Result<()> {
     let port = app_state.config.server.port;
     let bind_addr = format!("{}:{}", host, port);
 
+    // The API exposes the same metadata-only registry on its local metrics
+    // endpoint. Deployments may scrape this listener directly or keep it behind
+    // an internal proxy; no tenant, path, payload or credential is ever emitted.
+    let metrics_host = app_state.config.brokers.ingest.metrics_host.clone();
+    let metrics_port = app_state.config.brokers.ingest.metrics_port;
+    let metrics_task = match tokio::net::TcpListener::bind((metrics_host.as_str(), metrics_port))
+        .await
+    {
+        Ok(metrics_listener) => Some(tokio::spawn(async move {
+            let metrics_router =
+                axum::Router::new().route("/metrics", axum::routing::get(metrics_endpoint));
+            if let Err(error) = axum::serve(metrics_listener, metrics_router).await {
+                tracing::warn!(%error, "metrics listener stopped");
+            }
+        })),
+        Err(error) => {
+            // The primary API listener already exposes /metrics.  Keep startup
+            // compatible with local development where a second API replica may
+            // have claimed the optional internal scrape port.
+            tracing::warn!(%error, host = %metrics_host, port = metrics_port, "optional metrics listener unavailable; using API listener");
+            None
+        }
+    };
+
     info!("Starting server on {}", bind_addr);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
@@ -262,6 +303,10 @@ async fn main() -> Result<()> {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .context("Server error")?;
+
+    if let Some(metrics_task) = metrics_task {
+        metrics_task.abort();
+    }
 
     Ok(())
 }

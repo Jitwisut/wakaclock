@@ -15,14 +15,23 @@ pub struct AiUsageEventRow {
     pub user_id: Uuid,
     pub date: u16,
     pub usage_event_id: String,
+    /// SHA-256 of the complete sanitized `AiUsageRecord` payload. `None` is kept
+    /// for legacy rows created before identity-conflict detection was deployed.
+    pub event_payload_hash: Option<String>,
     pub ai_session_id: String,
     pub event_time: u32,
     #[serde(with = "clickhouse::serde::uuid::option")]
     pub project_id: Option<Uuid>,
+    /// `explicit_project_hint` is source evidence; `sole_project_session` is a
+    /// replaceable projection. Keeping the distinction lets a later
+    /// multi-project session withdraw an earlier sole-project inference.
+    pub project_attribution_method: Option<String>,
     pub ai_agent: String,
     pub ai_provider: Option<String>,
     pub ai_model: Option<String>,
     pub prompt_count: u32,
+    /// Nullable so old transcript imports remain distinguishable from a measured zero.
+    pub prompt_character_count: Option<u64>,
     /// Null means the provider did not report the figure — never zero (plan.md 9.4).
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -37,8 +46,6 @@ pub struct AiUsageEventRow {
     pub token_source: String,
     pub version: u64,
     pub received_at: u32,
-    /// Nullable so old transcript imports remain distinguishable from a measured zero.
-    pub prompt_character_count: Option<u64>,
 }
 
 /// A coding session as the agent itself identifies it (plan.md 9.4).
@@ -65,6 +72,10 @@ pub struct AiSessionRow {
     pub machine: Option<String>,
     pub operating_system: Option<String>,
     pub prompt_count: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
     pub version: u64,
     pub updated_at: u32,
 }
@@ -88,6 +99,11 @@ pub struct AiSessionProjectRow {
     /// Records how the projects were attached, so a later, better allocation can be distinguished
     /// from this one without guessing.
     pub token_allocation_method: String,
+    /// ReplacingMergeTree cannot remove a projection row in the same idempotent
+    /// write path as a fact. Tombstones let a later multi-project reconciliation
+    /// retract an earlier sole-project projection without issuing a non-atomic
+    /// ClickHouse DELETE.
+    pub is_deleted: u8,
     pub version: u64,
 }
 

@@ -86,21 +86,20 @@ pub use editor_capability::{
     editor_capability_catalog, AiEvidence, CapabilityStatus, EditorCapability, InputEvidence,
 };
 pub use event::{
-    is_known_agent_id, is_safe_event_id, normalize_agent_id, AiConfidence, AiEditEvent, AiEventSource,
-    KNOWN_AGENT_IDS,
-};
-pub use identity::{
-    is_internal_marker, is_placeholder, normalize_agent as normalize_identity_agent,
-    normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
-    normalize_identity_status,
-    normalize_model as normalize_identity_model, normalize_provider as normalize_identity_provider,
-    resolve_identity, IdentityResolution, IdentityStatus, IDENTITY_SCHEMA_VERSION,
-    MAX_IDENTITY_REFERENCE_BYTES,
-    REASON_CONFLICTING_EVIDENCE, REASON_CONTEXT_UNAVAILABLE, REASON_INTERNAL_MARKER,
-    REASON_MISSING_AGENT, REASON_MISSING_MODEL, REASON_MISSING_PROVIDER,
+    is_known_agent_id, is_safe_event_id, normalize_agent_id, AiConfidence, AiEditEvent,
+    AiEventSource, KNOWN_AGENT_IDS,
 };
 pub use follow_up::{AiLineOwnership, FollowUpRate, HumanFollowUpEvent, HumanFollowUpLedger};
 pub use gemini::GeminiCliParser;
+pub use identity::{
+    is_internal_marker, is_placeholder, normalize_agent as normalize_identity_agent,
+    normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
+    normalize_identity_status, normalize_model as normalize_identity_model,
+    normalize_provider as normalize_identity_provider, resolve_identity, IdentityResolution,
+    IdentityStatus, IDENTITY_SCHEMA_VERSION, MAX_IDENTITY_REFERENCE_BYTES,
+    REASON_CONFLICTING_EVIDENCE, REASON_CONTEXT_UNAVAILABLE, REASON_INTERNAL_MARKER,
+    REASON_MISSING_AGENT, REASON_MISSING_MODEL, REASON_MISSING_PROVIDER,
+};
 pub use parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
@@ -126,7 +125,7 @@ pub use revision::{
     EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
     PENDING_OBSERVATION_RETENTION_SECONDS,
 };
-pub use state::AiAttributionState;
+pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{
     from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,
     TopologyIdentityInput, WorkspaceMapping, WorkspaceMappingRegistry, TOPOLOGY_SCHEMA_VERSION,
@@ -139,5 +138,6 @@ pub use topology_handoff::{
 };
 pub use usage::{
     parse_claude_usage, parse_claude_usage_str, parse_codex_usage, parse_codex_usage_str,
-    parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageRecord, TokenSource,
+    parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageIngestReportV2,
+    AiUsageProcessingState, AiUsageRecord, TokenSource, MAX_USAGE_IDENTIFIER_BYTES,
 };

@@ -80,6 +80,14 @@ impl HeartbeatService {
         strict_projection: bool,
         insert_token: Option<&str>,
     ) -> Result<usize> {
+        #[cfg(feature = "kafka-spike")]
+        if std::env::var("ATOAXIS_KAFKA_SPIKE_FAILURE_POINT")
+            .ok()
+            .as_deref()
+            == Some("clickhouse_down")
+        {
+            anyhow::bail!("injected ClickHouse outage");
+        }
         let mut heartbeats = heartbeats;
         // Sanitize before deriving event/fingerprint identities so retries use the
         // same canonical payload whether they came from a new or legacy client.
@@ -152,6 +160,7 @@ impl HeartbeatService {
                 if !duplicate_raw {
                     if hb.revision > 0
                         && stored_revision.is_none()
+                        && batch_revision.is_none()
                         && hb.ai_event_id.is_none()
                         && hb.ai_change_id.is_none()
                     {
@@ -165,6 +174,15 @@ impl HeartbeatService {
                         if hb.revision != revision.saturating_add(1) {
                             anyhow::bail!(
                                 "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                                hb.revision,
+                                revision,
+                                heartbeat_id
+                            );
+                        }
+                    } else if let Some(revision) = batch_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow batch revision {} for heartbeat_id {}",
                                 hb.revision,
                                 revision,
                                 heartbeat_id
@@ -187,7 +205,7 @@ impl HeartbeatService {
                     duplicate_raw = true;
                 }
                 if !duplicate_raw {
-                    if hb.revision > 0 && stored_revision.is_none() {
+                    if hb.revision > 0 && stored_revision.is_none() && batch_revision.is_none() {
                         anyhow::bail!(
                             "correction revision {} has no stored base for ai_event_id {}",
                             hb.revision,
@@ -198,6 +216,15 @@ impl HeartbeatService {
                         if hb.revision != revision.saturating_add(1) {
                             anyhow::bail!(
                                 "correction revision {} must follow stored revision {} for ai_event_id {}",
+                                hb.revision,
+                                revision,
+                                event_id
+                            );
+                        }
+                    } else if let Some(revision) = batch_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow batch revision {} for ai_event_id {}",
                                 hb.revision,
                                 revision,
                                 event_id
@@ -219,7 +246,8 @@ impl HeartbeatService {
                         duplicate_raw = true;
                     }
                     if !duplicate_raw {
-                        if hb.revision > 0 && stored_revision.is_none() {
+                        if hb.revision > 0 && stored_revision.is_none() && batch_revision.is_none()
+                        {
                             anyhow::bail!(
                                 "correction revision {} has no stored base for ai_change_id {}",
                                 hb.revision,
@@ -230,6 +258,15 @@ impl HeartbeatService {
                             if hb.revision != revision.saturating_add(1) {
                                 anyhow::bail!(
                                     "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                    hb.revision,
+                                    revision,
+                                    change_id
+                                );
+                            }
+                        } else if let Some(revision) = batch_revision {
+                            if hb.revision != revision.saturating_add(1) {
+                                anyhow::bail!(
+                                    "correction revision {} must follow batch revision {} for ai_change_id {}",
                                     hb.revision,
                                     revision,
                                     change_id
@@ -295,7 +332,22 @@ impl HeartbeatService {
             } else {
                 Some(evidence.proven_seconds())
             };
+            let existing_segments = if duplicate_raw {
+                let candidates = evidence
+                    .segments
+                    .iter()
+                    .map(|segment| segment.segment_id.clone())
+                    .collect::<Vec<_>>();
+                self.repo
+                    .existing_activity_segment_ids(user_id, &interval_heartbeat_id, &candidates)
+                    .await?
+            } else {
+                std::collections::HashSet::new()
+            };
             for segment in evidence.segments {
+                if existing_segments.contains(&segment.segment_id) {
+                    continue;
+                }
                 interval_rows.push(ActivityIntervalRow {
                     user_id,
                     segment_id: segment.segment_id,
@@ -451,7 +503,17 @@ impl HeartbeatService {
         }
 
         let inserted = rows.len();
-        self.repo.insert_batch_with_token(rows, insert_token).await?;
+        self.repo
+            .insert_batch_with_token(rows, insert_token)
+            .await?;
+        #[cfg(feature = "kafka-spike")]
+        if std::env::var("ATOAXIS_KAFKA_SPIKE_FAILURE_POINT")
+            .ok()
+            .as_deref()
+            == Some("raw_before_interval")
+        {
+            anyhow::bail!("injected failure after raw heartbeat write");
+        }
         // Raw heartbeat JSON remains the audit source. A projection failure must not
         // make the client retry an already accepted heartbeat; readers can rebuild it.
         let interval_token = insert_token.map(|token| format!("{token}:interval"));

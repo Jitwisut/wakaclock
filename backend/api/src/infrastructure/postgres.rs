@@ -26,8 +26,11 @@ const API_KEY_READBACK_MIGRATION: &str =
 const ASYNC_JOBS_MIGRATION: &str = include_str!("../../migrations/postgres/007_async_jobs.sql");
 const JOB_WORKER_STATE_MIGRATION: &str =
     include_str!("../../migrations/postgres/008_job_worker_state.sql");
-const INGEST_STATE_MIGRATION: &str =
-    include_str!("../../migrations/postgres/009_ingest_state.sql");
+const INGEST_STATE_MIGRATION: &str = include_str!("../../migrations/postgres/009_ingest_state.sql");
+const HEARTBEAT_VERIFICATION_AUDIT_MIGRATION: &str =
+    include_str!("../../migrations/postgres/010_heartbeat_verification_audits.sql");
+const AI_USAGE_VERIFICATION_AUDIT_MIGRATION: &str =
+    include_str!("../../migrations/postgres/011_ai_usage_verification_audits.sql");
 
 pub struct PostgresClient {
     pool: Pool,
@@ -117,6 +120,14 @@ impl PostgresClient {
             ("async jobs", ASYNC_JOBS_MIGRATION),
             ("job worker state", JOB_WORKER_STATE_MIGRATION),
             ("ingest state", INGEST_STATE_MIGRATION),
+            (
+                "heartbeat verification audits",
+                HEARTBEAT_VERIFICATION_AUDIT_MIGRATION,
+            ),
+            (
+                "AI usage verification audits",
+                AI_USAGE_VERIFICATION_AUDIT_MIGRATION,
+            ),
         ] {
             client
                 .batch_execute(sql)
@@ -240,5 +251,9 @@ mod tests {
         assert!(INGEST_STATE_MIGRATION.contains("CREATE TABLE IF NOT EXISTS user_ingest_access"));
         assert!(INGEST_STATE_MIGRATION.contains("CREATE TABLE IF NOT EXISTS project_rules"));
         assert!(INGEST_STATE_MIGRATION.contains("project_rules_active_priority_idx"));
+        assert!(HEARTBEAT_VERIFICATION_AUDIT_MIGRATION
+            .contains("CREATE TABLE IF NOT EXISTS heartbeat_verification_audits"));
+        assert!(HEARTBEAT_VERIFICATION_AUDIT_MIGRATION.contains("field_flags TEXT[]"));
+        assert!(HEARTBEAT_VERIFICATION_AUDIT_MIGRATION.contains("resolved_at TIMESTAMPTZ"));
     }
 }

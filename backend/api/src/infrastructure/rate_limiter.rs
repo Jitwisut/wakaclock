@@ -72,7 +72,9 @@ impl PresenceRateLimiter {
     }
 
     pub fn check(&self, user_id: Uuid) -> Result<(), RateLimitExceeded> {
-        self.inner.check_key(&user_id).map_err(|_| RateLimitExceeded)
+        self.inner
+            .check_key(&user_id)
+            .map_err(|_| RateLimitExceeded)
     }
 }
 
@@ -90,7 +92,9 @@ impl AnalyticsRateLimiter {
     }
 
     pub fn check(&self, user_id: Uuid) -> Result<(), RateLimitExceeded> {
-        self.inner.check_key(&user_id).map_err(|_| RateLimitExceeded)
+        self.inner
+            .check_key(&user_id)
+            .map_err(|_| RateLimitExceeded)
     }
 }
 

@@ -5,11 +5,16 @@
 //! per model request. A single assistant message can edit three files — attaching its token
 //! counts to each edit would triple the tokens. The two never merge.
 
+use crate::ai::{normalize_identity_model, normalize_identity_provider};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use crate::ai::{normalize_identity_model, normalize_identity_provider};
+
+/// Maximum size for an opaque producer identifier or a privacy-safe display hint.
+/// The broker contract hashes the usage id, but the API still accepts legacy provider
+/// ids verbatim so retries remain byte-for-byte stable.
+pub const MAX_USAGE_IDENTIFIER_BYTES: usize = 512;
 
 /// One model request's usage, keyed by the provider's own message id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +52,54 @@ pub struct AiUsageRecord {
     pub project_hint: Option<String>,
 }
 
+impl AiUsageRecord {
+    /// Validate the content-free boundary shared by the HTTP API, the Kafka envelope
+    /// and the durable client queue.  This intentionally checks byte length without
+    /// trimming or normalising the stable usage id.
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("usage_event_id", self.usage_event_id.as_str()),
+            ("ai_session_id", self.ai_session_id.as_str()),
+            ("agent", self.agent.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{label} cannot be empty"));
+            }
+            if value.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                return Err(format!(
+                    "{label} must be at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                ));
+            }
+        }
+        for (label, value) in [
+            ("provider", self.provider.as_deref()),
+            ("model", self.model.as_deref()),
+        ] {
+            if let Some(value) = value {
+                if value.trim().is_empty() || value.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                    return Err(format!(
+                        "{label} must be a non-empty value of at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                    ));
+                }
+            }
+        }
+        if let Some(project_hint) = self.project_hint.as_deref() {
+            if project_hint.trim().is_empty() || project_hint.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                return Err(format!(
+                    "project_hint must be a non-empty display name of at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                ));
+            }
+            if project_hint.contains('/') || project_hint.contains('\\') {
+                return Err("project_hint must be a display name, not a filesystem path".into());
+            }
+        }
+        if self.occurred_at.timestamp() < 0 {
+            return Err("occurred_at must be on or after 1970-01-01T00:00:00Z".into());
+        }
+        Ok(())
+    }
+}
+
 /// The outcome of a server-side usage ingest. Kept in the core crate because both the
 /// CLI and the API serialize this sanitized, content-free shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +109,28 @@ pub struct AiUsageIngestReport {
     pub duplicates_in_batch: usize,
     pub unpriced: usize,
     pub sessions_touched: usize,
+}
+
+/// Capability-negotiated response for the Kafka cutover. Derived fields are
+/// nullable because a pending Kafka acknowledgement has not reached the fact sink
+/// yet; a direct/verify response can still expose the legacy numeric counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiUsageIngestReportV2 {
+    pub contract_version: u16,
+    pub processing_state: AiUsageProcessingState,
+    pub received: usize,
+    pub accepted: usize,
+    pub duplicates_in_batch: usize,
+    pub stored: Option<usize>,
+    pub unpriced: Option<usize>,
+    pub sessions_touched: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiUsageProcessingState {
+    Stored,
+    Pending,
 }
 
 /// Provenance of a usage row's token counts.
@@ -271,11 +346,14 @@ fn parse_generic_usage_str(
                 })
             })
             .and_then(|value| normalize_identity_model(Some(&value)));
-        let explicit_provider = first_string_value(&value, &["provider", "provider_id", "providerId"])
-            .or_else(|| value.get("payload").and_then(|payload| {
-                first_string_value(payload, &["provider", "provider_id", "providerId"])
-            }))
-            .and_then(|value| normalize_identity_provider(Some(&value)));
+        let explicit_provider =
+            first_string_value(&value, &["provider", "provider_id", "providerId"])
+                .or_else(|| {
+                    value.get("payload").and_then(|payload| {
+                        first_string_value(payload, &["provider", "provider_id", "providerId"])
+                    })
+                })
+                .and_then(|value| normalize_identity_provider(Some(&value)));
         let input = first_u64_value(
             usage,
             &[
@@ -322,7 +400,8 @@ fn parse_generic_usage_str(
             ai_session_id: session.clone(),
             occurred_at,
             agent: agent.to_string(),
-            provider: explicit_provider.or_else(|| provider.and_then(|value| normalize_identity_provider(Some(value)))),
+            provider: explicit_provider
+                .or_else(|| provider.and_then(|value| normalize_identity_provider(Some(value)))),
             model,
             prompt_count,
             prompt_character_count: (prompt_count > 0)

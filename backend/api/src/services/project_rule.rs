@@ -37,12 +37,13 @@ impl ProjectRuleService {
         let clickhouse = || self.repo.list_by_user(user_id);
         match self.ingest_state_source {
             IngestStateSource::ClickHouse => clickhouse().await,
-            IngestStateSource::Postgres => self
-                .ingest_state
-                .as_ref()
-                .ok_or_else(|| anyhow!("PostgreSQL ingest state is not configured"))?
-                .list_rules(user_id)
-                .await,
+            IngestStateSource::Postgres => {
+                self.ingest_state
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("PostgreSQL ingest state is not configured"))?
+                    .list_rules(user_id)
+                    .await
+            }
             IngestStateSource::Dual => {
                 let primary = clickhouse().await?;
                 if let Some(postgres) = &self.ingest_state {
