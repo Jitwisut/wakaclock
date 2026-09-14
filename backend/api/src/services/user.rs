@@ -8,10 +8,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::infrastructure::database::ClickHouseClient;
 use crate::config::brokers::IngestStateSource;
+use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
-use crate::repository::ingest_state::IngestStateRepository;
 use crate::infrastructure::secret_box::{SecretBox, KEY_VERSION};
 use crate::middleware::auth;
 use crate::model::auth::AuthData;
@@ -19,6 +18,7 @@ use crate::model::user::{
     CredentialsRow, ExistingUserRow, GenerateApiKeyData, GenerateApiKeyResponse,
     RevokeApiKeyResponse, UserData, UserResponse, UserRow,
 };
+use crate::repository::ingest_state::IngestStateRepository;
 
 pub struct UserService {
     clickhouse: Arc<ClickHouseClient>,
@@ -413,36 +413,37 @@ impl UserService {
 
         let clickhouse_access = async {
             let row = self
-            .clickhouse
-            .get_client()
-            .query(
-                "SELECT subscription_status, trial_ends_at > now() AS trial_valid
+                .clickhouse
+                .get_client()
+                .query(
+                    "SELECT subscription_status, trial_ends_at > now() AS trial_valid
                  FROM wakaclock.users FINAL
                  WHERE user_id = ?
                  LIMIT 1",
-            )
-            .bind(user_id)
-            .fetch_optional::<AccessRow>()
-            .await
-            .map_err(|error| anyhow!("ClickHouse users query error: {error}"))?;
+                )
+                .bind(user_id)
+                .fetch_optional::<AccessRow>()
+                .await
+                .map_err(|error| anyhow!("ClickHouse users query error: {error}"))?;
 
             Ok::<bool, anyhow::Error>(match row {
-            Some(row) => {
-                row.subscription_status == "active"
-                    || (row.subscription_status == "trialing" && row.trial_valid)
-            }
-            None => false,
+                Some(row) => {
+                    row.subscription_status == "active"
+                        || (row.subscription_status == "trialing" && row.trial_valid)
+                }
+                None => false,
             })
         };
 
         match self.ingest_state_source {
             IngestStateSource::ClickHouse => clickhouse_access.await,
-            IngestStateSource::Postgres => self
-                .ingest_state
-                .as_ref()
-                .context("PostgreSQL ingest state is not configured")?
-                .has_active_access(user_id)
-                .await,
+            IngestStateSource::Postgres => {
+                self.ingest_state
+                    .as_ref()
+                    .context("PostgreSQL ingest state is not configured")?
+                    .has_active_access(user_id)
+                    .await
+            }
             IngestStateSource::Dual => {
                 let clickhouse = clickhouse_access.await?;
                 if let Some(postgres) = &self.ingest_state {
@@ -527,7 +528,10 @@ impl UserService {
                     0,
                 )
             } else {
-                state.get_access(user_id).await?.and_then(|access| access.trial_ends_at)
+                state
+                    .get_access(user_id)
+                    .await?
+                    .and_then(|access| access.trial_ends_at)
             };
             let period = period_end.and_then(|value| {
                 chrono::DateTime::<chrono::Utc>::from_timestamp(i64::from(value), 0)

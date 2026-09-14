@@ -7,10 +7,10 @@
 
 use crate::{
     ai::{
-        event::is_safe_event_id, is_internal_marker, normalize_agent_id, normalize_model_id,
-        normalize_provider_id, normalize_identity_model, normalize_identity_provider,
-        normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
-        normalize_identity_status, AiConfidence, AiEventSource, REASON_CONFLICTING_EVIDENCE,
+        event::is_safe_event_id, is_internal_marker, normalize_agent_id, normalize_identity_model,
+        normalize_identity_provider, normalize_identity_reason, normalize_identity_reference,
+        normalize_identity_source, normalize_identity_status, normalize_model_id,
+        normalize_provider_id, AiConfidence, AiEventSource, REASON_CONFLICTING_EVIDENCE,
         REASON_INTERNAL_MARKER,
     },
     error::AppError,
@@ -1214,10 +1214,8 @@ impl BrokerStore {
                     // A public id has already been assigned to another session
                     // in this transaction. Namespace this event while keeping
                     // the wire-level event id unchanged.
-                    storage_event_id = scoped_storage_event_id(
-                        &event.event_id,
-                        event.session_id.as_deref(),
-                    );
+                    storage_event_id =
+                        scoped_storage_event_id(&event.event_id, event.session_id.as_deref());
                 }
             }
             storage_sessions
@@ -2081,8 +2079,14 @@ mod tests {
         second.session_id = Some("session-b".to_string());
 
         assert_eq!(store.ingest(&first).unwrap(), BrokerIngestOutcome::Accepted);
-        assert_eq!(store.ingest(&second).unwrap(), BrokerIngestOutcome::Accepted);
-        assert_eq!(store.ingest(&first).unwrap(), BrokerIngestOutcome::Duplicate);
+        assert_eq!(
+            store.ingest(&second).unwrap(),
+            BrokerIngestOutcome::Accepted
+        );
+        assert_eq!(
+            store.ingest(&first).unwrap(),
+            BrokerIngestOutcome::Duplicate
+        );
 
         let mut conflicting_second = second;
         conflicting_second.lines_added = Some(99);

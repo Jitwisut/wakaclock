@@ -10,6 +10,18 @@ pub struct HeartbeatRepository {
     client: Arc<ClickHouseClient>,
 }
 
+/// Metadata selected by the K3 shadow verifier.  This deliberately excludes
+/// source text and the rest of the heartbeat payload; parity checks compare only
+/// the fields that define the ingest contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatVerificationProjection {
+    pub entity: String,
+    pub project: Option<String>,
+    pub project_id: Option<uuid::Uuid>,
+    pub actor_type: String,
+    pub revision: u32,
+}
+
 impl HeartbeatRepository {
     pub fn new(client: Arc<ClickHouseClient>) -> Self {
         Self { client }
@@ -599,6 +611,42 @@ impl HeartbeatRepository {
         Ok(())
     }
 
+    /// Return the projected segment IDs already present for one heartbeat.  The
+    /// fact-sink uses this only on a replay that the raw revision lookup has
+    /// classified as a duplicate: a crash after the raw insert but before the
+    /// interval insert must still be repairable, while a normal duplicate must
+    /// not append another interval row.
+    pub async fn existing_activity_segment_ids(
+        &self,
+        user_id: uuid::Uuid,
+        heartbeat_id: &str,
+        candidates: &[String],
+    ) -> Result<std::collections::HashSet<String>> {
+        if candidates.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct SegmentRow {
+            segment_id: String,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT segment_id FROM wakaclock.activity_intervals
+                 WHERE user_id = ? AND heartbeat_id = ? AND segment_id IN ?",
+            )
+            .bind(user_id)
+            .bind(heartbeat_id)
+            .bind(candidates)
+            .fetch_all::<SegmentRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse activity interval lookup failed: {error}")
+            })?;
+        Ok(rows.into_iter().map(|row| row.segment_id).collect())
+    }
+
     /// Return the highest revision already stored for each transport heartbeat ID.
     /// A correction may reuse the same opaque ID with the next revision; a retry of
     /// the same revision remains idempotent.
@@ -619,17 +667,11 @@ impl HeartbeatRepository {
             .client
             .get_client()
             .query(
-                "SELECT heartbeat_id, max(revision) AS revision FROM (
-                     SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, revision
-                     FROM wakaclock.heartbeats
-                     WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
-                     UNION ALL
-                     SELECT heartbeat_id, toUInt32(4294967295) AS revision
-                     FROM wakaclock.heartbeat_deletions WHERE user_id = ? AND heartbeat_id IN ?
-                 ) GROUP BY heartbeat_id",
+                "SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, max(revision) AS revision
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
+                 GROUP BY heartbeat_id",
             )
-            .bind(user_id)
-            .bind(candidates)
             .bind(user_id)
             .bind(candidates)
             .fetch_all::<RevisionRow>()
@@ -637,10 +679,32 @@ impl HeartbeatRepository {
             .map_err(|error| {
                 anyhow::anyhow!("ClickHouse heartbeat revision query failed: {error}")
             })?;
-        Ok(rows
+        let mut revisions = rows
             .into_iter()
             .map(|row| (row.heartbeat_id, row.revision))
-            .collect())
+            .collect::<HashMap<_, _>>();
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct TombstoneRow {
+            heartbeat_id: String,
+        }
+        let tombstones = self
+            .client
+            .get_client()
+            .query(
+                "SELECT heartbeat_id FROM wakaclock.heartbeat_deletions
+                 WHERE user_id = ? AND heartbeat_id IN ?",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<TombstoneRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse heartbeat tombstone query failed: {error}")
+            })?;
+        for tombstone in tombstones {
+            revisions.insert(tombstone.heartbeat_id, u32::MAX);
+        }
+        Ok(revisions)
     }
 
     /// Session-scoped revision lookup for AI heartbeats. AI compatibility IDs are
@@ -665,20 +729,12 @@ impl HeartbeatRepository {
             .client
             .get_client()
             .query(
-                "SELECT heartbeat_id, session_id, max(revision) AS revision FROM (
-                     SELECT heartbeat_id, session_id, revision
-                     FROM wakaclock.heartbeats
-                     WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
-                     UNION ALL
-                     SELECT heartbeat_id, CAST(NULL AS Nullable(String)) AS session_id,
-                            toUInt32(4294967295) AS revision
-                     FROM wakaclock.heartbeat_deletions
-                     WHERE user_id = ? AND heartbeat_id IN ?
-                 )
+                "SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, session_id,
+                        max(revision) AS revision
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ? AND heartbeat_id IS NOT NULL AND heartbeat_id IN ?
                  GROUP BY heartbeat_id, session_id",
             )
-            .bind(user_id)
-            .bind(candidates)
             .bind(user_id)
             .bind(candidates)
             .fetch_all::<RevisionRow>()
@@ -686,10 +742,32 @@ impl HeartbeatRepository {
             .map_err(|error| {
                 anyhow::anyhow!("ClickHouse scoped heartbeat revision query failed: {error}")
             })?;
-        Ok(rows
+        let mut revisions = rows
             .into_iter()
             .map(|row| ((row.heartbeat_id, row.session_id), row.revision))
-            .collect())
+            .collect::<HashMap<_, _>>();
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct TombstoneRow {
+            heartbeat_id: String,
+        }
+        let tombstones = self
+            .client
+            .get_client()
+            .query(
+                "SELECT heartbeat_id FROM wakaclock.heartbeat_deletions
+                 WHERE user_id = ? AND heartbeat_id IN ?",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<TombstoneRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse heartbeat tombstone query failed: {error}")
+            })?;
+        for tombstone in tombstones {
+            revisions.insert((tombstone.heartbeat_id, None), u32::MAX);
+        }
+        Ok(revisions)
     }
 
     pub async fn has_heartbeat_revision(
@@ -715,8 +793,57 @@ impl HeartbeatRepository {
             .bind(revision)
             .fetch_one::<FoundRow>()
             .await
-            .map_err(|error| anyhow::anyhow!("ClickHouse heartbeat verification query failed: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse heartbeat verification query failed: {error}")
+            })?;
         Ok(row.found != 0)
+    }
+
+    /// Return the canonical projection for one event revision.  The verifier
+    /// uses this instead of a count-only existence check so a direct write and
+    /// its Kafka shadow event must agree on project, actor attribution, revision
+    /// and the privacy-safe entity representation.
+    pub async fn heartbeat_verification_projection(
+        &self,
+        user_id: uuid::Uuid,
+        heartbeat_id: &str,
+        revision: u32,
+    ) -> Result<Option<HeartbeatVerificationProjection>> {
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct ProjectionRow {
+            entity: String,
+            project: Option<String>,
+            #[serde(with = "clickhouse::serde::uuid::option")]
+            project_id: Option<uuid::Uuid>,
+            actor_type: String,
+            revision: u32,
+        }
+        let relation = canonical_winner_relation(
+            "h.user_id = ? AND h.heartbeat_id = ? AND h.revision = ?",
+            "h",
+        );
+        let query = format!(
+            "SELECT entity, project, project_id, actor_type, revision FROM {relation} LIMIT 1"
+        );
+        let row = self
+            .client
+            .get_client()
+            .query(&query)
+            .bind(user_id)
+            .bind(heartbeat_id)
+            .bind(revision)
+            .fetch_optional::<ProjectionRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse heartbeat verification query failed: {error}")
+            })?;
+        Ok(row.map(|row| HeartbeatVerificationProjection {
+            entity: row.entity,
+            project: row.project,
+            project_id: row.project_id,
+            actor_type: row.actor_type,
+            revision: row.revision,
+        }))
     }
 
     /// Return the highest revision already stored for each AI event ID.

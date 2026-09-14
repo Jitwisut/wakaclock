@@ -8,15 +8,14 @@ mod enabled {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-    use std::time::Duration;
     use tokio::net::TcpListener;
 
     use wakaclock_server::config::brokers::IngestMode;
     use wakaclock_server::infrastructure::app::create_app_state;
-    use wakaclock_server::infrastructure::contracts::{
-        EventBus, EventConsumer, EventEnvelope, EventTopic, HeartbeatEventV1, StableEventId,
-    };
+    use wakaclock_server::infrastructure::contracts::{EventConsumer, EventTopic};
     use wakaclock_server::infrastructure::kafka::{KafkaEventBus, KafkaEventConsumer};
+    use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
+    use wakaclock_server::services::kafka_heartbeat::process_batch;
 
     pub async fn run() -> Result<()> {
         let state = Arc::new(
@@ -77,6 +76,20 @@ mod enabled {
             let app = Router::new()
                 .route("/live", get(|| async { axum::http::StatusCode::OK }))
                 .route(
+                    "/metrics",
+                    get(|| async {
+                        (
+                            [(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_static(
+                                    "text/plain; version=0.0.4; charset=utf-8",
+                                ),
+                            )],
+                            global_kafka_metrics().render_prometheus("fact-sink"),
+                        )
+                    }),
+                )
+                .route(
                     "/ready",
                     get(move || {
                         let state = health_state.clone();
@@ -106,95 +119,73 @@ mod enabled {
             }
         });
 
-        let mut retry_delay = Duration::from_secs(1);
+        let mut retry_delay = state.config.brokers.ingest.retry_min;
         let shutdown = tokio::signal::ctrl_c();
         tokio::pin!(shutdown);
         let result = loop {
             tokio::select! {
                 _ = &mut shutdown => break Ok(()),
-                batch = consumer.poll_batch(1_000, Duration::from_millis(500)) => {
+                batch = consumer.poll_batch(
+                    state.config.brokers.ingest.batch_size,
+                    state.config.brokers.ingest.batch_wait,
+                ) => {
                     let batch = match batch {
                         Ok(batch) => batch,
                         Err(error) => {
-                            tracing::warn!(%error, backoff_seconds = retry_delay.as_secs(), "heartbeat consumer transient error");
+                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "heartbeat consumer transient error");
                             tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(Duration::from_secs(60));
+                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
                             continue;
                         }
                     };
                     if batch.is_empty() { continue; }
-                    let mut committed = Vec::new();
-                    let mut backoff_after_batch = false;
-                    for delivery in batch {
-                        let event = match serde_json::from_value::<HeartbeatEventV1>(delivery.event.payload.clone()) {
-                            Ok(event) => event,
-                            Err(error) => {
-                                if publish_dlq(&bus, &delivery, "invalid_heartbeat_payload").await {
-                                    committed.push(delivery);
-                                } else {
-                                    tracing::warn!(%error, "heartbeat DLQ publish failed; leaving offset uncommitted");
-                                    backoff_after_batch = true;
-                                    break;
-                                }
-                                tracing::warn!(%error, "heartbeat event payload rejected");
-                                continue;
-                            }
-                        };
-                        if let Err(error) = event.validate_envelope(&delivery.event) {
-                            if publish_dlq(&bus, &delivery, "event_identity_mismatch").await {
-                                committed.push(delivery);
-                            } else {
-                                tracing::warn!(%error, "heartbeat DLQ publish failed; leaving offset uncommitted");
-                                backoff_after_batch = true;
-                                break;
-                            }
-                            tracing::warn!(%error, "heartbeat event identity rejected");
+                    let outcome = match process_batch(&state, &bus, batch).await {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            tracing::warn!(%error, "heartbeat batch processing failed");
+                            tokio::time::sleep(retry_delay).await;
+                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
                             continue;
                         }
-                        let heartbeat = event.into_heartbeat(delivery.event.tenant_id);
-                        let token = format!(
-                            "kafka:{}:{}:{}:{}",
-                            delivery.topic.name(),
-                            delivery.partition,
-                            delivery.offset,
-                            delivery.event.tenant_id
-                        );
-                        match state.heartbeat_service.process_heartbeats_strict_with_token(
-                            delivery.event.tenant_id,
-                            heartbeat.machine.clone(),
-                            vec![heartbeat],
-                            &token,
-                        ).await {
-                            Ok(_) => committed.push(delivery),
-                            Err(error) => {
-                                let error_text = error.to_string();
-                                if let Some(category) = permanent_category(&error_text) {
-                                    if publish_dlq(&bus, &delivery, category).await {
-                                        committed.push(delivery);
-                                    } else {
-                                        tracing::warn!(%error, "heartbeat DLQ publish failed; leaving offset uncommitted");
-                                        backoff_after_batch = true;
-                                        break;
-                                    }
-                                } else {
-                                    tracing::warn!(%error, "heartbeat sink transient failure; leaving offset uncommitted");
-                                    backoff_after_batch = true;
-                                    break;
-                                }
-                            }
+                    };
+                    if !outcome.committed.is_empty() {
+                        if let Err(error) = consumer.commit(&outcome.committed).await {
+                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "heartbeat offset commit failed; leaving offsets uncommitted");
+                            tokio::time::sleep(retry_delay).await;
+                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
+                            continue;
                         }
                     }
-                    if !committed.is_empty() {
-                        if let Err(error) = consumer.commit(&committed).await {
-                            tracing::warn!(%error, backoff_seconds = retry_delay.as_secs(), "heartbeat offset commit failed; leaving offsets uncommitted");
-                            backoff_after_batch = true;
+                    if !outcome.retry_partitions.is_empty() {
+                        consumer
+                            .mark_retry_partitions(&outcome.retry_partitions)
+                            .await;
+                        let retry_offsets = outcome
+                            .retry_offsets
+                            .iter()
+                            .map(|(partition, offset)| (*partition, *offset))
+                            .collect::<Vec<_>>();
+                        if let Err(error) = consumer.seek_to_offsets(&retry_offsets) {
+                            tracing::warn!(%error, "could not rewind retry partitions");
                         }
-                    }
-                    if backoff_after_batch {
+                        if let Err(error) = consumer.pause_partitions(&outcome.retry_partitions) {
+                            tracing::warn!(%error, "could not pause retry partitions");
+                        }
                         tokio::time::sleep(retry_delay).await;
-                        retry_delay = (retry_delay * 2).min(Duration::from_secs(60));
+                        if let Err(error) = consumer.resume_partitions(&outcome.retry_partitions) {
+                            tracing::warn!(%error, "could not resume retry partitions");
+                        }
+                        retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
                     } else {
-                        retry_delay = Duration::from_secs(1);
+                        let committed_partitions = outcome
+                            .committed
+                            .iter()
+                            .map(|delivery| delivery.partition)
+                            .collect::<std::collections::BTreeSet<_>>();
+                        consumer
+                            .clear_retry_partitions(&committed_partitions)
+                            .await;
+                        retry_delay = state.config.brokers.ingest.retry_min;
                     }
                 }
             }
@@ -202,80 +193,6 @@ mod enabled {
         ready.store(false, Ordering::Release);
         health.abort();
         result
-    }
-
-    async fn publish_dlq(
-        bus: &KafkaEventBus,
-        delivery: &wakaclock_server::infrastructure::contracts::EventDelivery,
-        category: &'static str,
-    ) -> bool {
-        let Ok(event_id) = StableEventId::heartbeat(
-            &format!("worker-dlq:{}:{}", delivery.partition, delivery.offset),
-            0,
-        ) else {
-            return false;
-        };
-        let envelope = EventEnvelope::new(
-            event_id,
-            "ingest.dead_letter",
-            delivery.event.tenant_id,
-            chrono::Utc::now(),
-            serde_json::json!({
-                "source_topic": delivery.topic.name(),
-                "source_partition": delivery.partition,
-                "source_offset": delivery.offset,
-                "error_category": category,
-            }),
-        );
-        bus.publish(EventTopic::IngestDeadLetter, &envelope)
-            .await
-            .is_ok()
-    }
-
-    fn permanent_category(error: &str) -> Option<&'static str> {
-        let lower = error.to_ascii_lowercase();
-        if lower.contains("no stored base")
-            || lower.contains("must follow stored revision")
-            || lower.contains("correction revision")
-        {
-            Some("revision_error")
-        } else if lower.contains("privacy") {
-            Some("privacy_contract_violation")
-        } else if lower.contains("heartbeat_id must")
-            || lower.contains("activity segment is invalid")
-            || lower.contains("revision exceeds")
-            || lower.contains("clipboard metrics require")
-            || lower.contains("unsupported clipboard_tracking_version")
-        {
-            Some("invalid_heartbeat")
-        } else {
-            None
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::permanent_category;
-
-        #[test]
-        fn only_known_permanent_categories_are_dead_lettered() {
-            assert_eq!(
-                permanent_category("correction revision 1 has no stored base"),
-                Some("revision_error")
-            );
-            assert_eq!(
-                permanent_category("heartbeat_id must be 1..=256 bytes"),
-                Some("invalid_heartbeat")
-            );
-            assert_eq!(
-                permanent_category("privacy contract violation"),
-                Some("privacy_contract_violation")
-            );
-            assert_eq!(
-                permanent_category("ClickHouse broker connection timed out"),
-                None
-            );
-        }
     }
 }
 

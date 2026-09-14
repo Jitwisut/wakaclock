@@ -84,11 +84,21 @@ impl HeartbeatIngestService {
                     .await
             }
             IngestMode::Verify => {
+                // The shadow event applies the privacy-safe entity projection
+                // before it crosses Kafka.  Apply the same projection to the
+                // authoritative direct write so verifier parity compares the
+                // same value rather than reporting every absolute path as a
+                // false mismatch.
+                let canonical_heartbeats = heartbeats
+                    .iter()
+                    .cloned()
+                    .map(sanitize_broker_heartbeat)
+                    .collect::<Vec<_>>();
                 let inserted = self
                     .heartbeat_service
-                    .process_heartbeats(user_id, machine, heartbeats.clone())
+                    .process_heartbeats(user_id, machine, canonical_heartbeats.clone())
                     .await?;
-                if let Err(error) = self.publish_all(user_id, &heartbeats).await {
+                if let Err(error) = self.publish_all(user_id, &canonical_heartbeats).await {
                     // Direct ClickHouse is authoritative in verify mode.  The
                     // mismatch is observable through logs/metrics, but a broker
                     // outage must not make an already accepted heartbeat fail.
@@ -128,6 +138,11 @@ impl HeartbeatIngestService {
         }
         Ok(())
     }
+}
+
+fn sanitize_broker_heartbeat(mut heartbeat: Heartbeat) -> Heartbeat {
+    heartbeat.entity = crate::infrastructure::contracts::safe_event_entity(&heartbeat.entity);
+    heartbeat
 }
 
 /// A small test-only constructor keeps service wiring tests independent from a

@@ -289,7 +289,9 @@ fn error_code(error: &AppError) -> &'static str {
     match error {
         AppError::Validation(_) => "validation",
         AppError::Auth(_) => "auth",
-        AppError::Http(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => "delivery",
+        AppError::Http(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => {
+            "delivery"
+        }
         AppError::Queue(_) => "queue",
         AppError::Io(_) => "io",
         AppError::Serde(_) => "serialization",
@@ -425,10 +427,8 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join("ai-events.jsonl");
     let mut store = BrokerStore::open()?;
-    let cursor = store.reserve_sidecar_cursor_scoped(
-        &event.event_id,
-        event.session_id.as_deref(),
-    )?;
+    let cursor =
+        store.reserve_sidecar_cursor_scoped(&event.event_id, event.session_id.as_deref())?;
     if cursor.already_written {
         return Ok(());
     }

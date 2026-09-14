@@ -235,7 +235,11 @@ impl Queue {
 
     /// Retry with a server-provided `Retry-After` delay when present, otherwise
     /// use the bounded local exponential schedule.
-    pub fn mark_retry_after(&self, id: i64, retry_after_seconds: Option<u64>) -> Result<(), AppError> {
+    pub fn mark_retry_after(
+        &self,
+        id: i64,
+        retry_after_seconds: Option<u64>,
+    ) -> Result<(), AppError> {
         if let Some(delay) = retry_after_seconds {
             let delay = delay.min(86_400);
             self.conn

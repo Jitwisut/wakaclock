@@ -9,6 +9,8 @@ NPM ?= npm
 COMPOSE ?= docker compose
 K0_COMPOSE_PROJECT ?= wakaclock-k0
 K0_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
+K5_COMPOSE_PROJECT ?= wakaclock-k5
+K5_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
 
 .DEFAULT_GOAL := help
 
@@ -52,7 +54,25 @@ kafka-spike-infra-down: ## Stop K0 and remove only its test volumes
 
 .PHONY: kafka-spike
 kafka-spike: ## Run the feature-gated K0 harness against the isolated stack
-	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock_k0}" $(CARGO) run --bin kafka-spike --features kafka-spike
+	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@localhost:15432/atoaxis_k0}" $(CARGO) run --bin kafka-spike --features kafka-spike
+
+.PHONY: k5-ai-usage-infra-up
+k5-ai-usage-infra-up: ## Start the isolated Kafka/ClickHouse/PostgreSQL/RabbitMQ K5 stack
+	@$(COMPOSE) -p $(K5_COMPOSE_PROJECT) -f $(K5_COMPOSE_FILE) up -d --wait
+
+.PHONY: k5-ai-usage-infra-down
+k5-ai-usage-infra-down: ## Stop K5 infrastructure and remove only its test volumes
+	@$(COMPOSE) -p $(K5_COMPOSE_PROJECT) -f $(K5_COMPOSE_FILE) down -v --remove-orphans
+
+.PHONY: k5-ai-usage-spike
+k5-ai-usage-spike: ## Run the feature-gated K5 full-stack harness against explicit isolated endpoints
+	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@localhost:15432/atoaxis_k0}" RABBITMQ_TEST_URL="$${RABBITMQ_TEST_URL:-amqp://atoaxis:atoaxis-test@localhost:15673/%2f}" $(CARGO) run --bin ai-usage-spike --features ai-usage-spike
+
+.PHONY: k5-integration
+k5-integration: ## Run K0 and K5 isolated broker acceptance harnesses
+	@$(MAKE) k5-ai-usage-infra-up
+	@$(MAKE) kafka-spike K0_COMPOSE_PROJECT=$(K5_COMPOSE_PROJECT)
+	@$(MAKE) k5-ai-usage-spike K5_COMPOSE_PROJECT=$(K5_COMPOSE_PROJECT)
 
 .PHONY: infra-down
 infra-down: ## Stop local infrastructure containers, including Redpanda
@@ -79,6 +99,18 @@ dev-heartbeat-enrichment: ## Run the Kafka heartbeat fact-sink consumer
 dev-heartbeat-verifier: ## Run the K3 verify-mode Kafka shadow consumer
 	@cd $(BACKEND_DIR) && $(CARGO) run --bin heartbeat-verifier --features kafka
 
+.PHONY: dev-ai-usage-ingest
+dev-ai-usage-ingest: ## Run the K5 AI usage Kafka fact-sink
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin ai-usage-ingest --features kafka
+
+.PHONY: dev-ai-usage-verifier
+dev-ai-usage-verifier: ## Run the K5 AI usage verify consumer
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin ai-usage-verifier --features kafka
+
+.PHONY: dev-ai-session-worker
+dev-ai-session-worker: ## Run the K5 AI session reconcile worker
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin ai-session-worker
+
 .PHONY: dev-frontend
 dev-frontend: ## Run the Next.js application in development mode
 	@cd $(FRONTEND_DIR) && $(NPM) run dev
@@ -101,6 +133,10 @@ test: test-backend test-frontend ## Run backend and frontend tests
 test-backend: ## Run Rust workspace tests
 	@cd $(BACKEND_DIR) && $(CARGO) test --workspace
 
+.PHONY: test-backend-kafka
+test-backend-kafka: ## Run Rust workspace tests with the Kafka adapter and K5 workers
+	@cd $(BACKEND_DIR) && $(CARGO) test --workspace --features kafka
+
 .PHONY: test-frontend
 test-frontend: ## Run frontend typecheck, lint and unit tests
 	@cd $(FRONTEND_DIR) && $(NPM) run validate
@@ -115,6 +151,10 @@ lint: lint-backend lint-frontend ## Run strict linters
 .PHONY: lint-backend
 lint-backend: ## Run zero-warning Rust Clippy across every target
 	@cd $(BACKEND_DIR) && $(CARGO) clippy --workspace --all-targets -- -D warnings
+
+.PHONY: lint-backend-kafka
+lint-backend-kafka: ## Run strict Clippy with Kafka/K5 targets enabled
+	@cd $(BACKEND_DIR) && $(CARGO) clippy --workspace --all-targets --features kafka -- -D warnings
 
 .PHONY: lint-frontend
 lint-frontend: ## Run frontend ESLint with zero warnings

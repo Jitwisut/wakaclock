@@ -10,20 +10,23 @@
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration};
 use uuid::Uuid;
-use wakaclock_core::heartbeat::Heartbeat;
+use wakaclock_core::{ai::AiUsageRecord, heartbeat::Heartbeat};
 
 /// Wire version of [`EventEnvelope`]. A field may be added without a bump; a
 /// field may not be removed or reinterpreted without one.
 pub const EVENT_ENVELOPE_VERSION: u16 = 1;
 pub const HEARTBEAT_EVENT_TYPE: &str = "heartbeat.recorded";
+pub const AI_USAGE_EVENT_TYPE: &str = "ai.usage.recorded";
 pub const MAX_EVENT_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// Upper bound for a source record ID folded into a [`StableEventId`]. Matches
 /// the per-ID bound `DELETE /api/v1/heartbeats.bulk` already enforces, so any ID
 /// a user can delete is also one that can travel through the event bus.
 pub const MAX_SOURCE_ID_LEN: usize = wakaclock_core::heartbeat::MAX_HEARTBEAT_ID_LEN;
+pub const MAX_USAGE_ID_LEN: usize = wakaclock_core::ai::MAX_USAGE_IDENTIFIER_BYTES;
 
 /// Kafka topics. The record key is always the envelope's `tenant_id`, which keeps
 /// one account's events ordered while spreading accounts across partitions.
@@ -178,6 +181,19 @@ impl StableEventId {
             )));
         }
         Ok(Self(format!("hb:{heartbeat_id}:{revision}")))
+    }
+
+    /// `au:v1:<sha256(raw usage_event_id bytes)>`. The source id is intentionally
+    /// hashed without trimming or normalisation so provider identifiers up to the
+    /// API's 512-byte compatibility limit remain stable across retries.
+    pub fn ai_usage(usage_event_id: &str) -> InfrastructureResult<Self> {
+        if usage_event_id.trim().is_empty() || usage_event_id.len() > MAX_USAGE_ID_LEN {
+            return Err(InfrastructureError::InvalidEnvelope(format!(
+                "usage_event_id must be 1..={MAX_USAGE_ID_LEN} bytes"
+            )));
+        }
+        let digest = Sha256::digest(usage_event_id.as_bytes());
+        Ok(Self(format!("au:v1:{digest:x}")))
     }
 
     /// `job:{job_id}`. The job ID comes from the `async_jobs` row written in the
@@ -421,6 +437,127 @@ impl<'de> Deserialize<'de> for HeartbeatEventV1 {
     }
 }
 
+/// Versioned, content-free AI usage payload carried by the `wakaclock.ai-usage.v1`
+/// topic. `flatten` keeps the public payload compatible with the HTTP record shape;
+/// authenticated tenant scope lives only in the envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiUsageEventV1 {
+    #[serde(flatten)]
+    pub record: AiUsageRecord,
+}
+
+impl AiUsageEventV1 {
+    pub fn from_record(record: AiUsageRecord) -> InfrastructureResult<Self> {
+        record
+            .validate()
+            .map_err(InfrastructureError::InvalidEnvelope)?;
+        Ok(Self { record })
+    }
+
+    pub fn event_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        source: Option<&str>,
+    ) -> InfrastructureResult<EventEnvelope> {
+        if tenant_id == Uuid::nil() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "AI usage tenant cannot be nil".to_string(),
+            ));
+        }
+        let event_id = StableEventId::ai_usage(&self.record.usage_event_id)?;
+        let payload = serde_json::to_value(self).map_err(InfrastructureError::Serialization)?;
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(InfrastructureError::Serialization)?;
+        if payload_bytes.len() > MAX_EVENT_PAYLOAD_BYTES {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "AI usage event payload exceeds the broker limit".to_string(),
+            ));
+        }
+        let mut envelope = EventEnvelope::new(
+            event_id,
+            AI_USAGE_EVENT_TYPE,
+            tenant_id,
+            self.record.occurred_at,
+            payload,
+        );
+        envelope.source = normalize_event_source(source);
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn into_record(self) -> AiUsageRecord {
+        self.record
+    }
+
+    pub fn payload_hash(&self) -> InfrastructureResult<String> {
+        let payload =
+            serde_json::to_vec(&self.record).map_err(InfrastructureError::Serialization)?;
+        let digest = Sha256::digest(payload);
+        Ok(format!("{digest:x}"))
+    }
+
+    /// Consumers must recompute the stable identity from the decoded payload and
+    /// reject a forged/misaligned envelope before touching ClickHouse.
+    pub fn validate_envelope(&self, envelope: &EventEnvelope) -> InfrastructureResult<()> {
+        envelope.validate()?;
+        if envelope.event_type != AI_USAGE_EVENT_TYPE || envelope.tenant_id == Uuid::nil() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "AI usage event envelope has an invalid type or tenant".to_string(),
+            ));
+        }
+        validate_ai_usage_payload_shape(&envelope.payload)?;
+        self.record
+            .validate()
+            .map_err(InfrastructureError::InvalidEnvelope)?;
+        let expected = StableEventId::ai_usage(&self.record.usage_event_id)?;
+        if envelope.event_id != expected
+            || envelope.idempotency_key != expected.as_str()
+            || envelope.occurred_at != self.record.occurred_at
+        {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "AI usage event identity does not match its payload".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The typed decoder intentionally ignores unknown serde fields so an API can
+/// evolve additively without copying them into ClickHouse. At the Kafka boundary,
+/// however, silently accepting a field named `prompt` or `transcript` would still
+/// put sensitive data in the envelope. Keep the v1 payload allowlist explicit and
+/// fail closed for both privacy-sensitive and future-unversioned fields.
+fn validate_ai_usage_payload_shape(payload: &serde_json::Value) -> InfrastructureResult<()> {
+    const ALLOWED_FIELDS: &[&str] = &[
+        "usage_event_id",
+        "ai_session_id",
+        "occurred_at",
+        "agent",
+        "provider",
+        "model",
+        "prompt_count",
+        "prompt_character_count",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "token_source",
+        "project_hint",
+    ];
+    let object = payload.as_object().ok_or_else(|| {
+        InfrastructureError::InvalidEnvelope("AI usage payload must be an object".to_string())
+    })?;
+    if object
+        .keys()
+        .any(|field| !ALLOWED_FIELDS.contains(&field.as_str()))
+    {
+        return Err(InfrastructureError::InvalidEnvelope(
+            "AI usage payload contains an unsupported field".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn timestamp_to_utc(time: f64) -> DateTime<Utc> {
     if time.is_finite() && time >= 0.0 {
         let seconds = time.trunc() as i64;
@@ -536,6 +673,29 @@ pub trait EventBus: Send + Sync {
     /// Returns only after the broker acknowledged durable receipt (`acks=all`).
     /// The API confirms acceptance to a client only after this returns `Ok`.
     async fn publish(&self, topic: EventTopic, event: &EventEnvelope) -> InfrastructureResult<()>;
+
+    /// Enqueue a batch in caller order and return only after every broker
+    /// acknowledgement is received. Implementations may pipeline the sends, but
+    /// partial failure must remain visible so the caller retries the full stable-id
+    /// batch safely.
+    async fn publish_batch(
+        &self,
+        topic: EventTopic,
+        events: &[EventEnvelope],
+    ) -> InfrastructureResult<()> {
+        let mut first_error = None;
+        for event in events {
+            if let Err(error) = self.publish(topic, event).await {
+                // Continue enqueueing the remainder so a partial batch is
+                // observable to the caller. Stable event IDs make retrying the
+                // whole request safe even when earlier records were acknowledged.
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -705,6 +865,8 @@ mod tests {
 
     const EVENT_FIXTURE: &str =
         include_str!("../../../../fixtures/message-envelopes/event-envelope-v1.json");
+    const AI_USAGE_FIXTURE: &str =
+        include_str!("../../../../fixtures/message-envelopes/ai-usage-event-v1.json");
     const JOB_FIXTURE: &str =
         include_str!("../../../../fixtures/message-envelopes/job-envelope-v1.json");
 
@@ -853,6 +1015,63 @@ mod tests {
         assert!(decoded.validate().is_ok());
         assert_eq!(serde_json::to_value(&decoded).unwrap(), fixture);
         assert_eq!(decoded.kind, JobKind::AnalyticsReprocess);
+    }
+
+    #[test]
+    fn ai_usage_wire_format_has_stable_identity_and_no_tenant_in_payload() {
+        let fixture: serde_json::Value = serde_json::from_str(AI_USAGE_FIXTURE).unwrap();
+        let envelope: EventEnvelope = serde_json::from_value(fixture.clone()).unwrap();
+        let payload: AiUsageEventV1 = serde_json::from_value(envelope.payload.clone()).unwrap();
+        payload.validate_envelope(&envelope).unwrap();
+        assert_eq!(envelope.event_type, AI_USAGE_EVENT_TYPE);
+        assert_eq!(
+            envelope.event_id.as_str(),
+            "au:v1:ef27c902bfbb8fdfa8e18db17c151ed753b8b2ab7a0fad9a3ce2bf9e280a0611"
+        );
+        assert!(envelope.payload.get("tenant_id").is_none());
+        assert!(envelope.payload.get("user_id").is_none());
+        assert!(payload.record.validate().is_ok());
+    }
+
+    #[test]
+    fn ai_usage_identity_hash_preserves_raw_bytes_and_supports_512_bytes() {
+        let id = "x".repeat(MAX_USAGE_ID_LEN);
+        let stable = StableEventId::ai_usage(&id).unwrap();
+        assert!(stable.as_str().starts_with("au:v1:"));
+        assert!(StableEventId::ai_usage(&format!("{id}x")).is_err());
+        assert_ne!(
+            StableEventId::ai_usage("msg").unwrap(),
+            StableEventId::ai_usage(" msg").unwrap()
+        );
+    }
+
+    #[test]
+    fn ai_usage_payload_rejects_content_like_or_future_unversioned_fields() {
+        let record = wakaclock_core::ai::AiUsageRecord {
+            usage_event_id: "message-1".to_string(),
+            ai_session_id: "session-1".to_string(),
+            occurred_at: fixed_time("2026-09-10T03:15:00Z"),
+            agent: "codex".to_string(),
+            provider: Some("openai".to_string()),
+            model: Some("gpt-5.6-sol".to_string()),
+            prompt_count: 1,
+            prompt_character_count: Some(12),
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            token_source: wakaclock_core::ai::TokenSource::Transcript,
+            project_hint: None,
+        };
+        let event = AiUsageEventV1::from_record(record).unwrap();
+        let mut envelope = event.event_for_tenant(Uuid::now_v7(), Some("api")).unwrap();
+        envelope.payload["prompt"] =
+            serde_json::Value::String("must not cross the boundary".into());
+        assert!(event.validate_envelope(&envelope).is_err());
+
+        envelope.payload.as_object_mut().unwrap().remove("prompt");
+        envelope.payload["future_field"] = serde_json::Value::Bool(true);
+        assert!(event.validate_envelope(&envelope).is_err());
     }
 
     #[test]

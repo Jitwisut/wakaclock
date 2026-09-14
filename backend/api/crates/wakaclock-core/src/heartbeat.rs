@@ -4,8 +4,8 @@ use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
 use crate::ai::{
-    is_known_agent_id, normalize_identity_model, normalize_identity_reason,
-    normalize_identity_provider, normalize_identity_reference, normalize_identity_source,
+    is_known_agent_id, normalize_identity_model, normalize_identity_provider,
+    normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
     normalize_identity_status, resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION,
     REASON_CONFLICTING_EVIDENCE,
 };
@@ -705,7 +705,8 @@ impl Heartbeat {
         self.identity_source = normalize_identity_source(self.identity_source.as_deref());
         self.session_id = normalize_identity_reference(self.session_id.as_deref());
         self.identity_turn_id = normalize_identity_reference(self.identity_turn_id.as_deref());
-        self.identity_message_id = normalize_identity_reference(self.identity_message_id.as_deref());
+        self.identity_message_id =
+            normalize_identity_reference(self.identity_message_id.as_deref());
 
         let declared_identity_status = self.identity_status.clone();
         let declared_identity_reason = self.identity_reason.clone();
@@ -721,14 +722,12 @@ impl Heartbeat {
         // a trusted identity source; otherwise the normal resolver below treats
         // the client claim as untrusted metadata and strips it.
         let explicit_identity_conflict = self.identity_status.as_deref() == Some("conflict")
-            && normalized_identity_source
-                .as_deref()
-                .is_some_and(|source| {
-                    matches!(
-                        source,
-                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                    )
-                });
+            && normalized_identity_source.as_deref().is_some_and(|source| {
+                matches!(
+                    source,
+                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                )
+            });
         let trusted_reported_reason = matches!(
             declared_identity_status.as_deref(),
             Some("partial" | "unavailable")
@@ -737,14 +736,12 @@ impl Heartbeat {
         .flatten()
         .filter(|reason| reason != REASON_CONFLICTING_EVIDENCE)
         .filter(|_| {
-            normalized_identity_source
-                .as_deref()
-                .is_some_and(|source| {
-                    matches!(
-                        source,
-                        "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                    )
-                })
+            normalized_identity_source.as_deref().is_some_and(|source| {
+                matches!(
+                    source,
+                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+                )
+            })
         });
         let identity = resolve_identity(
             self.ai_agent.as_deref(),
@@ -775,14 +772,12 @@ impl Heartbeat {
             self.ai_provider = identity.provider.clone();
             self.ai_model = identity.model.clone();
         }
-        let verified_source = normalized_identity_source
-            .as_deref()
-            .is_some_and(|source| {
-                matches!(
-                    source,
-                    "agent_hook" | "mcp" | "structured_mcp" | "transcript"
-                )
-            });
+        let verified_source = normalized_identity_source.as_deref().is_some_and(|source| {
+            matches!(
+                source,
+                "agent_hook" | "mcp" | "structured_mcp" | "transcript"
+            )
+        });
         let verified_confidence = self
             .ai_confidence
             .as_deref()
@@ -792,11 +787,8 @@ impl Heartbeat {
         // change even when the provider or model field is absent. Keep that
         // partial tuple for the unresolved section; only an untrusted observer
         // claim is stripped from the public payload.
-        let trusted_agent_evidence = verified_source
-            && self
-                .ai_agent
-                .as_deref()
-                .is_some_and(is_known_agent_id);
+        let trusted_agent_evidence =
+            verified_source && self.ai_agent.as_deref().is_some_and(is_known_agent_id);
 
         // A provider/model without a client name is not an identity either. Keep
         // those fields coupled to the named agent so a malformed legacy payload
@@ -879,10 +871,11 @@ impl Heartbeat {
     /// must hide identity on historical rows written before the policy existed.
     pub fn has_verified_ai_identity(&self) -> bool {
         self.is_ai_generated
-            && self
-                .identity_status
-                .as_deref()
-                .is_some_and(|status| status.trim().eq_ignore_ascii_case(IdentityStatus::Confirmed.as_str()))
+            && self.identity_status.as_deref().is_some_and(|status| {
+                status
+                    .trim()
+                    .eq_ignore_ascii_case(IdentityStatus::Confirmed.as_str())
+            })
             && self
                 .identity_reason
                 .as_deref()
@@ -1620,7 +1613,10 @@ mod tests {
         assert_eq!(heartbeat.actor_type, ActorType::AiInferred);
         assert!(heartbeat.is_ai_generated);
         assert_eq!(heartbeat.identity_status.as_deref(), Some("unavailable"));
-        assert_eq!(heartbeat.identity_reason.as_deref(), Some("context_unavailable"));
+        assert_eq!(
+            heartbeat.identity_reason.as_deref(),
+            Some("context_unavailable")
+        );
         heartbeat.validate().unwrap();
     }
 

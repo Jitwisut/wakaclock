@@ -21,6 +21,10 @@ pub mod heartbeat_ingest;
 pub mod insights;
 pub mod integrations;
 pub mod jobs;
+#[cfg(feature = "kafka")]
+pub mod kafka_ai_usage;
+#[cfg(feature = "kafka")]
+pub mod kafka_heartbeat;
 pub mod keystroke_stats;
 pub mod leaderboards;
 pub mod oauth;

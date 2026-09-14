@@ -4,12 +4,12 @@ use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
 };
+use crate::ai::patch::{count_unified_diff_lines, parse_apply_patch};
+use crate::ai::path::resolve_within_workspace;
 use crate::ai::{
     is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
     REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
 };
-use crate::ai::patch::{count_unified_diff_lines, parse_apply_patch};
-use crate::ai::path::resolve_within_workspace;
 use crate::broker::BrokerChangeKind;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -157,8 +157,8 @@ impl AiActivityParser for CodexParser {
         // session/turn/call metadata rebuilds the context needed by the unread tail.
         let replay_prefix = cursor.context.is_none() && cursor.byte_offset > 0;
         let read_offset = if replay_prefix { 0 } else { cursor.byte_offset };
-        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(
-            |error| match error.kind() {
+        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(|error| {
+            match error.kind() {
                 std::io::ErrorKind::NotFound => AiParseError::NotFound {
                     path: cursor.source_path.clone(),
                 },
@@ -166,8 +166,8 @@ impl AiActivityParser for CodexParser {
                     path: cursor.source_path.clone(),
                 },
                 _ => AiParseError::Io(error),
-            },
-        )?;
+            }
+        })?;
 
         let mut events = Vec::new();
         let mut warnings = Vec::new();
@@ -319,10 +319,7 @@ impl AiActivityParser for CodexParser {
                     if let Ok(turn) = parsed {
                         current_turn_id = Some(turn.turn_id.clone());
                         let model = normalize_identity_model(turn.model.as_deref());
-                        let model_marker = turn
-                            .model
-                            .as_deref()
-                            .is_some_and(is_internal_marker);
+                        let model_marker = turn.model.as_deref().is_some_and(is_internal_marker);
                         let cwd = turn.cwd.map(PathBuf::from);
                         if let Some(previous) = turn_context.get_mut(&turn.turn_id) {
                             if let (Some(previous_model), Some(next_model)) =
@@ -338,8 +335,7 @@ impl AiActivityParser for CodexParser {
                                 previous.model = model;
                                 previous.identity_reason = None;
                             } else if !previous.identity_conflict && model_marker {
-                                previous.identity_reason =
-                                    Some(REASON_INTERNAL_MARKER.to_string());
+                                previous.identity_reason = Some(REASON_INTERNAL_MARKER.to_string());
                             }
                             if previous.cwd.is_none() {
                                 previous.cwd = cwd;
@@ -453,7 +449,9 @@ impl AiActivityParser for CodexParser {
                         events.push(AiEditEvent {
                             event_id: opaque_file_event_id("codex-v1", &parsed.call_id, &raw_path),
                             agent: "codex".to_string(),
-                            provider: (!identity_conflict).then(|| session_provider.clone()).flatten(),
+                            provider: (!identity_conflict)
+                                .then(|| session_provider.clone())
+                                .flatten(),
                             model: (!identity_conflict)
                                 .then(|| normalize_identity_model(model.as_deref()))
                                 .flatten(),
@@ -463,9 +461,9 @@ impl AiActivityParser for CodexParser {
                             identity_status: identity_conflict
                                 .then(|| IdentityStatus::Conflict.as_str().to_string())
                                 .or_else(|| {
-                                    identity_reason.as_ref().map(|_| {
-                                        IdentityStatus::Partial.as_str().to_string()
-                                    })
+                                    identity_reason
+                                        .as_ref()
+                                        .map(|_| IdentityStatus::Partial.as_str().to_string())
                                 }),
                             identity_reason: identity_conflict
                                 .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
@@ -540,8 +538,8 @@ impl AiActivityParser for CodexParser {
                                     .as_ref()
                                     .and_then(|turn_id| turn_context.get(turn_id));
                                 let reported_model = turn.and_then(|turn| turn.model.clone());
-                                let mut identity_reason = turn
-                                    .and_then(|turn| turn.identity_reason.clone());
+                                let mut identity_reason =
+                                    turn.and_then(|turn| turn.identity_reason.clone());
                                 let mut model = reported_model.clone();
                                 let mut identity_conflict = session_provider_conflict
                                     || turn.is_some_and(|turn| turn.identity_conflict);
@@ -740,7 +738,10 @@ impl AiActivityParser for CodexParser {
             if let Some(turn) = turn_context.get(turn_id) {
                 serialized_turns.push(ParserTurnContext {
                     id: turn_id.clone(),
-                    cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                    cwd: turn
+                        .cwd
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
                     model: turn.model.clone(),
                     identity_reason: turn.identity_reason.clone(),
                     identity_conflict: turn.identity_conflict,
@@ -749,13 +750,18 @@ impl AiActivityParser for CodexParser {
         }
         for (id, turn) in turn_context.iter() {
             if serialized_turns.len() >= 128
-                || serialized_turns.iter().any(|saved| saved.id.as_str() == id.as_str())
+                || serialized_turns
+                    .iter()
+                    .any(|saved| saved.id.as_str() == id.as_str())
             {
                 continue;
             }
             serialized_turns.push(ParserTurnContext {
                 id: id.clone(),
-                cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                cwd: turn
+                    .cwd
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
                 model: turn.model.clone(),
                 identity_reason: turn.identity_reason.clone(),
                 identity_conflict: turn.identity_conflict,
@@ -768,10 +774,11 @@ impl AiActivityParser for CodexParser {
                 turn_id: pending.turn_id.clone(),
                 identity_message_id: None,
                 model: pending.model.clone().or_else(|| {
-                    pending
-                        .turn_id
-                        .as_ref()
-                        .and_then(|turn_id| turn_context.get(turn_id).and_then(|turn| turn.model.clone()))
+                    pending.turn_id.as_ref().and_then(|turn_id| {
+                        turn_context
+                            .get(turn_id)
+                            .and_then(|turn| turn.model.clone())
+                    })
                 }),
                 identity_reason: pending.identity_reason.clone().or_else(|| {
                     pending
@@ -1694,9 +1701,9 @@ mod tests {
                     source_path: path.to_string_lossy().into_owned(),
                     file_identity: None,
                     byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1747,9 +1754,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+            last_record_id: None,
+            last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -1766,9 +1773,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+            last_record_id: None,
+            last_record_time: None,
+            context: None,
         };
         let first_batch = parser
             .parse_since(&ParseContext::default(), Some(&first_cursor))

@@ -2,8 +2,11 @@
 
 **สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้; R3/R4 เสร็จใน branch
 `codex/integrate-all-current-work` เมื่อ 2026-09-13 และ Kafka K-P0/K0.5/K1/K2
-มี implementation แบบ feature-gated แล้ว แต่ยังไม่เปิด production จนกว่า isolated
-Redpanda/ClickHouse spike และ parity gate จะผ่าน
+มี implementation แบบ feature-gated แล้ว. K0 isolated correctness gate ผ่านครบ 11/11
+และเลือก D6=`revision_lookup`; K5 contract/config/client durability/fact-sink/session
+worker/verify scaffolding ลงใน branch นี้แล้ว แต่ production ยังไม่เปิดจนกว่า K3/K4
+และ K5 staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence
+จะผ่าน
 
 | ขั้น | สถานะ |
 |---|---|
@@ -14,11 +17,12 @@ Redpanda/ClickHouse spike และ parity gate จะผ่าน
 | R3 Worker runtime | ✅ 2026-09-13 — `job-worker` binary, migration `008_job_worker_state.sql`, lease fencing, retry/DLQ outbox, graceful drain และ health endpoints; PG regressions 8/8 และ RabbitMQ adapter 8/8 ผ่าน |
 | R4 `analytics.reprocess` | ✅ 2026-09-13 — `ATOAXIS_REPROCESS_MODE=job` ตอบ `202` + `Location`/`job_id`, idempotency บังคับ, worker processor ทำงานจริง; sync mode คงเป็นค่าเริ่มต้น |
 | K-P0 heartbeat ID/retry gate | ✅ validation 1..=256 bytes, server IDs ใน verify/kafka และ permanent 4xx ไม่เข้า retry queue |
-| K0 spike harness + D6 record | 🟡 harness/decision template พร้อม; ต้องรัน isolated Redpanda + ClickHouse จริงก่อนตัดสิน production |
+| K0 spike harness + D6 record | ✅ 2026-09-13 — isolated Redpanda `v24.1.8` + ClickHouse `24.10.4.191` + PostgreSQL 16, 11/11 scenarios; D6=`revision_lookup` ไม่ provisional |
 | K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring, value-level access/rule parity report |
 | K1 Kafka producer | ✅ `rdkafka` feature, idempotent producer, typed heartbeat envelope, topic/infra config |
-| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, sanitized DLQ classification and health endpoints; e2e/rebalance gate pending |
-| K3 verify + K4 cohort rollout | 🟡 orchestration/config/API response implemented; rollout/load/parity gate pending |
+| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, retry seek/pause/resume, sanitized DLQ classification and health endpoints; K0 e2e/rebalance/outage matrix passed |
+| K3 verify + K4 cohort rollout | 🟡 orchestration, PostgreSQL audit, parity verifier, metrics and API response implemented; staging/load/cohort gate pending |
+| K5 AI usage Kafka + session reconcile | 🟡 contract v2/header routing, independent config, durable CLI pending queue, `ai-usage-ingest`, `ai-session-worker`, verifier/audit schema, payload-hash conflict guard and runbook implemented; isolated full-stack, real-account and rollout gates pending |
 | R5 งานชนิดอื่น | ยังไม่เริ่ม |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,

@@ -514,6 +514,7 @@ mod tests {
             "accessory":"none",
             "hairStyle":"bob",
             "outfit":"hoodie"
-        })).is_ok());
+        }))
+        .is_ok());
     }
 }

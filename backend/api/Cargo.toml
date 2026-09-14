@@ -60,6 +60,7 @@ fs2 = "0.4"
 default = []
 kafka = ["dep:rdkafka"]
 kafka-spike = ["kafka"]
+ai-usage-spike = ["kafka"]
 
 [dependencies]
 wakaclock-core = { path = "crates/wakaclock-core" }

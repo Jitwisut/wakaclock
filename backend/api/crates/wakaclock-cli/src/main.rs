@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     error::Error,
     fs,
     io::{self, BufRead, BufReader, Read},
@@ -26,20 +26,20 @@ use wakaclock_core::ai::topology_handoff::{
 use wakaclock_core::{
     ai::{
         editor_capability_catalog, is_known_agent_id, normalize_agent_id, normalize_client_id,
-        normalize_model_id,
-        normalize_provider_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        normalize_identity_reference,
+        normalize_identity_reference, normalize_model_id, normalize_provider_id,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, resolve_identity,
         AdapterFreshnessV2, AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence,
         AiDiagnosticsReportV2, AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple,
         ClaudeCodeParser, CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext,
         DiscoveryResult, DiscoveryState, EditorSurface, ExecutionSurface, GeminiCliParser,
-        MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
-        RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag, VerificationStatus,
-        resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION, REASON_CONFLICTING_EVIDENCE,
-        REASON_INTERNAL_MARKER, FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
+        IdentityStatus, MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor,
+        ParserLagSummaryV2, RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag,
+        VerificationStatus, FINGERPRINT_SCHEME_V1, IDENTITY_SCHEMA_VERSION,
+        PRODUCER_CONTRACT_VERSION, REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
     },
     api_client::{
-        AiIdentityCorrection, AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
+        is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
+        AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
     },
     broker::{scoped_storage_event_id, BrokerEventV1},
     config::Config,
@@ -3819,12 +3819,12 @@ async fn run_ai_identity_repair(
                     events_by_id.entry(event_key).or_insert(event);
                 }
                 if !batch.warnings.is_empty() {
-                    warnings.extend(batch.warnings.into_iter().map(|warning| {
-                        format!(
-                            "{id}: {}",
-                            warning.message
-                        )
-                    }));
+                    warnings.extend(
+                        batch
+                            .warnings
+                            .into_iter()
+                            .map(|warning| format!("{id}: {}", warning.message)),
+                    );
                 }
                 let next_cursor = batch.next_cursor;
                 let pending = next_cursor
@@ -3999,9 +3999,18 @@ async fn run_ai_identity_repair(
         println!("Mode: {}", if report.dry_run { "dry-run" } else { "apply" });
         println!("Transcripts scanned: {}", report.transcripts_scanned.len());
         println!("Events / heartbeats observed: {}", report.event_count);
-        println!("Lines added / deleted: {} / {}", report.lines_added, report.lines_deleted);
-        println!("Confirmed identity candidates: {}", report.confirmed_candidates);
-        println!("Candidates with stable references: {}", report.candidates_with_reference);
+        println!(
+            "Lines added / deleted: {} / {}",
+            report.lines_added, report.lines_deleted
+        );
+        println!(
+            "Confirmed identity candidates: {}",
+            report.confirmed_candidates
+        );
+        println!(
+            "Candidates with stable references: {}",
+            report.candidates_with_reference
+        );
         println!("Identity statuses: {:?}", report.status_counts);
         println!("Identity reasons: {:?}", report.reason_counts);
         if let Some(remote) = &report.remote {
@@ -4050,13 +4059,15 @@ async fn run_ai_sync(
     let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
     let mut first_delivery_error: Option<AppError> = None;
-    // A sync can discover many transcript files, and each parser currently
-    // returns the usage records for the whole file. Accumulate and deduplicate
-    // them here so one pass makes one bounded upload instead of hammering the
-    // API once per transcript (the previous behavior produced hundreds of
-    // simultaneous 500s when the server was unhealthy).
-    let mut pending_usage_records = Vec::new();
-    let mut pending_usage_ids = HashSet::new();
+
+    // Flush durable usage before discovering new transcript bytes. This makes a
+    // restarted watcher drain an outage backlog first while still allowing the
+    // scan below to enqueue newly parsed records if the broker remains down.
+    if !dry_run {
+        if let Some(error) = flush_pending_usage(&mut state, api_client, verbose).await? {
+            first_delivery_error = Some(error);
+        }
+    }
 
     for (id, parser) in supported_ai_parsers() {
         if agent_filter.is_some_and(|filter| filter != id) {
@@ -4205,9 +4216,7 @@ async fn run_ai_sync(
             let candidate_keys: Vec<String> = batch
                 .events
                 .iter()
-                .map(|event| {
-                    scoped_storage_event_id(&event.event_id, event.session_id.as_deref())
-                })
+                .map(|event| scoped_storage_event_id(&event.event_id, event.session_id.as_deref()))
                 .collect();
             let undelivered = state.filter_undelivered(&candidate_keys)?;
             let new_events: Vec<&AiEditEvent> = batch
@@ -4254,12 +4263,11 @@ async fn run_ai_sync(
                 continue;
             }
 
-            if !dry_run {
-                for record in usage_records {
-                    if pending_usage_ids.insert(record.usage_event_id.clone()) {
-                        pending_usage_records.push(record);
-                    }
-                }
+            if !dry_run && !usage_records.is_empty() {
+                // Persist before the network call and before the next transcript
+                // rotation can hide the source bytes. INSERT is idempotent by the
+                // provider event id and stores only the sanitised record.
+                state.enqueue_pending_usage(&usage_records)?;
             }
 
             if !new_events.is_empty() {
@@ -4327,47 +4335,10 @@ async fn run_ai_sync(
         }
     }
 
-    if !dry_run && !pending_usage_records.is_empty() {
-        // Usage parsers intentionally read complete transcripts so they can handle
-        // provider rotations and non-JSONL envelopes. Filter the stable provider IDs
-        // against local acknowledgements before uploading; otherwise the 5-second
-        // watcher would resend every historical token row on every scan.
-        let candidate_usage_ids: Vec<String> = pending_usage_records
-            .iter()
-            .map(|record| record.usage_event_id.clone())
-            .collect();
-        let undelivered_usage = state.filter_undelivered_usage(&candidate_usage_ids)?;
-        pending_usage_records.retain(|record| undelivered_usage.contains(&record.usage_event_id));
-
-        // The API accepts at most 2,000 usage records per request. Keep the
-        // chunks deterministic and stop after the first failure so a broken
-        // server is not flooded with retries during one scan.
-        for chunk in pending_usage_records.chunks(2_000) {
-            match api_client.send_ai_usage(chunk).await {
-                Ok(report) => {
-                    if verbose {
-                        println!(
-                            "usage: received {}, stored {}, duplicate-in-batch {}, unpriced {}, sessions {}",
-                            report.received,
-                            report.stored,
-                            report.duplicates_in_batch,
-                            report.unpriced,
-                            report.sessions_touched
-                        );
-                    }
-                    let delivered_ids: Vec<String> = chunk
-                        .iter()
-                        .map(|record| record.usage_event_id.clone())
-                        .collect();
-                    state.mark_usage_delivered(&delivered_ids)?;
-                }
-                Err(error) => {
-                    if verbose {
-                        eprintln!("warning: usage upload failed: {error}");
-                    }
-                    first_delivery_error = Some(error);
-                    break;
-                }
+    if !dry_run {
+        if let Some(error) = flush_pending_usage(&mut state, api_client, verbose).await? {
+            if first_delivery_error.is_none() {
+                first_delivery_error = Some(error);
             }
         }
     }
@@ -4386,6 +4357,74 @@ async fn run_ai_sync(
     }
 
     Ok(())
+}
+
+/// Drain the durable AI usage queue in deterministic, bounded batches. A successful
+/// 200/202 acknowledgement deletes the pending rows and records delivery in one
+/// SQLite transaction; a retryable refusal updates the timer, while a permanent
+/// 4xx moves the metadata-only records to local dead-letter storage.
+async fn flush_pending_usage(
+    state: &mut AiAttributionState,
+    api_client: &ApiClient,
+    verbose: bool,
+) -> Result<Option<AppError>, Box<dyn Error>> {
+    let pending = state.pending_usage_due(chrono::Utc::now().timestamp())?;
+    for batch in pending.chunks(2_000) {
+        let records: Vec<_> = batch.iter().map(|item| item.record.clone()).collect();
+        let ids: Vec<String> = records
+            .iter()
+            .map(|record| record.usage_event_id.clone())
+            .collect();
+        match api_client.send_ai_usage(&records).await {
+            Ok(report) => {
+                state.mark_usage_delivered(&ids)?;
+                if verbose {
+                    println!(
+                        "usage: received {}, accepted {}, state {:?}, duplicates {}, pending delivery {}",
+                        report.received,
+                        report.accepted,
+                        report.processing_state,
+                        report.duplicates_in_batch,
+                        matches!(
+                            report.processing_state,
+                            wakaclock_core::ai::AiUsageProcessingState::Pending
+                        )
+                    );
+                }
+            }
+            Err(error) => {
+                if is_retryable_delivery_error(&error) {
+                    let max_attempt = batch.iter().map(|item| item.attempt).max().unwrap_or(0);
+                    let delay_seconds = retry_after_seconds(&error)
+                        .unwrap_or_else(|| 2_u64.saturating_pow(max_attempt.min(11)));
+                    let next_retry_at =
+                        chrono::Utc::now().timestamp() + delay_seconds.min(3_600) as i64;
+                    state.mark_usage_retry(&ids, next_retry_at, "delivery_retry")?;
+                } else {
+                    state.move_usage_dead_letter(&ids, usage_error_code(&error))?;
+                }
+                if verbose {
+                    eprintln!("warning: usage upload failed: {error}");
+                }
+                return Ok(Some(error));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn usage_error_code(error: &AppError) -> &'static str {
+    match error {
+        AppError::Conflict(_) => "conflict",
+        AppError::Validation(_) => "validation",
+        AppError::Auth(_) => "auth",
+        AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. }
+            if (400..=499).contains(status) =>
+        {
+            "permanent_http_4xx"
+        }
+        _ => "permanent_delivery_error",
+    }
 }
 
 #[derive(Debug)]

@@ -3,7 +3,8 @@ use crate::{
         normalize_identity_agent, normalize_identity_model, normalize_identity_provider,
         normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
         normalize_identity_status, resolve_identity, AiDiagnosticsReport, AiDiagnosticsReportV2,
-        AiUsageIngestReport, AiUsageRecord, IDENTITY_SCHEMA_VERSION,
+        AiUsageIngestReport, AiUsageIngestReportV2, AiUsageProcessingState, AiUsageRecord,
+        IDENTITY_SCHEMA_VERSION,
     },
     config::Config,
     error::{AppError, AppResult},
@@ -138,10 +139,27 @@ pub fn is_retryable_delivery_error(error: &AppError) -> bool {
     }
 }
 
-fn retry_after_seconds(error: &AppError) -> Option<u64> {
+/// Heartbeat delivery has one additional durable-capture case: HTTP 402 means
+/// the account entitlement is inactive, not that the captured activity is
+/// invalid. Keep that heartbeat in the local queue so it can be delivered when
+/// billing is restored. AI usage uses `is_retryable_delivery_error` directly;
+/// its permanent-4xx dead-letter contract must remain stricter.
+fn is_retryable_heartbeat_delivery_error(error: &AppError) -> bool {
+    match error {
+        AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. }
+            if *status == 402 =>
+        {
+            true
+        }
+        _ => is_retryable_delivery_error(error),
+    }
+}
+
+pub fn retry_after_seconds(error: &AppError) -> Option<u64> {
     match error {
         AppError::HttpStatusRetry {
-            retry_after_seconds, ..
+            retry_after_seconds,
+            ..
         } => *retry_after_seconds,
         _ => None,
     }
@@ -357,7 +375,7 @@ impl ApiClient {
             }
             Err(error) => {
                 self.record_delivery_failure(&error.to_string());
-                if is_retryable_delivery_error(&error) {
+                if is_retryable_heartbeat_delivery_error(&error) {
                     for payload in &payloads {
                         queue.push(payload)?;
                     }
@@ -441,20 +459,41 @@ impl ApiClient {
         Ok(response.json::<StatusBarSnapshot>().await?)
     }
 
-    /// Upload sanitized token/session usage parsed from an agent transcript. Unlike
-    /// heartbeats this stream is not placed in the offline heartbeat queue: each event
-    /// has its own stable provider id, so a failed or retried batch can simply be sent
-    /// again without ever duplicating usage at the server.
-    pub async fn send_ai_usage(&self, records: &[AiUsageRecord]) -> AppResult<AiUsageIngestReport> {
+    /// Upload sanitized token/session usage parsed from an agent transcript. The
+    /// capability header opts the caller into the nullable response contract used by
+    /// the Kafka cutover; older binaries that omit it continue to receive the legacy
+    /// direct-path response.
+    pub async fn send_ai_usage(
+        &self,
+        records: &[AiUsageRecord],
+    ) -> AppResult<AiUsageIngestReportV2> {
         let response = self
             .client
             .post(format!("{}/api/v1/ai/usage", self.config.server_url))
+            .header("X-AtoAxis-Ai-Usage-Contract", "2")
             .json(records)
             .send()
             .await?;
         let response = Self::reject_unauthorized(response)?;
         let response = Self::error_for_status_with_body(response).await?;
-        Ok(response.json::<AiUsageIngestReport>().await?)
+        let body = response.json::<Value>().await?;
+        if let Ok(report) = serde_json::from_value::<AiUsageIngestReportV2>(body.clone()) {
+            return Ok(report);
+        }
+        // During a rolling server upgrade an API replica may still return the
+        // legacy direct-path shape. Treat that successful response as stored so
+        // the durable client queue is not needlessly retried or dead-lettered.
+        let legacy = serde_json::from_value::<AiUsageIngestReport>(body)?;
+        Ok(AiUsageIngestReportV2 {
+            contract_version: 2,
+            processing_state: AiUsageProcessingState::Stored,
+            received: legacy.received,
+            accepted: legacy.received.saturating_sub(legacy.duplicates_in_batch),
+            duplicates_in_batch: legacy.duplicates_in_batch,
+            stored: Some(legacy.stored),
+            unpriced: Some(legacy.unpriced),
+            sessions_touched: Some(legacy.sessions_touched),
+        })
     }
 
     /// Upload a metadata-only AI diagnostics snapshot.  Diagnostics are optional
@@ -503,7 +542,10 @@ impl ApiClient {
     ) -> AppResult<AiIdentityRepairReport> {
         let response = self
             .client
-            .post(format!("{}/api/v1/ai/identity/repair", self.config.server_url))
+            .post(format!(
+                "{}/api/v1/ai/identity/repair",
+                self.config.server_url
+            ))
             .json(request)
             .send()
             .await?;
@@ -562,7 +604,7 @@ impl ApiClient {
                 }
                 Err(error) => {
                     stopped_because = Some(error.to_string());
-                    if is_retryable_delivery_error(&error) {
+                    if is_retryable_heartbeat_delivery_error(&error) {
                         queue.mark_retry_after(id, retry_after_seconds(&error))?;
                     } else {
                         // A queued row that now receives a permanent 4xx is
@@ -740,7 +782,8 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     let identity_source = normalize_identity_source(queued_string_value(object, "identity_source"))
         .or_else(|| normalize_identity_source(source.as_deref()));
     let identity_status = normalize_identity_status(queued_string_value(object, "identity_status"));
-    let _identity_reason = normalize_identity_reason(queued_string_value(object, "identity_reason"));
+    let _identity_reason =
+        normalize_identity_reason(queued_string_value(object, "identity_reason"));
     for key in ["identity_turn_id", "identity_message_id"] {
         let normalized = object
             .get(key)
@@ -928,7 +971,10 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     payload
 }
 
-fn queued_string_value<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+fn queued_string_value<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
     object
         .get(key)
         .and_then(Value::as_str)
@@ -1152,7 +1198,9 @@ mod tests {
             message: "down".to_string(),
             retry_after_seconds: Some(5),
         }));
-        assert!(!is_retryable_delivery_error(&AppError::Conflict("duplicate".to_string())));
+        assert!(!is_retryable_delivery_error(&AppError::Conflict(
+            "duplicate".to_string()
+        )));
     }
 
     #[test]
@@ -1172,9 +1220,19 @@ mod tests {
         };
         let value = serde_json::to_value(&request).expect("serializes");
         let object = value.as_object().expect("object");
-        for forbidden in ["prompt", "response", "patch", "content", "source_text", "time"] {
+        for forbidden in [
+            "prompt",
+            "response",
+            "patch",
+            "content",
+            "source_text",
+            "time",
+        ] {
             assert!(!object.contains_key(forbidden));
         }
-        assert_eq!(serde_json::from_value::<AiIdentityRepairRequest>(value).unwrap(), request);
+        assert_eq!(
+            serde_json::from_value::<AiIdentityRepairRequest>(value).unwrap(),
+            request
+        );
     }
 }

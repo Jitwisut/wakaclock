@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::config::brokers::IngestMode;
 use crate::config::Config;
-use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::contracts::EventBus;
+use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::rate_limiter::{
@@ -164,7 +164,8 @@ impl AppState {
         // the fact-sink owns that dependency. Keep the health endpoint live during
         // a ClickHouse outage so the broker-accepting path is not restarted.
         let clickhouse_required = self.config.brokers.ingest.mode
-            != crate::config::brokers::IngestMode::Kafka;
+            != crate::config::brokers::IngestMode::Kafka
+            && self.config.brokers.ai_usage.mode != crate::config::brokers::IngestMode::Kafka;
         let postgres_ok = match &self.postgres {
             Some(postgres) => postgres.health_check().await.is_ok(),
             None => true,
@@ -217,9 +218,12 @@ pub async fn create_app_state() -> Result<AppState> {
     let event_bus: Option<Arc<dyn EventBus>> = {
         // Keep the direct compatibility path independent from Kafka even when a
         // developer leaves broker settings in the environment for an integration
-        // test. Verify/Kafka modes are the only modes that need a live producer at
-        // API startup.
-        if config.brokers.ingest.mode == IngestMode::Direct {
+        // Verify/Kafka modes are the only modes that need a live producer at API
+        // startup. Heartbeat and AI usage deliberately have independent rollout
+        // switches, so either stream can request the shared producer.
+        if config.brokers.ingest.mode == IngestMode::Direct
+            && config.brokers.ai_usage.mode == IngestMode::Direct
+        {
             None
         } else {
             #[cfg(feature = "kafka")]
@@ -241,7 +245,9 @@ pub async fn create_app_state() -> Result<AppState> {
             #[cfg(not(feature = "kafka"))]
             {
                 if config.brokers.event_bus.is_some() {
-                    tracing::warn!("Kafka event bus configured but server was built without the kafka feature");
+                    tracing::warn!(
+                        "Kafka event bus configured but server was built without the kafka feature"
+                    );
                 }
                 None
             }
@@ -324,15 +330,10 @@ pub async fn create_app_state() -> Result<AppState> {
         )),
         None => None,
     };
-    let user_service = Arc::new(UserService::new(
-        clickhouse.clone(),
-        postgres.clone(),
-        credential_secret_box,
-    )
-    .with_ingest_state(
-        config.brokers.ingest_state_source,
-        postgres.clone(),
-    ));
+    let user_service = Arc::new(
+        UserService::new(clickhouse.clone(), postgres.clone(), credential_secret_box)
+            .with_ingest_state(config.brokers.ingest_state_source, postgres.clone()),
+    );
     let duration_service = Arc::new(DurationService::new(clickhouse.clone(), bridge_config));
     let external_duration_service =
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
@@ -391,10 +392,8 @@ pub async fn create_app_state() -> Result<AppState> {
     ));
     let projects_service = Arc::new(ProjectsService::new(clickhouse.clone(), bridge_config));
     let project_rule_service = Arc::new(
-        ProjectRuleService::new(project_rule_repo.clone()).with_ingest_state(
-            config.brokers.ingest_state_source,
-            postgres.clone(),
-        ),
+        ProjectRuleService::new(project_rule_repo.clone())
+            .with_ingest_state(config.brokers.ingest_state_source, postgres.clone()),
     );
     let reprocess_service = Arc::new(ReprocessService::new(
         postgres.clone(),

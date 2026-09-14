@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
+use crate::infrastructure::postgres::PostgresClient;
 use crate::model::ai_usage::{
     AiModelPricingRow, AiSessionProjectRow, AiSessionRow, AiUsageEventRow,
 };
@@ -14,6 +16,34 @@ pub struct AiUsageRepository {
 impl AiUsageRepository {
     pub fn new(client: Arc<ClickHouseClient>) -> Self {
         Self { client }
+    }
+
+    pub async fn insert_verification_audit(
+        &self,
+        postgres: &PostgresClient,
+        event_id_hash: &str,
+        mismatch_category: &str,
+        field_flags: &[&str],
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        let id = Uuid::now_v7();
+        let flags = serde_json::to_value(field_flags)?;
+        postgres
+            .execute(
+                "INSERT INTO ai_usage_verification_audits
+                 (id, event_id_hash, mismatch_category, field_flags, received_at)
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[
+                    &id,
+                    &event_id_hash,
+                    &mismatch_category,
+                    &flags,
+                    &received_at,
+                ],
+            )
+            .await
+            .context("insert AI usage verification audit")?;
+        Ok(())
     }
 
     /// Creates the AI usage/session/pricing tables and seeds the price catalog.
@@ -29,9 +59,11 @@ impl AiUsageRepository {
                     user_id UUID,
                     date Date,
                     usage_event_id String,
+                    event_payload_hash Nullable(String),
                     ai_session_id String,
                     event_time UInt32,
                     project_id Nullable(UUID),
+                    project_attribution_method Nullable(String),
                     ai_agent String,
                     ai_provider Nullable(String),
                     ai_model Nullable(String),
@@ -67,6 +99,10 @@ impl AiUsageRepository {
                     machine Nullable(String),
                     operating_system Nullable(String),
                     prompt_count UInt64,
+                    input_tokens Nullable(UInt64),
+                    output_tokens Nullable(UInt64),
+                    cache_read_tokens Nullable(UInt64),
+                    cache_write_tokens Nullable(UInt64),
                     version UInt64,
                     updated_at UInt32
                 ) ENGINE = ReplacingMergeTree(version)
@@ -85,6 +121,7 @@ impl AiUsageRepository {
                     event_count UInt64,
                     ai_lines_changed UInt64,
                     token_allocation_method String,
+                    is_deleted UInt8 DEFAULT 0,
                     version UInt64
                 ) ENGINE = ReplacingMergeTree(version)
                 ORDER BY (user_id, ai_session_id, project_id)
@@ -154,6 +191,79 @@ impl AiUsageRepository {
             .await
             .context("Failed to add ai_usage_events.prompt_character_count")?;
 
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 ADD COLUMN IF NOT EXISTS event_payload_hash Nullable(String)",
+            )
+            .execute()
+            .await
+            .context("Failed to add ai_usage_events.event_payload_hash")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 ADD COLUMN IF NOT EXISTS project_attribution_method Nullable(String)",
+            )
+            .execute()
+            .await
+            .context("Failed to add ai_usage_events.project_attribution_method")?;
+
+        // Early development schemas appended additive columns at the end of the
+        // MergeTree. Keep the RowBinary insert order canonical for both fresh and
+        // upgraded databases before any worker starts writing replacement rows.
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 MODIFY COLUMN prompt_character_count Nullable(UInt64) AFTER prompt_count",
+            )
+            .execute()
+            .await
+            .context("Failed to order ai_usage_events.prompt_character_count")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 MODIFY COLUMN event_payload_hash Nullable(String) AFTER usage_event_id",
+            )
+            .execute()
+            .await
+            .context("Failed to order ai_usage_events.event_payload_hash")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_usage_events
+                 MODIFY COLUMN project_attribution_method Nullable(String) AFTER project_id",
+            )
+            .execute()
+            .await
+            .context("Failed to order ai_usage_events.project_attribution_method")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_session_projects
+                 ADD COLUMN IF NOT EXISTS is_deleted UInt8 DEFAULT 0",
+            )
+            .execute()
+            .await
+            .context("Failed to add ai_session_projects.is_deleted")?;
+
+        self.client
+            .get_client()
+            .query(
+                "ALTER TABLE wakaclock.ai_session_projects
+                 MODIFY COLUMN is_deleted UInt8 DEFAULT 0 AFTER token_allocation_method",
+            )
+            .execute()
+            .await
+            .context("Failed to order ai_session_projects.is_deleted")?;
+
         // Existing development databases may have been created by the short-lived
         // FixedString(3) schema above. Pricing is always USD today, but using String
         // keeps the codec safe and makes a future currency code migration explicit.
@@ -174,6 +284,32 @@ impl AiUsageRepository {
             .execute()
             .await
             .context("Failed to add ai_sessions.last_event_at")?;
+
+        for (column, after) in [
+            ("input_tokens", "prompt_count"),
+            ("output_tokens", "input_tokens"),
+            ("cache_read_tokens", "output_tokens"),
+            ("cache_write_tokens", "cache_read_tokens"),
+        ] {
+            self.client
+                .get_client()
+                .query(&format!(
+                    "ALTER TABLE wakaclock.ai_sessions
+                     ADD COLUMN IF NOT EXISTS {column} Nullable(UInt64)"
+                ))
+                .execute()
+                .await
+                .with_context(|| format!("Failed to add ai_sessions.{column}"))?;
+            self.client
+                .get_client()
+                .query(&format!(
+                    "ALTER TABLE wakaclock.ai_sessions
+                     MODIFY COLUMN {column} Nullable(UInt64) AFTER {after}"
+                ))
+                .execute()
+                .await
+                .with_context(|| format!("Failed to order ai_sessions.{column}"))?;
+        }
 
         self.seed_pricing().await?;
         Ok(())
@@ -286,6 +422,67 @@ impl AiUsageRepository {
         Ok(rows.into_iter().map(|row| row.usage_event_id).collect())
     }
 
+    /// Return the stored payload hash for each logical usage id. `None` means a
+    /// legacy row predating the additive hash column; that row is treated as the
+    /// first write and is never overwritten by a later payload.
+    pub async fn existing_event_payload_hashes(
+        &self,
+        user_id: Uuid,
+        candidates: &[String],
+    ) -> Result<HashMap<String, Option<String>>> {
+        if candidates.is_empty() {
+            return Ok(HashMap::new());
+        }
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct IdentityRow {
+            usage_event_id: String,
+            event_payload_hash: Option<String>,
+        }
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT usage_event_id, event_payload_hash
+                 FROM wakaclock.ai_usage_events FINAL
+                 WHERE user_id = ? AND usage_event_id IN ?",
+            )
+            .bind(user_id)
+            .bind(candidates)
+            .fetch_all::<IdentityRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse usage identity query error: {e}"))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.usage_event_id, row.event_payload_hash))
+            .collect())
+    }
+
+    pub async fn find_event(
+        &self,
+        user_id: Uuid,
+        usage_event_id: &str,
+    ) -> Result<Option<AiUsageEventRow>> {
+        self.client
+            .get_client()
+            .query(
+                "SELECT
+                    user_id, toUInt16(date) AS date, usage_event_id, event_payload_hash,
+                    ai_session_id, event_time, project_id, project_attribution_method,
+                    ai_agent, ai_provider, ai_model,
+                    prompt_count, prompt_character_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, estimated_cost_microusd,
+                    pricing_version, token_source, version, received_at
+                 FROM wakaclock.ai_usage_events FINAL
+                 WHERE user_id = ? AND usage_event_id = ?
+                 LIMIT 1",
+            )
+            .bind(user_id)
+            .bind(usage_event_id)
+            .fetch_optional::<AiUsageEventRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse usage verification query error: {e}"))
+    }
+
     /// Returns the distinct projects already proven for each touched session. This supports
     /// the conservative allocation rule: an event without an explicit project may inherit the
     /// session's sole project, but a multi-project session remains unattributed rather than
@@ -316,6 +513,96 @@ impl AiUsageRepository {
             .fetch_all::<SessionProjectIdRow>()
             .await
             .map_err(|e| anyhow::anyhow!("ClickHouse session project query error: {e}"))
+    }
+
+    /// Full fact rows for a bounded session reconciliation. The worker reads
+    /// these values from ClickHouse rather than trusting the small RabbitMQ job
+    /// payload.
+    pub async fn session_facts(
+        &self,
+        user_id: Uuid,
+        session_ids: &[String],
+    ) -> Result<Vec<AiUsageEventRow>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.client
+            .get_client()
+            .query(
+                "SELECT
+                    user_id, toUInt16(date) AS date, usage_event_id, event_payload_hash,
+                    ai_session_id, event_time, project_id, project_attribution_method,
+                    ai_agent, ai_provider, ai_model,
+                    prompt_count, prompt_character_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, estimated_cost_microusd,
+                    pricing_version, token_source, version, received_at
+                 FROM wakaclock.ai_usage_events FINAL
+                 WHERE user_id = ? AND ai_session_id IN ?
+                 ORDER BY event_time, usage_event_id",
+            )
+            .bind(user_id)
+            .bind(session_ids)
+            .fetch_all::<AiUsageEventRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse session facts query error: {e}"))
+    }
+
+    pub async fn session_project_rollups(
+        &self,
+        user_id: Uuid,
+        session_ids: &[String],
+    ) -> Result<Vec<SessionProjectRollup>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.client
+            .get_client()
+            .query(
+                "SELECT
+                    ai_session_id,
+                    assumeNotNull(project_id) AS project_id,
+                    min(event_time) AS first_event_at,
+                    max(event_time) AS last_event_at,
+                    count() AS event_count
+                 FROM wakaclock.ai_usage_events FINAL
+                 WHERE user_id = ? AND ai_session_id IN ? AND project_id IS NOT NULL
+                 GROUP BY ai_session_id, project_id",
+            )
+            .bind(user_id)
+            .bind(session_ids)
+            .fetch_all::<SessionProjectRollup>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse session project rollup error: {e}"))
+    }
+
+    /// Returns active project projections for one session. A reconciliation uses
+    /// this snapshot to emit tombstones for projects that were previously inferred
+    /// but are no longer supported by the session's facts.
+    pub async fn active_session_project_ids(
+        &self,
+        user_id: Uuid,
+        session_id: &str,
+    ) -> Result<Vec<Uuid>> {
+        #[derive(Debug, serde::Deserialize, clickhouse::Row)]
+        struct ProjectIdRow {
+            #[serde(with = "clickhouse::serde::uuid")]
+            project_id: Uuid,
+        }
+
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT project_id
+                 FROM wakaclock.ai_session_projects FINAL
+                 WHERE user_id = ? AND ai_session_id = ? AND is_deleted = 0",
+            )
+            .bind(user_id)
+            .bind(session_id)
+            .fetch_all::<ProjectIdRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse active session project query error: {e}"))?;
+        Ok(rows.into_iter().map(|row| row.project_id).collect())
     }
 
     pub async fn insert_usage_events(&self, rows: &[AiUsageEventRow]) -> Result<()> {
@@ -386,7 +673,11 @@ impl AiUsageRepository {
                     uniqExact(ifNull(ai_provider, '')) AS distinct_providers,
                     argMax(ifNull(ai_provider, ''), event_time) AS latest_provider,
                     uniqExact(ifNull(ai_model, '')) AS distinct_models,
-                    argMax(ifNull(ai_model, ''), event_time) AS latest_model
+                    argMax(ifNull(ai_model, ''), event_time) AS latest_model,
+                    sumOrNull(input_tokens) AS input_tokens,
+                    sumOrNull(output_tokens) AS output_tokens,
+                    sumOrNull(cache_read_tokens) AS cache_read_tokens,
+                    sumOrNull(cache_write_tokens) AS cache_write_tokens
                  FROM wakaclock.ai_usage_events FINAL
                  WHERE user_id = ? AND ai_session_id IN ?
                  GROUP BY ai_session_id",
@@ -435,6 +726,10 @@ pub struct SessionRollup {
     pub latest_provider: String,
     pub distinct_models: u64,
     pub latest_model: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
@@ -442,6 +737,16 @@ pub struct SessionProjectIdRow {
     pub ai_session_id: String,
     #[serde(with = "clickhouse::serde::uuid")]
     pub project_id: Uuid,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+pub struct SessionProjectRollup {
+    pub ai_session_id: String,
+    #[serde(with = "clickhouse::serde::uuid")]
+    pub project_id: Uuid,
+    pub first_event_at: u32,
+    pub last_event_at: u32,
+    pub event_count: u64,
 }
 
 /// Identifies the shipped catalog. Bump when the seeded numbers change so a new boot writes the

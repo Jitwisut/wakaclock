@@ -11,15 +11,18 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use serde_json::json;
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 use wakaclock_core::{
-    api_client::{AiIdentityCorrection, AiIdentityRepairReport, AiIdentityRepairRequest},
     ai::{
-        is_known_agent_id, is_safe_event_id, normalize_identity_agent,
-        normalize_identity_model, normalize_identity_provider, normalize_identity_reference,
-        normalize_identity_source, resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION,
+        is_known_agent_id, is_safe_event_id, normalize_identity_agent, normalize_identity_model,
+        normalize_identity_provider, normalize_identity_reference, normalize_identity_source,
+        resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION,
     },
+    api_client::{AiIdentityCorrection, AiIdentityRepairReport, AiIdentityRepairRequest},
     heartbeat::MAX_HEARTBEAT_REVISION,
 };
 
@@ -60,9 +63,7 @@ pub async fn repair(
     if request.corrections.len() > MAX_REPAIR_CORRECTIONS {
         return Err(app_error(
             StatusCode::BAD_REQUEST,
-            &format!(
-                "at most {MAX_REPAIR_CORRECTIONS} identity corrections per request"
-            ),
+            &format!("at most {MAX_REPAIR_CORRECTIONS} identity corrections per request"),
         ));
     }
     let repair_run_id = Uuid::parse_str(&request.repair_run_id).map_err(|_| {
@@ -156,7 +157,10 @@ pub async fn repair(
         unique.insert(correction_key, valid);
     }
 
-    let event_ids: Vec<String> = unique.keys().map(|(event_id, _)| event_id.clone()).collect();
+    let event_ids: Vec<String> = unique
+        .keys()
+        .map(|(event_id, _)| event_id.clone())
+        .collect();
     let rows = state
         .heartbeat_repo
         .get_by_ai_event_ids(user_id, &event_ids)
@@ -235,12 +239,14 @@ pub async fn repair(
                     .map(|reason| reason.trim().is_empty())
                     .unwrap_or(true)
                 && row.ai_agent.as_deref().is_some_and(is_known_agent_id)
-                && row.ai_provider.as_deref().is_some_and(|provider| {
-                    normalize_identity_provider(Some(provider)).is_some()
-                })
-                && row.ai_model.as_deref().is_some_and(|model| {
-                    normalize_identity_model(Some(model)).is_some()
-                });
+                && row
+                    .ai_provider
+                    .as_deref()
+                    .is_some_and(|provider| normalize_identity_provider(Some(provider)).is_some())
+                && row
+                    .ai_model
+                    .as_deref()
+                    .is_some_and(|model| normalize_identity_model(Some(model)).is_some());
             if existing_confirmed_tuple
                 && (row.ai_agent.as_deref() != Some(correction.agent.as_str())
                     || row.ai_provider.as_deref() != Some(correction.provider.as_str())
@@ -268,9 +274,8 @@ pub async fn repair(
                 let mut next = row.clone();
                 next.revision = row.revision.saturating_add(1);
                 next.identity_status = Some(IdentityStatus::Conflict.as_str().to_string());
-                next.identity_reason = Some(
-                    wakaclock_core::ai::REASON_CONFLICTING_EVIDENCE.to_string(),
-                );
+                next.identity_reason =
+                    Some(wakaclock_core::ai::REASON_CONFLICTING_EVIDENCE.to_string());
                 next.identity_schema_version = Some(IDENTITY_SCHEMA_VERSION);
                 next.ai_agent = (row.ai_agent.as_deref() == Some(correction.agent.as_str()))
                     .then(|| correction.agent.clone());
@@ -387,8 +392,8 @@ pub async fn repair(
         preserved_lines_added,
         preserved_lines_deleted,
     };
-    if let Err(error) = write_audit(&state, repair_run_id, user_id, &audit_summary, &audit_rows)
-    .await
+    if let Err(error) =
+        write_audit(&state, repair_run_id, user_id, &audit_summary, &audit_rows).await
     {
         tracing::warn!(%error, %repair_run_id, "AI identity repair audit write failed");
     }

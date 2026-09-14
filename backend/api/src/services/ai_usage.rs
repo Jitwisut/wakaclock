@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -14,6 +15,71 @@ use wakaclock_core::ai::AiUsageRecord;
 pub struct AiUsageService {
     repo: Arc<AiUsageRepository>,
     project_identity_service: Arc<ProjectIdentityService>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AiUsageBatchError {
+    #[error("usage_event_id {0} was submitted with conflicting payloads")]
+    IdentityConflict(String),
+    #[error("invalid AI usage record: {0}")]
+    Validation(String),
+    #[error("could not serialize AI usage payload")]
+    Serialization(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedAiUsageBatch {
+    pub records: Vec<AiUsageRecord>,
+    pub duplicates_in_batch: usize,
+    pub payload_hashes: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AiUsageFactsReport {
+    pub report: AiUsageIngestReport,
+    pub session_ids: Vec<String>,
+}
+
+/// Deduplicate by the provider id while treating an ID/payload mismatch as a
+/// conflict. The hash covers the complete sanitized record and never contains
+/// prompt/response/source data because those fields are not part of the record.
+pub fn prepare_batch(records: &[AiUsageRecord]) -> Result<PreparedAiUsageBatch, AiUsageBatchError> {
+    let mut by_id: HashMap<String, (String, AiUsageRecord)> = HashMap::new();
+    let mut order = Vec::with_capacity(records.len());
+    let mut duplicates_in_batch = 0;
+    for record in records {
+        record.validate().map_err(AiUsageBatchError::Validation)?;
+        let payload = serde_json::to_vec(record)?;
+        let digest = Sha256::digest(&payload);
+        let payload_hash = format!("{digest:x}");
+        match by_id.entry(record.usage_event_id.clone()) {
+            Entry::Vacant(entry) => {
+                order.push(record.usage_event_id.clone());
+                entry.insert((payload_hash, record.clone()));
+            }
+            Entry::Occupied(entry) => {
+                if entry.get().0 != payload_hash {
+                    return Err(AiUsageBatchError::IdentityConflict(
+                        record.usage_event_id.clone(),
+                    ));
+                }
+                duplicates_in_batch += 1;
+            }
+        }
+    }
+    let payload_hashes = by_id
+        .iter()
+        .map(|(id, (hash, _))| (id.clone(), hash.clone()))
+        .collect();
+    let records = order
+        .into_iter()
+        .filter_map(|id| by_id.remove(&id).map(|(_, record)| record))
+        .collect();
+    Ok(PreparedAiUsageBatch {
+        records,
+        duplicates_in_batch,
+        payload_hashes,
+    })
 }
 
 impl AiUsageService {
@@ -38,19 +104,60 @@ impl AiUsageService {
         user_id: Uuid,
         records: Vec<AiUsageRecord>,
     ) -> Result<AiUsageIngestReport> {
-        let received = records.len();
-        let now = chrono::Utc::now().timestamp().max(0) as u32;
-
-        // Collapse within the batch first. A client retrying mid-batch can legitimately send the
-        // same event twice in one call, and ClickHouse would keep both until a merge.
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut deduped = Vec::with_capacity(records.len());
-        for record in records {
-            if seen.insert(record.usage_event_id.clone()) {
-                deduped.push(record);
+        let mut facts = self.ingest_internal(user_id, records).await?;
+        // The direct compatibility path preserves the old synchronous contract by
+        // running the same two-stage pipeline as the workers: facts first, then a
+        // full session/project rebuild from authoritative facts. Projection errors
+        // remain non-fatal after the fact insert, matching the legacy endpoint's
+        // accepted-event behaviour while making the next reconcile able to repair it.
+        for session_id in &facts.session_ids {
+            match self.reconcile_session(user_id, session_id).await {
+                Ok(touched) => facts.report.sessions_touched += touched,
+                Err(error) => warn!(
+                    %user_id,
+                    %error,
+                    session_id,
+                    "AI usage session projection failed after direct fact acceptance"
+                ),
             }
         }
-        let duplicates_in_batch = received - deduped.len();
+        Ok(facts.report)
+    }
+
+    /// Ingest only authoritative usage facts. Kafka consumers call this method;
+    /// session projections are scheduled separately through PostgreSQL jobs so a
+    /// ClickHouse-success/PG-failure crash replays without committing the offset.
+    pub async fn ingest_facts(
+        &self,
+        user_id: Uuid,
+        records: Vec<AiUsageRecord>,
+    ) -> Result<AiUsageFactsReport> {
+        self.ingest_internal(user_id, records).await
+    }
+
+    /// Recompute one session projection from the stored facts. The operation is
+    /// derived and idempotent; replaying the same job writes the same logical
+    /// replacement version rather than accumulating totals.
+    pub async fn reconcile_session(&self, user_id: Uuid, session_id: &str) -> Result<usize> {
+        let version = chrono::Utc::now().timestamp_micros().max(0) as u64;
+        self.reconcile_projects(user_id, session_id, version)
+            .await?;
+        self.refresh_sessions(user_id, &[session_id.to_string()], version)
+            .await
+    }
+
+    async fn ingest_internal(
+        &self,
+        user_id: Uuid,
+        records: Vec<AiUsageRecord>,
+    ) -> Result<AiUsageFactsReport> {
+        let received = records.len();
+        let now = chrono::Utc::now().timestamp().max(0) as u32;
+        let version = chrono::Utc::now().timestamp_micros().max(0) as u64;
+        let prepared = prepare_batch(&records).map_err(ai_usage_batch_error)?;
+        let duplicates_in_batch = prepared.duplicates_in_batch;
+        let payload_hashes = prepared.payload_hashes;
+        let deduped = prepared.records;
 
         // Price once per model rather than once per event — a batch is overwhelmingly one or two
         // models, and the catalog is small enough to hold for the duration of the call.
@@ -126,17 +233,21 @@ impl AiUsageService {
                 },
                 _ => None,
             };
+            let project_attribution_method =
+                project_id.map(|_| "explicit_project_hint".to_string());
 
             rows.push(AiUsageEventRow {
                 user_id,
                 date: (event_time / 86_400) as u16,
                 usage_event_id: record.usage_event_id.clone(),
+                event_payload_hash: payload_hashes.get(&record.usage_event_id).cloned(),
                 ai_session_id: record.ai_session_id.clone(),
                 event_time,
                 // Explicit privacy-safe hints are resolved here. A later conservative pass may
                 // attach the event to a session's sole known project; ambiguous sessions stay in
                 // the unattributed-project bucket instead of copying totals to every project.
                 project_id,
+                project_attribution_method,
                 ai_agent: record.agent.clone(),
                 ai_provider: record.provider.clone(),
                 ai_model: record.model.clone(),
@@ -149,82 +260,29 @@ impl AiUsageService {
                 estimated_cost_microusd: priced.map(|(cost, _)| cost),
                 pricing_version: priced.map(|(_, window)| window.pricing_version.clone()),
                 token_source: record.token_source.as_str().to_string(),
-                version: u64::from(now),
+                version,
                 received_at: now,
             });
         }
 
-        let already_present: HashSet<String> = match self
+        let candidates: Vec<String> = rows.iter().map(|row| row.usage_event_id.clone()).collect();
+        let existing = self
             .repo
-            .existing_event_ids(
-                user_id,
-                &rows
-                    .iter()
-                    .map(|row| row.usage_event_id.clone())
-                    .collect::<Vec<_>>(),
-            )
+            .existing_event_payload_hashes(user_id, &candidates)
             .await
-        {
-            Ok(ids) => ids.into_iter().collect(),
-            Err(error) => {
-                // The stable event id and ReplacingMergeTree remain the
-                // server-side safety net. If the read-side dedup query is
-                // temporarily unavailable, accepting the batch is preferable
-                // to retrying the same transcript forever.
-                warn!(
-                    %user_id,
-                    %error,
-                    "AI usage existing-event lookup unavailable; relying on server dedup"
-                );
-                HashSet::new()
-            }
-        };
-
-        // Attach project-less events to a session's sole known project. We collect from both
-        // the existing authoritative events and the explicit hints in this batch, so retries
-        // and split transcript uploads converge on the same allocation. A session touching two
-        // projects deliberately receives no inferred project.
-        let mut session_projects: HashMap<String, HashSet<Uuid>> = HashMap::new();
-        let mut explicit_session_projects: HashSet<(String, Uuid)> = HashSet::new();
+            .context("AI usage identity lookup failed")?;
         for row in &rows {
-            if let Some(project_id) = row.project_id {
-                session_projects
-                    .entry(row.ai_session_id.clone())
-                    .or_default()
-                    .insert(project_id);
-                explicit_session_projects.insert((row.ai_session_id.clone(), project_id));
-            }
-        }
-        match self.repo.session_project_ids(user_id, &session_ids).await {
-            Ok(rows) => {
-                for row in rows {
-                    session_projects
-                        .entry(row.ai_session_id)
-                        .or_default()
-                        .insert(row.project_id);
-                }
-            }
-            Err(error) => {
-                warn!(
-                    %user_id,
-                    %error,
-                    "AI usage session-project lookup unavailable; leaving events unattributed"
+            let Some(Some(existing_hash)) = existing.get(&row.usage_event_id) else {
+                continue;
+            };
+            if payload_hashes.get(&row.usage_event_id) != Some(existing_hash) {
+                anyhow::bail!(
+                    "usage_identity_conflict for usage_event_id {}",
+                    row.usage_event_id
                 );
             }
         }
-        for row in &mut rows {
-            if row.project_id.is_none() {
-                if let Some(project_id) =
-                    session_projects
-                        .get(&row.ai_session_id)
-                        .and_then(|projects| {
-                            (projects.len() == 1).then(|| *projects.iter().next().unwrap())
-                        })
-                {
-                    row.project_id = Some(project_id);
-                }
-            }
-        }
+        let already_present: HashSet<String> = existing.into_keys().collect();
 
         // Do not rewrite an event that the database already has. This is stricter
         // than relying on ReplacingMergeTree alone because its sort key includes the
@@ -239,90 +297,105 @@ impl AiUsageService {
             .insert_usage_events(&new_rows)
             .await
             .context("AI usage event insert failed")?;
-        if let Err(error) = self
-            .persist_session_projects(user_id, &new_rows, &explicit_session_projects, now)
-            .await
-        {
-            warn!(
-                %user_id,
-                %error,
-                "AI usage session-project projection failed after event acceptance"
-            );
-        }
-        let sessions_touched = match self.refresh_sessions(user_id, &session_ids, now).await {
-            Ok(touched) => touched,
-            Err(error) => {
-                warn!(
-                    %user_id,
-                    %error,
-                    "AI usage session projection failed after event acceptance"
-                );
-                0
-            }
-        };
 
-        Ok(AiUsageIngestReport {
-            received,
-            stored: new_rows.len(),
-            duplicates_in_batch,
-            unpriced,
-            sessions_touched,
+        Ok(AiUsageFactsReport {
+            report: AiUsageIngestReport {
+                received,
+                stored: new_rows.len(),
+                duplicates_in_batch,
+                unpriced,
+                sessions_touched: 0,
+            },
+            session_ids,
         })
     }
 
-    async fn persist_session_projects(
+    async fn reconcile_projects(
         &self,
         user_id: Uuid,
-        rows: &[AiUsageEventRow],
-        explicit_session_projects: &HashSet<(String, Uuid)>,
-        version: u32,
+        session_id: &str,
+        version: u64,
     ) -> Result<()> {
-        use std::collections::HashMap;
+        let mut facts = self
+            .repo
+            .session_facts(user_id, &[session_id.to_string()])
+            .await?;
+        let replacements = project_attribution_replacements(&mut facts, version);
+        self.repo.insert_usage_events(&replacements).await?;
+
         #[derive(Default)]
         struct Allocation {
-            first: u32,
-            last: u32,
-            count: u64,
+            first_event_at: u32,
+            last_event_at: u32,
+            event_count: u64,
+            inferred_count: u64,
         }
-        let mut allocations: HashMap<(String, Uuid), Allocation> = HashMap::new();
-        for row in rows {
-            let Some(project_id) = row.project_id else {
+        let mut allocations: HashMap<Uuid, Allocation> = HashMap::new();
+        for fact in &facts {
+            let Some(project_id) = fact.project_id else {
                 continue;
             };
-            let entry = allocations
-                .entry((row.ai_session_id.clone(), project_id))
-                .or_insert_with(|| Allocation {
-                    first: row.event_time,
-                    last: row.event_time,
-                    count: 0,
-                });
-            entry.first = entry.first.min(row.event_time);
-            entry.last = entry.last.max(row.event_time);
-            entry.count += 1;
+            let entry = allocations.entry(project_id).or_insert_with(|| Allocation {
+                first_event_at: fact.event_time,
+                last_event_at: fact.event_time,
+                event_count: 0,
+                inferred_count: 0,
+            });
+            entry.first_event_at = entry.first_event_at.min(fact.event_time);
+            entry.last_event_at = entry.last_event_at.max(fact.event_time);
+            entry.event_count += 1;
+            if fact.project_attribution_method.as_deref() == Some("sole_project_session") {
+                entry.inferred_count += 1;
+            }
         }
-        let rows = allocations
+        let project_rows = allocations
             .into_iter()
-            .map(|((session_id, project_id), allocation)| {
-                let token_allocation_method =
-                    if explicit_session_projects.contains(&(session_id.clone(), project_id)) {
-                        "explicit_project_hint"
-                    } else {
-                        "sole_project_session"
-                    };
-                crate::model::ai_usage::AiSessionProjectRow {
+            .map(
+                |(project_id, allocation)| crate::model::ai_usage::AiSessionProjectRow {
                     user_id,
-                    ai_session_id: session_id,
+                    ai_session_id: session_id.to_string(),
                     project_id,
-                    first_event_at: allocation.first,
-                    last_event_at: allocation.last,
-                    event_count: allocation.count,
+                    first_event_at: allocation.first_event_at,
+                    last_event_at: allocation.last_event_at,
+                    event_count: allocation.event_count,
                     ai_lines_changed: 0,
-                    token_allocation_method: token_allocation_method.to_string(),
-                    version: u64::from(version),
-                }
-            })
+                    token_allocation_method: if allocation.inferred_count > 0 {
+                        "sole_project_session"
+                    } else {
+                        "explicit_project_hint"
+                    }
+                    .to_string(),
+                    is_deleted: 0,
+                    version,
+                },
+            )
             .collect::<Vec<_>>();
-        self.repo.upsert_session_projects(&rows).await
+
+        let active_project_ids = self
+            .repo
+            .active_session_project_ids(user_id, session_id)
+            .await?;
+        let current_project_ids: HashSet<Uuid> =
+            project_rows.iter().map(|row| row.project_id).collect();
+        let mut writes = project_rows;
+        for project_id in active_project_ids {
+            if current_project_ids.contains(&project_id) {
+                continue;
+            }
+            writes.push(crate::model::ai_usage::AiSessionProjectRow {
+                user_id,
+                ai_session_id: session_id.to_string(),
+                project_id,
+                first_event_at: 0,
+                last_event_at: 0,
+                event_count: 0,
+                ai_lines_changed: 0,
+                token_allocation_method: "retracted".to_string(),
+                is_deleted: 1,
+                version,
+            });
+        }
+        self.repo.upsert_session_projects(&writes).await
     }
 
     /// Rebuilds each touched session from its stored events.
@@ -334,7 +407,7 @@ impl AiUsageService {
         &self,
         user_id: Uuid,
         session_ids: &[String],
-        now: u32,
+        version: u64,
     ) -> Result<usize> {
         let rollups = self.repo.session_rollups(user_id, session_ids).await?;
         let rows: Vec<AiSessionRow> = rollups
@@ -355,14 +428,75 @@ impl AiUsageService {
                 machine: None,
                 operating_system: None,
                 prompt_count: rollup.prompt_count,
-                version: u64::from(now),
-                updated_at: now,
+                input_tokens: rollup.input_tokens,
+                output_tokens: rollup.output_tokens,
+                cache_read_tokens: rollup.cache_read_tokens,
+                cache_write_tokens: rollup.cache_write_tokens,
+                version,
+                updated_at: chrono::Utc::now().timestamp().max(0) as u32,
             })
             .collect();
 
         let touched = rows.len();
         self.repo.upsert_sessions(&rows).await?;
         Ok(touched)
+    }
+}
+
+/// Apply the conservative project rule to a session's logical facts.
+///
+/// Only explicit project hints are evidence. An earlier `sole_project_session`
+/// assignment is a replaceable projection, not proof; when a second explicit
+/// project arrives, the inferred facts are withdrawn and their project rows are
+/// tombstoned by `reconcile_projects`.
+fn project_attribution_replacements(
+    facts: &mut [AiUsageEventRow],
+    version: u64,
+) -> Vec<AiUsageEventRow> {
+    let proven_projects: HashSet<Uuid> = facts
+        .iter()
+        .filter(|fact| {
+            fact.project_id.is_some()
+                && fact.project_attribution_method.as_deref() != Some("sole_project_session")
+        })
+        .filter_map(|fact| fact.project_id)
+        .collect();
+    let sole_project = (proven_projects.len() == 1)
+        .then(|| *proven_projects.iter().next().expect("one project exists"));
+
+    let mut replacements = Vec::new();
+    for fact in facts {
+        let was_inferred =
+            fact.project_attribution_method.as_deref() == Some("sole_project_session");
+        let desired_project = if was_inferred || fact.project_id.is_none() {
+            sole_project
+        } else {
+            fact.project_id
+        };
+        let desired_method = if was_inferred || fact.project_id.is_none() {
+            desired_project.map(|_| "sole_project_session".to_string())
+        } else {
+            fact.project_attribution_method.clone()
+        };
+        if fact.project_id != desired_project || fact.project_attribution_method != desired_method {
+            fact.project_id = desired_project;
+            fact.project_attribution_method = desired_method;
+            fact.version = version;
+            replacements.push(fact.clone());
+        }
+    }
+    replacements
+}
+
+fn ai_usage_batch_error(error: AiUsageBatchError) -> anyhow::Error {
+    match error {
+        AiUsageBatchError::IdentityConflict(id) => {
+            anyhow::anyhow!("usage_identity_conflict for usage_event_id {id}")
+        }
+        AiUsageBatchError::Validation(message) => {
+            anyhow::anyhow!("invalid AI usage record: {message}")
+        }
+        AiUsageBatchError::Serialization(error) => anyhow::Error::new(error),
     }
 }
 
@@ -581,5 +715,127 @@ mod tests {
     #[test]
     fn a_session_with_only_unknown_models_reports_none() {
         assert_eq!(primary_model(1, String::new()), None);
+    }
+
+    #[test]
+    fn batch_preparation_counts_identical_duplicates_without_reordering() {
+        let first = record(Some(1), Some(2));
+        let mut second = first.clone();
+        second.usage_event_id = "msg_2".to_string();
+        let input = vec![first.clone(), second.clone(), first.clone()];
+        let prepared = prepare_batch(&input).unwrap();
+        assert_eq!(prepared.duplicates_in_batch, 1);
+        assert_eq!(
+            prepared
+                .records
+                .iter()
+                .map(|record| record.usage_event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["msg_1", "msg_2"]
+        );
+        assert_eq!(prepared.payload_hashes.len(), 2);
+    }
+
+    #[test]
+    fn batch_preparation_rejects_same_id_with_different_payload() {
+        let first = record(Some(1), Some(2));
+        let mut conflicting = first.clone();
+        conflicting.output_tokens = Some(3);
+        let error = prepare_batch(&[first, conflicting]).unwrap_err();
+        assert!(matches!(error, AiUsageBatchError::IdentityConflict(_)));
+    }
+
+    fn usage_row(
+        id: &str,
+        project_id: Option<Uuid>,
+        project_attribution_method: Option<&str>,
+    ) -> AiUsageEventRow {
+        AiUsageEventRow {
+            user_id: Uuid::nil(),
+            date: 0,
+            usage_event_id: id.to_string(),
+            event_payload_hash: Some(format!("hash-{id}")),
+            ai_session_id: "session-1".to_string(),
+            event_time: 1,
+            project_id,
+            project_attribution_method: project_attribution_method.map(str::to_string),
+            ai_agent: "test".to_string(),
+            ai_provider: Some("provider".to_string()),
+            ai_model: Some("model".to_string()),
+            prompt_count: 1,
+            prompt_character_count: Some(1),
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            estimated_cost_microusd: None,
+            pricing_version: None,
+            token_source: "transcript".to_string(),
+            version: 1,
+            received_at: 1,
+        }
+    }
+
+    #[test]
+    fn projectless_facts_inherit_the_only_explicit_session_project() {
+        let project = Uuid::from_u128(1);
+        let mut facts = vec![
+            usage_row("explicit", Some(project), Some("explicit_project_hint")),
+            usage_row("projectless", None, None),
+        ];
+
+        let replacements = project_attribution_replacements(&mut facts, 42);
+
+        assert_eq!(facts[1].project_id, Some(project));
+        assert_eq!(
+            facts[1].project_attribution_method.as_deref(),
+            Some("sole_project_session")
+        );
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].version, 42);
+    }
+
+    #[test]
+    fn projectless_facts_stay_unattributed_in_a_multi_project_session() {
+        let mut facts = vec![
+            usage_row(
+                "explicit-a",
+                Some(Uuid::from_u128(1)),
+                Some("explicit_project_hint"),
+            ),
+            usage_row(
+                "explicit-b",
+                Some(Uuid::from_u128(2)),
+                Some("explicit_project_hint"),
+            ),
+            usage_row("projectless", None, None),
+        ];
+
+        let replacements = project_attribution_replacements(&mut facts, 42);
+
+        assert!(facts[2].project_id.is_none());
+        assert!(facts[2].project_attribution_method.is_none());
+        assert!(replacements.is_empty());
+    }
+
+    #[test]
+    fn a_new_explicit_project_withdraws_an_old_sole_project_inference() {
+        let project_a = Uuid::from_u128(1);
+        let mut facts = vec![
+            usage_row("explicit-a", Some(project_a), Some("explicit_project_hint")),
+            usage_row("inferred-a", Some(project_a), Some("sole_project_session")),
+            usage_row(
+                "explicit-b",
+                Some(Uuid::from_u128(2)),
+                Some("explicit_project_hint"),
+            ),
+        ];
+
+        let replacements = project_attribution_replacements(&mut facts, 42);
+
+        assert!(facts[1].project_id.is_none());
+        assert!(facts[1].project_attribution_method.is_none());
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].usage_event_id, "inferred-a");
     }
 }
