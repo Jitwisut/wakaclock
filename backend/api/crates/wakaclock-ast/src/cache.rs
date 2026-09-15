@@ -78,12 +78,6 @@ pub fn insert(entity: &str, source: &[u8], result: CachedResult) {
 }
 
 #[cfg(test)]
-pub fn clear_for_tests() {
-    let _guard = write_lock().lock();
-    cache().clear();
-}
-
-#[cfg(test)]
 pub fn len_for_tests() -> usize {
     let _guard = write_lock().lock();
     cache().len()
@@ -104,16 +98,30 @@ mod tests {
 
     #[test]
     fn cache_is_keyed_by_source_content() {
-        clear_for_tests();
-        insert("main.rs", b"fn one() {}", result("Rust"));
+        // Do not clear the process-global cache here: the Rust test harness runs
+        // tests in parallel, and another test may legitimately be inserting while
+        // this assertion is executing. A private key makes this test independent
+        // of both earlier runs and the detector tests that share the cache.
+        insert(
+            "__cache_exact_content_test__.rs",
+            b"fn cache_exact_content_test() {}",
+            result("Rust"),
+        );
 
-        assert!(get("main.rs", b"fn one() {}").is_some());
-        assert!(get("main.rs", b"fn two() {}").is_none());
+        assert!(get(
+            "__cache_exact_content_test__.rs",
+            b"fn cache_exact_content_test() {}"
+        )
+        .is_some());
+        assert!(get(
+            "__cache_exact_content_test__.rs",
+            b"fn cache_exact_content_test_changed() {}"
+        )
+        .is_none());
     }
 
     #[test]
     fn cache_is_bounded() {
-        clear_for_tests();
         for index in 0..(MAX_ENTRIES + 32) {
             let entity = format!("file-{index}.rs");
             let source = format!("fn item_{index}() {{}}");
@@ -125,7 +133,6 @@ mod tests {
 
     #[test]
     fn concurrent_writers_preserve_the_bound() {
-        clear_for_tests();
         const WRITERS: usize = 8;
         const INSERTS_PER_WRITER: usize = 160;
         let start = Arc::new(Barrier::new(WRITERS));

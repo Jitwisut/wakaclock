@@ -4,6 +4,7 @@
 mod enabled {
     use anyhow::{Context, Result};
     use axum::{routing::get, Router};
+    use futures::{stream, StreamExt};
     use std::collections::BTreeMap;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -20,6 +21,17 @@ mod enabled {
     use wakaclock_server::infrastructure::kafka::{KafkaEventBus, KafkaEventConsumer};
     use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
     use wakaclock_server::repository::heartbeat::HeartbeatVerificationProjection;
+    use wakaclock_server::{
+        config::parse_positive_port, services::background_worker::shutdown_signal,
+    };
+
+    const VERIFY_DEADLINES: [std::time::Duration; 4] = [
+        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(60),
+    ];
+    const VERIFY_CONCURRENCY: usize = 16;
 
     pub async fn run() -> Result<()> {
         let state = Arc::new(
@@ -30,9 +42,11 @@ mod enabled {
         if state.config.brokers.ingest.mode != IngestMode::Verify {
             anyhow::bail!("heartbeat-verifier requires ATOAXIS_INGEST_MODE=verify");
         }
-        if let Some(postgres) = &state.postgres {
-            postgres.migrate().await?;
-        }
+        let postgres = state
+            .postgres
+            .clone()
+            .context("heartbeat verifier requires POSTGRES_URL")?;
+        postgres.migrate().await?;
         state.heartbeat_repo.migrate().await?;
         let event_config = state
             .config
@@ -56,14 +70,19 @@ mod enabled {
         let live = Arc::new(AtomicBool::new(true));
         let assigned = consumer.assignment_flag();
         let health_live = live.clone();
+        let health_server_live = live.clone();
         let health_assigned = assigned.clone();
         let health_state = state.clone();
         let host =
             std::env::var("KAFKA_CONSUMER_HEALTH_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let port = std::env::var("KAFKA_CONSUMER_HEALTH_PORT")
-            .unwrap_or_else(|_| "8082".to_string())
-            .parse::<u16>()
-            .context("KAFKA_CONSUMER_HEALTH_PORT must be a port")?;
+        let port = parse_positive_port(
+            std::env::var("KAFKA_CONSUMER_HEALTH_PORT").ok(),
+            "KAFKA_CONSUMER_HEALTH_PORT",
+            8082,
+        )?;
+        let health_listener = TcpListener::bind((host.as_str(), port))
+            .await
+            .context("heartbeat verifier health listener failed")?;
         let health = tokio::spawn(async move {
             let app = Router::new()
                 .route("/live", get(|| async { axum::http::StatusCode::OK }))
@@ -88,8 +107,13 @@ mod enabled {
                         let live = health_live.clone();
                         let assigned = health_assigned.clone();
                         async move {
+                            let postgres_ok = match &state.postgres {
+                                Some(postgres) => postgres.health_check().await.is_ok(),
+                                None => false,
+                            };
                             if !live.load(Ordering::Acquire)
                                 || !assigned.load(Ordering::Acquire)
+                                || !postgres_ok
                                 || state.clickhouse.health_check().await.is_err()
                             {
                                 axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -99,13 +123,12 @@ mod enabled {
                         }
                     }),
                 );
-            let Ok(listener) = TcpListener::bind((host.as_str(), port)).await else {
-                return;
-            };
-            let _ = axum::serve(listener, app).await;
+            if axum::serve(health_listener, app).await.is_err() {
+                health_server_live.store(false, Ordering::Release);
+            }
         });
 
-        let shutdown = tokio::signal::ctrl_c();
+        let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         let mut retry_delay = state.config.brokers.ingest.retry_min;
         let result = loop {
@@ -117,106 +140,22 @@ mod enabled {
                 ) => {
                     let mut batch = match batch {
                         Ok(batch) => batch,
-                        Err(error) => {
-                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "heartbeat verifier poll failed");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!(backoff_ms = retry_delay.as_millis(), "heartbeat verifier poll failed");
+                            // Recreate the consumer after a partial poll so an
+                            // uncommitted record cannot be skipped by the local
+                            // librdkafka position.
+                            break Err(anyhow::anyhow!("heartbeat verifier poll failed"));
                         }
                     };
                     if batch.is_empty() { continue; }
                     batch.sort_by_key(|delivery| (delivery.partition, delivery.offset));
-                    let mut committed = Vec::new();
-                    let mut retry_offsets = BTreeMap::new();
-                    for (index, delivery) in batch.iter().cloned().enumerate() {
-                        let event = match serde_json::from_value::<HeartbeatEventV1>(delivery.event.payload.clone()) {
-                            Ok(event) => event,
-                            Err(_) => {
-                                if publish_dlq(&bus, &delivery, "invalid_heartbeat_payload").await {
-                                    committed.push(delivery);
-                                } else {
-                                    add_retry_offsets(&mut retry_offsets, &batch, index);
-                                    break;
-                                }
-                                continue;
-                            }
-                        };
-                        if let Err(error) = event.validate_envelope(&delivery.event) {
-                            if publish_dlq(&bus, &delivery, "event_identity_mismatch").await {
-                                committed.push(delivery);
-                            } else {
-                                tracing::warn!(%error, "heartbeat verifier DLQ publish failed; leaving offset uncommitted");
-                                add_retry_offsets(&mut retry_offsets, &batch, index);
-                                break;
-                            }
-                            tracing::warn!(%error, "heartbeat verifier event identity rejected");
-                            continue;
-                        }
-                        let heartbeat_id = event.heartbeat.heartbeat_id.clone().expect("validated event id");
-                        let mut found = false;
-                        let mut query_failed = false;
-                        let mut mismatch_flags = Vec::new();
-                        let mut mismatch_category = "missing_heartbeat";
-                        // Deadlines are measured from the broker's received_at.  A
-                        // verifier restart must not turn 3/5/15/60 into an ever
-                        // growing 3+5+15+60 second delay.
-                        for delay in [3_i64, 5, 15, 60] {
-                            let deadline = delivery.event.received_at
-                                + chrono::Duration::seconds(delay);
-                            if let Ok(wait) = (deadline - chrono::Utc::now()).to_std() {
-                                if !wait.is_zero() {
-                                    tokio::time::sleep(wait).await;
-                                }
-                            }
-                            match state.heartbeat_repo.heartbeat_verification_projection(
-                                delivery.event.tenant_id,
-                                &heartbeat_id,
-                                event.heartbeat.revision,
-                            ).await {
-                                Ok(Some(projection)) => {
-                                    mismatch_flags = parity_flags(&event, &projection);
-                                    if mismatch_flags.is_empty() {
-                                        found = true;
-                                        break;
-                                    }
-                                    mismatch_category = "field_mismatch";
-                                }
-                                Ok(None) => {}
-                                Err(error) => {
-                                    tracing::warn!(%error, "heartbeat verification query failed; leaving offset uncommitted");
-                                    query_failed = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if query_failed {
-                            add_retry_offsets(&mut retry_offsets, &batch, index);
-                            break;
-                        }
-                        if found {
-                            global_kafka_metrics().increment_category("verification", "success");
-                        } else {
-                            let metrics = global_kafka_metrics();
-                            metrics
-                                .verification_mismatch_total
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            metrics.increment_category("verification", mismatch_category);
-                            if let Err(error) = record_mismatch_audit(
-                                &state,
-                                &delivery,
-                                mismatch_category,
-                                &mismatch_flags,
-                            )
-                            .await
-                            {
-                                tracing::warn!(%error, "heartbeat verification audit write failed");
-                            }
-                        }
-                        // A mismatch is an audit/metric signal, not a partition blocker.
-                        committed.push(delivery);
-                    }
+                    let (committed, retry_offsets) = verify_batch(&state, &bus, &batch).await;
                     if !committed.is_empty() {
-                        consumer.commit(&committed).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                        consumer
+                            .commit(&committed)
+                            .await
+                            .map_err(|_| anyhow::anyhow!("heartbeat verifier offset commit failed"))?;
                     }
                     if !retry_offsets.is_empty() {
                         let retry_partitions = retry_offsets.keys().copied().collect::<std::collections::BTreeSet<_>>();
@@ -224,14 +163,14 @@ mod enabled {
                         let offsets = retry_offsets.into_iter().collect::<Vec<_>>();
                         consumer
                             .seek_to_offsets(&offsets)
-                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            .map_err(|_| anyhow::anyhow!("heartbeat verifier retry rewind failed"))?;
                         consumer
                             .pause_partitions(&retry_partitions)
-                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            .map_err(|_| anyhow::anyhow!("heartbeat verifier retry pause failed"))?;
                         tokio::time::sleep(retry_delay).await;
                         consumer
                             .resume_partitions(&retry_partitions)
-                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            .map_err(|_| anyhow::anyhow!("heartbeat verifier retry resume failed"))?;
                         retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
                     } else {
                         let committed_partitions = committed
@@ -249,16 +188,149 @@ mod enabled {
         result
     }
 
-    fn add_retry_offsets(
-        retry_offsets: &mut BTreeMap<i32, i64>,
+    enum VerificationOutcome {
+        Committed(EventDelivery),
+        Retry(EventDelivery),
+    }
+
+    async fn verify_batch(
+        state: &wakaclock_server::infrastructure::app::AppState,
+        bus: &KafkaEventBus,
         batch: &[EventDelivery],
-        start: usize,
-    ) {
-        for delivery in batch.iter().skip(start) {
-            retry_offsets
-                .entry(delivery.partition)
-                .or_insert(delivery.offset);
+    ) -> (Vec<EventDelivery>, BTreeMap<i32, i64>) {
+        // Verification waits against absolute deadlines, so one slow event must
+        // not serialize every other event in the poll. Bound concurrency to keep
+        // ClickHouse and PostgreSQL protected while allowing a full batch to make
+        // progress within the same 3/5/15/60-second schedule.
+        let mut outcomes = stream::iter(
+            batch
+                .iter()
+                .cloned()
+                .map(|delivery| verify_delivery(state, bus, delivery)),
+        )
+        .buffer_unordered(VERIFY_CONCURRENCY);
+        let mut committed = Vec::new();
+        let mut retry_offsets: BTreeMap<i32, i64> = BTreeMap::new();
+        while let Some(outcome) = outcomes.next().await {
+            match outcome {
+                VerificationOutcome::Committed(delivery) => committed.push(delivery),
+                VerificationOutcome::Retry(delivery) => {
+                    retry_offsets
+                        .entry(delivery.partition)
+                        .and_modify(|first| *first = (*first).min(delivery.offset))
+                        .or_insert(delivery.offset);
+                }
+            }
         }
+        // Kafka commits a partition watermark, not individual records. A later
+        // verification that completed concurrently must remain uncommitted when
+        // an earlier record in the same partition needs a retry.
+        committed.retain(|delivery| {
+            retry_offsets
+                .get(&delivery.partition)
+                .is_none_or(|first_retry| delivery.offset < *first_retry)
+        });
+        (committed, retry_offsets)
+    }
+
+    async fn verify_delivery(
+        state: &wakaclock_server::infrastructure::app::AppState,
+        bus: &KafkaEventBus,
+        delivery: EventDelivery,
+    ) -> VerificationOutcome {
+        let event = match serde_json::from_value::<HeartbeatEventV1>(delivery.event.payload.clone())
+        {
+            Ok(event) => event,
+            Err(_) => {
+                return if publish_dlq(bus, &delivery, "invalid_heartbeat_payload").await {
+                    VerificationOutcome::Committed(delivery)
+                } else {
+                    VerificationOutcome::Retry(delivery)
+                };
+            }
+        };
+        if event.validate_envelope(&delivery.event).is_err() {
+            return if publish_dlq(bus, &delivery, "event_identity_mismatch").await {
+                tracing::warn!("heartbeat verifier event identity rejected");
+                VerificationOutcome::Committed(delivery)
+            } else {
+                tracing::warn!("heartbeat verifier DLQ publish failed; leaving offset uncommitted");
+                VerificationOutcome::Retry(delivery)
+            };
+        }
+
+        let Some(heartbeat_id) = event.heartbeat.heartbeat_id.clone() else {
+            // `validate_envelope` currently guarantees this, but keep the
+            // verifier fail-closed if the contract is extended later.
+            return if publish_dlq(bus, &delivery, "invalid_heartbeat_payload").await {
+                VerificationOutcome::Committed(delivery)
+            } else {
+                VerificationOutcome::Retry(delivery)
+            };
+        };
+        let mut mismatch_flags = Vec::new();
+        let mut mismatch_category = "missing_heartbeat";
+        let mut found = false;
+        // Deadlines are measured from broker `received_at`. A verifier restart
+        // therefore resumes at the next absolute deadline instead of sleeping
+        // for a fresh 3+5+15+60 seconds.
+        for (deadline_index, delay) in VERIFY_DEADLINES.iter().enumerate() {
+            let deadline = delivery.event.received_at
+                + chrono::Duration::from_std(*delay)
+                    .expect("verification deadline fits in chrono duration");
+            if let Ok(wait) = (deadline - chrono::Utc::now()).to_std() {
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+            }
+            match state
+                .heartbeat_repo
+                .heartbeat_verification_projection(
+                    delivery.event.tenant_id,
+                    &heartbeat_id,
+                    event.heartbeat.revision,
+                )
+                .await
+            {
+                Ok(Some(projection)) => {
+                    mismatch_flags = parity_flags(&event, &projection);
+                    if mismatch_flags.is_empty() {
+                        found = true;
+                        break;
+                    } else {
+                        mismatch_category = "field_mismatch";
+                    }
+                }
+                Ok(None) if deadline_index + 1 < VERIFY_DEADLINES.len() => {}
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!(
+                        "heartbeat verification query failed; leaving offset uncommitted"
+                    );
+                    return VerificationOutcome::Retry(delivery);
+                }
+            }
+        }
+        if found {
+            global_kafka_metrics().increment_category("verification", "success");
+            return VerificationOutcome::Committed(delivery);
+        }
+
+        if let Err(_error) =
+            record_mismatch_audit(state, &delivery, mismatch_category, &mismatch_flags).await
+        {
+            // A mismatch without its durable audit is not a completed
+            // verification. Replaying the event is safer than acknowledging an
+            // untraceable parity failure.
+            tracing::warn!("heartbeat verification audit write failed; leaving offset uncommitted");
+            return VerificationOutcome::Retry(delivery);
+        }
+        let metrics = global_kafka_metrics();
+        metrics
+            .verification_mismatch_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        metrics.increment_category("verification", mismatch_category);
+        VerificationOutcome::Committed(delivery)
     }
 
     fn parity_flags(
@@ -319,17 +391,13 @@ mod enabled {
         delivery: &EventDelivery,
         category: &'static str,
     ) -> bool {
-        let Ok(event_id) = StableEventId::heartbeat(
-            &format!("verifier-dlq:{}:{}", delivery.partition, delivery.offset),
-            0,
-        ) else {
-            return false;
-        };
+        let event_id =
+            StableEventId::dead_letter(delivery.topic.name(), delivery.partition, delivery.offset);
         let envelope = EventEnvelope::new(
             event_id,
             "ingest.dead_letter",
             delivery.event.tenant_id,
-            chrono::Utc::now(),
+            delivery.event.received_at,
             serde_json::json!({
                 "source_topic": delivery.topic.name(),
                 "source_partition": delivery.partition,

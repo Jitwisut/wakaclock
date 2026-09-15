@@ -27,7 +27,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use lapin::options::{
-    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions,
+    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions, BasicRejectOptions,
     ConfirmSelectOptions, ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
 };
 use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
@@ -540,6 +540,14 @@ impl JobDelivery for RabbitMqDelivery {
             .ack(BasicAckOptions::default())
             .await
             .map_err(|error| unavailable("ack", error))?;
+        Ok(())
+    }
+
+    async fn requeue(self: Box<Self>) -> InfrastructureResult<()> {
+        self.delivery
+            .reject(BasicRejectOptions { requeue: true })
+            .await
+            .map_err(|error| unavailable("requeue", error))?;
         Ok(())
     }
 

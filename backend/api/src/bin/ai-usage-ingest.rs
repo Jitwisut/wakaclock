@@ -15,6 +15,9 @@ mod enabled {
     use wakaclock_server::infrastructure::kafka::{KafkaEventBus, KafkaEventConsumer};
     use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
     use wakaclock_server::services::kafka_ai_usage::process_batch;
+    use wakaclock_server::{
+        config::parse_positive_port, services::background_worker::shutdown_signal,
+    };
 
     pub async fn run() -> Result<()> {
         let state = Arc::new(
@@ -54,14 +57,20 @@ mod enabled {
 
         let ready = Arc::new(AtomicBool::new(true));
         let assigned = consumer.assignment_flag();
+        let health_state = state.clone();
         let health_ready = ready.clone();
+        let health_server_ready = ready.clone();
         let health_assigned = assigned.clone();
         let health_host =
             std::env::var("KAFKA_CONSUMER_HEALTH_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let health_port = std::env::var("AI_USAGE_CONSUMER_HEALTH_PORT")
-            .unwrap_or_else(|_| "8084".to_string())
-            .parse::<u16>()
-            .context("AI_USAGE_CONSUMER_HEALTH_PORT must be a port")?;
+        let health_port = parse_positive_port(
+            std::env::var("AI_USAGE_CONSUMER_HEALTH_PORT").ok(),
+            "AI_USAGE_CONSUMER_HEALTH_PORT",
+            8084,
+        )?;
+        let health_listener = TcpListener::bind((health_host.as_str(), health_port))
+            .await
+            .context("AI usage fact-sink health listener failed")?;
         let health = tokio::spawn(async move {
             let app = Router::new()
                 .route("/live", get(|| async { axum::http::StatusCode::OK }))
@@ -82,10 +91,20 @@ mod enabled {
                 .route(
                     "/ready",
                     get(move || {
+                        let state = health_state.clone();
                         let ready = health_ready.clone();
                         let assigned = health_assigned.clone();
                         async move {
-                            if ready.load(Ordering::Acquire) && assigned.load(Ordering::Acquire) {
+                            let postgres_ok = match &state.postgres {
+                                Some(postgres) => postgres.health_check().await.is_ok(),
+                                None => false,
+                            };
+                            let clickhouse_ok = state.clickhouse.health_check().await.is_ok();
+                            if ready.load(Ordering::Acquire)
+                                && assigned.load(Ordering::Acquire)
+                                && postgres_ok
+                                && clickhouse_ok
+                            {
                                 axum::http::StatusCode::OK
                             } else {
                                 axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -93,14 +112,13 @@ mod enabled {
                         }
                     }),
                 );
-            let Ok(listener) = TcpListener::bind((health_host.as_str(), health_port)).await else {
-                return;
-            };
-            let _ = axum::serve(listener, app).await;
+            if axum::serve(health_listener, app).await.is_err() {
+                health_server_ready.store(false, Ordering::Release);
+            }
         });
 
         let mut retry_delay = state.config.brokers.ai_usage.retry_min;
-        let shutdown = tokio::signal::ctrl_c();
+        let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         let result = loop {
             tokio::select! {
@@ -111,40 +129,54 @@ mod enabled {
                 ) => {
                     let batch = match batch {
                         Ok(batch) => batch,
-                        Err(error) => {
-                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "AI usage consumer poll failed");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!(backoff_ms = retry_delay.as_millis(), "AI usage consumer poll failed");
+                            // `poll_batch` may already have advanced the local
+                            // librdkafka position before an invalid/DLQ or recv
+                            // error. Reusing this consumer could commit past a
+                            // record that was never handed to the fact writer.
+                            break Err(anyhow::anyhow!("AI usage consumer poll failed"));
                         }
                     };
                     if batch.is_empty() { continue; }
                     let outcome = match process_batch(&state, &bus, batch).await {
                         Ok(outcome) => outcome,
-                        Err(error) => {
-                            tracing::warn!(%error, "AI usage fact-sink batch failed");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!("AI usage fact-sink batch failed");
+                            // `poll_batch` has already advanced librdkafka's local
+                            // position. Re-polling after an unexpected processor
+                            // error could therefore commit past an unprocessed record;
+                            // let the supervisor recreate the consumer group instead.
+                            break Err(anyhow::anyhow!("AI usage fact-sink batch processing failed"));
                         }
                     };
-                    if !outcome.committed.is_empty() {
-                        if let Err(error) = consumer.commit(&outcome.committed).await {
-                            tracing::warn!(%error, "AI usage offset commit failed; offsets remain replayable");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
-                            continue;
-                        }
+                    if !outcome.committed.is_empty()
+                        && consumer.commit(&outcome.committed).await.is_err()
+                    {
+                        tracing::warn!("AI usage offset commit failed; offsets remain replayable");
+                        // A commit may have partially succeeded per partition.
+                        // The retry watermark alone is not safe in that case,
+                        // because the successful prefix may also remain
+                        // uncommitted. Stop and reconnect so Kafka restores the
+                        // last durable group offsets before any further poll.
+                        break Err(anyhow::anyhow!("AI usage offset commit failed"));
                     }
                     if !outcome.retry_partitions.is_empty() {
                         consumer.mark_retry_partitions(&outcome.retry_partitions).await;
                         let offsets = outcome.retry_offsets.iter().map(|(p, o)| (*p, *o)).collect::<Vec<_>>();
-                        if let Err(error) = consumer.seek_to_offsets(&offsets) {
-                            tracing::warn!(%error, "could not rewind AI usage retry partitions");
+                        if consumer.seek_to_offsets(&offsets).is_err() {
+                            tracing::warn!("could not rewind AI usage retry partitions");
+                            break Err(anyhow::anyhow!("AI usage retry rewind failed"));
                         }
-                        let _ = consumer.pause_partitions(&outcome.retry_partitions);
+                        if consumer.pause_partitions(&outcome.retry_partitions).is_err() {
+                            tracing::warn!("could not pause AI usage retry partitions");
+                            break Err(anyhow::anyhow!("AI usage retry pause failed"));
+                        }
                         tokio::time::sleep(retry_delay).await;
-                        let _ = consumer.resume_partitions(&outcome.retry_partitions);
+                        if consumer.resume_partitions(&outcome.retry_partitions).is_err() {
+                            tracing::warn!("could not resume AI usage retry partitions");
+                            break Err(anyhow::anyhow!("AI usage retry resume failed"));
+                        }
                         retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
                     } else {
                         let committed_partitions = outcome.committed.iter().map(|delivery| delivery.partition).collect::<std::collections::BTreeSet<_>>();

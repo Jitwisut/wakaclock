@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
+use crate::infrastructure::contracts::CredentialVault;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::vcs::{
     Commit, CommitAnalytics, ConnectVcsRequest, ProjectMappingRequest, PullRequest,
@@ -72,6 +73,7 @@ pub struct VcsService {
     activity_timeline: Arc<ActivityTimelineService>,
     postgres: Option<Arc<PostgresClient>>,
     authorization: Arc<AuthorizationService>,
+    credential_vault: Option<Arc<dyn CredentialVault>>,
 }
 
 impl VcsService {
@@ -84,7 +86,16 @@ impl VcsService {
             activity_timeline,
             postgres,
             authorization,
+            credential_vault: None,
         }
+    }
+
+    pub fn with_credential_vault(
+        mut self,
+        credential_vault: Option<Arc<dyn CredentialVault>>,
+    ) -> Self {
+        self.credential_vault = credential_vault;
+        self
     }
 
     pub async fn connect(
@@ -111,6 +122,23 @@ impl VcsService {
         {
             return Err(anyhow!("external_account_id must contain 1-320 characters"));
         }
+        let vault = self
+            .credential_vault
+            .as_ref()
+            .context("integration credential vault is not configured")?;
+        let plaintext = vault
+            .open(request.organization_id, &credentials)
+            .await
+            .map_err(|_| anyhow!("encrypted_credentials failed vault validation"))?;
+        if plaintext.is_empty() || plaintext.len() > 128 * 1024 {
+            return Err(anyhow!(
+                "encrypted_credentials has an invalid plaintext size"
+            ));
+        }
+        let sealed_credentials = vault
+            .seal(request.organization_id, &plaintext)
+            .await
+            .map_err(|_| anyhow!("failed to seal VCS credentials"))?;
         let postgres = self.required()?;
         let integration_id = Uuid::now_v7();
         let display_name = format!("{} VCS account", request.provider);
@@ -134,11 +162,11 @@ impl VcsService {
             .client()
             .execute(
                 "INSERT INTO integration_credentials (connection_id, encrypted_payload, key_version)
-                 VALUES ($1, $2, 'client-envelope-v1')
+                 VALUES ($1, $2, 'credential-vault-v1')
                  ON CONFLICT (connection_id) DO UPDATE SET
                     encrypted_payload = EXCLUDED.encrypted_payload,
                     updated_at = now()",
-                &[&integration_id, &credentials],
+                &[&integration_id, &sealed_credentials],
             )
             .await
             .context("failed to store VCS encrypted credentials")?;

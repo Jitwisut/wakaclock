@@ -30,6 +30,7 @@ impl LeaderboardService {
         owner_user_id: Uuid,
         request: CreateLeaderboardRequest,
     ) -> Result<Leaderboard> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         validate(&request)?;
         if let Some(organization_id) = request.organization_id {
             self.authorization
@@ -80,6 +81,7 @@ impl LeaderboardService {
     }
 
     pub async fn list(&self, user_id: Uuid) -> Result<Vec<Leaderboard>> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         let postgres = self.required()?;
         let rows = postgres
             .client()
@@ -101,6 +103,7 @@ impl LeaderboardService {
     }
 
     pub async fn get(&self, user_id: Uuid, id: Uuid) -> Result<Option<Leaderboard>> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         let postgres = self.required()?;
         let row = postgres
             .client()
@@ -126,6 +129,7 @@ impl LeaderboardService {
         user_id: Uuid,
         leaderboard_id: Uuid,
     ) -> Result<Vec<LeaderboardMember>> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         self.require_access(user_id, leaderboard_id).await?;
         let postgres = self.required()?;
         let rows = postgres
@@ -155,6 +159,7 @@ impl LeaderboardService {
         leaderboard_id: Uuid,
         request: LeaderboardMemberRequest,
     ) -> Result<bool> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         self.require_owner_or_org_admin(actor, leaderboard_id)
             .await?;
         let postgres = self.required()?;
@@ -177,6 +182,7 @@ impl LeaderboardService {
         leaderboard_id: Uuid,
         member_user_id: Uuid,
     ) -> Result<bool> {
+        super::require_runtime_feature(super::RuntimeFeature::PrivateLeaderboards)?;
         self.require_owner_or_org_admin(actor, leaderboard_id)
             .await?;
         let postgres = self.required()?;

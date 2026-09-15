@@ -71,6 +71,20 @@ TLS-protected `rediss://` URLs are supported. PostgreSQL migration
 `002_presence_v2.sql` creates durable team rooms and the three fixed pairing
 zones; Redis owns only leases/live snapshots and ClickHouse owns session history.
 
+Exports are closed by default. Set `ATOAXIS_EXPORT_MODE=job` only when the API,
+`export-worker`, RabbitMQ job queue and S3-compatible object store are deployed
+together; boot validation rejects a partial configuration. The default remains
+safe for rollback and local installations, while a worker can still drain already
+accepted export jobs.
+
+Account deletion is closed by default. Set `ATOAXIS_ACCOUNT_DELETION_MODE=job`
+only after the dedicated `account-deletion` worker and its PostgreSQL,
+ClickHouse, object-store and cache purge verification have passed in an isolated
+environment. `DELETE /api/v2/me` is session-only and requires `{"confirm":true}`;
+it returns `202` only after the account tombstone and system job/outbox commit. The
+request writes an account tombstone before enqueueing cleanup;
+Kafka fact-sinks reject later records for that account into a metadata-only DLQ.
+
 The frontend uses `https://api.atoaxis.com` as its production API origin. Set
 `NEXT_PUBLIC_WAKACLOCK_API_URL` to a local API URL during development.
 
@@ -158,19 +172,28 @@ The following binaries provide separate deployment units:
 
 ```text
 heartbeat-enrichment   outbox-relay       integration-sync
-export-worker           report-worker      billing-reconciliation
-account-deletion
+export-worker           projection-worker  report-worker
+billing-reconciliation account-deletion   job-worker
 ```
 
-These binaries are currently **unavailable**: they exit with an error until a real
-processor is registered. `ATOAXIS_WORKER_ONESHOT=1` does not bypass this check.
-Export creation, report scheduling and integration connect/sync return 503 before
-persisting new jobs or credentials. Existing records remain readable/cancellable.
-Capabilities expose `available: false` for these incomplete workflows.
+`job-worker`, `projection-worker`, and `export-worker` have registered processors,
+but only `analytics.reprocess` is enabled by default. Projection rebuild is opt-in
+with `ATOAXIS_PROJECTION_REBUILD_MODE=job`; exports remain guarded until their
+object-store and end-to-end gates are complete. `report-worker`,
+`integration-sync`, and `billing-reconciliation` intentionally fail closed because
+their provider processors are not registered. `account-deletion` has a registered
+processor but remains closed unless `ATOAXIS_ACCOUNT_DELETION_MODE=job` is set and
+the object-store dependency is ready.
+`ATOAXIS_WORKER_ONESHOT=1` does not bypass these checks. Report scheduling, new
+integration credentials, and export creation return 503 before persisting new work
+while the corresponding capability is disabled. Existing records remain
+readable/cancellable where the service supports it. Capabilities expose
+`available: false` for these incomplete workflows.
 
 Queue consumption, retry/dead-letter processing, artifact delivery, provider sync
-and cross-store account deletion still require implementation. Do not deploy
-these binaries as healthy consumers merely because they compile.
+and cross-store account deletion are not interchangeable: deploy only workers whose
+processor and dependency gates are enabled. Do not deploy the fail-closed binaries
+as healthy consumers merely because they compile.
 
 ## Quality gates
 

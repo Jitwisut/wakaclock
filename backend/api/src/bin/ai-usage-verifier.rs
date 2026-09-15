@@ -4,6 +4,7 @@
 mod enabled {
     use anyhow::{Context, Result};
     use axum::{routing::get, Router};
+    use futures::{stream, StreamExt};
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{
@@ -21,6 +22,9 @@ mod enabled {
     };
     use wakaclock_server::infrastructure::kafka::{KafkaEventBus, KafkaEventConsumer};
     use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
+    use wakaclock_server::{
+        config::parse_positive_port, services::background_worker::shutdown_signal,
+    };
 
     const VERIFY_DEADLINES: [Duration; 4] = [
         Duration::from_secs(3),
@@ -28,6 +32,7 @@ mod enabled {
         Duration::from_secs(15),
         Duration::from_secs(60),
     ];
+    const VERIFY_CONCURRENCY: usize = 16;
 
     pub async fn run() -> Result<()> {
         let state = Arc::new(
@@ -65,14 +70,20 @@ mod enabled {
 
         let live = Arc::new(AtomicBool::new(true));
         let assigned = consumer.assignment_flag();
+        let health_state = state.clone();
         let health_live = live.clone();
+        let health_server_live = live.clone();
         let health_assigned = assigned.clone();
         let host =
             std::env::var("KAFKA_CONSUMER_HEALTH_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let port = std::env::var("AI_USAGE_VERIFIER_HEALTH_PORT")
-            .unwrap_or_else(|_| "8086".to_string())
-            .parse::<u16>()
-            .context("AI_USAGE_VERIFIER_HEALTH_PORT must be a port")?;
+        let port = parse_positive_port(
+            std::env::var("AI_USAGE_VERIFIER_HEALTH_PORT").ok(),
+            "AI_USAGE_VERIFIER_HEALTH_PORT",
+            8086,
+        )?;
+        let health_listener = TcpListener::bind((host.as_str(), port))
+            .await
+            .context("AI usage verifier health listener failed")?;
         let health = tokio::spawn(async move {
             let app = Router::new()
                 .route("/live", get(|| async { axum::http::StatusCode::OK }))
@@ -93,10 +104,20 @@ mod enabled {
                 .route(
                     "/ready",
                     get(move || {
+                        let state = health_state.clone();
                         let live = health_live.clone();
                         let assigned = health_assigned.clone();
                         async move {
-                            if live.load(Ordering::Acquire) && assigned.load(Ordering::Acquire) {
+                            let postgres_ok = match &state.postgres {
+                                Some(postgres) => postgres.health_check().await.is_ok(),
+                                None => false,
+                            };
+                            let clickhouse_ok = state.clickhouse.health_check().await.is_ok();
+                            if live.load(Ordering::Acquire)
+                                && assigned.load(Ordering::Acquire)
+                                && postgres_ok
+                                && clickhouse_ok
+                            {
                                 axum::http::StatusCode::OK
                             } else {
                                 axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -104,14 +125,13 @@ mod enabled {
                         }
                     }),
                 );
-            let Ok(listener) = TcpListener::bind((host.as_str(), port)).await else {
-                return;
-            };
-            let _ = axum::serve(listener, app).await;
+            if axum::serve(health_listener, app).await.is_err() {
+                health_server_live.store(false, Ordering::Release);
+            }
         });
 
         let mut retry_delay = state.config.brokers.ai_usage.retry_min;
-        let shutdown = tokio::signal::ctrl_c();
+        let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         let result = loop {
             tokio::select! {
@@ -122,17 +142,18 @@ mod enabled {
                 ) => {
                     let batch = match batch {
                         Ok(batch) => batch,
-                        Err(error) => {
-                            tracing::warn!(%error, "AI usage verifier poll failed");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!("AI usage verifier poll failed");
+                            // Recreate the consumer on poll failure: a partial
+                            // poll may have moved the local position past an
+                            // uncommitted event.
+                            break Err(anyhow::anyhow!("AI usage verifier poll failed"));
                         }
                     };
                     if batch.is_empty() { continue; }
                     let (committed, retry_offsets) = match verify_batch(&state, &bus, &batch).await {
                         Ok(result) => result,
-                        Err(error) => {
+                        Err(_) => {
                             // An audit write is part of the verifier's durable side effect.
                             // Keep the process healthy during a PostgreSQL outage, but rewind
                             // every partition in this poll so no later record can move past the
@@ -145,31 +166,47 @@ mod enabled {
                                 .iter()
                                 .map(|(partition, offset)| (*partition, *offset))
                                 .collect::<Vec<_>>();
-                            if let Err(seek_error) = consumer.seek_to_offsets(&offsets) {
-                                tracing::warn!(%seek_error, "could not rewind verifier batch after audit failure");
+                            if consumer.seek_to_offsets(&offsets).is_err() {
+                                tracing::warn!("could not rewind verifier batch after audit failure");
+                                break Err(anyhow::anyhow!("AI usage verifier rewind failed"));
                             }
-                            let _ = consumer.pause_partitions(&partitions);
-                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "AI usage verification batch failed; offsets remain uncommitted");
+                            if consumer.pause_partitions(&partitions).is_err() {
+                                tracing::warn!("could not pause verifier partitions after audit failure");
+                                break Err(anyhow::anyhow!("AI usage verifier pause failed"));
+                            }
+                            tracing::warn!(backoff_ms = retry_delay.as_millis(), "AI usage verification batch failed; offsets remain uncommitted");
                             tokio::time::sleep(retry_delay).await;
-                            let _ = consumer.resume_partitions(&partitions);
+                            if consumer.resume_partitions(&partitions).is_err() {
+                                tracing::warn!("could not resume verifier partitions after audit failure");
+                                break Err(anyhow::anyhow!("AI usage verifier resume failed"));
+                            }
                             retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
                             continue;
                         }
                     };
-                    if !committed.is_empty() {
-                        if let Err(error) = consumer.commit(&committed).await {
-                            tracing::warn!(%error, "AI usage verifier commit failed");
-                            continue;
-                        }
+                    if !committed.is_empty()
+                        && consumer.commit(&committed).await.is_err()
+                    {
+                        tracing::warn!("AI usage verifier commit failed");
+                        break Err(anyhow::anyhow!("AI usage verifier offset commit failed"));
                     }
                     if !retry_offsets.is_empty() {
                         let partitions = retry_offsets.keys().copied().collect::<BTreeSet<_>>();
                         consumer.mark_retry_partitions(&partitions).await;
                         let offsets = retry_offsets.iter().map(|(p, o)| (*p, *o)).collect::<Vec<_>>();
-                        let _ = consumer.seek_to_offsets(&offsets);
-                        let _ = consumer.pause_partitions(&partitions);
+                        if consumer.seek_to_offsets(&offsets).is_err() {
+                            tracing::warn!("could not rewind verifier retry partitions");
+                            break Err(anyhow::anyhow!("AI usage verifier retry rewind failed"));
+                        }
+                        if consumer.pause_partitions(&partitions).is_err() {
+                            tracing::warn!("could not pause verifier retry partitions");
+                            break Err(anyhow::anyhow!("AI usage verifier retry pause failed"));
+                        }
                         tokio::time::sleep(retry_delay).await;
-                        let _ = consumer.resume_partitions(&partitions);
+                        if consumer.resume_partitions(&partitions).is_err() {
+                            tracing::warn!("could not resume verifier retry partitions");
+                            break Err(anyhow::anyhow!("AI usage verifier retry resume failed"));
+                        }
                         retry_delay = (retry_delay * 2).min(state.config.brokers.ai_usage.retry_max);
                     } else {
                         let partitions = committed.iter().map(|delivery| delivery.partition).collect::<BTreeSet<_>>();
@@ -184,115 +221,38 @@ mod enabled {
         result
     }
 
+    enum VerificationOutcome {
+        Committed(EventDelivery),
+        Retry(EventDelivery),
+    }
+
     async fn verify_batch(
         state: &wakaclock_server::infrastructure::app::AppState,
         bus: &Arc<KafkaEventBus>,
         batch: &[EventDelivery],
     ) -> Result<(Vec<EventDelivery>, BTreeMap<i32, i64>)> {
+        // Waiting for one event's 60-second deadline must not block every other
+        // record in the poll. Bound concurrency to protect ClickHouse while still
+        // allowing a full batch to make progress within the same deadlines.
+        let mut outcomes = stream::iter(
+            batch
+                .iter()
+                .cloned()
+                .map(|delivery| verify_delivery(state, bus, delivery)),
+        )
+        .buffer_unordered(VERIFY_CONCURRENCY);
         let mut committed = Vec::new();
-        let mut retry_offsets = BTreeMap::new();
-        let mut sorted = batch.to_vec();
-        sorted.sort_by_key(|delivery| (delivery.partition, delivery.offset));
-        for delivery in sorted {
-            let event =
-                match serde_json::from_value::<AiUsageEventV1>(delivery.event.payload.clone()) {
-                    Ok(event) => event,
-                    Err(_) => {
-                        if publish_dlq(bus, &delivery, "invalid_ai_usage_payload").await {
-                            committed.push(delivery);
-                        } else {
-                            retry_offsets
-                                .entry(delivery.partition)
-                                .or_insert(delivery.offset);
-                        }
-                        continue;
-                    }
-                };
-            if event.validate_envelope(&delivery.event).is_err() {
-                if publish_dlq(bus, &delivery, "usage_identity_conflict").await {
-                    committed.push(delivery);
-                } else {
+        let mut retry_offsets: BTreeMap<i32, i64> = BTreeMap::new();
+        while let Some(outcome) = outcomes.next().await {
+            match outcome {
+                VerificationOutcome::Committed(delivery) => committed.push(delivery),
+                VerificationOutcome::Retry(delivery) => {
                     retry_offsets
                         .entry(delivery.partition)
+                        .and_modify(|first| *first = (*first).min(delivery.offset))
                         .or_insert(delivery.offset);
                 }
-                continue;
             }
-            if retry_offsets.contains_key(&delivery.partition) {
-                continue;
-            }
-            let user_id = delivery.event.tenant_id;
-            let mut row = None;
-            let mut final_missing = false;
-            let mut query_failed = false;
-            for (deadline_index, delay) in VERIFY_DEADLINES.iter().enumerate() {
-                let deadline_at = delivery.event.received_at
-                    + chrono::Duration::from_std(*delay)
-                        .expect("verification deadline fits in chrono duration");
-                if let Ok(wait) = (deadline_at - chrono::Utc::now()).to_std() {
-                    if !wait.is_zero() {
-                        tokio::time::sleep(wait).await;
-                    }
-                }
-
-                match state
-                    .ai_usage_repo
-                    .find_event(user_id, &event.record.usage_event_id)
-                    .await
-                {
-                    Ok(Some(found)) => {
-                        row = Some(found);
-                        break;
-                    }
-                    Ok(None) if deadline_index + 1 < VERIFY_DEADLINES.len() => {}
-                    Ok(None) => {
-                        final_missing = true;
-                        break;
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "AI usage verifier query failed");
-                        retry_offsets
-                            .entry(delivery.partition)
-                            .or_insert(delivery.offset);
-                        query_failed = true;
-                        break;
-                    }
-                }
-            }
-            if query_failed {
-                break;
-            }
-            let Some(row) = row else {
-                if final_missing {
-                    let flags = ["missing_fact"];
-                    write_audit(
-                        state,
-                        &event,
-                        delivery.event.received_at,
-                        "missing_fact",
-                        &flags,
-                    )
-                    .await?;
-                    global_kafka_metrics()
-                        .verification_mismatch_total
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    committed.push(delivery);
-                }
-                continue;
-            };
-            let flags = compare(&event, &row)?;
-            let category = if flags.is_empty() {
-                "match"
-            } else {
-                "field_mismatch"
-            };
-            write_audit(state, &event, delivery.event.received_at, category, &flags).await?;
-            if !flags.is_empty() {
-                global_kafka_metrics()
-                    .verification_mismatch_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            committed.push(delivery);
         }
         let committed = committed
             .into_iter()
@@ -303,6 +263,128 @@ mod enabled {
             })
             .collect();
         Ok((committed, retry_offsets))
+    }
+
+    async fn verify_delivery(
+        state: &wakaclock_server::infrastructure::app::AppState,
+        bus: &Arc<KafkaEventBus>,
+        delivery: EventDelivery,
+    ) -> VerificationOutcome {
+        let event = match serde_json::from_value::<AiUsageEventV1>(delivery.event.payload.clone()) {
+            Ok(event) => event,
+            Err(_) => {
+                return if publish_dlq(bus, &delivery, "invalid_ai_usage_payload").await {
+                    VerificationOutcome::Committed(delivery)
+                } else {
+                    VerificationOutcome::Retry(delivery)
+                };
+            }
+        };
+        if let Err(error) = event.validate_envelope(&delivery.event) {
+            let category = if error.to_string().contains("identity") {
+                "usage_identity_conflict"
+            } else {
+                "invalid_ai_usage_envelope"
+            };
+            return if publish_dlq(bus, &delivery, category).await {
+                VerificationOutcome::Committed(delivery)
+            } else {
+                VerificationOutcome::Retry(delivery)
+            };
+        }
+
+        let user_id = delivery.event.tenant_id;
+        let mut row = None;
+        let mut final_missing = false;
+        let mut mismatch_flags = Vec::new();
+        for (deadline_index, delay) in VERIFY_DEADLINES.iter().enumerate() {
+            let deadline_at = delivery.event.received_at
+                + chrono::Duration::from_std(*delay)
+                    .expect("verification deadline fits in chrono duration");
+            if let Ok(wait) = (deadline_at - chrono::Utc::now()).to_std() {
+                if !wait.is_zero() {
+                    tokio::time::sleep(wait).await;
+                }
+            }
+
+            match state
+                .ai_usage_repo
+                .find_event(user_id, &event.record.usage_event_id)
+                .await
+            {
+                Ok(Some(found)) => {
+                    let flags = match compare(&event, &found) {
+                        Ok(flags) => flags,
+                        Err(_) => return VerificationOutcome::Retry(delivery),
+                    };
+                    row = Some(found);
+                    if flags.is_empty() {
+                        mismatch_flags.clear();
+                        break;
+                    }
+                    // A read can observe an older ClickHouse replacement while
+                    // the direct writer/fact-sink path is still converging. Keep
+                    // the latest mismatch and give the remaining absolute
+                    // deadlines a chance to observe the authoritative row.
+                    mismatch_flags = flags;
+                }
+                Ok(None) if deadline_index + 1 < VERIFY_DEADLINES.len() => {}
+                Ok(None) => {
+                    // If an earlier read found a mismatching row, preserve that
+                    // evidence rather than downgrading it to "missing" because a
+                    // later eventually-consistent read returned no row.
+                    final_missing = row.is_none();
+                    break;
+                }
+                Err(_) => return VerificationOutcome::Retry(delivery),
+            }
+        }
+        if row.is_none() {
+            if final_missing {
+                let flags = ["missing_fact"];
+                if write_audit(
+                    state,
+                    &event,
+                    delivery.event.tenant_id,
+                    delivery.event.received_at,
+                    "missing_fact",
+                    &flags,
+                )
+                .await
+                .is_err()
+                {
+                    return VerificationOutcome::Retry(delivery);
+                }
+                global_kafka_metrics()
+                    .verification_mismatch_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            return VerificationOutcome::Committed(delivery);
+        }
+        let category = if mismatch_flags.is_empty() {
+            "match"
+        } else {
+            "field_mismatch"
+        };
+        if write_audit(
+            state,
+            &event,
+            delivery.event.tenant_id,
+            delivery.event.received_at,
+            category,
+            &mismatch_flags,
+        )
+        .await
+        .is_err()
+        {
+            return VerificationOutcome::Retry(delivery);
+        }
+        if !mismatch_flags.is_empty() {
+            global_kafka_metrics()
+                .verification_mismatch_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        VerificationOutcome::Committed(delivery)
     }
 
     fn first_offsets(batch: &[EventDelivery]) -> BTreeMap<i32, i64> {
@@ -370,6 +452,7 @@ mod enabled {
     async fn write_audit(
         state: &wakaclock_server::infrastructure::app::AppState,
         event: &AiUsageEventV1,
+        tenant_id: uuid::Uuid,
         received_at: chrono::DateTime<chrono::Utc>,
         category: &str,
         flags: &[&str],
@@ -379,6 +462,7 @@ mod enabled {
             .insert_verification_audit(
                 state.postgres.as_ref().context("PostgreSQL is required")?,
                 &usage_id_hash(event),
+                &usage_identity_hash(tenant_id, &event.record.usage_event_id),
                 category,
                 flags,
                 received_at,
@@ -391,25 +475,29 @@ mod enabled {
         format!("{digest:x}")
     }
 
+    fn usage_identity_hash(tenant_id: uuid::Uuid, usage_event_id: &str) -> String {
+        let mut input = Vec::with_capacity(16 + usage_event_id.len() + 32);
+        input.extend_from_slice(b"ai-usage-verification:v1\0");
+        input.extend_from_slice(&(tenant_id.as_bytes().len() as u64).to_be_bytes());
+        input.extend_from_slice(tenant_id.as_bytes());
+        input.extend_from_slice(&(usage_event_id.len() as u64).to_be_bytes());
+        input.extend_from_slice(usage_event_id.as_bytes());
+        let digest = Sha256::digest(input);
+        format!("{digest:x}")
+    }
+
     async fn publish_dlq(
         bus: &KafkaEventBus,
         delivery: &EventDelivery,
         category: &'static str,
     ) -> bool {
-        let Ok(event_id) = StableEventId::heartbeat(
-            &format!(
-                "usage-verifier-dlq:{}:{}",
-                delivery.partition, delivery.offset
-            ),
-            0,
-        ) else {
-            return false;
-        };
+        let event_id =
+            StableEventId::dead_letter(delivery.topic.name(), delivery.partition, delivery.offset);
         let envelope = EventEnvelope::new(
             event_id,
             "ingest.dead_letter",
             delivery.event.tenant_id,
-            chrono::Utc::now(),
+            delivery.event.received_at,
             serde_json::json!({
                 "source_topic": delivery.topic.name(),
                 "source_partition": delivery.partition,
@@ -425,6 +513,29 @@ mod enabled {
             global_kafka_metrics().increment_category("dlq", category);
         }
         result.is_ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn verification_identity_hash_is_tenant_scoped_and_stable() {
+            let tenant_a = uuid::Uuid::from_u128(1);
+            let tenant_b = uuid::Uuid::from_u128(2);
+            assert_eq!(
+                usage_identity_hash(tenant_a, "event"),
+                usage_identity_hash(tenant_a, "event")
+            );
+            assert_ne!(
+                usage_identity_hash(tenant_a, "event"),
+                usage_identity_hash(tenant_b, "event")
+            );
+            assert_ne!(
+                usage_identity_hash(tenant_a, "ab"),
+                usage_identity_hash(tenant_a, "a")
+            );
+        }
     }
 }
 

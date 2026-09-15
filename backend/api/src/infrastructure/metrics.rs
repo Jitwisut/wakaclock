@@ -41,10 +41,158 @@ pub struct KafkaMetrics {
 
 static GLOBAL: OnceLock<Arc<KafkaMetrics>> = OnceLock::new();
 
+/// Process-local metrics for bounded RabbitMQ jobs.  This registry is deliberately
+/// separate from [`KafkaMetrics`]: a Rabbit worker must not expose Kafka consumer
+/// counters as if they described job delivery, and an API/Kafka scrape must not
+/// inherit a worker's lifecycle counters.
+#[derive(Default)]
+pub struct JobMetrics {
+    pub deliveries_total: AtomicU64,
+    pub outbox_published_total: AtomicU64,
+    pub outbox_poison_total: AtomicU64,
+    pub outbox_publish_failures_total: AtomicU64,
+    pub lease_sweep_requeued_total: AtomicU64,
+    pub lease_sweep_dead_lettered_total: AtomicU64,
+    pub claimed_total: AtomicU64,
+    pub duplicate_deliveries_total: AtomicU64,
+    pub not_ready_total: AtomicU64,
+    pub claim_failures_total: AtomicU64,
+    pub completed_total: AtomicU64,
+    pub failure_transitions_total: AtomicU64,
+    pub retries_total: AtomicU64,
+    pub dead_lettered_total: AtomicU64,
+    pub requeued_total: AtomicU64,
+    pub lease_lost_total: AtomicU64,
+    pub processing_latency_ms_total: AtomicU64,
+    pub processing_latency_count: AtomicU64,
+}
+
+static JOB_GLOBAL: OnceLock<Arc<JobMetrics>> = OnceLock::new();
+
 pub fn global_kafka_metrics() -> Arc<KafkaMetrics> {
     GLOBAL
         .get_or_init(|| Arc::new(KafkaMetrics::default()))
         .clone()
+}
+
+pub fn global_job_metrics() -> Arc<JobMetrics> {
+    JOB_GLOBAL
+        .get_or_init(|| Arc::new(JobMetrics::default()))
+        .clone()
+}
+
+impl JobMetrics {
+    pub fn observe_processing(&self, latency_ms: u64) {
+        self.processing_latency_ms_total
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.processing_latency_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn render_prometheus(&self, service: &str) -> String {
+        let mut output = String::new();
+        let _ = writeln!(
+            output,
+            "# HELP atoaxis_job_service_info RabbitMQ job worker identity."
+        );
+        let _ = writeln!(output, "# TYPE atoaxis_job_service_info gauge");
+        let _ = writeln!(
+            output,
+            "atoaxis_job_service_info{{service=\"{}\"}} 1",
+            escape(service)
+        );
+        write_job_counter(
+            &mut output,
+            "deliveries_total",
+            self.deliveries_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "outbox_published_total",
+            self.outbox_published_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "outbox_poison_total",
+            self.outbox_poison_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "outbox_publish_failures_total",
+            self.outbox_publish_failures_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "lease_sweep_requeued_total",
+            self.lease_sweep_requeued_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "lease_sweep_dead_lettered_total",
+            self.lease_sweep_dead_lettered_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "claimed_total",
+            self.claimed_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "duplicate_deliveries_total",
+            self.duplicate_deliveries_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "not_ready_total",
+            self.not_ready_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "claim_failures_total",
+            self.claim_failures_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "completed_total",
+            self.completed_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "failure_transitions_total",
+            self.failure_transitions_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "retries_total",
+            self.retries_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "dead_lettered_total",
+            self.dead_lettered_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "requeued_total",
+            self.requeued_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "lease_lost_total",
+            self.lease_lost_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "processing_latency_ms_total",
+            self.processing_latency_ms_total.load(Ordering::Relaxed),
+        );
+        write_job_counter(
+            &mut output,
+            "processing_latency_count",
+            self.processing_latency_count.load(Ordering::Relaxed),
+        );
+        output
+    }
 }
 
 impl KafkaMetrics {
@@ -123,6 +271,7 @@ impl KafkaMetrics {
     }
 
     pub fn increment_category(&self, metric: &str, category: &str) {
+        let (metric, category) = bounded_category_labels(metric, category);
         *self
             .categorized
             .lock()
@@ -296,9 +445,76 @@ fn bounded_topic_label(topic: &str) -> &'static str {
     }
 }
 
+/// Keep category labels finite and contract-owned as well as topic labels.
+///
+/// The method is intentionally public because worker code records categories at
+/// the boundary where an error is classified.  Do not let a future caller turn
+/// an exception, identifier, or broker payload into an unbounded Prometheus
+/// label. Unknown values remain observable through the bounded `other` bucket.
+fn bounded_category_labels(metric: &str, category: &str) -> (&'static str, &'static str) {
+    let metric_label = match metric {
+        "tombstone" => "tombstone",
+        "retry" => "retry",
+        "dlq" => "dlq",
+        "verification" => "verification",
+        "ai_session_job" => "ai_session_job",
+        "ai_session_reconcile" => "ai_session_reconcile",
+        _ => "other",
+    };
+    let category_label = match metric_label {
+        "tombstone" => match category {
+            "account_deleted" => "account_deleted",
+            _ => "other",
+        },
+        "retry" => match category {
+            "clickhouse_or_broker" => "clickhouse_or_broker",
+            _ => "other",
+        },
+        "dlq" => match category {
+            "empty_payload" => "empty_payload",
+            "invalid_envelope" => "invalid_envelope",
+            "invalid_json" => "invalid_json",
+            "invalid_partition_key" => "invalid_partition_key",
+            "invalid_heartbeat" => "invalid_heartbeat",
+            "revision_error" => "revision_error",
+            "privacy_contract_violation" => "privacy_contract_violation",
+            "invalid_ai_usage_payload" => "invalid_ai_usage_payload",
+            "usage_identity_conflict" => "usage_identity_conflict",
+            "invalid_ai_usage_envelope" => "invalid_ai_usage_envelope",
+            _ => "other",
+        },
+        "verification" => match category {
+            "success" => "success",
+            "missing_heartbeat" => "missing_heartbeat",
+            "field_mismatch" => "field_mismatch",
+            _ => "other",
+        },
+        "ai_session_job" => match category {
+            "created" => "created",
+            "deduplicated" => "deduplicated",
+            _ => "other",
+        },
+        "ai_session_reconcile" => match category {
+            "success" => "success",
+            "failure" => "failure",
+            _ => "other",
+        },
+        _ => "other",
+    };
+    (metric_label, category_label)
+}
+
 fn write_counter(output: &mut String, name: &str, value: u64) {
-    let _ = writeln!(output, "# TYPE atoaxis_kafka_{} counter", name);
-    let _ = writeln!(output, "atoaxis_kafka_{} {}", name, value);
+    write_counter_with_prefix(output, "atoaxis_kafka", name, value);
+}
+
+fn write_job_counter(output: &mut String, name: &str, value: u64) {
+    write_counter_with_prefix(output, "atoaxis_job", name, value);
+}
+
+fn write_counter_with_prefix(output: &mut String, prefix: &str, name: &str, value: u64) {
+    let _ = writeln!(output, "# TYPE {prefix}_{name} counter");
+    let _ = writeln!(output, "{prefix}_{name} {value}");
 }
 
 fn write_gauge(output: &mut String, name: &str, value: u64) {
@@ -315,17 +531,40 @@ fn escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::KafkaMetrics;
+    use super::{JobMetrics, KafkaMetrics};
 
     #[test]
     fn exposition_contains_only_bounded_metadata_labels() {
         let metrics = KafkaMetrics::default();
         metrics.observe_partition_lag("wakaclock.heartbeat.v1", 2, 7);
         metrics.increment_category("dlq", "invalid_heartbeat");
+        metrics.increment_category("user_id", "session_id");
+        metrics.increment_category("dlq", "event_id");
         let output = metrics.render_prometheus("fact-sink");
         assert!(output.contains("partition=\"2\""));
         assert!(output.contains("category=\"invalid_heartbeat\""));
+        assert!(output.contains("metric=\"other\",category=\"other\""));
+        assert!(output.contains("metric=\"dlq\",category=\"other\""));
         assert!(!output.contains("user_id"));
+        assert!(!output.contains("session_id"));
+        assert!(!output.contains("event_id"));
         assert!(!output.contains("payload"));
+    }
+
+    #[test]
+    fn job_exposition_is_separate_from_kafka_counters() {
+        let metrics = JobMetrics::default();
+        metrics
+            .deliveries_total
+            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .completed_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let output = metrics.render_prometheus("export-worker");
+        assert!(output.contains("atoaxis_job_service_info{service=\"export-worker\"} 1"));
+        assert!(output.contains("atoaxis_job_deliveries_total 2"));
+        assert!(output.contains("atoaxis_job_completed_total 1"));
+        assert!(!output.contains("atoaxis_kafka_"));
+        assert!(!output.contains("job_id"));
     }
 }

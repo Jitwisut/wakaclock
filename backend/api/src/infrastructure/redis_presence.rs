@@ -605,6 +605,10 @@ impl RedisPresenceStore {
             ],
         )
         .await?;
+        self.command("SADD", &[user_tickets_key(user_id), token.clone()])
+            .await?;
+        self.command("EXPIRE", &[user_tickets_key(user_id), "300".to_string()])
+            .await?;
         Ok(token)
     }
 
@@ -620,6 +624,46 @@ impl RedisPresenceStore {
             return Ok(None);
         };
         Ok((ticket_room == room_id).then_some(user_id))
+    }
+
+    /// Remove all presence state owned by a user. The room membership set is the
+    /// authoritative index for per-room keys, while the ticket set covers the
+    /// short-lived EventSource handoff tokens issued to that user.
+    pub async fn purge_user(&self, user_id: Uuid) -> Result<()> {
+        let room_values =
+            array_values(self.command("SMEMBERS", &[user_rooms_key(user_id)]).await?)?;
+        for room in room_values {
+            let Some(room) = bulk_string(room) else {
+                continue;
+            };
+            let Ok(room_id) = Uuid::parse_str(&room) else {
+                continue;
+            };
+            self.leave(room_id, user_id).await?;
+            self.command("DEL", &[auto_join_snooze_key(room_id, user_id)])
+                .await?;
+        }
+
+        let ticket_values = array_values(
+            self.command("SMEMBERS", &[user_tickets_key(user_id)])
+                .await?,
+        )?;
+        for ticket in ticket_values {
+            if let Some(ticket) = bulk_string(ticket) {
+                self.command("DEL", &[ticket_key(&ticket)]).await?;
+            }
+        }
+        self.command(
+            "DEL",
+            &[
+                user_key(user_id),
+                movement_rate_key(user_id),
+                user_rooms_key(user_id),
+                user_tickets_key(user_id),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 
     async fn sessions(&self, room_id: Uuid) -> Result<Vec<LiveSession>> {
@@ -1145,6 +1189,9 @@ fn movement_rate_key(user_id: Uuid) -> String {
 }
 fn user_rooms_key(user_id: Uuid) -> String {
     format!("presence:user:{user_id}:rooms")
+}
+fn user_tickets_key(user_id: Uuid) -> String {
+    format!("presence:user:{user_id}:tickets")
 }
 fn auto_join_snooze_key(room_id: Uuid, user_id: Uuid) -> String {
     format!("presence:room:{room_id}:auto-join-snooze:{user_id}")

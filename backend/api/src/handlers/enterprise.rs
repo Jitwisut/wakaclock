@@ -307,6 +307,8 @@ async fn scim_org(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Uuid, (StatusCode, Json<Value>)> {
+    crate::services::require_runtime_feature(crate::services::RuntimeFeature::Scim)
+        .map_err(service_error)?;
     let value = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

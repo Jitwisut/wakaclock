@@ -48,6 +48,13 @@ pub enum AppError {
 
     #[error("Serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+
+    /// A successful response that cannot be decoded as the advertised API
+    /// contract. The server may have committed the request before the client
+    /// lost the response, so callers must treat this as an unknown outcome and
+    /// retry with stable identities rather than dead-lettering the batch.
+    #[error("API protocol error: {0}")]
+    Protocol(String),
 }
 
 // ทำให้ส่งกลับ HTTP response ได้ (ใช้ใน server)

@@ -101,11 +101,11 @@ async fn main() -> Result<()> {
     // 2. Perform Database Migrations. Kafka mode must be able to start while
     // ClickHouse is unavailable: the API only needs PostgreSQL state and broker
     // acknowledgement on that path. The fact-sink owns ClickHouse migrations.
-    let kafka_mode = app_state.config.brokers.ingest.mode
-        == wakaclock_server::config::brokers::IngestMode::Kafka
-        || app_state.config.brokers.ai_usage.mode
-            == wakaclock_server::config::brokers::IngestMode::Kafka;
-    if !kafka_mode {
+    // ClickHouse may be skipped only when this API process has no direct or
+    // verify writer at all. A Kafka rollout for one stream must not suppress
+    // migrations needed by the other stream's direct/verify path.
+    let clickhouse_required = app_state.config.brokers.api_requires_clickhouse();
+    if clickhouse_required {
         migrate_clickhouse(&app_state)
             .await
             .context("ClickHouse migration failed")?;
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
     }
     info!("Migrations completed successfully.");
 
-    if !kafka_mode {
+    if clickhouse_required {
         app_state.user_service.migrate_legacy_credentials().await?;
     }
     drop(migration_guard);

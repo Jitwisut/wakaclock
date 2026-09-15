@@ -18,5 +18,7 @@ pub struct ReportSchedule {
     pub delivery_hour: i16,
     pub enabled: bool,
     pub last_sent_at: Option<DateTime<Utc>>,
+    pub next_run_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

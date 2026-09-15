@@ -6,6 +6,7 @@ pub mod job_relay;
 pub mod kafka;
 pub mod logger;
 pub mod metrics;
+pub mod object_store;
 pub mod postgres;
 pub mod presence_store;
 pub mod rabbitmq;

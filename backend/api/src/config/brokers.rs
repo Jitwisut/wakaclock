@@ -35,6 +35,7 @@ const KAFKA_RETRY_MIN_MS: &str = "ATOAXIS_KAFKA_RETRY_MIN_MS";
 const KAFKA_RETRY_MAX_MS: &str = "ATOAXIS_KAFKA_RETRY_MAX_MS";
 const METRICS_HOST: &str = "ATOAXIS_METRICS_HOST";
 const METRICS_PORT: &str = "ATOAXIS_METRICS_PORT";
+const PROJECTION_MODE: &str = "ATOAXIS_PROJECTION_REBUILD_MODE";
 
 #[derive(Debug, Clone, Default)]
 pub struct BrokerConfig {
@@ -50,6 +51,7 @@ pub struct BrokerConfig {
     /// rejected unless PostgreSQL is authoritative.
     pub ingest_state_source: IngestStateSource,
     pub reprocess_mode: ReprocessMode,
+    pub projection_mode: ProjectionMode,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -251,6 +253,13 @@ impl IngestCohort {
             IngestCohort::Users(users) => users.contains(&user_id),
         }
     }
+
+    /// Whether this cohort covers every authenticated account. Explicit user
+    /// lists are intentionally never treated as an all-users rollout, even if
+    /// they happen to be large today.
+    pub const fn covers_all_users(&self) -> bool {
+        matches!(self, Self::All | Self::Percent(100))
+    }
 }
 
 /// Bucket 0–99 from the low 64 bits of the account UUID. Those bits are random in
@@ -271,7 +280,37 @@ pub enum ReprocessMode {
     Job,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProjectionMode {
+    /// Projection rebuilds run synchronously for compatibility with existing clients.
+    #[default]
+    Sync,
+    /// Projection rebuilds are accepted as durable `projection.rebuild` jobs.
+    Job,
+}
+
 impl BrokerConfig {
+    /// Whether the API can still execute a ClickHouse write for any request.
+    /// Kafka mode is cohort-based, and AI usage additionally keeps legacy
+    /// clients on direct mode until contract v2 is required. Migrations and
+    /// readiness must use this same predicate as request routing.
+    pub fn api_requires_clickhouse(&self) -> bool {
+        let heartbeat_direct = self.ingest.mode != IngestMode::Kafka
+            || !self
+                .ingest
+                .kafka_cohort
+                .as_ref()
+                .is_some_and(IngestCohort::covers_all_users);
+        let ai_usage_direct = self.ai_usage.mode != IngestMode::Kafka
+            || !self
+                .ai_usage
+                .kafka_cohort
+                .as_ref()
+                .is_some_and(IngestCohort::covers_all_users)
+            || !self.ai_usage.require_contract_v2;
+        heartbeat_direct || ai_usage_direct
+    }
+
     pub fn from_env(postgres_configured: bool) -> Result<Self> {
         let config = Self::from_lookup(|key| std::env::var(key).ok(), postgres_configured)?;
         config.ensure_supported()?;
@@ -406,6 +445,15 @@ impl BrokerConfig {
         if ai_usage_mode == IngestMode::Kafka && job_queue.is_none() {
             anyhow::bail!("{AI_USAGE_INGEST_MODE}=kafka requires {JOB_QUEUE_URL}");
         }
+        // Both verify consumers persist their audit outcome in PostgreSQL. Do not
+        // let the API advertise a verify rollout that the corresponding verifier
+        // cannot start or durably report.
+        if mode == IngestMode::Verify && !postgres_configured {
+            anyhow::bail!("{INGEST_MODE}=verify requires POSTGRES_URL");
+        }
+        if ai_usage_mode == IngestMode::Verify && !postgres_configured {
+            anyhow::bail!("{AI_USAGE_INGEST_MODE}=verify requires POSTGRES_URL");
+        }
 
         let reprocess_mode = match get(REPROCESS_MODE).as_deref() {
             None => ReprocessMode::Sync,
@@ -422,6 +470,23 @@ impl BrokerConfig {
             // Job state lives in PostgreSQL (plan D5).
             if !postgres_configured {
                 anyhow::bail!("{REPROCESS_MODE}=job requires POSTGRES_URL");
+            }
+        }
+
+        let projection_mode = match get(PROJECTION_MODE).as_deref() {
+            None => ProjectionMode::Sync,
+            Some(value) => match value.to_ascii_lowercase().as_str() {
+                "sync" => ProjectionMode::Sync,
+                "job" => ProjectionMode::Job,
+                _ => anyhow::bail!("{PROJECTION_MODE} must be sync or job"),
+            },
+        };
+        if projection_mode == ProjectionMode::Job {
+            if job_queue.is_none() {
+                anyhow::bail!("{PROJECTION_MODE}=job requires {JOB_QUEUE_URL}");
+            }
+            if !postgres_configured {
+                anyhow::bail!("{PROJECTION_MODE}=job requires POSTGRES_URL");
             }
         }
 
@@ -449,6 +514,7 @@ impl BrokerConfig {
             },
             ingest_state_source,
             reprocess_mode,
+            projection_mode,
         })
     }
 
@@ -480,6 +546,7 @@ impl BrokerConfig {
             ai_usage_ingest_mode = self.ai_usage.mode.as_str(),
             ai_usage_require_contract_v2 = self.ai_usage.require_contract_v2,
             reprocess_mode = ?self.reprocess_mode,
+            projection_mode = ?self.projection_mode,
             "broker modes"
         );
         if let Some(event_bus) = &self.event_bus {
@@ -722,6 +789,7 @@ mod tests {
         assert_eq!(config.ingest, IngestConfig::default());
         assert_eq!(config.ingest.mode, IngestMode::Direct);
         assert_eq!(config.reprocess_mode, ReprocessMode::Sync);
+        assert_eq!(config.projection_mode, ProjectionMode::Sync);
         assert!(config.ensure_supported().is_ok());
     }
 
@@ -827,6 +895,32 @@ mod tests {
         let job_queue = (JOB_QUEUE_URL, "amqps://u:p@mq.example.cloud:5671/%2f");
         assert!(parse(&[job_queue, (REPROCESS_MODE, "job")], false).is_err());
         assert!(parse(&[job_queue, (REPROCESS_MODE, "job")], true).is_ok());
+
+        assert!(parse(&[(PROJECTION_MODE, "job")], true).is_err());
+        assert!(parse(&[job_queue, (PROJECTION_MODE, "job")], false).is_err());
+        assert_eq!(
+            parse(&[job_queue, (PROJECTION_MODE, "job")], true)
+                .unwrap()
+                .projection_mode,
+            ProjectionMode::Job
+        );
+    }
+
+    #[test]
+    fn verify_modes_require_postgres_audit_storage() {
+        let mut heartbeat = managed_kafka();
+        heartbeat.push((INGEST_MODE, "verify"));
+        assert!(parse(&heartbeat, false).is_err());
+        assert!(parse(&heartbeat, true).is_ok());
+
+        let mut ai_usage = managed_kafka();
+        ai_usage.push((AI_USAGE_INGEST_MODE, "verify"));
+        assert!(parse(&ai_usage, false).is_err());
+        assert!(parse(&ai_usage, true).is_ok());
+
+        // The compatibility default remains usable without the transactional
+        // store; only the explicitly selected verifier needs the audit backend.
+        assert!(parse(&[], false).is_ok());
     }
 
     #[test]
@@ -900,10 +994,29 @@ mod tests {
     }
 
     #[test]
+    fn clickhouse_dependency_matches_actual_api_fallback_paths() {
+        let mut config = BrokerConfig::default();
+        assert!(config.api_requires_clickhouse());
+
+        config.ingest.mode = IngestMode::Kafka;
+        config.ingest.kafka_cohort = Some(IngestCohort::All);
+        config.ai_usage.mode = IngestMode::Kafka;
+        config.ai_usage.kafka_cohort = Some(IngestCohort::All);
+        config.ai_usage.require_contract_v2 = true;
+        assert!(!config.api_requires_clickhouse());
+
+        config.ai_usage.require_contract_v2 = false;
+        assert!(config.api_requires_clickhouse());
+        config.ai_usage.require_contract_v2 = true;
+        config.ai_usage.kafka_cohort = Some(IngestCohort::Percent(5));
+        assert!(config.api_requires_clickhouse());
+    }
+
+    #[test]
     fn modes_without_an_implementation_refuse_to_boot() {
         let mut vars = managed_kafka();
         vars.push((INGEST_MODE, "verify"));
-        let verify = parse(&vars, false).unwrap();
+        let verify = parse(&vars, true).unwrap();
         #[cfg(feature = "kafka")]
         assert!(verify.ensure_supported().is_ok());
         #[cfg(not(feature = "kafka"))]

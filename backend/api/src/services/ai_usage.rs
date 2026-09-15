@@ -1,9 +1,14 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::{hash_map::Entry, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use crate::infrastructure::postgres::PostgresClient;
 use crate::model::ai_usage::{
     AiModelPricingRow, AiSessionRow, AiUsageEventRow, AiUsageIngestReport,
 };
@@ -12,15 +17,23 @@ use crate::services::project_identity::ProjectIdentityService;
 use tracing::warn;
 use wakaclock_core::ai::AiUsageRecord;
 
+static LAST_RECONCILE_VERSION: AtomicU64 = AtomicU64::new(0);
+
 pub struct AiUsageService {
     repo: Arc<AiUsageRepository>,
     project_identity_service: Arc<ProjectIdentityService>,
+    postgres: Option<Arc<PostgresClient>>,
+    /// A reconcile holds one PostgreSQL connection while it takes the distributed
+    /// session lock and performs the ClickHouse rebuild. Keep a small pool reserve
+    /// for job claim/complete, lease renewal, relay and health checks instead of
+    /// allowing a burst of sessions to occupy every connection.
+    reconcile_slots: Option<Arc<Semaphore>>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum AiUsageBatchError {
-    #[error("usage_event_id {0} was submitted with conflicting payloads")]
-    IdentityConflict(String),
+    #[error("usage_identity_conflict")]
+    IdentityConflict,
     #[error("invalid AI usage record: {0}")]
     Validation(String),
     #[error("could not serialize AI usage payload")]
@@ -49,9 +62,7 @@ pub fn prepare_batch(records: &[AiUsageRecord]) -> Result<PreparedAiUsageBatch, 
     let mut duplicates_in_batch = 0;
     for record in records {
         record.validate().map_err(AiUsageBatchError::Validation)?;
-        let payload = serde_json::to_vec(record)?;
-        let digest = Sha256::digest(&payload);
-        let payload_hash = format!("{digest:x}");
+        let payload_hash = ai_usage_payload_hash(record)?;
         match by_id.entry(record.usage_event_id.clone()) {
             Entry::Vacant(entry) => {
                 order.push(record.usage_event_id.clone());
@@ -59,9 +70,7 @@ pub fn prepare_batch(records: &[AiUsageRecord]) -> Result<PreparedAiUsageBatch, 
             }
             Entry::Occupied(entry) => {
                 if entry.get().0 != payload_hash {
-                    return Err(AiUsageBatchError::IdentityConflict(
-                        record.usage_event_id.clone(),
-                    ));
+                    return Err(AiUsageBatchError::IdentityConflict);
                 }
                 duplicates_in_batch += 1;
             }
@@ -82,15 +91,221 @@ pub fn prepare_batch(records: &[AiUsageRecord]) -> Result<PreparedAiUsageBatch, 
     })
 }
 
+/// Hash the complete sanitized record exactly once for every ingress path. The
+/// Kafka identity ledger and the ClickHouse fact writer must agree byte-for-byte
+/// so a changed timestamp or token field cannot be mistaken for a replay.
+pub fn ai_usage_payload_hash(record: &AiUsageRecord) -> Result<String, serde_json::Error> {
+    let payload = serde_json::to_vec(record)?;
+    let digest = Sha256::digest(payload);
+    Ok(format!("{digest:x}"))
+}
+
 impl AiUsageService {
     pub fn new(
         repo: Arc<AiUsageRepository>,
         project_identity_service: Arc<ProjectIdentityService>,
+        postgres: Option<Arc<PostgresClient>>,
     ) -> Self {
+        let reconcile_slots = postgres.as_ref().map(|postgres| {
+            const RESERVED_CONNECTIONS: u32 = 2;
+            let permits = postgres
+                .max_connections()
+                .saturating_sub(RESERVED_CONNECTIONS)
+                .max(1);
+            Arc::new(Semaphore::new(permits as usize))
+        });
         Self {
             repo,
             project_identity_service,
+            postgres,
+            reconcile_slots,
         }
+    }
+
+    /// Reserve stable Kafka identities before publishing. The ledger is a
+    /// metadata-only guard: it never stores prompt/response/transcript data.
+    /// Existing same-hash identities are safe retries; an existing different
+    /// hash is a contract conflict and must be returned before any publish.
+    pub async fn reserve_kafka_identities(
+        &self,
+        user_id: Uuid,
+        prepared: &PreparedAiUsageBatch,
+    ) -> Result<Vec<AiUsageRecord>> {
+        let state_by_id = self
+            .reserve_ingest_identity_states(user_id, prepared)
+            .await?;
+        let mut to_publish = Vec::new();
+        for record in &prepared.records {
+            let expected_hash = prepared
+                .payload_hashes
+                .get(&record.usage_event_id)
+                .context("AI usage payload hash is missing")?;
+            let Some((stored_hash, published)) = state_by_id.get(&record.usage_event_id) else {
+                anyhow::bail!("AI usage Kafka identity reservation disappeared")
+            };
+            if stored_hash != expected_hash {
+                anyhow::bail!("usage_identity_conflict")
+            }
+            if !published {
+                to_publish.push(record.clone());
+            }
+        }
+        Ok(to_publish)
+    }
+
+    /// Reserve/check identities for every writer that has PostgreSQL. Direct
+    /// and Kafka fact-sink ingestion share this ledger, so a concurrent direct
+    /// write cannot turn a changed-date or changed-payload retry into a second
+    /// logical event in ClickHouse.
+    async fn reserve_ingest_identity_states(
+        &self,
+        user_id: Uuid,
+        prepared: &PreparedAiUsageBatch,
+    ) -> Result<HashMap<String, (String, bool)>> {
+        let Some(postgres) = self.postgres.as_ref() else {
+            anyhow::bail!("AI usage identity ledger is not configured")
+        };
+        let client = postgres
+            .transaction_client()
+            .await
+            .context("acquire AI usage identity connection")?;
+        self.reserve_ingest_identity_states_on(&client, user_id, prepared)
+            .await
+    }
+
+    async fn reserve_ingest_identity_states_on(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+        prepared: &PreparedAiUsageBatch,
+    ) -> Result<HashMap<String, (String, bool)>> {
+        if prepared.records.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let ids: Vec<String> = prepared
+            .records
+            .iter()
+            .map(|record| record.usage_event_id.clone())
+            .collect();
+        let hashes: Vec<String> = prepared
+            .records
+            .iter()
+            .map(|record| {
+                prepared
+                    .payload_hashes
+                    .get(&record.usage_event_id)
+                    .cloned()
+                    .context("AI usage payload hash is missing")
+            })
+            .collect::<Result<_>>()?;
+
+        client
+            .execute(
+                "INSERT INTO ai_usage_ingest_identities
+                     (user_id, usage_event_id, payload_hash)
+                 SELECT $1, input.usage_event_id, input.payload_hash
+                 FROM unnest($2::text[], $3::text[]) AS input(usage_event_id, payload_hash)
+                 ON CONFLICT (user_id, usage_event_id) DO NOTHING",
+                &[&user_id, &ids, &hashes],
+            )
+            .await
+            .context("reserve AI usage identities")?;
+
+        let rows = client
+            .query(
+                "SELECT usage_event_id, payload_hash, published_at IS NOT NULL AS published
+                 FROM ai_usage_ingest_identities
+                 WHERE user_id = $1 AND usage_event_id = ANY($2::text[])",
+                &[&user_id, &ids],
+            )
+            .await
+            .context("read AI usage identity reservations")?;
+
+        let mut state_by_id = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("usage_event_id");
+            let hash: String = row.get("payload_hash");
+            let published: bool = row.get("published");
+            state_by_id.insert(id, (hash, published));
+        }
+        for record in &prepared.records {
+            let expected_hash = prepared
+                .payload_hashes
+                .get(&record.usage_event_id)
+                .context("AI usage payload hash is missing")?;
+            let Some((stored_hash, _published)) = state_by_id.get(&record.usage_event_id) else {
+                anyhow::bail!("AI usage identity reservation disappeared")
+            };
+            if stored_hash != expected_hash {
+                anyhow::bail!("usage_identity_conflict")
+            }
+        }
+        Ok(state_by_id)
+    }
+
+    /// Mark identities durable after the writer has acknowledged its durable
+    /// side effect. Kafka calls this after the complete publish; direct/fact
+    /// writers call it after ClickHouse. A failure leaves the reservation
+    /// replayable with the same stable event IDs.
+    pub async fn mark_ingest_identities_durable(
+        &self,
+        user_id: Uuid,
+        records: &[AiUsageRecord],
+    ) -> Result<()> {
+        let Some(postgres) = self.postgres.as_ref() else {
+            anyhow::bail!("AI usage Kafka identity ledger is not configured")
+        };
+        let client = postgres
+            .transaction_client()
+            .await
+            .context("acquire AI usage identity acknowledgement connection")?;
+        self.mark_ingest_identities_durable_on(&client, user_id, records)
+            .await
+    }
+
+    async fn mark_ingest_identities_durable_on(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+        records: &[AiUsageRecord],
+    ) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let prepared = prepare_batch(records).map_err(ai_usage_batch_error)?;
+        let ids: Vec<String> = prepared
+            .records
+            .iter()
+            .map(|record| record.usage_event_id.clone())
+            .collect();
+        let hashes: Vec<String> = prepared
+            .records
+            .iter()
+            .map(|record| {
+                prepared
+                    .payload_hashes
+                    .get(&record.usage_event_id)
+                    .cloned()
+                    .context("AI usage payload hash is missing")
+            })
+            .collect::<Result<_>>()?;
+        let updated = client
+            .execute(
+                "UPDATE ai_usage_ingest_identities AS identity
+                 SET published_at = COALESCE(identity.published_at, now())
+                 FROM unnest($2::text[], $3::text[]) AS input(usage_event_id, payload_hash)
+                 WHERE identity.user_id = $1
+                   AND identity.usage_event_id = input.usage_event_id
+                   AND identity.payload_hash = input.payload_hash",
+                &[&user_id, &ids, &hashes],
+            )
+            .await
+            .context("mark AI usage Kafka identities published")?;
+        if updated != ids.len() as u64 {
+            anyhow::bail!("AI usage Kafka identity acknowledgement was incomplete")
+        }
+        Ok(())
     }
 
     /// Stores a batch of usage events and refreshes the sessions they belong to.
@@ -104,21 +319,54 @@ impl AiUsageService {
         user_id: Uuid,
         records: Vec<AiUsageRecord>,
     ) -> Result<AiUsageIngestReport> {
-        let mut facts = self.ingest_internal(user_id, records).await?;
+        // Direct and verify modes still write ClickHouse from the API process.
+        // Take the same account lock used by tombstoning and the Kafka fact-sink
+        // so a request that started before deletion cannot write facts or session
+        // projections after the deletion worker has purged the account.
+        let account_lock = if let Some(postgres) = self.postgres.as_ref() {
+            let account_lock = postgres
+                .account_activity_lock(user_id)
+                .await
+                .context("acquire AI usage account activity lock")?;
+            if postgres
+                .is_account_deleted_on(&account_lock, user_id)
+                .await
+                .context("check AI usage account availability")?
+            {
+                anyhow::bail!("account is unavailable for AI usage");
+            }
+            Some(account_lock)
+        } else {
+            None
+        };
+        let mut facts = match account_lock.as_ref() {
+            Some(account_lock) => {
+                let account_client: &tokio_postgres::Client = account_lock;
+                self.ingest_internal_with_client(user_id, records, Some(account_client))
+                    .await?
+            }
+            None => self.ingest_internal(user_id, records).await?,
+        };
         // The direct compatibility path preserves the old synchronous contract by
         // running the same two-stage pipeline as the workers: facts first, then a
         // full session/project rebuild from authoritative facts. Projection errors
         // remain non-fatal after the fact insert, matching the legacy endpoint's
         // accepted-event behaviour while making the next reconcile able to repair it.
         for session_id in &facts.session_ids {
-            match self.reconcile_session(user_id, session_id).await {
+            let result = if let Some(account_lock) = account_lock.as_ref() {
+                // The account lock already owns a pool connection. Reuse it for
+                // the session lock so a one-connection PostgreSQL deployment
+                // cannot deadlock by waiting for a second connection.
+                self.reconcile_session_on(account_lock, user_id, session_id)
+                    .await
+            } else {
+                self.reconcile_session(user_id, session_id).await
+            };
+            match result {
                 Ok(touched) => facts.report.sessions_touched += touched,
-                Err(error) => warn!(
-                    %user_id,
-                    %error,
-                    session_id,
-                    "AI usage session projection failed after direct fact acceptance"
-                ),
+                Err(_error) => {
+                    warn!("AI usage session projection failed after direct fact acceptance")
+                }
             }
         }
         Ok(facts.report)
@@ -135,21 +383,137 @@ impl AiUsageService {
         self.ingest_internal(user_id, records).await
     }
 
+    /// Ingest facts while the caller already holds the account activity lock on
+    /// the supplied PostgreSQL connection. Kafka fact-sinks use this variant so
+    /// the identity ledger, ClickHouse write and reconcile-job transaction do
+    /// not acquire another pool connection behind the lock (including when the
+    /// configured PostgreSQL pool has only one connection).
+    pub async fn ingest_facts_on_account_lock(
+        &self,
+        user_id: Uuid,
+        records: Vec<AiUsageRecord>,
+        account_lock: &tokio_postgres::Client,
+    ) -> Result<AiUsageFactsReport> {
+        self.ingest_internal_with_client(user_id, records, Some(account_lock))
+            .await
+    }
+
     /// Recompute one session projection from the stored facts. The operation is
     /// derived and idempotent; replaying the same job writes the same logical
     /// replacement version rather than accumulating totals.
     pub async fn reconcile_session(&self, user_id: Uuid, session_id: &str) -> Result<usize> {
-        let version = chrono::Utc::now().timestamp_micros().max(0) as u64;
-        self.reconcile_projects(user_id, session_id, version)
-            .await?;
-        self.refresh_sessions(user_id, &[session_id.to_string()], version)
+        // Multiple Kafka batches can touch one session at the same time. A
+        // PostgreSQL advisory lock serializes those rebuilds across worker
+        // processes while leaving unrelated sessions concurrent. Dropping the
+        // pooled connection releases the lock even if the ClickHouse operation
+        // is cancelled or fails.
+        if let Some(postgres) = self.postgres.as_ref() {
+            let _reconcile_slot = self
+                .reconcile_slots
+                .as_ref()
+                .context("AI session reconcile capacity is not configured")?
+                .acquire()
+                .await
+                .context("AI session reconcile capacity was closed")?;
+            // The account lock must cover the ClickHouse read and replacement writes,
+            // not only the session advisory lock. Account deletion uses this same
+            // lock while it drains jobs and purges analytics; otherwise a queued
+            // reconcile could recreate a projection after the purge completed.
+            let connection = postgres
+                .account_activity_lock(user_id)
+                .await
+                .context("acquire AI session reconcile account lock")?;
+            if postgres
+                .is_account_deleted_on(&connection, user_id)
+                .await
+                .context("check AI session reconcile account availability")?
+            {
+                // The account may have been hard-deleted after its queued job was
+                // accepted. There is no authoritative state left to project and
+                // retrying would keep a terminal deletion job alive forever.
+                return Ok(0);
+            }
+            self.reconcile_session_on(&connection, user_id, session_id)
+                .await
+        } else {
+            // ClickHouse-only compatibility mode has no cross-process lock
+            // store. The monotonic local version still prevents equal-version
+            // replacements inside one API process; production Kafka workers
+            // always have PostgreSQL and take the distributed lock above.
+            self.reconcile_session_unlocked(user_id, session_id).await
+        }
+    }
+
+    async fn reconcile_session_on(
+        &self,
+        connection: &tokio_postgres::Client,
+        user_id: Uuid,
+        session_id: &str,
+    ) -> Result<usize> {
+        let lock_key = format!("ai-session-reconcile:v1:{user_id}:{session_id}");
+        connection
+            .query_one(
+                "SELECT pg_advisory_lock(hashtextextended($1, 73110))",
+                &[&lock_key],
+            )
             .await
+            .context("acquire AI session reconcile lock")?;
+
+        let result = self.reconcile_session_unlocked(user_id, session_id).await;
+        let unlock = connection
+            .query_one(
+                "SELECT pg_advisory_unlock(hashtextextended($1, 73110))",
+                &[&lock_key],
+            )
+            .await;
+        match (result, unlock) {
+            (Ok(value), Ok(row)) if row.get::<_, bool>(0) => Ok(value),
+            (Ok(_), Ok(_)) => anyhow::bail!("AI session reconcile lock release failed"),
+            (Ok(_), Err(error)) => Err(error).context("release AI session reconcile lock"),
+            (Err(error), Ok(_)) => Err(error),
+            (Err(error), Err(unlock_error)) => {
+                warn!(
+                    %unlock_error,
+                    "AI session reconcile failed and lock release also failed"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    async fn reconcile_session_unlocked(&self, user_id: Uuid, session_id: &str) -> Result<usize> {
+        // Keep project attribution and the session aggregate on one authoritative
+        // ClickHouse snapshot. A second query here could observe a later batch and
+        // publish a session total that no longer corresponds to its project rows.
+        let mut facts = self
+            .repo
+            .session_facts(user_id, &[session_id.to_string()])
+            .await?;
+        let version = next_reconcile_version();
+        self.reconcile_projects(user_id, session_id, &mut facts, version)
+            .await?;
+
+        let Some(row) = session_projection_from_facts(user_id, session_id, &facts, version)? else {
+            return Ok(0);
+        };
+        self.repo.upsert_sessions(&[row]).await?;
+        Ok(1)
     }
 
     async fn ingest_internal(
         &self,
         user_id: Uuid,
         records: Vec<AiUsageRecord>,
+    ) -> Result<AiUsageFactsReport> {
+        self.ingest_internal_with_client(user_id, records, None)
+            .await
+    }
+
+    async fn ingest_internal_with_client(
+        &self,
+        user_id: Uuid,
+        records: Vec<AiUsageRecord>,
+        identity_client: Option<&tokio_postgres::Client>,
     ) -> Result<AiUsageFactsReport> {
         let received = records.len();
         let now = chrono::Utc::now().timestamp().max(0) as u32;
@@ -158,6 +522,27 @@ impl AiUsageService {
         let duplicates_in_batch = prepared.duplicates_in_batch;
         let payload_hashes = prepared.payload_hashes;
         let deduped = prepared.records;
+        // The ledger is optional for the old ClickHouse-only deployment, but is
+        // mandatory for Kafka mode and shared by direct/fact-sink writers when
+        // PostgreSQL is present. Reserve before doing any ClickHouse write.
+        if self.postgres.is_some() {
+            let prepared = PreparedAiUsageBatch {
+                records: deduped.clone(),
+                duplicates_in_batch,
+                payload_hashes: payload_hashes.clone(),
+            };
+            match identity_client {
+                Some(client) => {
+                    self.reserve_ingest_identity_states_on(client, user_id, &prepared)
+                        .await
+                }
+                None => {
+                    self.reserve_ingest_identity_states(user_id, &prepared)
+                        .await
+                }
+            }
+            .context("AI usage identity reservation failed")?;
+        }
 
         // Price once per model rather than once per event — a batch is overwhelmingly one or two
         // models, and the catalog is small enough to hold for the duration of the call.
@@ -170,16 +555,14 @@ impl AiUsageService {
                 if let Entry::Vacant(entry) = pricing_cache.entry(key) {
                     let windows = match self.repo.pricing_for_model(provider, model).await {
                         Ok(windows) => windows,
-                        Err(error) => {
+                        Err(_error) => {
                             // Pricing is a derived enrichment. A catalog/query
                             // problem must not reject the authoritative usage
                             // event; store it as unpriced and make the failure
                             // visible for an operator.
                             warn!(
-                                %error,
                                 provider,
-                                model,
-                                "AI usage pricing unavailable; storing event as unpriced"
+                                model, "AI usage pricing unavailable; storing event as unpriced"
                             );
                             Vec::new()
                         }
@@ -220,15 +603,15 @@ impl AiUsageService {
                 {
                     Ok(project_id) => project_id,
                     Err(error) => {
-                        // Project attribution is also derived data. Keep the
-                        // token event usable in the unattributed bucket when
-                        // identity tables are unavailable.
+                        // The hint is privacy-safe but its resolved project_id is
+                        // part of the analytics meaning of this fact. Do not
+                        // silently discard that evidence when the identity store
+                        // is temporarily unavailable: Kafka retries the batch,
+                        // while direct mode returns a retryable server failure.
                         warn!(
-                            %user_id,
-                            %error,
-                            "AI usage project identity unavailable; storing event unattributed"
+                            "AI usage project identity unavailable; retaining the fact for retry"
                         );
-                        None
+                        return Err(error).context("AI usage explicit project resolution failed");
                     }
                 },
                 _ => None,
@@ -276,10 +659,7 @@ impl AiUsageService {
                 continue;
             };
             if payload_hashes.get(&row.usage_event_id) != Some(existing_hash) {
-                anyhow::bail!(
-                    "usage_identity_conflict for usage_event_id {}",
-                    row.usage_event_id
-                );
+                anyhow::bail!("usage_identity_conflict");
             }
         }
         let already_present: HashSet<String> = existing.into_keys().collect();
@@ -298,6 +678,17 @@ impl AiUsageService {
             .await
             .context("AI usage event insert failed")?;
 
+        if self.postgres.is_some() {
+            match identity_client {
+                Some(client) => {
+                    self.mark_ingest_identities_durable_on(client, user_id, &deduped)
+                        .await
+                }
+                None => self.mark_ingest_identities_durable(user_id, &deduped).await,
+            }
+            .context("AI usage identity acknowledgement failed")?;
+        }
+
         Ok(AiUsageFactsReport {
             report: AiUsageIngestReport {
                 received,
@@ -314,13 +705,10 @@ impl AiUsageService {
         &self,
         user_id: Uuid,
         session_id: &str,
+        facts: &mut [AiUsageEventRow],
         version: u64,
     ) -> Result<()> {
-        let mut facts = self
-            .repo
-            .session_facts(user_id, &[session_id.to_string()])
-            .await?;
-        let replacements = project_attribution_replacements(&mut facts, version);
+        let replacements = project_attribution_replacements(facts, version);
         self.repo.insert_usage_events(&replacements).await?;
 
         #[derive(Default)]
@@ -331,7 +719,7 @@ impl AiUsageService {
             inferred_count: u64,
         }
         let mut allocations: HashMap<Uuid, Allocation> = HashMap::new();
-        for fact in &facts {
+        for fact in facts.iter() {
             let Some(project_id) = fact.project_id else {
                 continue;
             };
@@ -397,50 +785,119 @@ impl AiUsageService {
         }
         self.repo.upsert_session_projects(&writes).await
     }
+}
 
-    /// Rebuilds each touched session from its stored events.
-    ///
-    /// Derived rather than accumulated, so the totals are correct however the events were split
-    /// across batches — and so a replayed batch produces the same session row instead of doubling
-    /// its prompt count.
-    async fn refresh_sessions(
-        &self,
-        user_id: Uuid,
-        session_ids: &[String],
-        version: u64,
-    ) -> Result<usize> {
-        let rollups = self.repo.session_rollups(user_id, session_ids).await?;
-        let rows: Vec<AiSessionRow> = rollups
-            .into_iter()
-            .map(|rollup| AiSessionRow {
-                user_id,
-                ai_session_id: rollup.ai_session_id,
-                started_at: rollup.started_at,
-                // A session has no end until the agent reports one; the last event's time is not
-                // an end, only the latest thing seen so far.
-                ended_at: None,
-                last_event_at: rollup.last_event_at,
-                ai_agent: rollup.ai_agent,
-                ai_provider: primary_value(rollup.distinct_providers, rollup.latest_provider),
-                primary_model: primary_model(rollup.distinct_models, rollup.latest_model),
-                ai_client: None,
-                editor: None,
-                machine: None,
-                operating_system: None,
-                prompt_count: rollup.prompt_count,
-                input_tokens: rollup.input_tokens,
-                output_tokens: rollup.output_tokens,
-                cache_read_tokens: rollup.cache_read_tokens,
-                cache_write_tokens: rollup.cache_write_tokens,
-                version,
-                updated_at: chrono::Utc::now().timestamp().max(0) as u32,
-            })
-            .collect();
-
-        let touched = rows.len();
-        self.repo.upsert_sessions(&rows).await?;
-        Ok(touched)
+fn next_reconcile_version() -> u64 {
+    let now = chrono::Utc::now().timestamp_micros().max(0) as u64;
+    let mut previous = LAST_RECONCILE_VERSION.load(Ordering::Acquire);
+    loop {
+        let candidate = now.max(previous.saturating_add(1));
+        match LAST_RECONCILE_VERSION.compare_exchange_weak(
+            previous,
+            candidate,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return candidate,
+            Err(observed) => previous = observed,
+        }
     }
+}
+
+/// Build one session projection from the exact fact snapshot already read by a
+/// reconcile. This deliberately mirrors ClickHouse's `sumOrNull` semantics:
+/// an entirely unreported token class stays `NULL`, while a mixture of reported
+/// and unreported values sums only the reported values.
+fn session_projection_from_facts(
+    user_id: Uuid,
+    session_id: &str,
+    facts: &[AiUsageEventRow],
+    version: u64,
+) -> Result<Option<AiSessionRow>> {
+    let facts: Vec<&AiUsageEventRow> = facts
+        .iter()
+        .filter(|fact| fact.ai_session_id == session_id)
+        .collect();
+    let Some(first) = facts.first() else {
+        return Ok(None);
+    };
+
+    let started_at = facts
+        .iter()
+        .map(|fact| fact.event_time)
+        .min()
+        .unwrap_or(first.event_time);
+    let last_event_at = facts
+        .iter()
+        .map(|fact| fact.event_time)
+        .max()
+        .unwrap_or(first.event_time);
+    let latest = facts
+        .iter()
+        .max_by(|left, right| {
+            left.event_time
+                .cmp(&right.event_time)
+                .then_with(|| left.usage_event_id.cmp(&right.usage_event_id))
+        })
+        .expect("session facts is non-empty");
+    let providers: HashSet<String> = facts
+        .iter()
+        .map(|fact| fact.ai_provider.clone().unwrap_or_default())
+        .collect();
+    let models: HashSet<String> = facts
+        .iter()
+        .map(|fact| fact.ai_model.clone().unwrap_or_default())
+        .collect();
+
+    Ok(Some(AiSessionRow {
+        user_id,
+        ai_session_id: session_id.to_string(),
+        started_at,
+        // A session has no end until the agent reports one; the last event's time is not an end,
+        // only the latest thing seen so far.
+        ended_at: None,
+        last_event_at,
+        ai_agent: latest.ai_agent.clone(),
+        ai_provider: primary_value(
+            providers.len() as u64,
+            latest.ai_provider.clone().unwrap_or_default(),
+        ),
+        primary_model: primary_model(
+            models.len() as u64,
+            latest.ai_model.clone().unwrap_or_default(),
+        ),
+        ai_client: None,
+        editor: None,
+        machine: None,
+        operating_system: None,
+        prompt_count: sum_required(facts.iter().map(|fact| u64::from(fact.prompt_count)))?,
+        input_tokens: sum_optional(facts.iter().map(|fact| fact.input_tokens))?,
+        output_tokens: sum_optional(facts.iter().map(|fact| fact.output_tokens))?,
+        cache_read_tokens: sum_optional(facts.iter().map(|fact| fact.cache_read_tokens))?,
+        cache_write_tokens: sum_optional(facts.iter().map(|fact| fact.cache_write_tokens))?,
+        version,
+        updated_at: chrono::Utc::now().timestamp().max(0) as u32,
+    }))
+}
+
+fn sum_required(mut values: impl Iterator<Item = u64>) -> Result<u64> {
+    values.try_fold(0_u64, |total, value| {
+        total
+            .checked_add(value)
+            .context("AI session prompt count overflow")
+    })
+}
+
+fn sum_optional(values: impl Iterator<Item = Option<u64>>) -> Result<Option<u64>> {
+    let mut total = 0_u64;
+    let mut reported = false;
+    for value in values.flatten() {
+        total = total
+            .checked_add(value)
+            .context("AI session token count overflow")?;
+        reported = true;
+    }
+    Ok(reported.then_some(total))
 }
 
 /// Apply the conservative project rule to a session's logical facts.
@@ -490,9 +947,7 @@ fn project_attribution_replacements(
 
 fn ai_usage_batch_error(error: AiUsageBatchError) -> anyhow::Error {
     match error {
-        AiUsageBatchError::IdentityConflict(id) => {
-            anyhow::anyhow!("usage_identity_conflict for usage_event_id {id}")
-        }
+        AiUsageBatchError::IdentityConflict => anyhow::anyhow!("usage_identity_conflict"),
         AiUsageBatchError::Validation(message) => {
             anyhow::anyhow!("invalid AI usage record: {message}")
         }
@@ -742,7 +1197,7 @@ mod tests {
         let mut conflicting = first.clone();
         conflicting.output_tokens = Some(3);
         let error = prepare_batch(&[first, conflicting]).unwrap_err();
-        assert!(matches!(error, AiUsageBatchError::IdentityConflict(_)));
+        assert!(matches!(error, AiUsageBatchError::IdentityConflict));
     }
 
     fn usage_row(
@@ -837,5 +1292,58 @@ mod tests {
         assert!(facts[1].project_attribution_method.is_none());
         assert_eq!(replacements.len(), 1);
         assert_eq!(replacements[0].usage_event_id, "inferred-a");
+    }
+
+    #[test]
+    fn session_projection_sums_one_snapshot_and_nulls_mixed_models() {
+        let mut first = usage_row("event-a", None, None);
+        first.event_time = 10;
+        first.prompt_count = 2;
+        first.input_tokens = Some(11);
+        first.output_tokens = None;
+        first.ai_model = Some("model-a".to_string());
+
+        let mut second = usage_row("event-b", None, None);
+        second.event_time = 20;
+        second.prompt_count = 3;
+        second.input_tokens = None;
+        second.output_tokens = Some(7);
+        second.ai_model = Some("model-b".to_string());
+
+        let row = session_projection_from_facts(Uuid::nil(), "session-1", &[first, second], 99)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.started_at, 10);
+        assert_eq!(row.last_event_at, 20);
+        assert_eq!(row.prompt_count, 5);
+        assert_eq!(row.input_tokens, Some(11));
+        assert_eq!(row.output_tokens, Some(7));
+        assert_eq!(row.ai_provider.as_deref(), Some("provider"));
+        assert_eq!(row.primary_model, None);
+        assert_eq!(row.version, 99);
+    }
+
+    #[test]
+    fn session_projection_uses_the_stable_id_as_a_tie_breaker() {
+        let mut first = usage_row("event-a", None, None);
+        first.event_time = 10;
+        first.ai_agent = "agent-a".to_string();
+        let mut second = usage_row("event-b", None, None);
+        second.event_time = 10;
+        second.ai_agent = "agent-b".to_string();
+
+        let row = session_projection_from_facts(Uuid::nil(), "session-1", &[first, second], 100)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.ai_agent, "agent-b");
+    }
+
+    #[test]
+    fn reconcile_versions_are_strictly_increasing_within_a_process() {
+        let first = next_reconcile_version();
+        let second = next_reconcile_version();
+        assert!(second > first);
     }
 }

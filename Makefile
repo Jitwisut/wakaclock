@@ -111,6 +111,18 @@ dev-ai-usage-verifier: ## Run the K5 AI usage verify consumer
 dev-ai-session-worker: ## Run the K5 AI session reconcile worker
 	@cd $(BACKEND_DIR) && $(CARGO) run --bin ai-session-worker
 
+.PHONY: dev-projection-worker
+dev-projection-worker: ## Run the account projection rebuild worker
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin projection-worker
+
+.PHONY: dev-export-worker
+dev-export-worker: ## Run the S3-backed export artifact worker
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin export-worker
+
+.PHONY: dev-account-deletion
+dev-account-deletion: ## Run the cross-store account deletion worker
+	@cd $(BACKEND_DIR) && $(CARGO) run --bin account-deletion
+
 .PHONY: dev-frontend
 dev-frontend: ## Run the Next.js application in development mode
 	@cd $(FRONTEND_DIR) && $(NPM) run dev
