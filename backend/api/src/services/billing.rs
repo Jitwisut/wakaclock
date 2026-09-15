@@ -27,6 +27,7 @@ impl BillingService {
         actor: Uuid,
         organization_id: Uuid,
     ) -> Result<OrganizationBilling> {
+        super::require_runtime_feature(super::RuntimeFeature::SeatBillingEntitlements)?;
         self.authorization
             .require(
                 actor,
@@ -73,7 +74,10 @@ impl BillingService {
         } else {
             Ok(OrganizationBilling {
                 organization_id,
-                provider: "stripe".to_string(),
+                // No payment provider is selected in this deployment. Returning
+                // a concrete provider here would falsely imply that charges or
+                // webhook reconciliation are available.
+                provider: "unconfigured".to_string(),
                 plan: None,
                 status: None,
                 current_period_start: None,
@@ -85,6 +89,7 @@ impl BillingService {
     }
 
     pub async fn invoices(&self, actor: Uuid, organization_id: Uuid) -> Result<Vec<Invoice>> {
+        super::require_runtime_feature(super::RuntimeFeature::SeatBillingEntitlements)?;
         self.authorization
             .require(
                 actor,

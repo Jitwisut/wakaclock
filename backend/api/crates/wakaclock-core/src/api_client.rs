@@ -135,6 +135,7 @@ pub fn is_retryable_delivery_error(error: &AppError) -> bool {
         AppError::HttpStatusRetry { status, .. } => {
             *status == 408 || *status == 429 || (500..=599).contains(status)
         }
+        AppError::Protocol(_) => true,
         _ => false,
     }
 }
@@ -476,14 +477,18 @@ impl ApiClient {
             .await?;
         let response = Self::reject_unauthorized(response)?;
         let response = Self::error_for_status_with_body(response).await?;
-        let body = response.json::<Value>().await?;
+        let body = response.json::<Value>().await.map_err(|_| {
+            AppError::Protocol("AI usage response could not be decoded".to_string())
+        })?;
         if let Ok(report) = serde_json::from_value::<AiUsageIngestReportV2>(body.clone()) {
             return Ok(report);
         }
         // During a rolling server upgrade an API replica may still return the
         // legacy direct-path shape. Treat that successful response as stored so
         // the durable client queue is not needlessly retried or dead-lettered.
-        let legacy = serde_json::from_value::<AiUsageIngestReport>(body)?;
+        let legacy = serde_json::from_value::<AiUsageIngestReport>(body).map_err(|_| {
+            AppError::Protocol("AI usage response did not match a known contract".to_string())
+        })?;
         Ok(AiUsageIngestReportV2 {
             contract_version: 2,
             processing_state: AiUsageProcessingState::Stored,
@@ -1198,6 +1203,9 @@ mod tests {
             message: "down".to_string(),
             retry_after_seconds: Some(5),
         }));
+        assert!(is_retryable_delivery_error(&AppError::Protocol(
+            "AI usage response did not match a known contract".to_string(),
+        )));
         assert!(!is_retryable_delivery_error(&AppError::Conflict(
             "duplicate".to_string()
         )));

@@ -4,9 +4,10 @@
 `codex/integrate-all-current-work` เมื่อ 2026-09-13 และ Kafka K-P0/K0.5/K1/K2
 มี implementation แบบ feature-gated แล้ว. K0 isolated correctness gate ผ่านครบ 11/11
 และเลือก D6=`revision_lookup`; K5 contract/config/client durability/fact-sink/session
-worker/verify scaffolding ลงใน branch นี้แล้ว แต่ production ยังไม่เปิดจนกว่า K3/K4
-และ K5 staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence
-จะผ่าน
+worker/verify implementation ลงใน branch นี้แล้ว. R5 มี shared worker runtime,
+projection rebuild, export artifact foundation และ account-deletion workflow เพิ่มแล้ว
+แต่ยังคง fail-closed สำหรับงานที่ยังไม่มี provider/cross-store processor. Production ยังไม่เปิดจนกว่า K3/K4 และ K5
+staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence จะผ่าน
 
 | ขั้น | สถานะ |
 |---|---|
@@ -23,7 +24,7 @@ worker/verify scaffolding ลงใน branch นี้แล้ว แต่ pr
 | K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, retry seek/pause/resume, sanitized DLQ classification and health endpoints; K0 e2e/rebalance/outage matrix passed |
 | K3 verify + K4 cohort rollout | 🟡 orchestration, PostgreSQL audit, parity verifier, metrics and API response implemented; staging/load/cohort gate pending |
 | K5 AI usage Kafka + session reconcile | 🟡 contract v2/header routing, independent config, durable CLI pending queue, `ai-usage-ingest`, `ai-session-worker`, verifier/audit schema, payload-hash conflict guard and runbook implemented; isolated full-stack, real-account and rollout gates pending |
-| R5 งานชนิดอื่น | ยังไม่เริ่ม |
+| R5 งานชนิดอื่น | 🟡 shared runtime, `projection.rebuild`, export artifact foundation และ account-deletion tombstone/worker ทำแล้ว; export/account deletion มี explicit gates และยังต้องผ่าน cross-store e2e; report/integration/billing ยังไม่มี provider processor ที่พร้อมเปิด |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -62,8 +63,8 @@ metrics ที่ต้องมี) ให้ใช้ §9.22 ตามเด�
 | Client library Kafka/AMQP ใน `Cargo.lock` | ไม่มี |
 | `backend/api/src/infrastructure/contracts.rs` | มี versioned event/job envelope, publisher/consumer contracts และ retry targets |
 | Heartbeat ingest | `handlers/v1/heartbeats.rs` → `HeartbeatService::process_heartbeats` → ClickHouse ตรง (sync) |
-| Worker | `src/bin/job-worker.rs` รัน relay + `analytics.reprocess`; job types อื่นยังไม่เปิด |
-| export/report/integration | ถูกกันด้วย `require_background_processor()` → 503 |
+| Worker | `src/bin/job-worker.rs` รัน relay + `analytics.reprocess`; `projection-worker`, `export-worker` และ `account-deletion` มี processor แยกแล้ว แต่ยังเปิดตาม guard/dependency; report/integration/billing ยัง fail-closed |
+| export/report/integration/account deletion | ถูกกันด้วย `require_background_processor()` หรือ explicit mode gate → 503 จน processor/dependency พร้อม |
 | Reprocess | ทำงานจริงแบบ sync ใน HTTP request พร้อม PG advisory lock (`services/reprocess.rs`) — **ไม่ได้**อยู่หลัง 503 guard |
 | `outbox_events` (PG) | relay อยู่ใน dedicated `job-worker`; poison row ถูก retire และ retry/DLQ ใช้ target ใน outbox |
 | Docker compose | RabbitMQ อยู่ใน `infra-up`; Redpanda ยังอยู่หลัง profile `kafka` จน K1 |
@@ -274,13 +275,18 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 
 **R5 — งานที่เหลือ งานละ 1 PR** (ถอด 503 guard ของงานนั้นหลังผ่าน e2e test เท่านั้น)
 
+ส่วน foundation ที่ไม่เสี่ยงต่อการเปิด traffic ปกติทำไว้แล้วบางส่วน ได้แก่ shared
+worker runtime, projection rebuild แบบ opt-in, export idempotency/checksum/object-store
+adapter และ terminal-failure fencing. งานที่ยังไม่มี provider หรือการลบข้าม store ที่
+พิสูจน์ได้จะไม่ถูกเปิดเพียงเพราะ binary compile ผ่าน
+
 | งาน | ต้องมีก่อน |
 |---|---|
-| `export.generate` | `ObjectStore` adapter (S3/MinIO), signed URL, checksum, expiry |
-| `report.deliver` + scheduler | ช่องทางส่ง (email provider); scheduler เลือกงานที่ถึงเวลาด้วย `SKIP LOCKED` |
-| `integration.sync` | `CredentialVault` (F11) — ต่อยอดจาก `infrastructure/secret_box.rs` ได้ |
-| `account.delete` | ลบข้าม PG + ClickHouse + object store พร้อม verification |
-| `billing.reconcile` | billing provider |
+| `export.generate` | foundation มี `ObjectStore` adapter (S3/MinIO), signed URL, checksum, expiry, aggregate row/byte bounds, idempotency และ lease fencing แล้ว; `ATOAXIS_EXPORT_MODE=job` เปิดรับงานได้เฉพาะเมื่อ PG/RabbitMQ/S3 ครบ แต่ยังต้องผ่าน full-stack object-store, retry/fencing และ end-to-end gates ก่อน production |
+| `report.deliver` + scheduler | scheduler foundation มี `next_run_at`, `SKIP LOCKED`, occurrence ledger และ job/outbox transaction แล้ว; ยังต้องมีช่องทางส่งที่เลือกใช้จริง (เช่น email provider), delivery processor, audit transitions และ e2e ก่อนเปิด |
+| `integration.sync` | มี `CredentialVault` สำหรับตรวจ envelope แล้ว; ต้องมี provider adapters, token refresh, generation fencing และ integration e2e ก่อนเปิด |
+| `account.delete` | ✅ foundation ลงแล้ว: `DELETE /api/v2/me` (session-only + explicit confirmation), tombstone, system job/outbox, dedicated worker, shared account lock, cross-store allowlist verification และ metadata-only audit; ยังปิดจนกว่า cross-store e2e จะผ่าน |
+| `billing.reconcile` | ต้องเลือก billing provider/source of truth แล้วทำ ledger/reconcile processor และ retry/DLQ audit ให้ครบ |
 
 ### Kafka track
 

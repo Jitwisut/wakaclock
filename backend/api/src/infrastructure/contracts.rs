@@ -134,7 +134,10 @@ impl JobKind {
     /// other kind must name the account whose data it touches, so a worker never
     /// has to infer scope from the payload.
     pub const fn is_system_scoped(self) -> bool {
-        matches!(self, JobKind::PricingReconcile | JobKind::BillingReconcile)
+        matches!(
+            self,
+            JobKind::PricingReconcile | JobKind::AccountDelete | JobKind::BillingReconcile
+        )
     }
 }
 
@@ -194,6 +197,20 @@ impl StableEventId {
         }
         let digest = Sha256::digest(usage_event_id.as_bytes());
         Ok(Self(format!("au:v1:{digest:x}")))
+    }
+
+    /// Stable identity for a metadata-only dead-letter record.  Partition and
+    /// offset alone are not globally unique when several source topics share the
+    /// same DLQ, so the source topic is length-framed into the digest as well.
+    pub fn dead_letter(source_topic: &str, partition: i32, offset: i64) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"dlq:v1\0");
+        hasher.update((source_topic.len() as u64).to_be_bytes());
+        hasher.update(source_topic.as_bytes());
+        hasher.update(partition.to_be_bytes());
+        hasher.update(offset.to_be_bytes());
+        let digest = hasher.finalize();
+        Self(format!("dlq:v1:{digest:x}"))
     }
 
     /// `job:{job_id}`. The job ID comes from the `async_jobs` row written in the
@@ -299,6 +316,16 @@ impl EventEnvelope {
         {
             return Err(InfrastructureError::InvalidEnvelope(
                 "event_type, trace_id and idempotency_key are required".to_string(),
+            ));
+        }
+        // Validation also runs on deserialized broker messages. Enforcing the
+        // payload bound here prevents a malformed or manually inserted envelope
+        // from bypassing the producer-side checks and reaching RabbitMQ/Kafka.
+        let payload_bytes =
+            serde_json::to_vec(&self.payload).map_err(InfrastructureError::Serialization)?;
+        if payload_bytes.len() > MAX_EVENT_PAYLOAD_BYTES {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "event payload exceeds the broker limit".to_string(),
             ));
         }
         Ok(())
@@ -641,6 +668,11 @@ impl JobEnvelope {
 
     pub fn validate(&self) -> InfrastructureResult<()> {
         self.event.validate()?;
+        if usize::from(self.attempt) > JOB_RETRY_DELAYS.len() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "job attempt exceeds the retry budget".to_string(),
+            ));
+        }
         if self.event.event_type != self.kind.routing_key() {
             return Err(InfrastructureError::InvalidEnvelope(
                 "event_type must equal the job routing key".to_string(),
@@ -772,6 +804,12 @@ pub trait JobDelivery: Send {
 
     /// Call only after the job's durable effects and status are written.
     async fn ack(self: Box<Self>) -> InfrastructureResult<()>;
+
+    /// Return the original delivery to the broker when the worker could not
+    /// consult or update the authoritative PostgreSQL state. Leaving a delivery
+    /// merely unacknowledged can exhaust the channel's prefetch window without
+    /// causing an immediate redelivery.
+    async fn requeue(self: Box<Self>) -> InfrastructureResult<()>;
 
     /// Reschedules with `attempt + 1` after [`JobEnvelope::next_retry_delay`], or
     /// dead-letters once the schedule is exhausted.
@@ -965,6 +1003,16 @@ mod tests {
     }
 
     #[test]
+    fn dead_letter_identity_includes_source_topic_and_is_replay_stable() {
+        let first = StableEventId::dead_letter("wakaclock.ai-usage.v1", 3, 42);
+        let replay = StableEventId::dead_letter("wakaclock.ai-usage.v1", 3, 42);
+        let other_topic = StableEventId::dead_letter("wakaclock.heartbeat.v1", 3, 42);
+        assert_eq!(first, replay);
+        assert_ne!(first, other_topic);
+        assert!(first.as_str().starts_with("dlq:v1:"));
+    }
+
+    #[test]
     fn envelope_validation_rejects_unknown_versions_and_missing_metadata() {
         let valid = EventEnvelope::new(
             StableEventId::heartbeat("operation-1", 0).unwrap(),
@@ -986,6 +1034,22 @@ mod tests {
         let mut envelope = valid;
         envelope.event_id = StableEventId(String::new());
         assert!(envelope.validate().is_err());
+    }
+
+    #[test]
+    fn envelope_validation_rejects_oversized_payloads_before_broker_publish() {
+        let envelope = EventEnvelope::new(
+            StableEventId::heartbeat("operation-1", 0).unwrap(),
+            "heartbeat.recorded",
+            Uuid::now_v7(),
+            Utc::now(),
+            serde_json::json!({ "bounded": "x".repeat(MAX_EVENT_PAYLOAD_BYTES) }),
+        );
+        assert!(matches!(
+            envelope.validate(),
+            Err(InfrastructureError::InvalidEnvelope(message))
+                if message == "event payload exceeds the broker limit"
+        ));
     }
 
     #[test]
@@ -1120,6 +1184,21 @@ mod tests {
         assert!(
             JobEnvelope::new(Uuid::now_v7(), JobKind::PricingReconcile, user, payload).is_err()
         );
+
+        assert!(JobEnvelope::new(
+            Uuid::now_v7(),
+            JobKind::AccountDelete,
+            SYSTEM_TENANT_ID,
+            serde_json::Value::Null
+        )
+        .is_ok());
+        assert!(JobEnvelope::new(
+            Uuid::now_v7(),
+            JobKind::AccountDelete,
+            user,
+            serde_json::Value::Null
+        )
+        .is_err());
     }
 
     #[test]
@@ -1138,6 +1217,19 @@ mod tests {
         }
         assert_eq!(delays, JOB_RETRY_DELAYS);
         assert_eq!(job.attempt as usize, JOB_RETRY_DELAYS.len());
+    }
+
+    #[test]
+    fn job_envelope_rejects_attempts_beyond_the_retry_budget() {
+        let mut job = JobEnvelope::new(
+            Uuid::now_v7(),
+            JobKind::AnalyticsReprocess,
+            Uuid::now_v7(),
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        job.attempt = (JOB_RETRY_DELAYS.len() as u16) + 1;
+        assert!(job.validate().is_err());
     }
 
     #[test]

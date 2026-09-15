@@ -49,7 +49,7 @@ pub async fn process_batch(
         let event = match serde_json::from_value::<HeartbeatEventV1>(delivery.event.payload.clone())
         {
             Ok(event) => event,
-            Err(error) => {
+            Err(_) => {
                 if publish_dlq(bus, &delivery, "invalid_heartbeat_payload").await {
                     outcome.committed.push(delivery);
                     outcome.permanent_failures += 1;
@@ -61,11 +61,11 @@ pub async fn process_batch(
                         .entry(delivery.partition)
                         .or_insert(delivery.offset);
                 }
-                tracing::warn!(%error, "heartbeat payload rejected by fact-sink");
+                tracing::warn!("heartbeat payload rejected by fact-sink");
                 continue;
             }
         };
-        if let Err(error) = event.validate_envelope(&delivery.event) {
+        if event.validate_envelope(&delivery.event).is_err() {
             if publish_dlq(bus, &delivery, "event_identity_mismatch").await {
                 outcome.committed.push(delivery);
                 outcome.permanent_failures += 1;
@@ -77,11 +77,56 @@ pub async fn process_batch(
                     .entry(delivery.partition)
                     .or_insert(delivery.offset);
             }
-            tracing::warn!(%error, "heartbeat event identity rejected by fact-sink");
+            tracing::warn!("heartbeat event identity rejected by fact-sink");
             continue;
         }
 
         let tenant_id = delivery.event.tenant_id;
+        let Some(postgres) = state.postgres.as_ref() else {
+            block_partition(&mut outcome, &mut blocked, &delivery);
+            tracing::warn!("heartbeat fact-sink has no PostgreSQL account guard");
+            continue;
+        };
+        // Hold the same account activity lock used by account deletion through
+        // the availability check and ClickHouse write. A cached "active" result
+        // is unsafe: a tombstone may commit between two records in one poll.
+        let account_lock = match postgres.account_activity_lock(tenant_id).await {
+            Ok(lock) => lock,
+            Err(_) => {
+                block_partition(&mut outcome, &mut blocked, &delivery);
+                tracing::warn!("heartbeat fact-sink account guard failed");
+                continue;
+            }
+        };
+        let account_deleted = match postgres
+            .is_account_deleted_on(&account_lock, tenant_id)
+            .await
+        {
+            Ok(deleted) => deleted,
+            Err(_) => {
+                block_partition(&mut outcome, &mut blocked, &delivery);
+                tracing::warn!("heartbeat fact-sink account availability check failed");
+                continue;
+            }
+        };
+        if account_deleted {
+            if publish_dlq(bus, &delivery, "account_deleted").await {
+                outcome.committed.push(delivery);
+                outcome.tombstoned += 1;
+                metrics
+                    .tombstoned_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                metrics.increment_category("tombstone", "account_deleted");
+            } else {
+                blocked.insert(delivery.partition);
+                outcome.retry_partitions.insert(delivery.partition);
+                outcome
+                    .retry_offsets
+                    .entry(delivery.partition)
+                    .or_insert(delivery.offset);
+            }
+            continue;
+        }
         let heartbeat = event.into_heartbeat(tenant_id);
         let heartbeat_id = heartbeat
             .heartbeat_id
@@ -143,7 +188,7 @@ pub async fn process_batch(
                         .retry_offsets
                         .entry(delivery.partition)
                         .or_insert(delivery.offset);
-                    tracing::warn!(%error, "heartbeat sink transient failure");
+                    tracing::warn!("heartbeat sink transient failure");
                 }
             }
         }
@@ -156,17 +201,13 @@ async fn publish_dlq(
     delivery: &EventDelivery,
     category: &'static str,
 ) -> bool {
-    let Ok(event_id) = StableEventId::heartbeat(
-        &format!("worker-dlq:{}:{}", delivery.partition, delivery.offset),
-        0,
-    ) else {
-        return false;
-    };
+    let event_id =
+        StableEventId::dead_letter(delivery.topic.name(), delivery.partition, delivery.offset);
     let envelope = EventEnvelope::new(
         event_id,
         "ingest.dead_letter",
         delivery.event.tenant_id,
-        chrono::Utc::now(),
+        delivery.event.received_at,
         serde_json::json!({
             "source_topic": delivery.topic.name(),
             "source_partition": delivery.partition,
@@ -186,6 +227,20 @@ async fn publish_dlq(
         metrics.increment_category("dlq", category);
     }
     published
+}
+
+fn block_partition(
+    outcome: &mut BatchOutcome,
+    blocked: &mut BTreeSet<i32>,
+    delivery: &EventDelivery,
+) {
+    blocked.insert(delivery.partition);
+    outcome.retry_partitions.insert(delivery.partition);
+    outcome
+        .retry_offsets
+        .entry(delivery.partition)
+        .and_modify(|first| *first = (*first).min(delivery.offset))
+        .or_insert(delivery.offset);
 }
 
 pub fn permanent_category(error: &str) -> Option<&'static str> {

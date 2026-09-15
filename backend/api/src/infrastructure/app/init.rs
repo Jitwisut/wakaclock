@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 
 use crate::config::brokers::IngestMode;
-use crate::config::Config;
-use crate::infrastructure::contracts::EventBus;
+use crate::config::{Config, ExportMode};
+use crate::infrastructure::contracts::{CredentialVault, EventBus, ObjectStore};
 use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
@@ -26,6 +26,7 @@ use crate::repository::project_merge::ProjectMergeRepository;
 use crate::repository::project_rule::ProjectRuleRepository;
 use crate::repository::team::TeamRepository;
 use crate::services::account_analytics::AccountAnalyticsService;
+use crate::services::account_deletion::AccountDeletionService;
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
 use crate::services::ai_certification::AiCertificationService;
 use crate::services::ai_diagnostics::AiDiagnosticsService;
@@ -78,6 +79,7 @@ pub struct AppState {
     /// modes are rejected at config validation until the feature is compiled
     /// and the producer is reachable.
     pub event_bus: Option<Arc<dyn EventBus>>,
+    pub object_store: Option<Arc<dyn ObjectStore>>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     pub presence_rate_limiter: Arc<PresenceRateLimiter>,
@@ -104,6 +106,7 @@ pub struct AppState {
     pub ai_certification_service: Arc<AiCertificationService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
     pub billing_service: Arc<BillingService>,
+    pub account_deletion_service: Arc<AccountDeletionService>,
     pub ai_usage_service: Arc<AiUsageService>,
     pub all_time_service: Arc<AllTimeService>,
     pub user_service: Arc<UserService>,
@@ -159,13 +162,11 @@ pub enum HealthStatus {
 
 impl AppState {
     pub async fn health(&self) -> AppHealth {
-        let clickhouse_ok = self.clickhouse.health_check().await.is_ok();
         // Kafka-cohort API replicas do not need ClickHouse on the request path;
         // the fact-sink owns that dependency. Keep the health endpoint live during
         // a ClickHouse outage so the broker-accepting path is not restarted.
-        let clickhouse_required = self.config.brokers.ingest.mode
-            != crate::config::brokers::IngestMode::Kafka
-            && self.config.brokers.ai_usage.mode != crate::config::brokers::IngestMode::Kafka;
+        let clickhouse_required = self.config.brokers.api_requires_clickhouse();
+        let clickhouse_ok = !clickhouse_required || self.clickhouse.health_check().await.is_ok();
         let postgres_ok = match &self.postgres {
             Some(postgres) => postgres.health_check().await.is_ok(),
             None => true,
@@ -192,6 +193,7 @@ pub async fn create_app_state() -> Result<AppState> {
     // โหลด Config
     let config = Config::from_env().context("Failed to load application configuration")?;
     config.brokers.log_startup_summary();
+    tracing::info!(export_mode = config.export_mode.as_str(), "export mode");
     let config = Arc::new(config);
 
     // สร้าง ClickHouse Client
@@ -330,6 +332,9 @@ pub async fn create_app_state() -> Result<AppState> {
         )),
         None => None,
     };
+    let credential_vault: Option<Arc<dyn CredentialVault>> = credential_secret_box
+        .clone()
+        .map(|vault| vault as Arc<dyn CredentialVault>);
     let user_service = Arc::new(
         UserService::new(clickhouse.clone(), postgres.clone(), credential_secret_box)
             .with_ingest_state(config.brokers.ingest_state_source, postgres.clone()),
@@ -338,8 +343,34 @@ pub async fn create_app_state() -> Result<AppState> {
     let external_duration_service =
         Arc::new(ExternalDurationService::new(external_duration_repo.clone()));
     let follow_up_service = Arc::new(FollowUpService::new(follow_up_repo.clone()));
-    let export_service = Arc::new(ExportService::new(postgres.clone()));
+    let object_store = crate::infrastructure::object_store::S3ObjectStore::from_env()?
+        .map(|store| Arc::new(store) as Arc<dyn ObjectStore>);
+    let export_service = Arc::new(ExportService::new(
+        postgres.clone(),
+        clickhouse.clone(),
+        object_store.clone(),
+        config.export_mode,
+    ));
+    if config.export_mode == ExportMode::Job && !export_service.processor_ready() {
+        anyhow::bail!(
+            "ATOAXIS_EXPORT_MODE=job requires PostgreSQL and a configured S3 object store"
+        );
+    }
     let job_service = Arc::new(JobService::new(postgres.clone()));
+    let account_deletion_service = Arc::new(AccountDeletionService::new(
+        postgres.clone(),
+        clickhouse.clone(),
+        object_store.clone(),
+        redis_presence.clone(),
+        config.account_deletion_mode,
+    ));
+    if config.account_deletion_mode == crate::config::AccountDeletionMode::Job
+        && !account_deletion_service.processor_ready()
+    {
+        anyhow::bail!(
+            "ATOAXIS_ACCOUNT_DELETION_MODE=job requires PostgreSQL and a configured S3 object store"
+        );
+    }
     let profile_service = Arc::new(ProfileService::new(postgres.clone()));
     let report_service = Arc::new(ReportService::new(postgres.clone()));
     let activity_timeline_service = Arc::new(ActivityTimelineService::new(
@@ -348,13 +379,17 @@ pub async fn create_app_state() -> Result<AppState> {
     ));
     // Constructed after the timeline: commit and pull-request attribution reads the
     // canonical timeline rather than deriving its own durations.
-    let vcs_service = Arc::new(VcsService::new(
-        postgres.clone(),
-        authorization_service.clone(),
-        activity_timeline_service.clone(),
-    ));
+    let vcs_service = Arc::new(
+        VcsService::new(
+            postgres.clone(),
+            authorization_service.clone(),
+            activity_timeline_service.clone(),
+        )
+        .with_credential_vault(credential_vault.clone()),
+    );
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone(), bridge_config));
-    let integration_service = Arc::new(IntegrationService::new(postgres.clone()));
+    let integration_service =
+        Arc::new(IntegrationService::new(postgres.clone()).with_credential_vault(credential_vault));
     let leaderboard_service = Arc::new(LeaderboardService::new(
         postgres.clone(),
         authorization_service.clone(),
@@ -368,6 +403,7 @@ pub async fn create_app_state() -> Result<AppState> {
     let ai_usage_service = Arc::new(AiUsageService::new(
         ai_usage_repo.clone(),
         project_identity_service.clone(),
+        postgres.clone(),
     ));
     let project_analytics_service = Arc::new(ProjectAnalyticsService::new(
         project_analytics_repo.clone(),
@@ -384,6 +420,7 @@ pub async fn create_app_state() -> Result<AppState> {
         config.clone(),
         heartbeat_service.clone(),
         event_bus.clone(),
+        postgres.clone(),
     ));
     let goal_service = Arc::new(GoalService::with_clickhouse(
         postgres.clone(),
@@ -421,6 +458,7 @@ pub async fn create_app_state() -> Result<AppState> {
         clickhouse,
         postgres,
         event_bus,
+        object_store,
         auth_rate_limiter,
         analytics_rate_limiter,
         presence_rate_limiter,
@@ -445,6 +483,7 @@ pub async fn create_app_state() -> Result<AppState> {
         ai_certification_service,
         account_analytics_service,
         billing_service,
+        account_deletion_service,
         ai_usage_service,
         all_time_service,
         user_service,

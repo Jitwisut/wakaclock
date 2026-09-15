@@ -298,6 +298,7 @@ fn error_code(error: &AppError) -> &'static str {
         AppError::Conflict(_) => "conflict",
         AppError::ClickHouse(_) => "clickhouse",
         AppError::NotFound(_) => "not_found",
+        AppError::Protocol(_) => "protocol",
     }
 }
 

@@ -13,6 +13,7 @@ use crate::config::brokers::IngestMode;
 use crate::config::Config;
 use crate::infrastructure::app::AppState;
 use crate::infrastructure::contracts::{EventBus, EventTopic, HeartbeatEventV1};
+use crate::infrastructure::postgres::PostgresClient;
 use crate::services::heartbeat::HeartbeatService;
 use wakaclock_core::heartbeat::Heartbeat;
 
@@ -20,6 +21,7 @@ pub struct HeartbeatIngestService {
     config: Arc<Config>,
     heartbeat_service: Arc<HeartbeatService>,
     event_bus: Option<Arc<dyn EventBus>>,
+    postgres: Option<Arc<PostgresClient>>,
 }
 
 impl HeartbeatIngestService {
@@ -27,11 +29,13 @@ impl HeartbeatIngestService {
         config: Arc<Config>,
         heartbeat_service: Arc<HeartbeatService>,
         event_bus: Option<Arc<dyn EventBus>>,
+        postgres: Option<Arc<PostgresClient>>,
     ) -> Self {
         Self {
             config,
             heartbeat_service,
             event_bus,
+            postgres,
         }
     }
 
@@ -78,11 +82,7 @@ impl HeartbeatIngestService {
             .is_some_and(|cohort| cohort.includes(user_id));
 
         match mode {
-            IngestMode::Direct => {
-                self.heartbeat_service
-                    .process_heartbeats(user_id, machine, heartbeats)
-                    .await
-            }
+            IngestMode::Direct => self.process_direct(user_id, machine, heartbeats).await,
             IngestMode::Verify => {
                 // The shadow event applies the privacy-safe entity projection
                 // before it crosses Kafka.  Apply the same projection to the
@@ -95,8 +95,7 @@ impl HeartbeatIngestService {
                     .map(sanitize_broker_heartbeat)
                     .collect::<Vec<_>>();
                 let inserted = self
-                    .heartbeat_service
-                    .process_heartbeats(user_id, machine, canonical_heartbeats.clone())
+                    .process_direct(user_id, machine, canonical_heartbeats.clone())
                     .await?;
                 if let Err(error) = self.publish_all(user_id, &canonical_heartbeats).await {
                     // Direct ClickHouse is authoritative in verify mode.  The
@@ -115,11 +114,39 @@ impl HeartbeatIngestService {
             IngestMode::Kafka => {
                 // Users outside the explicit cohort retain the break-glass direct
                 // path during rollout.
-                self.heartbeat_service
-                    .process_heartbeats(user_id, machine, heartbeats)
-                    .await
+                self.process_direct(user_id, machine, heartbeats).await
             }
         }
+    }
+
+    async fn process_direct(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+    ) -> Result<usize> {
+        // Direct and verify modes write from the API process. Share the account
+        // activity lock with the deletion workflow and Kafka fact-sinks so a
+        // request racing a tombstone cannot restore data after the purge.
+        let _account_lock = if let Some(postgres) = self.postgres.as_ref() {
+            let account_lock = postgres
+                .account_activity_lock(user_id)
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?;
+            if postgres
+                .is_account_deleted_on(&account_lock, user_id)
+                .await
+                .map_err(|error| anyhow!(error.to_string()))?
+            {
+                anyhow::bail!("account is unavailable for heartbeat ingestion");
+            }
+            Some(account_lock)
+        } else {
+            None
+        };
+        self.heartbeat_service
+            .process_heartbeats(user_id, machine, heartbeats)
+            .await
     }
 
     async fn publish_all(&self, user_id: Uuid, heartbeats: &[Heartbeat]) -> Result<()> {
@@ -152,5 +179,6 @@ pub fn build_from_state(state: &AppState) -> HeartbeatIngestService {
         state.config.clone(),
         state.heartbeat_service.clone(),
         state.event_bus.clone(),
+        state.postgres.clone(),
     )
 }

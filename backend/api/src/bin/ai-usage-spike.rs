@@ -623,10 +623,15 @@ mod enabled {
             TopicReplication::Fixed(1),
         )
         .set("retention.ms", "3600000");
-        for result in admin
-            .create_topics([&source, &dlq], &AdminOptions::new())
-            .await?
-        {
+        let results = tokio::time::timeout(
+            Duration::from_secs(5),
+            admin.create_topics([&source, &dlq], &AdminOptions::new()),
+        )
+        .await
+        .context(
+            "timed out connecting to KAFKA_TEST_URL; start the isolated K5 infrastructure first",
+        )??;
+        for result in results {
             if let Err((name, error)) = result {
                 if !error
                     .to_string()

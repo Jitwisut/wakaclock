@@ -12,6 +12,7 @@ use crate::infrastructure::contracts::{
 };
 use crate::infrastructure::metrics::{global_kafka_metrics, KafkaMetrics};
 use async_trait::async_trait;
+use chrono::TimeZone;
 use futures::future::join_all;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
@@ -69,6 +70,11 @@ impl KafkaEventBus {
     ) -> InfrastructureResult<()> {
         let started = std::time::Instant::now();
         event.validate()?;
+        if key != event.partition_key() {
+            return Err(InfrastructureError::InvalidEnvelope(
+                "event partition key does not match tenant".to_string(),
+            ));
+        }
         let payload = serde_json::to_vec(event)?;
         if payload.len() > MAX_EVENT_PAYLOAD_BYTES {
             return Err(InfrastructureError::InvalidEnvelope(
@@ -240,6 +246,9 @@ impl KafkaEventConsumer {
     /// Drive librdkafka until this consumer has an assignment.  Subscription
     /// callbacks are delivered while polling, so merely constructing a consumer
     /// is not enough to establish a tail position for the rebalance harness.
+    /// If polling also returns a record while the assignment callback is being
+    /// delivered, seek that record back before returning; this helper must never
+    /// consume data as a side effect of waiting for readiness.
     pub async fn wait_for_assignment(&self, timeout: Duration) -> InfrastructureResult<()> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
@@ -255,11 +264,26 @@ impl KafkaEventConsumer {
                     "kafka consumer assignment timeout".to_string(),
                 ));
             }
-            let _ = tokio::time::timeout(
+            let message = match tokio::time::timeout(
                 remaining.min(Duration::from_millis(250)),
                 self.consumer.recv(),
             )
-            .await;
+            .await
+            {
+                Ok(Ok(message)) => message,
+                Ok(Err(error)) => {
+                    return Err(InfrastructureError::Unavailable(sanitize_kafka_error(
+                        error,
+                    )))
+                }
+                Err(_) => continue,
+            };
+            // `recv` advances librdkafka's local position even though no
+            // application offset was committed. Restore that position so
+            // the next poll sees the same record again.
+            let position = (message.partition(), message.offset());
+            drop(message);
+            self.seek_to_offsets(&[position])?;
         }
     }
 
@@ -343,19 +367,16 @@ impl KafkaEventConsumer {
         tenant_id: uuid::Uuid,
         category: &'static str,
     ) -> InfrastructureResult<(i32, i64)> {
-        let event_id = format!("dlq:{}:{}", message.partition(), message.offset());
-        let Ok(stable_id) =
-            crate::infrastructure::contracts::StableEventId::heartbeat(&event_id, 0)
-        else {
-            return Err(InfrastructureError::InvalidEnvelope(
-                "DLQ event identity is invalid".to_string(),
-            ));
-        };
+        let stable_id = crate::infrastructure::contracts::StableEventId::dead_letter(
+            message.topic(),
+            message.partition(),
+            message.offset(),
+        );
         let envelope = EventEnvelope::new(
             stable_id,
             "ingest.dead_letter",
             tenant_id,
-            chrono::Utc::now(),
+            message_received_at(message),
             serde_json::json!({
                 "source_topic": message.topic(),
                 "source_partition": message.partition(),
@@ -402,9 +423,11 @@ impl EventConsumer for KafkaEventConsumer {
         let deadline = tokio::time::Instant::now() + max_wait;
         let mut deliveries = Vec::with_capacity(max_records);
         let mut dlq_offsets = Vec::new();
-        while deliveries.len() < max_records {
+        let mut consumed_records = 0usize;
+        let mut oldest_record_age_seconds = 0_u64;
+        while consumed_records < max_records {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() && !deliveries.is_empty() {
+            if remaining.is_zero() {
                 break;
             }
             let message = match tokio::time::timeout(
@@ -421,6 +444,18 @@ impl EventConsumer for KafkaEventConsumer {
                 }
                 Err(_) => break,
             };
+            // Count every broker record, including poison records that are sent
+            // to the DLQ. Otherwise a poison-only partition can stay in this
+            // loop indefinitely and starve the commit boundary.
+            consumed_records += 1;
+            let age = chrono::Utc::now()
+                .signed_duration_since(message_received_at(&message))
+                .num_seconds()
+                .max(0) as u64;
+            // A batch can contain records from multiple partitions. The oldest
+            // record is the maximum age, not the age of whichever record happens
+            // to be read last.
+            oldest_record_age_seconds = oldest_record_age_seconds.max(age);
             let Some(payload) = message.payload() else {
                 dlq_offsets.push(
                     self.handle_invalid(&message, uuid::Uuid::nil(), "empty_payload")
@@ -450,6 +485,13 @@ impl EventConsumer for KafkaEventConsumer {
                     continue;
                 }
             };
+            if !partition_key_matches(&message, &event) {
+                dlq_offsets.push(
+                    self.handle_invalid(&message, event.tenant_id, "invalid_partition_key")
+                        .await?,
+                );
+                continue;
+            }
             deliveries.push(EventDelivery {
                 topic: self.topic,
                 partition: message.partition(),
@@ -466,23 +508,20 @@ impl EventConsumer for KafkaEventConsumer {
                 self.metrics
                     .observe_partition_lag(&self.source_topic, message.partition(), lag);
             }
-            let age = chrono::Utc::now()
-                .signed_duration_since(
-                    deliveries
-                        .last()
-                        .expect("delivery was just pushed")
-                        .event
-                        .received_at,
-                )
-                .num_seconds()
-                .max(0) as u64;
-            self.metrics.observe_oldest_record_age(age);
         }
         let dlq_count = dlq_offsets.len();
         if !dlq_offsets.is_empty() {
             self.pending_dlq_offsets.lock().await.extend(dlq_offsets);
         }
         self.metrics.observe_batch(deliveries.len() + dlq_count);
+        // Clear the gauge after an empty poll (including a poison-only poll whose
+        // DLQ offsets were already committed). Otherwise a drained consumer can
+        // keep reporting an old backlog forever and trigger a false alert.
+        self.metrics
+            .observe_oldest_record_age(oldest_record_age_for_poll(
+                consumed_records,
+                oldest_record_age_seconds,
+            ));
         // A batch containing only malformed records has no new valid side effect
         // that could be skipped, so it can advance all pending DLQ offsets
         // immediately.  This also prevents a broker commit failure in a previous
@@ -529,6 +568,41 @@ impl EventConsumer for KafkaEventConsumer {
         pending.extend(retained_dlq);
         Ok(())
     }
+}
+
+fn oldest_record_age_for_poll(consumed_records: usize, oldest_record_age_seconds: u64) -> u64 {
+    if consumed_records == 0 {
+        0
+    } else {
+        oldest_record_age_seconds
+    }
+}
+
+fn partition_key_matches(message: &BorrowedMessage<'_>, event: &EventEnvelope) -> bool {
+    partition_key_bytes_match(message.key(), event.tenant_id)
+}
+
+fn partition_key_bytes_match(key: Option<&[u8]>, tenant_id: uuid::Uuid) -> bool {
+    let Some(key) = key else {
+        return false;
+    };
+    let Ok(key) = std::str::from_utf8(key) else {
+        return false;
+    };
+    key == tenant_id.to_string()
+}
+
+fn message_received_at(message: &BorrowedMessage<'_>) -> chrono::DateTime<chrono::Utc> {
+    message
+        .timestamp()
+        .to_millis()
+        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+        .unwrap_or_else(|| {
+            chrono::Utc
+                .timestamp_opt(0, 0)
+                .single()
+                .expect("Unix epoch is a valid UTC timestamp")
+        })
 }
 
 impl KafkaEventConsumer {
@@ -722,11 +796,28 @@ mod tests {
     }
 
     #[test]
+    fn partition_key_must_be_the_authenticated_tenant_uuid() {
+        let tenant = uuid::Uuid::now_v7();
+        let key = tenant.to_string();
+        assert!(partition_key_bytes_match(Some(key.as_bytes()), tenant));
+        assert!(!partition_key_bytes_match(Some(b"other-tenant"), tenant));
+        assert!(!partition_key_bytes_match(None, tenant));
+        assert!(!partition_key_bytes_match(Some(&[0xff, 0xfe]), tenant));
+    }
+
+    #[test]
     fn pending_dlq_never_crosses_a_transient_partition_gap() {
         let successful = BTreeMap::from([(1, 6), (2, 11)]);
         let (ready, retained) =
             split_pending_dlq_offsets(vec![(1, 8), (2, 10), (2, 12)].into_iter(), &successful);
         assert_eq!(ready, vec![(2, 10)]);
         assert_eq!(retained, vec![(1, 8), (2, 12)]);
+    }
+
+    #[test]
+    fn oldest_age_includes_poison_only_polls_but_clears_on_empty_poll() {
+        assert_eq!(oldest_record_age_for_poll(1, 42), 42);
+        assert_eq!(oldest_record_age_for_poll(3, 7), 7);
+        assert_eq!(oldest_record_age_for_poll(0, 99), 0);
     }
 }

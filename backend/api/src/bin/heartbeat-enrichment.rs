@@ -16,6 +16,9 @@ mod enabled {
     use wakaclock_server::infrastructure::kafka::{KafkaEventBus, KafkaEventConsumer};
     use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
     use wakaclock_server::services::kafka_heartbeat::process_batch;
+    use wakaclock_server::{
+        config::parse_positive_port, services::background_worker::shutdown_signal,
+    };
 
     pub async fn run() -> Result<()> {
         let state = Arc::new(
@@ -65,13 +68,18 @@ mod enabled {
         let assigned = consumer.assignment_flag();
         let health_state = state.clone();
         let health_ready = ready.clone();
+        let health_server_ready = ready.clone();
         let health_assigned = assigned.clone();
         let health_host =
             std::env::var("KAFKA_CONSUMER_HEALTH_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let health_port = std::env::var("KAFKA_CONSUMER_HEALTH_PORT")
-            .unwrap_or_else(|_| "8082".to_string())
-            .parse::<u16>()
-            .context("KAFKA_CONSUMER_HEALTH_PORT must be a port")?;
+        let health_port = parse_positive_port(
+            std::env::var("KAFKA_CONSUMER_HEALTH_PORT").ok(),
+            "KAFKA_CONSUMER_HEALTH_PORT",
+            8082,
+        )?;
+        let health_listener = TcpListener::bind((health_host.as_str(), health_port))
+            .await
+            .context("heartbeat worker health listener failed")?;
         let health = tokio::spawn(async move {
             let app = Router::new()
                 .route("/live", get(|| async { axum::http::StatusCode::OK }))
@@ -96,8 +104,13 @@ mod enabled {
                         let ready = health_ready.clone();
                         let assigned = health_assigned.clone();
                         async move {
+                            let postgres_ok = match &state.postgres {
+                                Some(postgres) => postgres.health_check().await.is_ok(),
+                                None => false,
+                            };
                             if !ready.load(Ordering::Acquire)
                                 || !assigned.load(Ordering::Acquire)
+                                || !postgres_ok
                                 || state.clickhouse.health_check().await.is_err()
                             {
                                 axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -107,20 +120,13 @@ mod enabled {
                         }
                     }),
                 );
-            let listener = match TcpListener::bind((health_host.as_str(), health_port)).await {
-                Ok(listener) => listener,
-                Err(error) => {
-                    tracing::error!(%error, "heartbeat worker health listener failed");
-                    return;
-                }
-            };
-            if let Err(error) = axum::serve(listener, app).await {
-                tracing::error!(%error, "heartbeat worker health server stopped");
+            if axum::serve(health_listener, app).await.is_err() {
+                health_server_ready.store(false, Ordering::Release);
             }
         });
 
         let mut retry_delay = state.config.brokers.ingest.retry_min;
-        let shutdown = tokio::signal::ctrl_c();
+        let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         let result = loop {
             tokio::select! {
@@ -131,30 +137,28 @@ mod enabled {
                 ) => {
                     let batch = match batch {
                         Ok(batch) => batch,
-                        Err(error) => {
-                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "heartbeat consumer transient error");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!(backoff_ms = retry_delay.as_millis(), "heartbeat consumer poll failed");
+                            // A failed poll can have consumed records before
+                            // returning the error. Let the supervisor recreate
+                            // the group instead of continuing with a moved local
+                            // offset.
+                            break Err(anyhow::anyhow!("heartbeat consumer poll failed"));
                         }
                     };
                     if batch.is_empty() { continue; }
                     let outcome = match process_batch(&state, &bus, batch).await {
                         Ok(outcome) => outcome,
-                        Err(error) => {
-                            tracing::warn!(%error, "heartbeat batch processing failed");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
-                            continue;
+                        Err(_) => {
+                            tracing::warn!("heartbeat batch processing failed");
+                            break Err(anyhow::anyhow!("heartbeat batch processing failed"));
                         }
                     };
-                    if !outcome.committed.is_empty() {
-                        if let Err(error) = consumer.commit(&outcome.committed).await {
-                            tracing::warn!(%error, backoff_ms = retry_delay.as_millis(), "heartbeat offset commit failed; leaving offsets uncommitted");
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
-                            continue;
-                        }
+                    if !outcome.committed.is_empty()
+                        && consumer.commit(&outcome.committed).await.is_err()
+                    {
+                        tracing::warn!(backoff_ms = retry_delay.as_millis(), "heartbeat offset commit failed; leaving offsets uncommitted");
+                        break Err(anyhow::anyhow!("heartbeat offset commit failed"));
                     }
                     if !outcome.retry_partitions.is_empty() {
                         consumer
@@ -165,15 +169,18 @@ mod enabled {
                             .iter()
                             .map(|(partition, offset)| (*partition, *offset))
                             .collect::<Vec<_>>();
-                        if let Err(error) = consumer.seek_to_offsets(&retry_offsets) {
-                            tracing::warn!(%error, "could not rewind retry partitions");
+                        if consumer.seek_to_offsets(&retry_offsets).is_err() {
+                            tracing::warn!("could not rewind retry partitions");
+                            break Err(anyhow::anyhow!("heartbeat retry rewind failed"));
                         }
-                        if let Err(error) = consumer.pause_partitions(&outcome.retry_partitions) {
-                            tracing::warn!(%error, "could not pause retry partitions");
+                        if consumer.pause_partitions(&outcome.retry_partitions).is_err() {
+                            tracing::warn!("could not pause retry partitions");
+                            break Err(anyhow::anyhow!("heartbeat retry pause failed"));
                         }
                         tokio::time::sleep(retry_delay).await;
-                        if let Err(error) = consumer.resume_partitions(&outcome.retry_partitions) {
-                            tracing::warn!(%error, "could not resume retry partitions");
+                        if consumer.resume_partitions(&outcome.retry_partitions).is_err() {
+                            tracing::warn!("could not resume retry partitions");
+                            break Err(anyhow::anyhow!("heartbeat retry resume failed"));
                         }
                         retry_delay = (retry_delay * 2).min(state.config.brokers.ingest.retry_max);
                     } else {

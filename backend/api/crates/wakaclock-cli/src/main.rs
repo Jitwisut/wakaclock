@@ -4370,13 +4370,51 @@ async fn flush_pending_usage(
 ) -> Result<Option<AppError>, Box<dyn Error>> {
     let pending = state.pending_usage_due(chrono::Utc::now().timestamp())?;
     for batch in pending.chunks(2_000) {
-        let records: Vec<_> = batch.iter().map(|item| item.record.clone()).collect();
+        if let Some(error) = flush_pending_usage_batch(state, api_client, batch, verbose).await? {
+            return Ok(Some(error));
+        }
+    }
+    Ok(None)
+}
+
+/// Send a pending batch, recursively isolating permanent per-record failures.
+/// The HTTP endpoint reports a batch-level status, so dead-lettering the whole
+/// batch would incorrectly discard valid records when one identity conflicts.
+/// Unknown/protocol and transient outcomes stay retryable with their stable IDs.
+async fn flush_pending_usage_batch(
+    state: &mut AiAttributionState,
+    api_client: &ApiClient,
+    batch: &[wakaclock_core::ai::PendingUsage],
+    verbose: bool,
+) -> Result<Option<AppError>, Box<dyn Error>> {
+    if batch.is_empty() {
+        return Ok(None);
+    }
+    // Use an explicit stack instead of recursive async calls. Each permanent
+    // batch-level 4xx is bisected until only the offending record is moved to
+    // local DLQ; valid siblings still get an acknowledgement in this pass.
+    let mut work = vec![batch.to_vec()];
+    let mut first_error = None;
+    while let Some(current) = work.pop() {
+        let records: Vec<_> = current.iter().map(|item| item.record.clone()).collect();
         let ids: Vec<String> = records
             .iter()
             .map(|record| record.usage_event_id.clone())
             .collect();
         match api_client.send_ai_usage(&records).await {
             Ok(report) => {
+                if let Err(error) = validate_ai_usage_ack(&report, records.len()) {
+                    let max_attempt = current.iter().map(|item| item.attempt).max().unwrap_or(0);
+                    let next_retry_at = chrono::Utc::now().timestamp()
+                        + retry_after_seconds(&error)
+                            .unwrap_or_else(|| 2_u64.saturating_pow(max_attempt.min(11)))
+                            .min(3_600) as i64;
+                    state.mark_usage_retry(&ids, next_retry_at, "protocol_retry")?;
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    continue;
+                }
                 state.mark_usage_delivered(&ids)?;
                 if verbose {
                     println!(
@@ -4392,25 +4430,128 @@ async fn flush_pending_usage(
                     );
                 }
             }
-            Err(error) => {
-                if is_retryable_delivery_error(&error) {
-                    let max_attempt = batch.iter().map(|item| item.attempt).max().unwrap_or(0);
-                    let delay_seconds = retry_after_seconds(&error)
-                        .unwrap_or_else(|| 2_u64.saturating_pow(max_attempt.min(11)));
-                    let next_retry_at =
-                        chrono::Utc::now().timestamp() + delay_seconds.min(3_600) as i64;
-                    state.mark_usage_retry(&ids, next_retry_at, "delivery_retry")?;
-                } else {
-                    state.move_usage_dead_letter(&ids, usage_error_code(&error))?;
-                }
+            Err(error) if is_retryable_delivery_error(&error) => {
+                let max_attempt = current.iter().map(|item| item.attempt).max().unwrap_or(0);
+                let delay_seconds = retry_after_seconds(&error)
+                    .unwrap_or_else(|| 2_u64.saturating_pow(max_attempt.min(11)));
+                let next_retry_at =
+                    chrono::Utc::now().timestamp() + delay_seconds.min(3_600) as i64;
+                state.mark_usage_retry(&ids, next_retry_at, "delivery_retry")?;
                 if verbose {
-                    eprintln!("warning: usage upload failed: {error}");
+                    eprintln!("warning: usage upload will retry: {error}");
                 }
-                return Ok(Some(error));
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+            Err(error) if current.len() > 1 => {
+                let split = current.len() / 2;
+                let (left, right) = current.split_at(split);
+                // LIFO order sends the left half first, preserving the original
+                // deterministic queue order while keeping both halves durable.
+                work.push(right.to_vec());
+                work.push(left.to_vec());
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+            Err(error) => {
+                state.move_usage_dead_letter(&ids, usage_error_code(&error))?;
+                if verbose {
+                    eprintln!("warning: usage upload permanently rejected: {error}");
+                }
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
         }
     }
-    Ok(None)
+    Ok(first_error)
+}
+
+fn validate_ai_usage_ack(
+    report: &wakaclock_core::ai::AiUsageIngestReportV2,
+    expected_records: usize,
+) -> Result<(), AppError> {
+    if report.contract_version != 2
+        || report.received != expected_records
+        || report.accepted > report.received
+        || report.duplicates_in_batch > report.received
+        || report.accepted.checked_add(report.duplicates_in_batch) != Some(report.received)
+        || report.stored.is_some_and(|stored| stored > report.accepted)
+        || report
+            .unpriced
+            .is_some_and(|unpriced| unpriced > report.accepted)
+    {
+        return Err(AppError::Protocol(
+            "AI usage acknowledgement fields were inconsistent".to_string(),
+        ));
+    }
+    match report.processing_state {
+        wakaclock_core::ai::AiUsageProcessingState::Pending => {
+            if report.stored.is_some()
+                || report.unpriced.is_some()
+                || report.sessions_touched.is_some()
+            {
+                return Err(AppError::Protocol(
+                    "AI usage pending acknowledgement had derived counts".to_string(),
+                ));
+            }
+        }
+        wakaclock_core::ai::AiUsageProcessingState::Stored => {
+            if report.stored.is_none()
+                || report.unpriced.is_none()
+                || report.sessions_touched.is_none()
+            {
+                return Err(AppError::Protocol(
+                    "AI usage stored acknowledgement omitted derived counts".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod ai_usage_ack_tests {
+    use super::*;
+    use wakaclock_core::ai::{AiUsageIngestReportV2, AiUsageProcessingState};
+
+    fn stored_report() -> AiUsageIngestReportV2 {
+        AiUsageIngestReportV2 {
+            contract_version: 2,
+            processing_state: AiUsageProcessingState::Stored,
+            received: 3,
+            accepted: 2,
+            duplicates_in_batch: 1,
+            stored: Some(2),
+            unpriced: Some(1),
+            sessions_touched: Some(1),
+        }
+    }
+
+    #[test]
+    fn acknowledgement_requires_consistent_batch_counts() {
+        let report = stored_report();
+        assert!(validate_ai_usage_ack(&report, 3).is_ok());
+
+        let mut invalid = report.clone();
+        invalid.accepted = 1;
+        assert!(matches!(
+            validate_ai_usage_ack(&invalid, 3),
+            Err(AppError::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn acknowledgement_rejects_derived_counts_larger_than_accepted() {
+        let mut invalid = stored_report();
+        invalid.stored = Some(3);
+        assert!(matches!(
+            validate_ai_usage_ack(&invalid, 3),
+            Err(AppError::Protocol(_))
+        ));
+    }
 }
 
 fn usage_error_code(error: &AppError) -> &'static str {

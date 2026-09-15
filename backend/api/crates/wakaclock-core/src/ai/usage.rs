@@ -93,8 +93,11 @@ impl AiUsageRecord {
                 return Err("project_hint must be a display name, not a filesystem path".into());
             }
         }
-        if self.occurred_at.timestamp() < 0 {
-            return Err("occurred_at must be on or after 1970-01-01T00:00:00Z".into());
+        let occurred_at = self.occurred_at.timestamp();
+        if !(0..=i64::from(u32::MAX)).contains(&occurred_at) {
+            return Err(
+                "occurred_at must fit the ClickHouse UInt32 timestamp range (1970..=2106)".into(),
+            );
         }
         Ok(())
     }
@@ -825,6 +828,15 @@ mod tests {
     fn a_record_without_timestamp_is_ignored_instead_of_being_misdated_at_upload_time() {
         let line = r#"{"type":"assistant","sessionId":"s1","message":{"id":"msg_1","usage":{"input_tokens":5}}}"#;
         assert!(parse_claude_usage_str(line).is_empty());
+    }
+
+    #[test]
+    fn a_timestamp_outside_the_clickhouse_uint32_range_is_rejected() {
+        let mut parsed = parse_claude_usage_str(&record("msg_1", r#""input_tokens":5"#));
+        let mut usage = parsed.pop().expect("one usage record");
+        usage.occurred_at = DateTime::<Utc>::from_timestamp(i64::from(u32::MAX) + 1, 0)
+            .expect("timestamp is representable by chrono");
+        assert!(usage.validate().is_err());
     }
 
     #[test]

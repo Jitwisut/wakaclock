@@ -5,6 +5,7 @@ use crate::config::ClickHouseConfig;
 
 pub struct ClickHouseClient {
     client: Client,
+    database: String,
 }
 
 impl ClickHouseClient {
@@ -26,11 +27,18 @@ impl ClickHouseClient {
         // in PostgreSQL and the heartbeat is durable once Kafka acknowledges it.
         // Direct/verify startup still probes ClickHouse through the migration pass
         // in `main`, and health checks continue to report the outage.
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            database: config.database.clone(),
+        })
     }
 
     pub fn get_client(&self) -> Client {
         self.client.clone()
+    }
+
+    pub fn database(&self) -> &str {
+        &self.database
     }
 
     pub async fn health_check(&self) -> Result<()> {

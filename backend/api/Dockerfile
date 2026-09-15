@@ -29,6 +29,7 @@ COPY --from=builder /app/target/release/heartbeat-verifier /usr/local/bin/heartb
 COPY --from=builder /app/target/release/ai-usage-ingest /usr/local/bin/ai-usage-ingest
 COPY --from=builder /app/target/release/ai-usage-verifier /usr/local/bin/ai-usage-verifier
 COPY --from=builder /app/target/release/ai-session-worker /usr/local/bin/ai-session-worker
+COPY --from=builder /app/target/release/projection-worker /usr/local/bin/projection-worker
 COPY --from=builder /app/target/release/outbox-relay /usr/local/bin/outbox-relay
 COPY --from=builder /app/target/release/integration-sync /usr/local/bin/integration-sync
 COPY --from=builder /app/target/release/export-worker /usr/local/bin/export-worker
@@ -46,6 +47,7 @@ EXPOSE 8082
 EXPOSE 8084
 EXPOSE 8085
 EXPOSE 8086
+EXPOSE 8087
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --fail http://127.0.0.1:8080/health || exit 1

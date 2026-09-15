@@ -22,6 +22,7 @@ impl AiUsageRepository {
         &self,
         postgres: &PostgresClient,
         event_id_hash: &str,
+        identity_hash: &str,
         mismatch_category: &str,
         field_flags: &[&str],
         received_at: chrono::DateTime<chrono::Utc>,
@@ -31,11 +32,18 @@ impl AiUsageRepository {
         postgres
             .execute(
                 "INSERT INTO ai_usage_verification_audits
-                 (id, event_id_hash, mismatch_category, field_flags, received_at)
-                 VALUES ($1, $2, $3, $4, $5)",
+                 (id, event_id_hash, identity_hash, mismatch_category, field_flags, received_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (identity_hash) DO UPDATE SET
+                    event_id_hash = EXCLUDED.event_id_hash,
+                    mismatch_category = EXCLUDED.mismatch_category,
+                    field_flags = EXCLUDED.field_flags,
+                    received_at = EXCLUDED.received_at,
+                    checked_at = now()",
                 &[
                     &id,
                     &event_id_hash,
+                    &identity_hash,
                     &mismatch_category,
                     &flags,
                     &received_at,
@@ -451,10 +459,26 @@ impl AiUsageRepository {
             .fetch_all::<IdentityRow>()
             .await
             .map_err(|e| anyhow::anyhow!("ClickHouse usage identity query error: {e}"))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| (row.usage_event_id, row.event_payload_hash))
-            .collect())
+        let mut hashes = HashMap::with_capacity(rows.len());
+        for row in rows {
+            match hashes.entry(row.usage_event_id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(row.event_payload_hash);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    match (entry.get().as_ref(), row.event_payload_hash.as_ref()) {
+                        (Some(existing), Some(candidate)) if existing != candidate => {
+                            anyhow::bail!("usage_identity_conflict")
+                        }
+                        (None, Some(candidate)) => {
+                            entry.insert(Some(candidate.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(hashes)
     }
 
     pub async fn find_event(

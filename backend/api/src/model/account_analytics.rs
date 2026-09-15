@@ -25,3 +25,17 @@ pub struct AccountProjectionRebuildResponse {
     pub status: String,
     pub data: AccountProjectionRebuildData,
 }
+
+#[derive(Debug, Serialize)]
+pub struct AccountProjectionRebuildAcceptedData {
+    pub job_id: Uuid,
+    pub job_status: String,
+    pub deduplicated: bool,
+    pub status_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountProjectionRebuildAcceptedResponse {
+    pub status: String,
+    pub data: AccountProjectionRebuildAcceptedData,
+}

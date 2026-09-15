@@ -70,9 +70,9 @@ pub async fn ingest(
     }
 
     let prepared = prepare_batch(&records).map_err(|error| match error {
-        AiUsageBatchError::IdentityConflict(id) => app_error(
+        AiUsageBatchError::IdentityConflict => app_error(
             StatusCode::CONFLICT,
-            &format!("usage_event_id {id} has conflicting payloads"),
+            "usage_event_id conflicts with an existing payload",
         ),
         AiUsageBatchError::Validation(message) => app_error(StatusCode::BAD_REQUEST, &message),
         AiUsageBatchError::Serialization(_) => {
@@ -83,6 +83,25 @@ pub async fn ingest(
     let accepted = prepared.records.len();
     let duplicates_in_batch = prepared.duplicates_in_batch;
 
+    // PostgreSQL owns the cross-request AI identity ledger whenever it is
+    // configured. Accounts created during the ClickHouse-only rollout may not
+    // have a row there yet, so materialize the authenticated identity before
+    // either Kafka reservation or direct/verify ingestion reaches the ledger.
+    // Do this only after payload validation and only for a non-empty batch to
+    // avoid turning an empty compatibility request into a write.
+    if !prepared.records.is_empty() {
+        state
+            .user_service
+            .ensure_postgres_identity(user_id)
+            .await
+            .map_err(|_| {
+                with_retry_after(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "AI usage identity storage is unavailable",
+                )
+            })?;
+    }
+
     let in_kafka_cohort = usage_config
         .kafka_cohort
         .as_ref()
@@ -92,20 +111,70 @@ pub async fn ingest(
         && contract_v2;
 
     if kafka_path {
-        let events = build_kafka_events(user_id, &prepared.records)
-            .map_err(|message| app_error(StatusCode::BAD_REQUEST, &message))?;
         let bus = state.event_bus.as_ref().ok_or_else(|| {
             app_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "AI usage event bus is not configured",
             )
         })?;
-        if let Err(error) = bus.publish_batch(EventTopic::AiUsage, &events).await {
-            warn!(%user_id, record_count = accepted, %error, "AI usage Kafka publish failed");
-            return Err(with_retry_after(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "AI usage event publish failed",
-            ));
+        let to_publish = state
+            .ai_usage_service
+            .reserve_kafka_identities(user_id, &prepared)
+            .await
+            .map_err(|error| {
+                if error
+                    .chain()
+                    .any(|cause| cause.to_string().contains("usage_identity_conflict"))
+                {
+                    return app_error(
+                        StatusCode::CONFLICT,
+                        "usage_event_id conflicts with an existing payload",
+                    );
+                }
+                warn!(
+                    record_count = accepted,
+                    "AI usage Kafka identity reservation failed"
+                );
+                with_retry_after(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "AI usage identity reservation failed",
+                )
+            })?;
+        let events = build_kafka_events(user_id, &to_publish)
+            .map_err(|message| app_error(StatusCode::BAD_REQUEST, &message))?;
+        if !events.is_empty() {
+            if bus
+                .publish_batch(EventTopic::AiUsage, &events)
+                .await
+                .is_err()
+            {
+                warn!(
+                    record_count = to_publish.len(),
+                    "AI usage Kafka publish failed"
+                );
+                return Err(with_retry_after(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "AI usage event publish failed",
+                ));
+            }
+            if state
+                .ai_usage_service
+                .mark_ingest_identities_durable(user_id, &to_publish)
+                .await
+                .is_err()
+            {
+                // Kafka has acknowledged the stable event IDs, but the ledger
+                // update did not. Returning 503 keeps the client's pending item
+                // for a safe replay; the fact-sink deduplicates that replay.
+                warn!(
+                    record_count = to_publish.len(),
+                    "AI usage Kafka publish state update failed"
+                );
+                return Err(with_retry_after(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "AI usage event acknowledgement could not be recorded",
+                ));
+            }
         }
         return Ok(v2_response(
             StatusCode::ACCEPTED,
@@ -127,23 +196,17 @@ pub async fn ingest(
         .ingest(user_id, prepared.records.clone())
         .await
         .map_err(|error| {
-            // The trace middleware can only report the resulting 500. Keep the
-            // actual bounded service/ClickHouse error in the server log so an
-            // operator can fix the failing phase instead of guessing from a
-            // repeated status code.
-            error!(
-                %user_id,
-                record_count,
-                error = %error,
-                "AI usage ingest failed"
-            );
-            if error.to_string().contains("usage_identity_conflict") {
+            let identity_conflict = error
+                .chain()
+                .any(|cause| cause.to_string().contains("usage_identity_conflict"));
+            if identity_conflict {
                 app_error(
                     StatusCode::CONFLICT,
                     "usage_event_id conflicts with an existing payload",
                 )
             } else {
-                app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string())
+                error!(record_count, "AI usage ingest failed");
+                app_error(StatusCode::INTERNAL_SERVER_ERROR, "AI usage ingest failed")
             }
         })?;
 
@@ -151,11 +214,18 @@ pub async fn ingest(
         let events = build_kafka_events(user_id, &prepared.records)
             .map_err(|message| app_error(StatusCode::BAD_REQUEST, &message))?;
         if let Some(bus) = state.event_bus.as_ref() {
-            if let Err(error) = bus.publish_batch(EventTopic::AiUsage, &events).await {
+            if bus
+                .publish_batch(EventTopic::AiUsage, &events)
+                .await
+                .is_err()
+            {
                 // Verify mode is intentionally observational: direct storage already
                 // succeeded, so Kafka failure is logged/metriced but never changes the
                 // successful HTTP result.
-                warn!(%user_id, %error, "AI usage verify publish failed after direct storage");
+                warn!(
+                    record_count = accepted,
+                    "AI usage verify publish failed after direct storage"
+                );
             }
         }
     }
@@ -196,8 +266,8 @@ fn build_kafka_events(
         .map(|record| {
             AiUsageEventV1::from_record(record)
                 .and_then(|event| event.event_for_tenant(user_id, Some("api")))
-                .map_err(|error| {
-                    error!(%user_id, %error, "could not build AI usage Kafka envelope");
+                .map_err(|_error| {
+                    error!("could not build AI usage Kafka envelope");
                     "invalid AI usage event".to_string()
                 })
         })

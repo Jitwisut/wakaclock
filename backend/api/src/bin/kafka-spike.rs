@@ -38,10 +38,17 @@ async fn main() -> anyhow::Result<()> {
     let dlq_topic = EventTopic::IngestDeadLetter.name();
     let new_dlq_topic =
         NewTopic::new(dlq_topic, 3, TopicReplication::Fixed(1)).set("retention.ms", "3600000");
-    let topic_result = admin
-        .create_topics([&new_topic, &new_dlq_topic], &AdminOptions::new())
-        .await?
-        .into_iter();
+    let topic_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        admin.create_topics([&new_topic, &new_dlq_topic], &AdminOptions::new()),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timed out connecting to KAFKA_TEST_URL; start the isolated K0 infrastructure first"
+        )
+    })??
+    .into_iter();
     for result in topic_result {
         if let Err((name, error)) = result {
             if !error
