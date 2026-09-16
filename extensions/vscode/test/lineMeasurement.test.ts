@@ -80,7 +80,11 @@ describe("editor measurement integration", () => {
       expect(payload.human_lines_added).toBeUndefined();
       expect(payload.unattributed_lines_added).toBeUndefined();
       expect(payload.keystrokes).toBeUndefined();
-      expect(JSON.stringify(payload)).not.toContain("abc");
+      // A random heartbeat id may legitimately contain the letters "abc"; check
+      // the metadata shape instead of making a probabilistic string assertion.
+      expect(payload).not.toHaveProperty("content");
+      expect(payload).not.toHaveProperty("text");
+      expect(payload).not.toHaveProperty("diff");
       expect(JSON.stringify(measured)).not.toContain("abc");
     }
     expect(results).toEqual([["measured", 1, 0], ["measured", 1, 0]]);

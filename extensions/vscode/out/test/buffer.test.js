@@ -71,6 +71,61 @@ function createConfig() {
     };
 }
 (0, vitest_1.describe)("HeartbeatBufferManager", () => {
+    (0, vitest_1.it)("sends an isolated write heartbeat for an external file change without inventing active time", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.recordExternalFileChange("/workspace/README.md", {
+            event_id: "observer:readme-1",
+            change_kind: "modify",
+            lines_added: 2,
+            lines_deleted: 1,
+        }, 10_000, "wakaclock");
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("/workspace/README.md", true, "coding", [], vitest_1.expect.objectContaining({
+            heartbeat_id: "observer:readme-1",
+            active_seconds: 0,
+            actor_type: "unknown",
+            actor_confidence: 0,
+            unattributed_lines_added: 2,
+            unattributed_lines_deleted: 1,
+            project: "wakaclock",
+        }));
+    });
+    (0, vitest_1.it)("does not duplicate a native AI heartbeat when the external change matches its sidecar", async () => {
+        const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-external-ai-"));
+        try {
+            const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
+            await fs.mkdir(path.dirname(logPath), { recursive: true });
+            await fs.writeFile(logPath, JSON.stringify({
+                event_id: "codex-external-1",
+                entity: "/workspace/README.md",
+                time: 10,
+                lines_added: 2,
+                lines_deleted: 1,
+                agent: "codex",
+                provider: "openai",
+                model: "gpt-6",
+                source: "agent_hook",
+                confidence: "verified",
+                actor_type: "ai_verified",
+                actor_confidence: 1,
+                content_fingerprint: contentFingerprint("new\nline\n"),
+            }) + "\n");
+            const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+            const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false), undefined, new aiAttribution_1.AiAttributionStore(homeDir));
+            await manager.recordExternalFileChange("/workspace/README.md", {
+                event_id: "observer:readme-2",
+                change_kind: "modify",
+                lines_added: 2,
+                lines_deleted: 1,
+                content_fingerprint: contentFingerprint("new\nline\n"),
+            }, 10_000);
+            (0, vitest_1.expect)(sendHeartbeat).not.toHaveBeenCalled();
+        }
+        finally {
+            await fs.rm(homeDir, { recursive: true, force: true });
+        }
+    });
     (0, vitest_1.it)("flushes copy-only activity and records paste volume without inflating keystrokes", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
         const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));

@@ -141,6 +141,82 @@ class HeartbeatBufferManager {
         this.onActivity?.();
         await this.flushFile(entity, "save", { now, write: true, force: true });
     }
+    /**
+     * Deliver a write marker for a file that changed on disk without a VS Code
+     * document event.  Codex Desktop, formatter processes and atomic-save tools can
+     * all take this path.  It deliberately bypasses the human activity buffer: an
+     * external write proves that a file changed, but it does not prove that the
+     * developer was typing during the write.  If a native AI sidecar has an exact
+     * line/fingerprint match, the native event already owns the heartbeat and this
+     * recovery marker is suppressed; otherwise it remains Unknown/Unattributed instead
+     * of guessing Human or AI.
+     */
+    async recordExternalFileChange(entity, metadata = {}, now = Date.now(), project) {
+        const normalizedEntity = (0, utils_1.normalizeFsPath)(entity);
+        if (!normalizedEntity) {
+            return;
+        }
+        let classification;
+        const linesAdded = metadata.lines_added;
+        const linesDeleted = metadata.lines_deleted;
+        if (linesAdded !== undefined &&
+            linesDeleted !== undefined &&
+            (linesAdded > 0 || linesDeleted > 0)) {
+            try {
+                classification = await this.aiAttributionStore.classify(normalizedEntity, now, linesAdded, linesDeleted, metadata.content_fingerprint);
+            }
+            catch {
+                // Sidecar reads are best effort. The file change itself still gets a
+                // heartbeat below, with unknown authorship when identity cannot be proven.
+            }
+        }
+        const matched = classification?.attribution === "ai" ? classification.event : undefined;
+        if (matched) {
+            // A native hook/transcript event already owns the durable AI heartbeat. The
+            // filesystem receiver is only a recovery path for a missed producer event;
+            // forwarding the same fingerprint a second time would double-count the write.
+            this.logger.debug("skipped duplicate external file-change heartbeat", {
+                entity: normalizedEntity,
+                aiEventId: matched.event_id,
+            });
+            return;
+        }
+        const heartbeatId = metadata.event_id ?? `external:${(0, node_crypto_1.createHash)("sha256")
+            .update(normalizedEntity)
+            .update("\0")
+            .update(metadata.change_kind ?? "modify")
+            .update("\0")
+            .update(metadata.content_fingerprint ?? String(now))
+            .digest("hex")}`;
+        const payload = {
+            entity: normalizedEntity,
+            time: now / 1000,
+            entity_type: "file",
+            project,
+            category: "coding",
+            write: true,
+            active_seconds: 0,
+            heartbeat_id: heartbeatId,
+            actor_type: "unknown",
+            actor_confidence: 0,
+            unattributed_lines_added: linesAdded,
+            unattributed_lines_deleted: linesDeleted,
+        };
+        try {
+            await this.cli.sendHeartbeat(normalizedEntity, true, "coding", [], payload);
+            this.onHeartbeatSent?.();
+            this.logger.debug("flushed external file-change heartbeat", {
+                entity: normalizedEntity,
+                changeKind: metadata.change_kind ?? "modify",
+                attributed: Boolean(matched),
+            });
+        }
+        catch (error) {
+            this.logger.error(`failed to flush external heartbeat for ${normalizedEntity}`, {
+                error,
+            });
+        }
+    }
     async recordEditorSwitch(previousEditor, currentEditorOrNow, now = Date.now()) {
         const currentEditor = typeof currentEditorOrNow === "number" ? undefined : currentEditorOrNow;
         if (typeof currentEditorOrNow === "number") {

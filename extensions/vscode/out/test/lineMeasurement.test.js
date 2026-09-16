@@ -76,7 +76,11 @@ const manager = (store = { classify: vitest_1.vi.fn().mockResolvedValue({ attrib
             (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
             (0, vitest_1.expect)(payload.unattributed_lines_added).toBeUndefined();
             (0, vitest_1.expect)(payload.keystrokes).toBeUndefined();
-            (0, vitest_1.expect)(JSON.stringify(payload)).not.toContain("abc");
+            // A random heartbeat id may legitimately contain the letters "abc"; check
+            // the metadata shape instead of making a probabilistic string assertion.
+            (0, vitest_1.expect)(payload).not.toHaveProperty("content");
+            (0, vitest_1.expect)(payload).not.toHaveProperty("text");
+            (0, vitest_1.expect)(payload).not.toHaveProperty("diff");
             (0, vitest_1.expect)(JSON.stringify(measured)).not.toContain("abc");
         }
         (0, vitest_1.expect)(results).toEqual([["measured", 1, 0], ["measured", 1, 0]]);

@@ -3,6 +3,7 @@
 วันที่ปรับปรุง: 2026-09-17
 Branch: `codex/integrate-all-current-work`
 Local commit ล่าสุด: `82a565a` (`feat: complete heartbeat timing and AI attribution pipeline`)
+Working tree: มีการแก้ไขตัวรับ filesystem ของ VS Code เพิ่มเติมในรอบนี้ และยังไม่ได้ commit
 
 เอกสารนี้เป็น context สำหรับผู้พัฒนาหรือ agent คนถัดไป ให้ใช้คู่กับ
 `plans/time-ai-correctness-progress-2026-09-16.md` และเอกสาร audit ในโฟลเดอร์ `docs/`.
@@ -48,6 +49,13 @@ VS Code / wakaclock CLI / Codex / Claude hooks
 4. `HeartbeatService` ตรวจ dedup/revision แล้วเขียน `wakaclock.heartbeats` และ
    `wakaclock.activity_intervals` ใน ClickHouse
 5. หลัง ClickHouse รับสำเร็จ ระบบอัปเดต presence ใน memory/Redis แบบ best-effort
+
+ฝั่ง VS Code มีตัวรับระดับ filesystem เพิ่มเติมสำหรับไฟล์ที่ถูกเขียนจากภายนอก editor
+(เช่น Codex Desktop `apply_patch`) ซึ่งอาจไม่ยิง `onDidChangeTextDocument`: watcher
+เฝ้าเฉพาะ workspace folder, รวม atomic-save burst, กัน event ซ้ำกับ editor และส่ง
+heartbeat แยก `write=true`, `active_seconds=0` ผ่าน CLI/queue เดิม ตัวรับคำนวณ line
+delta และ fingerprint ภายในเครื่องเท่านั้น หากไม่มี sidecar ที่ยืนยันผู้เขียนจะเก็บ
+เป็น `unknown`/`unattributed` แทนการเดาว่าเป็น AI หรือ human.
 
 จุดอ้างอิงหลัก:
 
@@ -114,6 +122,7 @@ DURATION_PRIMARY_MODE=wakatime_compatible
 - `extensions/ai-agents/codex/heartbeat-hook.sh`
 - `extensions/vscode/src/aiAttribution.ts`
 - `extensions/vscode/src/buffer.ts`
+- `extensions/vscode/src/externalFileObserver.ts`
 
 ## Local development state
 
@@ -162,7 +171,7 @@ wakaclock today --json
 - server tests: 323 ผ่าน, 27 ignored (integration dependencies)
 - CLI tests: 66 ผ่าน
 - broker process tests: 7 ผ่าน
-- VS Code tests: 129 ผ่าน รวม regression 7 นาที + idle 1 นาที
+- VS Code tests: 131 ผ่าน รวม regression 7 นาที + idle 1 นาที และ external-file receiver
 - VS Code compile/lint, frontend typecheck/build และ Python audit tests ผ่าน
 - Codex heartbeat hook test ผ่าน
 - Docker PostgreSQL, Redis, ClickHouse และ RabbitMQ healthy

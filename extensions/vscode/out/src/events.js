@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerEventSubscriptions = registerEventSubscriptions;
 const vscode = __importStar(require("vscode"));
+const externalFileObserver_1 = require("./externalFileObserver");
 const clipboardTracking_1 = require("./clipboardTracking");
 function registerEventSubscriptions(context, configService, bufferManager, logger) {
     let previousEditor = vscode.window.activeTextEditor;
@@ -46,7 +47,27 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         }
         return vscode.workspace.getWorkspaceFolder(document.uri)?.name;
     }
-    context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => bufferManager.forgetDocument(document)), vscode.workspace.onDidChangeTextDocument((event) => {
+    // VS Code's document events cover typing inside the editor, but a file written by
+    // Codex Desktop (or another process) may only produce an OS file-system event. Keep
+    // a workspace-scoped receiver alive for that second path and feed it into the same
+    // CLI/queue adapter used by the normal buffer.
+    const externalFileObserver = new externalFileObserver_1.ExternalFileObserver((entity, metadata, now, project) => bufferManager.recordExternalFileChange(entity, metadata, now, project), (uri) => vscode.workspace.getWorkspaceFolder(uri)?.name, logger);
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        externalFileObserver.watchWorkspace(folder.uri);
+    }
+    for (const document of vscode.workspace.textDocuments) {
+        externalFileObserver.seedDocument(document);
+    }
+    context.subscriptions.push(externalFileObserver, vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+        for (const folder of event.added)
+            externalFileObserver.watchWorkspace(folder.uri);
+        for (const folder of event.removed)
+            externalFileObserver.unwatchWorkspace(folder.uri);
+    }), vscode.workspace.onDidCloseTextDocument((document) => bufferManager.forgetDocument(document)), vscode.workspace.onDidChangeTextDocument((event) => {
+        // The file watcher reports a second notification for many saves. Recording the
+        // current in-memory fingerprint lets it suppress that duplicate while still
+        // allowing an external writer with different bytes through.
+        externalFileObserver.noteEditorChange(event.document.uri, safeDocumentText(event.document), event.document.isDirty);
         const activeSelection = vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
             ? vscode.window.activeTextEditor.selection
             : undefined;
@@ -79,6 +100,7 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         copyMimeTypes: [clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME],
         pasteMimeTypes: [clipboardTracking_1.ATOAXIS_CLIPBOARD_MIME, "text/plain"]
     }), vscode.workspace.onDidSaveTextDocument((document) => {
+        externalFileObserver.noteEditorChange(document.uri, safeDocumentText(document), document.isDirty);
         void bufferManager.recordSave(document, Date.now(), workspaceProject(document));
     }), vscode.window.onDidChangeActiveTextEditor((editor) => {
         const now = Date.now();
@@ -152,6 +174,14 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         return setInterval(() => {
             void bufferManager.flushDueBuffers("timer");
         }, configService.getSnapshot().flushIntervalMs);
+    }
+}
+function safeDocumentText(document) {
+    try {
+        return document.getText();
+    }
+    catch {
+        return undefined;
     }
 }
 //# sourceMappingURL=events.js.map

@@ -45,6 +45,9 @@ The status bar shows `AtoAxis: Connect`, `Connecting`, `Verified` or `Offline qu
 
 - Typing updates an in-memory buffer for the current file
 - Saving flushes immediately and marks the heartbeat as a write
+- A workspace-scoped filesystem receiver also watches writes made outside VS Code
+  (for example Codex Desktop `apply_patch`). It coalesces atomic-save bursts and sends
+  an isolated write heartbeat even when no document-change event is raised.
 - Switching files flushes the file you left
 - A 30-second timer checks buffers, but does not bypass the 120-second heartbeat cadence
 - Resuming the same file after a gap starts a new heartbeat window; gaps over 120 seconds
@@ -84,6 +87,13 @@ OpenAI, Gemini CLI to Google, and Kilo/Kimi preserve the provider selected for t
 request. The dashboard aggregates AI lines separately from human lines and keystrokes.
 Kilo inline autocomplete is not claimed as AI evidence without an explicit acceptance
 event.
+
+When an external filesystem write is received without a matching native AI sidecar,
+the heartbeat remains `unknown`/`unattributed`; the receiver never guesses that a
+formatter, build, human process or AI wrote the file. A matching sidecar fingerprint
+and line delta means the native AI heartbeat is authoritative, so the receiver
+suppresses its duplicate. Without that proof the external marker remains
+`unknown`/`unattributed`.
 
 Run `AtoAxis: Repair AI Integrations` after changing an agent installation or if an
 agent reports that its hook path no longer exists. Cursor, Copilot and other IDE-only
@@ -142,7 +152,9 @@ npm install
 npm run compile
 ```
 
-Then press `F5` in VS Code to launch the extension host.
+Then press `F5` in VS Code to launch the extension host. If the extension is already
+running from the symlinked checkout, run **Developer: Reload Window** after compiling;
+the Extension Host keeps the previously loaded JavaScript until the window reloads.
 
 ## Links
 

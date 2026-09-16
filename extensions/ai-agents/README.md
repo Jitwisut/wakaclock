@@ -3,10 +3,11 @@
 Sends real AtoAxis coding-time heartbeats whenever an AI coding agent (Claude Code,
 Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI) edits a file — attributed to that agent, not silently merged
 into your own human coding time. This does **not** depend on an editor being open or
-noticing the change (unlike `extensions/vscode`, which only sees edits made through
-VS Code's own document-change events) — each integration here hooks directly into the
-agent's own tool-call lifecycle, the same mechanism WakaTime's official Claude Code /
-Codex / Gemini CLI plugins use.
+noticing the change: each integration here hooks directly into the agent's own
+tool-call lifecycle, the same mechanism WakaTime's official Claude Code / Codex /
+Gemini CLI plugins use. The VS Code extension also has a workspace-scoped filesystem
+receiver for external writes, but native hooks remain the only source that can prove
+an AI model's identity while the editor is closed.
 
 All adapters send the same metadata-only event to the local Broker through the existing
 `wakaclock` binary:

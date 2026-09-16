@@ -11,6 +11,22 @@ export interface ClipboardPasteMetrics {
     origin: PasteOrigin;
 }
 
+/**
+ * Metadata captured when a file changes on disk outside VS Code's document event
+ * stream (for example an AI desktop client applying a patch).  The receiver keeps
+ * the bytes local; only bounded line counts and an opaque fingerprint may cross the
+ * heartbeat boundary.  Missing counters are intentionally `undefined` rather than
+ * zero because a new/unreadable file has no proven before-version.
+ */
+export interface ExternalFileChangeMetadata {
+    /** Stable receiver identity used to make watcher retries idempotent. */
+    event_id?: string;
+    change_kind?: "create" | "modify" | "delete";
+    lines_added?: number;
+    lines_deleted?: number;
+    content_fingerprint?: string;
+}
+
 export type FlushReason =
     | "save"
     | "timer"
