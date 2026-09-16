@@ -64,6 +64,10 @@ defaults to 15 and controls the WakaTime-style pause bridge. Keep
 `combined_v2` only after the seven-day comparison passes. The new mode exposes the
 WakaTime-comparable, measured-AI, and additional-AI seconds alongside the legacy
 total, and can be rolled back by changing the value back to `legacy` and restarting.
+`DURATION_PRIMARY_MODE` defaults to `wakatime_compatible`; set it to `active_v1` only
+after the Active coverage canary passes. Active v1 uses explicit 15-second editor
+leases and completed AI tool start/end intervals, and keeps the compatibility total
+in the response for side-by-side comparison.
 
 Presence v2 is opt-in during rollout. Setting `PRESENCE_V2_ENABLED=true` requires
 both `POSTGRES_URL` and `REDIS_URL` to be reachable at boot. `redis://` and

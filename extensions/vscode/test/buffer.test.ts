@@ -12,8 +12,8 @@ function fileUri(fsPath: string) {
   return { scheme: "file", fsPath } as const as any;
 }
 
-function document(fsPath: string, text: string) {
-  return { uri: fileUri(fsPath), getText: () => text } as const as any;
+function document(fsPath: string, text: string, version = 1) {
+  return { uri: fileUri(fsPath), version, getText: () => text } as const as any;
 }
 
 function contentFingerprint(text: string) {
@@ -71,7 +71,7 @@ describe("HeartbeatBufferManager", () => {
       paste_actions: 1,
       pasted_chars: 2_000,
       paste_external_or_unknown_actions: 1,
-      unattributed_lines_added: 1,
+      unattributed_lines_added: undefined,
       human_lines_added: undefined,
       copy_actions: undefined
     }));
@@ -161,13 +161,13 @@ describe("HeartbeatBufferManager", () => {
       [],
       expect.objectContaining({
         project: "Daniel",
-        keystrokes: 5,
+        keystrokes: undefined,
         chars_added: 5,
         // Like WakaTime, one isolated heartbeat has no duration until another
         // editor activity establishes the interval after it.
         active_seconds: 0,
         human_lines_added: undefined,
-        unattributed_lines_added: 1,
+        unattributed_lines_added: undefined,
         actor_type: "unknown",
         actor_confidence: 0,
         line_number: 5,
@@ -176,14 +176,8 @@ describe("HeartbeatBufferManager", () => {
     );
   });
 
-  it("does not count an undo/redo replay as new lines, but still reports presence", async () => {
-    // TextDocumentChangeReason.Undo === 1 (mirrored as
-    // TEXT_DOCUMENT_CHANGE_REASON_UNDO in buffer.ts, without importing the real
-    // vscode enum). Undo/redo replays content already counted once; if the line delta
-    // were counted again, a large undo could also line-match an unrelated nearby AI
-    // event purely by coincidence of size. Keystrokes/chars still count, and a
-    // heartbeat still goes out — dropping the heartbeat entirely would also drop its
-    // timestamp anchor, which the idle bridge needs to resume the clock correctly.
+  it("reports undo character volume without fabricating keys or unversioned line totals", async () => {
+    // An undo is observed activity; its generation identity is unknown.
     const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
     const manager = new HeartbeatBufferManager(
       createConfig,
@@ -208,7 +202,7 @@ describe("HeartbeatBufferManager", () => {
       "coding",
       [],
       expect.objectContaining({
-        keystrokes: 5,
+        keystrokes: undefined,
         chars_added: 5,
         human_lines_added: undefined,
         human_lines_deleted: undefined
@@ -239,7 +233,7 @@ describe("HeartbeatBufferManager", () => {
       false,
       "coding",
       [],
-      expect.objectContaining({ keystrokes: 5, human_lines_added: undefined, unattributed_lines_added: 1 })
+      expect.objectContaining({ keystrokes: undefined, human_lines_added: undefined, unattributed_lines_added: undefined })
     );
   });
 
@@ -322,7 +316,7 @@ describe("HeartbeatBufferManager", () => {
     await manager.flushDueBuffers("timer", 121_000);
     expect(sendHeartbeat).toHaveBeenCalledTimes(2);
     expect(sendHeartbeat.mock.calls[1][4]).toEqual(
-      expect.objectContaining({ keystrokes: 1, active_seconds: 1 })
+      expect.objectContaining({ chars_added: 1, active_seconds: 1 })
     );
   });
 
@@ -344,6 +338,7 @@ describe("HeartbeatBufferManager", () => {
       1_000
     );
     const failedId = sendHeartbeat.mock.calls[0][4].heartbeat_id;
+    const failedTime = sendHeartbeat.mock.calls[0][4].time;
 
     await manager.recordTextChange(
       { uri: fileUri("C:/project/retry.ts") },
@@ -354,7 +349,39 @@ describe("HeartbeatBufferManager", () => {
 
     expect(sendHeartbeat).toHaveBeenCalledTimes(2);
     expect(sendHeartbeat.mock.calls[1][4].heartbeat_id).toBe(failedId);
+    expect(sendHeartbeat.mock.calls[1][4].time).toBe(failedTime);
     expect(sendHeartbeat.mock.calls[1][3][0].heartbeat_id).not.toBe(failedId);
+    expect(sendHeartbeat.mock.calls[1][3][0].time).toBe(2);
+  });
+
+  it("force flushes recent activity during shutdown and waits for delivery", async () => {
+    const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const manager = new HeartbeatBufferManager(
+      createConfig,
+      { sendHeartbeat },
+      new Logger(() => false)
+    );
+
+    await manager.recordTextChange(
+      { uri: fileUri("C:/project/shutdown.ts") },
+      [{ text: "a", rangeLength: 0 }],
+      selection(0, 0),
+      1_000
+    );
+    await manager.recordTextChange(
+      { uri: fileUri("C:/project/shutdown.ts") },
+      [{ text: "b", rangeLength: 0 }],
+      selection(0, 1),
+      2_000
+    );
+
+    expect(sendHeartbeat).toHaveBeenCalledTimes(1);
+    await manager.flushAllBuffers("shutdown", 2_500);
+
+    expect(sendHeartbeat).toHaveBeenCalledTimes(2);
+    expect(sendHeartbeat.mock.calls[1][4]).toEqual(
+      expect.objectContaining({ chars_added: 1, time: 2 })
+    );
   });
 
   it("switch flushes previous file", async () => {
@@ -442,7 +469,7 @@ describe("HeartbeatBufferManager", () => {
       { uri: fileUri("C:/project/a.ts") },
       [{ text: "b", rangeLength: 0 }],
       selection(0, 1),
-      61_000
+      11_000
     );
     await manager.flushDueBuffers("timer", 121_000);
 
@@ -451,7 +478,7 @@ describe("HeartbeatBufferManager", () => {
       expect.objectContaining({ active_seconds: 0 })
     );
     expect(sendHeartbeat.mock.calls[1][4]).toEqual(
-      expect.objectContaining({ active_seconds: 60 })
+        expect.objectContaining({ active_seconds: 10 })
     );
   });
 
@@ -463,7 +490,7 @@ describe("HeartbeatBufferManager", () => {
       new Logger(() => false)
     );
 
-    for (const [index, now] of [1_000, 61_000, 121_000, 181_000, 241_000].entries()) {
+    for (const [index, now] of Array.from({ length: 25 }, (_, index) => [index, 1_000 + index * 10_000] as const)) {
       await manager.recordTextChange(
         { uri: fileUri("C:/project/five-minute.ts") },
         [{ text: String(index), rangeLength: 0 }],
@@ -477,7 +504,7 @@ describe("HeartbeatBufferManager", () => {
     expect(payloads[2]).toEqual(expect.objectContaining({ active_seconds: 120 }));
     for (const payload of payloads) {
       for (const segment of payload.activity_segments ?? []) {
-        expect(segment.end - segment.start).toBeLessThanOrEqual(120);
+        expect(segment.end - segment.start).toBeLessThanOrEqual(15);
       }
     }
   });
@@ -510,7 +537,7 @@ describe("HeartbeatBufferManager", () => {
     );
   });
 
-  it("uses the fixed two-minute gap even when legacy idleMinutes is fifteen", async () => {
+  it("uses the fixed fifteen-second Active lease even when legacy idleMinutes is fifteen", async () => {
     const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
     const manager = new HeartbeatBufferManager(
       () => ({ ...createConfig(), idleMs: 15 * 60 * 1000 }),
@@ -535,6 +562,41 @@ describe("HeartbeatBufferManager", () => {
     expect(sendHeartbeat.mock.calls[1][4]).toEqual(
       expect.objectContaining({ active_seconds: 0 })
     );
+  });
+
+  it("does not turn a seven-minute run plus a one-minute pause into eight minutes", async () => {
+    const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const manager = new HeartbeatBufferManager(
+      () => ({ ...createConfig(), heartbeatRateLimitMs: 10_000_000 }),
+      { sendHeartbeat },
+      new Logger(() => false)
+    );
+
+    // Activity arrives every ten seconds for seven minutes. The editor can prove
+    // those intervals, even though delivery is rate limited to 120 seconds.
+    for (let now = 1_000; now <= 421_000; now += 10_000) {
+      await manager.recordTextChange(
+        { uri: fileUri("C:/project/lease.ts") },
+        [{ text: "x", rangeLength: 0 }],
+        selection(0, 0),
+        now
+      );
+    }
+    // Returning after a 60-second idle gap is an activity marker, not 60 seconds
+    // of coding. Force the snapshot so the assertion observes all buffered time.
+    await manager.recordTextChange(
+      { uri: fileUri("C:/project/lease.ts") },
+      [{ text: "y", rangeLength: 0 }],
+      selection(0, 1),
+      481_000
+    );
+    await manager.flushCurrentEditor(editor("C:/project/lease.ts"), "manual", undefined);
+
+    const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
+    expect(payload.active_seconds).toBe(420);
+    expect(payload.activity_segments?.every((segment: { end: number; start: number }) =>
+      segment.end - segment.start <= 15
+    )).toBe(true);
   });
 
   it("uses one global activity timeline when work moves between files", async () => {
@@ -591,9 +653,7 @@ describe("HeartbeatBufferManager", () => {
     );
     await manager.flushDueBuffers("timer", 121_000);
 
-    expect(sendHeartbeat).toHaveBeenCalledTimes(3);
-    expect(sendHeartbeat.mock.calls[2][0]).toBe("C:/project/a.ts");
-    expect(sendHeartbeat.mock.calls[2][4].active_seconds).toBe(60);
+    expect(sendHeartbeat).toHaveBeenCalledTimes(2);
   });
 
   it("counts cursor activity without inventing overlapping file time", async () => {
@@ -618,10 +678,7 @@ describe("HeartbeatBufferManager", () => {
     );
     await manager.flushDueBuffers("timer", 90_000);
 
-    expect(sendHeartbeat).toHaveBeenCalledTimes(1);
-    expect(sendHeartbeat.mock.calls[0][4]).toEqual(
-      expect.objectContaining({ active_seconds: 60, line_number: 11, cursor_position: 5 })
-    );
+    expect(sendHeartbeat).toHaveBeenCalledTimes(0);
   });
 
   it("does not claim a small edit as human when a nearby agent rewrite is ambiguous", async () => {
@@ -670,9 +727,9 @@ describe("HeartbeatBufferManager", () => {
         "coding",
         [],
         expect.objectContaining({
-          unattributed_lines_added: 1,
+          unattributed_lines_added: undefined,
           human_lines_added: undefined,
-          keystrokes: 5,
+          keystrokes: undefined,
           actor_type: "unknown",
           actor_confidence: 0
         })
@@ -708,6 +765,7 @@ describe("HeartbeatBufferManager", () => {
         new AiAttributionStore(homeDir)
       );
 
+      manager.updateCursor(document("C:/project/a.ts", "", 0), undefined, undefined, 10_000);
       await manager.recordTextChange(
         document("C:/project/a.ts", "hello"),
         [{ text: "hello", rangeLength: 0 }],
@@ -717,6 +775,9 @@ describe("HeartbeatBufferManager", () => {
       await manager.flushDueBuffers("timer", 31_000);
 
       expect(sendHeartbeat).not.toHaveBeenCalled();
+      expect(manager.getLastLineMeasurement("C:/project/a.ts")).toMatchObject({
+        status: "measured", linesAdded: 1, linesDeleted: 0
+      });
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
     }
@@ -749,10 +810,11 @@ describe("HeartbeatBufferManager", () => {
       );
 
       // 40 seconds of the developer genuinely typing in this file...
-      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 0), undefined, 60_000);
-      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 1), undefined, 80_000);
-      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 2), undefined, 100_000);
-      expect(manager.getBufferedSeconds()).toBe(40);
+      await manager.updateCursor(document("C:/project/a.ts", "", 0), selection(0, 0), undefined, 60_000);
+      await manager.updateCursor(document("C:/project/a.ts", "", 0), selection(0, 1), undefined, 70_000);
+      await manager.updateCursor(document("C:/project/a.ts", "", 0), selection(0, 2), undefined, 80_000);
+      await manager.updateCursor(document("C:/project/a.ts", "", 0), selection(0, 3), undefined, 90_000);
+      expect(manager.getBufferedSeconds()).toBe(30);
 
       // ...then, five seconds later, the agent patches the same file and its sidecar
       // event matches the change exactly.
@@ -768,7 +830,7 @@ describe("HeartbeatBufferManager", () => {
       // The agent owns the line counts and the interval its own edit closed; the
       // developer keeps the 40 seconds they had already earned.
       expect(payload.human_lines_added).toBeUndefined();
-      expect(payload.active_seconds).toBe(40);
+      expect(payload.active_seconds).toBe(30);
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
     }
@@ -813,7 +875,7 @@ describe("HeartbeatBufferManager", () => {
         "coding",
         [],
         expect.objectContaining({
-          unattributed_lines_added: 1,
+          unattributed_lines_added: undefined,
           human_lines_added: undefined,
           actor_type: "unknown",
           actor_confidence: 0
@@ -825,12 +887,7 @@ describe("HeartbeatBufferManager", () => {
   });
 
   it("does not relabel a preceding human interval as AI when a whole-file overwrite follows it", async () => {
-    // A whole-file agent overwrite (see the next test) must not turn the developer's
-    // own preceding seconds into AI time. `human_lines_added` is correctly cleared —
-    // the agent owns this edit's line counts — but `active_seconds: 40` here is time
-    // the developer earned *before* the agent touched the file, so `actor_type` must
-    // stay "human" for it. The agent's own attribution reaches the server separately,
-    // through the CLI/broker path that classified this edit in the first place.
+    // Missing before-content cannot establish ownership of the entire overwrite.
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
     try {
       const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
@@ -860,9 +917,10 @@ describe("HeartbeatBufferManager", () => {
       );
 
       await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 0), undefined, 60_000);
-      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 1), undefined, 80_000);
-      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 2), undefined, 100_000);
-      expect(manager.getBufferedSeconds()).toBe(40);
+      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 1), undefined, 70_000);
+      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 2), undefined, 80_000);
+      await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 3), undefined, 90_000);
+      expect(manager.getBufferedSeconds()).toBe(30);
 
       await manager.recordTextChange(
         document("C:/project/a.ts", "line1\nline2\nline3\nline4\nline5"),
@@ -880,7 +938,7 @@ describe("HeartbeatBufferManager", () => {
 
       const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
       expect(payload.human_lines_added).toBeUndefined();
-      expect(payload.active_seconds).toBe(40);
+      expect(payload.active_seconds).toBe(45);
       expect(payload.actor_type).toBe("unknown");
       expect(payload.ai_event_id).toBeUndefined();
     } finally {
@@ -888,19 +946,8 @@ describe("HeartbeatBufferManager", () => {
     }
   });
 
-  it("attributes a whole-file agent overwrite as AI on the save that follows it", async () => {
-    // Regression test for the `Write` line-delta asymmetry: an agent hook overwriting
-    // an existing file has no prior content to diff, so it reports lines_deleted: 0.
-    // VS Code sees the reload as a full-range replacement, so its own linesDeleted is
-    // the old file's line count (200 here). The shared post-edit fingerprint proves
-    // ownership while the unmatched deleted lines remain explicitly unknown.
-    //
-    // This edit has no prior activity behind it, so the classifying flush sends
-    // nothing on its own (an AI-only edit produces no heartbeat by design — see "does
-    // not resend a matching AI edit as human activity"). The save that follows is what
-    // must carry the AI attribution: before this fix, `write: true` alone forced
-    // `actor_type: "human"` on that save, even though every human-side counter for
-    // this exact edit had already been zeroed.
+  it("keeps a whole-file overwrite unknown when its before-version is missing", async () => {
+    // A matching final fingerprint cannot fill in missing before-content.
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
     try {
       const logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
@@ -945,18 +992,18 @@ describe("HeartbeatBufferManager", () => {
         selection(0, 0),
         10_000
       );
-      expect(sendHeartbeat).not.toHaveBeenCalled();
+      expect(sendHeartbeat).toHaveBeenCalledTimes(1);
 
       await manager.recordSave({ uri: fileUri("C:/project/b.ts") }, 10_500);
 
-      expect(sendHeartbeat).toHaveBeenCalledTimes(1);
+      expect(sendHeartbeat).toHaveBeenCalledTimes(2);
       const payload = sendHeartbeat.mock.calls[0][4];
-      expect(payload.actor_type).toBe("ai_verified");
-      expect(payload.actor_confidence).toBe(1);
-      expect(payload.ai_agent).toBe("claude-code");
-      expect(payload.ai_provider).toBe("anthropic");
-      expect(payload.ai_model).toBe("claude-sonnet-5");
-      expect(payload.ai_event_id).toBe("claude-write-overwrite-2");
+      expect(payload.actor_type).toBe("unknown");
+      expect(payload.actor_confidence).toBe(0);
+      expect(payload.ai_agent).toBeUndefined();
+      expect(payload.ai_provider).toBeUndefined();
+      expect(payload.ai_model).toBeUndefined();
+      expect(payload.ai_event_id).toBeUndefined();
       expect(payload.human_lines_added).toBeUndefined();
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
@@ -964,14 +1011,7 @@ describe("HeartbeatBufferManager", () => {
   });
 
   it("does not attribute prettier or eslint whole-file reformat to AI without sidecar evidence", async () => {
-    // Guards the A-2 whole-file-overwrite rule above: a large edit that looks like an
-    // agent overwrite (big line delta, no matching deletions) must still resolve to
-    // Human when the broker recorded nothing for this file — e.g. a "format on save"
-    // reformat by prettier or eslint, which VS Code delivers as an ordinary large
-    // `onDidChangeTextDocument` event with no AI evidence behind it. The whole-file
-    // rule only ever narrows what counts as a match against an *existing* candidate
-    // event (see `classify`'s `candidates.length === 0` early return above it); it can
-    // never manufacture AI attribution out of no evidence.
+    // Formatter events provide neither human nor model authorship evidence.
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-ai-attribution-"));
     try {
       // No sidecar file is written at all for this home directory.
@@ -1003,7 +1043,7 @@ describe("HeartbeatBufferManager", () => {
       expect(payload.actor_type).toBe("unknown");
       expect(payload.ai_event_id).toBeUndefined();
       expect(payload.human_lines_added).toBeUndefined();
-      expect(payload.unattributed_lines_added).toBe(5);
+      expect(payload.unattributed_lines_added).toBeUndefined();
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
     }

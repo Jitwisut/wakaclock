@@ -19,7 +19,7 @@ import * as path from "node:path";
  * directly comparable and must not be unified — narrowing this one to match the
  * other's number would tighten matching here and reduce AI recall for no reason tied
  * to this call site's own accuracy. Also unrelated to `activity.ts`'s
- * `MAX_ACTIVITY_GAP_SECONDS` (120s), which bounds one wire segment's own span, not a
+ * `MAX_ACTIVITY_GAP_SECONDS` (15s), which bounds one wire segment's own span, not a
  * correlation match.
  */
 const CORRELATION_WINDOW_SECONDS = 15;

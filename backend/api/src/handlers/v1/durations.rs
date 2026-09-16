@@ -69,6 +69,18 @@ pub async fn list(
         ai_measured_seconds: Some(ai_measured_seconds),
         ai_additional_seconds: Some(ai_additional_seconds),
         calculation_version: Some(calculation_version),
+        active_seconds: Some(result.active_seconds),
+        active_human_seconds: Some(result.active_human_seconds),
+        active_human_only_seconds: Some(
+            (result.active_human_seconds - result.active_overlap_seconds).max(0.0),
+        ),
+        active_ai_only_seconds: Some(
+            (result.active_ai_seconds - result.active_overlap_seconds).max(0.0),
+        ),
+        active_ai_seconds: Some(result.active_ai_seconds),
+        active_overlap_seconds: Some(result.active_overlap_seconds),
+        active_coverage: Some(result.active_coverage),
+        wakatime_compatible_seconds: Some(result.wakatime_compatible_seconds),
     }))
 }
 

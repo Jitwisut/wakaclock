@@ -78,6 +78,19 @@ export const INSIGHT_TYPES: InsightType[] = [
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
 export interface StatusBarResponse {
+  active_ai_seconds?: number;
+  active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_intervals?: Array<{
+    end: number;
+    segment_id: string;
+    source: string;
+    start: number;
+  }>;
+  active_human_seconds?: number;
+  active_human_only_seconds?: number;
+  active_ai_only_seconds?: number;
+  active_overlap_seconds?: number;
+  active_seconds?: number;
   agent_health?: unknown;
   ai_additional_seconds?: number;
   ai_measured_seconds?: number;
@@ -100,12 +113,20 @@ export interface StatusBarResponse {
   queued_seconds?: number;
   timezone?: string;
   total_seconds: number;
+  wakatime_compatible_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------
 // GET /all_time_since_today
 // ---------------------------------------------------------------------------
 export interface AllTimeData {
+  active_ai_seconds?: number;
+  active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_human_seconds?: number;
+  active_human_only_seconds?: number;
+  active_ai_only_seconds?: number;
+  active_overlap_seconds?: number;
+  active_seconds?: number;
   ai_additional_seconds?: number;
   ai_measured_seconds?: number;
   calculation_version?: 'combined_v2' | 'legacy';
@@ -158,6 +179,13 @@ export interface EvidenceSplit {
 }
 
 export interface StatsData {
+  active_ai_seconds?: number;
+  active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_human_seconds?: number;
+  active_human_only_seconds?: number;
+  active_ai_only_seconds?: number;
+  active_overlap_seconds?: number;
+  active_seconds?: number;
   ai_additional_seconds?: number;
   ai_measured_seconds?: number;
   best_day: BestDay | null;
@@ -197,6 +225,13 @@ export interface SummaryItem {
 }
 
 export interface SummaryGrandTotal {
+  active_ai_seconds?: number;
+  active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_human_seconds?: number;
+  active_human_only_seconds?: number;
+  active_ai_only_seconds?: number;
+  active_overlap_seconds?: number;
+  active_seconds?: number;
   ai_additional_seconds?: number;
   ai_measured_seconds?: number;
   calculation_version?: 'combined_v2' | 'legacy';
@@ -220,10 +255,21 @@ export interface SummaryDay {
   projects: SummaryItem[];
 }
 
+export interface SummaryCalculation {
+  calculation_version: 'combined_v2' | 'legacy' | string;
+  comparable_metric: string;
+  scope: string;
+  timeout_seconds: number;
+  timezone: string;
+  writes_only: boolean;
+}
+
 export interface SummariesResponse {
   days: SummaryDay[];
   end: string;
   start: string;
+  /** Additive effective-settings contract for external duration comparisons. */
+  calculation?: SummaryCalculation;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,12 +287,20 @@ export interface DurationBlock {
 }
 
 export interface DurationsResponse {
+  active_ai_seconds?: number;
+  active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_human_seconds?: number;
+  active_human_only_seconds?: number;
+  active_ai_only_seconds?: number;
+  active_overlap_seconds?: number;
+  active_seconds?: number;
   ai_additional_seconds?: number;
   ai_measured_seconds?: number;
   calculation_version?: 'combined_v2' | 'legacy';
   comparable_seconds?: number;
   data: DurationBlock[];
   date: string;
+  wakatime_compatible_seconds?: number;
   total: number;
 }
 
@@ -297,6 +351,8 @@ export interface InsightsResponse {
 export interface AiAgentItem {
   actor_type: ActorType;
   agent: string;
+  ai_added_measured_heartbeats?: number;
+  ai_deleted_measured_heartbeats?: number;
   ai_lines_added: number;
   ai_lines_deleted: number;
   heartbeat_count: number;

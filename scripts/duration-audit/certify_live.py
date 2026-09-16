@@ -189,13 +189,17 @@ def main() -> int:
 
     report = {
         "schema_version": 2,
+        "evidence_kind": "internal_api_replay_consistency",
+        "reference_source": "local_wakatime_algorithm_on_wakaclock_export",
+        "external_wakatime_verified": False,
         "status": status,
         "checked_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "tested_commit_sha": commit_sha,
         "range": {"start": start, "end": end},
         "total": {
             "api_seconds": api_total,
-            "wakatime_seconds": reference_total,
+            "algorithm_reference_seconds": reference_total,
+            "wakatime_seconds": reference_total,  # Legacy field; see reference_source.
             "relative_error": total_error,
         },
         "max_eligible_daily_error": max_daily_error,

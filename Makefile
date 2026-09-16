@@ -29,12 +29,12 @@ env-setup: ## Create local environment files from checked-in examples
 	@test -f $(BACKEND_DIR)/.env || printf '%s\n' 'SERVER_HOST=127.0.0.1' 'SERVER_PORT=8000' 'CLICKHOUSE_URL=http://localhost:8123' > $(BACKEND_DIR)/.env
 
 .PHONY: infra-up
-infra-up: ## Start PostgreSQL, ClickHouse, Redis, RabbitMQ and Redpanda
-	@$(COMPOSE) -f docker-compose.yml up -d postgres clickhouse redis rabbitmq redpanda
+infra-up: ## Start PostgreSQL, ClickHouse, Redis and RabbitMQ
+	@$(COMPOSE) -f docker-compose.yml up -d --wait postgres clickhouse redis rabbitmq
 
 .PHONY: infra-kafka-up
-infra-kafka-up: ## Start Redpanda (compatibility alias for infra-up)
-	@$(COMPOSE) -f docker-compose.yml up -d redpanda
+infra-kafka-up: ## Start optional Redpanda (Kafka-compatible event bus)
+	@$(COMPOSE) -f docker-compose.yml up -d --wait redpanda
 
 .PHONY: kafka-topics
 kafka-topics: ## Create local Kafka topics with K0/K1 retention defaults

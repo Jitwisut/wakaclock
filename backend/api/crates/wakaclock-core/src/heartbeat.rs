@@ -72,10 +72,33 @@ impl ActorType {
     }
 }
 
-/// Canonical coarse source used by every duration projection. The actor enum is the
-/// source of truth; legacy/source text is accepted only for API compatibility and
-/// cannot promote an unknown row to Human.
-pub fn normalize_activity_source(_source: Option<&str>, actor_type: &str) -> &'static str {
+/// Canonical coarse source used by every duration projection. The actor enum remains
+/// the authorship source of truth; the explicit editor Active marker may be retained
+/// on an Unknown row as separate presence evidence, but it never changes that actor
+/// enum to Human.
+pub fn normalize_activity_source(source: Option<&str>, actor_type: &str) -> &'static str {
+    // Active v1 markers are additive. Keep the editor marker for a Human *or
+    // Unknown* actor: an editor heartbeat can prove keyboard presence while its
+    // line author remains Unknown when a flush contains mixed/unavailable edits.
+    // It must never survive on an AI actor, where the marker would turn an
+    // attribution claim into human Active time. Public filters treat these values
+    // as editor/AI through `activity_source_matches_filter` below.
+    if source.is_some_and(|value| value.eq_ignore_ascii_case("editor_active_v1"))
+        && matches!(
+            actor_type.trim().to_ascii_lowercase().as_str(),
+            "human" | "unknown" | "unattributed"
+        )
+    {
+        return "editor_active_v1";
+    }
+    if source.is_some_and(|value| value.eq_ignore_ascii_case("ai_tool_v1"))
+        && matches!(
+            actor_type.trim().to_ascii_lowercase().as_str(),
+            "ai_verified" | "ai_inferred" | "verified" | "inferred" | "correlated"
+        )
+    {
+        return "ai_tool_v1";
+    }
     match actor_type.trim().to_ascii_lowercase().as_str() {
         "human" => "editor",
         "ai_verified" | "ai_inferred" | "verified" | "inferred" | "correlated" => "ai",
@@ -89,9 +112,9 @@ pub fn normalize_activity_source(_source: Option<&str>, actor_type: &str) -> &'s
 /// `ai`, or `other`.
 pub fn activity_source_matches_filter(source: &str, filter: &str) -> bool {
     match filter.trim().to_ascii_lowercase().as_str() {
-        "human" | "editor" => source == "editor",
-        "ai" => source == "ai",
-        "other" => source != "editor" && source != "ai",
+        "human" | "editor" => source == "editor" || source == "editor_active_v1",
+        "ai" => source == "ai" || source == "ai_tool_v1",
+        "other" => !matches!(source, "editor" | "editor_active_v1" | "ai" | "ai_tool_v1"),
         _ => true,
     }
 }
@@ -243,12 +266,15 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
         {
             return Err("AI actor_type cannot contain positive Human line counters".to_string());
         }
-        // An editor can report keystrokes/character activity while the line delta is
-        // ambiguous with a nearby agent event. In that specific case Unknown is the
-        // canonical answer; those counters are retained for observability and are
-        // partitioned into Unknown by the analytics rollups. Without ambiguous counters,
-        // an explicit Unknown plus positive Human evidence is contradictory.
-        if explicit == ActorType::Unknown && (ai_evidence || human_evidence) && !ambiguous_lines {
+        // Character deltas and legacy keystroke estimates prove activity, not
+        // authorship. Unknown remains valid when a baseline or identity is missing.
+        let explicit_human_evidence = input.positive_editor_evidence
+            || input.human_lines_added.is_some_and(|value| value > 0)
+            || input.human_lines_deleted.is_some_and(|value| value > 0);
+        if explicit == ActorType::Unknown
+            && (ai_evidence || explicit_human_evidence)
+            && !ambiguous_lines
+        {
             return Err("unknown actor_type cannot contain positive actor evidence".to_string());
         }
         explicit
@@ -303,6 +329,12 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
 /// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
 /// this window to mean the same thing here as it does there.
 pub const MAX_ACTIVITY_GAP_SECONDS: f64 = 120.0;
+/// Human Active evidence is leased by the editor for at most fifteen seconds.
+/// The legacy 120-second bound remains valid for old clients and WakaTime imports.
+pub const ACTIVE_LEASE_SECONDS: f64 = 15.0;
+/// A completed AI tool operation may be observed for its full wall-clock run, but
+/// malformed or abandoned operations are bounded before they reach the timeline.
+pub const MAX_AI_TOOL_DURATION_SECONDS: f64 = 6.0 * 60.0 * 60.0;
 pub const DEDUP_WINDOW_SECONDS: f64 = MAX_ACTIVITY_GAP_SECONDS;
 /// Upper bound for append-only attribution corrections. A revision is a small
 /// monotonic counter, never an unbounded client-controlled integer.
@@ -952,9 +984,20 @@ impl Heartbeat {
                 || !segment.end.is_finite()
                 || segment.start < 0.0
                 || segment.end < segment.start
-                || segment.end - segment.start > MAX_ACTIVITY_GAP_SECONDS
+                || segment.end - segment.start
+                    > match segment.source.as_deref() {
+                        Some(source) if source.eq_ignore_ascii_case("editor_active_v1") => {
+                            ACTIVE_LEASE_SECONDS
+                        }
+                        Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
+                            MAX_AI_TOOL_DURATION_SECONDS
+                        }
+                        _ => MAX_ACTIVITY_GAP_SECONDS,
+                    }
             {
-                return Err("activity segment is invalid or exceeds the 120 second gap".to_string());
+                return Err(
+                    "activity segment is invalid or exceeds its evidence window".to_string()
+                );
             }
         }
         Ok(())
@@ -1091,22 +1134,39 @@ mod tests {
             "ai"
         );
         assert_eq!(normalize_activity_source(Some("ai"), "unknown"), "other");
+        assert_eq!(
+            normalize_activity_source(Some("editor_active_v1"), "human"),
+            "editor_active_v1"
+        );
+        assert_eq!(
+            normalize_activity_source(Some("editor_active_v1"), "unknown"),
+            "editor_active_v1"
+        );
+        assert_eq!(
+            normalize_activity_source(Some("editor_active_v1"), "ai_inferred"),
+            "ai"
+        );
+        assert_eq!(
+            normalize_activity_source(Some("ai_tool_v1"), "ai_verified"),
+            "ai_tool_v1"
+        );
     }
 
     #[test]
     fn activity_source_filter_mapping_is_exhaustive_and_symmetric() {
         let canonical = [
-            ("human", "editor"),
-            ("editor", "editor"),
-            ("ai", "ai"),
-            ("other", "other"),
+            ("human", ["editor", "editor_active_v1"].as_slice()),
+            ("editor", ["editor", "editor_active_v1"].as_slice()),
+            ("ai", ["ai", "ai_tool_v1"].as_slice()),
+            ("other", ["other"].as_slice()),
         ];
-        for (filter, expected_source) in canonical {
-            assert!(activity_source_matches_filter(expected_source, filter));
-            for source in ["editor", "ai", "other"] {
-                if source != expected_source {
-                    assert!(!activity_source_matches_filter(source, filter));
-                }
+        for (filter, expected_sources) in canonical {
+            for source in ["editor", "editor_active_v1", "ai", "ai_tool_v1", "other"] {
+                assert_eq!(
+                    activity_source_matches_filter(source, filter),
+                    expected_sources.contains(&source),
+                    "filter={filter} source={source}"
+                );
             }
         }
         assert!(activity_source_matches_filter("future", "unrecognized"));

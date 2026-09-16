@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.HeartbeatBufferManager = void 0;
 const node_crypto_1 = require("node:crypto");
 const aiAttribution_1 = require("./aiAttribution");
+const lineMeasurement_1 = require("./lineMeasurement");
 const activity_1 = require("./activity");
 const node_crypto_2 = require("node:crypto");
 const utils_1 = require("./utils");
@@ -25,6 +26,16 @@ class HeartbeatBufferManager {
     aiAttributionStore;
     onActivity;
     states = new Map();
+    lineMeasurements = new lineMeasurement_1.DocumentLineMeasurements();
+    lastLineMeasurements = new Map();
+    /** Local diagnostics only: the legacy CLI cannot transport a versioned line metric. */
+    getLastLineMeasurement(entity) {
+        const measurement = this.lastLineMeasurements.get((0, utils_1.normalizeFsPath)(entity));
+        return measurement ? { ...measurement } : undefined;
+    }
+    forgetDocument(document) {
+        this.lineMeasurements.forget((0, utils_1.normalizeFsPath)(document.uri.fsPath));
+    }
     /**
      * One global activity cursor prevents two open files from claiming the same wall-clock
      * interval. WakaTime derives a mini-duration from each heartbeat to the next one; this
@@ -63,57 +74,34 @@ class HeartbeatBufferManager {
         // otherwise a nearby AI sidecar event can fall outside the correlation window.
         state.lastEditAt = now;
         state.lastEditIntervalStartAt = intervalStartAt;
-        // Undo/redo replays content already counted once before, and it is specifically
-        // the *line* delta that gets compared against nearby AI sidecar evidence
-        // (classifyPendingAttribution → AiAttributionStore.classify): a large undo could
-        // otherwise manufacture a coincidental line-count match against unrelated AI
-        // activity, or double-count a human's own earlier edit as new lines written.
-        // Keystrokes/chars still accumulate regardless — they carry no line-match risk,
-        // and withholding them here would make an undo-only edit indistinguishable from
-        // no activity at all (`hasPendingActivity` would see nothing to report), silently
-        // dropping the heartbeat whose timestamp anchor the idle bridge relies on to
-        // resume the clock after a break (see docs/duration-accuracy-audit.md Finding 0).
-        state.keystrokes += paste ? 0 : summary.keystrokes;
+        // These are character volumes, never physical key presses or authorship evidence.
         state.charsAdded += summary.charsAdded;
         state.charsDeleted += summary.charsDeleted;
+        this.lineMeasurements.change(entity, document, changeReason === TEXT_DOCUMENT_CHANGE_REASON_UNDO || changeReason === TEXT_DOCUMENT_CHANGE_REASON_REDO);
         if (paste && this.getConfig().trackClipboardActions) {
             state.pasteActions += 1;
             state.pastedChars += summary.charsAdded;
-            state.pastedLines += summary.linesAdded;
-            if (paste.origin === "same_file") {
+            state.pastedLines += summary.insertedTextLines;
+            if (paste.origin === "same_file")
                 state.pasteSameFileActions += 1;
-            }
-            else if (paste.origin === "same_workspace") {
+            else if (paste.origin === "same_workspace")
                 state.pasteSameWorkspaceActions += 1;
-            }
-            else {
+            else
                 state.pasteExternalOrUnknownActions += 1;
-            }
-            state.unattributedLinesAdded += summary.linesAdded;
-            state.unattributedLinesDeleted += summary.linesDeleted;
         }
-        else if (changeReason !== TEXT_DOCUMENT_CHANGE_REASON_UNDO &&
-            changeReason !== TEXT_DOCUMENT_CHANGE_REASON_REDO) {
-            state.humanLinesAdded += summary.linesAdded;
-            state.humanLinesDeleted += summary.linesDeleted;
-        }
-        const contentFingerprint = fingerprintDocument(document);
-        for (const change of changes) {
-            const changeSummary = (0, utils_1.summarizeTextChanges)([change]);
-            if (changeSummary.linesAdded === 0 && changeSummary.linesDeleted === 0) {
-                continue;
-            }
+        if (state.pendingEditorChanges.length < 2)
             state.pendingEditorChanges.push({
                 timeMs: now,
-                linesAdded: changeSummary.linesAdded,
-                linesDeleted: changeSummary.linesDeleted,
-                contentFingerprint
+                linesAdded: 0,
+                linesDeleted: 0,
+                contentFingerprint: fingerprintDocument(document)
             });
-        }
         this.updateSelectionState(state, selection);
         this.onActivity?.();
         // WakaTime sends the first file-change heartbeat immediately. Subsequent
-        // same-file heartbeats are rate limited to the configured cadence.
+        // same-file heartbeats are rate limited to the configured network cadence;
+        // the independent 15-second lease in `observeActivity` is the only duration
+        // this editor can prove.
         if ((state.lastHeartbeatAt === undefined ||
             now - state.lastHeartbeatAt >= this.getConfig().heartbeatRateLimitMs) &&
             this.hasPendingActivity(state)) {
@@ -125,6 +113,7 @@ class HeartbeatBufferManager {
             return;
         }
         const entity = (0, utils_1.normalizeFsPath)(document.uri.fsPath);
+        this.lineMeasurements.observe(entity, document);
         const state = this.getOrCreateState(entity);
         this.updateProjectState(state, project);
         this.observeActivity(state, now);
@@ -143,6 +132,7 @@ class HeartbeatBufferManager {
             return;
         }
         const entity = (0, utils_1.normalizeFsPath)(document.uri.fsPath);
+        this.lineMeasurements.observe(entity, document);
         const state = this.getOrCreateState(entity);
         this.updateProjectState(state, project);
         this.observeActivity(state, now);
@@ -161,6 +151,8 @@ class HeartbeatBufferManager {
             await this.flushFile(previousEntity, "switch", { now });
         }
         const currentEntity = (0, utils_1.getEditorEntity)(currentEditor);
+        if (currentEntity && currentEditor)
+            this.lineMeasurements.observe(currentEntity, currentEditor.document);
         if (currentEntity && currentEntity !== previousEntity) {
             const state = this.getOrCreateState(currentEntity);
             // A switch is an activity marker even when the file has no pending edits.
@@ -176,6 +168,7 @@ class HeartbeatBufferManager {
             return;
         }
         const entity = (0, utils_1.normalizeFsPath)(document.uri.fsPath);
+        this.lineMeasurements.observe(entity, document);
         const state = this.getOrCreateState(entity);
         this.updateProjectState(state, project);
         this.updateSelectionState(state, selection);
@@ -193,6 +186,14 @@ class HeartbeatBufferManager {
     }
     async flushDueBuffers(reason, now = Date.now()) {
         return this.enqueueFlush(() => this.flushDueBuffersInternal(reason, now));
+    }
+    /** Flush every measured or retryable snapshot before the extension host exits. */
+    async flushAllBuffers(reason = "shutdown", now = Date.now()) {
+        return this.enqueueFlush(async () => {
+            for (const entity of this.states.keys()) {
+                await this.flushFileInternal(entity, reason, { now, force: true });
+            }
+        });
     }
     getBufferedSeconds(now = Date.now()) {
         void now;
@@ -246,33 +247,30 @@ class HeartbeatBufferManager {
             return;
         }
         try {
-            await this.classifyPendingAttribution(state, now);
-            // A producer may prove only part of a whole-file overwrite (for example a
-            // Write hook reports added lines but VS Code observes the deleted old file).
-            // Keep the residual unknown counters attached to the AI event until save/timer
-            // gives us a durable heartbeat; an automatic gap flush must not emit a second
-            // editor heartbeat for an edit already owned by the broker.
-            if (!force &&
-                reason === "gap" &&
-                state.aiEventId !== undefined &&
-                state.activitySegments.length === 0 &&
-                state.humanLinesAdded === 0 &&
-                state.humanLinesDeleted === 0 &&
-                state.keystrokes === 0 &&
-                state.charsAdded === 0 &&
-                state.charsDeleted === 0 &&
-                state.copyActions === 0 &&
-                state.pasteActions === 0 &&
-                !state.pendingWrite) {
-                return;
-            }
-            if (!force && !this.hasPendingActivity(state) && retries.length === 0) {
-                this.clearEmptyState(state);
-                return;
-            }
             const snapshots = [...retries];
             if (this.hasPendingActivity(state)) {
-                snapshots.push(this.captureSnapshot(state, category, write));
+                // Detach before any sidecar I/O. Changes arriving during classification/send
+                // belong to the next window and can never mutate a retry's counters.
+                const captured = {
+                    ...state,
+                    activitySegments: state.activitySegments.map((segment) => ({ ...segment })),
+                    pendingEditorChanges: [...state.pendingEditorChanges]
+                };
+                const measurement = this.lineMeasurements.close(entity) ?? (captured.pendingEditorChanges.length > 0 ? {
+                    metricVersion: "editor-before-after-v1",
+                    boundary: "flush",
+                    status: "unavailable",
+                    reason: "baseline_missing",
+                    changeEvents: captured.pendingEditorChanges.length,
+                    containsReplay: false
+                } : undefined);
+                if (measurement)
+                    this.lastLineMeasurements.set(entity, measurement);
+                this.clearMeasurements(state);
+                await this.classifyPendingAttribution(captured, now, measurement);
+                if (this.hasPendingActivity(captured)) {
+                    snapshots.push(this.captureSnapshot(captured, category, write));
+                }
             }
             if (snapshots.length === 0) {
                 return;
@@ -360,13 +358,8 @@ class HeartbeatBufferManager {
     }
     buildPayload(state, category, write) {
         const clipboardEnabled = this.getConfig().trackClipboardActions;
-        const hasAmbiguousLines = state.unattributedLinesAdded > 0 || state.unattributedLinesDeleted > 0;
+        const hasAmbiguousLines = state.pendingEditorChanges.length > 0;
         const hasHumanEvidence = write ||
-            state.humanLinesAdded > 0 ||
-            state.humanLinesDeleted > 0 ||
-            state.keystrokes > 0 ||
-            state.charsAdded > 0 ||
-            state.charsDeleted > 0 ||
             state.copyActions > 0 ||
             state.activitySegments.length > 0;
         // `state.aiEventId` is set only when this flush is reporting an edit the broker
@@ -394,19 +387,22 @@ class HeartbeatBufferManager {
             };
         return {
             entity: state.entity,
+            time: state.lastActivityAt === undefined ? undefined : state.lastActivityAt / 1000,
             entity_type: "file",
             project: state.project,
             category,
             write,
             line_number: state.lineNumber,
             cursor_position: state.cursorPosition,
-            keystrokes: state.keystrokes || undefined,
+            keystrokes: undefined,
             chars_added: state.charsAdded || undefined,
             chars_deleted: state.charsDeleted || undefined,
-            human_lines_added: state.humanLinesAdded || undefined,
-            human_lines_deleted: state.humanLinesDeleted || undefined,
-            unattributed_lines_added: state.unattributedLinesAdded || undefined,
-            unattributed_lines_deleted: state.unattributedLinesDeleted || undefined,
+            // No metric-version field exists in the legacy CLI. Publishing this new
+            // definition in unversioned fields would silently mix incompatible totals.
+            human_lines_added: undefined,
+            human_lines_deleted: undefined,
+            unattributed_lines_added: undefined,
+            unattributed_lines_deleted: undefined,
             clipboard_tracking_version: clipboardEnabled ? 1 : undefined,
             copy_actions: clipboardEnabled ? state.copyActions || undefined : undefined,
             paste_actions: clipboardEnabled ? state.pasteActions || undefined : undefined,
@@ -429,110 +425,58 @@ class HeartbeatBufferManager {
             ...aiAttribution
         };
     }
-    async classifyPendingAttribution(state, now) {
-        if (state.humanLinesAdded === 0 && state.humanLinesDeleted === 0) {
-            state.pendingEditorChanges = [];
+    async classifyPendingAttribution(state, now, measurement) {
+        // A final fingerprint cannot prove who made earlier edits in a mixed window.
+        // Until native operation boundaries exist, only one non-replay change event
+        // with a known before-version can be reconciled with a producer-owned edit.
+        if (measurement?.status !== "measured" || measurement.containsReplay ||
+            measurement.changeEvents !== 1 || state.pendingEditorChanges.length !== 1 ||
+            (measurement.linesAdded === 0 && measurement.linesDeleted === 0))
+            return;
+        const observation = state.pendingEditorChanges[0];
+        let result;
+        try {
+            result = await this.aiAttributionStore.classify(state.entity, observation.timeMs, measurement.linesAdded, measurement.linesDeleted, observation.contentFingerprint, observation.toolEventId);
+        }
+        catch {
+            // Sidecar availability must not drop already-observed activity or characters.
             return;
         }
-        const observations = state.pendingEditorChanges.length > 0
-            ? state.pendingEditorChanges.splice(0)
-            : [{
-                    timeMs: state.lastEditAt ?? state.lastActivityAt ?? now,
-                    linesAdded: state.humanLinesAdded,
-                    linesDeleted: state.humanLinesDeleted
-                }];
-        let humanLinesAdded = 0;
-        let humanLinesDeleted = 0;
-        let aiLinesAdded = 0;
-        let aiLinesDeleted = 0;
-        let unattributedLinesAdded = 0;
-        let unattributedLinesDeleted = 0;
-        let matchedEvent;
-        for (const observation of observations) {
-            const result = await this.aiAttributionStore.classify(state.entity, observation.timeMs, observation.linesAdded, observation.linesDeleted, observation.contentFingerprint, observation.toolEventId, observations.length > 1);
-            if (result.attribution === "human") {
-                humanLinesAdded += observation.linesAdded;
-                humanLinesDeleted += observation.linesDeleted;
-            }
-            else if (result.attribution === "ai") {
-                aiLinesAdded += result.ai_lines_added ?? observation.linesAdded;
-                aiLinesDeleted += result.ai_lines_deleted ?? observation.linesDeleted;
-                unattributedLinesAdded += result.unattributed_lines_added ?? 0;
-                unattributedLinesDeleted += result.unattributed_lines_deleted ?? 0;
-                matchedEvent ??= result.event;
-            }
-            else {
-                unattributedLinesAdded +=
-                    result.unattributed_lines_added ?? observation.linesAdded;
-                unattributedLinesDeleted +=
-                    result.unattributed_lines_deleted ?? observation.linesDeleted;
-            }
-        }
-        state.humanLinesAdded = humanLinesAdded;
-        state.humanLinesDeleted = humanLinesDeleted;
-        state.unattributedLinesAdded += unattributedLinesAdded;
-        state.unattributedLinesDeleted += unattributedLinesDeleted;
-        if (aiLinesAdded === 0 && aiLinesDeleted === 0) {
+        if (result.attribution !== "ai" || !result.event ||
+            result.unattributed_lines_added || result.unattributed_lines_deleted)
             return;
-        }
-        // The agent hook owns this edit's line/time attribution. Remove the editor-side
-        // counters so the same change is not reported as human as well. A pending save is
-        // left intact so the ordinary write heartbeat can still mark the file as active.
-        this.logger.debug("classified editor change as AI-generated", { entity: state.entity });
-        state.keystrokes = 0;
+        // The producer already owns these line totals. The editor sends only supporting
+        // identity, never a second AI line count.
         state.charsAdded = 0;
         state.charsDeleted = 0;
-        state.humanLinesAdded = 0;
-        state.humanLinesDeleted = 0;
-        state.aiLinesAdded = aiLinesAdded;
-        state.aiLinesDeleted = aiLinesDeleted;
-        // AI provenance changes who owns the edited lines, not who invoked the editor's
-        // Copy/Paste interaction. Clipboard counters therefore survive correlation.
-        // A transcript-confirmed AI patch is not evidence that the developer was actively
-        // interacting with the editor, so the interval the patch itself closed is dropped.
-        //
-        // Only that interval. Clearing the whole list — which is what this used to do —
-        // also deleted every interval the developer had genuinely earned in this file
-        // before the agent touched it, so one agent edit could erase minutes of real
-        // typing. Everything up to the moment the agent's edit landed is the developer's
-        // and stands on its own evidence; the segment list is truncated there rather than
-        // emptied. Adjacent intervals merge, so truncation has to cut a segment in half
-        // instead of only dropping whole ones.
+        state.pendingEditorChanges = [];
         const boundary = (state.lastEditIntervalStartAt ?? state.lastEditAt ?? now) / 1000;
         state.activitySegments = state.activitySegments.flatMap((segment) => {
-            if (segment.end <= boundary + SEGMENT_MATCH_EPSILON_SECONDS) {
-                return [segment];
-            }
-            if (segment.start >= boundary - SEGMENT_MATCH_EPSILON_SECONDS) {
+            if (segment.start >= boundary - SEGMENT_MATCH_EPSILON_SECONDS)
                 return [];
-            }
+            if (segment.end <= boundary + SEGMENT_MATCH_EPSILON_SECONDS)
+                return [segment];
             return [{ ...segment, end: boundary }];
         });
         state.activeSeconds = (0, activity_1.unionSeconds)(state.activitySegments);
-        // Only carry the matched event's provenance onto the payload when nothing
-        // developer-earned survived the truncation above. If a segment remains, the
-        // developer's own time is still in this flush and the payload must report Human
-        // for it — the agent's own attribution already reaches the server independently,
-        // through the CLI/broker path that classified this edit in the first place.
-        // Reporting `ai_verified` here on top of a surviving human segment would relabel
-        // the developer's own earned seconds as AI activity server-side.
         if (state.activitySegments.length === 0) {
-            state.aiEventId = matchedEvent?.event_id;
-            state.aiAgent = matchedEvent?.agent;
-            state.aiProvider = matchedEvent?.provider;
-            state.aiModel = matchedEvent?.model;
-            state.aiSource = matchedEvent?.source;
-            state.aiConfidence = matchedEvent?.confidence;
-            state.aiActorType = matchedEvent?.actor_type;
-            state.aiActorConfidence = matchedEvent?.actor_confidence;
+            state.aiEventId = result.event.event_id;
+            state.aiAgent = result.event.agent;
+            state.aiProvider = result.event.provider;
+            state.aiModel = result.event.model;
+            state.aiSource = result.event.source;
+            state.aiConfidence = result.event.confidence;
+            state.aiActorType = result.event.actor_type;
+            state.aiActorConfidence = result.event.actor_confidence;
         }
     }
     observeActivity(state, now) {
         const previous = this.lastObservedActivityAt;
         if (previous !== undefined) {
             const elapsedMs = now - previous;
-            // Strict Wakaclock timing gives a heartbeat the interval to the next activity only
-            // while the gap is at most 120 seconds.
+            // Strict Active timing gives a heartbeat the interval to the next activity only
+            // while the gap is at most the 15-second human lease. The 120-second heartbeat
+            // cadence is a delivery concern and must never manufacture coding time.
             if (elapsedMs >= 0 && elapsedMs <= activity_1.MAX_ACTIVITY_GAP_MS) {
                 // Attribute the interval to the earlier activity's file, just as WakaTime's
                 // heartbeat-to-next-heartbeat mini-duration algorithm does. The state remains
@@ -548,7 +492,10 @@ class HeartbeatBufferManager {
                         segment_id: (0, node_crypto_2.randomUUID)(),
                         start,
                         end,
-                        source: "editor"
+                        // The suffix is an additive wire marker. Legacy readers still see
+                        // this as editor activity, while the API can distinguish explicit
+                        // 15-second Active evidence from older WakaTime-compatible rows.
+                        source: "editor_active_v1"
                     });
                     previousState.activeSeconds = (0, activity_1.unionSeconds)(previousState.activitySegments);
                     previousState.lastActivityAt = now;
@@ -677,7 +624,10 @@ function fingerprintDocument(document) {
         return undefined;
     }
     try {
-        return `sha256:${(0, node_crypto_1.createHash)("sha256").update(document.getText()).digest("hex")}`;
+        const text = document.getText();
+        if (text.length > 512 * 1024)
+            return undefined;
+        return `sha256:${(0, node_crypto_1.createHash)("sha256").update(text).digest("hex")}`;
     }
     catch {
         return undefined;

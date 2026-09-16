@@ -40,6 +40,7 @@ class WakaclockCliService {
         if (primaryWrite) {
             args.push("--write");
         }
+        this.pushOptionalNumber(args, "--time", primaryExtra.time);
         this.pushOptionalNumber(args, "--line-number", primaryExtra.line_number);
         this.pushOptionalNumber(args, "--cursor-position", primaryExtra.cursor_position);
         this.pushOptionalNumber(args, "--keystrokes", primaryExtra.keystrokes);
@@ -387,6 +388,21 @@ class WakaclockCliService {
             });
             let stdout = "";
             let stderr = "";
+            let settled = false;
+            const finish = (callback) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(deadline);
+                callback();
+            };
+            const deadline = setTimeout(() => {
+                if (!child.killed) {
+                    child.kill();
+                }
+                finish(() => reject(new Error(`wakaclock-cli timed out after 45 seconds while running ${args[0] ?? "command"}`)));
+            }, 45_000);
             child.stdout.setEncoding("utf8");
             child.stderr.setEncoding("utf8");
             child.stdout.on("data", (chunk) => {
@@ -396,15 +412,15 @@ class WakaclockCliService {
                 stderr += chunk;
             });
             child.on("error", (error) => {
-                reject(new Error(`Failed to start wakaclock-cli at "${cliPath}". ${error.message}. The bundled AtoAxis CLI may be unavailable; check the Extension installation or use the advanced cliPath override.`));
+                finish(() => reject(new Error(`Failed to start wakaclock-cli at "${cliPath}". ${error.message}. The bundled AtoAxis CLI may be unavailable; check the Extension installation or use the advanced cliPath override.`)));
             });
             child.on("close", (code) => {
                 const exitCode = code ?? -1;
                 if (exitCode !== 0) {
-                    reject(new Error(`wakaclock-cli exited with code ${exitCode}. ${stderr.trim() || stdout.trim()}`));
+                    finish(() => reject(new Error(`wakaclock-cli exited with code ${exitCode}. ${stderr.trim() || stdout.trim()}`)));
                     return;
                 }
-                resolve({ stdout, stderr, exitCode });
+                finish(() => resolve({ stdout, stderr, exitCode }));
             });
             if (stdinPayload) {
                 child.stdin.write(stdinPayload);

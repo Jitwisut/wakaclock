@@ -1,8 +1,10 @@
 services:
+  # Keep container names project-scoped. Hard-coded names collide when the
+  # repository is checked out in more than one worktree or started by another
+  # Compose project on the same Docker daemon.
   # PostgreSQL transactional source of truth for AtoAxis identity and product state.
   postgres:
     image: postgres:16-alpine
-    container_name: wakaclock_postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: wakaclock
@@ -21,7 +23,6 @@ services:
   # ClickHouse Database
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
-    container_name: wakaclock_clickhouse
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: wakaclock
@@ -42,7 +43,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: wakaclock_redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -60,7 +60,6 @@ services:
   # baseline so the producer/consumer can be exercised without a second command.
   redpanda:
     image: redpandadata/redpanda:v24.1.8
-    container_name: wakaclock_redpanda
     restart: unless-stopped
     command:
       - redpanda
@@ -83,7 +82,6 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management
-    container_name: wakaclock_rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-wakaclock}
@@ -102,7 +100,6 @@ services:
   # ClickHouse Web UI
   ch-ui:
     image: ghcr.io/caioricciuti/ch-ui:latest
-    container_name: wakaclock_ch_ui
     restart: unless-stopped
     depends_on:
       clickhouse:

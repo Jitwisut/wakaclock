@@ -46,7 +46,7 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
         }
         return vscode.workspace.getWorkspaceFolder(document.uri)?.name;
     }
-    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => bufferManager.forgetDocument(document)), vscode.workspace.onDidChangeTextDocument((event) => {
         const activeSelection = vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
             ? vscode.window.activeTextEditor.selection
             : undefined;
@@ -140,8 +140,6 @@ function registerEventSubscriptions(context, configService, bufferManager, logge
     }), {
         dispose: () => {
             clearInterval(timer);
-            // VS Code shutdown: flush what is already measured instead of discarding it.
-            void bufferManager.flushDueBuffers("shutdown");
         }
     });
     // Emit an initial marker for the editor that was already active when the extension

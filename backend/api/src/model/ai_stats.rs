@@ -47,6 +47,9 @@ pub struct AiAgentItem {
     pub identity_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_source: Option<String>,
+    /// Canonical AI rows with a measured counter. Zero and missing stay distinct.
+    pub ai_added_measured_heartbeats: u64,
+    pub ai_deleted_measured_heartbeats: u64,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
     pub human_lines_added: u64,
@@ -191,6 +194,9 @@ pub struct AiAgentRow {
     pub identity_status: Option<String>,
     pub identity_reason: Option<String>,
     pub identity_source: Option<String>,
+    /// Canonical AI rows with a measured counter. Zero and missing stay distinct.
+    pub ai_added_measured_heartbeats: u64,
+    pub ai_deleted_measured_heartbeats: u64,
     pub ai_lines_added: u64,
     pub ai_lines_deleted: u64,
     pub human_lines_added: u64,

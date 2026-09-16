@@ -132,11 +132,27 @@ impl HeartbeatIngestService {
             let account_lock = postgres
                 .account_activity_lock(user_id)
                 .await
-                .map_err(|error| anyhow!(error.to_string()))?;
+                .map_err(|error| {
+                    tracing::error!(
+                        %user_id,
+                        error = %error,
+                        error_chain = %format!("{error:#}"),
+                        "heartbeat account activity lock failed"
+                    );
+                    anyhow!(error.to_string())
+                })?;
             if postgres
                 .is_account_deleted_on(&account_lock, user_id)
                 .await
-                .map_err(|error| anyhow!(error.to_string()))?
+                .map_err(|error| {
+                    tracing::error!(
+                        %user_id,
+                        error = %error,
+                        error_chain = %format!("{error:#}"),
+                        "heartbeat account availability check failed"
+                    );
+                    anyhow!(error.to_string())
+                })?
             {
                 anyhow::bail!("account is unavailable for heartbeat ingestion");
             }

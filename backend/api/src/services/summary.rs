@@ -101,6 +101,13 @@ impl SummaryService {
                     .iter()
                     .map(|interval| interval.end - interval.start)
                     .sum();
+                let (
+                    active_seconds,
+                    active_human_seconds,
+                    active_ai_seconds,
+                    active_overlap_seconds,
+                    active_coverage,
+                ) = timeline.active_metrics_in_range(day_start, day_end);
                 let proven = timeline
                     .measured
                     .iter()
@@ -152,6 +159,17 @@ impl SummaryService {
                         ai_measured_seconds: evidence.ai_measured_seconds,
                         ai_additional_seconds: evidence.ai_additional_seconds,
                         calculation_version: Some(timeline.calculation_version),
+                        active_seconds: Some(active_seconds),
+                        active_human_seconds: Some(active_human_seconds),
+                        active_human_only_seconds: Some(
+                            (active_human_seconds - active_overlap_seconds).max(0.0),
+                        ),
+                        active_ai_only_seconds: Some(
+                            (active_ai_seconds - active_overlap_seconds).max(0.0),
+                        ),
+                        active_ai_seconds: Some(active_ai_seconds),
+                        active_overlap_seconds: Some(active_overlap_seconds),
+                        active_coverage: Some(active_coverage),
                         evidence,
                     },
                     languages: summary_items(&intervals, Dimension::Language),
@@ -165,6 +183,18 @@ impl SummaryService {
             .collect::<Vec<_>>();
 
         Ok(SummariesResponse {
+            calculation: crate::model::summary::SummaryCalculation {
+                timezone: timezone_name,
+                timeout_seconds: self.bridge.idle_timeout_seconds,
+                writes_only: false,
+                scope: "all_projects_all_categories",
+                comparable_metric: "editor_ranges",
+                calculation_version: if self.bridge.combined_v2 {
+                    "combined_v2"
+                } else {
+                    "legacy"
+                },
+            },
             start: start.to_string(),
             end: end.to_string(),
             days,

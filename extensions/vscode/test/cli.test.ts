@@ -129,6 +129,17 @@ describe("WakaclockCliService", () => {
     expect(spawnMock.mock.calls[0][1]).toContain("Daniel");
   });
 
+  it("passes the original event timestamp to the CLI", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], { time: 123.25 });
+
+    expect(spawnMock.mock.calls[0][1]).toEqual(
+      expect.arrayContaining(["--time", "123.25"])
+    );
+  });
+
   it("passes AI attribution metadata to the CLI", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));

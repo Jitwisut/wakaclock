@@ -116,6 +116,10 @@ pub struct Config {
     pub idle_timeout_seconds: f64,
     #[serde(default)]
     pub duration_combined_v2: bool,
+    /// Additive rollout switch for the UI/API primary duration. The legacy field
+    /// values remain available in every response while this is canaried.
+    #[serde(default)]
+    pub duration_primary_mode: DurationPrimaryMode,
     /// The same pause allowance for agent-emitted activity, bridged on its own timeline.
     /// Defaults to `idle_timeout_seconds`, which keeps the reported total within 1% of
     /// WakaTime while still attributing human and agent seconds separately. Lower it to
@@ -127,6 +131,13 @@ pub struct Config {
     /// credentials; `Default` is "no brokers", which is today's behaviour.
     #[serde(skip)]
     pub brokers: brokers::BrokerConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub enum DurationPrimaryMode {
+    #[default]
+    WakatimeCompatible,
+    ActiveV1,
 }
 
 const DEV_JWT_SECRET: &str = "wakaclock-dev-secret-change-me";
@@ -233,6 +244,9 @@ impl Config {
             idle_timeout_seconds,
             duration_combined_v2: parse_duration_mode(
                 std::env::var("DURATION_CALCULATION_MODE").ok(),
+            )?,
+            duration_primary_mode: parse_duration_primary_mode(
+                std::env::var("DURATION_PRIMARY_MODE").ok(),
             )?,
             agent_idle_timeout_seconds: parse_agent_idle_timeout(
                 std::env::var("AGENT_IDLE_TIMEOUT_MINUTES").ok(),
@@ -345,6 +359,23 @@ fn parse_duration_mode(value: Option<String>) -> Result<bool> {
         None | Some("legacy") => Ok(false),
         Some("combined_v2") => Ok(true),
         Some(_) => anyhow::bail!("DURATION_CALCULATION_MODE must be legacy or combined_v2"),
+    }
+}
+
+/// Select which additive duration is presented as the primary number. Keep the
+/// compatibility value in the response so a canary can be reversed without data
+/// migration or a second query.
+fn parse_duration_primary_mode(value: Option<String>) -> Result<DurationPrimaryMode> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("wakatime_compatible") | Some("legacy") => {
+            Ok(DurationPrimaryMode::WakatimeCompatible)
+        }
+        Some("active_v1") => Ok(DurationPrimaryMode::ActiveV1),
+        Some(_) => anyhow::bail!("DURATION_PRIMARY_MODE must be wakatime_compatible or active_v1"),
     }
 }
 
@@ -537,6 +568,19 @@ mod tests {
         assert!(!parse_duration_mode(Some(" legacy ".to_string())).unwrap());
         assert!(parse_duration_mode(Some("COMBINED_V2".to_string())).unwrap());
         assert!(parse_duration_mode(Some("canary".to_string())).is_err());
+    }
+
+    #[test]
+    fn duration_primary_mode_is_explicit_and_fail_closed() {
+        assert_eq!(
+            parse_duration_primary_mode(None).unwrap(),
+            DurationPrimaryMode::WakatimeCompatible
+        );
+        assert_eq!(
+            parse_duration_primary_mode(Some("active_v1".to_string())).unwrap(),
+            DurationPrimaryMode::ActiveV1
+        );
+        assert!(parse_duration_primary_mode(Some("canary".to_string())).is_err());
     }
 
     #[test]

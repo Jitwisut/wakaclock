@@ -40,6 +40,12 @@ const attributionDecision_1 = require("../src/attributionDecision");
 const fixturePath = path.resolve(__dirname, "../../../fixtures/ai-attribution/decision-v1.json");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
 (0, vitest_1.describe)("canonical attribution decision conformance", () => {
+    (0, vitest_1.it)("permits unknown authorship with measured characters and unavailable lines", () => {
+        (0, vitest_1.expect)((0, attributionDecision_1.decideAttribution)({ explicit_actor_type: "unknown", chars_added: 3, chars_deleted: 2 })).toEqual({ kind: "resolved", actor_type: "unknown", confidence: 0 });
+        (0, vitest_1.expect)((0, attributionDecision_1.decideAttribution)({ explicit_actor_type: "unknown", human_lines_added: 1 }).kind).toBe("rejected");
+        (0, vitest_1.expect)((0, attributionDecision_1.decideAttribution)({ explicit_actor_type: "unknown", ai_lines_added: 1 }).kind).toBe("rejected");
+        (0, vitest_1.expect)((0, attributionDecision_1.decideAttribution)({ explicit_actor_type: "unknown", positive_editor_evidence: true }).kind).toBe("rejected");
+    });
     (0, vitest_1.it)("matches the shared decision-v1 fixture", () => {
         (0, vitest_1.expect)(fixture.schema_version).toBe(1);
         (0, vitest_1.expect)(fixture.contract).toBe("canonical_attribution_decision");

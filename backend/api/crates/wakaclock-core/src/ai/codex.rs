@@ -546,6 +546,13 @@ impl AiActivityParser for CodexParser {
                                 let mut timestamp = record.timestamp;
                                 let mut offset_before = line.offset_before;
                                 if let Some(previous) = pending_apply_patch.get(&call_id) {
+                                    // Reusing an ID for different requested mutations
+                                    // makes a later output impossible to correlate.
+                                    if previous.input != input {
+                                        pending_apply_patch.remove(&call_id);
+                                        failed_apply_patch.insert(call_id);
+                                        continue;
+                                    }
                                     if previous.turn_id != turn_id
                                         || (previous.model.is_some()
                                             && reported_model.is_some()
@@ -602,19 +609,25 @@ impl AiActivityParser for CodexParser {
                                 failed_apply_patch.insert(call_id);
                                 continue;
                             }
-                            // The output's own content is never inspected — only its
-                            // presence matters, as proof the call actually completed
-                            // rather than being interrupted mid-flight. Parsing a
-                            // free-text confirmation for a success/failure signal
-                            // would be brittle (the real shape varies: sometimes a
-                            // string, sometimes a content-block list) and risks
-                            // matching on text that is exactly the kind of content
-                            // this parser must never retain.
+                            // Completion of exec is not completion of apply_patch.
+                            // Inspect only supported result envelopes locally, then
+                            // discard them; neither output nor patch enters the cursor.
                             let Some(pending) = pending_apply_patch.remove(&call_id) else {
                                 continue;
                             };
-                            completed_apply_patch.insert(call_id.clone());
                             last_record_id = Some(call_id.clone());
+                            let confirmed_files = match normalize_patch_outcome(&item.output, 0) {
+                                PatchOutcome::Success(files) => files,
+                                PatchOutcome::Failure => {
+                                    failed_apply_patch.insert(call_id);
+                                    continue;
+                                }
+                                PatchOutcome::Unavailable => continue,
+                            };
+                            completed_apply_patch.insert(call_id.clone());
+                            if !is_complete_patch(&pending.input) {
+                                continue;
+                            }
                             let turn = pending.turn_id.as_ref().and_then(|id| turn_context.get(id));
                             let project_root = turn
                                 .and_then(|t| t.cwd.clone())
@@ -630,15 +643,21 @@ impl AiActivityParser for CodexParser {
                                 || pending.identity_conflict
                                 || turn.is_some_and(|turn| turn.identity_conflict);
 
+                            let changes = parse_apply_patch(&pending.input);
+                            let mut requested_counts = HashMap::new();
+                            let mut confirmed_counts = HashMap::new();
+                            for change in &changes {
+                                *requested_counts
+                                    .entry((summary_kind(change.change_kind), change.path.clone()))
+                                    .or_insert(0usize) += 1;
+                            }
+                            for confirmation in confirmed_files {
+                                *confirmed_counts.entry(confirmation).or_insert(0usize) += 1;
+                            }
                             let mut path_occurrences = HashMap::<String, usize>::new();
-                            for change in parse_apply_patch(&pending.input) {
-                                // Codex Desktop sometimes represents a full replacement
-                                // as `*** Delete File` followed by `*** Add File` for the
-                                // same path in one tool call. The path alone is therefore
-                                // not a unique operation identity. Keep the first ID
-                                // backward-compatible and add a deterministic occurrence
-                                // suffix only for repeated paths so the broker does not
-                                // reject the batch as conflicting payloads.
+                            for change in changes {
+                                // Stable occurrence identity includes unconfirmed
+                                // requests so a partial result cannot shift later IDs.
                                 let occurrence =
                                     path_occurrences.entry(change.path.clone()).or_insert(0);
                                 let operation_id = if *occurrence == 0 {
@@ -647,6 +666,18 @@ impl AiActivityParser for CodexParser {
                                     format!("{}:{}", call_id, *occurrence)
                                 };
                                 *occurrence += 1;
+                                let key = (summary_kind(change.change_kind), change.path.clone());
+                                // A single summary entry cannot distinguish which
+                                // of two same-path/same-kind requests succeeded.
+                                if confirmed_counts.get(&key) != requested_counts.get(&key) {
+                                    continue;
+                                }
+                                if change.change_kind == BrokerChangeKind::Modify
+                                    && change.delta.added == 0
+                                    && change.delta.deleted == 0
+                                {
+                                    continue;
+                                }
                                 let entity = resolve_entity(&change.path, project_root.as_deref());
                                 if replay_prefix && line.offset_before < cursor.byte_offset {
                                     continue;
@@ -685,7 +716,7 @@ impl AiActivityParser for CodexParser {
                                     entity,
                                     project_root: project_root.clone(),
                                     lines_added: Some(change.delta.added),
-                                    lines_deleted: Some(change.delta.deleted),
+                                    lines_deleted: change.deleted_lines(),
                                     change_kind: change.change_kind,
                                     previous_entity: change
                                         .previous_path
@@ -839,33 +870,154 @@ fn resolve_entity(raw_path: &str, project_root: Option<&Path>) -> PathBuf {
     }
 }
 
-/// Extract the apply_patch DSL from Codex Desktop's `exec` bridge input.
-///
-/// The bridge is not itself a source of file evidence: only a successfully paired
-/// `custom_tool_call_output` is emitted below. This helper therefore only unwraps the
-/// string argument and deliberately ignores shell commands or unrelated text that merely
-/// mentions `apply_patch`.
+/// Recognize only an unconditional, single native call whose result is forwarded.
+/// General JavaScript cannot establish which nested call produced an output. In
+/// particular, substring extraction would accept comments, dead branches, aliases,
+/// multiple calls, or a patch literal unrelated to the successful inner result.
 fn extract_apply_patch_input(input: &str) -> Option<String> {
-    const MARKER: &str = "tools.apply_patch(";
-    let marker_start = input.find(MARKER)?;
-    let argument = input[marker_start + MARKER.len()..].trim_start();
-
-    if argument.starts_with('"') {
-        return parse_json_string_prefix(argument).map(|(value, _)| value);
+    let mut input = input.trim();
+    let mut binding = None;
+    if let Some(declaration) = input.strip_prefix("const ") {
+        let (name, assigned) = declaration.split_once('=')?;
+        let name = name.trim();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return None;
+        }
+        let assigned = assigned.trim_start();
+        let (value, end) = parse_json_string_prefix(assigned)?;
+        input = assigned[end..].trim_start().strip_prefix(';')?.trim_start();
+        // Some observed desktop inputs encode a trailing newline twice.
+        input = input.strip_prefix("\\n").unwrap_or(input).trim_start();
+        binding = Some((name, value));
     }
+    let argument = input
+        .strip_prefix("text(await tools.apply_patch(")?
+        .trim_start();
+    let (patch, remainder) = if argument.starts_with('"') {
+        let (value, end) = parse_json_string_prefix(argument)?;
+        (value, &argument[end..])
+    } else {
+        let (name, value) = binding?;
+        (value, argument.strip_prefix(name)?)
+    };
+    let trailing = remainder.trim_start().strip_prefix("))")?.trim();
+    let trailing = trailing.strip_prefix(';').unwrap_or(trailing).trim();
+    let trailing = trailing.strip_suffix("\\n").unwrap_or(trailing).trim();
+    trailing.is_empty().then_some(patch)
+}
 
-    // The desktop wrapper often binds the patch first and passes the variable to the
-    // tool: `const patch = "..."; text(await tools.apply_patch(patch));`.
-    let variable_end =
-        argument.find(|character: char| !character.is_ascii_alphanumeric() && character != '_')?;
-    let variable = &argument[..variable_end];
-    if variable.is_empty() {
-        return None;
+fn summary_kind(kind: BrokerChangeKind) -> char {
+    match kind {
+        BrokerChangeKind::Create => 'A',
+        BrokerChangeKind::Delete => 'D',
+        BrokerChangeKind::Modify | BrokerChangeKind::Rename => 'M',
     }
-    let assignment_marker = format!("{variable} =");
-    let assignment_start = input[..marker_start].rfind(&assignment_marker)?;
-    let assigned = input[assignment_start + assignment_marker.len()..].trim_start();
-    parse_json_string_prefix(assigned).map(|(value, _)| value)
+}
+
+fn is_complete_patch(input: &str) -> bool {
+    let mut lines = input.trim().lines();
+    lines.next() == Some("*** Begin Patch")
+        && lines.next_back() == Some("*** End Patch")
+        && !lines.any(|line| line == "*** Begin Patch" || line == "*** End Patch")
+}
+
+/// Internal outcome only: the persisted event contract still contains successful
+/// file edits. Unknown/failed output produces no edit, and does not alter independent
+/// session/usage/time observations. Strings live only in this bounded parse.
+#[derive(Debug, PartialEq, Eq)]
+enum PatchOutcome {
+    Success(Vec<(char, String)>),
+    Failure,
+    Unavailable,
+}
+
+fn normalize_patch_outcome(value: &serde_json::Value, depth: usize) -> PatchOutcome {
+    if depth > 8 {
+        return PatchOutcome::Unavailable;
+    }
+    match value {
+        serde_json::Value::String(text) => {
+            let text = text.trim();
+            // Bridge outputs can JSON-encode the native result once more.
+            if text.starts_with('{') || text.starts_with('[') || text.starts_with('"') {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                    return normalize_patch_outcome(&value, depth + 1);
+                }
+            }
+            if text.starts_with("Error:") || text.starts_with("error:") {
+                return PatchOutcome::Failure;
+            }
+            let mut lines = text.lines();
+            if lines.next() != Some("Success. Updated the following files:") {
+                return PatchOutcome::Unavailable;
+            }
+            let mut files = Vec::new();
+            for line in lines {
+                let Some((kind, path)) = line.split_once(' ') else {
+                    return PatchOutcome::Unavailable;
+                };
+                if !matches!(kind, "A" | "M" | "D") || path.trim().is_empty() {
+                    return PatchOutcome::Unavailable;
+                }
+                files.push((kind.chars().next().unwrap(), path.to_string()));
+            }
+            if files.is_empty() {
+                PatchOutcome::Unavailable
+            } else {
+                PatchOutcome::Success(files)
+            }
+        }
+        serde_json::Value::Object(object) => {
+            if object.get("isError").and_then(|v| v.as_bool()) == Some(true)
+                || object.get("success").and_then(|v| v.as_bool()) == Some(false)
+                || object.get("error").is_some_and(|v| !v.is_null())
+                || object
+                    .get("exit_code")
+                    .is_some_and(|v| v.as_i64() != Some(0))
+                || object
+                    .get("metadata")
+                    .and_then(|v| v.get("exit_code"))
+                    .is_some_and(|v| v.as_i64() != Some(0))
+                || object
+                    .get("status")
+                    .is_some_and(|v| !matches!(v.as_str(), Some("completed" | "success")))
+            {
+                return PatchOutcome::Failure;
+            }
+            if object.get("type").and_then(|v| v.as_str()) == Some("text") {
+                if ["output", "result", "content"]
+                    .iter()
+                    .any(|key| object.contains_key(*key))
+                {
+                    return PatchOutcome::Unavailable;
+                }
+                return object
+                    .get("text")
+                    .map_or(PatchOutcome::Unavailable, |value| {
+                        normalize_patch_outcome(value, depth + 1)
+                    });
+            }
+            // Exactly one payload field: do not pick a successful child from an
+            // ambiguous envelope with a different failed or unreported sibling.
+            let mut payloads = ["output", "result", "content"]
+                .iter()
+                .filter_map(|key| object.get(*key));
+            match (payloads.next(), payloads.next()) {
+                (Some(payload), None) => normalize_patch_outcome(payload, depth + 1),
+                _ => PatchOutcome::Unavailable,
+            }
+        }
+        // One text result is the supported MCP content-block representation.
+        // Multiple blocks may describe different inner calls; do not pool them.
+        serde_json::Value::Array(values) if values.len() == 1 => {
+            normalize_patch_outcome(&values[0], depth + 1)
+        }
+        _ => PatchOutcome::Unavailable,
+    }
 }
 
 /// Parse one JSON/JavaScript-compatible double-quoted string at the start of `input`.
@@ -914,16 +1066,15 @@ struct ResponseItemPayload {
     name: Option<String>,
     #[serde(default)]
     call_id: Option<String>,
-    /// The apply_patch call's own patch-text argument. Present only on
-    /// `custom_tool_call`; deliberately not read at all for `custom_tool_call_output`,
-    /// whose `output` field is never deserialized here — see the call site's comment
-    /// on why that content is never inspected.
+    /// The apply_patch call's patch argument, held only during this local parse.
     #[serde(default)]
     input: Option<String>,
-    /// Current Codex marks completed/failed tool calls explicitly. We only use
-    /// this bounded status token; output text is deliberately never inspected.
+    /// Completion status is a veto on failure, never proof of a file edit.
     #[serde(default)]
     status: Option<String>,
+    /// Read only to normalize known result envelopes; never persisted or emitted.
+    #[serde(default)]
+    output: serde_json::Value,
 }
 
 /// An apply_patch call waiting for its matching `custom_tool_call_output`.
@@ -1000,6 +1151,235 @@ struct CodexChange {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn parse_outcome_fixture(
+        name: &str,
+        input: &str,
+        output: serde_json::Value,
+        status: Option<&str>,
+    ) -> ParseBatch {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-codex-outcome-{}-{sequence}.jsonl",
+            std::process::id()
+        ));
+        let mut file = fs::File::create(&path).unwrap();
+        for payload in [
+            serde_json::json!({"type":"session_meta", "payload":{"id":"outcome-session", "cwd":"/workspace"}}),
+            serde_json::json!({"type":"turn_context", "payload":{"turn_id":"outcome-turn", "model":"example-model-id"}}),
+            serde_json::json!({"type":"response_item", "payload":{"type":"custom_tool_call", "name":name, "call_id":"outcome-call", "input":input}}),
+            serde_json::json!({"type":"response_item", "payload":{"type":"custom_tool_call_output", "call_id":"outcome-call", "status":status, "output":output}}),
+        ] {
+            let mut record = payload;
+            record["timestamp"] = serde_json::json!("2026-09-15T00:00:00Z");
+            writeln!(file, "{record}").unwrap();
+        }
+        let parser = CodexParser::new();
+        let batch = parser
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+        // The output terminates the call even when unavailable. Restart does not
+        // rewind forever, emit another event, or retain raw output/patch text.
+        assert_eq!(
+            batch.next_cursor.byte_offset,
+            fs::metadata(&path).unwrap().len()
+        );
+        assert!(parser
+            .parse_since(&ParseContext::default(), Some(&batch.next_cursor))
+            .unwrap()
+            .events
+            .is_empty());
+        assert!(batch
+            .next_cursor
+            .context
+            .as_ref()
+            .unwrap()
+            .pending_calls
+            .is_empty());
+        fs::remove_file(path).unwrap();
+        batch
+    }
+
+    const OUTCOME_PATCH: &str = "*** Begin Patch\n*** Add File: src/ok.rs\n+one\n*** End Patch";
+    const OUTCOME_SUCCESS: &str = "Success. Updated the following files:\nA src/ok.rs\n";
+
+    #[test]
+    fn outputs_require_recognized_mutation_evidence_even_with_completed_status() {
+        for output in [
+            serde_json::Value::Null,
+            serde_json::json!(""),
+            serde_json::json!("Error: Failed to find expected lines. No files were modified."),
+            serde_json::json!("No files were modified."),
+            serde_json::json!("Script completed"),
+            serde_json::json!("Success"),
+            serde_json::json!("Success. Updated the following files:\n"),
+            serde_json::json!("Success. Updated the following files:\nA src/other.rs\n"),
+            serde_json::json!("Success. Updated the following files:\nM src/ok.rs\n"),
+            serde_json::json!({"success":true}),
+            serde_json::json!({"status":"completed", "output":"Error: apply_patch failed"}),
+            serde_json::json!({"exit_code":0, "output":"No changes"}),
+            serde_json::json!({"isError":true, "content":[{"type":"text", "text":OUTCOME_SUCCESS}]}),
+            serde_json::json!({"success":false, "output":OUTCOME_SUCCESS}),
+            serde_json::json!({"exit_code":1, "output":OUTCOME_SUCCESS}),
+            serde_json::json!({"metadata":{"exit_code":1}, "output":OUTCOME_SUCCESS}),
+            serde_json::json!({"type":"text", "text":OUTCOME_SUCCESS, "result":{"isError":true}}),
+            serde_json::json!({"status":"cancelled", "output":OUTCOME_SUCCESS}),
+            serde_json::json!({"output":OUTCOME_SUCCESS, "result":{"isError":true}}),
+            serde_json::json!([{"type":"text", "text":OUTCOME_SUCCESS}, {"type":"text", "text":"Error"}]),
+            serde_json::json!(format!("{OUTCOME_SUCCESS}Error: second patch failed")),
+        ] {
+            for status in [None, Some("completed"), Some("success")] {
+                let batch =
+                    parse_outcome_fixture("apply_patch", OUTCOME_PATCH, output.clone(), status);
+                assert!(
+                    batch.events.is_empty(),
+                    "output {output}, status {status:?}"
+                );
+                assert!(batch.warnings.is_empty());
+            }
+        }
+        for status in ["failed", "cancelled", "interrupted", "in_progress"] {
+            assert!(parse_outcome_fixture(
+                "apply_patch",
+                OUTCOME_PATCH,
+                serde_json::json!(OUTCOME_SUCCESS),
+                Some(status)
+            )
+            .events
+            .is_empty());
+        }
+    }
+
+    #[test]
+    fn recognized_direct_and_single_exec_result_envelopes_preserve_success() {
+        let wrapper = format!(
+            "text(await tools.apply_patch({}));",
+            serde_json::to_string(OUTCOME_PATCH).unwrap()
+        );
+        for output in [
+            serde_json::json!(OUTCOME_SUCCESS),
+            serde_json::json!([{"type":"text", "text":OUTCOME_SUCCESS}]),
+            serde_json::json!({"content":[{"type":"text", "text":OUTCOME_SUCCESS}], "isError":false}),
+            serde_json::json!({"exit_code":0, "output":OUTCOME_SUCCESS}),
+            serde_json::json!({"result":{"output":OUTCOME_SUCCESS}}),
+            serde_json::json!(serde_json::to_string(
+                &serde_json::json!({"output":OUTCOME_SUCCESS})
+            )
+            .unwrap()),
+        ] {
+            for (name, input) in [("apply_patch", OUTCOME_PATCH), ("exec", wrapper.as_str())] {
+                let batch = parse_outcome_fixture(name, input, output.clone(), None);
+                assert_eq!(batch.events.len(), 1, "{name}: {output}");
+                assert_eq!(batch.events[0].lines_added, Some(1));
+                assert_eq!(batch.events[0].confidence, AiConfidence::Verified);
+            }
+        }
+    }
+
+    #[test]
+    fn wrapper_completion_cannot_verify_unrelated_or_multiple_inner_calls() {
+        let literal = serde_json::to_string(OUTCOME_PATCH).unwrap();
+        for input in [
+            format!("if (false) {{ text(await tools.apply_patch({literal})); }}"),
+            format!("// text(await tools.apply_patch({literal}));"),
+            format!("await tools.apply_patch({literal}); text('done');"),
+            format!("text(await tools.apply_patch({literal})); text(await tools.apply_patch({literal}));"),
+            format!("text(await tools.exec({literal}));"),
+            format!("text(await Promise.all([tools.apply_patch({literal}), tools.apply_patch({literal})]));"),
+            format!("const patch = {literal}; patch = 'other'; text(await tools.apply_patch(patch));"),
+        ] {
+            assert!(parse_outcome_fixture("exec", &input, serde_json::json!(OUTCOME_SUCCESS), Some("completed")).events.is_empty(), "{input}");
+        }
+        let input = format!("text(await tools.apply_patch({literal}));");
+        for output in [
+            serde_json::json!({"status":"completed", "output":{"isError":true, "content":[{"type":"text", "text":"Error: patch failed"}]}}),
+            serde_json::json!({"status":"completed", "output":[]}),
+        ] {
+            assert!(
+                parse_outcome_fixture("exec", &input, output, Some("completed"))
+                    .events
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn partial_summary_verifies_only_matching_file_operations() {
+        let input = "*** Begin Patch\n*** Add File: src/unconfirmed.rs\n+other\n*** Add File: src/ok.rs\n+one\n*** End Patch";
+        let batch = parse_outcome_fixture(
+            "apply_patch",
+            input,
+            serde_json::json!(OUTCOME_SUCCESS),
+            None,
+        );
+        assert_eq!(batch.events.len(), 1);
+        assert!(batch.events[0].entity.ends_with("src/ok.rs"));
+    }
+
+    #[test]
+    fn repeated_same_kind_path_requires_complete_operation_evidence() {
+        let input = "*** Begin Patch\n*** Update File: src/ok.rs\n+one\n*** Update File: src/ok.rs\n+two\n*** End Patch";
+        let batch = parse_outcome_fixture(
+            "apply_patch",
+            input,
+            serde_json::json!("Success. Updated the following files:\nM src/ok.rs\n"),
+            None,
+        );
+        assert!(batch.events.is_empty());
+        let batch = parse_outcome_fixture(
+            "apply_patch",
+            input,
+            serde_json::json!("Success. Updated the following files:\nM src/ok.rs\nM src/ok.rs\n"),
+            None,
+        );
+        assert_eq!(batch.events.len(), 2);
+        assert_ne!(batch.events[0].event_id, batch.events[1].event_id);
+    }
+
+    #[test]
+    fn truncated_patch_and_zero_line_modify_do_not_become_edits() {
+        for input in [
+            "*** Begin Patch\n*** Add File: src/ok.rs\n+one",
+            "*** Add File: src/ok.rs\n+one\n*** End Patch",
+            "*** Begin Patch\n*** Add File: src/ok.rs\n+one\n*** End Patch\n*** Begin Patch\n*** End Patch",
+        ] {
+            assert!(parse_outcome_fixture("apply_patch", input, serde_json::json!(OUTCOME_SUCCESS), None).events.is_empty());
+        }
+        let input = "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n unchanged\n*** End Patch";
+        assert!(parse_outcome_fixture(
+            "apply_patch",
+            input,
+            serde_json::json!("Success. Updated the following files:\nM src/ok.rs\n"),
+            None
+        )
+        .events
+        .is_empty());
+    }
+
+    #[test]
+    fn successful_bodyless_delete_preserves_unavailable_deleted_lines() {
+        let input = "*** Begin Patch\n*** Delete File: src/ok.rs\n*** End Patch";
+        let batch = parse_outcome_fixture(
+            "apply_patch",
+            input,
+            serde_json::json!("Success. Updated the following files:\nD src/ok.rs\n"),
+            None,
+        );
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].change_kind, BrokerChangeKind::Delete);
+        assert_eq!(batch.events[0].lines_deleted, None);
+    }
 
     fn write_fixture_copy(name: &str) -> PathBuf {
         let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
@@ -1447,6 +1827,9 @@ mod tests {
         )
         .unwrap();
         output["payload"]["call_id"] = serde_json::json!("call-repeated-file-marker");
+        output["payload"]["output"] = serde_json::json!(
+            "Success. Updated the following files:\nD src/replaced.rs\nA src/replaced.rs\n"
+        );
 
         let path = std::env::temp_dir().join(format!(
             "wakaclock-core-codex-repeated-path-{}.jsonl",

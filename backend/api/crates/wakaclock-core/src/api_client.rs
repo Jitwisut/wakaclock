@@ -9,11 +9,13 @@ use crate::{
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
-    queue::Queue,
+    queue::{Queue, QueueScope},
 };
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::time::Duration;
 use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,12 +39,24 @@ pub struct StatusBarSnapshot {
     pub agent_health: Option<serde_json::Value>,
     #[serde(default)]
     pub covered_intervals: Vec<crate::heartbeat::ActivitySegment>,
+    /// Raw strict Active v1 intervals. These exclude idle-bridge time and are used to
+    /// union server-confirmed activity with local queue entries after a crash/retry.
+    #[serde(default)]
+    pub active_intervals: Vec<crate::heartbeat::ActivitySegment>,
     #[serde(default)]
     pub last_increment_seconds: Option<f64>,
     #[serde(default)]
     pub last_increment_source: Option<String>,
     #[serde(default)]
     pub discarded_seconds: f64,
+    /// Strict Active v1 timing, when the server has at least one explicit v1
+    /// evidence marker in the requested range. Older servers omit these fields.
+    #[serde(default)]
+    pub active_seconds: Option<f64>,
+    #[serde(default)]
+    pub active_coverage: Option<String>,
+    #[serde(default)]
+    pub wakatime_compatible_seconds: Option<f64>,
 }
 
 /// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
@@ -124,8 +138,8 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
 ///
 /// A transport error has no response and is safe to retry.  For an HTTP
 /// response, only the statuses explicitly called out by the ingest contract
-/// are retryable; validation/auth/permission/conflict errors are permanent and
-/// retrying them would create an infinite local queue.
+/// are generally retryable. Heartbeat flushes additionally preserve credential
+/// failures because a repaired key can make the same captured activity valid.
 pub fn is_retryable_delivery_error(error: &AppError) -> bool {
     match error {
         AppError::Http(_) => true,
@@ -154,6 +168,21 @@ fn is_retryable_heartbeat_delivery_error(error: &AppError) -> bool {
         }
         _ => is_retryable_delivery_error(error),
     }
+}
+
+fn is_credential_delivery_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Auth(_)
+            | AppError::HttpStatus {
+                status: 401 | 403,
+                ..
+            }
+            | AppError::HttpStatusRetry {
+                status: 401 | 403,
+                ..
+            }
+    )
 }
 
 pub fn retry_after_seconds(error: &AppError) -> Option<u64> {
@@ -281,8 +310,25 @@ impl ApiClient {
             headers.insert(header::AUTHORIZATION, value);
         }
 
-        let client = Client::builder().default_headers(headers).build()?;
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .default_headers(headers)
+            .build()?;
         Ok(Self { config, client })
+    }
+
+    pub fn queue_scope(&self) -> QueueScope {
+        let owner = self
+            .config
+            .api_key
+            .as_deref()
+            .map(|key| format!("key:{:x}", Sha256::digest(key.as_bytes())))
+            .unwrap_or_else(|| format!("anonymous:{}", self.config.user_id));
+        QueueScope {
+            destination: self.config.server_url.trim_end_matches('/').to_string(),
+            owner,
+        }
     }
 
     pub async fn send_heartbeat(&self, heartbeat: Heartbeat) -> AppResult<SendReport> {
@@ -378,7 +424,7 @@ impl ApiClient {
                 self.record_delivery_failure(&error.to_string());
                 if is_retryable_heartbeat_delivery_error(&error) {
                     for payload in &payloads {
-                        queue.push(payload)?;
+                        queue.push_scoped(payload, &self.queue_scope())?;
                     }
                     // Do not persist a failed payload in the local last-heartbeat
                     // cache: the stable ID must remain retryable, and the durable
@@ -593,7 +639,8 @@ impl ApiClient {
     }
 
     async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
-        let pending = queue.pop_all()?;
+        let lease_owner = uuid::Uuid::new_v4().to_string();
+        let pending = queue.claim_batch_scoped(&self.queue_scope(), &lease_owner)?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
@@ -609,17 +656,33 @@ impl ApiClient {
                 }
                 Err(error) => {
                     stopped_because = Some(error.to_string());
-                    if is_retryable_heartbeat_delivery_error(&error) {
+                    // A queue flush is also a delivery attempt. Persist the latest
+                    // failure so status-bar clients do not keep showing an old
+                    // outage after the queue has recovered, or hide a new one
+                    // behind a previous success.
+                    self.record_delivery_failure(&error.to_string());
+                    if is_credential_delivery_error(&error) {
+                        // Credentials may be repaired. Keep the only durable copy and
+                        // pause this owner-bound queue rather than deleting activity.
+                        queue.mark_retry_after(id, Some(300))?;
+                    } else if is_retryable_heartbeat_delivery_error(&error) {
                         queue.mark_retry_after(id, retry_after_seconds(&error))?;
                     } else {
-                        // A queued row that now receives a permanent 4xx is
-                        // quarantined by removal.  Keeping it would cause every
-                        // future flush to repeat the same rejected request.
-                        queue.remove(id)?;
+                        queue.dead_letter(id, &error.to_string())?;
                     }
+                    queue.release_claim(&lease_owner)?;
                     break;
                 }
             }
+        }
+
+        queue.release_claim(&lease_owner)?;
+
+        // `wakaclock status` may be the only command that drains a backlog. Clear
+        // the persisted refusal only after every currently eligible row was
+        // accepted; a partial flush must continue to show its latest failure.
+        if flushed > 0 && stopped_because.is_none() {
+            self.clear_delivery_failure();
         }
 
         Ok(FlushReport {
@@ -1209,6 +1272,15 @@ mod tests {
         assert!(!is_retryable_delivery_error(&AppError::Conflict(
             "duplicate".to_string()
         )));
+        assert!(is_credential_delivery_error(&AppError::HttpStatus {
+            status: 401,
+            message: "replace the key".to_string(),
+        }));
+        assert!(is_credential_delivery_error(&AppError::HttpStatusRetry {
+            status: 403,
+            message: "permission changed".to_string(),
+            retry_after_seconds: None,
+        }));
     }
 
     #[test]

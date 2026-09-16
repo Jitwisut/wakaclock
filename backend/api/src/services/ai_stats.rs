@@ -158,6 +158,8 @@ impl AiStatsService {
                         identity_status: row.identity_status,
                         identity_reason: row.identity_reason,
                         identity_source: row.identity_source,
+                        ai_added_measured_heartbeats: row.ai_added_measured_heartbeats,
+                        ai_deleted_measured_heartbeats: row.ai_deleted_measured_heartbeats,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
                         human_lines_added: row.human_lines_added,
@@ -274,6 +276,8 @@ impl AiStatsService {
                             lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))),
                             NULL
                         ), NULL) AS identity_source,
+                    countIf(h.effective_actor_type IN ('ai_verified', 'ai_inferred') AND isNotNull(h.ai_lines_added)) AS ai_added_measured_heartbeats,
+                    countIf(h.effective_actor_type IN ('ai_verified', 'ai_inferred') AND isNotNull(h.ai_lines_deleted)) AS ai_deleted_measured_heartbeats,
                     sumIf(coalesce(h.ai_lines_added, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
                     sumIf(coalesce(h.ai_lines_deleted, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
                     sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
@@ -576,6 +580,8 @@ mod tests {
     fn identity_summary_keeps_partial_verified_rows_and_reasons() {
         let rows = vec![
             AiAgentRow {
+                ai_added_measured_heartbeats: 0,
+                ai_deleted_measured_heartbeats: 0,
                 agent: "codex".into(),
                 actor_type: "ai_verified".into(),
                 provider: Some("openai".into()),
@@ -592,6 +598,8 @@ mod tests {
                 heartbeat_count: 4,
             },
             AiAgentRow {
+                ai_added_measured_heartbeats: 0,
+                ai_deleted_measured_heartbeats: 0,
                 agent: "codex".into(),
                 actor_type: "ai_verified".into(),
                 provider: Some("openai".into()),
@@ -676,6 +684,9 @@ mod tests {
             .find(|row| row.actor_type == "ai_verified")
             .expect("verified agent row");
         assert_eq!(verified.identity_status.as_deref(), Some("confirmed"));
+        assert_eq!(verified.ai_added_measured_heartbeats, 1);
+        assert_eq!(verified.ai_deleted_measured_heartbeats, 0);
+        assert_eq!(verified.ai_lines_deleted, 0); // Known subtotal, not measured-zero proof.
 
         let inferred = rows
             .iter()

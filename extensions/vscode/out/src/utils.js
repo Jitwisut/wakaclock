@@ -34,34 +34,15 @@ function getEditorEntity(editor) {
 function summarizeTextChanges(changes) {
     let charsAdded = 0;
     let charsDeleted = 0;
-    let keystrokes = 0;
-    let linesAdded = 0;
-    let linesDeleted = 0;
+    let insertedTextLines = 0;
     for (const change of changes) {
         charsAdded += change.text.length;
         charsDeleted += change.rangeLength;
-        keystrokes += Math.max(change.text.length, change.rangeLength, 1);
-        linesAdded += countChangedLines(change.text);
-        if (change.range) {
-            linesDeleted += Math.max(0, change.range.end.line - change.range.start.line);
+        if (change.text) {
+            insertedTextLines += change.text.split("\n").length - (change.text.endsWith("\n") ? 1 : 0);
         }
     }
-    return { charsAdded, charsDeleted, keystrokes, linesAdded, linesDeleted };
-}
-/** Count logical lines in inserted text without sending source content anywhere. */
-function countChangedLines(text) {
-    if (!text) {
-        return 0;
-    }
-    const newlineCount = (text.match(/\n/g) ?? []).length;
-    if (newlineCount > 0) {
-        return newlineCount + (text.endsWith("\n") ? 0 : 1);
-    }
-    // VS Code reports ordinary typing one character at a time. Counting every such
-    // event as a new line would turn a 40-character line into 40 human lines. A multi-
-    // character paste/AI insertion is still represented as one changed line when it
-    // has no newline boundary.
-    return text.length > 1 ? 1 : 0;
+    return { charsAdded, charsDeleted, insertedTextLines };
 }
 function getSelectionMetrics(selection) {
     if (!selection) {

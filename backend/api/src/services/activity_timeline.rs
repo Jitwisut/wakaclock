@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use wakaclock_core::heartbeat::{
-    normalize_activity_source, ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS,
+    normalize_activity_source, ActivitySegment, ActorType, ACTIVE_LEASE_SECONDS,
+    MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
 };
 
 /// One raw interval recovered from a heartbeat. The fallback interval for a legacy
@@ -106,6 +107,9 @@ pub struct BridgeConfig {
     /// timeline at `idle_timeout_seconds` — the single-stream behaviour that shipped
     /// before the split, kept so a deployment can roll back without a revert.
     pub agent_idle_timeout_seconds: Option<f64>,
+    /// Which duration is presented as primary by canaried surfaces. Both streams
+    /// are always computed; this only changes presentation when explicitly enabled.
+    pub primary_mode: crate::config::DurationPrimaryMode,
 }
 
 impl BridgeConfig {
@@ -116,6 +120,7 @@ impl BridgeConfig {
             combined_v2: false,
             idle_timeout_seconds,
             agent_idle_timeout_seconds: None,
+            primary_mode: crate::config::DurationPrimaryMode::WakatimeCompatible,
         }
     }
 
@@ -126,6 +131,7 @@ impl BridgeConfig {
             combined_v2: false,
             idle_timeout_seconds,
             agent_idle_timeout_seconds: Some(agent_idle_timeout_seconds),
+            primary_mode: crate::config::DurationPrimaryMode::WakatimeCompatible,
         }
     }
 }
@@ -303,7 +309,7 @@ impl ActivityTimelineService {
                 before_boundary = Some(make_boundary_anchor(
                     &row,
                     &heartbeat_id,
-                    start,
+                    row.time,
                     "boundary-start",
                 ));
             } else if row.time >= end
@@ -313,7 +319,7 @@ impl ActivityTimelineService {
                 after_boundary = Some(make_boundary_anchor(
                     &row,
                     &heartbeat_id,
-                    end,
+                    row.time,
                     "boundary-end",
                 ));
             }
@@ -387,7 +393,19 @@ impl ActivityTimelineService {
                 // Ingest validation rejects oversized segments, so this only fires for
                 // rows written before that rule existed. Clamp to the trailing window
                 // rather than discarding the row's entire contribution.
-                let clamped_start = segment.start.max(segment.end - MAX_ACTIVITY_GAP_SECONDS);
+                // Legacy segments are bounded to the 120-second evidence window.
+                // A completed AI tool operation carries its own bounded start/end
+                // interval (up to six hours) and must not be shortened to 120s.
+                let max_span = match segment.source.as_deref() {
+                    Some(source) if source.eq_ignore_ascii_case("editor_active_v1") => {
+                        ACTIVE_LEASE_SECONDS
+                    }
+                    Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
+                        MAX_AI_TOOL_DURATION_SECONDS
+                    }
+                    _ => MAX_ACTIVITY_GAP_SECONDS,
+                };
+                let clamped_start = segment.start.max(segment.end - max_span);
                 let segment_start = clamped_start.max(start);
                 let segment_end = segment.end.min(end);
                 if !segment_start.is_finite()
@@ -466,7 +484,7 @@ impl ActivityTimelineService {
         // AI metrics, which must union overlapping AI ranges independently of ownership.
         self.apply_project_merges_to_activity(user_id, &mut raw)
             .await?;
-        Ok(Timeline::build(&raw, self.bridge))
+        Ok(Timeline::build_clipped(&raw, self.bridge, start, end))
     }
 
     /// Fold merged project names into their target, for the timeline as well as the
@@ -581,8 +599,8 @@ impl ActivityTimelineService {
 
 fn source_priority(source: &str) -> u8 {
     match source {
-        "editor" => 0,
-        "ai" => 1,
+        "editor" | "editor_active_v1" => 0,
+        "ai" | "ai_tool_v1" => 1,
         _ => 2,
     }
 }
@@ -780,9 +798,9 @@ pub fn bridge_idle_gaps_with_anchors(
 
     let mut result: Vec<CanonicalInterval> = Vec::new();
     for event in events {
-        let (at, candidate, is_anchor) = match event {
-            Event::Interval(interval) => (interval.start, interval, false),
-            Event::Anchor(anchor) => (anchor.start, anchor, true),
+        let (at, candidate) = match event {
+            Event::Interval(interval) => (interval.start, interval),
+            Event::Anchor(anchor) => (anchor.start, anchor),
         };
         if let Some(previous) = result.last_mut() {
             let gap = at - previous.end;
@@ -802,17 +820,9 @@ pub fn bridge_idle_gaps_with_anchors(
                 // `canonicalize` already resolved ownership; never double-count.
                 previous.end = candidate.start;
             }
-            if is_anchor && gap <= idle_timeout_seconds {
-                // The anchor has done its job by extending the run above.
-                //
-                // It only skips the push when it was actually *within reach* of that
-                // run. Skipping unconditionally — which is what this used to do — meant
-                // that once any run existed, no later anchor could ever open another
-                // one, so every session that resumed after a break with a bare heartbeat
-                // (an editor switch, an agent tool call) was discarded and the clock
-                // never restarted. WakaTime starts a new block there; so does this now.
-                continue;
-            }
+            // Keep a reachable anchor as a zero-length ownership cursor. It contributes
+            // no duration by itself, but if another event follows it, that next gap must
+            // belong to this anchor's project/entity rather than the run before it.
         }
         result.push(candidate);
     }
@@ -891,12 +901,10 @@ fn bridge_by_attendance(
     // separately keeps each decision about the events that actually happened.
     let mut previous_source: Option<String> = None;
     for event in events {
-        let (at, candidate, is_anchor) = match event {
-            Event::Interval(interval) => (interval.start, interval, false),
-            Event::Anchor(anchor) => (anchor.start, anchor, true),
+        let (at, candidate) = match event {
+            Event::Interval(interval) => (interval.start, interval),
+            Event::Anchor(anchor) => (anchor.start, anchor),
         };
-        let mut timeout = idle_timeout_seconds;
-        let mut inserted_handover = false;
         if let Some(previous) = result.last() {
             let previous_source = previous_source.as_deref().unwrap_or(&previous.source);
             let gap = at - previous.end;
@@ -904,7 +912,7 @@ fn bridge_by_attendance(
             // activity — the unattended-run case it exists to catch. A pause with a human
             // on either side is a developer driving an agent, which is ordinary attended
             // work and gets the human timeout.
-            timeout = if is_attended(previous_source) || is_attended(&candidate.source) {
+            let timeout = if is_attended(previous_source) || is_attended(&candidate.source) {
                 idle_timeout_seconds
             } else {
                 agent_idle_timeout_seconds
@@ -930,7 +938,6 @@ fn bridge_by_attendance(
                         ..previous.clone()
                     };
                     result.push(bridged);
-                    inserted_handover = true;
                 }
             }
         }
@@ -951,13 +958,8 @@ fn bridge_by_attendance(
                 // `canonicalize` already resolved ownership; never double-count.
                 previous.end = candidate.start;
             }
-            if is_anchor && !inserted_handover && at - previous.end <= timeout {
-                // The anchor has done its job by extending the run above. It still opens a
-                // run of its own when it was out of bridging reach, which is what lets a
-                // session resume after a break.
-                previous_source = Some(candidate.source);
-                continue;
-            }
+            // Keep reachable anchors as ownership cursors. The final retain removes a
+            // cursor when no later event grows it into a real interval.
         }
         previous_source = Some(candidate.source.clone());
         result.push(candidate);
@@ -995,7 +997,7 @@ fn anchor_interval(anchor: &ActivityInterval) -> CanonicalInterval {
 /// source normalization in `wakaclock_core::heartbeat::normalize_activity_source` has
 /// already folded every emitter into `editor` / `ai` / `other`.
 fn is_attended(source: &str) -> bool {
-    source == "editor"
+    source == "editor" || source == "editor_active_v1"
 }
 
 /// Old desktop clients emitted foreground-app samples before they populated `actor_type`,
@@ -1004,6 +1006,7 @@ fn is_attended(source: &str) -> bool {
 /// because it could be an AI or integration event with no reliable human proof.
 fn is_comparable_editor_interval(interval: &ActivityInterval) -> bool {
     interval.source == "editor"
+        || interval.source == "editor_active_v1"
         || interval.actor_type == ActorType::Human
         || (interval.actor_type == ActorType::Unknown
             && interval
@@ -1039,9 +1042,47 @@ pub struct Timeline {
     /// derived without treating idle bridge time as AI coding.
     pub measured: Vec<CanonicalInterval>,
     pub bridged: Vec<CanonicalInterval>,
+    /// Strict Active v1 duration, derived only from explicit 15-second editor
+    /// leases and completed AI tool intervals. Legacy/WakaTime-compatible rows
+    /// are intentionally excluded from this union.
+    pub active_seconds: f64,
+    pub active_human_seconds: f64,
+    pub active_ai_seconds: f64,
+    pub active_overlap_seconds: f64,
+    /// `measured` when at least one v1 interval exists, `partial` for a range that
+    /// only contains legacy evidence, and `unavailable` for an empty range.
+    pub active_coverage: &'static str,
 }
 
 impl Timeline {
+    pub fn primary_seconds(&self, mode: crate::config::DurationPrimaryMode) -> f64 {
+        match mode {
+            crate::config::DurationPrimaryMode::ActiveV1 if self.active_coverage == "measured" => {
+                self.active_seconds
+            }
+            _ => total_seconds(&self.bridged),
+        }
+    }
+
+    /// Return strict Active v1 metrics clipped to one calendar/reporting range.
+    ///
+    /// A multi-day timeline is built once per request, but summary rows are emitted
+    /// per day. Reusing the range-level fields for every row would duplicate the full
+    /// range in each day, so day-level surfaces must clip the raw evidence first.
+    pub fn active_metrics_in_range(
+        &self,
+        start: f64,
+        end: f64,
+    ) -> (f64, f64, f64, f64, &'static str) {
+        let clipped = self
+            .raw
+            .iter()
+            .cloned()
+            .filter_map(|interval| clip_activity_interval(interval, start, end))
+            .collect::<Vec<_>>();
+        active_metrics(&clipped)
+    }
+
     pub fn build(intervals: &[ActivityInterval], bridge: impl Into<BridgeConfig>) -> Self {
         let bridge = bridge.into();
         let raw = intervals.to_vec();
@@ -1153,6 +1194,13 @@ impl Timeline {
                 }
             }
         };
+        let (
+            active_seconds,
+            active_human_seconds,
+            active_ai_seconds,
+            active_overlap_seconds,
+            active_coverage,
+        ) = active_metrics(&raw);
         Self {
             raw,
             comparable_ranges,
@@ -1168,7 +1216,69 @@ impl Timeline {
             proven_seconds,
             measured,
             bridged,
+            active_seconds,
+            active_human_seconds,
+            active_ai_seconds,
+            active_overlap_seconds,
+            active_coverage,
         }
+    }
+
+    /// Build with original boundary-event timestamps, then clip the resulting
+    /// ownership windows. Clipping anchors before idle-timeout comparison can turn
+    /// a long cross-boundary absence into an apparently short active gap.
+    pub fn build_clipped(
+        intervals: &[ActivityInterval],
+        bridge: impl Into<BridgeConfig>,
+        start: f64,
+        end: f64,
+    ) -> Self {
+        let mut timeline = Self::build(intervals, bridge);
+        timeline.raw = timeline
+            .raw
+            .into_iter()
+            .filter_map(|interval| clip_activity_interval(interval, start, end))
+            .collect();
+        timeline.measured = timeline
+            .measured
+            .into_iter()
+            .filter_map(|interval| clip_canonical_interval(interval, start, end))
+            .collect();
+        timeline.bridged = timeline
+            .bridged
+            .into_iter()
+            .filter_map(|interval| clip_canonical_interval(interval, start, end))
+            .collect();
+        timeline.comparable_ranges = timeline
+            .comparable_ranges
+            .into_iter()
+            .filter_map(|range| clip_range(range, start, end))
+            .collect();
+        timeline.ai_ranges = timeline
+            .ai_ranges
+            .into_iter()
+            .filter_map(|range| clip_range(range, start, end))
+            .collect();
+        timeline.proven_seconds = total_seconds(&timeline.measured);
+        timeline.comparable_seconds = union_ranges(&timeline.comparable_ranges);
+        timeline.ai_measured_seconds = union_ranges(&timeline.ai_ranges);
+        let mut combined = timeline.comparable_ranges.clone();
+        combined.extend(timeline.ai_ranges.iter().copied());
+        timeline.ai_additional_seconds =
+            (union_ranges(&combined) - timeline.comparable_seconds).max(0.0);
+        let (
+            active_seconds,
+            active_human_seconds,
+            active_ai_seconds,
+            active_overlap_seconds,
+            active_coverage,
+        ) = active_metrics(&timeline.raw);
+        timeline.active_seconds = active_seconds;
+        timeline.active_human_seconds = active_human_seconds;
+        timeline.active_ai_seconds = active_ai_seconds;
+        timeline.active_overlap_seconds = active_overlap_seconds;
+        timeline.active_coverage = active_coverage;
+        timeline
     }
 
     /// Measured AI ranges for one stable project identity. This deliberately reads raw
@@ -1249,6 +1359,63 @@ impl Timeline {
         evidence.calculation_version = Some(self.calculation_version);
         evidence
     }
+}
+
+fn clip_range((range_start, range_end): (f64, f64), start: f64, end: f64) -> Option<(f64, f64)> {
+    let clipped = (range_start.max(start), range_end.min(end));
+    (clipped.1 > clipped.0).then_some(clipped)
+}
+
+fn active_metrics(intervals: &[ActivityInterval]) -> (f64, f64, f64, f64, &'static str) {
+    let human = intervals
+        .iter()
+        .filter(|interval| interval.source == "editor_active_v1" && interval.end > interval.start)
+        .map(|interval| (interval.start, interval.end))
+        .collect::<Vec<_>>();
+    let ai = intervals
+        .iter()
+        .filter(|interval| interval.source == "ai_tool_v1" && interval.end > interval.start)
+        .map(|interval| (interval.start, interval.end))
+        .collect::<Vec<_>>();
+    let human_seconds = union_ranges(&human);
+    let ai_seconds = union_ranges(&ai);
+    let mut combined = human.clone();
+    combined.extend(ai.iter().copied());
+    let total = union_ranges(&combined);
+    let overlap = (human_seconds + ai_seconds - total).max(0.0);
+    let coverage = if !human.is_empty() || !ai.is_empty() {
+        "measured"
+    } else if intervals.is_empty() {
+        "unavailable"
+    } else {
+        "partial"
+    };
+    (total, human_seconds, ai_seconds, overlap, coverage)
+}
+
+fn clip_canonical_interval(
+    mut interval: CanonicalInterval,
+    start: f64,
+    end: f64,
+) -> Option<CanonicalInterval> {
+    let (clipped_start, clipped_end) = clip_range((interval.start, interval.end), start, end)?;
+    interval.start = clipped_start;
+    interval.end = clipped_end;
+    Some(interval)
+}
+
+fn clip_activity_interval(
+    mut interval: ActivityInterval,
+    start: f64,
+    end: f64,
+) -> Option<ActivityInterval> {
+    if interval.end <= interval.start {
+        return (interval.start >= start && interval.start < end).then_some(interval);
+    }
+    let (clipped_start, clipped_end) = clip_range((interval.start, interval.end), start, end)?;
+    interval.start = clipped_start;
+    interval.end = clipped_end;
+    Some(interval)
 }
 
 pub fn total_seconds(intervals: &[CanonicalInterval]) -> f64 {
@@ -1369,8 +1536,8 @@ impl EvidenceSplit {
         for interval in bridged {
             let seconds = interval.end - interval.start;
             match interval.source.as_str() {
-                "editor" => split.attended_seconds += seconds,
-                "ai" => split.agent_seconds += seconds,
+                "editor" | "editor_active_v1" => split.attended_seconds += seconds,
+                "ai" | "ai_tool_v1" => split.agent_seconds += seconds,
                 _ => split.other_seconds += seconds,
             }
         }
@@ -1520,6 +1687,77 @@ mod tests {
 
         assert_eq!(timeline.comparable_seconds, 60.0);
         assert_eq!(total_seconds(&timeline.bridged), 60.0);
+    }
+
+    #[test]
+    fn active_v1_unions_human_and_ai_and_reports_overlap_once() {
+        let human = ActivityInterval {
+            source: "editor_active_v1".to_string(),
+            actor_type: ActorType::Human,
+            actor_confidence: 1.0,
+            ..interval("human-active", "editor", 0.0, 30.0)
+        };
+        let ai = ActivityInterval {
+            source: "ai_tool_v1".to_string(),
+            actor_type: ActorType::AiVerified,
+            actor_confidence: 1.0,
+            ..interval("ai-active", "ai", 20.0, 60.0)
+        };
+        let timeline = Timeline::build(&[human, ai], BridgeConfig::single(900.0));
+
+        assert_eq!(timeline.active_seconds, 60.0);
+        assert_eq!(timeline.active_human_seconds, 30.0);
+        assert_eq!(timeline.active_ai_seconds, 40.0);
+        assert_eq!(timeline.active_overlap_seconds, 10.0);
+        assert_eq!(timeline.active_coverage, "measured");
+    }
+
+    #[test]
+    fn active_v1_keeps_editor_lease_when_line_authorship_is_unknown() {
+        let unknown_editor = ActivityInterval {
+            source: "editor_active_v1".to_string(),
+            actor_type: ActorType::Unknown,
+            actor_confidence: 0.0,
+            ..interval("mixed-editor", "other", 0.0, 15.0)
+        };
+
+        let timeline = Timeline::build(&[unknown_editor], BridgeConfig::single(900.0));
+
+        assert_eq!(timeline.active_seconds, 15.0);
+        assert_eq!(timeline.active_human_seconds, 15.0);
+        assert_eq!(timeline.active_ai_seconds, 0.0);
+        assert_eq!(timeline.active_coverage, "measured");
+    }
+
+    #[test]
+    fn active_v1_metrics_can_be_clipped_per_day_without_repeating_the_range() {
+        let human = ActivityInterval {
+            source: "editor_active_v1".to_string(),
+            actor_type: ActorType::Human,
+            actor_confidence: 1.0,
+            ..interval("human-day-1", "editor", 86_390.0, 86_400.0)
+        };
+        let ai = ActivityInterval {
+            source: "ai_tool_v1".to_string(),
+            actor_type: ActorType::AiVerified,
+            actor_confidence: 1.0,
+            ..interval("ai-day-2", "ai", 86_410.0, 86_430.0)
+        };
+        let timeline = Timeline::build(&[human, ai], BridgeConfig::single(900.0));
+
+        let day_one = timeline.active_metrics_in_range(86_000.0, 86_400.0);
+        assert_eq!(day_one.0, 10.0);
+        assert_eq!(day_one.1, 10.0);
+        assert_eq!(day_one.2, 0.0);
+        assert_eq!(day_one.3, 0.0);
+        assert_eq!(day_one.4, "measured");
+
+        let day_two = timeline.active_metrics_in_range(86_400.0, 86_800.0);
+        assert_eq!(day_two.0, 20.0);
+        assert_eq!(day_two.1, 0.0);
+        assert_eq!(day_two.2, 20.0);
+        assert_eq!(day_two.3, 0.0);
+        assert_eq!(day_two.4, "measured");
     }
 
     #[test]
@@ -1824,6 +2062,50 @@ mod tests {
         let bridged = bridge_idle_gaps_with_anchors(canonical, &[anchor("tail", 300.0)], 900.0);
         assert_eq!(total_seconds(&bridged), 300.0);
         assert_eq!(bridged.last().unwrap().end, 300.0);
+    }
+
+    #[test]
+    fn each_anchor_owns_the_gap_after_its_project_switch() {
+        let anchors = [
+            ActivityInterval {
+                project: Some("one".to_string()),
+                ..anchor("one", 0.0)
+            },
+            ActivityInterval {
+                project: Some("two".to_string()),
+                ..anchor("two", 600.0)
+            },
+            ActivityInterval {
+                project: Some("three".to_string()),
+                ..anchor("three", 1_200.0)
+            },
+        ];
+
+        let bridged = bridge_idle_gaps_with_anchors(Vec::new(), &anchors, 900.0);
+
+        assert_eq!(bridged.len(), 2);
+        assert_eq!(bridged[0].project.as_deref(), Some("one"));
+        assert_eq!((bridged[0].start, bridged[0].end), (0.0, 600.0));
+        assert_eq!(bridged[1].project.as_deref(), Some("two"));
+        assert_eq!((bridged[1].start, bridged[1].end), (600.0, 1_200.0));
+    }
+
+    #[test]
+    fn clipping_does_not_shorten_a_cross_boundary_idle_gap() {
+        let raw = vec![anchor("before", -840.0), anchor("after", 840.0)];
+
+        let timeline = Timeline::build_clipped(&raw, 900.0, 0.0, 86_400.0);
+
+        assert_eq!(total_seconds(&timeline.bridged), 0.0);
+    }
+
+    #[test]
+    fn clipping_keeps_the_in_range_part_of_a_real_session() {
+        let raw = vec![anchor("before", -300.0), anchor("after", 300.0)];
+
+        let timeline = Timeline::build_clipped(&raw, 900.0, 0.0, 86_400.0);
+
+        assert_eq!(total_seconds(&timeline.bridged), 300.0);
     }
 
     #[test]

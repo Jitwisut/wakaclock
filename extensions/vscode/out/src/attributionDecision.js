@@ -72,7 +72,7 @@ function decideAttribution(input) {
             (positive(input.human_lines_added) || positive(input.human_lines_deleted))) {
             return reject("ai_contains_human_lines");
         }
-        if (explicit === "unknown" && (aiEvidence || humanEvidence) && !ambiguousLines) {
+        if (explicit === "unknown" && (aiEvidence || input.positive_editor_evidence === true || positive(input.human_lines_added) || positive(input.human_lines_deleted)) && !ambiguousLines) {
             return reject("unknown_contains_positive_evidence");
         }
         actorType = explicit;

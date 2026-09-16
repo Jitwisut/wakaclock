@@ -798,6 +798,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
     };
     let has_ai_metadata = has_legacy_ai_claim || explicit_actor_type.is_some_and(ActorType::is_ai);
     let positive_editor_evidence = !has_ai_metadata
+        && explicit_actor_type != Some(ActorType::Unknown)
         && (p.is_write == Some(true)
             || p.activity_segments.iter().any(|segment| {
                 segment.source.as_deref().is_some_and(|source| {
@@ -1211,6 +1212,22 @@ mod tests {
         assert!(heartbeat.ai_model.is_none());
         assert_eq!(heartbeat.ai_source.as_deref(), Some("observer"));
         heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn explicit_unknown_editor_write_does_not_infer_human_authorship() {
+        let payload: HeartbeatPayload = serde_json::from_value(serde_json::json!({
+            "entity": "file.rs", "entity_type": "file", "time": 1789171200.0,
+            "is_write": true, "actor_type": "unknown", "chars_added": 3
+        }))
+        .unwrap();
+        let heartbeat = payload_to_heartbeat(payload, Uuid::new_v4()).unwrap();
+        assert_eq!(
+            heartbeat.actor_type,
+            wakaclock_core::heartbeat::ActorType::Unknown
+        );
+        assert_eq!(heartbeat.chars_added, Some(3));
+        assert_eq!(heartbeat.unattributed_lines_added, None);
     }
 
     #[test]

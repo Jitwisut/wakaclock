@@ -47,7 +47,7 @@ use wakaclock_core::{
     git,
     heartbeat::{
         resolve_attribution, union_activity_seconds, ActivitySegment, ActorType, AttributionInput,
-        Category, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
+        Category, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
     },
     queue::Queue,
 };
@@ -182,6 +182,10 @@ enum Commands {
 
         #[arg(long)]
         active_seconds: Option<f64>,
+
+        /// Original event time as Unix seconds. Retries must preserve this value.
+        #[arg(long)]
+        time: Option<f64>,
 
         /// Stable transport identity. Retries must reuse this value.
         #[arg(long)]
@@ -649,6 +653,8 @@ struct ExtraHeartbeatInput {
     #[serde(default)]
     active_seconds: Option<f64>,
     #[serde(default)]
+    time: Option<f64>,
+    #[serde(default)]
     heartbeat_id: Option<String>,
     #[serde(default)]
     activity_segments: Vec<ActivitySegment>,
@@ -1020,6 +1026,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             paste_same_workspace_actions,
             paste_external_or_unknown_actions,
             active_seconds,
+            time,
             heartbeat_id,
             activity_segments,
             actor_type,
@@ -1100,6 +1107,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 paste_same_workspace_actions,
                 paste_external_or_unknown_actions,
                 active_seconds,
+                time,
                 heartbeat_id,
                 activity_segments: parsed_activity_segments.unwrap_or_default(),
                 actor_type,
@@ -1393,21 +1401,51 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             buffered_seconds: 0.0,
                             agent_health: None,
                             covered_intervals: vec![],
+                            active_intervals: vec![],
                             last_increment_seconds: None,
                             last_increment_source: None,
                             discarded_seconds: 0.0,
+                            active_seconds: None,
+                            active_coverage: None,
+                            wakatime_compatible_seconds: None,
                         },
                         Some(error.to_string()),
                     ),
                 };
             let queue = Queue::open()?;
+            let queue_scope = api_client.queue_scope();
             let delivery_failure = wakaclock_core::api_client::ApiClient::last_delivery_failure();
-            let queued_segments = queue.queued_segments_for_day(timezone.as_deref())?;
+            let queued_segments =
+                queue.queued_segments_for_day_scoped(timezone.as_deref(), &queue_scope)?;
+            let queued_heartbeats = queue.len_scoped(&queue_scope).unwrap_or(0);
             let queued_seconds = union_activity_seconds(&queued_segments);
-            let confirmed_seconds = snapshot.confirmed_seconds.unwrap_or(snapshot.total_seconds);
+            let queued_active_segments = queued_segments
+                .iter()
+                .filter(|segment| is_strict_active_source(segment.source.as_deref()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let queued_active_seconds = union_activity_seconds(&queued_active_segments);
+            let active_confirmed_seconds = snapshot
+                .active_seconds
+                .filter(|_| snapshot.active_coverage.as_deref() == Some("measured"));
+            let active_primary = active_confirmed_seconds.is_some();
+            let confirmed_seconds = active_confirmed_seconds
+                .or(snapshot.confirmed_seconds)
+                .unwrap_or(snapshot.total_seconds);
             snapshot.confirmed_seconds = Some(confirmed_seconds);
-            snapshot.queued_seconds = queued_seconds;
-            if !snapshot.covered_intervals.is_empty() {
+            let displayed_queued_seconds = if active_primary {
+                queued_active_seconds
+            } else {
+                queued_seconds
+            };
+            snapshot.queued_seconds = displayed_queued_seconds;
+            if active_primary {
+                // The server's raw Active intervals and local queued Active intervals
+                // are unioned together. This handles both offline activity and the
+                // crash window after an accepted response but before local deletion.
+                snapshot.total_seconds =
+                    active_seconds_with_queued(&snapshot.active_intervals, &queued_active_segments);
+            } else if !snapshot.covered_intervals.is_empty() {
                 snapshot.covered_intervals.extend(queued_segments);
                 snapshot.total_seconds = union_activity_seconds(&snapshot.covered_intervals);
             } else {
@@ -1421,7 +1459,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 "last_scan_at": agent_report.last_scan_at,
                 "last_heartbeat_at": agent_report.last_heartbeat_at,
                 "last_error": agent_report.last_error,
-                "queue_count": queue.len().unwrap_or(0),
+                "queue_count": queued_heartbeats,
             });
             if snapshot.agent_health.is_none() {
                 snapshot.agent_health = Some(agent_health);
@@ -1431,15 +1469,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "{}",
                     serde_json::to_string(&serde_json::json!({
                     "confirmed_seconds": confirmed_seconds,
-                        "queued_seconds": queued_seconds,
+                        "queued_seconds": displayed_queued_seconds,
                         "total_seconds": snapshot.total_seconds,
                         "human_readable": snapshot.human_readable,
                         "heartbeat_count": snapshot.heartbeat_count,
                         "last_heartbeat_at": snapshot.last_heartbeat_at,
                     "covered_intervals": snapshot.covered_intervals,
+                    "active_intervals": snapshot.active_intervals,
                     "last_increment_seconds": snapshot.last_increment_seconds,
                     "last_increment_source": snapshot.last_increment_source,
                     "discarded_seconds": snapshot.discarded_seconds,
+                    "active_seconds": snapshot.active_seconds,
+                    "active_coverage": snapshot.active_coverage,
+                    "wakatime_compatible_seconds": snapshot.wakatime_compatible_seconds,
                     "timezone": snapshot.timezone,
                     "agent_health": snapshot.agent_health,
                     "error": server_error,
@@ -1447,7 +1489,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     // still a backlog, and `queued_seconds` scoped to today reports 0 for
                     // it — which is exactly how a day and a half of refused heartbeats
                     // stayed invisible.
-                    "queued_heartbeats": queue.len().unwrap_or(0),
+                    "queued_heartbeats": queued_heartbeats,
+                    "queued_active_seconds": queued_active_seconds,
                     "delivery_failure": delivery_failure,
                     }))?
                 );
@@ -1458,11 +1501,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Today: {}", snapshot.human_readable);
                 println!("Total seconds: {}", snapshot.total_seconds);
                 println!("Confirmed seconds: {}", confirmed_seconds);
-                println!("Queued seconds: {}", queued_seconds);
+                println!("Queued seconds: {}", displayed_queued_seconds);
                 println!("Heartbeats: {}", snapshot.heartbeat_count);
                 // The whole point of the lines below: an expired entitlement and a broken
                 // hook look identical from the dashboard. Say which one it is.
-                let queued_heartbeats = queue.len().unwrap_or(0);
                 if queued_heartbeats > 0 {
                     println!(
                         "Queued heartbeats: {queued_heartbeats} (not yet accepted by the server)"
@@ -1993,6 +2035,16 @@ fn ai_discovery_context() -> Result<DiscoveryContext, Box<dyn Error>> {
     })
 }
 
+fn sort_transcript_paths_newest_first(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| {
+        let left_modified = fs::metadata(left).and_then(|meta| meta.modified()).ok();
+        let right_modified = fs::metadata(right).and_then(|meta| meta.modified()).ok();
+        right_modified
+            .cmp(&left_modified)
+            .then_with(|| right.cmp(left))
+    });
+}
+
 fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     // Keep the human-friendly discovery details below, but take health/runtime
     // state from the same typed collector used by `ai doctor` and the extension
@@ -2003,13 +2055,14 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     let mut reports = Vec::new();
     for (id, parser) in supported_ai_parsers() {
         let discoveries = parser.discover_sources(&context);
-        let paths: Vec<PathBuf> = discoveries
+        let mut paths: Vec<PathBuf> = discoveries
             .iter()
             .filter_map(|result| match &result.state {
                 DiscoveryState::TranscriptFound { path } => Some(path.clone()),
                 _ => None,
             })
             .collect();
+        sort_transcript_paths_newest_first(&mut paths);
         let result = discoveries
             .into_iter()
             .find(|result| !matches!(result.state, DiscoveryState::TranscriptFound { .. }))
@@ -2645,10 +2698,8 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     RuntimeHealth::Degraded
                 } else if service_running == Some(true) {
                     RuntimeHealth::Healthy
-                } else if service_running.is_none() {
-                    RuntimeHealth::Degraded
                 } else {
-                    RuntimeHealth::Idle
+                    RuntimeHealth::Degraded
                 };
                 adapters.push(AdapterFreshnessV2 {
                     agent: id.to_string(),
@@ -2717,10 +2768,8 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
         RuntimeHealth::Degraded
     } else if service_running == Some(true) {
         RuntimeHealth::Healthy
-    } else if service_running.is_none() {
-        RuntimeHealth::Degraded
     } else {
-        RuntimeHealth::Idle
+        RuntimeHealth::Degraded
     };
     Ok(AiDiagnosticsReportV2 {
         schema_version: wakaclock_core::ai::AI_DIAGNOSTICS_SCHEMA_VERSION_V2,
@@ -3661,8 +3710,8 @@ struct AiIdentityRepairCandidateReport {
     identity_message_id: Option<String>,
     tool_event_id: Option<String>,
     occurred_at: chrono::DateTime<chrono::Utc>,
-    lines_added: u32,
-    lines_deleted: u32,
+    lines_added: Option<u32>,
+    lines_deleted: Option<u32>,
     has_reference: bool,
 }
 
@@ -3680,6 +3729,7 @@ struct AiIdentityRepairCliReport {
     heartbeat_count: u64,
     lines_added: u64,
     lines_deleted: u64,
+    line_measurement_missing_events: u64,
     confirmed_candidates: u64,
     candidates_with_reference: u64,
     status_counts: BTreeMap<String, u64>,
@@ -3949,8 +3999,8 @@ async fn run_ai_identity_repair(
                 identity_message_id: event.identity_message_id.clone(),
                 tool_event_id: event.tool_event_id.clone(),
                 occurred_at: event.occurred_at,
-                lines_added: event.lines_added.unwrap_or(0),
-                lines_deleted: event.lines_deleted.unwrap_or(0),
+                lines_added: event.lines_added,
+                lines_deleted: event.lines_deleted,
                 has_reference,
             });
         }
@@ -3982,6 +4032,10 @@ async fn run_ai_identity_repair(
         heartbeat_count: events_by_id.len() as u64,
         lines_added,
         lines_deleted,
+        line_measurement_missing_events: events_by_id
+            .values()
+            .filter(|event| event.lines_added.is_none() || event.lines_deleted.is_none())
+            .count() as u64,
         confirmed_candidates,
         candidates_with_reference,
         status_counts,
@@ -4002,6 +4056,10 @@ async fn run_ai_identity_repair(
         println!(
             "Lines added / deleted: {} / {}",
             report.lines_added, report.lines_deleted
+        );
+        println!(
+            "Events with unavailable line measurements: {}",
+            report.line_measurement_missing_events
         );
         println!(
             "Confirmed identity candidates: {}",
@@ -4122,13 +4180,7 @@ async fn run_ai_sync(
         // path as a stable tie-breaker. This keeps Codex's current Desktop session
         // visible even when an older Claude/Codex archive is large.
         let mut transcript_paths = transcript_paths;
-        transcript_paths.sort_by(|left, right| {
-            let left_modified = fs::metadata(left).and_then(|meta| meta.modified()).ok();
-            let right_modified = fs::metadata(right).and_then(|meta| meta.modified()).ok();
-            right_modified
-                .cmp(&left_modified)
-                .then_with(|| right.cmp(left))
-        });
+        sort_transcript_paths_newest_first(&mut transcript_paths);
 
         for transcript_path in transcript_paths {
             // Resume from the saved cursor only if it still points at the same file — a
@@ -4983,7 +5035,10 @@ async fn run_ai_tool_after(
     let occurred_at = chrono::Utc::now();
     let elapsed_seconds =
         (occurred_at - before.started_at).num_milliseconds().max(0) as f64 / 1000.0;
-    let tool_active_seconds = elapsed_seconds.min(MAX_ACTIVITY_GAP_SECONDS);
+    // A completed tool operation has explicit start/end evidence. Preserve its
+    // observed wall-clock duration up to the safety bound; the old 120-second
+    // cap was a heartbeat delivery rule and silently undercounted long patches.
+    let tool_active_seconds = elapsed_seconds.min(MAX_AI_TOOL_DURATION_SECONDS);
     let inputs: Vec<GenericAiEventInput> = changes
         .iter()
         .map(|change| tool_change_input(&before, &input, change, occurred_at))
@@ -5743,6 +5798,9 @@ pub(crate) fn build_ai_heartbeat(
             segment_id: format!("ai:{}:segment", event.event_id),
             start: (heartbeat.time - active_seconds).max(0.0),
             end: heartbeat.time,
+            // Transcript replay has only an observed edit timestamp and the legacy
+            // activity cadence; the broker upgrades this to `ai_tool_v1` only when a
+            // completed tool start/end event is present.
             source: Some("ai".to_string()),
         });
     }
@@ -5895,11 +5953,13 @@ fn build_heartbeat(
             || extra.ai_lines_deleted.is_some_and(|value| value > 0)
             || extra.actor_type.is_some_and(ActorType::is_ai);
         let positive_editor_evidence = !has_ai_metadata
+            && extra.actor_type != Some(ActorType::Unknown)
             && (is_write
                 || extra.activity_segments.iter().any(|segment| {
                     segment.source.as_deref().is_some_and(|source| {
                         source.eq_ignore_ascii_case("human")
                             || source.eq_ignore_ascii_case("editor")
+                            || source.eq_ignore_ascii_case("editor_active_v1")
                     })
                 }));
         let attribution = resolve_attribution(AttributionInput {
@@ -5938,6 +5998,10 @@ fn build_heartbeat(
         heartbeat.paste_same_workspace_actions = extra.paste_same_workspace_actions;
         heartbeat.paste_external_or_unknown_actions = extra.paste_external_or_unknown_actions;
         heartbeat.active_seconds = extra.active_seconds;
+        if let Some(time) = extra.time {
+            heartbeat.time = time;
+            heartbeat.date = Heartbeat::date_from_time(time);
+        }
         heartbeat.heartbeat_id = extra
             .heartbeat_id
             .or_else(|| Some(Uuid::new_v4().to_string()));
@@ -5984,12 +6048,13 @@ fn ensure_activity_segment(heartbeat: &mut Heartbeat) {
     if !heartbeat.activity_segments.is_empty() {
         return;
     }
-    // A legacy client may still send one large `active_seconds` value. It is not split
-    // into a run of apparently-valid 120-second intervals — that would let one heartbeat
-    // manufacture its own idle time, which is exactly what the strict timeline removes.
-    // But it is no longer discarded either: dropping it made the entire heartbeat worth
-    // zero seconds, silently. Keep the trailing window this heartbeat can actually prove
-    // and let the server's idle bridging recover the rest from neighbouring evidence.
+    // A legacy client may still send one large `active_seconds` value. Keep only the
+    // trailing window this heartbeat can prove. Splitting the claim into adjacent
+    // 120-second segments would make one heartbeat manufacture an arbitrarily long
+    // session, which is exactly the idle inflation this evidence boundary prevents.
+    // The original claim remains in `active_seconds_claimed` for diagnostics; the
+    // canonical timeline reads this single bounded segment and may bridge only when a
+    // neighbouring heartbeat independently vouches for the pause.
     let Some(raw_seconds) = heartbeat.active_seconds.filter(|value| *value > 0.0) else {
         return;
     };
@@ -6011,20 +6076,12 @@ fn ensure_activity_segment(heartbeat: &mut Heartbeat) {
     } else {
         "editor".to_string()
     });
-    let start = (heartbeat.time - seconds).max(0.0);
-    let mut cursor = start;
-    let mut index = 0usize;
-    while cursor < heartbeat.time {
-        let end = (cursor + MAX_ACTIVITY_GAP_SECONDS).min(heartbeat.time);
-        heartbeat.activity_segments.push(ActivitySegment {
-            segment_id: format!("{base}:segment:{index}"),
-            start: cursor,
-            end,
-            source: source.clone(),
-        });
-        cursor = end;
-        index += 1;
-    }
+    heartbeat.activity_segments.push(ActivitySegment {
+        segment_id: format!("{base}:legacy-segment"),
+        start: (heartbeat.time - seconds).max(0.0),
+        end: heartbeat.time,
+        source,
+    });
 }
 
 fn normalize_entity(entity: &str) -> Result<String, Box<dyn Error>> {
@@ -6130,6 +6187,25 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
+fn is_strict_active_source(source: Option<&str>) -> bool {
+    matches!(source, Some("editor_active_v1" | "ai_tool_v1"))
+}
+
+/// Union strict Active evidence from the server and the local queue. A heartbeat may
+/// remain in SQLite after the server accepted it (process crash between response and
+/// delete), so this must union ranges rather than add the two scalar totals. Legacy
+/// queued heartbeats remain visible through queue depth but cannot inflate an Active
+/// total without a v1 evidence marker.
+fn active_seconds_with_queued(server: &[ActivitySegment], queued: &[ActivitySegment]) -> f64 {
+    let intervals = server
+        .iter()
+        .chain(queued.iter())
+        .filter(|segment| is_strict_active_source(segment.source.as_deref()))
+        .cloned()
+        .collect::<Vec<_>>();
+    union_activity_seconds(&intervals)
+}
+
 #[cfg(test)]
 mod generic_ai_ingress_tests {
     use super::*;
@@ -6212,6 +6288,60 @@ mod generic_ai_ingress_tests {
             editor: None,
             topology: None,
         }
+    }
+
+    #[test]
+    fn active_queue_union_ignores_legacy_and_deduplicates_replay() {
+        let server = vec![ActivitySegment {
+            segment_id: "accepted".to_string(),
+            start: 0.0,
+            end: 420.0,
+            source: Some("editor_active_v1".to_string()),
+        }];
+        let queued = vec![
+            ActivitySegment {
+                segment_id: "replayed".to_string(),
+                start: 0.0,
+                end: 420.0,
+                source: Some("editor_active_v1".to_string()),
+            },
+            ActivitySegment {
+                segment_id: "legacy".to_string(),
+                start: 420.0,
+                end: 540.0,
+                source: None,
+            },
+            ActivitySegment {
+                segment_id: "new-active".to_string(),
+                start: 540.0,
+                end: 555.0,
+                source: Some("editor_active_v1".to_string()),
+            },
+        ];
+
+        assert_eq!(active_seconds_with_queued(&server, &queued), 435.0);
+    }
+
+    #[test]
+    fn legacy_active_seconds_keeps_only_one_trailing_evidence_window() {
+        let mut heartbeat = Heartbeat::new(
+            Uuid::nil(),
+            "/workspace/src/lib.rs".to_string(),
+            EntityType::File,
+            "test".to_string(),
+        );
+        heartbeat.time = 1_000.0;
+        heartbeat.heartbeat_id = Some("legacy-heartbeat".to_string());
+        heartbeat.active_seconds = Some(600.0);
+
+        ensure_activity_segment(&mut heartbeat);
+
+        assert_eq!(heartbeat.activity_segments.len(), 1);
+        let segment = &heartbeat.activity_segments[0];
+        assert_eq!(segment.start, 880.0);
+        assert_eq!(segment.end, 1_000.0);
+        assert_eq!(segment.end - segment.start, MAX_ACTIVITY_GAP_SECONDS);
+        assert_eq!(segment.source.as_deref(), Some("editor"));
     }
 
     #[test]

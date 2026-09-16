@@ -43,6 +43,20 @@ pub struct StatsData {
     pub ai_additional_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calculation_version: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_overlap_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_coverage: Option<&'static str>,
     /// Additive: how much of `total_seconds` was measured rather than inferred, and
     /// how much was attended by a human rather than produced by an agent.
     pub evidence: crate::services::activity_timeline::EvidenceSplit,

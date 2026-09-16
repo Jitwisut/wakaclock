@@ -133,6 +133,11 @@ function AiStatsPanel() {
                   Attribution coverage: {coverageStatus.replaceAll('_', ' ')}
                 </p>
                 <p className="text-muted-foreground mt-1 text-xs">
+                  Coverage describes received events, not all coding activity. Line totals show
+                  measured changes; missing measurements are marked in the agent table. These
+                  changes are not retained code or a productivity score.
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
                   {stats.coverage
                     ? `Event evidence: ${formatCompactNumber(knownHeartbeatCount ?? 0)} of ${formatCompactNumber(stats.coverage.heartbeat_denominator)} heartbeats have a known actor.`
                     : 'Event evidence counts are unavailable on this server version.'}
@@ -145,7 +150,10 @@ function AiStatsPanel() {
               </div>
 
               {stats.identity && (
-                <section aria-label="AI identity coverage" className="rounded-md border p-3 text-sm">
+                <section
+                  aria-label="AI identity coverage"
+                  className="rounded-md border p-3 text-sm"
+                >
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <p className="font-medium">AI identity coverage</p>
                     <p className="text-muted-foreground text-xs">

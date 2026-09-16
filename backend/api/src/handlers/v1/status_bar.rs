@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Serialize)]
 pub struct StatusBarResponse {
-    /// Server-confirmed time. `total_seconds` remains for backwards compatibility;
-    /// the additive fields let newer clients display queue/buffer state separately.
+    /// Server-confirmed time. `total_seconds` follows the configured primary mode;
+    /// `wakatime_compatible_seconds` remains available for an explicit comparison.
     pub total_seconds: f64,
     pub confirmed_seconds: f64,
     pub queued_seconds: f64,
@@ -27,6 +27,11 @@ pub struct StatusBarResponse {
     pub agent_health: Option<serde_json::Value>,
     #[serde(default)]
     pub covered_intervals: Vec<CoveredInterval>,
+    /// Raw strict Active v1 intervals. Unlike `covered_intervals`, these never include
+    /// idle-bridge time, so a client can union them with its still-queued intervals
+    /// without counting a crash/retry twice.
+    #[serde(default)]
+    pub active_intervals: Vec<CoveredInterval>,
     #[serde(default)]
     pub last_increment_seconds: Option<f64>,
     #[serde(default)]
@@ -43,6 +48,24 @@ pub struct StatusBarResponse {
     pub ai_additional_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calculation_version: Option<&'static str>,
+    /// Strict Active v1 metrics. These stay additive so clients can choose Active only
+    /// when coverage is measured while older clients keep their legacy field contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_overlap_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_coverage: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wakatime_compatible_seconds: Option<f64>,
     /// How much of `total_seconds` a client actually measured versus how much the idle
     /// bridge inferred, and how much was attended versus agent-produced. On real data
     /// the inferred half is the larger one; nothing used to say so.
@@ -130,10 +153,25 @@ pub async fn today(
             let evidence = timeline
                 .evidence()
                 .with_ai_session_seconds(union_ranges(&ai_session_ranges));
+            let total = timeline
+                .primary_seconds(state.activity_timeline_service.bridge_config().primary_mode);
             let canonical = timeline.bridged;
-            let total = total_seconds(&canonical);
+            let wakatime_total = total_seconds(&canonical);
             let covered_intervals = canonical
                 .iter()
+                .map(|interval| CoveredInterval {
+                    segment_id: interval.segment_id.clone(),
+                    start: interval.start,
+                    end: interval.end,
+                    source: interval.source.clone(),
+                })
+                .collect::<Vec<_>>();
+            let active_intervals = raw_intervals
+                .iter()
+                .filter(|interval| {
+                    matches!(interval.source.as_str(), "editor_active_v1" | "ai_tool_v1")
+                        && interval.end > interval.start
+                })
                 .map(|interval| CoveredInterval {
                     segment_id: interval.segment_id.clone(),
                     start: interval.start,
@@ -153,6 +191,7 @@ pub async fn today(
                 last_heartbeat_at: row.last_heartbeat_at,
                 agent_health: None,
                 covered_intervals,
+                active_intervals,
                 last_increment_seconds: last.map(|interval| interval.end - interval.start),
                 last_increment_source: last.map(|interval| interval.source.clone()),
                 discarded_seconds: (raw_seconds - total).max(0.0),
@@ -160,6 +199,18 @@ pub async fn today(
                 ai_measured_seconds: evidence.ai_measured_seconds,
                 ai_additional_seconds: evidence.ai_additional_seconds,
                 calculation_version: evidence.calculation_version,
+                active_seconds: Some(timeline.active_seconds),
+                active_human_seconds: Some(timeline.active_human_seconds),
+                active_human_only_seconds: Some(
+                    (timeline.active_human_seconds - timeline.active_overlap_seconds).max(0.0),
+                ),
+                active_ai_only_seconds: Some(
+                    (timeline.active_ai_seconds - timeline.active_overlap_seconds).max(0.0),
+                ),
+                active_ai_seconds: Some(timeline.active_ai_seconds),
+                active_overlap_seconds: Some(timeline.active_overlap_seconds),
+                active_coverage: Some(timeline.active_coverage),
+                wakatime_compatible_seconds: Some(wakatime_total),
                 evidence,
             })
         }
@@ -174,6 +225,7 @@ pub async fn today(
             last_heartbeat_at: None,
             agent_health: None,
             covered_intervals: vec![],
+            active_intervals: vec![],
             last_increment_seconds: None,
             last_increment_source: None,
             discarded_seconds: 0.0,
@@ -181,6 +233,14 @@ pub async fn today(
             ai_measured_seconds: None,
             ai_additional_seconds: None,
             calculation_version: None,
+            active_seconds: None,
+            active_human_seconds: None,
+            active_human_only_seconds: None,
+            active_ai_only_seconds: None,
+            active_ai_seconds: None,
+            active_overlap_seconds: None,
+            active_coverage: None,
+            wakatime_compatible_seconds: None,
             evidence: crate::services::activity_timeline::EvidenceSplit::default(),
         }),
     })

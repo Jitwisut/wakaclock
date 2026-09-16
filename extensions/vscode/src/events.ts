@@ -12,6 +12,7 @@ export function registerEventSubscriptions(
   configService: WakaclockConfigService,
   bufferManager: Pick<
     HeartbeatBufferManager,
+    | "forgetDocument"
     | "recordEditorSwitch"
     | "recordSave"
     | "recordTextChange"
@@ -21,6 +22,7 @@ export function registerEventSubscriptions(
     | "getBufferedSegments"
     | "flushCurrentEditor"
     | "flushDueBuffers"
+    | "flushAllBuffers"
   >,
   logger: Logger
 ): void {
@@ -36,6 +38,7 @@ export function registerEventSubscriptions(
   }
 
   context.subscriptions.push(
+    vscode.workspace.onDidCloseTextDocument((document) => bufferManager.forgetDocument(document)),
     vscode.workspace.onDidChangeTextDocument((event) => {
       const activeSelection =
         vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
@@ -196,8 +199,6 @@ export function registerEventSubscriptions(
     {
       dispose: () => {
         clearInterval(timer);
-        // VS Code shutdown: flush what is already measured instead of discarding it.
-        void bufferManager.flushDueBuffers("shutdown");
       }
     }
   );

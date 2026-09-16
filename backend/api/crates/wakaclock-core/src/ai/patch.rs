@@ -14,8 +14,8 @@ pub struct LineDelta {
 impl LineDelta {
     fn add_line(&mut self, line: &str) {
         match line.as_bytes().first() {
-            Some(b'+') if !line.starts_with("+++") => self.added += 1,
-            Some(b'-') if !line.starts_with("---") => self.deleted += 1,
+            Some(b'+') => self.added += 1,
+            Some(b'-') => self.deleted += 1,
             _ => {}
         }
     }
@@ -53,8 +53,19 @@ pub fn count_structured_patch_lines(hunks: &[StructuredPatchHunk]) -> LineDelta 
 /// is otherwise standard unified diff.
 pub fn count_unified_diff_lines(diff_text: &str) -> LineDelta {
     let mut delta = LineDelta::default();
+    let mut in_hunk = false;
     for line in diff_text.lines() {
-        if line.starts_with("@@") || line.starts_with("\\ No newline") {
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+            continue;
+        }
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+        if (!in_hunk && (line.starts_with("--- ") || line.starts_with("+++ ")))
+            || line.starts_with("\\ No newline")
+        {
             continue;
         }
         delta.add_line(line);
@@ -78,6 +89,17 @@ pub struct ApplyPatchFileChange {
     pub previous_path: Option<String>,
     pub change_kind: BrokerChangeKind,
     pub delta: LineDelta,
+}
+
+impl ApplyPatchFileChange {
+    /// A bodyless delete proves the operation, not the original file size.
+    pub fn deleted_lines(&self) -> Option<u32> {
+        if self.change_kind == BrokerChangeKind::Delete && self.delta.deleted == 0 {
+            None
+        } else {
+            Some(self.delta.deleted)
+        }
+    }
 }
 
 /// Parses `*** Begin Patch` / `*** Update File: <path>` / `*** Add File: <path>` /
@@ -164,6 +186,42 @@ mod tests {
         let full = format!("{path}{relative}");
         let raw = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("read {full}: {e}"));
         serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {full}: {e}"))
+    }
+
+    #[test]
+    fn body_signs_are_not_headers() {
+        let delta =
+            count_unified_diff_lines("--- a/x\n+++ b/x\n@@ -1 +1 @@\n---counter;\n+++counter;\n");
+        assert_eq!(
+            delta,
+            LineDelta {
+                added: 1,
+                deleted: 1
+            }
+        );
+        let changes = parse_apply_patch(
+            "*** Begin Patch\n*** Update File: x\n@@\n---counter;\n+++counter;\n*** End Patch\n",
+        );
+        assert_eq!(changes[0].delta, delta);
+        let hunks = vec![StructuredPatchHunk {
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: 1,
+            lines: vec!["---counter;".into(), "+++counter;".into()],
+        }];
+        assert_eq!(count_structured_patch_lines(&hunks), delta);
+    }
+
+    #[test]
+    fn bodyless_delete_has_unavailable_magnitude() {
+        let changes = parse_apply_patch("*** Begin Patch\n*** Delete File: x\n*** End Patch\n");
+        assert_eq!(changes[0].deleted_lines(), None);
+        let changes =
+            parse_apply_patch("*** Begin Patch\n*** Delete File: x\n-old\n*** End Patch\n");
+        assert_eq!(changes[0].deleted_lines(), Some(1));
+        let changes = parse_apply_patch("*** Begin Patch\n*** Add File: x\n*** End Patch\n");
+        assert_eq!(changes[0].deleted_lines(), Some(0));
     }
 
     #[test]

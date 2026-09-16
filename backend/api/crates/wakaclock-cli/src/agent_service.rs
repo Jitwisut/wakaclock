@@ -60,21 +60,12 @@ impl AgentLock {
             .open(&path)
             .map_err(|error| error.to_string())?;
 
-        // Keep compatibility with lock files created by older releases, which did
-        // not take an OS lock. A live PID is still authoritative for those files;
-        // once it exits, `try_lock_exclusive` below safely reclaims the same path.
-        let previous_pid = fs::read_to_string(&path)
-            .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok());
+        // The advisory OS lock is the ownership boundary. Do not trust the PID
+        // text before acquiring it: after a crash, the OS may reuse that PID for
+        // an unrelated process, which would otherwise create a false singleton.
+        // PID-only lock files from older releases remain reclaimable when no
+        // broker currently holds the OS lease.
         let current_pid = std::process::id();
-        if previous_pid.is_some_and(|pid| pid != current_pid && process_is_running(pid)) {
-            return Err(format!(
-                "wakaclock agent is already running{}",
-                previous_pid
-                    .map(|pid| format!(" (pid {pid})"))
-                    .unwrap_or_default()
-            ));
-        }
 
         file.try_lock_exclusive().map_err(|error| {
             if error.kind() == std::io::ErrorKind::WouldBlock {
@@ -203,8 +194,52 @@ fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!("{executable} broker run\n")
 }
 
+/// Keep the macOS LaunchAgent executable outside project folders such as
+/// Desktop. macOS can re-scan a freshly rebuilt project binary under a
+/// background launch context and leave the process in dyld before `main`; a
+/// per-user runtime copy gives launchd a stable, user-owned executable path.
+#[cfg(target_os = "macos")]
+fn service_executable_path() -> PathBuf {
+    wakaclock_dir().join("bin").join("wakaclock")
+}
+
+fn service_executable() -> Result<PathBuf, String> {
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let target = service_executable_path();
+        let current_identity = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+        let target_identity = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
+        if current_identity != target_identity {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            let permissions = fs::metadata(&current)
+                .map_err(|error| error.to_string())?
+                .permissions();
+            let temporary = target.with_file_name(format!("wakaclock.tmp-{}", std::process::id()));
+            fs::copy(&current, &temporary).map_err(|error| {
+                format!(
+                    "could not copy wakaclock runtime to {}: {error}",
+                    target.display()
+                )
+            })?;
+            fs::set_permissions(&temporary, permissions).map_err(|error| error.to_string())?;
+            fs::rename(&temporary, &target).map_err(|error| {
+                format!(
+                    "could not activate wakaclock runtime at {}: {error}",
+                    target.display()
+                )
+            })?;
+        }
+        return Ok(target);
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(current)
+}
+
 pub fn install() -> Result<AgentServiceReport, String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = service_executable()?;
     let manifest = manifest_path();
     if let Some(parent) = manifest.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -340,11 +375,10 @@ fn executable_in_manifest(content: &str) -> Option<String> {
     None
 }
 
-/// True when the installed service manifest names an executable path that is not
-/// the binary running this process (compared canonically, so a symlink or a
-/// relative spelling of the same file is not a mismatch). `false` when the
-/// manifest is absent, unparseable, or already current — a missing answer is not
-/// a mismatch.
+/// True when the installed service manifest names an executable path other than
+/// the active service runtime (compared canonically, so a symlink or a relative
+/// spelling of the same file is not a mismatch). `false` when the manifest is
+/// absent, unparseable, or already current — a missing answer is not a mismatch.
 pub fn manifest_points_at_stale_binary() -> bool {
     let Ok(content) = fs::read_to_string(manifest_path()) else {
         return false;
@@ -355,8 +389,19 @@ pub fn manifest_points_at_stale_binary() -> bool {
     let Ok(current) = std::env::current_exe() else {
         return false;
     };
+    #[cfg(target_os = "macos")]
+    let expected = {
+        let installed = service_executable_path();
+        if installed.exists() {
+            installed
+        } else {
+            current.clone()
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let expected = current.clone();
     let canon = |p: &std::path::Path| fs::canonicalize(p).ok();
-    match (canon(std::path::Path::new(&manifest_exe)), canon(&current)) {
+    match (canon(std::path::Path::new(&manifest_exe)), canon(&expected)) {
         (Some(a), Some(b)) => a != b,
         // The manifest path no longer resolves to a real file → definitely stale.
         (None, Some(_)) => true,
@@ -460,17 +505,21 @@ pub fn status() -> AgentServiceReport {
     result
 }
 
-/// Probe the service lock without collapsing an unreadable or malformed lock
-/// into a real `false`. Diagnostics use the error to mark the measurement as
-/// unavailable; the legacy status report keeps its historical best-effort
-/// boolean through `status()`.
+/// Probe the service lock using the OS lease rather than the PID text stored in
+/// it. Malformed or stale PID-only contents are harmless; an unreadable lock
+/// remains an error so diagnostics can mark the measurement unavailable.
 pub fn running_probe() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         // A LaunchAgent can be alive while the sandbox denies `kill -0` against
-        // its PID. Ask launchd for the service state first; the lock remains the
-        // fallback used by tests and by non-launchd invocations.
-        launchd_running_probe().or_else(|_| running_probe_at(lock_path()))
+        // its PID. Ask launchd first, but a healthy manually-started broker has no
+        // LaunchAgent entry and still owns the same lock. A negative launchd answer
+        // therefore must fall back to the lock rather than overriding live runtime
+        // evidence.
+        match launchd_running_probe() {
+            Ok(true) => Ok(true),
+            Ok(false) | Err(_) => running_probe_at(lock_path()),
+        }
     }
     #[cfg(not(target_os = "macos"))]
     running_probe_at(lock_path())
@@ -503,19 +552,16 @@ fn parse_launchd_state(output: &str) -> Result<bool, String> {
 }
 
 fn running_probe_at(path: PathBuf) -> Result<bool, String> {
-    let lock = match fs::read_to_string(path) {
-        Ok(content) => content,
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(format!("could not read agent lock: {error}")),
+        Err(error) => return Err(format!("could not open agent lock: {error}")),
     };
-    let pid = lock
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| "agent lock does not contain a valid pid".to_string())?;
-    if pid == 0 {
-        return Ok(false);
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(format!("could not probe agent lock: {error}")),
     }
-    process_is_running_probe(pid)
 }
 
 fn report(
@@ -621,43 +667,6 @@ fn uid() -> String {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "0".to_string())
     })
-}
-
-fn process_is_running(pid: u32) -> bool {
-    process_is_running_probe(pid).unwrap_or(false)
-}
-
-fn process_is_running_probe(pid: u32) -> Result<bool, String> {
-    if pid == 0 {
-        return Ok(false);
-    }
-    #[cfg(unix)]
-    {
-        let output = Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .map_err(|error| format!("could not probe agent pid: {error}"))?;
-        if output.status.success() {
-            return Ok(true);
-        }
-        // `kill -0` returns non-zero for both a missing PID and a live process
-        // that this user cannot inspect. The latter must remain unavailable.
-        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-        if stderr.contains("permission") || stderr.contains("operation not permitted") {
-            return Err("agent pid probe was denied".to_string());
-        }
-        return Ok(false);
-    }
-    #[cfg(windows)]
-    {
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
-            .map_err(|error| format!("could not probe agent pid: {error}"))?;
-        return Ok(String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()));
-    }
-    #[allow(unreachable_code)]
-    Ok(false)
 }
 
 fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
@@ -793,7 +802,8 @@ mod tests {
         assert!(after.is_ok(), "the lock is free once the holder drops it");
         drop(after);
 
-        // A crashed broker leaves a stale lock naming a PID that is not alive.
+        // A crashed broker leaves a stale PID-only lock file. The OS lease, not
+        // the text in that file, decides whether a broker is actually running.
         fs::write(&lock, "0\n").unwrap();
         assert!(
             AgentLock::acquire_at(lock.clone()).is_ok(),
@@ -815,10 +825,34 @@ mod tests {
 
         assert!(!running_probe_at(lock.clone()).unwrap());
         fs::write(&lock, "not-a-pid\n").unwrap();
-        assert!(running_probe_at(lock.clone()).is_err());
+        assert!(!running_probe_at(lock.clone()).unwrap());
         fs::write(&lock, "0\n").unwrap();
         assert!(!running_probe_at(lock).unwrap());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_unrelated_pid_in_a_stale_lock_does_not_block_acquisition() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-agentlock-pid-reuse-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("agent.lock");
+        // The test runner itself is a live, non-broker process. Using its PID
+        // avoids spawning a child that could inherit another parallel test's
+        // lock descriptor on macOS.
+        fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+
+        let acquired = AgentLock::acquire_at(lock);
+        assert!(
+            acquired.is_ok(),
+            "a live unrelated PID in a stale lock file must not block the broker"
+        );
+        drop(acquired);
         let _ = fs::remove_dir_all(&dir);
     }
 

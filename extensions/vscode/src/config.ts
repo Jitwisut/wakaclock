@@ -41,7 +41,8 @@ export class WakaclockConfigService implements vscode.Disposable {
       sameFileHeartbeatMs:
         Math.max(1, config.get<number>("sameFileHeartbeatMinutes", 2)) * 60 * 1000,
       // Kept in the snapshot for backwards-compatible consumers, but the timing engine
-      // intentionally ignores it: all clients use the fixed strict 120-second gap.
+      // intentionally ignores it: Active evidence uses a fixed 15-second lease. The
+      // heartbeat rate setting controls delivery cadence only.
       idleMs: Math.max(1, config.get<number>("idleMinutes", 15)) * 60 * 1000,
       statusBarEnabled: config.get<boolean>("statusBarEnabled", true),
       debugLogging: config.get<boolean>("debugLogging", false),

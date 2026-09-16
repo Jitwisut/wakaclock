@@ -72,3 +72,37 @@ machine-readable acceptance manifest; it is the only baseline used for Phase 0.
 The runner fails when total error exceeds 1%, an active day (at least 60 seconds)
 exceeds 3%, a duration/actor/project breakdown no longer partitions its total, or
 any expected actor type/confidence changes.
+
+## Correctness follow-up (2026-09-16)
+
+The external runner now requires the server's additive `calculation` metadata,
+uses the effective timeout in WakaTime's documented request, pins writes-only to
+false, validates timezone and rejects incompatible category scopes. Unsupported
+summary filter overrides return an error instead of being silently ignored.
+WakaTime responses need not echo optional request preferences; when present the
+echoes must agree. Per-day timezone and category totals must be available.
+A non-editor/AI category makes this runner non-comparable rather than subtracting
+potentially overlapping totals. A separate interval-level oracle remains necessary
+for mixed editor/AI comparisons.
+
+Seven measured zero days do not certify capture completeness. The observation gate
+requires seven active completed days, records dirty-worktree state and the runner
+hash, and remains advisory. It does not certify delivered binaries or real working
+time by itself. No historical certificate was refreshed by the code change.
+`certify_live.py` labels its reference as internal API replay consistency; its
+legacy `wakatime_seconds` field is an algorithm reference, not a WakaTime response.
+
+Metadata-only line repair inventory (does not write to either API):
+
+```bash
+python3 scripts/ai-coverage/audit_measurement_repair.py \
+  --canonical canonical-metadata.json \
+  --reparsed fresh-parser-report.json \
+  --output repair-inventory.json
+```
+
+The canonical input must contain current winner rows with stable event/session
+references. The reparsed input may be the CLI's `ai repair --json` candidate report.
+Missing source events and reused/multi-file ambiguous references stay unresolved.
+Changing historical line/outcome values still needs a dedicated revision apply
+path; the identity-only repair endpoint cannot perform this operation.

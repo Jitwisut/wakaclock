@@ -496,7 +496,8 @@ describe("Codex heartbeat hook", () => {
         session_id: "session-1",
         tool_use_id: "apply-1",
         tool_input: { input: patch },
-        model: "gpt-test"
+        model: "gpt-test",
+        tool_response: "Success. Updated the following files:\nM src/one.ts\nA src/two file.ts\n"
       },
       {
         ...process.env,

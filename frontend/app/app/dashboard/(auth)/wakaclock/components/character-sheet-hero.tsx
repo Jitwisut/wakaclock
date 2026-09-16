@@ -41,6 +41,11 @@ export function CharacterSheetHero() {
     enabled: Boolean(userId),
   });
 
+  const todaySeconds =
+    statusBar.data?.active_coverage === 'measured'
+      ? (statusBar.data.active_seconds ?? 0)
+      : (statusBar.data?.total_seconds ?? 0);
+
   return (
     <div className={styles.heroGrid}>
       <section aria-labelledby="focus-heading" className={styles.hero}>
@@ -74,7 +79,11 @@ export function CharacterSheetHero() {
         <div className={styles.progress}>
           <XpBar
             isLoading={allTime.isLoading}
-            totalSeconds={allTime.data?.data.total_seconds ?? 0}
+            totalSeconds={
+              allTime.data?.data.active_coverage === 'measured'
+                ? (allTime.data.data.active_seconds ?? 0)
+                : (allTime.data?.data.total_seconds ?? 0)
+            }
           />
           <ActiveDaysBadge
             days={allTime.data?.data.days_with_activity ?? 0}
@@ -84,7 +93,7 @@ export function CharacterSheetHero() {
       </section>
       <TodayQuestCard
         isLoading={statusBar.isLoading}
-        todaySeconds={statusBar.data?.total_seconds ?? 0}
+        todaySeconds={todaySeconds}
       />
     </div>
   );

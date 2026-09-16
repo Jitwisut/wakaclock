@@ -75,13 +75,14 @@ export interface BufferedFileState {
     aiActorConfidence?: number;
     aiLinesAdded?: number;
     aiLinesDeleted?: number;
-    /** Individual editor deltas retained until attribution runs; aggregate counters
-     * remain for backwards-compatible heartbeat fields. */
+    /** At most two event metadata records: one permits exact reconciliation,
+     * two mark a mixed window. Source text is never retained here. */
     pendingEditorChanges: EditorChangeObservation[];
 }
 
 export interface EditorChangeObservation {
     timeMs: number;
+    /** Deprecated event-shape fields, zero until the window is measured. */
     linesAdded: number;
     linesDeleted: number;
     contentFingerprint?: string;
@@ -90,6 +91,8 @@ export interface EditorChangeObservation {
 
 export interface ExtraHeartbeatPayload {
     entity: string;
+    /** Unix seconds when the captured editor activity occurred. */
+    time?: number;
     entity_type?: "file" | "domain" | "url" | "app";
     project?: string;
     category?: string;
