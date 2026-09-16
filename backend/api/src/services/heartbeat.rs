@@ -6,7 +6,7 @@ use uuid::Uuid;
 use wakaclock_core::ai::fingerprint_for_heartbeat;
 use wakaclock_core::heartbeat::{
     normalize_activity_source, union_activity_seconds, ActivitySegment, Heartbeat,
-    MAX_ACTIVITY_GAP_SECONDS,
+    ACTIVE_LEASE_SECONDS, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
 };
 
 use crate::model::date_range::ResolvedRange;
@@ -652,7 +652,14 @@ pub fn clamp_to_evidence_window(
     for segment in segments {
         // `Heartbeat::validate` already rejects oversized explicit segments, so this
         // clamp only guards replayed and imported rows.
-        let clamped_start = segment.start.max(segment.end - MAX_ACTIVITY_GAP_SECONDS);
+        let max_span = match segment.source.as_deref() {
+            Some(source) if source.eq_ignore_ascii_case("editor_active_v1") => ACTIVE_LEASE_SECONDS,
+            Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
+                MAX_AI_TOOL_DURATION_SECONDS
+            }
+            _ => MAX_ACTIVITY_GAP_SECONDS,
+        };
+        let clamped_start = segment.start.max(segment.end - max_span);
         if clamped_start > segment.start && segment.start.is_finite() {
             clamped_excess_seconds += clamped_start - segment.start;
         }
@@ -854,6 +861,37 @@ mod tests {
             evidence.clamped_excess_seconds,
             900.0 - MAX_ACTIVITY_GAP_SECONDS
         );
+    }
+
+    #[test]
+    fn completed_ai_tool_interval_keeps_its_observed_start_and_end() {
+        let segments = vec![ActivitySegment {
+            segment_id: "tool".to_string(),
+            start: 0.0,
+            end: 600.0,
+            source: Some("ai_tool_v1".to_string()),
+        }];
+
+        let evidence = clamp_to_evidence_window(&segments, None, 600.0, "hb");
+
+        assert_eq!(evidence.proven_seconds(), 600.0);
+        assert_eq!(evidence.clamped_excess_seconds, 0.0);
+    }
+
+    #[test]
+    fn editor_active_interval_is_bounded_by_the_fifteen_second_lease() {
+        let segments = vec![ActivitySegment {
+            segment_id: "editor".to_string(),
+            start: 0.0,
+            end: 60.0,
+            source: Some("editor_active_v1".to_string()),
+        }];
+
+        let evidence = clamp_to_evidence_window(&segments, None, 60.0, "hb");
+
+        assert_eq!(evidence.proven_seconds(), 15.0);
+        assert_eq!(evidence.segments[0].start, 45.0);
+        assert_eq!(evidence.segments[0].end, 60.0);
     }
 
     #[test]

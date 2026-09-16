@@ -72,47 +72,104 @@ if [ -z "$PATCH_TEXT" ] || [ "$PATCH_TEXT" = "null" ]; then
   exit 0
 fi
 
-# Emit one record per file. The previous implementation used `head -n1`, assigned the
-# whole patch's line totals to that first path and silently lost every other file. The
-# unit separator keeps paths containing spaces intact while awk reports per-file deltas.
-# A Codex move is represented by an Update marker followed by `*** Move to:`; retain both
-# paths so the broker can validate it as a rename instead of inventing a modify event.
-printf '%s\n' "$PATCH_TEXT" | awk '
-  function emit() {
+# PostToolUse/outer completion alone does not prove apply_patch succeeded. Read
+# only recognized result envelopes locally; unknown shapes fail closed. Native
+# summaries name each confirmed file operation, so a partial result cannot verify
+# the remainder of the requested patch. Keep this normalization aligned with
+# wakaclock-core/src/ai/codex.rs; these schemas require live certification per client.
+CONFIRMED_FILES="$(jq -r '
+  def outcome($depth):
+    if $depth > 8 then empty
+    elif type == "string" then
+      . as $text | (try fromjson catch null) as $decoded |
+      if $decoded != null then $decoded | outcome($depth + 1)
+      else
+        ($text | gsub("\r\n"; "\n") | sub("\n+$"; "") | split("\n")) as $lines |
+        if $lines[0] == "Success. Updated the following files:" and ($lines | length) > 1
+          and all($lines[1:][]; test("^[AMD] .+"))
+        then $lines[1:][] else empty end
+      end
+    elif type == "array" then
+      if length == 1 then .[0] | outcome($depth + 1) else empty end
+    elif type == "object" then
+      if .isError == true or .success == false or .error != null
+    or (.tool_name != null and .tool_name != "apply_patch")
+    or (has("exit_code") and .exit_code != 0)
+        or (.metadata.exit_code? != null and .metadata.exit_code != 0)
+        or (has("status") and .status != "success" and .status != "completed")
+      then empty
+      elif .type == "text" then
+        if has("output") or has("result") or has("content") then empty
+        else .text | outcome($depth + 1) end
+      else [.output?, .result?, .content?] | map(select(. != null)) |
+        if length == 1 then .[0] | outcome($depth + 1) else empty end
+      end
+    else empty end;
+  if .isError == true or .success == false or .error != null
+    or (.tool_name != null and .tool_name != "apply_patch")
+    or (has("exit_code") and .exit_code != 0)
+    or (.status != null and .status != "success" and .status != "completed")
+  then empty
+  else [.tool_response?, .tool_output?, .output?] | map(select(. != null)) |
+    if length == 1 then .[0] | outcome(0) else empty end
+  end
+' <<<"$INPUT" 2>/dev/null || true)"
+[ -n "$CONFIRMED_FILES" ] || exit 0
+
+# Buffer metadata until the final patch marker has been seen. A truncated patch,
+# malformed extra data, or repeated path with incomplete result evidence emits no
+# verified edits. The separator preserves spaces in file paths.
+printf '%s\n' "$PATCH_TEXT" | CODEX_CONFIRMED="$CONFIRMED_FILES" awk '
+  BEGIN {
+    count = split(ENVIRON["CODEX_CONFIRMED"], confirmations, "\n")
+    for (i = 1; i <= count; i++) successes[confirmations[i]]++
+  }
+  function collect() {
     if (file != "") {
-      printf "%s\034%d\034%d\034%s\034%s\n", file, added, deleted, kind, previous
+      n++
+      files[n] = file; additions[n] = added; deletions[n] = deleted
+      kinds[n] = kind; previous_paths[n] = previous
+      keys[n] = (kind == "create" ? "A" : (kind == "delete" ? "D" : "M")) " " file
+      expected[keys[n]]++
+      occurrences[n] = seen[file]++
+      file = ""
     }
   }
+  { sub(/\r$/, "") }
+  NR == 1 { if ($0 != "*** Begin Patch") invalid = 1; next }
+  ended { if ($0 != "") invalid = 1; next }
   /^\*\*\* (Update|Add|Delete) File: / {
-    emit()
+    collect()
     file = $0
-    marker = $0
-    sub(/^\*\*\* /, "", marker)
-    if (marker ~ /^Add File:/) kind = "create"
-    else if (marker ~ /^Delete File:/) kind = "delete"
+    if ($0 ~ /^\*\*\* Add File:/) kind = "create"
+    else if ($0 ~ /^\*\*\* Delete File:/) kind = "delete"
     else kind = "modify"
     previous = ""
     sub(/^\*\*\* (Update|Add|Delete) File: /, "", file)
-    added = 0
-    deleted = 0
+    added = 0; deleted = 0
     next
   }
   /^\*\*\* Move to: / {
-    previous = file
-    file = $0
+    if (file == "" || kind != "modify") invalid = 1
+    previous = file; file = $0
     sub(/^\*\*\* Move to: /, "", file)
     kind = "rename"
     next
   }
-  /^\*\*\* End Patch/ {
-    emit()
-    file = ""
-    next
+  /^\*\*\* End Patch$/ { collect(); ended = 1; next }
+  /^\*\*\* Begin Patch$/ { invalid = 1; next }
+  file != "" && /^\+/ { added++; next }
+  file != "" && /^-/ { deleted++; next }
+  END {
+    if (invalid || !ended) exit
+    for (i = 1; i <= n; i++) {
+      if (successes[keys[i]] != expected[keys[i]]) continue
+      if (kinds[i] == "modify" && additions[i] == 0 && deletions[i] == 0) continue
+      deleted_value = (kinds[i] == "delete" && deletions[i] == 0) ? "null" : deletions[i]
+      printf "%s\034%d\034%s\034%s\034%s\034%d\n", files[i], additions[i], deleted_value, kinds[i], previous_paths[i], occurrences[i]
+    }
   }
-  file != "" && /^\+/ { added += 1; next }
-  file != "" && /^-/ { deleted += 1; next }
-  END { emit() }
-' | while IFS=$'\034' read -r FILE_PATH LINES_ADDED LINES_DELETED CHANGE_KIND PREVIOUS_ENTITY; do
+' | while IFS=$'\034' read -r FILE_PATH LINES_ADDED LINES_DELETED CHANGE_KIND PREVIOUS_ENTITY OCCURRENCE; do
   if [ -z "$FILE_PATH" ]; then
     continue
   fi
@@ -126,6 +183,9 @@ printf '%s\n' "$PATCH_TEXT" | awk '
   fi
 
   EVENT_MATERIAL="${SESSION_ID}|${CALL_ID:-apply_patch}|${FILE_PATH}"
+  if [ "$OCCURRENCE" -gt 0 ]; then
+    EVENT_MATERIAL="${EVENT_MATERIAL}|${OCCURRENCE}"
+  fi
   if command -v shasum >/dev/null 2>&1; then
     EVENT_HASH="$(printf '%s' "$EVENT_MATERIAL" | shasum -a 256 | cut -c1-40)"
   elif command -v sha256sum >/dev/null 2>&1; then

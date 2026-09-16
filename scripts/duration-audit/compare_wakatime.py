@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import json
+import hashlib
 import math
 import os
 import subprocess
@@ -20,14 +21,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = HERE / "certifications" / "wakatime-parity.json"
 
 
-def _fetch(base: str, key: str, start: str, end: str, timezone: str) -> dict:
-    query = urllib.parse.urlencode({"start": start, "end": end, "timezone": timezone})
+def _fetch(base: str, key: str, start: str, end: str, timezone: str,
+           *, timeout_minutes: int | None = None) -> dict:
+    params = {"start": start, "end": end, "timezone": timezone}
+    if timeout_minutes is not None:
+        params.update(timeout=timeout_minutes, writes_only="false")
+    query = urllib.parse.urlencode(params)
     token = base64.b64encode(key.encode("utf-8")).decode("ascii")
     request = urllib.request.Request(
         f"{base.rstrip('/')}/api/v1/users/current/summaries?{query}",
@@ -38,6 +43,76 @@ def _fetch(base: str, key: str, start: str, end: str, timezone: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("summary response must be an object")
     return payload
+
+
+def _calculation_contract(payload: dict, timezone: str) -> int:
+    """Use effective server settings, never assume unsupported overrides worked."""
+    value = payload.get("calculation")
+    if not isinstance(value, dict):
+        raise ValueError("calculation metadata unavailable")
+    seconds = _seconds(value.get("timeout_seconds"))
+    if (value.get("timezone") != timezone or value.get("writes_only") is not False
+            or value.get("scope") != "all_projects_all_categories"
+            or value.get("comparable_metric") != "editor_ranges"
+            or value.get("calculation_version") not in ("legacy", "combined_v2")
+            or seconds <= 0 or seconds % 60 != 0):
+        raise ValueError("unsupported comparison settings")
+    return int(seconds / 60)
+
+
+def _validate_wakatime_settings(payload: dict, timezone: str, timeout: int) -> None:
+    if payload.get("is_up_to_date") is False:
+        raise ValueError("stale WakaTime response")
+    # The documented summaries request supports explicit timeout/writes_only;
+    # the response does not require echoing them. Validate echoes when present.
+    if (("timeout" in payload and (isinstance(payload["timeout"], bool)
+                                   or payload["timeout"] != timeout))
+            or ("writes_only" in payload and payload["writes_only"] is not False)
+            or ("timezone" in payload and payload["timezone"] != timezone)):
+        raise ValueError("WakaTime settings mismatched")
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise ValueError("WakaTime category evidence unavailable")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("invalid WakaTime day")
+        row_range = row.get("range") or {}
+        if not isinstance(row_range, dict):
+            raise ValueError("invalid WakaTime day range")
+        effective_zone = row_range.get("timezone", payload.get("timezone"))
+        if effective_zone != timezone:
+            raise ValueError("WakaTime timezone missing or mismatched")
+        categories = row.get("categories") if isinstance(row, dict) else None
+        if not isinstance(categories, list):
+            raise ValueError("WakaTime category evidence unavailable")
+        total = _seconds((row.get("grand_total") or {}).get("total_seconds"))
+        category_total = sum(_seconds(c.get("total_seconds")) for c in categories if isinstance(c, dict))
+        if abs(total - category_total) > 0.5:
+            raise ValueError("WakaTime categories do not partition the total")
+        # A grand total containing AI or unrelated activity is not editor-comparable.
+        # Do not subtract category totals: overlaps can have different semantics.
+        allowed = {"coding", "debugging", "building", "running tests", "code reviewing"}
+        if any(not isinstance(c, dict) or
+               (_seconds(c.get("total_seconds")) > 0 and
+                str(c.get("name", "")).lower() not in allowed) for c in categories):
+            raise ValueError("WakaTime activity scope is not editor-comparable")
+
+
+def _acceptance(observations: list[dict], errors: list[dict]) -> dict:
+    unavailable = sum(o["status"] == "unavailable" for o in observations)
+    provisional = sum(o["status"] == "provisional" for o in observations)
+    active = sum(o["status"] in ("pass", "fail") and
+                 max(o.get("wakatime_seconds", 0), o.get("wakaclock_seconds", 0)) > 0
+                 for o in observations)
+    return {
+        "daily_limit_seconds": 120, "required_complete_days": 7,
+        "complete_days": len(observations) - unavailable - provisional,
+        "active_complete_days": active, "unavailable_days": unavailable,
+        "provisional_days": provisional,
+        "passed": not errors and active >= 7 and unavailable == 0 and provisional == 0
+                  and all(o["status"] == "pass" for o in observations),
+        "interval_diagnosis": "unavailable_summary_only",
+    }
 
 
 def _seconds(value: object) -> float:
@@ -74,6 +149,9 @@ def _summary_days(payload: dict, *, comparable: bool = False) -> dict[str, float
             value = total.get("total_seconds", row.get("total_seconds"))
         seconds = _seconds(value)
         date = date[:10]
+        dt.date.fromisoformat(date)
+        if date in result:
+            raise ValueError("duplicate summary day")
         result[date] = seconds
     return result
 
@@ -220,8 +298,9 @@ def main() -> int:
     try:
         dt.date.fromisoformat(start)
         dt.date.fromisoformat(end)
-    except ValueError:
-        print("comparison dates must use YYYY-MM-DD", file=sys.stderr)
+        ZoneInfo(timezone)
+    except (ValueError, ZoneInfoNotFoundError):
+        print("comparison dates must use YYYY-MM-DD and a valid IANA timezone", file=sys.stderr)
         return 2
     if start > end:
         print("comparison start must not be after end", file=sys.stderr)
@@ -245,30 +324,24 @@ def main() -> int:
     baseline = _raw_activity_baseline(raw_path, start, end, timezone)
 
     errors: list[dict[str, str]] = []
+    if baseline.get("pending_or_failed_rows_reported_by_export", 0):
+        errors.append({"source": "delivery", "error": "pending_or_failed_exported_rows"})
+    if baseline.get("invalid_rows_or_timestamps", 0):
+        errors.append({"source": "baseline", "error": "invalid_exported_rows"})
+    wakaclock, wakatime = {}, {}
+    calculation = None
     try:
-        wakatime = _summary_days(
-            _fetch("https://wakatime.com", wakatime_key, start, end, timezone)
-        )
+        local_payload = _fetch(os.environ.get("WAKACLOCK_API", "http://localhost:8080"),
+                               wakaclock_key, start, end, timezone)
+        timeout_minutes = _calculation_contract(local_payload, timezone)
+        calculation = local_payload["calculation"]
+        wakaclock = _summary_days(local_payload, comparable=True)
+        remote_payload = _fetch("https://wakatime.com", wakatime_key, start, end,
+                                timezone, timeout_minutes=timeout_minutes)
+        _validate_wakatime_settings(remote_payload, timezone, timeout_minutes)
+        wakatime = _summary_days(remote_payload)
     except (OSError, ValueError, urllib.error.URLError) as error:
-        # Keep the report useful and safe even when one endpoint is unavailable. Do
-        # not serialize exception text: HTTP client errors can echo request URLs or
-        # server responses, neither of which belongs in the sanitized artifact.
-        wakatime = {}
-        errors.append({"source": "wakatime", "error": type(error).__name__})
-    try:
-        wakaclock = _summary_days(
-            _fetch(
-                os.environ.get("WAKACLOCK_API", "http://localhost:8080"),
-                wakaclock_key,
-                start,
-                end,
-                timezone,
-            ),
-            comparable=True,
-        )
-    except (OSError, ValueError, urllib.error.URLError) as error:
-        wakaclock = {}
-        errors.append({"source": "wakaclock", "error": type(error).__name__})
+        errors.append({"source": "comparison", "error": type(error).__name__})
     first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
     dates = [(first + dt.timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
     today = dt.datetime.now(ZoneInfo(timezone)).date().isoformat()
@@ -291,21 +364,17 @@ def main() -> int:
         )
     expected_total = sum(wakatime.values())
     actual_total = sum(wakaclock.values())
-    unavailable_days = sum(item["status"] == "unavailable" for item in observations)
-    provisional_days = sum(item["status"] == "provisional" for item in observations)
-    complete_days = len(observations) - unavailable_days - provisional_days
-    acceptance_passed = (
-        not errors
-        and len(observations) >= 7
-        and unavailable_days == 0
-        and provisional_days == 0
-        and all(item["status"] == "pass" for item in observations)
-    )
+    acceptance = _acceptance(observations, errors)
+    unavailable_days = acceptance["unavailable_days"]
+    acceptance_passed = acceptance["passed"]
     report = {
         "schema_version": 1,
         "status": "error" if errors else ("advisory" if acceptance_passed else "incomplete"),
         "checked_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "tested_commit_sha": _commit_sha(),
+        "working_tree_dirty": bool(subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=HERE.parent.parent, text=True).strip()),
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "range": {"start": start, "end": end},
         "timezone": timezone,
         "settle_seconds": settle_seconds,
@@ -320,15 +389,10 @@ def main() -> int:
         "max_daily_relative_error": max(
             (item["relative_error"] for item in observations if "relative_error" in item), default=0.0
         ),
-        "acceptance": {
-            "daily_limit_seconds": 120,
-            "required_complete_days": 7,
-            "complete_days": complete_days,
-            "unavailable_days": unavailable_days,
-            "provisional_days": provisional_days,
-            "passed": acceptance_passed,
-            "interval_diagnosis": "unavailable_summary_only",
-        },
+        "acceptance": acceptance,
+        "calculation": calculation,
+        "evidence_kind": "external_wakatime_comparison",
+        "release_certified": False,
         "observations": observations,
         "baseline": baseline,
     }

@@ -31,12 +31,15 @@ use wakaclock_core::{
     broker::{
         broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck, BrokerClient,
         BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
-        BrokerStore, BrokerStoreStats, QuarantineDiagnostic, AI_SIDECAR_SCHEMA_VERSION,
-        BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS, MAX_EVENT_BYTES,
+        BrokerStore, BrokerStoreStats, QuarantineDiagnostic, TransportKind,
+        AI_SIDECAR_SCHEMA_VERSION, BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
+        MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
-    heartbeat::{ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS},
+    heartbeat::{
+        ActivitySegment, ActorType, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
+    },
     queue::Queue,
 };
 
@@ -318,8 +321,17 @@ async fn process_record(
         eprintln!("Warning: could not append AI attribution sidecar code=io");
     }
 
+    // Only a completed tool operation with an explicit elapsed duration carries
+    // start/end evidence. A native PostToolUse hook can have a tool id and transport
+    // but no start timestamp; keep that event on the legacy point/cadence stream so
+    // it cannot manufacture a 120-second Active interval merely because a hook fired.
+    let tool_duration_evidence = has_explicit_tool_duration_evidence(event);
     let active_seconds = if let Some(seconds) = event.active_seconds {
-        seconds.min(MAX_ACTIVITY_GAP_SECONDS)
+        seconds.min(if tool_duration_evidence {
+            MAX_AI_TOOL_DURATION_SECONDS
+        } else {
+            MAX_ACTIVITY_GAP_SECONDS
+        })
     } else {
         let mut state = AiAttributionState::open()?;
         state.record_activity(
@@ -397,7 +409,11 @@ async fn process_record(
             segment_id: format!("{}:segment", event.heartbeat_id()),
             start: (heartbeat.time - active_seconds).max(0.0),
             end: heartbeat.time,
-            source: Some("ai".to_string()),
+            source: Some(if tool_duration_evidence {
+                "ai_tool_v1".to_string()
+            } else {
+                "ai".to_string()
+            }),
         }]
     } else {
         Vec::new()
@@ -418,6 +434,26 @@ async fn process_record(
     state.mark_delivered(&delivery_id, "broker")?;
     agent_service::record_heartbeat();
     Ok(())
+}
+
+/// A tool id identifies an operation for attribution, but it does not by itself
+/// identify an operation duration. The strict Active marker requires the producer
+/// to provide the elapsed start/end measurement explicitly.
+fn has_explicit_tool_duration_evidence(event: &BrokerEventV1) -> bool {
+    let transport_is_tool_evidence = matches!(
+        TransportKind::classify(event.transport.as_deref()),
+        TransportKind::NativePlugin
+            | TransportKind::Mcp
+            | TransportKind::ToolSnapshot
+            | TransportKind::Filesystem
+            | TransportKind::Editor
+    );
+    transport_is_tool_evidence
+        && event.tool_event_id.is_some()
+        && event.transport.is_some()
+        && event
+            .active_seconds
+            .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
 }
 
 fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
@@ -1043,6 +1079,20 @@ mod tests {
             tool_event_id: Some("tool".to_string()),
             editor: None,
         }
+    }
+
+    #[test]
+    fn strict_ai_tool_duration_requires_an_explicit_elapsed_measurement() {
+        let mut hook = event("hook-without-duration");
+        hook.active_seconds = None;
+        assert!(!has_explicit_tool_duration_evidence(&hook));
+
+        let completed = event("completed-tool");
+        assert!(has_explicit_tool_duration_evidence(&completed));
+
+        let mut legacy = completed.clone();
+        legacy.transport = Some("cli_compat".to_string());
+        assert!(!has_explicit_tool_duration_evidence(&legacy));
     }
 
     #[test]

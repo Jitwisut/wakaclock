@@ -318,6 +318,7 @@ pub async fn create_app_state() -> Result<AppState> {
         None => BridgeConfig::single(config.idle_timeout_seconds),
     };
     bridge_config.combined_v2 = config.duration_combined_v2;
+    bridge_config.primary_mode = config.duration_primary_mode;
     let dashboard_analytics_service = Arc::new(DashboardAnalyticsService::new(
         clickhouse.clone(),
         bridge_config,

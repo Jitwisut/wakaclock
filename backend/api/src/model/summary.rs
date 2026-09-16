@@ -26,6 +26,22 @@ pub struct SummaryGrandTotal {
     pub ai_additional_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calculation_version: Option<&'static str>,
+    /// Strict Active v1 metrics. Legacy `total_seconds` remains the
+    /// WakaTime-compatible value for existing consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_human_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_only_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_ai_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_overlap_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_coverage: Option<&'static str>,
     /// Additive: `total_seconds` keeps its WakaTime meaning, and this says how much of
     /// it a client actually measured versus how much the idle bridge inferred, and how
     /// much was attended by a human versus produced by an agent.
@@ -45,7 +61,18 @@ pub struct SummaryDay {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SummaryCalculation {
+    pub timezone: String,
+    pub timeout_seconds: f64,
+    pub writes_only: bool,
+    pub scope: &'static str,
+    pub comparable_metric: &'static str,
+    pub calculation_version: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SummariesResponse {
+    pub calculation: SummaryCalculation,
     pub start: String,
     pub end: String,
     pub days: Vec<SummaryDay>,

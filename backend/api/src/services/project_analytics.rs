@@ -1358,6 +1358,7 @@ fn is_comparable_editor_interval(
     interval: &crate::services::activity_timeline::CanonicalInterval,
 ) -> bool {
     interval.source == "editor"
+        || interval.source == "editor_active_v1"
         || interval.actor_type == wakaclock_core::heartbeat::ActorType::Human
         || (interval.actor_type == wakaclock_core::heartbeat::ActorType::Unknown
             && interval

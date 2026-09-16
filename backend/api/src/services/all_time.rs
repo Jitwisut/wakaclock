@@ -42,6 +42,13 @@ impl AllTimeService {
                 ai_measured_seconds: Some(row.ai_measured_seconds),
                 ai_additional_seconds: Some(row.ai_additional_seconds),
                 calculation_version: Some(row.calculation_version),
+                active_seconds: Some(row.active_seconds),
+                active_human_seconds: Some(row.active_human_seconds),
+                active_human_only_seconds: Some(row.active_human_only_seconds),
+                active_ai_only_seconds: Some(row.active_ai_only_seconds),
+                active_ai_seconds: Some(row.active_ai_seconds),
+                active_overlap_seconds: Some(row.active_overlap_seconds),
+                active_coverage: Some(row.active_coverage),
             },
         })
     }
@@ -84,6 +91,16 @@ impl AllTimeService {
             ai_measured_seconds: timeline.ai_measured_seconds,
             ai_additional_seconds: timeline.ai_additional_seconds,
             calculation_version: timeline.calculation_version.to_string(),
+            active_seconds: timeline.active_seconds,
+            active_human_seconds: timeline.active_human_seconds,
+            active_human_only_seconds: (timeline.active_human_seconds
+                - timeline.active_overlap_seconds)
+                .max(0.0),
+            active_ai_only_seconds: (timeline.active_ai_seconds - timeline.active_overlap_seconds)
+                .max(0.0),
+            active_ai_seconds: timeline.active_ai_seconds,
+            active_overlap_seconds: timeline.active_overlap_seconds,
+            active_coverage: timeline.active_coverage.to_string(),
         })
     }
 }

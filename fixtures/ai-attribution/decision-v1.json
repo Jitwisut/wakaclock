@@ -113,6 +113,16 @@
       "id": "explicit_human_with_legacy_ai",
       "input": { "explicit_actor_type": "human", "legacy_is_ai_generated": true },
       "expected": { "kind": "rejected" }
+    },
+    {
+      "id": "explicit_unknown_character_activity_without_line_baseline",
+      "input": { "explicit_actor_type": "unknown", "chars_added": 3, "keystrokes": 3 },
+      "expected": { "kind": "resolved", "actor_type": "unknown", "confidence": 0 }
+    },
+    {
+      "id": "explicit_unknown_still_rejects_positive_human_lines",
+      "input": { "explicit_actor_type": "unknown", "human_lines_added": 1 },
+      "expected": { "kind": "rejected" }
     }
   ]
 }

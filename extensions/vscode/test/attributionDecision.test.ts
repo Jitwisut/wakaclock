@@ -26,6 +26,13 @@ const fixturePath = path.resolve(__dirname, "../../../fixtures/ai-attribution/de
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Fixture;
 
 describe("canonical attribution decision conformance", () => {
+  it("permits unknown authorship with measured characters and unavailable lines", () => {
+    expect(decideAttribution({ explicit_actor_type: "unknown", chars_added: 3, chars_deleted: 2 })).toEqual({ kind: "resolved", actor_type: "unknown", confidence: 0 });
+    expect(decideAttribution({ explicit_actor_type: "unknown", human_lines_added: 1 }).kind).toBe("rejected");
+    expect(decideAttribution({ explicit_actor_type: "unknown", ai_lines_added: 1 }).kind).toBe("rejected");
+    expect(decideAttribution({ explicit_actor_type: "unknown", positive_editor_evidence: true }).kind).toBe("rejected");
+  });
+
   it("matches the shared decision-v1 fixture", () => {
     expect(fixture.schema_version).toBe(1);
     expect(fixture.contract).toBe("canonical_attribution_decision");

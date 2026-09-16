@@ -54,6 +54,7 @@ dirs = "5.0"
 sysinfo = "0.39"
 notify = "9.0.0-rc.5"
 fs2 = "0.4"
+sha2 = "0.10"
 
 
 [features]

@@ -117,7 +117,7 @@
           "type": "number",
           "default": 120,
           "minimum": 30,
-          "description": "Strict activity window and minimum non-write heartbeat cadence in seconds. Gaps above 120 seconds never add time."
+          "description": "Minimum non-write heartbeat delivery cadence in seconds. This controls network delivery only; Active coding evidence uses a fixed 15-second lease."
         },
         "wakaclock.sameFileHeartbeatMinutes": {
           "type": "number",
@@ -129,7 +129,7 @@
           "type": "number",
           "default": 15,
           "minimum": 1,
-          "description": "Deprecated compatibility setting. Activity timing always uses the fixed 120-second strict gap."
+          "description": "Deprecated compatibility setting. Activity timing always uses the fixed 15-second Active lease."
         },
         "wakaclock.statusBarEnabled": {
           "type": "boolean",

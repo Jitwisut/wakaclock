@@ -16,6 +16,16 @@ pub struct Queue {
     conn: Connection,
 }
 
+/// Authenticated transport boundary that owns queued activity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueScope {
+    pub destination: String,
+    pub owner: String,
+}
+
+const FLUSH_BATCH_SIZE: usize = 100;
+const FLUSH_LEASE_SECONDS: i64 = 60;
+
 impl Queue {
     /// เปิด SQLite database ที่ ~/.wakaclock/queue.db
     pub fn open() -> Result<Self, AppError> {
@@ -43,7 +53,24 @@ impl Queue {
                 payload     TEXT NOT NULL,        -- JSON ของ heartbeat
                 created_at  INTEGER NOT NULL,     -- unix timestamp
                 retry_count INTEGER DEFAULT 0,
-                next_retry_at INTEGER DEFAULT 0
+                next_retry_at INTEGER DEFAULT 0,
+                destination TEXT NOT NULL DEFAULT '',
+                owner_scope TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
+                entity TEXT NOT NULL DEFAULT '',
+                revision INTEGER NOT NULL DEFAULT 0,
+                lease_owner TEXT,
+                lease_until INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS heartbeat_dead_letter (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                heartbeat_id TEXT,
+                payload TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                owner_scope TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                failed_at INTEGER NOT NULL
             );
 
             -- Metadata-only remote/container handoff state. The actual heartbeat
@@ -55,14 +82,8 @@ impl Queue {
                 updated_at  INTEGER NOT NULL
             );
 
-            -- ลบ rows ที่เก่าเกิน 30 วันอัตโนมัติ
-            DELETE FROM heartbeat_queue
-            WHERE created_at < strftime('%s', 'now') - 2592000;
-            -- Do not age out the handoff snapshot here. It may contain accepted
-            -- but unacknowledged receipts from a stopped container. The snapshot
-            -- is metadata-only and bounded by save_handoff_ledger; acknowledged
-            -- identity compaction is an explicit ledger operation, never a blind
-            -- time-based delete that could lose a remote edit.
+            -- Unsent activity is never expired implicitly. Delivery, explicit
+            -- recovery, or a visible dead-letter transition owns deletion.
         ",
         )
         .map_err(AppError::Queue)?;
@@ -97,6 +118,31 @@ impl Queue {
                 [],
             )
             .map_err(AppError::Queue)?;
+        }
+
+        for (name, definition) in [
+            ("destination", "TEXT NOT NULL DEFAULT ''"),
+            ("owner_scope", "TEXT NOT NULL DEFAULT ''"),
+            ("session_id", "TEXT NOT NULL DEFAULT ''"),
+            ("entity", "TEXT NOT NULL DEFAULT ''"),
+            ("revision", "INTEGER NOT NULL DEFAULT 0"),
+            ("lease_owner", "TEXT"),
+            ("lease_until", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let exists = conn
+                .prepare("PRAGMA table_info(heartbeat_queue)")
+                .map_err(AppError::Queue)?
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(AppError::Queue)?
+                .filter_map(Result::ok)
+                .any(|column| column == name);
+            if !exists {
+                conn.execute(
+                    &format!("ALTER TABLE heartbeat_queue ADD COLUMN {name} {definition}"),
+                    [],
+                )
+                .map_err(AppError::Queue)?;
+            }
         }
 
         // Backfill identities for rows written by pre-id clients. When the old payload
@@ -134,20 +180,59 @@ impl Queue {
                 );
             }
             let updated_payload = serde_json::to_string(&value).unwrap_or(payload);
-            let _ = conn.execute(
-                "UPDATE heartbeat_queue SET heartbeat_id = ?1, payload = ?2 WHERE id = ?3 AND heartbeat_id IS NULL",
+            conn.execute(
+                "UPDATE heartbeat_queue SET heartbeat_id = ?1, payload = ?2
+                 WHERE id = ?3 AND heartbeat_id IS NULL",
                 params![heartbeat_id, updated_payload, id],
-            );
+            )
+            .map_err(AppError::Queue)?;
         }
-        // A crash in an older client could leave the same payload queued twice. The
-        // durable queue is transport state (raw server history is untouched), so retain
-        // the oldest copy and make the identity index enforce idempotency from here on.
+
+        let queued_payloads: Vec<(i64, String)> = {
+            let mut statement = conn
+                .prepare("SELECT id, payload FROM heartbeat_queue")
+                .map_err(AppError::Queue)?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(AppError::Queue)?
+                .filter_map(Result::ok)
+                .collect();
+            rows
+        };
+        for (id, payload) in queued_payloads {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                continue;
+            };
+            let session_id = value
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let entity = value
+                .get("entity")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let revision = value
+                .get("revision")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .min(i64::MAX as u64) as i64;
+            conn.execute(
+                "UPDATE heartbeat_queue SET session_id = ?1, entity = ?2, revision = ?3
+                 WHERE id = ?4",
+                params![session_id, entity, revision, id],
+            )
+            .map_err(AppError::Queue)?;
+        }
+
+        // Retain one exact transport revision per owner and destination. A newer
+        // correction is a separate row; dropping its base would make it an orphan.
         conn.execute(
             "DELETE FROM heartbeat_queue
              WHERE heartbeat_id IS NOT NULL
                AND id NOT IN (
                  SELECT MIN(id) FROM heartbeat_queue
-                 WHERE heartbeat_id IS NOT NULL GROUP BY heartbeat_id
+                 WHERE heartbeat_id IS NOT NULL
+                 GROUP BY destination, owner_scope, heartbeat_id, session_id, entity, revision
                )",
             [],
         )
@@ -155,8 +240,14 @@ impl Queue {
         conn.execute("DROP INDEX IF EXISTS heartbeat_queue_heartbeat_id_idx", [])
             .map_err(AppError::Queue)?;
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS heartbeat_queue_heartbeat_id_idx
-             ON heartbeat_queue(heartbeat_id) WHERE heartbeat_id IS NOT NULL",
+            "DROP INDEX IF EXISTS heartbeat_queue_delivery_identity_idx",
+            [],
+        )
+        .map_err(AppError::Queue)?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS heartbeat_queue_delivery_identity_idx
+             ON heartbeat_queue(destination, owner_scope, heartbeat_id, session_id, entity, revision)
+             WHERE heartbeat_id IS NOT NULL",
             [],
         )
         .map_err(AppError::Queue)?;
@@ -166,20 +257,57 @@ impl Queue {
 
     /// บันทึก heartbeat payload ลง queue
     pub fn push(&self, payload: &serde_json::Value) -> Result<(), AppError> {
+        self.push_scoped(
+            payload,
+            &QueueScope {
+                destination: String::new(),
+                owner: String::new(),
+            },
+        )
+    }
+
+    pub fn push_scoped(
+        &self,
+        payload: &serde_json::Value,
+        scope: &QueueScope,
+    ) -> Result<(), AppError> {
         let json = serde_json::to_string(payload).map_err(AppError::Serde)?;
-
         let now = chrono::Utc::now().timestamp();
-
         let heartbeat_id = payload
             .get("heartbeat_id")
             .and_then(|value| value.as_str())
             .filter(|value| !value.trim().is_empty());
+        let session_id = payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let entity = payload
+            .get("entity")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let revision = payload
+            .get("revision")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .min(i64::MAX as u64) as i64;
         if let Some(heartbeat_id) = heartbeat_id {
             let exists: bool = self
                 .conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM heartbeat_queue WHERE heartbeat_id = ?1)",
-                    params![heartbeat_id],
+                    "SELECT EXISTS(
+                         SELECT 1 FROM heartbeat_queue
+                         WHERE destination = ?1 AND owner_scope = ?2
+                           AND heartbeat_id = ?3 AND session_id = ?4
+                           AND entity = ?5 AND revision = ?6
+                     )",
+                    params![
+                        &scope.destination,
+                        &scope.owner,
+                        heartbeat_id,
+                        session_id,
+                        entity,
+                        revision
+                    ],
                     |row| row.get(0),
                 )
                 .map_err(AppError::Queue)?;
@@ -190,8 +318,20 @@ impl Queue {
 
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO heartbeat_queue (heartbeat_id, payload, created_at) VALUES (?1, ?2, ?3)",
-                params![heartbeat_id, json, now],
+                "INSERT OR IGNORE INTO heartbeat_queue
+                 (heartbeat_id, payload, created_at, destination, owner_scope,
+                  session_id, entity, revision)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    heartbeat_id,
+                    json,
+                    now,
+                    &scope.destination,
+                    &scope.owner,
+                    session_id,
+                    entity,
+                    revision
+                ],
             )
             .map_err(AppError::Queue)?;
 
@@ -227,6 +367,68 @@ impl Queue {
         Ok(result)
     }
 
+    /// Atomically lease one bounded delivery batch for this exact owner and origin.
+    /// Expired leases are reclaimable after a crashed process.
+    pub fn claim_batch_scoped(
+        &self,
+        scope: &QueueScope,
+        lease_owner: &str,
+    ) -> Result<Vec<(i64, serde_json::Value)>, AppError> {
+        self.conn
+            .execute(
+                "UPDATE heartbeat_queue
+                 SET lease_owner = ?1, lease_until = strftime('%s', 'now') + ?2
+                 WHERE id IN (
+                     SELECT id FROM heartbeat_queue
+                     WHERE destination = ?3 AND owner_scope = ?4
+                       AND next_retry_at <= strftime('%s', 'now')
+                       AND (lease_owner IS NULL OR lease_until <= strftime('%s', 'now'))
+                     ORDER BY created_at ASC, heartbeat_id ASC, revision ASC, id ASC
+                     LIMIT ?5
+                 )",
+                params![
+                    lease_owner,
+                    FLUSH_LEASE_SECONDS,
+                    &scope.destination,
+                    &scope.owner,
+                    FLUSH_BATCH_SIZE as i64
+                ],
+            )
+            .map_err(AppError::Queue)?;
+
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, payload FROM heartbeat_queue
+                 WHERE lease_owner = ?1
+                 ORDER BY created_at ASC, heartbeat_id ASC, revision ASC, id ASC",
+            )
+            .map_err(AppError::Queue)?;
+        let claimed = statement
+            .query_map(params![lease_owner], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(AppError::Queue)?
+            .map(|row| {
+                let (id, payload) = row.map_err(AppError::Queue)?;
+                let value = serde_json::from_str(&payload).map_err(AppError::Serde)?;
+                Ok((id, value))
+            })
+            .collect();
+        claimed
+    }
+
+    pub fn release_claim(&self, lease_owner: &str) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "UPDATE heartbeat_queue SET lease_owner = NULL, lease_until = 0
+                 WHERE lease_owner = ?1",
+                params![lease_owner],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
     /// Delay a failed row with bounded exponential backoff. The payload remains in
     /// SQLite and is eligible again after 60s, 120s, 240s ... up to one hour.
     pub fn mark_retry(&self, id: i64) -> Result<(), AppError> {
@@ -246,7 +448,9 @@ impl Queue {
                 .execute(
                     "UPDATE heartbeat_queue
                      SET retry_count = retry_count + 1,
-                         next_retry_at = strftime('%s', 'now') + ?1
+                         next_retry_at = strftime('%s', 'now') + ?1,
+                         lease_owner = NULL,
+                         lease_until = 0
                      WHERE id = ?2",
                     params![delay as i64, id],
                 )
@@ -266,7 +470,9 @@ impl Queue {
                          WHEN retry_count < 5 THEN 960
                          WHEN retry_count < 6 THEN 1920
                          ELSE 3600
-                       END
+                       END,
+                     lease_owner = NULL,
+                     lease_until = 0
                  WHERE id = ?1",
                 params![id],
             )
@@ -283,6 +489,35 @@ impl Queue {
         Ok(())
     }
 
+    /// Move a permanently malformed row out of the live queue without erasing the
+    /// only recoverable copy of its payload.
+    pub fn dead_letter(&self, id: i64, reason: &str) -> Result<(), AppError> {
+        let transaction = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        transaction
+            .execute(
+                "INSERT INTO heartbeat_dead_letter
+                 (heartbeat_id, payload, destination, owner_scope, reason, failed_at)
+                 SELECT heartbeat_id, payload, destination, owner_scope, ?1,
+                        strftime('%s', 'now')
+                 FROM heartbeat_queue WHERE id = ?2",
+                params![reason, id],
+            )
+            .map_err(AppError::Queue)?;
+        transaction
+            .execute("DELETE FROM heartbeat_queue WHERE id = ?1", params![id])
+            .map_err(AppError::Queue)?;
+        transaction.commit().map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    pub fn dead_letter_len(&self) -> Result<usize, AppError> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM heartbeat_dead_letter", [], |row| {
+                row.get(0)
+            })
+            .map_err(AppError::Queue)
+    }
+
     /// จำนวน heartbeats ที่ค้างอยู่
     pub fn len(&self) -> Result<usize, AppError> {
         let count: usize = self
@@ -291,6 +526,17 @@ impl Queue {
             .map_err(AppError::Queue)?;
 
         Ok(count)
+    }
+
+    pub fn len_scoped(&self, scope: &QueueScope) -> Result<usize, AppError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM heartbeat_queue
+                 WHERE destination = ?1 AND owner_scope = ?2",
+                params![&scope.destination, &scope.owner],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)
     }
 
     /// Whether the durable heartbeat queue has no pending rows.
@@ -373,6 +619,22 @@ impl Queue {
         &self,
         timezone: Option<&str>,
     ) -> Result<Vec<ActivitySegment>, AppError> {
+        self.queued_segments_for_day_query(timezone, None)
+    }
+
+    pub fn queued_segments_for_day_scoped(
+        &self,
+        timezone: Option<&str>,
+        scope: &QueueScope,
+    ) -> Result<Vec<ActivitySegment>, AppError> {
+        self.queued_segments_for_day_query(timezone, Some(scope))
+    }
+
+    fn queued_segments_for_day_query(
+        &self,
+        timezone: Option<&str>,
+        scope: Option<&QueueScope>,
+    ) -> Result<Vec<ActivitySegment>, AppError> {
         let zone: Tz = timezone
             .filter(|value| !value.trim().is_empty())
             .unwrap_or("UTC")
@@ -395,12 +657,17 @@ impl Queue {
             .single()
             .map(|value| value.timestamp() as f64)
             .unwrap_or(day_start + 86_400.0);
+        let destination = scope.map(|value| value.destination.as_str());
+        let owner = scope.map(|value| value.owner.as_str());
         let mut stmt = self
             .conn
-            .prepare("SELECT payload FROM heartbeat_queue")
+            .prepare(
+                "SELECT payload FROM heartbeat_queue
+                 WHERE ?1 IS NULL OR (destination = ?1 AND owner_scope = ?2)",
+            )
             .map_err(AppError::Queue)?;
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map(params![destination, owner], |row| row.get::<_, String>(0))
             .map_err(AppError::Queue)?;
         let mut segments_for_day = Vec::new();
         for row in rows {
@@ -574,6 +841,89 @@ mod tests {
             queue.load_handoff_ledger().unwrap().unwrap().pending_len(),
             1
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn correction_revisions_are_distinct_and_delivered_in_order() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-revision-queue-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let scope = QueueScope {
+            destination: "https://one.example".to_string(),
+            owner: "owner-a".to_string(),
+        };
+        for revision in [1, 0, 1] {
+            queue
+                .push_scoped(
+                    &serde_json::json!({
+                        "heartbeat_id": "same",
+                        "session_id": "session",
+                        "entity": "a.rs",
+                        "revision": revision
+                    }),
+                    &scope,
+                )
+                .unwrap();
+        }
+        let rows = queue.claim_batch_scoped(&scope, "lease-a").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1["revision"], 0);
+        assert_eq!(rows[1].1["revision"], 1);
+        drop(queue);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn queue_scope_and_lease_prevent_cross_account_delivery() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-scoped-queue-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let owner_a = QueueScope {
+            destination: "https://one.example".to_string(),
+            owner: "owner-a".to_string(),
+        };
+        let owner_b = QueueScope {
+            destination: "https://one.example".to_string(),
+            owner: "owner-b".to_string(),
+        };
+        queue
+            .push_scoped(
+                &serde_json::json!({"heartbeat_id":"a", "entity":"a.rs"}),
+                &owner_a,
+            )
+            .unwrap();
+        assert_eq!(queue.len_scoped(&owner_a).unwrap(), 1);
+        assert_eq!(queue.len_scoped(&owner_b).unwrap(), 0);
+        assert!(queue
+            .claim_batch_scoped(&owner_b, "lease-b")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            queue.claim_batch_scoped(&owner_a, "lease-a").unwrap().len(),
+            1
+        );
+        assert!(queue
+            .claim_batch_scoped(&owner_a, "second-process")
+            .unwrap()
+            .is_empty());
+        drop(queue);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn malformed_rows_move_to_recoverable_dead_letter_storage() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-dead-letter-queue-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        queue
+            .push(&serde_json::json!({"heartbeat_id":"bad", "entity":"a.rs"}))
+            .unwrap();
+        let row = queue.pop_all().unwrap().remove(0);
+        queue.dead_letter(row.0, "HTTP 422").unwrap();
+        assert_eq!(queue.len().unwrap(), 0);
+        assert_eq!(queue.dead_letter_len().unwrap(), 1);
+        drop(queue);
         let _ = std::fs::remove_file(path);
     }
 }

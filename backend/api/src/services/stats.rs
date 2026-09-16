@@ -126,6 +126,17 @@ impl StatsService {
                 ai_measured_seconds: Some(timeline.ai_measured_seconds),
                 ai_additional_seconds: Some(timeline.ai_additional_seconds),
                 calculation_version: Some(timeline.calculation_version),
+                active_seconds: Some(timeline.active_seconds),
+                active_human_seconds: Some(timeline.active_human_seconds),
+                active_human_only_seconds: Some(
+                    (timeline.active_human_seconds - timeline.active_overlap_seconds).max(0.0),
+                ),
+                active_ai_only_seconds: Some(
+                    (timeline.active_ai_seconds - timeline.active_overlap_seconds).max(0.0),
+                ),
+                active_ai_seconds: Some(timeline.active_ai_seconds),
+                active_overlap_seconds: Some(timeline.active_overlap_seconds),
+                active_coverage: Some(timeline.active_coverage),
                 evidence,
             },
         })

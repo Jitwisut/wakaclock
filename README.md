@@ -98,6 +98,32 @@ management on `http://localhost:15672`.
 Redpanda is not started by `make infra-up`: the API has no Kafka adapter yet.
 Start it explicitly with `make infra-kafka-up`.
 
+Run Compose commands from the repository root (the `backend/api` directory does
+not contain a separate Compose file). The services use Compose-managed,
+project-scoped container names, so multiple worktrees can share one Docker
+daemon without name collisions. If an older checkout left a stopped container
+with a fixed name, remove that container after confirming it is stopped and
+belongs to the old project; do not use `docker rm -v`, so named volumes and
+development data are preserved.
+
+`docker-compose.yml` uses prebuilt images and has no `build:` sections. Use
+`docker compose up -d` (or `make infra-up`). If you ever need to rebuild a
+Compose file that has `build:` sections, the flag comes after `up`, as in
+`docker compose up -d --build`.
+
+If Compose cannot connect to `unix:///.../.docker/run/docker.sock`, start
+Docker Desktop and confirm the daemon with `docker info`, then rerun the
+command.
+
+On macOS, if `/usr/bin/make` stops with an Xcode license message, use the
+already-installed Command Line Tools for this checkout without changing the
+system developer selection:
+
+```bash
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+  /Library/Developer/CommandLineTools/usr/bin/make dev
+```
+
 ## API overview
 
 WakaTime clients authenticate with Basic API key or Bearer OAuth. AtoAxis v2

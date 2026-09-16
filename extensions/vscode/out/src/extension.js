@@ -47,6 +47,7 @@ const logging_1 = require("./logging");
 const managedCli_1 = require("./managedCli");
 const secrets_1 = require("./secrets");
 const statusBar_1 = require("./statusBar");
+let activeBufferManager;
 function activate(context) {
     console.log("[wakaclock] extension activated");
     const configService = new config_1.WakaclockConfigService();
@@ -65,6 +66,7 @@ function activate(context) {
         statusBar.handleHeartbeatSent();
         presenceHeartbeat();
     }, undefined, () => statusBar.handleActivity());
+    activeBufferManager = bufferManager;
     statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
     statusBar.setBufferedSegmentsProvider(() => bufferManager.getBufferedSegments());
     const stableAgentDir = (0, agentSetup_1.syncAgentPluginsToStableDir)({
@@ -262,6 +264,8 @@ async function maybeOfferAiSetup(context, aiIntegrations, logger) {
     }
 }
 function deactivate() {
-    // VS Code disposes subscriptions registered during activation.
+    const bufferManager = activeBufferManager;
+    activeBufferManager = undefined;
+    return bufferManager?.flushAllBuffers("shutdown");
 }
 //# sourceMappingURL=extension.js.map

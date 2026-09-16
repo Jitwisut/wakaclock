@@ -71,6 +71,7 @@ export function DurationTimeline() {
     blocks.map((block) => ({ durationSeconds: block.duration_seconds, project: block.project }))
   );
   const hasDurationV2 = data?.comparable_seconds != null || data?.ai_additional_seconds != null;
+  const activeAvailable = data?.active_coverage === 'measured';
 
   return (
     <Card>
@@ -102,8 +103,16 @@ export function DurationTimeline() {
           isLoading={timezone === null || isLoading}
         >
           <div className="space-y-4">
-            {hasDurationV2 && (
-              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+            {(hasDurationV2 || activeAvailable) && (
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
+                {activeAvailable && (
+                  <div className="bg-primary/5 rounded-lg border px-3 py-2">
+                    <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
+                    <dd className="mt-1 text-lg font-semibold">
+                      {formatProjectDuration(data?.active_seconds ?? 0)}
+                    </dd>
+                  </div>
+                )}
                 <div className="bg-muted/30 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
                   <dd className="mt-1 text-lg font-semibold">

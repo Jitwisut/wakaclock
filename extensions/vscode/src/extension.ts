@@ -23,6 +23,8 @@ import {
 } from "./secrets";
 import { StatusBarController } from "./statusBar";
 
+let activeBufferManager: HeartbeatBufferManager | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
   console.log("[wakaclock] extension activated");
   const configService = new WakaclockConfigService();
@@ -65,6 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
     undefined,
     () => statusBar.handleActivity()
   );
+  activeBufferManager = bufferManager;
   statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
   statusBar.setBufferedSegmentsProvider(() => bufferManager.getBufferedSegments());
 
@@ -323,6 +326,8 @@ async function maybeOfferAiSetup(
   }
 }
 
-export function deactivate(): void {
-  // VS Code disposes subscriptions registered during activation.
+export function deactivate(): Thenable<void> | undefined {
+  const bufferManager = activeBufferManager;
+  activeBufferManager = undefined;
+  return bufferManager?.flushAllBuffers("shutdown");
 }

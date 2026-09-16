@@ -51,7 +51,10 @@ const ACCOUNT_DELETION_MIGRATION: &str =
     include_str!("../../migrations/postgres/020_account_deletion.sql");
 const ACCOUNT_DELETION_CONSTRAINTS_MIGRATION: &str =
     include_str!("../../migrations/postgres/021_account_deletion_constraints.sql");
-const ACCOUNT_ACTIVITY_LOCK_NAMESPACE: i32 = 73_111;
+// PostgreSQL's hashtextextended seed and advisory-lock key are bigint values.
+// Keep this as i64 so tokio-postgres serializes the parameter as int8 instead
+// of sending int4, which PostgreSQL rejects for the prepared expression.
+const ACCOUNT_ACTIVITY_LOCK_NAMESPACE: i64 = 73_111;
 
 fn account_activity_lock_key(user_id: uuid::Uuid) -> String {
     format!("account-delete:v1:{user_id}")

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
 use crate::model::duration::DurationBlockRow;
-use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig};
+use crate::services::activity_timeline::{total_seconds, ActivityTimelineService, BridgeConfig};
 
 /// Blocks plus the range-level diagnostics used by the combined duration rollout.
 /// Keeping this separate from `DurationBlockRow` preserves the existing block shape and
@@ -18,6 +18,12 @@ pub struct DurationResult {
     pub ai_measured_seconds: f64,
     pub ai_additional_seconds: f64,
     pub calculation_version: &'static str,
+    pub active_seconds: f64,
+    pub active_human_seconds: f64,
+    pub active_ai_seconds: f64,
+    pub active_overlap_seconds: f64,
+    pub active_coverage: &'static str,
+    pub wakatime_compatible_seconds: f64,
 }
 
 /// Project durations from the canonical overlap-free timeline. The previous raw
@@ -49,6 +55,7 @@ impl DurationService {
     ) -> Result<DurationResult> {
         let (start, end) = range.unix_bounds();
         let timeline = self.timeline.build_timeline(user_id, start, end).await?;
+        let wakatime_compatible_seconds = total_seconds(&timeline.bridged);
         let mut rows: Vec<DurationBlockRow> = Vec::new();
         for interval in timeline.bridged {
             if let Some(previous) = rows.last_mut() {
@@ -81,6 +88,12 @@ impl DurationService {
             ai_measured_seconds: timeline.ai_measured_seconds,
             ai_additional_seconds: timeline.ai_additional_seconds,
             calculation_version: timeline.calculation_version,
+            active_seconds: timeline.active_seconds,
+            active_human_seconds: timeline.active_human_seconds,
+            active_ai_seconds: timeline.active_ai_seconds,
+            active_overlap_seconds: timeline.active_overlap_seconds,
+            active_coverage: timeline.active_coverage,
+            wakatime_compatible_seconds,
         })
     }
 }

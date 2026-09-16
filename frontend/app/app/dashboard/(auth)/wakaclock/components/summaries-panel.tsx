@@ -45,7 +45,10 @@ export function SummariesPanel() {
   const days = data?.days ?? [];
   const chartData = days.map((day) => ({
     date: day.date,
-    seconds: day.grand_total.total_seconds,
+    seconds:
+      day.grand_total.active_coverage === 'measured'
+        ? (day.grand_total.active_seconds ?? 0)
+        : day.grand_total.total_seconds,
   }));
   const comparableSeconds = days.reduce(
     (sum, day) => sum + (day.grand_total.comparable_seconds ?? 0),
@@ -56,6 +59,15 @@ export function SummariesPanel() {
     0
   );
   const hasDurationV2 = days.some((day) => day.grand_total.comparable_seconds !== undefined);
+  const activeSeconds = days.reduce(
+    (sum, day) =>
+      sum +
+      (day.grand_total.active_coverage === 'measured'
+        ? (day.grand_total.active_seconds ?? 0)
+        : 0),
+    0
+  );
+  const hasActive = days.some((day) => day.grand_total.active_coverage === 'measured');
 
   return (
     <Card>
@@ -112,8 +124,16 @@ export function SummariesPanel() {
               </AreaChart>
             </ChartContainer>
 
-            {hasDurationV2 && (
-              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+            {(hasDurationV2 || hasActive) && (
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
+                {hasActive && (
+                  <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                    <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
+                    <dd className="text-lg font-semibold tabular-nums">
+                      {formatDurationShort(activeSeconds)}
+                    </dd>
+                  </div>
+                )}
                 <div className="rounded-md border p-3">
                   <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
                   <dd className="text-lg font-semibold tabular-nums">

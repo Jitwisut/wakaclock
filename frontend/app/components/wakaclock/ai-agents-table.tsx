@@ -44,6 +44,18 @@ function agentGroupKey(agent: AiAgentItem) {
   ]);
 }
 
+function measuredLines(total: number, measured: number | undefined, agent: AiAgentItem) {
+  if (agent.actor_type !== 'ai_verified' && agent.actor_type !== 'ai_inferred') {
+    return formatCompactNumber(total);
+  }
+  if (measured === undefined) return `${formatCompactNumber(total)} (coverage unavailable)`;
+  if (measured === 0) return 'Unavailable';
+  if (measured < agent.heartbeat_count) {
+    return `${formatCompactNumber(total)} (partial: ${measured}/${agent.heartbeat_count})`;
+  }
+  return formatCompactNumber(total);
+}
+
 export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) {
   const confirmed = agents.filter(isConfirmedAiIdentity);
   const unresolvedAi = agents.filter(
@@ -83,8 +95,16 @@ export function AiAgentsTable({ agents, title = 'Agents' }: AiAgentsTableProps) 
                 <TableCell className={isUnattributed ? 'text-muted-foreground' : undefined}>
                   {formatAiProviderModel(agent.provider, agent.model, agent.actor_type)}
                 </TableCell>
-                <TableCell>{formatCompactNumber(agent.ai_lines_added)}</TableCell>
-                <TableCell>{formatCompactNumber(agent.ai_lines_deleted)}</TableCell>
+                <TableCell>
+                  {measuredLines(agent.ai_lines_added, agent.ai_added_measured_heartbeats, agent)}
+                </TableCell>
+                <TableCell>
+                  {measuredLines(
+                    agent.ai_lines_deleted,
+                    agent.ai_deleted_measured_heartbeats,
+                    agent
+                  )}
+                </TableCell>
                 <TableCell>{formatCompactNumber(agent.human_lines_added)}</TableCell>
                 <TableCell>
                   {formatCompactNumber(
