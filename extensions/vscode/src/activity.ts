@@ -10,7 +10,15 @@ import type { ActivitySegment } from "./types";
  * match) for the two windows that do that job, each sized for what it measures.
  * Do not unify these three constants — they answer different questions.
  */
-export const MAX_ACTIVITY_GAP_SECONDS = 120;
+/**
+ * A human editor event leases at most fifteen seconds of Active time.  The
+ * heartbeat transport is still rate limited independently (normally 120s), but
+ * that network cadence must never become duration evidence.  This is the same
+ * user-visible timeout as WakaTime's default idle timeout while keeping the
+ * evidence boundary explicit on every segment.
+ */
+export const ACTIVE_LEASE_SECONDS = 15;
+export const MAX_ACTIVITY_GAP_SECONDS = ACTIVE_LEASE_SECONDS;
 export const MAX_ACTIVITY_GAP_MS = MAX_ACTIVITY_GAP_SECONDS * 1000;
 
 /** Return the length covered by the union of valid activity intervals. */

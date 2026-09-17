@@ -235,29 +235,48 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<HeartbeatPayload>,
-) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<HeartbeatResponse>, (StatusCode, HeaderMap, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
-        .ok_or_else(auth::unauthorized)?;
+        .ok_or_else(|| with_headers(auth::unauthorized()))?;
     if !auth::require_scope(&state, &headers, "write_logged_time").await {
-        return Err(auth::forbidden_scope("write_logged_time"));
+        return Err(with_headers(auth::forbidden_scope("write_logged_time")));
     }
-    require_active_access(&state, user_id).await?;
-    let heartbeat = payload_to_heartbeat(payload, user_id)
-        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+    require_active_access(&state, user_id)
+        .await
+        .map_err(with_headers)?;
+    let mut heartbeat = payload_to_heartbeat(payload, user_id)
+        .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
+    state
+        .heartbeat_ingest_service
+        .assign_server_ids(user_id, std::slice::from_mut(&mut heartbeat));
     let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
         .await
-        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| with_headers(app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())))?;
 
     heartbeat
         .validate()
-        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+        .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
 
     let inserted = state
-        .heartbeat_service
-        .process_heartbeats(user_id, "".to_string(), vec![heartbeat])
+        .heartbeat_ingest_service
+        .process(user_id, "".to_string(), vec![heartbeat])
         .await
-        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            if state.config.brokers.ingest.mode == crate::config::brokers::IngestMode::Kafka
+                && state
+                    .config
+                    .brokers
+                    .ingest
+                    .kafka_cohort
+                    .as_ref()
+                    .is_some_and(|cohort| cohort.includes(user_id))
+            {
+                kafka_unavailable()
+            } else {
+                with_headers(app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+            }
+        })?;
 
     // Presence: best-effort, and deliberately after the ClickHouse write succeeds — a
     // presence update is not a reason to fail or delay a heartbeat.
@@ -276,46 +295,67 @@ pub async fn create_bulk(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payloads): Json<Vec<HeartbeatPayload>>,
-) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<HeartbeatResponse>, (StatusCode, HeaderMap, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
-        .ok_or_else(auth::unauthorized)?;
+        .ok_or_else(|| with_headers(auth::unauthorized()))?;
     if !auth::require_scope(&state, &headers, "write_logged_time").await {
-        return Err(auth::forbidden_scope("write_logged_time"));
+        return Err(with_headers(auth::forbidden_scope("write_logged_time")));
     }
-    require_active_access(&state, user_id).await?;
+    require_active_access(&state, user_id)
+        .await
+        .map_err(with_headers)?;
 
     if payloads.len() > 1000 {
-        return Err(app_error(
+        return Err(with_headers(app_error(
             StatusCode::BAD_REQUEST,
             "at most 1000 heartbeats per request",
-        ));
+        )));
     }
     let mut heartbeats: Vec<Heartbeat> = payloads
         .into_iter()
         .map(|p| payload_to_heartbeat(p, user_id))
         .collect::<Result<_, _>>()
-        .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+        .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
+    state
+        .heartbeat_ingest_service
+        .assign_server_ids(user_id, &mut heartbeats);
 
     let mut resolved = Vec::with_capacity(heartbeats.len());
     for heartbeat in heartbeats.drain(..) {
         let heartbeat = resolve_heartbeat_project(&state, user_id, heartbeat)
             .await
-            .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+            .map_err(|e| {
+                with_headers(app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+            })?;
         resolved.push(heartbeat);
     }
     let heartbeats = resolved;
 
     for hb in &heartbeats {
         hb.validate()
-            .map_err(|e| app_error(StatusCode::BAD_REQUEST, &e))?;
+            .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
     }
 
     let count = state
-        .heartbeat_service
-        .process_heartbeats(user_id, "".to_string(), heartbeats)
+        .heartbeat_ingest_service
+        .process(user_id, "".to_string(), heartbeats)
         .await
-        .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            if state.config.brokers.ingest.mode == crate::config::brokers::IngestMode::Kafka
+                && state
+                    .config
+                    .brokers
+                    .ingest
+                    .kafka_cohort
+                    .as_ref()
+                    .is_some_and(|cohort| cohort.includes(user_id))
+            {
+                kafka_unavailable()
+            } else {
+                with_headers(app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+            }
+        })?;
 
     // See the same call in `create` above. Guarded on `count` so an empty batch — which
     // sent zero actual heartbeats — does not mark the user as having just been active.
@@ -404,17 +444,17 @@ pub async fn list(
             // downgrade a malformed verified row; they never promote `unknown`.
             let stored_actor_type = r.actor_type.parse().unwrap_or_default();
             let verified_identity = row_has_verified_identity(&r);
-            let projection = project_history_attribution(
+            let projection = project_history_attribution(HistoryAttributionInput {
                 stored_actor_type,
-                r.actor_confidence,
-                row_has_ai_evidence(&r),
+                stored_confidence: r.actor_confidence,
+                has_ai_evidence: row_has_ai_evidence(&r),
                 verified_identity,
-                r.identity_status.as_deref(),
-                r.identity_source.as_deref(),
-                r.ai_agent.as_deref(),
-                r.ai_source.as_deref(),
-                r.ai_confidence.as_deref(),
-            );
+                identity_status: r.identity_status.as_deref(),
+                identity_source: r.identity_source.as_deref(),
+                ai_agent: r.ai_agent.as_deref(),
+                ai_source: r.ai_source.as_deref(),
+                ai_confidence: r.ai_confidence.as_deref(),
+            });
 
             // Only a verified actor may expose identity. Inferred rows retain a
             // useful compatibility marker without leaking an arbitrary label;
@@ -532,22 +572,36 @@ struct HistoryAttributionProjection {
     is_ai_generated: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HistoryAttributionInput<'a> {
+    stored_actor_type: ActorType,
+    stored_confidence: f32,
+    has_ai_evidence: bool,
+    verified_identity: bool,
+    identity_status: Option<&'a str>,
+    identity_source: Option<&'a str>,
+    ai_agent: Option<&'a str>,
+    ai_source: Option<&'a str>,
+    ai_confidence: Option<&'a str>,
+}
+
 /// Project a stored heartbeat into the public history contract.
 ///
 /// `actor_type` is intentionally authoritative here. The legacy AI fields are
 /// evidence for validating a verified identity and for downgrading a spoofed
 /// `ai_verified` row, but they cannot turn an explicit `unknown` row into AI.
-fn project_history_attribution(
-    stored_actor_type: ActorType,
-    stored_confidence: f32,
-    has_ai_evidence: bool,
-    verified_identity: bool,
-    identity_status: Option<&str>,
-    identity_source: Option<&str>,
-    ai_agent: Option<&str>,
-    ai_source: Option<&str>,
-    ai_confidence: Option<&str>,
-) -> HistoryAttributionProjection {
+fn project_history_attribution(input: HistoryAttributionInput<'_>) -> HistoryAttributionProjection {
+    let HistoryAttributionInput {
+        stored_actor_type,
+        stored_confidence,
+        has_ai_evidence,
+        verified_identity,
+        identity_status,
+        identity_source,
+        ai_agent,
+        ai_source,
+        ai_confidence,
+    } = input;
     let trusted_partial_identity = matches!(
         identity_status
             .map(|value| value.trim().to_ascii_lowercase())
@@ -744,6 +798,7 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
     };
     let has_ai_metadata = has_legacy_ai_claim || explicit_actor_type.is_some_and(ActorType::is_ai);
     let positive_editor_evidence = !has_ai_metadata
+        && explicit_actor_type != Some(ActorType::Unknown)
         && (p.is_write == Some(true)
             || p.activity_segments.iter().any(|segment| {
                 segment.source.as_deref().is_some_and(|source| {
@@ -911,6 +966,10 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         heartbeat.actor_confidence = 0.0;
         heartbeat.is_ai_generated = false;
     }
+    // Validate before project-rule/identity lookups.  Besides avoiding needless
+    // ClickHouse work for malformed requests, this is important for broker mode:
+    // an invalid heartbeat must never reach either the direct writer or Kafka.
+    heartbeat.validate()?;
     Ok(heartbeat)
 }
 
@@ -925,11 +984,25 @@ async fn resolve_heartbeat_project(
         .await?;
 
     // Identity is resolved after the name rules, not before: a rule can change which
-    // project a heartbeat belongs to, and the id must follow the resolved name.
-    heartbeat.project_id = state
-        .project_identity_service
-        .resolve_project_id(user_id, heartbeat.project.as_deref(), None)
-        .await?;
+    // project a heartbeat belongs to, and the id must follow the resolved name.  A
+    // Kafka-cohort request deliberately leaves the ID for the fact-sink, so an API
+    // replica can continue accepting data while ClickHouse is unavailable.  The
+    // serialized event never trusts the client-provided ID.
+    let kafka_cohort = state.config.brokers.ingest.mode
+        == crate::config::brokers::IngestMode::Kafka
+        && state
+            .config
+            .brokers
+            .ingest
+            .kafka_cohort
+            .as_ref()
+            .is_some_and(|cohort| cohort.includes(user_id));
+    if !kafka_cohort {
+        heartbeat.project_id = state
+            .project_identity_service
+            .resolve_project_id(user_id, heartbeat.project.as_deref(), None)
+            .await?;
+    }
 
     Ok(heartbeat)
 }
@@ -938,11 +1011,27 @@ fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Val
     (status, Json(serde_json::json!({ "error": msg })))
 }
 
+fn with_headers(
+    error: (StatusCode, Json<serde_json::Value>),
+) -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    (error.0, HeaderMap::new(), error.1)
+}
+
+fn kafka_unavailable() -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after", axum::http::HeaderValue::from_static("5"));
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        headers,
+        Json(serde_json::json!({ "error": "heartbeat broker unavailable" })),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         payload_to_heartbeat, project_history_attribution, sanitize_entity, HeartbeatItem,
-        HeartbeatPayload, MAX_HEARTBEAT_REVISION,
+        HeartbeatPayload, HistoryAttributionInput, MAX_HEARTBEAT_REVISION,
     };
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -963,6 +1052,28 @@ mod tests {
         );
         assert_eq!(sanitize_entity("../../secrets.env"), "secrets.env");
         assert_eq!(sanitize_entity("src/main.rs"), "src/main.rs");
+    }
+
+    #[test]
+    fn heartbeat_id_boundary_is_rejected_before_ingest() {
+        let valid: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "heartbeat_id": "x".repeat(256)
+        }))
+        .unwrap();
+        assert!(payload_to_heartbeat(valid, Uuid::nil()).is_ok());
+
+        let invalid: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "heartbeat_id": "x".repeat(257)
+        }))
+        .unwrap();
+        let error = payload_to_heartbeat(invalid, Uuid::nil()).unwrap_err();
+        assert!(error.contains("heartbeat_id"));
     }
 
     #[test]
@@ -1104,6 +1215,22 @@ mod tests {
     }
 
     #[test]
+    fn explicit_unknown_editor_write_does_not_infer_human_authorship() {
+        let payload: HeartbeatPayload = serde_json::from_value(serde_json::json!({
+            "entity": "file.rs", "entity_type": "file", "time": 1789171200.0,
+            "is_write": true, "actor_type": "unknown", "chars_added": 3
+        }))
+        .unwrap();
+        let heartbeat = payload_to_heartbeat(payload, Uuid::new_v4()).unwrap();
+        assert_eq!(
+            heartbeat.actor_type,
+            wakaclock_core::heartbeat::ActorType::Unknown
+        );
+        assert_eq!(heartbeat.chars_added, Some(3));
+        assert_eq!(heartbeat.unattributed_lines_added, None);
+    }
+
+    #[test]
     fn positive_editor_write_resolves_human_without_ai_metadata() {
         let payload: HeartbeatPayload = serde_json::from_value(json!({
             "entity": "src/main.rs",
@@ -1212,17 +1339,17 @@ mod tests {
         ];
 
         for case in cases {
-            let projection = project_history_attribution(
-                case.stored_actor_type,
-                case.stored_confidence,
-                case.has_ai_evidence,
-                case.verified_identity,
-                None,
-                None,
-                None,
-                Some("mcp"),
-                Some("verified"),
-            );
+            let projection = project_history_attribution(HistoryAttributionInput {
+                stored_actor_type: case.stored_actor_type,
+                stored_confidence: case.stored_confidence,
+                has_ai_evidence: case.has_ai_evidence,
+                verified_identity: case.verified_identity,
+                identity_status: None,
+                identity_source: None,
+                ai_agent: None,
+                ai_source: Some("mcp"),
+                ai_confidence: Some("verified"),
+            });
             assert_eq!(
                 projection.actor_type, case.expected_actor_type,
                 "actor for {}",

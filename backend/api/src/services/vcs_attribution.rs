@@ -310,6 +310,7 @@ mod tests {
             heartbeat_id: format!("hb-{start}"),
             language: Some("Rust".to_string()),
             operating_system: "macos".to_string(),
+            machine: "test".to_string(),
             project: Some("wakaclock".to_string()),
             project_id: Some(project()),
             segment_id: format!("seg-{start}"),

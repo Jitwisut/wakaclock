@@ -186,6 +186,21 @@ export function PhaseNineDashboard() {
                   )}
                 </div>
 
+                {data.summary.comparable_seconds !== undefined && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <MetricCard
+                      label="WakaTime-comparable activity"
+                      subtext={`Calculation ${data.summary.calculation_version ?? 'legacy'}`}
+                      value={formatDurationShort(data.summary.comparable_seconds)}
+                    />
+                    <MetricCard
+                      label="Additional measured AI time"
+                      subtext="Unioned with comparable activity in the main total"
+                      value={formatDurationShort(data.summary.ai_additional_seconds ?? 0)}
+                    />
+                  </div>
+                )}
+
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {codeAttribution && (
                     <MetricCard

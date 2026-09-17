@@ -16,6 +16,7 @@ dotenvy = { workspace = true }
 rusqlite = { workspace = true }
 gix = { workspace = true }
 regex = { workspace = true }
+sha2 = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
 sysinfo = { workspace = true }

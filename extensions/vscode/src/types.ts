@@ -11,9 +11,15 @@ export interface ClipboardPasteMetrics {
     origin: PasteOrigin;
 }
 
-/** Metadata sent by the workspace watcher to correlate an external write with
- * the local broker's native AI event. File contents never leave VS Code. */
+/**
+ * Metadata captured when a file changes on disk outside VS Code's document event
+ * stream (for example an AI desktop client applying a patch).  The receiver keeps
+ * the bytes local; only bounded line counts and an opaque fingerprint may cross the
+ * heartbeat boundary.  Missing counters are intentionally `undefined` rather than
+ * zero because a new/unreadable file has no proven before-version.
+ */
 export interface ExternalFileChangeMetadata {
+    /** Stable receiver identity used to make watcher retries idempotent. */
     event_id?: string;
     change_kind?: "create" | "modify" | "delete" | "rename";
     previous_entity?: string;
@@ -22,6 +28,8 @@ export interface ExternalFileChangeMetadata {
     content_fingerprint?: string;
 }
 
+/** Metadata sent by the workspace watcher to correlate an external write with
+ * the local broker's native AI event. File contents never leave VS Code. */
 export interface EditorObservationPayload {
     schema_version: 1;
     observation_id: string;
@@ -90,8 +98,6 @@ export interface BufferedFileState {
     pasteExternalOrUnknownActions: number;
     lineNumber?: number;
     cursorPosition?: number;
-    /** A real editor-presence instant waiting to be emitted as a heartbeat anchor. */
-    pendingPresence: boolean;
     pendingWrite: boolean;
     /**
      * Set only when the pending edit was matched against a broker sidecar event
@@ -109,13 +115,14 @@ export interface BufferedFileState {
     aiActorConfidence?: number;
     aiLinesAdded?: number;
     aiLinesDeleted?: number;
-    /** Individual editor deltas retained until attribution runs; aggregate counters
-     * remain for backwards-compatible heartbeat fields. */
+    /** At most two event metadata records: one permits exact reconciliation,
+     * two mark a mixed window. Source text is never retained here. */
     pendingEditorChanges: EditorChangeObservation[];
 }
 
 export interface EditorChangeObservation {
     timeMs: number;
+    /** Deprecated event-shape fields, zero until the window is measured. */
     linesAdded: number;
     linesDeleted: number;
     contentFingerprint?: string;
@@ -124,6 +131,8 @@ export interface EditorChangeObservation {
 
 export interface ExtraHeartbeatPayload {
     entity: string;
+    /** Unix seconds when the captured editor activity occurred. */
+    time?: number;
     entity_type?: "file" | "domain" | "url" | "app";
     project?: string;
     category?: string;

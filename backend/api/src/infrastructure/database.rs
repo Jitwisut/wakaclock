@@ -5,6 +5,7 @@ use crate::config::ClickHouseConfig;
 
 pub struct ClickHouseClient {
     client: Client,
+    database: String,
 }
 
 impl ClickHouseClient {
@@ -21,14 +22,23 @@ impl ClickHouseClient {
             client = client.with_password(password);
         }
 
-        // Test connection
-        client.query("SELECT 1").execute().await?;
-
-        Ok(Self { client })
+        // Keep construction lazy.  Kafka-mode API replicas intentionally start
+        // while ClickHouse is unavailable; request-path access/project state lives
+        // in PostgreSQL and the heartbeat is durable once Kafka acknowledges it.
+        // Direct/verify startup still probes ClickHouse through the migration pass
+        // in `main`, and health checks continue to report the outage.
+        Ok(Self {
+            client,
+            database: config.database.clone(),
+        })
     }
 
     pub fn get_client(&self) -> Client {
         self.client.clone()
+    }
+
+    pub fn database(&self) -> &str {
+        &self.database
     }
 
     pub async fn health_check(&self) -> Result<()> {

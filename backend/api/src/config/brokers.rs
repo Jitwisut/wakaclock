@@ -20,14 +20,56 @@ const EVENT_BUS_SASL_PASSWORD: &str = "ATOAXIS_EVENT_BUS_SASL_PASSWORD";
 const JOB_QUEUE_URL: &str = "ATOAXIS_JOB_QUEUE_URL";
 const INGEST_MODE: &str = "ATOAXIS_INGEST_MODE";
 const INGEST_KAFKA_COHORT: &str = "ATOAXIS_INGEST_KAFKA_COHORT";
+const AI_USAGE_INGEST_MODE: &str = "ATOAXIS_AI_USAGE_INGEST_MODE";
+const AI_USAGE_KAFKA_COHORT: &str = "ATOAXIS_AI_USAGE_KAFKA_COHORT";
+const AI_USAGE_REQUIRE_CONTRACT_V2: &str = "ATOAXIS_AI_USAGE_REQUIRE_CONTRACT_V2";
+const AI_USAGE_KAFKA_BATCH_SIZE: &str = "ATOAXIS_AI_USAGE_KAFKA_BATCH_SIZE";
+const AI_USAGE_KAFKA_BATCH_WAIT_MS: &str = "ATOAXIS_AI_USAGE_KAFKA_BATCH_WAIT_MS";
+const AI_USAGE_KAFKA_RETRY_MIN_MS: &str = "ATOAXIS_AI_USAGE_KAFKA_RETRY_MIN_MS";
+const AI_USAGE_KAFKA_RETRY_MAX_MS: &str = "ATOAXIS_AI_USAGE_KAFKA_RETRY_MAX_MS";
+const INGEST_STATE_SOURCE: &str = "ATOAXIS_INGEST_STATE_SOURCE";
 const REPROCESS_MODE: &str = "ATOAXIS_REPROCESS_MODE";
+const KAFKA_BATCH_SIZE: &str = "ATOAXIS_KAFKA_BATCH_SIZE";
+const KAFKA_BATCH_WAIT_MS: &str = "ATOAXIS_KAFKA_BATCH_WAIT_MS";
+const KAFKA_RETRY_MIN_MS: &str = "ATOAXIS_KAFKA_RETRY_MIN_MS";
+const KAFKA_RETRY_MAX_MS: &str = "ATOAXIS_KAFKA_RETRY_MAX_MS";
+const METRICS_HOST: &str = "ATOAXIS_METRICS_HOST";
+const METRICS_PORT: &str = "ATOAXIS_METRICS_PORT";
+const PROJECTION_MODE: &str = "ATOAXIS_PROJECTION_REBUILD_MODE";
 
 #[derive(Debug, Clone, Default)]
 pub struct BrokerConfig {
     pub event_bus: Option<EventBusConfig>,
     pub job_queue: Option<JobQueueConfig>,
     pub ingest: IngestConfig,
+    /// AI usage has its own rollout and cohort. It must never inherit the heartbeat
+    /// mode implicitly: operators need to cut over one stream while verifying the
+    /// other and to roll either one back independently.
+    pub ai_usage: AiUsageIngestConfig,
+    /// Source of request-path access and project-rule state.  ClickHouse is
+    /// retained as the compatibility default; Kafka mode is deliberately
+    /// rejected unless PostgreSQL is authoritative.
+    pub ingest_state_source: IngestStateSource,
     pub reprocess_mode: ReprocessMode,
+    pub projection_mode: ProjectionMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IngestStateSource {
+    #[default]
+    ClickHouse,
+    Dual,
+    Postgres,
+}
+
+impl IngestStateSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClickHouse => "clickhouse",
+            Self::Dual => "dual",
+            Self::Postgres => "postgres",
+        }
+    }
 }
 
 /// Kafka connection. Managed providers (Redpanda Cloud, Confluent, Aiven, MSK) all
@@ -137,13 +179,61 @@ impl IngestMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestConfig {
     pub mode: IngestMode,
     /// Parsed whenever it is set, but acted on only in `Kafka` mode. Leaving it set
     /// while switching back to `Direct` or `Verify` is deliberately legal: a rollback
     /// deploy must not fail because it did not also clear the cohort.
     pub kafka_cohort: Option<IngestCohort>,
+    pub batch_size: usize,
+    pub batch_wait: std::time::Duration,
+    pub retry_min: std::time::Duration,
+    pub retry_max: std::time::Duration,
+    pub metrics_host: String,
+    pub metrics_port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiUsageIngestConfig {
+    pub mode: IngestMode,
+    /// Parsed whenever set, but required only for `mode=kafka`; a stale value is
+    /// deliberately harmless during a rollback to direct.
+    pub kafka_cohort: Option<IngestCohort>,
+    pub require_contract_v2: bool,
+    pub batch_size: usize,
+    pub batch_wait: std::time::Duration,
+    pub retry_min: std::time::Duration,
+    pub retry_max: std::time::Duration,
+}
+
+impl Default for AiUsageIngestConfig {
+    fn default() -> Self {
+        Self {
+            mode: IngestMode::Direct,
+            kafka_cohort: None,
+            require_contract_v2: false,
+            batch_size: 1_000,
+            batch_wait: std::time::Duration::from_millis(500),
+            retry_min: std::time::Duration::from_millis(1_000),
+            retry_max: std::time::Duration::from_millis(60_000),
+        }
+    }
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            mode: IngestMode::Direct,
+            kafka_cohort: None,
+            batch_size: 1_000,
+            batch_wait: std::time::Duration::from_millis(500),
+            retry_min: std::time::Duration::from_millis(1_000),
+            retry_max: std::time::Duration::from_millis(60_000),
+            metrics_host: "127.0.0.1".to_string(),
+            metrics_port: 9_090,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,16 +246,19 @@ pub enum IngestCohort {
 }
 
 impl IngestCohort {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the Kafka ingest switch (plan K4)")
-    )]
     pub fn includes(&self, user_id: Uuid) -> bool {
         match self {
             IngestCohort::All => true,
             IngestCohort::Percent(percent) => stable_bucket(user_id) < u64::from(*percent),
             IngestCohort::Users(users) => users.contains(&user_id),
         }
+    }
+
+    /// Whether this cohort covers every authenticated account. Explicit user
+    /// lists are intentionally never treated as an all-users rollout, even if
+    /// they happen to be large today.
+    pub const fn covers_all_users(&self) -> bool {
+        matches!(self, Self::All | Self::Percent(100))
     }
 }
 
@@ -187,7 +280,37 @@ pub enum ReprocessMode {
     Job,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProjectionMode {
+    /// Projection rebuilds run synchronously for compatibility with existing clients.
+    #[default]
+    Sync,
+    /// Projection rebuilds are accepted as durable `projection.rebuild` jobs.
+    Job,
+}
+
 impl BrokerConfig {
+    /// Whether the API can still execute a ClickHouse write for any request.
+    /// Kafka mode is cohort-based, and AI usage additionally keeps legacy
+    /// clients on direct mode until contract v2 is required. Migrations and
+    /// readiness must use this same predicate as request routing.
+    pub fn api_requires_clickhouse(&self) -> bool {
+        let heartbeat_direct = self.ingest.mode != IngestMode::Kafka
+            || !self
+                .ingest
+                .kafka_cohort
+                .as_ref()
+                .is_some_and(IngestCohort::covers_all_users);
+        let ai_usage_direct = self.ai_usage.mode != IngestMode::Kafka
+            || !self
+                .ai_usage
+                .kafka_cohort
+                .as_ref()
+                .is_some_and(IngestCohort::covers_all_users)
+            || !self.ai_usage.require_contract_v2;
+        heartbeat_direct || ai_usage_direct
+    }
+
     pub fn from_env(postgres_configured: bool) -> Result<Self> {
         let config = Self::from_lookup(|key| std::env::var(key).ok(), postgres_configured)?;
         config.ensure_supported()?;
@@ -211,25 +334,125 @@ impl BrokerConfig {
             .transpose()
             .with_context(|| format!("{JOB_QUEUE_URL} is invalid"))?;
 
-        let mode = match get(INGEST_MODE).as_deref() {
-            None => IngestMode::Direct,
-            Some(value) => match value.to_ascii_lowercase().as_str() {
-                "direct" => IngestMode::Direct,
-                "verify" => IngestMode::Verify,
-                "kafka" => IngestMode::Kafka,
-                _ => anyhow::bail!("{INGEST_MODE} must be direct, verify or kafka"),
-            },
-        };
+        let mode = parse_ingest_mode(get(INGEST_MODE), INGEST_MODE)?;
         let kafka_cohort = get(INGEST_KAFKA_COHORT)
             .map(|value| parse_cohort(&value))
             .transpose()
             .with_context(|| format!("{INGEST_KAFKA_COHORT} is invalid"))?;
-        if mode != IngestMode::Direct && event_bus.is_none() {
-            anyhow::bail!("{INGEST_MODE}={} requires {EVENT_BUS_URL}", mode.as_str());
+        let batch_size =
+            parse_bounded_u64(get(KAFKA_BATCH_SIZE), KAFKA_BATCH_SIZE, 1, 10_000, 1_000)? as usize;
+        let batch_wait = std::time::Duration::from_millis(parse_bounded_u64(
+            get(KAFKA_BATCH_WAIT_MS),
+            KAFKA_BATCH_WAIT_MS,
+            1,
+            60_000,
+            500,
+        )?);
+        let retry_min = std::time::Duration::from_millis(parse_bounded_u64(
+            get(KAFKA_RETRY_MIN_MS),
+            KAFKA_RETRY_MIN_MS,
+            1,
+            300_000,
+            1_000,
+        )?);
+        let retry_max = std::time::Duration::from_millis(parse_bounded_u64(
+            get(KAFKA_RETRY_MAX_MS),
+            KAFKA_RETRY_MAX_MS,
+            1,
+            3_600_000,
+            60_000,
+        )?);
+        if retry_min > retry_max {
+            anyhow::bail!("{KAFKA_RETRY_MIN_MS} must not exceed {KAFKA_RETRY_MAX_MS}");
+        }
+
+        let ai_usage_mode = parse_ingest_mode(get(AI_USAGE_INGEST_MODE), AI_USAGE_INGEST_MODE)?;
+        let ai_usage_kafka_cohort = get(AI_USAGE_KAFKA_COHORT)
+            .map(|value| parse_cohort(&value))
+            .transpose()
+            .with_context(|| format!("{AI_USAGE_KAFKA_COHORT} is invalid"))?;
+        let ai_usage_require_contract_v2 = get(AI_USAGE_REQUIRE_CONTRACT_V2)
+            .map(|value| parse_bool(&value))
+            .transpose()
+            .with_context(|| format!("{AI_USAGE_REQUIRE_CONTRACT_V2} is invalid"))?
+            .unwrap_or(false);
+        let ai_usage_batch_size = parse_bounded_u64(
+            get(AI_USAGE_KAFKA_BATCH_SIZE),
+            AI_USAGE_KAFKA_BATCH_SIZE,
+            1,
+            10_000,
+            1_000,
+        )? as usize;
+        let ai_usage_batch_wait = std::time::Duration::from_millis(parse_bounded_u64(
+            get(AI_USAGE_KAFKA_BATCH_WAIT_MS),
+            AI_USAGE_KAFKA_BATCH_WAIT_MS,
+            1,
+            60_000,
+            500,
+        )?);
+        let ai_usage_retry_min = std::time::Duration::from_millis(parse_bounded_u64(
+            get(AI_USAGE_KAFKA_RETRY_MIN_MS),
+            AI_USAGE_KAFKA_RETRY_MIN_MS,
+            1,
+            300_000,
+            1_000,
+        )?);
+        let ai_usage_retry_max = std::time::Duration::from_millis(parse_bounded_u64(
+            get(AI_USAGE_KAFKA_RETRY_MAX_MS),
+            AI_USAGE_KAFKA_RETRY_MAX_MS,
+            1,
+            3_600_000,
+            60_000,
+        )?);
+        if ai_usage_retry_min > ai_usage_retry_max {
+            anyhow::bail!(
+                "{AI_USAGE_KAFKA_RETRY_MIN_MS} must not exceed {AI_USAGE_KAFKA_RETRY_MAX_MS}"
+            );
+        }
+        let metrics_host = get(METRICS_HOST).unwrap_or_else(|| "127.0.0.1".to_string());
+        let metrics_port =
+            parse_bounded_u64(get(METRICS_PORT), METRICS_PORT, 1, u16::MAX as u64, 9090)? as u16;
+        let ingest_state_source = match get(INGEST_STATE_SOURCE).as_deref() {
+            None | Some("clickhouse") => IngestStateSource::ClickHouse,
+            Some("dual") => IngestStateSource::Dual,
+            Some("postgres") => IngestStateSource::Postgres,
+            Some(_) => anyhow::bail!("{INGEST_STATE_SOURCE} must be clickhouse, dual or postgres"),
+        };
+        if ingest_state_source != IngestStateSource::ClickHouse && !postgres_configured {
+            anyhow::bail!(
+                "{INGEST_STATE_SOURCE}={} requires POSTGRES_URL",
+                ingest_state_source.as_str()
+            );
+        }
+        if (mode != IngestMode::Direct || ai_usage_mode != IngestMode::Direct)
+            && event_bus.is_none()
+        {
+            anyhow::bail!("broker-backed heartbeat or AI usage ingest requires {EVENT_BUS_URL}");
         }
         // No implicit "everyone": the first Kafka deploy must name who moves.
         if mode == IngestMode::Kafka && kafka_cohort.is_none() {
             anyhow::bail!("{INGEST_MODE}=kafka requires {INGEST_KAFKA_COHORT}");
+        }
+        if mode == IngestMode::Kafka && ingest_state_source != IngestStateSource::Postgres {
+            anyhow::bail!("{INGEST_MODE}=kafka requires {INGEST_STATE_SOURCE}=postgres");
+        }
+        if ai_usage_mode == IngestMode::Kafka && ai_usage_kafka_cohort.is_none() {
+            anyhow::bail!("{AI_USAGE_INGEST_MODE}=kafka requires {AI_USAGE_KAFKA_COHORT}");
+        }
+        if ai_usage_mode == IngestMode::Kafka && !postgres_configured {
+            anyhow::bail!("{AI_USAGE_INGEST_MODE}=kafka requires POSTGRES_URL");
+        }
+        if ai_usage_mode == IngestMode::Kafka && job_queue.is_none() {
+            anyhow::bail!("{AI_USAGE_INGEST_MODE}=kafka requires {JOB_QUEUE_URL}");
+        }
+        // Both verify consumers persist their audit outcome in PostgreSQL. Do not
+        // let the API advertise a verify rollout that the corresponding verifier
+        // cannot start or durably report.
+        if mode == IngestMode::Verify && !postgres_configured {
+            anyhow::bail!("{INGEST_MODE}=verify requires POSTGRES_URL");
+        }
+        if ai_usage_mode == IngestMode::Verify && !postgres_configured {
+            anyhow::bail!("{AI_USAGE_INGEST_MODE}=verify requires POSTGRES_URL");
         }
 
         let reprocess_mode = match get(REPROCESS_MODE).as_deref() {
@@ -250,29 +473,67 @@ impl BrokerConfig {
             }
         }
 
+        let projection_mode = match get(PROJECTION_MODE).as_deref() {
+            None => ProjectionMode::Sync,
+            Some(value) => match value.to_ascii_lowercase().as_str() {
+                "sync" => ProjectionMode::Sync,
+                "job" => ProjectionMode::Job,
+                _ => anyhow::bail!("{PROJECTION_MODE} must be sync or job"),
+            },
+        };
+        if projection_mode == ProjectionMode::Job {
+            if job_queue.is_none() {
+                anyhow::bail!("{PROJECTION_MODE}=job requires {JOB_QUEUE_URL}");
+            }
+            if !postgres_configured {
+                anyhow::bail!("{PROJECTION_MODE}=job requires POSTGRES_URL");
+            }
+        }
+
         Ok(Self {
             event_bus,
             job_queue,
-            ingest: IngestConfig { mode, kafka_cohort },
+            ingest: IngestConfig {
+                mode,
+                kafka_cohort,
+                batch_size,
+                batch_wait,
+                retry_min,
+                retry_max,
+                metrics_host,
+                metrics_port,
+            },
+            ai_usage: AiUsageIngestConfig {
+                mode: ai_usage_mode,
+                kafka_cohort: ai_usage_kafka_cohort,
+                require_contract_v2: ai_usage_require_contract_v2,
+                batch_size: ai_usage_batch_size,
+                batch_wait: ai_usage_batch_wait,
+                retry_min: ai_usage_retry_min,
+                retry_max: ai_usage_retry_max,
+            },
+            ingest_state_source,
             reprocess_mode,
+            projection_mode,
         })
     }
 
-    /// Refuses modes whose implementation has not landed yet. Each later PR removes
-    /// its own line here in the same change that makes the mode real.
+    /// Refuses broker modes when the binary was built without the Kafka adapter.
+    /// The default feature set therefore remains a safe direct-only deployment,
+    /// while production images can opt into the fully wired K1–K4 path.
     fn ensure_supported(&self) -> Result<()> {
-        if self.ingest.mode != IngestMode::Direct {
+        #[cfg(not(feature = "kafka"))]
+        if self.ingest.mode != IngestMode::Direct || self.ai_usage.mode != IngestMode::Direct {
             anyhow::bail!(
-                "{INGEST_MODE}={} is not available in this build: the Kafka producer and \
+                "broker-backed ingest is not available in this build: the Kafka producer and \
                  consumer have not landed (plan K1-K4). Unset it or use `direct`.",
-                self.ingest.mode.as_str()
             );
         }
-        if self.reprocess_mode != ReprocessMode::Sync {
-            anyhow::bail!(
-                "{REPROCESS_MODE}=job is not available in this build: the job worker has not \
-                 landed (plan R1-R4). Unset it or use `sync`."
-            );
+        #[cfg(feature = "kafka")]
+        if (self.ingest.mode != IngestMode::Direct || self.ai_usage.mode != IngestMode::Direct)
+            && self.event_bus.is_none()
+        {
+            anyhow::bail!("broker-backed ingest requires {EVENT_BUS_URL}");
         }
         Ok(())
     }
@@ -282,21 +543,32 @@ impl BrokerConfig {
     pub fn log_startup_summary(&self) {
         tracing::info!(
             ingest_mode = self.ingest.mode.as_str(),
+            ai_usage_ingest_mode = self.ai_usage.mode.as_str(),
+            ai_usage_require_contract_v2 = self.ai_usage.require_contract_v2,
             reprocess_mode = ?self.reprocess_mode,
+            projection_mode = ?self.projection_mode,
             "broker modes"
         );
         if let Some(event_bus) = &self.event_bus {
+            #[cfg(feature = "kafka")]
+            tracing::info!(
+                bootstrap_servers = ?event_bus.bootstrap_servers,
+                tls = event_bus.tls,
+                sasl = event_bus.sasl.as_ref().map(|sasl| sasl.mechanism.as_str()),
+                "{EVENT_BUS_URL} is configured for Kafka"
+            );
+            #[cfg(not(feature = "kafka"))]
             tracing::warn!(
                 bootstrap_servers = ?event_bus.bootstrap_servers,
                 tls = event_bus.tls,
                 sasl = event_bus.sasl.as_ref().map(|sasl| sasl.mechanism.as_str()),
-                "{EVENT_BUS_URL} is set but no Kafka adapter exists in this build; it is unused"
+                "{EVENT_BUS_URL} is set but the Kafka adapter is not compiled; it is unused"
             );
         }
         if let Some(job_queue) = &self.job_queue {
             tracing::info!(
                 url = %job_queue.redacted_url(),
-                "{JOB_QUEUE_URL} is set; the outbox relay connects to RabbitMQ when POSTGRES_URL is also configured (plan R2)"
+                "{JOB_QUEUE_URL} is set; the dedicated job-worker connects to RabbitMQ when POSTGRES_URL is also configured (plan R3)"
             );
             if !job_queue.tls() && !is_loopback_host(&job_queue.host) {
                 tracing::warn!(
@@ -306,6 +578,36 @@ impl BrokerConfig {
             }
         }
     }
+}
+
+fn parse_ingest_mode(value: Option<String>, key: &str) -> Result<IngestMode> {
+    match value.as_deref() {
+        None => Ok(IngestMode::Direct),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "direct" => Ok(IngestMode::Direct),
+            "verify" => Ok(IngestMode::Verify),
+            "kafka" => Ok(IngestMode::Kafka),
+            _ => anyhow::bail!("{key} must be direct, verify or kafka"),
+        },
+    }
+}
+
+fn parse_bounded_u64(
+    value: Option<String>,
+    key: &str,
+    min: u64,
+    max: u64,
+    default: u64,
+) -> Result<u64> {
+    let parsed = value
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .with_context(|| format!("{key} must be an integer"))?
+        .unwrap_or(default);
+    if !(min..=max).contains(&parsed) {
+        anyhow::bail!("{key} must be between {min} and {max}");
+    }
+    Ok(parsed)
 }
 
 fn parse_event_bus(get: &impl Fn(&str) -> Option<String>) -> Result<Option<EventBusConfig>> {
@@ -487,6 +789,7 @@ mod tests {
         assert_eq!(config.ingest, IngestConfig::default());
         assert_eq!(config.ingest.mode, IngestMode::Direct);
         assert_eq!(config.reprocess_mode, ReprocessMode::Sync);
+        assert_eq!(config.projection_mode, ProjectionMode::Sync);
         assert!(config.ensure_supported().is_ok());
     }
 
@@ -592,6 +895,32 @@ mod tests {
         let job_queue = (JOB_QUEUE_URL, "amqps://u:p@mq.example.cloud:5671/%2f");
         assert!(parse(&[job_queue, (REPROCESS_MODE, "job")], false).is_err());
         assert!(parse(&[job_queue, (REPROCESS_MODE, "job")], true).is_ok());
+
+        assert!(parse(&[(PROJECTION_MODE, "job")], true).is_err());
+        assert!(parse(&[job_queue, (PROJECTION_MODE, "job")], false).is_err());
+        assert_eq!(
+            parse(&[job_queue, (PROJECTION_MODE, "job")], true)
+                .unwrap()
+                .projection_mode,
+            ProjectionMode::Job
+        );
+    }
+
+    #[test]
+    fn verify_modes_require_postgres_audit_storage() {
+        let mut heartbeat = managed_kafka();
+        heartbeat.push((INGEST_MODE, "verify"));
+        assert!(parse(&heartbeat, false).is_err());
+        assert!(parse(&heartbeat, true).is_ok());
+
+        let mut ai_usage = managed_kafka();
+        ai_usage.push((AI_USAGE_INGEST_MODE, "verify"));
+        assert!(parse(&ai_usage, false).is_err());
+        assert!(parse(&ai_usage, true).is_ok());
+
+        // The compatibility default remains usable without the transactional
+        // store; only the explicitly selected verifier needs the audit backend.
+        assert!(parse(&[], false).is_ok());
     }
 
     #[test]
@@ -600,10 +929,61 @@ mod tests {
         vars.push((INGEST_MODE, "kafka"));
         assert!(parse(&vars, false).is_err());
         vars.push((INGEST_KAFKA_COHORT, "percent:5"));
+        assert!(
+            parse(&vars, false).is_err(),
+            "Kafka mode requires PostgreSQL state"
+        );
+        vars.push((INGEST_STATE_SOURCE, "postgres"));
         assert_eq!(
-            parse(&vars, false).unwrap().ingest.kafka_cohort,
+            parse(&vars, true).unwrap().ingest.kafka_cohort,
             Some(IngestCohort::Percent(5))
         );
+    }
+
+    #[test]
+    fn kafka_mode_requires_postgres_state_source() {
+        let mut vars = managed_kafka();
+        vars.extend([(INGEST_MODE, "kafka"), (INGEST_KAFKA_COHORT, "all")]);
+        assert!(parse(&vars, true).is_err());
+        vars.push((INGEST_STATE_SOURCE, "postgres"));
+        assert!(parse(&vars, true).is_ok());
+    }
+
+    #[test]
+    fn ai_usage_rollout_is_independent_and_requires_all_kafka_dependencies() {
+        let mut vars = managed_kafka();
+        vars.extend([
+            (AI_USAGE_INGEST_MODE, "kafka"),
+            (AI_USAGE_KAFKA_COHORT, "percent:5"),
+            (JOB_QUEUE_URL, "amqps://u:p@mq.example.cloud:5671/%2f"),
+        ]);
+        let config = parse(&vars, true).unwrap();
+        assert_eq!(config.ingest.mode, IngestMode::Direct);
+        assert_eq!(config.ai_usage.mode, IngestMode::Kafka);
+        assert_eq!(config.ai_usage.kafka_cohort, Some(IngestCohort::Percent(5)));
+
+        let mut missing_cohort = vars.clone();
+        missing_cohort.retain(|(key, _)| *key != AI_USAGE_KAFKA_COHORT);
+        assert!(parse(&missing_cohort, true).is_err());
+
+        let mut missing_jobs = vars;
+        missing_jobs.retain(|(key, _)| *key != JOB_QUEUE_URL);
+        assert!(parse(&missing_jobs, true).is_err());
+    }
+
+    #[test]
+    fn ai_usage_cohort_and_contract_requirement_do_not_block_direct_rollback() {
+        let config = parse(
+            &[
+                (AI_USAGE_KAFKA_COHORT, "all"),
+                (AI_USAGE_REQUIRE_CONTRACT_V2, "true"),
+            ],
+            false,
+        )
+        .unwrap();
+        assert_eq!(config.ai_usage.mode, IngestMode::Direct);
+        assert!(config.ai_usage.require_contract_v2);
+        assert!(config.ensure_supported().is_ok());
     }
 
     #[test]
@@ -614,10 +994,32 @@ mod tests {
     }
 
     #[test]
+    fn clickhouse_dependency_matches_actual_api_fallback_paths() {
+        let mut config = BrokerConfig::default();
+        assert!(config.api_requires_clickhouse());
+
+        config.ingest.mode = IngestMode::Kafka;
+        config.ingest.kafka_cohort = Some(IngestCohort::All);
+        config.ai_usage.mode = IngestMode::Kafka;
+        config.ai_usage.kafka_cohort = Some(IngestCohort::All);
+        config.ai_usage.require_contract_v2 = true;
+        assert!(!config.api_requires_clickhouse());
+
+        config.ai_usage.require_contract_v2 = false;
+        assert!(config.api_requires_clickhouse());
+        config.ai_usage.require_contract_v2 = true;
+        config.ai_usage.kafka_cohort = Some(IngestCohort::Percent(5));
+        assert!(config.api_requires_clickhouse());
+    }
+
+    #[test]
     fn modes_without_an_implementation_refuse_to_boot() {
         let mut vars = managed_kafka();
         vars.push((INGEST_MODE, "verify"));
-        let verify = parse(&vars, false).unwrap();
+        let verify = parse(&vars, true).unwrap();
+        #[cfg(feature = "kafka")]
+        assert!(verify.ensure_supported().is_ok());
+        #[cfg(not(feature = "kafka"))]
         assert!(verify.ensure_supported().is_err());
 
         let job = parse(
@@ -628,7 +1030,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(job.ensure_supported().is_err());
+        assert!(job.ensure_supported().is_ok());
     }
 
     #[test]

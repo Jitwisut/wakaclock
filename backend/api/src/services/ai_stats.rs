@@ -158,6 +158,8 @@ impl AiStatsService {
                         identity_status: row.identity_status,
                         identity_reason: row.identity_reason,
                         identity_source: row.identity_source,
+                        ai_added_measured_heartbeats: row.ai_added_measured_heartbeats,
+                        ai_deleted_measured_heartbeats: row.ai_deleted_measured_heartbeats,
                         ai_lines_added: row.ai_lines_added,
                         ai_lines_deleted: row.ai_lines_deleted,
                         human_lines_added: row.human_lines_added,
@@ -260,9 +262,9 @@ impl AiStatsService {
                     h.effective_actor_type AS actor_type,
                     if(h.effective_actor_type = 'ai_verified', nullIf(trim(ifNull(h.ai_provider, '')), ''), NULL) AS provider,
                     if(h.effective_actor_type = 'ai_verified', nullIf(trim(ifNull(h.ai_model, '')), ''), NULL) AS model,
-                    if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
+                    toNullable(if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
                         coalesce(nullIf(lower(trim(ifNull(h.identity_status, ''))), ''), 'unavailable'),
-                        'unavailable') AS identity_status,
+                        'unavailable')) AS identity_status,
                     if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
                         multiIf(
                             lower(trim(ifNull(h.identity_reason, ''))) IN ('missing_agent', 'missing_provider', 'missing_model', 'internal_marker', 'context_unavailable', 'conflicting_evidence'),
@@ -274,6 +276,8 @@ impl AiStatsService {
                             lower(trim(ifNull(h.identity_source, ifNull(h.ai_source, '')))),
                             NULL
                         ), NULL) AS identity_source,
+                    countIf(h.effective_actor_type IN ('ai_verified', 'ai_inferred') AND isNotNull(h.ai_lines_added)) AS ai_added_measured_heartbeats,
+                    countIf(h.effective_actor_type IN ('ai_verified', 'ai_inferred') AND isNotNull(h.ai_lines_deleted)) AS ai_deleted_measured_heartbeats,
                     sumIf(coalesce(h.ai_lines_added, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_added,
                     sumIf(coalesce(h.ai_lines_deleted, 0), h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_lines_deleted,
                     sumIf(coalesce(h.human_lines_added, 0), h.effective_actor_type = 'human') AS human_lines_added,
@@ -494,8 +498,12 @@ fn validate_date(date: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{coverage_from_totals, effective_actor_type_expr, identity_summary};
+    use super::{
+        coverage_from_totals, effective_actor_type_expr, identity_summary, AiStatsService,
+    };
     use crate::model::ai_stats::{AiAgentRow, AiCoverageStatus, AiTotalsRow};
+    use crate::repository::heartbeat::HeartbeatRepository;
+    use uuid::Uuid;
 
     fn totals() -> AiTotalsRow {
         AiTotalsRow {
@@ -572,6 +580,8 @@ mod tests {
     fn identity_summary_keeps_partial_verified_rows_and_reasons() {
         let rows = vec![
             AiAgentRow {
+                ai_added_measured_heartbeats: 0,
+                ai_deleted_measured_heartbeats: 0,
                 agent: "codex".into(),
                 actor_type: "ai_verified".into(),
                 provider: Some("openai".into()),
@@ -588,6 +598,8 @@ mod tests {
                 heartbeat_count: 4,
             },
             AiAgentRow {
+                ai_added_measured_heartbeats: 0,
+                ai_deleted_measured_heartbeats: 0,
                 agent: "codex".into(),
                 actor_type: "ai_verified".into(),
                 provider: Some("openai".into()),
@@ -613,5 +625,79 @@ mod tests {
         assert_eq!(summary.conflict_heartbeats, 0);
         assert_eq!(summary.reason_counts[0].reason, "missing_model");
         assert_eq!(summary.reason_counts[0].heartbeats, 4);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn agents_query_deserializes_nullable_identity_status() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+
+        let user_id = Uuid::new_v4();
+        let client = clickhouse.get_client();
+        let insert = format!(
+            r#"INSERT INTO wakaclock.heartbeats
+                (user_id, entity, entity_type, time, date, is_write, category,
+                 editor, operating_system, machine, user_agent, is_ai_generated,
+                 ai_agent, ai_provider, ai_model, identity_status, identity_source,
+                 ai_source, ai_confidence, ai_event_id, ai_lines_added,
+                 human_lines_added, actor_type, created_at)
+               VALUES
+                ('{user_id}', 'verified.rs', 'file', 1789171200, '2026-09-12', 1, 'coding',
+                 'test', 'test', 'test', 'test', 1,
+                 'codex', 'openai', 'gpt-5.6-sol', 'confirmed', 'agent_hook',
+                 'agent_hook', 'verified', 'ai-stats-verified', 5,
+                 NULL, 'ai_verified', 1),
+                ('{user_id}', 'inferred.rs', 'file', 1789171260, '2026-09-12', 1, 'coding',
+                 'test', 'test', 'test', 'test', 1,
+                 'legacy-agent', NULL, NULL, 'partial', 'transcript',
+                 'transcript', 'correlated', 'ai-stats-inferred', 2,
+                 NULL, 'ai_inferred', 2),
+                ('{user_id}', 'human.rs', 'file', 1789171320, '2026-09-12', 1, 'coding',
+                 'test', 'test', 'test', 'test', 0,
+                 NULL, NULL, NULL, NULL, NULL,
+                 NULL, NULL, 'ai-stats-human', NULL,
+                 3, 'human', 3)"#
+        );
+        client.query(&insert).execute().await.unwrap();
+
+        let status_type: String = client
+            .query(&format!(
+                "SELECT toTypeName(toNullable(if(actor_type IN ('ai_verified', 'ai_inferred'), coalesce(nullIf(lower(trim(ifNull(identity_status, ''))), ''), 'unavailable'), 'unavailable'))) FROM wakaclock.heartbeats WHERE user_id = '{user_id}' LIMIT 1"
+            ))
+            .fetch_one()
+            .await
+            .unwrap();
+        assert_eq!(status_type, "Nullable(String)");
+
+        let service = AiStatsService::new(clickhouse);
+        let rows = service
+            .fetch_agents(user_id, "2026-09-12", "2026-09-12")
+            .await
+            .unwrap();
+
+        let verified = rows
+            .iter()
+            .find(|row| row.actor_type == "ai_verified")
+            .expect("verified agent row");
+        assert_eq!(verified.identity_status.as_deref(), Some("confirmed"));
+        assert_eq!(verified.ai_added_measured_heartbeats, 1);
+        assert_eq!(verified.ai_deleted_measured_heartbeats, 0);
+        assert_eq!(verified.ai_lines_deleted, 0); // Known subtotal, not measured-zero proof.
+
+        let inferred = rows
+            .iter()
+            .find(|row| row.actor_type == "ai_inferred")
+            .expect("inferred agent row");
+        assert_eq!(inferred.identity_status.as_deref(), Some("partial"));
+
+        let human = rows
+            .iter()
+            .find(|row| row.actor_type == "human")
+            .expect("human agent row");
+        assert_eq!(human.identity_status.as_deref(), Some("unavailable"));
     }
 }

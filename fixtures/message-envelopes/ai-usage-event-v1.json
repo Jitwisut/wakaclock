@@ -1,0 +1,27 @@
+{
+  "event_id": "au:v1:ef27c902bfbb8fdfa8e18db17c151ed753b8b2ab7a0fad9a3ce2bf9e280a0611",
+  "event_version": 1,
+  "event_type": "ai.usage.recorded",
+  "tenant_id": "0190f3a1-0000-7000-8000-000000000001",
+  "occurred_at": "2026-09-10T03:15:00Z",
+  "received_at": "2026-09-10T03:15:01.250Z",
+  "source": "api",
+  "trace_id": "au:v1:ef27c902bfbb8fdfa8e18db17c151ed753b8b2ab7a0fad9a3ce2bf9e280a0611",
+  "idempotency_key": "au:v1:ef27c902bfbb8fdfa8e18db17c151ed753b8b2ab7a0fad9a3ce2bf9e280a0611",
+  "payload": {
+    "usage_event_id": "msg_fixture_001",
+    "ai_session_id": "session_fixture_001",
+    "occurred_at": "2026-09-10T03:15:00Z",
+    "agent": "claude-code",
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "prompt_count": 1,
+    "prompt_character_count": 42,
+    "input_tokens": 120,
+    "output_tokens": 80,
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "token_source": "transcript",
+    "project_hint": "wakaclock"
+  }
+}

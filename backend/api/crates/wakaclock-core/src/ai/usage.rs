@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 
+/// Maximum size for an opaque producer identifier or a privacy-safe display hint.
+/// The broker contract hashes the usage id, but the API still accepts legacy provider
+/// ids verbatim so retries remain byte-for-byte stable.
+pub const MAX_USAGE_IDENTIFIER_BYTES: usize = 512;
+
 /// One model request's usage, keyed by the provider's own message id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiUsageRecord {
@@ -47,6 +52,57 @@ pub struct AiUsageRecord {
     pub project_hint: Option<String>,
 }
 
+impl AiUsageRecord {
+    /// Validate the content-free boundary shared by the HTTP API, the Kafka envelope
+    /// and the durable client queue.  This intentionally checks byte length without
+    /// trimming or normalising the stable usage id.
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("usage_event_id", self.usage_event_id.as_str()),
+            ("ai_session_id", self.ai_session_id.as_str()),
+            ("agent", self.agent.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{label} cannot be empty"));
+            }
+            if value.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                return Err(format!(
+                    "{label} must be at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                ));
+            }
+        }
+        for (label, value) in [
+            ("provider", self.provider.as_deref()),
+            ("model", self.model.as_deref()),
+        ] {
+            if let Some(value) = value {
+                if value.trim().is_empty() || value.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                    return Err(format!(
+                        "{label} must be a non-empty value of at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                    ));
+                }
+            }
+        }
+        if let Some(project_hint) = self.project_hint.as_deref() {
+            if project_hint.trim().is_empty() || project_hint.len() > MAX_USAGE_IDENTIFIER_BYTES {
+                return Err(format!(
+                    "project_hint must be a non-empty display name of at most {MAX_USAGE_IDENTIFIER_BYTES} bytes"
+                ));
+            }
+            if project_hint.contains('/') || project_hint.contains('\\') {
+                return Err("project_hint must be a display name, not a filesystem path".into());
+            }
+        }
+        let occurred_at = self.occurred_at.timestamp();
+        if !(0..=i64::from(u32::MAX)).contains(&occurred_at) {
+            return Err(
+                "occurred_at must fit the ClickHouse UInt32 timestamp range (1970..=2106)".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// The outcome of a server-side usage ingest. Kept in the core crate because both the
 /// CLI and the API serialize this sanitized, content-free shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +112,28 @@ pub struct AiUsageIngestReport {
     pub duplicates_in_batch: usize,
     pub unpriced: usize,
     pub sessions_touched: usize,
+}
+
+/// Capability-negotiated response for the Kafka cutover. Derived fields are
+/// nullable because a pending Kafka acknowledgement has not reached the fact sink
+/// yet; a direct/verify response can still expose the legacy numeric counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiUsageIngestReportV2 {
+    pub contract_version: u16,
+    pub processing_state: AiUsageProcessingState,
+    pub received: usize,
+    pub accepted: usize,
+    pub duplicates_in_batch: usize,
+    pub stored: Option<usize>,
+    pub unpriced: Option<usize>,
+    pub sessions_touched: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiUsageProcessingState {
+    Stored,
+    Pending,
 }
 
 /// Provenance of a usage row's token counts.
@@ -750,6 +828,15 @@ mod tests {
     fn a_record_without_timestamp_is_ignored_instead_of_being_misdated_at_upload_time() {
         let line = r#"{"type":"assistant","sessionId":"s1","message":{"id":"msg_1","usage":{"input_tokens":5}}}"#;
         assert!(parse_claude_usage_str(line).is_empty());
+    }
+
+    #[test]
+    fn a_timestamp_outside_the_clickhouse_uint32_range_is_rejected() {
+        let mut parsed = parse_claude_usage_str(&record("msg_1", r#""input_tokens":5"#));
+        let mut usage = parsed.pop().expect("one usage record");
+        usage.occurred_at = DateTime::<Utc>::from_timestamp(i64::from(u32::MAX) + 1, 0)
+            .expect("timestamp is representable by chrono");
+        assert!(usage.validate().is_err());
     }
 
     #[test]

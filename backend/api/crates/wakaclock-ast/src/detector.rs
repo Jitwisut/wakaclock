@@ -2138,7 +2138,6 @@ mod tests {
 
     #[test]
     fn cache_invalidates_when_editor_buffer_changes_without_a_disk_mtime_change() {
-        cache::clear_for_tests();
         let first = detect(
             "buffer.ts",
             b"import react from 'react';\nconst value: number = 1;",
@@ -2177,7 +2176,6 @@ mod tests {
 
     #[test]
     fn concurrent_detection_is_consistent() {
-        cache::clear_for_tests();
         let cases = [
             (
                 "a.rs",

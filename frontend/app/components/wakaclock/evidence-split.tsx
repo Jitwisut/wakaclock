@@ -29,7 +29,12 @@ interface Row {
   tone: string;
 }
 
-function Meter({ rows, total, title, caption }: {
+function Meter({
+  rows,
+  total,
+  title,
+  caption,
+}: {
   caption: string;
   rows: Row[];
   title: string;
@@ -38,15 +43,10 @@ function Meter({ rows, total, title, caption }: {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-muted-foreground text-xs font-bold tracking-wide uppercase">
-          {title}
-        </h3>
+        <h3 className="text-muted-foreground text-xs font-bold tracking-wide uppercase">{title}</h3>
         <p className="text-muted-foreground text-xs">{caption}</p>
       </div>
-      <div
-        aria-hidden
-        className="border-border flex h-3 w-full overflow-hidden border-2"
-      >
+      <div aria-hidden className="border-border flex h-3 w-full overflow-hidden border-2">
         {rows.map((row) => (
           <div
             className={row.tone}
@@ -144,16 +144,14 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
 
   const ai: Row[] = [
     {
-      hint:
-        'Measured editor or agent intervals attributed to an AI actor. Idle bridge time is excluded.',
+      hint: 'Measured editor or agent intervals attributed to an AI actor. Idle bridge time is excluded.',
       key: 'ai-coding',
       label: 'AI coding',
       seconds: evidence.ai_coding_seconds,
       tone: 'bg-chart-2',
     },
     {
-      hint:
-        'The union of AI session intervals. This can be longer than measured AI coding when a session spans pauses, but it never changes total time.',
+      hint: 'The union of AI session intervals. This can be longer than measured AI coding when a session spans pauses, but it never changes total time.',
       key: 'ai-session',
       label: 'AI session',
       seconds: evidence.ai_session_seconds,
@@ -167,6 +165,19 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
         <CardTitle>Where this time came from</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {evidence.comparable_seconds !== undefined &&
+          evidence.ai_additional_seconds !== undefined && (
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt>WakaTime-comparable activity</dt>
+                <dd>{Math.round(evidence.comparable_seconds / 60)} min</dd>
+              </div>
+              <div>
+                <dt>Additional measured AI time</dt>
+                <dd>{Math.round(evidence.ai_additional_seconds / 60)} min</dd>
+              </div>
+            </dl>
+          )}
         <Meter
           caption="both bars total the same time"
           rows={measurement}

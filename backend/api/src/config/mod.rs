@@ -34,6 +34,44 @@ pub struct RedisConfig {
     pub url: Option<String>,
 }
 
+/// Export requests are disabled by default until the API and the dedicated
+/// export worker are deployed with a durable object store. Keeping this switch
+/// separate from the generic job queue prevents an operator from accidentally
+/// accepting export work merely by enabling RabbitMQ for another job kind.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum ExportMode {
+    #[default]
+    Disabled,
+    Job,
+}
+
+/// Account deletion is deliberately opt-in. The endpoint must not accept a
+/// destructive request merely because the shared job queue is configured.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum AccountDeletionMode {
+    #[default]
+    Disabled,
+    Job,
+}
+
+impl AccountDeletionMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Job => "job",
+        }
+    }
+}
+
+impl ExportMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Job => "job",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum CorsOrigins {
     /// `CORS_ORIGINS=*` — explicit opt-in to accept any origin. Fine for a laptop-only
@@ -65,12 +103,23 @@ pub struct Config {
     /// product must be able to show again (currently the dashboard API key). `None`
     /// leaves keys hash-only and `GET /users/current/api_key` returns no value.
     pub credential_master_key: Option<String>,
+    /// Explicit gate for accepting export jobs. The worker may still be run while
+    /// this is disabled to drain already accepted work during a rollback.
+    pub export_mode: ExportMode,
+    /// Explicit gate for accepting destructive account deletion jobs.
+    pub account_deletion_mode: AccountDeletionMode,
     /// How long a pause between two *proven* activity intervals may last before the
     /// clock stops. This is WakaTime's per-user timeout, and it exists because a
     /// segment can only ever be as long as the strict 120-second evidence window:
     /// without it, every think/read/test pause longer than two minutes silently
     /// vanished from the day's total. Set to `0` to keep the pre-bridging behaviour.
     pub idle_timeout_seconds: f64,
+    #[serde(default)]
+    pub duration_combined_v2: bool,
+    /// Additive rollout switch for the UI/API primary duration. The legacy field
+    /// values remain available in every response while this is canaried.
+    #[serde(default)]
+    pub duration_primary_mode: DurationPrimaryMode,
     /// The same pause allowance for agent-emitted activity, bridged on its own timeline.
     /// Defaults to `idle_timeout_seconds`, which keeps the reported total within 1% of
     /// WakaTime while still attributing human and agent seconds separately. Lower it to
@@ -82,6 +131,13 @@ pub struct Config {
     /// credentials; `Default` is "no brokers", which is today's behaviour.
     #[serde(skip)]
     pub brokers: brokers::BrokerConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub enum DurationPrimaryMode {
+    #[default]
+    WakatimeCompatible,
+    ActiveV1,
 }
 
 const DEV_JWT_SECRET: &str = "wakaclock-dev-secret-change-me";
@@ -122,14 +178,24 @@ impl Config {
             .ok()
             .filter(|value| !value.trim().is_empty());
         let brokers = brokers::BrokerConfig::from_env(postgres_url.is_some())?;
+        let export_mode = parse_export_mode(std::env::var("ATOAXIS_EXPORT_MODE").ok())?;
+        ensure_export_mode_supported(
+            export_mode,
+            postgres_url.is_some(),
+            brokers.job_queue.is_some(),
+        )?;
+        let account_deletion_mode =
+            parse_account_deletion_mode(std::env::var("ATOAXIS_ACCOUNT_DELETION_MODE").ok())?;
+        ensure_account_deletion_mode_supported(
+            account_deletion_mode,
+            postgres_url.is_some(),
+            brokers.job_queue.is_some(),
+        )?;
 
         Ok(Self {
             server: ServerConfig {
                 host: std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
-                port: std::env::var("SERVER_PORT")
-                    .unwrap_or_else(|_| "8080".to_string())
-                    .parse()
-                    .unwrap_or(8080),
+                port: parse_positive_port(std::env::var("SERVER_PORT").ok(), "SERVER_PORT", 8080)?,
             },
             clickhouse: ClickHouseConfig {
                 url: std::env::var("CLICKHOUSE_URL")
@@ -142,10 +208,11 @@ impl Config {
             },
             postgres: PostgresConfig {
                 url: postgres_url,
-                max_connections: std::env::var("POSTGRES_MAX_CONNECTIONS")
-                    .unwrap_or_else(|_| "16".to_string())
-                    .parse()
-                    .context("POSTGRES_MAX_CONNECTIONS must be a positive integer")?,
+                max_connections: parse_positive_u32(
+                    std::env::var("POSTGRES_MAX_CONNECTIONS").ok(),
+                    "POSTGRES_MAX_CONNECTIONS",
+                    16,
+                )?,
             },
             redis: RedisConfig {
                 url: std::env::var("REDIS_URL")
@@ -172,13 +239,143 @@ impl Config {
             credential_master_key: std::env::var("ATOAXIS_KMS_KEY_ID")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            export_mode,
+            account_deletion_mode,
             idle_timeout_seconds,
+            duration_combined_v2: parse_duration_mode(
+                std::env::var("DURATION_CALCULATION_MODE").ok(),
+            )?,
+            duration_primary_mode: parse_duration_primary_mode(
+                std::env::var("DURATION_PRIMARY_MODE").ok(),
+            )?,
             agent_idle_timeout_seconds: parse_agent_idle_timeout(
                 std::env::var("AGENT_IDLE_TIMEOUT_MINUTES").ok(),
                 idle_timeout_seconds,
             )?,
             brokers,
         })
+    }
+}
+
+fn parse_account_deletion_mode(value: Option<String>) -> Result<AccountDeletionMode> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("disabled") => Ok(AccountDeletionMode::Disabled),
+        Some("job") => Ok(AccountDeletionMode::Job),
+        Some(_) => anyhow::bail!("ATOAXIS_ACCOUNT_DELETION_MODE must be disabled or job"),
+    }
+}
+
+fn ensure_account_deletion_mode_supported(
+    mode: AccountDeletionMode,
+    postgres_configured: bool,
+    job_queue_configured: bool,
+) -> Result<()> {
+    if mode == AccountDeletionMode::Job {
+        if !postgres_configured {
+            anyhow::bail!("ATOAXIS_ACCOUNT_DELETION_MODE=job requires POSTGRES_URL");
+        }
+        if !job_queue_configured {
+            anyhow::bail!("ATOAXIS_ACCOUNT_DELETION_MODE=job requires ATOAXIS_JOB_QUEUE_URL");
+        }
+    }
+    Ok(())
+}
+
+fn parse_positive_u32(value: Option<String>, name: &str, default: u32) -> Result<u32> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let parsed = value
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("{name} must be a positive integer"))?;
+    if parsed == 0 {
+        anyhow::bail!("{name} must be a positive integer");
+    }
+    Ok(parsed)
+}
+
+/// Parse a TCP port at boot. An explicit malformed, zero, or out-of-range value
+/// must fail startup instead of silently moving a service to another port.
+pub fn parse_positive_port(value: Option<String>, name: &str, default: u16) -> Result<u16> {
+    let Some(value) = value else {
+        if default == 0 {
+            anyhow::bail!("{name} default must be positive");
+        }
+        return Ok(default);
+    };
+    let parsed = value
+        .trim()
+        .parse::<u16>()
+        .with_context(|| format!("{name} must be a positive port number"))?;
+    if parsed == 0 {
+        anyhow::bail!("{name} must be a positive port number");
+    }
+    Ok(parsed)
+}
+
+fn parse_export_mode(value: Option<String>) -> Result<ExportMode> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("disabled") => Ok(ExportMode::Disabled),
+        Some("job") => Ok(ExportMode::Job),
+        Some(_) => anyhow::bail!("ATOAXIS_EXPORT_MODE must be disabled or job"),
+    }
+}
+
+fn ensure_export_mode_supported(
+    mode: ExportMode,
+    postgres_configured: bool,
+    job_queue_configured: bool,
+) -> Result<()> {
+    if mode == ExportMode::Job {
+        if !postgres_configured {
+            anyhow::bail!("ATOAXIS_EXPORT_MODE=job requires POSTGRES_URL");
+        }
+        if !job_queue_configured {
+            anyhow::bail!("ATOAXIS_EXPORT_MODE=job requires ATOAXIS_JOB_QUEUE_URL");
+        }
+    }
+    Ok(())
+}
+
+/// Parse the rollout switch once at boot. Missing and explicit `legacy` both keep the
+/// pre-existing response semantics; only the exact `combined_v2` value enables the
+/// measured-editor union plus measured-AI union. Rejecting typos is safer than silently
+/// changing the user's daily total.
+fn parse_duration_mode(value: Option<String>) -> Result<bool> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("legacy") => Ok(false),
+        Some("combined_v2") => Ok(true),
+        Some(_) => anyhow::bail!("DURATION_CALCULATION_MODE must be legacy or combined_v2"),
+    }
+}
+
+/// Select which additive duration is presented as the primary number. Keep the
+/// compatibility value in the response so a canary can be reversed without data
+/// migration or a second query.
+fn parse_duration_primary_mode(value: Option<String>) -> Result<DurationPrimaryMode> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("wakatime_compatible") | Some("legacy") => {
+            Ok(DurationPrimaryMode::WakatimeCompatible)
+        }
+        Some("active_v1") => Ok(DurationPrimaryMode::ActiveV1),
+        Some(_) => anyhow::bail!("DURATION_PRIMARY_MODE must be wakatime_compatible or active_v1"),
     }
 }
 
@@ -363,6 +560,98 @@ mod tests {
             parse_agent_idle_timeout(Some("  ".to_string()), human).unwrap(),
             Some(human)
         );
+    }
+
+    #[test]
+    fn duration_mode_defaults_to_legacy_and_accepts_only_known_values() {
+        assert!(!parse_duration_mode(None).unwrap());
+        assert!(!parse_duration_mode(Some(" legacy ".to_string())).unwrap());
+        assert!(parse_duration_mode(Some("COMBINED_V2".to_string())).unwrap());
+        assert!(parse_duration_mode(Some("canary".to_string())).is_err());
+    }
+
+    #[test]
+    fn duration_primary_mode_is_explicit_and_fail_closed() {
+        assert_eq!(
+            parse_duration_primary_mode(None).unwrap(),
+            DurationPrimaryMode::WakatimeCompatible
+        );
+        assert_eq!(
+            parse_duration_primary_mode(Some("active_v1".to_string())).unwrap(),
+            DurationPrimaryMode::ActiveV1
+        );
+        assert!(parse_duration_primary_mode(Some("canary".to_string())).is_err());
+    }
+
+    #[test]
+    fn export_mode_defaults_closed_and_accepts_only_known_values() {
+        assert_eq!(parse_export_mode(None).unwrap(), ExportMode::Disabled);
+        assert_eq!(
+            parse_export_mode(Some(" JOB ".to_string())).unwrap(),
+            ExportMode::Job
+        );
+        assert!(parse_export_mode(Some("enabled".to_string())).is_err());
+    }
+
+    #[test]
+    fn export_job_mode_requires_transactional_store_and_job_queue() {
+        assert!(ensure_export_mode_supported(ExportMode::Disabled, false, false).is_ok());
+        assert!(ensure_export_mode_supported(ExportMode::Job, false, true).is_err());
+        assert!(ensure_export_mode_supported(ExportMode::Job, true, false).is_err());
+        assert!(ensure_export_mode_supported(ExportMode::Job, true, true).is_ok());
+    }
+
+    #[test]
+    fn account_deletion_mode_is_closed_by_default_and_requires_dependencies() {
+        assert_eq!(
+            parse_account_deletion_mode(None).unwrap(),
+            AccountDeletionMode::Disabled
+        );
+        assert_eq!(
+            parse_account_deletion_mode(Some(" JOB ".to_string())).unwrap(),
+            AccountDeletionMode::Job
+        );
+        assert!(parse_account_deletion_mode(Some("enabled".to_string())).is_err());
+        assert!(
+            ensure_account_deletion_mode_supported(AccountDeletionMode::Job, false, true).is_err()
+        );
+        assert!(
+            ensure_account_deletion_mode_supported(AccountDeletionMode::Job, true, false).is_err()
+        );
+        assert!(
+            ensure_account_deletion_mode_supported(AccountDeletionMode::Job, true, true).is_ok()
+        );
+    }
+
+    #[test]
+    fn postgres_pool_size_must_be_positive() {
+        assert_eq!(
+            parse_positive_u32(None, "POSTGRES_MAX_CONNECTIONS", 16).unwrap(),
+            16
+        );
+        assert_eq!(
+            parse_positive_u32(Some(" 8 ".to_string()), "POSTGRES_MAX_CONNECTIONS", 16).unwrap(),
+            8
+        );
+        assert!(parse_positive_u32(Some("0".to_string()), "POSTGRES_MAX_CONNECTIONS", 16).is_err());
+        assert!(
+            parse_positive_u32(Some("nope".to_string()), "POSTGRES_MAX_CONNECTIONS", 16).is_err()
+        );
+    }
+
+    #[test]
+    fn server_port_must_be_a_valid_positive_port() {
+        assert_eq!(
+            parse_positive_port(None, "SERVER_PORT", 8080).unwrap(),
+            8080
+        );
+        assert_eq!(
+            parse_positive_port(Some(" 9090 ".to_string()), "SERVER_PORT", 8080).unwrap(),
+            9090
+        );
+        assert!(parse_positive_port(Some("0".to_string()), "SERVER_PORT", 8080).is_err());
+        assert!(parse_positive_port(Some("65536".to_string()), "SERVER_PORT", 8080).is_err());
+        assert!(parse_positive_port(Some("nope".to_string()), "SERVER_PORT", 8080).is_err());
     }
 
     /// Tuning only IDLE_TIMEOUT_MINUTES must not leave the agent stream on a stale

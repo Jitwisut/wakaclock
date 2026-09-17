@@ -24,18 +24,10 @@
 //! must be re-read from PostgreSQL first. Job state is authoritative in PostgreSQL (plan
 //! D5): a message lost in a broker failure is recovered by the R2 sweeper, not here.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "constructed by the outbox relay (plan R2) and worker runtime (plan R3)"
-    )
-)]
-
 use async_trait::async_trait;
 use futures::StreamExt;
 use lapin::options::{
-    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions,
+    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions, BasicRejectOptions,
     ConfirmSelectOptions, ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
 };
 use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
@@ -47,7 +39,8 @@ use tokio::sync::Mutex;
 
 use super::contracts::{
     InfrastructureError, InfrastructureResult, JobConsumer, JobDelivery, JobEnvelope, JobKind,
-    JobPublisher, RetryOutcome, JOB_DEAD_LETTER_EXCHANGE, JOB_EXCHANGE, JOB_RETRY_DELAYS,
+    JobPublishTarget, JobPublisher, RetryOutcome, JOB_DEAD_LETTER_EXCHANGE, JOB_EXCHANGE,
+    JOB_RETRY_DELAYS,
 };
 use crate::config::brokers::JobQueueConfig;
 
@@ -249,6 +242,54 @@ impl JobPublisher for RabbitMqJobQueue {
         )
         .await
     }
+
+    async fn publish_to(
+        &self,
+        job: &JobEnvelope,
+        target: &JobPublishTarget,
+    ) -> InfrastructureResult<()> {
+        job.validate()?;
+        let body = serde_json::to_vec(job)?;
+        match target {
+            JobPublishTarget::Primary => self.publish(job).await,
+            JobPublishTarget::Retry(delay) => {
+                if !JOB_RETRY_DELAYS.contains(delay) {
+                    return Err(InfrastructureError::InvalidEnvelope(
+                        "retry delay is not in JOB_RETRY_DELAYS".to_string(),
+                    ));
+                }
+                publish_confirmed(
+                    &self.publish_channel,
+                    &self.topology.retry_exchange(*delay),
+                    job.kind.routing_key(),
+                    &body,
+                    job_properties(job),
+                )
+                .await
+            }
+            JobPublishTarget::DeadLetter(category) => {
+                if category.is_empty()
+                    || category.len() > 64
+                    || !category.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+                {
+                    return Err(InfrastructureError::InvalidEnvelope(
+                        "dead-letter category must be a sanitized fixed identifier".to_string(),
+                    ));
+                }
+                publish_dead_letter(
+                    &self.publish_channel,
+                    &self.topology,
+                    job.kind.routing_key(),
+                    &body,
+                    job_properties(job),
+                    category,
+                )
+                .await
+            }
+        }
+    }
 }
 
 async fn declare_topology(channel: &Channel, topology: &JobTopology) -> InfrastructureResult<()> {
@@ -402,7 +443,7 @@ async fn publish_dead_letter(
     routing_key: &str,
     body: &[u8],
     properties: BasicProperties,
-    category: &'static str,
+    category: &str,
 ) -> InfrastructureResult<()> {
     let mut headers = properties.headers().clone().unwrap_or_default();
     headers.insert(FAILURE_CATEGORY_HEADER.into(), long_string(category));
@@ -499,6 +540,14 @@ impl JobDelivery for RabbitMqDelivery {
             .ack(BasicAckOptions::default())
             .await
             .map_err(|error| unavailable("ack", error))?;
+        Ok(())
+    }
+
+    async fn requeue(self: Box<Self>) -> InfrastructureResult<()> {
+        self.delivery
+            .reject(BasicRejectOptions { requeue: true })
+            .await
+            .map_err(|error| unavailable("requeue", error))?;
         Ok(())
     }
 

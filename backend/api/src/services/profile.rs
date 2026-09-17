@@ -58,6 +58,11 @@ impl ProfileService {
         user_id: Uuid,
         input: UpdateProfileRequest,
     ) -> Result<PublicProfile> {
+        // Updating visibility/settings can make the public-profile surface
+        // externally reachable. Keep the write path closed until that
+        // provider/runtime contract is certified; private reads and revokes
+        // remain available for privacy and recovery operations.
+        super::require_runtime_feature(super::RuntimeFeature::PublicProfilesAndEmbeds)?;
         let current = self.get_profile(user_id).await?;
         let username = input.username.unwrap_or(current.username);
         validate_username(&username)?;
@@ -102,6 +107,10 @@ impl ProfileService {
         user_id: Uuid,
         input: CreateShareLinkRequest,
     ) -> Result<ShareLink> {
+        // Creating a new public token is an externally visible capability. Keep
+        // it closed until the public-profile/embed surface is certified, while
+        // leaving revoke available as a privacy and recovery control.
+        super::require_runtime_feature(super::RuntimeFeature::PublicProfilesAndEmbeds)?;
         if !SHAREABLE_RESOURCES.contains(&input.resource_type.as_str()) {
             return Err(anyhow!("unsupported share resource type"));
         }
@@ -182,6 +191,10 @@ impl ProfileService {
     }
 
     pub async fn resolve_public_share(&self, token: &str) -> Result<Option<PublicShare>> {
+        // Do not expose a pre-existing public token while this product surface is
+        // disabled. Existing tokens remain in PostgreSQL so a later controlled
+        // enablement or operator cleanup can handle them without data loss.
+        super::require_runtime_feature(super::RuntimeFeature::PublicProfilesAndEmbeds)?;
         if token.len() < 20 {
             return Ok(None);
         }
@@ -275,5 +288,25 @@ mod tests {
         assert!(validate_username("atoaxis_dev").is_ok());
         assert!(validate_username("AtoAxis").is_err());
         assert!(validate_username("ab").is_err());
+    }
+
+    #[tokio::test]
+    async fn profile_updates_fail_closed_before_database_access() {
+        let service = ProfileService::new(None);
+        let error = service
+            .update_profile(
+                Uuid::now_v7(),
+                UpdateProfileRequest {
+                    username: Some("atoaxis_dev".to_string()),
+                    is_public: Some(true),
+                    show_projects: None,
+                    show_languages: None,
+                    show_ai_metrics: None,
+                    badge: None,
+                },
+            )
+            .await
+            .expect_err("public profile writes must remain disabled");
+        assert!(error.to_string().contains("public_profiles_and_embeds"));
     }
 }

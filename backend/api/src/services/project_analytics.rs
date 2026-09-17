@@ -22,7 +22,7 @@ use crate::repository::project_analytics::{
     ProjectAggregateRow, ProjectAnalyticsRepository, ProjectBreakdownRow, ProjectBreakdownTable,
 };
 use crate::services::activity_timeline::{
-    totals_by, ActivityTimelineService, BridgeConfig, Dimension,
+    total_seconds, totals_by, union_ranges, ActivityTimelineService, BridgeConfig, Dimension,
 };
 use crate::services::project_identity::ProjectIdentityService;
 
@@ -75,13 +75,13 @@ impl ProjectAnalyticsService {
         start_epoch: f64,
         end_epoch: f64,
     ) -> Result<ProjectSeconds> {
-        let canonical = self
+        let timeline = self
             .timeline
-            .canonical(user_id, start_epoch, end_epoch)
+            .build_timeline(user_id, start_epoch, end_epoch)
             .await?;
         let mut by_id: HashMap<String, f64> = HashMap::new();
         let mut by_name: HashMap<String, f64> = HashMap::new();
-        for interval in &canonical {
+        for interval in &timeline.bridged {
             let seconds = interval.end - interval.start;
             match interval.project_id {
                 Some(id) => *by_id.entry(id.to_string()).or_default() += seconds,
@@ -91,7 +91,14 @@ impl ProjectAnalyticsService {
                 }
             }
         }
-        Ok(ProjectSeconds { by_id, by_name })
+        Ok(ProjectSeconds {
+            by_id,
+            by_name,
+            comparable_seconds: timeline.comparable_seconds,
+            ai_measured_seconds: timeline.ai_measured_seconds,
+            ai_additional_seconds: timeline.ai_additional_seconds,
+            calculation_version: timeline.calculation_version,
+        })
     }
 
     pub async fn list(
@@ -170,6 +177,10 @@ impl ProjectAnalyticsService {
             totals: ProjectAnalyticsTotals {
                 project_count,
                 total_seconds,
+                comparable_seconds: Some(canonical_seconds.comparable_seconds),
+                ai_measured_seconds: Some(canonical_seconds.ai_measured_seconds),
+                ai_additional_seconds: Some(canonical_seconds.ai_additional_seconds),
+                calculation_version: Some(canonical_seconds.calculation_version),
             },
         })
     }
@@ -188,7 +199,7 @@ impl ProjectAnalyticsService {
             .ok_or_else(|| anyhow::anyhow!("project not found"))?;
         let (start_epoch, end_epoch) = range.unix_bounds();
         let timezone = range.timezone.to_string();
-        let (daily, languages, editors, branches, files, aggregates) = tokio::try_join!(
+        let (daily, languages, editors, mut branches, mut files, aggregates) = tokio::try_join!(
             self.repo.project_daily(
                 user_id,
                 project_id,
@@ -225,41 +236,121 @@ impl ProjectAnalyticsService {
             .find(|row| row.project_id == project_id);
 
         // Seconds come from the canonical timeline so this page agrees with the dashboard
-        // total; everything else in the response is a genuine per-heartbeat sum and stays
-        // on the repository. A branch filter is the one case the timeline cannot serve —
-        // `activity_intervals` carries no branch — so those views keep the aggregate
-        // figure and remain a known disagreement.
-        let canonical = if branch.is_none() {
-            Some(
-                self.timeline
-                    .canonical(user_id, start_epoch, end_epoch)
-                    .await?,
-            )
-        } else {
-            None
-        };
+        // total. Branch is carried on the heartbeat/interval evidence, so a branch filter
+        // can use the same overlap and idle rules instead of falling back to a raw
+        // `sum(active_seconds)` aggregate.
+        let timeline = Some(
+            self.timeline
+                .build_timeline(user_id, start_epoch, end_epoch)
+                .await?,
+        );
+        let canonical = timeline.as_ref().map(|timeline| timeline.bridged.clone());
         // Deliberately unscoped: this is the denominator for "how much of your time went
         // to this project", so a branch filter must not shrink it too.
         let all_projects_canonical = self
             .canonical_project_seconds(user_id, start_epoch, end_epoch)
             .await?
             .total();
-        let project_key = project_id.to_string();
         // Same identity rule as the list: an interval that carries an id must match it,
         // and one that does not falls back to the display name. Matching on the id alone
         // would report zero for every project whose intervals predate that column.
-        let project_name = aggregate.as_ref().map(|row| row.name.clone());
+        let project_name = aggregate
+            .as_ref()
+            .map(|row| row.name.clone())
+            .or_else(|| Some(identity.display_name.clone()));
         let project_canonical: Option<Vec<_>> = canonical.as_ref().map(|intervals| {
             intervals
                 .iter()
-                .filter(|interval| match interval.project_id {
-                    Some(id) => id.to_string() == project_key,
-                    None => project_name.as_deref().is_some_and(|name| {
-                        interval.project.as_deref().unwrap_or("Unknown") == name
-                    }),
+                .filter(|interval| {
+                    interval_matches_project(interval, project_id, project_name.as_deref(), branch)
                 })
                 .cloned()
                 .collect()
+        });
+
+        // File and branch rows retain their line-count and heartbeat columns from the
+        // repository, but replace their duration with the same canonical ownership sweep
+        // used by the summary. This keeps the detail cards, top-file list and branch table
+        // from reintroducing raw heartbeat overlap after the headline has been corrected.
+        if let Some(project_intervals) = project_canonical.as_deref() {
+            let mut duration_by_entity = HashMap::<String, f64>::new();
+            for interval in project_intervals {
+                *duration_by_entity
+                    .entry(entity_key_for(&interval.entity))
+                    .or_default() += interval.end - interval.start;
+            }
+            for row in &mut files {
+                row.total_seconds = duration_by_entity
+                    .get(&row.entity_key)
+                    .copied()
+                    .unwrap_or(0.0);
+            }
+            files.sort_by(|left, right| {
+                right
+                    .total_seconds
+                    .total_cmp(&left.total_seconds)
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+        }
+        if let Some(intervals) = canonical.as_deref() {
+            let mut duration_by_branch = HashMap::<String, f64>::new();
+            for interval in intervals.iter().filter(|interval| {
+                interval_matches_project(interval, project_id, project_name.as_deref(), None)
+            }) {
+                *duration_by_branch
+                    .entry(interval.branch.as_deref().unwrap_or("Unknown").to_string())
+                    .or_default() += interval.end - interval.start;
+            }
+            for row in &mut branches {
+                row.total_seconds = duration_by_branch.get(&row.branch).copied().unwrap_or(0.0);
+            }
+            branches.sort_by(|left, right| {
+                right
+                    .total_seconds
+                    .total_cmp(&left.total_seconds)
+                    .then_with(|| left.branch.cmp(&right.branch))
+            });
+        }
+
+        // The repository still supplies the per-day line attribution fields, but its
+        // duration column is a raw heartbeat sum. Keep the canonical per-day totals
+        // separately so zero-filled days that have timeline evidence (for example a
+        // pre-identity heartbeat) receive their duration too.
+        let daily_seconds = project_canonical
+            .as_deref()
+            .map(|intervals| canonical_daily_seconds(intervals, range));
+
+        // Project totals use the full canonical stream so a timeout between two projects
+        // remains attributed to the earlier project. The independent AI metric cannot be
+        // recovered from that ownership sweep when a human interval overlaps it, so union
+        // the raw AI ranges retained by the same timeline and subtract the project's
+        // comparable editor ranges only after both have been resolved.
+        let detail_metrics = timeline.as_ref().map(|timeline| {
+            let project_intervals = project_canonical.as_deref().unwrap_or(&[]);
+            let comparable_ranges: Vec<_> = project_intervals
+                .iter()
+                .filter(|interval| {
+                    is_comparable_editor_interval(interval) && interval.end > interval.start
+                })
+                .map(|interval| (interval.start, interval.end))
+                .collect();
+            let comparable_seconds = union_ranges(&comparable_ranges);
+            let ai_ranges = timeline.ai_ranges_for_project_on_branch(
+                project_id,
+                project_name.as_deref(),
+                branch,
+            );
+            let ai_measured_seconds = union_ranges(&ai_ranges);
+            let mut combined_ranges = comparable_ranges;
+            combined_ranges.extend(ai_ranges);
+            let ai_additional_seconds =
+                (union_ranges(&combined_ranges) - comparable_seconds).max(0.0);
+            (
+                comparable_seconds,
+                ai_measured_seconds,
+                ai_additional_seconds,
+                timeline.calculation_version,
+            )
         });
 
         let total_seconds = match project_canonical.as_ref() {
@@ -298,7 +389,10 @@ impl ProjectAnalyticsService {
         let ai_percentage = attribution_known
             .then(|| percentage(ai_lines, observed_lines))
             .flatten();
-        let active_days = daily.iter().filter(|item| item.total_seconds > 0.0).count() as u32;
+        let active_days = daily_seconds
+            .as_ref()
+            .map(|totals| totals.values().filter(|seconds| **seconds > 0.0).count() as u32)
+            .unwrap_or_else(|| daily.iter().filter(|item| item.total_seconds > 0.0).count() as u32);
         // Usage events do not carry branch provenance. Once a branch filter is active,
         // returning project-wide prompts/tokens/cost would falsely attribute them to the
         // selected branch, so keep those metrics explicitly unavailable instead of
@@ -377,25 +471,32 @@ impl ProjectAnalyticsService {
                 .collect(),
             daily_activity: zero_fill_daily(daily, range)
                 .into_iter()
-                .map(|row| ProjectDailyItem {
-                    ai_added: row.ai_added,
-                    ai_deleted: row.ai_deleted,
-                    ai_inferred_added: row.ai_inferred_added,
-                    ai_inferred_deleted: row.ai_inferred_deleted,
-                    ai_verified_added: row.ai_verified_added,
-                    ai_verified_deleted: row.ai_verified_deleted,
-                    date: row.date,
-                    human_added: row.human_added,
-                    human_deleted: row.human_deleted,
-                    total_seconds: rounded_seconds(row.total_seconds),
-                    unknown_added: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_added),
-                    unknown_deleted: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_deleted),
-                    unattributed_added: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_added),
-                    unattributed_deleted: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_deleted),
+                .map(|row| {
+                    let date = row.date.clone();
+                    let total_seconds = daily_seconds
+                        .as_ref()
+                        .and_then(|totals| totals.get(&date).copied())
+                        .unwrap_or(row.total_seconds);
+                    ProjectDailyItem {
+                        ai_added: row.ai_added,
+                        ai_deleted: row.ai_deleted,
+                        ai_inferred_added: row.ai_inferred_added,
+                        ai_inferred_deleted: row.ai_inferred_deleted,
+                        ai_verified_added: row.ai_verified_added,
+                        ai_verified_deleted: row.ai_verified_deleted,
+                        date,
+                        human_added: row.human_added,
+                        human_deleted: row.human_deleted,
+                        total_seconds: rounded_seconds(total_seconds),
+                        unknown_added: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_added),
+                        unknown_deleted: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_deleted),
+                        unattributed_added: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_added),
+                        unattributed_deleted: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_deleted),
+                    }
                 })
                 .collect(),
             data_version: RAW_DATA_VERSION,
@@ -427,6 +528,10 @@ impl ProjectAnalyticsService {
                     .as_ref()
                     .and_then(|row| format_timestamp(row.last_activity)),
                 project_seconds: total_seconds,
+                comparable_seconds: detail_metrics.map(|metrics| metrics.0),
+                ai_measured_seconds: detail_metrics.map(|metrics| metrics.1),
+                ai_additional_seconds: detail_metrics.map(|metrics| metrics.2),
+                calculation_version: detail_metrics.map(|metrics| metrics.3),
             },
             top_files: file_items(files, total_seconds, 20),
         })
@@ -442,21 +547,51 @@ impl ProjectAnalyticsService {
         cursor: Option<&str>,
         min_seconds: Option<f64>,
     ) -> Result<ProjectFilesResponse> {
-        if self
+        let identity = self
             .identity_service
             .owned_identity(user_id, project_id)
             .await?
-            .is_none()
-        {
-            bail!("project not found");
-        }
+            .ok_or_else(|| anyhow::anyhow!("project not found"))?;
         let (start_epoch, end_epoch) = range.unix_bounds();
+        let timeline = self
+            .timeline
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
+        let project_intervals: Vec<_> = timeline
+            .bridged
+            .iter()
+            .filter(|interval| {
+                interval_matches_project(interval, project_id, Some(&identity.display_name), branch)
+            })
+            .collect();
+        let mut duration_by_entity = HashMap::<String, f64>::new();
+        for interval in &project_intervals {
+            *duration_by_entity
+                .entry(entity_key_for(&interval.entity))
+                .or_default() += interval.end - interval.start;
+        }
         let mut files = self
             .repo
             .project_files(user_id, project_id, start_epoch, end_epoch, branch)
             .await?;
-        let project_total_seconds =
-            rounded_seconds(files.iter().map(|row| row.total_seconds).sum());
+        for row in &mut files {
+            row.total_seconds = duration_by_entity
+                .get(&row.entity_key)
+                .copied()
+                .unwrap_or(0.0);
+        }
+        files.sort_by(|left, right| {
+            right
+                .total_seconds
+                .total_cmp(&left.total_seconds)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        let project_total_seconds = rounded_seconds(total_seconds(
+            &project_intervals
+                .iter()
+                .map(|interval| (*interval).clone())
+                .collect::<Vec<_>>(),
+        ));
         let min_seconds = min_seconds.filter(|value| value.is_finite() && *value > 0.0);
         if let Some(min_seconds) = min_seconds {
             files.retain(|row| row.total_seconds >= min_seconds);
@@ -478,14 +613,14 @@ impl ProjectAnalyticsService {
             None => 0,
         };
         let page: Vec<_> = files.iter().skip(start_index).cloned().collect();
-        let other_seconds = rounded_seconds(
-            files
-                .iter()
-                .take(start_index)
-                .chain(files.iter().skip(start_index + page_size))
-                .map(|row| row.total_seconds)
-                .sum(),
-        );
+        let visible_page_seconds: f64 = files
+            .iter()
+            .skip(start_index)
+            .take(page_size)
+            .map(|row| row.total_seconds)
+            .sum();
+        let other_seconds =
+            rounded_seconds((project_total_seconds as f64 - visible_page_seconds).max(0.0));
         let next_cursor = if page.len() > page_size {
             page.get(page_size - 1)
                 .map(|row| self.encode_file_cursor(&row.entity_key, &cursor_scope))
@@ -516,13 +651,43 @@ impl ProjectAnalyticsService {
         limit: Option<u16>,
         cursor: Option<&str>,
     ) -> Result<ProjectBranchesResponse> {
-        self.require_owned(user_id, project_id).await?;
+        let identity = self
+            .identity_service
+            .owned_identity(user_id, project_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("project not found"))?;
         let (start_epoch, end_epoch) = range.unix_bounds();
         let cursor_scope = project_branches_cursor_scope(user_id, project_id, range);
-        let rows = self
+        let timeline = self
+            .timeline
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
+        let project_intervals: Vec<_> = timeline
+            .bridged
+            .iter()
+            .filter(|interval| {
+                interval_matches_project(interval, project_id, Some(&identity.display_name), None)
+            })
+            .collect();
+        let mut duration_by_branch = HashMap::<String, f64>::new();
+        for interval in &project_intervals {
+            *duration_by_branch
+                .entry(interval.branch.as_deref().unwrap_or("Unknown").to_string())
+                .or_default() += interval.end - interval.start;
+        }
+        let mut rows = self
             .repo
             .project_branches(user_id, project_id, start_epoch, end_epoch)
             .await?;
+        for row in &mut rows {
+            row.total_seconds = duration_by_branch.get(&row.branch).copied().unwrap_or(0.0);
+        }
+        rows.sort_by(|left, right| {
+            right
+                .total_seconds
+                .total_cmp(&left.total_seconds)
+                .then_with(|| left.branch.cmp(&right.branch))
+        });
         let attribution_coverage_percent = branch_attribution_coverage(&rows);
         let page_size =
             usize::from(limit.unwrap_or(DEFAULT_PAGE_SIZE as u16)).clamp(1, MAX_PAGE_SIZE);
@@ -537,13 +702,15 @@ impl ProjectAnalyticsService {
             None => 0,
         };
         let remaining = rows.iter().skip(start_index).cloned().collect::<Vec<_>>();
-        let other_seconds = rounded_seconds(
-            rows.iter()
-                .take(start_index)
-                .chain(rows.iter().skip(start_index + page_size))
-                .map(|row| row.total_seconds)
-                .sum(),
-        );
+        let project_total_seconds: f64 = duration_by_branch.values().sum();
+        let visible_page_seconds: f64 = rows
+            .iter()
+            .skip(start_index)
+            .take(page_size)
+            .map(|row| row.total_seconds)
+            .sum();
+        let other_seconds =
+            rounded_seconds((project_total_seconds - visible_page_seconds).max(0.0));
         let next_cursor = if remaining.len() > page_size {
             remaining
                 .get(page_size - 1)
@@ -587,9 +754,26 @@ impl ProjectAnalyticsService {
         range: &ResolvedRange,
         branch: Option<&str>,
     ) -> Result<ProjectDailyResponse> {
-        self.require_owned(user_id, project_id).await?;
+        let identity = self
+            .identity_service
+            .owned_identity(user_id, project_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("project not found"))?;
         let (start_epoch, end_epoch) = range.unix_bounds();
         let timezone = range.timezone.to_string();
+        let timeline = self
+            .timeline
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
+        let project_intervals: Vec<_> = timeline
+            .bridged
+            .iter()
+            .filter(|interval| {
+                interval_matches_project(interval, project_id, Some(&identity.display_name), branch)
+            })
+            .cloned()
+            .collect();
+        let daily_seconds = canonical_daily_seconds(&project_intervals, range);
         let rows = self
             .repo
             .project_daily(
@@ -608,42 +792,37 @@ impl ProjectAnalyticsService {
             generated_at: Utc::now().to_rfc3339(),
             items: zero_fill_daily(rows, range)
                 .into_iter()
-                .map(|row| ProjectDailyItem {
-                    ai_added: row.ai_added,
-                    ai_deleted: row.ai_deleted,
-                    ai_inferred_added: row.ai_inferred_added,
-                    ai_inferred_deleted: row.ai_inferred_deleted,
-                    ai_verified_added: row.ai_verified_added,
-                    ai_verified_deleted: row.ai_verified_deleted,
-                    date: row.date,
-                    human_added: row.human_added,
-                    human_deleted: row.human_deleted,
-                    total_seconds: rounded_seconds(row.total_seconds),
-                    unknown_added: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_added),
-                    unknown_deleted: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_deleted),
-                    unattributed_added: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_added),
-                    unattributed_deleted: (row.unattributed_unknown == 0)
-                        .then_some(row.unattributed_deleted),
+                .map(|row| {
+                    let date = row.date.clone();
+                    let total_seconds = daily_seconds
+                        .get(&date)
+                        .copied()
+                        .unwrap_or(row.total_seconds);
+                    ProjectDailyItem {
+                        ai_added: row.ai_added,
+                        ai_deleted: row.ai_deleted,
+                        ai_inferred_added: row.ai_inferred_added,
+                        ai_inferred_deleted: row.ai_inferred_deleted,
+                        ai_verified_added: row.ai_verified_added,
+                        ai_verified_deleted: row.ai_verified_deleted,
+                        date,
+                        human_added: row.human_added,
+                        human_deleted: row.human_deleted,
+                        total_seconds: rounded_seconds(total_seconds),
+                        unknown_added: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_added),
+                        unknown_deleted: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_deleted),
+                        unattributed_added: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_added),
+                        unattributed_deleted: (row.unattributed_unknown == 0)
+                            .then_some(row.unattributed_deleted),
+                    }
                 })
                 .collect(),
             range: project_range_info(range, branch),
             schema_version: PROJECT_ANALYTICS_SCHEMA_VERSION,
         })
-    }
-
-    async fn require_owned(&self, user_id: Uuid, project_id: Uuid) -> Result<()> {
-        if self
-            .identity_service
-            .owned_identity(user_id, project_id)
-            .await?
-            .is_none()
-        {
-            bail!("project not found");
-        }
-        Ok(())
     }
 
     fn encode_cursor(
@@ -839,6 +1018,10 @@ fn cursor_is_after(
 struct ProjectSeconds {
     by_id: HashMap<String, f64>,
     by_name: HashMap<String, f64>,
+    comparable_seconds: f64,
+    ai_measured_seconds: f64,
+    ai_additional_seconds: f64,
+    calculation_version: &'static str,
 }
 
 impl ProjectSeconds {
@@ -863,8 +1046,8 @@ impl ProjectSeconds {
 /// One breakdown of a project's canonical intervals, shaped like the repository rows it
 /// replaces so the caller can fall back without branching twice.
 ///
-/// Returning `None` when the timeline was not built (a branch filter is active) keeps the
-/// old aggregate path reachable rather than silently reporting zeros.
+/// Returning `None` when a caller does not request timeline-backed data keeps the old
+/// aggregate path reachable rather than silently reporting zeros.
 fn canonical_breakdown(
     intervals: Option<&[crate::services::activity_timeline::CanonicalInterval]>,
     dimension: Dimension,
@@ -1165,6 +1348,65 @@ fn unknown_spend() -> EstimatedSpend {
 
 fn rounded_seconds(value: f64) -> i64 {
     value.round().max(0.0) as i64
+}
+
+fn entity_key_for(entity: &str) -> String {
+    format!("{:x}", Sha256::digest(entity.as_bytes()))
+}
+
+fn is_comparable_editor_interval(
+    interval: &crate::services::activity_timeline::CanonicalInterval,
+) -> bool {
+    interval.source == "editor"
+        || interval.source == "editor_active_v1"
+        || interval.actor_type == wakaclock_core::heartbeat::ActorType::Human
+        || (interval.actor_type == wakaclock_core::heartbeat::ActorType::Unknown
+            && interval
+                .editor
+                .trim()
+                .eq_ignore_ascii_case("atoaxis desktop"))
+}
+
+fn interval_matches_project(
+    interval: &crate::services::activity_timeline::CanonicalInterval,
+    project_id: Uuid,
+    project_name: Option<&str>,
+    branch: Option<&str>,
+) -> bool {
+    let project_matches = match interval.project_id {
+        Some(id) => id == project_id,
+        None => project_name
+            .is_some_and(|name| interval.project.as_deref().unwrap_or("Unknown") == name),
+    };
+    let branch_matches =
+        branch.is_none_or(|name| interval.branch.as_deref().unwrap_or("Unknown") == name);
+    project_matches && branch_matches
+}
+
+fn canonical_daily_seconds(
+    intervals: &[crate::services::activity_timeline::CanonicalInterval],
+    range: &ResolvedRange,
+) -> HashMap<String, f64> {
+    let mut totals = HashMap::new();
+    for offset in 0..range.days_included() {
+        let day = range.start + Duration::days(offset);
+        let day_range = ResolvedRange {
+            start: day,
+            end: day,
+            timezone: range.timezone,
+        };
+        let (day_start, day_end) = day_range.unix_bounds();
+        let seconds = intervals
+            .iter()
+            .filter_map(|interval| {
+                let start = interval.start.max(day_start);
+                let end = interval.end.min(day_end);
+                (end > start).then_some(end - start)
+            })
+            .sum();
+        totals.insert(day.to_string(), seconds);
+    }
+    totals
 }
 
 fn percentage(numerator: u64, denominator: u64) -> Option<f64> {

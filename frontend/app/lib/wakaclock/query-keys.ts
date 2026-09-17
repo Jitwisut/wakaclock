@@ -6,17 +6,20 @@ export const wakaclockKeys = {
   all: ['wakaclock'] as const,
   // No userId: describes the server deployment, not an account — see useCapabilities.
   capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
-  statusBar: (userId: string) => [...wakaclockKeys.all, 'status-bar', userId] as const,
-  allTime: (userId: string) => [...wakaclockKeys.all, 'all-time', userId] as const,
-  stats: (userId: string, range: string) => [...wakaclockKeys.all, 'stats', userId, range] as const,
-  summaries: (userId: string, start: string, end: string) =>
-    [...wakaclockKeys.all, 'summaries', userId, start, end] as const,
+  statusBar: (userId: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'status-bar', userId, timezone] as const,
+  allTime: (userId: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'all-time', userId, timezone] as const,
+  stats: (userId: string, range: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'stats', userId, range, timezone] as const,
+  summaries: (userId: string, start: string, end: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'summaries', userId, start, end, timezone] as const,
   durations: (userId: string, date: string, timezone?: string) =>
     [...wakaclockKeys.all, 'durations', userId, date, timezone] as const,
-  projects: (userId: string, start: string, end: string) =>
-    [...wakaclockKeys.all, 'projects', userId, start, end] as const,
-  insights: (userId: string, type: string, range: string) =>
-    [...wakaclockKeys.all, 'insights', userId, type, range] as const,
+  projects: (userId: string, start: string, end: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'projects', userId, start, end, timezone] as const,
+  insights: (userId: string, type: string, range: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'insights', userId, type, range, timezone] as const,
   aiStats: (userId: string, start: string, end: string) =>
     [...wakaclockKeys.all, 'ai-stats', userId, start, end] as const,
   aiDiagnostics: (userId: string) => [...wakaclockKeys.all, 'ai-diagnostics', userId] as const,

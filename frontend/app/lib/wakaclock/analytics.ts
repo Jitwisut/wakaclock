@@ -59,7 +59,11 @@ export interface AnalyticsExplorerResponse {
   schema_version: number;
   summary: {
     active_days: number;
+    ai_additional_seconds?: number;
+    ai_measured_seconds?: number;
     ai_share_percent: null | number;
+    calculation_version?: 'combined_v2' | 'legacy';
+    comparable_seconds?: number;
   } & AnalyticsDurationSplit;
   time_heatmap: Array<
     {

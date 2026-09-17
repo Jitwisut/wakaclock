@@ -1,10 +1,9 @@
-//! In-process outbox relay (plans/plan-kafka-rabbitmq-adoption.md, R2).
+//! Dedicated-process outbox relay (plans/plan-kafka-rabbitmq-adoption.md, R2/R3).
 //!
-//! `wakaclock-server` has no library target, so `src/bin/outbox-relay.rs` cannot reach
-//! the services. Until a lib target exists the relay runs as a task inside the API
-//! process, started from `main.rs` only when both `ATOAXIS_JOB_QUEUE_URL` and
-//! `POSTGRES_URL` are set. Every replica runs one; `FOR UPDATE SKIP LOCKED` in
-//! [`JobService::relay_once`] keeps two of them from publishing the same row.
+//! The `job-worker` binary starts this task alongside its processors. The API does not
+//! publish jobs itself; PostgreSQL remains the source of truth and `FOR UPDATE SKIP
+//! LOCKED` in [`JobService::relay_once`] keeps multiple worker replicas from publishing
+//! the same row.
 //!
 //! This module owns the RabbitMQ connection lifecycle — the adapter itself
 //! deliberately does not reconnect. A broker error ends the inner loop, the
@@ -14,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::brokers::JobQueueConfig;
+use crate::infrastructure::metrics::global_job_metrics;
 use crate::infrastructure::rabbitmq::RabbitMqJobQueue;
 use crate::services::jobs::JobService;
 
@@ -49,6 +49,14 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
 
         match job_service.relay_once(queue, RELAY_BATCH).await {
             Ok(outcome) => {
+                let metrics = global_job_metrics();
+                metrics.outbox_published_total.fetch_add(
+                    outcome.published as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                metrics
+                    .outbox_poison_total
+                    .fetch_add(outcome.poison as u64, std::sync::atomic::Ordering::Relaxed);
                 if outcome.published > 0 {
                     tracing::debug!(published = outcome.published, "relayed async jobs");
                 }
@@ -59,6 +67,9 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
                     );
                 }
                 if let Some(error) = outcome.broker_error {
+                    metrics
+                        .outbox_publish_failures_total
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tracing::warn!(%error, "relay publish failed; reconnecting");
                     return;
                 }
@@ -71,6 +82,15 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
 
         match job_service.sweep_once(SWEEP_BATCH).await {
             Ok(outcome) if outcome.requeued > 0 || outcome.dead_lettered > 0 => {
+                let metrics = global_job_metrics();
+                metrics.lease_sweep_requeued_total.fetch_add(
+                    outcome.requeued as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                metrics.lease_sweep_dead_lettered_total.fetch_add(
+                    outcome.dead_lettered as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 tracing::info!(
                     requeued = outcome.requeued,
                     dead_lettered = outcome.dead_lettered,

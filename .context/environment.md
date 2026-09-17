@@ -23,16 +23,37 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `INTERNAL_API_SECRET` | no | Unset ⇒ `POST /api/v1/internal/subscription` returns 404 rather than being reachable uncredentialed. |
 | `IDLE_TIMEOUT_MINUTES` | no | Max pause between proven activity intervals. `0` disables idle bridging. |
 | `AGENT_IDLE_TIMEOUT_MINUTES` | no | Agent-only bridge allowance. Keep the default for WakaTime-compatible `total_seconds`; set `0` when consumers should rely on measured `ai_coding_seconds` instead of bridging agent pauses. |
-| `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Parsed in [../backend/api/src/config/brokers.rs](../backend/api/src/config/brokers.rs); no adapter reads it yet, so setting it only logs a warning. |
+| `ATOAXIS_EVENT_BUS_URL` | no | Kafka bootstrap servers, comma-separated bare `host:port`. Used by the Kafka producer/consumers when heartbeat or AI usage is in `verify`/`kafka` mode. |
 | `ATOAXIS_EVENT_BUS_SASL_MECHANISM`, `ATOAXIS_EVENT_BUS_SASL_USERNAME`, `ATOAXIS_EVENT_BUS_SASL_PASSWORD` | no | All three or none. Mechanism `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512`. Refused without `ATOAXIS_EVENT_BUS_URL`. |
 | `ATOAXIS_EVENT_BUS_TLS` | no | Defaults to `true` when SASL is set, else `false`; SASL with `false` is refused. |
-| `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. With `POSTGRES_URL` also set, `main.rs` starts the in-process outbox relay (plan R2). Never printed unredacted; a plaintext URL to a non-local host logs a warning. |
-| `ATOAXIS_INGEST_MODE` | no | `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL` and **refuses to boot** until the Kafka ingest path lands. |
+| `ATOAXIS_JOB_QUEUE_URL` | no | `amqp://` or `amqps://` RabbitMQ URL. The API uses PostgreSQL as the job/outbox source of truth; the dedicated `job-worker` process runs the outbox relay and processors. Never printed unredacted; a plaintext URL to a non-local host logs a warning. |
+| `ATOAXIS_INGEST_MODE` | no | Heartbeat mode: `direct` (default) / `verify` / `kafka`. Non-`direct` needs `ATOAXIS_EVENT_BUS_URL`; `kafka` also needs PostgreSQL state and an explicit cohort. |
 | `ATOAXIS_INGEST_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`. Required for `kafka` mode; ignored (not refused) in other modes so a rollback deploy can leave it set. |
-| `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`, and **refuses to boot** until the reprocess worker lands. |
+| `ATOAXIS_AI_USAGE_INGEST_MODE` | no | AI usage mode: `direct` (default) / `verify` / `kafka`, independent from heartbeat mode. |
+| `ATOAXIS_AI_USAGE_KAFKA_COHORT` | no | `all`, `percent:<0-100>` or `users:<uuid>,…`; required only when AI usage mode is `kafka`, never inferred as `all`. |
+| `ATOAXIS_AI_USAGE_REQUIRE_CONTRACT_V2` | no | Defaults to `false`; when `true`, AI usage clients without `X-AtoAxis-Ai-Usage-Contract: 2` receive `426`. Rollback to direct with this flag unset accepts legacy clients again. |
+| `ATOAXIS_AI_USAGE_KAFKA_BATCH_SIZE`, `ATOAXIS_AI_USAGE_KAFKA_BATCH_WAIT_MS` | no | AI usage consumer batch bounds; defaults `1000` and `500ms`. |
+| `ATOAXIS_AI_USAGE_KAFKA_RETRY_MIN_MS`, `ATOAXIS_AI_USAGE_KAFKA_RETRY_MAX_MS` | no | AI usage consumer retry bounds; defaults `1000ms` and `60000ms`. |
+| `ATOAXIS_REPROCESS_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`; requests require `Idempotency-Key` and return `202` while `job-worker` processes them. |
+| `ATOAXIS_PROJECTION_REBUILD_MODE` | no | `sync` (default) / `job`. `job` needs `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL`; requests require `Idempotency-Key` and are processed by `projection-worker`. |
+| `ATOAXIS_EXPORT_MODE` | no | `disabled` (default) / `job`. `job` additionally requires `POSTGRES_URL`, `ATOAXIS_JOB_QUEUE_URL` and a complete S3 object-store configuration; the API refuses to boot with an incomplete setup. Existing jobs may still be drained by `export-worker` during rollback. |
+| `ATOAXIS_ACCOUNT_DELETION_MODE` | no | `disabled` (default) / `job`. `job` requires `POSTGRES_URL`, `ATOAXIS_JOB_QUEUE_URL`, the account-deletion worker and a complete S3 object-store configuration. The API tombstones an account before enqueueing cleanup; enable only after cross-store e2e and audit gates pass. |
+| `ATOAXIS_JOB_WORKER_PREFETCH` | no | Worker concurrency/prefetch; defaults to `4`. |
+| `ATOAXIS_JOB_LEASE_SECONDS` | no | Lease duration for a claimed job; defaults to `300`. |
+| `ATOAXIS_JOB_RENEW_SECONDS` | no | Lease renewal interval; defaults to `60`. |
+| `ATOAXIS_JOB_SHUTDOWN_SECONDS` | no | Grace period for in-flight jobs during shutdown; defaults to `30`. |
+| `ATOAXIS_JOB_WORKER_HEALTH_HOST`, `ATOAXIS_JOB_WORKER_HEALTH_PORT` | no | Worker liveness/readiness listener; defaults to `0.0.0.0:8081`. |
 | `ATOAXIS_REDIS_URL` | no | Redis-compatible cache/lock provider. |
-| `ATOAXIS_OBJECT_STORE_BUCKET` | no | S3-compatible export artifact bucket. |
+| `ATOAXIS_OBJECT_STORE_S3_ENDPOINT`, `ATOAXIS_OBJECT_STORE_S3_BUCKET` | no | Together enable the S3-compatible export artifact store; endpoint must be HTTPS in non-local deployments. A partial configuration refuses startup. |
+| `ATOAXIS_OBJECT_STORE_S3_REGION` | no | SigV4 region; defaults to `us-east-1` when the object store is configured. |
+| `ATOAXIS_OBJECT_STORE_S3_ACCESS_KEY`, `ATOAXIS_OBJECT_STORE_S3_SECRET_KEY` | no | Required with the S3 endpoint/bucket; never logged or committed. |
+| `ATOAXIS_OBJECT_STORE_S3_SESSION_TOKEN` | no | Optional temporary-credential session token. |
+| `ATOAXIS_OBJECT_STORE_S3_PATH_STYLE` | no | Defaults to `true` for S3-compatible endpoints such as MinIO; set `false` for virtual-hosted AWS S3 addressing. |
+| `ATOAXIS_OBJECT_STORE_ALLOW_HTTP` | no | Defaults to `false`; explicit local-development opt-in for an HTTP MinIO endpoint. |
 | `ATOAXIS_KMS_KEY_ID` | no | KMS/Vault key identifier for credential sealing. |
+| `ATOAXIS_EXPORT_WORKER_PREFETCH`, `EXPORT_WORKER_HEALTH_HOST`, `EXPORT_WORKER_HEALTH_PORT` | no | Export worker tuning and health listener; defaults to prefetch `1` and `0.0.0.0:8082`. |
+| `ATOAXIS_PROJECTION_WORKER_PREFETCH`, `PROJECTION_WORKER_HEALTH_HOST`, `PROJECTION_WORKER_HEALTH_PORT` | no | Projection worker tuning and health listener; defaults to prefetch `2` and `0.0.0.0:8086`. |
+| `ATOAXIS_ACCOUNT_DELETION_WORKER_PREFETCH`, `ACCOUNT_DELETION_WORKER_HEALTH_HOST`, `ACCOUNT_DELETION_WORKER_HEALTH_PORT` | no | Account-deletion worker tuning and health listener; defaults to prefetch `1` and `0.0.0.0:8087`. Keep this worker separate from the generic job worker. |
 
 ### Test-only
 

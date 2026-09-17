@@ -17,9 +17,15 @@
 //! isolation or centrally audited decrypt calls.
 
 use anyhow::{anyhow, bail, Context, Result};
+use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
+use uuid::Uuid;
+
+use crate::infrastructure::contracts::{
+    CredentialVault, InfrastructureError, InfrastructureResult,
+};
 
 /// Recorded in `api_keys.secret_key_version` so a future key rotation can tell
 /// which master key sealed a given row.
@@ -103,6 +109,22 @@ impl SecretBox {
             )
             .map_err(|_| anyhow!("credential envelope failed authentication"))?;
         Ok(plaintext.to_vec())
+    }
+}
+
+/// Adapt the local AES envelope to the provider-neutral credential contract. The
+/// tenant UUID is authenticated as associated data, so a ciphertext copied between
+/// accounts cannot be replayed successfully by an integration worker.
+#[async_trait]
+impl CredentialVault for SecretBox {
+    async fn seal(&self, tenant_id: Uuid, secret: &[u8]) -> InfrastructureResult<Vec<u8>> {
+        SecretBox::seal(self, tenant_id.as_bytes(), secret)
+            .map_err(|error| InfrastructureError::Unavailable(error.to_string()))
+    }
+
+    async fn open(&self, tenant_id: Uuid, ciphertext: &[u8]) -> InfrastructureResult<Vec<u8>> {
+        SecretBox::open(self, tenant_id.as_bytes(), ciphertext)
+            .map_err(|error| InfrastructureError::InvalidEnvelope(error.to_string()))
     }
 }
 

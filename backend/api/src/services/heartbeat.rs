@@ -6,7 +6,7 @@ use uuid::Uuid;
 use wakaclock_core::ai::fingerprint_for_heartbeat;
 use wakaclock_core::heartbeat::{
     normalize_activity_source, union_activity_seconds, ActivitySegment, Heartbeat,
-    MAX_ACTIVITY_GAP_SECONDS,
+    ACTIVE_LEASE_SECONDS, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
 };
 
 use crate::model::date_range::ResolvedRange;
@@ -37,6 +37,57 @@ impl HeartbeatService {
         machine: String,
         heartbeats: Vec<Heartbeat>,
     ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(user_id, machine, heartbeats, false, None)
+            .await
+    }
+
+    /// Kafka consumers use the strict projection policy: if raw data is durable
+    /// but an interval insert fails, the source offset must remain uncommitted so
+    /// replay can fill the missing projection.  Direct HTTP keeps its historical
+    /// best-effort interval behaviour through [`Self::process_heartbeats`].
+    pub async fn process_heartbeats_strict(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+    ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(user_id, machine, heartbeats, true, None)
+            .await
+    }
+
+    pub async fn process_heartbeats_strict_with_token(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+        token: &str,
+    ) -> Result<usize> {
+        self.process_heartbeats_with_policy_and_token(
+            user_id,
+            machine,
+            heartbeats,
+            true,
+            Some(token),
+        )
+        .await
+    }
+
+    async fn process_heartbeats_with_policy_and_token(
+        &self,
+        user_id: Uuid,
+        machine: String,
+        heartbeats: Vec<Heartbeat>,
+        strict_projection: bool,
+        insert_token: Option<&str>,
+    ) -> Result<usize> {
+        #[cfg(feature = "kafka-spike")]
+        if std::env::var("ATOAXIS_KAFKA_SPIKE_FAILURE_POINT")
+            .ok()
+            .as_deref()
+            == Some("clickhouse_down")
+        {
+            anyhow::bail!("injected ClickHouse outage");
+        }
         let mut heartbeats = heartbeats;
         // Sanitize before deriving event/fingerprint identities so retries use the
         // same canonical payload whether they came from a new or legacy client.
@@ -88,37 +139,58 @@ impl HeartbeatService {
             .existing_change_revisions(user_id, &candidate_change_ids)
             .await?;
         for (batch_index, mut hb) in heartbeats.into_iter().enumerate() {
+            let mut duplicate_raw = false;
             if let Some(heartbeat_id) = hb.heartbeat_id.as_ref() {
                 let heartbeat_key = (heartbeat_id.clone(), hb.session_id.clone());
                 let stored_revision = existing_heartbeat_revisions.get(&heartbeat_key).copied();
+                let tombstoned = existing_heartbeat_revisions
+                    .get(&(heartbeat_id.clone(), None))
+                    .is_some_and(|revision| *revision == u32::MAX);
                 let batch_revision = batch_heartbeat_revisions.get(&heartbeat_key).copied();
+                if stored_revision == Some(u32::MAX) || tombstoned {
+                    // A deletion tombstone dominates every delayed/replayed
+                    // heartbeat.  Do not recreate its interval projection.
+                    continue;
+                }
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
-                    continue;
+                    duplicate_raw = true;
                 }
-                if hb.revision > 0
-                    && stored_revision.is_none()
-                    && hb.ai_event_id.is_none()
-                    && hb.ai_change_id.is_none()
-                {
-                    anyhow::bail!(
-                        "correction revision {} has no stored base for heartbeat_id {}",
-                        hb.revision,
-                        heartbeat_id
-                    );
-                }
-                if let Some(revision) = stored_revision {
-                    if hb.revision != revision.saturating_add(1) {
+                if !duplicate_raw {
+                    if hb.revision > 0
+                        && stored_revision.is_none()
+                        && batch_revision.is_none()
+                        && hb.ai_event_id.is_none()
+                        && hb.ai_change_id.is_none()
+                    {
                         anyhow::bail!(
-                            "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                            "correction revision {} has no stored base for heartbeat_id {}",
                             hb.revision,
-                            revision,
                             heartbeat_id
                         );
                     }
+                    if let Some(revision) = stored_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow stored revision {} for heartbeat_id {}",
+                                hb.revision,
+                                revision,
+                                heartbeat_id
+                            );
+                        }
+                    } else if let Some(revision) = batch_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow batch revision {} for heartbeat_id {}",
+                                hb.revision,
+                                revision,
+                                heartbeat_id
+                            );
+                        }
+                    }
+                    batch_heartbeat_revisions.insert(heartbeat_key, hb.revision);
                 }
-                batch_heartbeat_revisions.insert(heartbeat_key, hb.revision);
             }
             // Bulk retries can contain the same AI event twice. De-duplicate within
             // the request before it reaches ClickHouse; the opaque id is supplied by
@@ -130,26 +202,37 @@ impl HeartbeatService {
                 if stored_revision.is_some_and(|revision| hb.revision <= revision)
                     || batch_revision.is_some_and(|revision| hb.revision <= revision)
                 {
-                    continue;
+                    duplicate_raw = true;
                 }
-                if hb.revision > 0 && stored_revision.is_none() {
-                    anyhow::bail!(
-                        "correction revision {} has no stored base for ai_event_id {}",
-                        hb.revision,
-                        event_id
-                    );
-                }
-                if let Some(revision) = stored_revision {
-                    if hb.revision != revision.saturating_add(1) {
+                if !duplicate_raw {
+                    if hb.revision > 0 && stored_revision.is_none() && batch_revision.is_none() {
                         anyhow::bail!(
-                            "correction revision {} must follow stored revision {} for ai_event_id {}",
+                            "correction revision {} has no stored base for ai_event_id {}",
                             hb.revision,
-                            revision,
                             event_id
                         );
                     }
+                    if let Some(revision) = stored_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow stored revision {} for ai_event_id {}",
+                                hb.revision,
+                                revision,
+                                event_id
+                            );
+                        }
+                    } else if let Some(revision) = batch_revision {
+                        if hb.revision != revision.saturating_add(1) {
+                            anyhow::bail!(
+                                "correction revision {} must follow batch revision {} for ai_event_id {}",
+                                hb.revision,
+                                revision,
+                                event_id
+                            );
+                        }
+                    }
+                    batch_event_revisions.insert(event_key, hb.revision);
                 }
-                batch_event_revisions.insert(event_key, hb.revision);
             }
 
             if hb.ai_event_id.is_none() {
@@ -160,26 +243,38 @@ impl HeartbeatService {
                     if stored_revision.is_some_and(|revision| hb.revision <= revision)
                         || batch_revision.is_some_and(|revision| hb.revision <= revision)
                     {
-                        continue;
+                        duplicate_raw = true;
                     }
-                    if hb.revision > 0 && stored_revision.is_none() {
-                        anyhow::bail!(
-                            "correction revision {} has no stored base for ai_change_id {}",
-                            hb.revision,
-                            change_id
-                        );
-                    }
-                    if let Some(revision) = stored_revision {
-                        if hb.revision != revision.saturating_add(1) {
+                    if !duplicate_raw {
+                        if hb.revision > 0 && stored_revision.is_none() && batch_revision.is_none()
+                        {
                             anyhow::bail!(
-                                "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                "correction revision {} has no stored base for ai_change_id {}",
                                 hb.revision,
-                                revision,
                                 change_id
                             );
                         }
+                        if let Some(revision) = stored_revision {
+                            if hb.revision != revision.saturating_add(1) {
+                                anyhow::bail!(
+                                    "correction revision {} must follow stored revision {} for ai_change_id {}",
+                                    hb.revision,
+                                    revision,
+                                    change_id
+                                );
+                            }
+                        } else if let Some(revision) = batch_revision {
+                            if hb.revision != revision.saturating_add(1) {
+                                anyhow::bail!(
+                                    "correction revision {} must follow batch revision {} for ai_change_id {}",
+                                    hb.revision,
+                                    revision,
+                                    change_id
+                                );
+                            }
+                        }
+                        batch_change_revisions.insert(change_key, hb.revision);
                     }
-                    batch_change_revisions.insert(change_key, hb.revision);
                 }
             }
 
@@ -237,7 +332,22 @@ impl HeartbeatService {
             } else {
                 Some(evidence.proven_seconds())
             };
+            let existing_segments = if duplicate_raw {
+                let candidates = evidence
+                    .segments
+                    .iter()
+                    .map(|segment| segment.segment_id.clone())
+                    .collect::<Vec<_>>();
+                self.repo
+                    .existing_activity_segment_ids(user_id, &interval_heartbeat_id, &candidates)
+                    .await?
+            } else {
+                std::collections::HashSet::new()
+            };
             for segment in evidence.segments {
+                if existing_segments.contains(&segment.segment_id) {
+                    continue;
+                }
                 interval_rows.push(ActivityIntervalRow {
                     user_id,
                     segment_id: segment.segment_id,
@@ -377,7 +487,9 @@ impl HeartbeatService {
                 session_id: hb.session_id,
             };
 
-            rows.push(row);
+            if !duplicate_raw {
+                rows.push(row);
+            }
         }
 
         if clamped_claims > 0 {
@@ -391,10 +503,28 @@ impl HeartbeatService {
         }
 
         let inserted = rows.len();
-        self.repo.insert_batch(rows).await?;
+        self.repo
+            .insert_batch_with_token(rows, insert_token)
+            .await?;
+        #[cfg(feature = "kafka-spike")]
+        if std::env::var("ATOAXIS_KAFKA_SPIKE_FAILURE_POINT")
+            .ok()
+            .as_deref()
+            == Some("raw_before_interval")
+        {
+            anyhow::bail!("injected failure after raw heartbeat write");
+        }
         // Raw heartbeat JSON remains the audit source. A projection failure must not
         // make the client retry an already accepted heartbeat; readers can rebuild it.
-        if let Err(error) = self.repo.insert_activity_intervals(interval_rows).await {
+        let interval_token = insert_token.map(|token| format!("{token}:interval"));
+        if let Err(error) = self
+            .repo
+            .insert_activity_intervals_with_token(interval_rows, interval_token.as_deref())
+            .await
+        {
+            if strict_projection {
+                return Err(error);
+            }
             tracing::warn!("activity interval projection failed: {error}");
         }
         Ok(inserted)
@@ -522,7 +652,14 @@ pub fn clamp_to_evidence_window(
     for segment in segments {
         // `Heartbeat::validate` already rejects oversized explicit segments, so this
         // clamp only guards replayed and imported rows.
-        let clamped_start = segment.start.max(segment.end - MAX_ACTIVITY_GAP_SECONDS);
+        let max_span = match segment.source.as_deref() {
+            Some(source) if source.eq_ignore_ascii_case("editor_active_v1") => ACTIVE_LEASE_SECONDS,
+            Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
+                MAX_AI_TOOL_DURATION_SECONDS
+            }
+            _ => MAX_ACTIVITY_GAP_SECONDS,
+        };
+        let clamped_start = segment.start.max(segment.end - max_span);
         if clamped_start > segment.start && segment.start.is_finite() {
             clamped_excess_seconds += clamped_start - segment.start;
         }
@@ -724,6 +861,37 @@ mod tests {
             evidence.clamped_excess_seconds,
             900.0 - MAX_ACTIVITY_GAP_SECONDS
         );
+    }
+
+    #[test]
+    fn completed_ai_tool_interval_keeps_its_observed_start_and_end() {
+        let segments = vec![ActivitySegment {
+            segment_id: "tool".to_string(),
+            start: 0.0,
+            end: 600.0,
+            source: Some("ai_tool_v1".to_string()),
+        }];
+
+        let evidence = clamp_to_evidence_window(&segments, None, 600.0, "hb");
+
+        assert_eq!(evidence.proven_seconds(), 600.0);
+        assert_eq!(evidence.clamped_excess_seconds, 0.0);
+    }
+
+    #[test]
+    fn editor_active_interval_is_bounded_by_the_fifteen_second_lease() {
+        let segments = vec![ActivitySegment {
+            segment_id: "editor".to_string(),
+            start: 0.0,
+            end: 60.0,
+            source: Some("editor_active_v1".to_string()),
+        }];
+
+        let evidence = clamp_to_evidence_window(&segments, None, 60.0, "hb");
+
+        assert_eq!(evidence.proven_seconds(), 15.0);
+        assert_eq!(evidence.segments[0].start, 45.0);
+        assert_eq!(evidence.segments[0].end, 60.0);
     }
 
     #[test]

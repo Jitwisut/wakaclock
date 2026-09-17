@@ -41,6 +41,7 @@ impl EnterpriseService {
         actor: Uuid,
         organization_id: Uuid,
     ) -> Result<Option<SsoConnection>> {
+        super::require_runtime_feature(super::RuntimeFeature::SsoOidcSaml)?;
         self.authorization
             .require(
                 actor,
@@ -69,6 +70,7 @@ impl EnterpriseService {
         organization_id: Uuid,
         request: UpsertSsoRequest,
     ) -> Result<SsoConnection> {
+        super::require_runtime_feature(super::RuntimeFeature::SsoOidcSaml)?;
         self.authorization
             .require(
                 actor,
@@ -130,6 +132,7 @@ impl EnterpriseService {
         connection_id: Uuid,
         enforced: bool,
     ) -> Result<bool> {
+        super::require_runtime_feature(super::RuntimeFeature::SsoOidcSaml)?;
         self.authorization
             .require(
                 actor,
@@ -163,6 +166,7 @@ impl EnterpriseService {
         organization_id: Uuid,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<ScimTokenCreated> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         self.authorization
             .require(
                 actor,
@@ -196,6 +200,7 @@ impl EnterpriseService {
         actor: Uuid,
         organization_id: Uuid,
     ) -> Result<Vec<ScimTokenSummary>> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         self.authorization
             .require(
                 actor,
@@ -213,6 +218,7 @@ impl EnterpriseService {
         organization_id: Uuid,
         token_id: Uuid,
     ) -> Result<bool> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         self.authorization
             .require(
                 actor,
@@ -320,6 +326,7 @@ impl EnterpriseService {
         user_id: Option<Uuid>,
         input: ScimUserInput,
     ) -> Result<ScimUserRecord> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         let username = input
             .username
             .as_deref()
@@ -392,6 +399,7 @@ impl EnterpriseService {
         user_id: Uuid,
         input: crate::model::enterprise::ScimPatchRequest,
     ) -> Result<Option<ScimUserRecord>> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         if self.scim_user(organization_id, user_id).await?.is_none() {
             return Ok(None);
         }
@@ -435,6 +443,7 @@ impl EnterpriseService {
         organization_id: Uuid,
         user_id: Uuid,
     ) -> Result<bool> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         let postgres = self.required()?;
         let changed = postgres
             .client()
@@ -477,6 +486,7 @@ impl EnterpriseService {
         organization_id: Uuid,
         display_name: &str,
     ) -> Result<ScimGroupRecord> {
+        super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         let name = display_name.trim();
         if name.is_empty() || name.len() > 120 {
             return Err(anyhow!(

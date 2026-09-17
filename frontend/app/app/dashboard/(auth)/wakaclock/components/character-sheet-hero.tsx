@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { ActiveDaysBadge } from '@/components/wakaclock/rpg/active-days-badge';
 import { TodayQuestCard } from '@/components/wakaclock/rpg/today-quest-card';
 import { XpBar } from '@/components/wakaclock/rpg/xp-bar';
-import { getAllTime, getStatusBar } from '@/lib/wakaclock/endpoints';
+import { getAllTime, getBrowserTimezone, getStatusBar } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
@@ -26,19 +26,25 @@ import styles from '../overview.module.css';
  */
 export function CharacterSheetHero() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const timezone = getBrowserTimezone();
 
   const statusBar = useQuery({
-    queryKey: wakaclockKeys.statusBar(userId),
+    queryKey: wakaclockKeys.statusBar(userId, timezone),
     queryFn: () => getStatusBar(),
     enabled: Boolean(userId),
     refetchInterval: 60_000,
   });
 
   const allTime = useQuery({
-    queryKey: wakaclockKeys.allTime(userId),
+    queryKey: wakaclockKeys.allTime(userId, timezone),
     queryFn: () => getAllTime(userId),
     enabled: Boolean(userId),
   });
+
+  const todaySeconds =
+    statusBar.data?.active_coverage === 'measured'
+      ? (statusBar.data.active_seconds ?? 0)
+      : (statusBar.data?.total_seconds ?? 0);
 
   return (
     <div className={styles.heroGrid}>
@@ -73,7 +79,11 @@ export function CharacterSheetHero() {
         <div className={styles.progress}>
           <XpBar
             isLoading={allTime.isLoading}
-            totalSeconds={allTime.data?.data.total_seconds ?? 0}
+            totalSeconds={
+              allTime.data?.data.active_coverage === 'measured'
+                ? (allTime.data.data.active_seconds ?? 0)
+                : (allTime.data?.data.total_seconds ?? 0)
+            }
           />
           <ActiveDaysBadge
             days={allTime.data?.data.days_with_activity ?? 0}
@@ -83,7 +93,7 @@ export function CharacterSheetHero() {
       </section>
       <TodayQuestCard
         isLoading={statusBar.isLoading}
-        todaySeconds={statusBar.data?.total_seconds ?? 0}
+        todaySeconds={todaySeconds}
       />
     </div>
   );

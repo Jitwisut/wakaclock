@@ -68,7 +68,7 @@ export function DurationTimeline() {
   const blocks = data?.data ?? [];
   const projects = orderedTimelineProjects(blocks.map((block) => block.project));
   const projectTotals = timelineProjectTotals(
-    blocks.map((block) => ({ durationSeconds: block.duration_seconds, project: block.project })),
+    blocks.map((block) => ({ durationSeconds: block.duration_seconds, project: block.project }))
   );
   const rangeStart = data?.range_start;
   const rangeEnd = data?.range_end;
@@ -83,6 +83,8 @@ export function DurationTimeline() {
     }
     return secondsSinceMidnight(epochSeconds);
   }
+  const hasDurationV2 = data?.comparable_seconds != null || data?.ai_additional_seconds != null;
+  const activeAvailable = data?.active_coverage === 'measured';
 
   return (
     <Card>
@@ -115,6 +117,30 @@ export function DurationTimeline() {
           isLoading={timezone === null || isLoading}
         >
           <div className="space-y-4">
+            {(hasDurationV2 || activeAvailable) && (
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
+                {activeAvailable && (
+                  <div className="bg-primary/5 rounded-lg border px-3 py-2">
+                    <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
+                    <dd className="mt-1 text-lg font-semibold">
+                      {formatProjectDuration(data?.active_seconds ?? 0)}
+                    </dd>
+                  </div>
+                )}
+                <div className="bg-muted/30 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {formatProjectDuration(data?.comparable_seconds ?? 0)}
+                  </dd>
+                </div>
+                <div className="bg-muted/30 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {formatProjectDuration(data?.ai_additional_seconds ?? 0)}
+                  </dd>
+                </div>
+              </dl>
+            )}
             <TooltipProvider>
               <div className="overflow-x-auto pb-1">
                 <div className="min-w-[900px]">
@@ -132,7 +158,7 @@ export function DurationTimeline() {
                   <div className="overflow-hidden rounded-md border">
                     {projects.map((project) => {
                       const projectBlocks = blocks.filter(
-                        (block) => timelineProjectLabel(block.project) === project,
+                        (block) => timelineProjectLabel(block.project) === project
                       );
                       const projectTotal = projectTotals.get(project) ?? 0;
                       const projectColor = timelineProjectColor(project);
@@ -160,9 +186,9 @@ export function DurationTimeline() {
                             style={{ height: `${PROJECT_ROW_HEIGHT}px` }}
                           >
                             <div className="pointer-events-none absolute inset-0 grid grid-cols-4">
-                              <span className="border-r border-border/50" />
-                              <span className="border-r border-border/50" />
-                              <span className="border-r border-border/50" />
+                              <span className="border-border/50 border-r" />
+                              <span className="border-border/50 border-r" />
+                              <span className="border-border/50 border-r" />
                               <span />
                             </div>
 
@@ -171,7 +197,7 @@ export function DurationTimeline() {
                                 (timelineOffset(block.start) / rangeSeconds) * 100;
                               const widthPct = Math.max(
                                 (block.duration_seconds / rangeSeconds) * 100,
-                                0.35,
+                                0.35
                               );
 
                               return (
@@ -179,7 +205,7 @@ export function DurationTimeline() {
                                   <TooltipTrigger asChild>
                                     <div
                                       aria-label={`${project}, ${formatEpochRange(block.start, block.end)}`}
-                                      className="absolute bottom-2 top-2 rounded-sm opacity-90 transition-opacity hover:opacity-100"
+                                      className="absolute top-2 bottom-2 rounded-sm opacity-90 transition-opacity hover:opacity-100"
                                       role="img"
                                       style={{
                                         backgroundColor: projectColor,
@@ -198,7 +224,8 @@ export function DurationTimeline() {
                                         {project}
                                       </div>
                                       <div>
-                                        {formatEpochRange(block.start, block.end)} · {block.category}
+                                        {formatEpochRange(block.start, block.end)} ·{' '}
+                                        {block.category}
                                       </div>
                                     </div>
                                   </TooltipContent>

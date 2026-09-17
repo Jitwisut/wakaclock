@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: atoaxis
+      POSTGRES_PASSWORD: atoaxis-test
+      POSTGRES_DB: atoaxis_k0
+    ports:
+      - "15432:5432"
+    volumes:
+      - k0_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atoaxis -d atoaxis_k0"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.8
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --check=false
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+    ports:
+      - "19092:19092"
+    volumes:
+      - k0_redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q Healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    environment:
+      # The application repositories use the stable `wakaclock.*` database
+      # qualifier.  This container/volume is isolated by the compose project, so
+      # reusing that database name cannot touch a developer's normal ClickHouse.
+      CLICKHOUSE_DB: wakaclock
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD: default
+    ports:
+      - "18123:8123"
+    volumes:
+      - k0_clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: atoaxis
+      RABBITMQ_DEFAULT_PASS: atoaxis-test
+    ports:
+      - "15673:5672"
+      - "15672:15672"
+    volumes:
+      - k0_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  k0_postgres_data:
+  k0_redpanda_data:
+  k0_clickhouse_data:
+  k0_rabbitmq_data:

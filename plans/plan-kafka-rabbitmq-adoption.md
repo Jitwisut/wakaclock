@@ -1,15 +1,30 @@
 # แผนนำ Kafka และ RabbitMQ มาใช้งานจริง
 
-**สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้ เขียน 2026-09-10; งานอยู่บน branch
-`feature/broker-adoption` (worktree `.worktrees/broker-adoption`)
+**สถานะ:** แผนที่ใช้งานอยู่ (active) ของ workstream นี้; R3/R4 เสร็จใน branch
+`codex/integrate-all-current-work` เมื่อ 2026-09-13 และ Kafka K-P0/K0.5/K1/K2
+มี implementation แบบ feature-gated แล้ว. K0 isolated correctness gate ผ่านครบ 11/11
+และเลือก D6=`revision_lookup`; K5 contract/config/client durability/fact-sink/session
+worker/verify implementation ลงใน branch นี้แล้ว. R5 มี shared worker runtime,
+projection rebuild, export artifact foundation และ account-deletion workflow เพิ่มแล้ว
+แต่ยังคง fail-closed สำหรับงานที่ยังไม่มี provider/cross-store processor. Production ยังไม่เปิดจนกว่า K3/K4 และ K5
+staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence จะผ่าน
 
 | ขั้น | สถานะ |
 |---|---|
 | P0.1 Contract | ✅ 2026-09-11 — `contracts.rs` ตาม D1–D4 + fixture `fixtures/message-envelopes/*-v1.json` (12 tests) |
 | P0.2 Config | ✅ 2026-09-11 — `config/brokers.rs` (15 tests); ตั้งค่าไม่ครบหรือขอโหมดที่ยังไม่มีจะไม่ยอม boot |
 | R1 RabbitMQ adapter | ✅ 2026-09-11 — `infrastructure/rabbitmq.rs`; integration tests 8 ตัวผ่านกับ RabbitMQ 3.13.7 และ 4.1.8 (รันซ้ำสองรอบไม่มีของค้าง) รวม restart broker |
-| R2 Job foundation + relay | ✅ 2026-09-11 — migration `007_async_jobs.sql`, `services/jobs.rs`, `infrastructure/job_relay.rs`, `GET /api/v2/jobs/:job_id`; 5 PG-backed tests (idempotency, foreign-row isolation, partial-pass double-publish safety, sweeper, broker e2e) รันซ้ำสองรอบผ่าน |
-| อื่น ๆ | ยังไม่เริ่ม (ถัดไป: R3) |
+| R2 Job foundation + relay | ✅ 2026-09-11 — migration `007_async_jobs.sql`, transactional outbox, `services/jobs.rs`, `GET /api/v2/jobs/:job_id`; partial relay, idempotency, sweeper และ broker e2e ผ่าน |
+| R3 Worker runtime | ✅ 2026-09-13 — `job-worker` binary, migration `008_job_worker_state.sql`, lease fencing, retry/DLQ outbox, graceful drain และ health endpoints; PG regressions 8/8 และ RabbitMQ adapter 8/8 ผ่าน |
+| R4 `analytics.reprocess` | ✅ 2026-09-13 — `ATOAXIS_REPROCESS_MODE=job` ตอบ `202` + `Location`/`job_id`, idempotency บังคับ, worker processor ทำงานจริง; sync mode คงเป็นค่าเริ่มต้น |
+| K-P0 heartbeat ID/retry gate | ✅ validation 1..=256 bytes, server IDs ใน verify/kafka และ permanent 4xx ไม่เข้า retry queue |
+| K0 spike harness + D6 record | ✅ 2026-09-13 — isolated Redpanda `v24.1.8` + ClickHouse `24.10.4.191` + PostgreSQL 16, 11/11 scenarios; D6=`revision_lookup` ไม่ provisional |
+| K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring, value-level access/rule parity report |
+| K1 Kafka producer | ✅ `rdkafka` feature, idempotent producer, typed heartbeat envelope, topic/infra config |
+| K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, retry seek/pause/resume, sanitized DLQ classification and health endpoints; K0 e2e/rebalance/outage matrix passed |
+| K3 verify + K4 cohort rollout | 🟡 orchestration, PostgreSQL audit, parity verifier, metrics and API response implemented; staging/load/cohort gate pending |
+| K5 AI usage Kafka + session reconcile | 🟡 contract v2/header routing, independent config, durable CLI pending queue, `ai-usage-ingest`, `ai-session-worker`, verifier/audit schema, payload-hash conflict guard and runbook implemented; isolated full-stack, real-account and rollout gates pending |
+| R5 งานชนิดอื่น | 🟡 shared runtime, `projection.rebuild`, export artifact foundation และ account-deletion tombstone/worker ทำแล้ว; export/account deletion มี explicit gates และยังต้องผ่าน cross-store e2e; report/integration/billing ยังไม่มี provider processor ที่พร้อมเปิด |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -46,13 +61,13 @@ metrics ที่ต้องมี) ให้ใช้ §9.22 ตามเด�
 | สิ่ง | สถานะ |
 |---|---|
 | Client library Kafka/AMQP ใน `Cargo.lock` | ไม่มี |
-| `backend/api/src/infrastructure/contracts.rs` | มี trait `EventBus`/`JobQueue` + ชื่อ topic แต่ `#![expect(dead_code)]` และไม่มี impl |
+| `backend/api/src/infrastructure/contracts.rs` | มี versioned event/job envelope, publisher/consumer contracts และ retry targets |
 | Heartbeat ingest | `handlers/v1/heartbeats.rs` → `HeartbeatService::process_heartbeats` → ClickHouse ตรง (sync) |
-| Worker 7 ตัวใน `src/bin/` | `worker_runtime::run` คืน error ทันที |
-| export/report/integration | ถูกกันด้วย `require_background_processor()` → 503 |
+| Worker | `src/bin/job-worker.rs` รัน relay + `analytics.reprocess`; `projection-worker`, `export-worker` และ `account-deletion` มี processor แยกแล้ว แต่ยังเปิดตาม guard/dependency; report/integration/billing ยัง fail-closed |
+| export/report/integration/account deletion | ถูกกันด้วย `require_background_processor()` หรือ explicit mode gate → 503 จน processor/dependency พร้อม |
 | Reprocess | ทำงานจริงแบบ sync ใน HTTP request พร้อม PG advisory lock (`services/reprocess.rs`) — **ไม่ได้**อยู่หลัง 503 guard |
-| `outbox_events` (PG) | มีตาราง ไม่มี relay |
-| Docker compose | `redpanda`/`rabbitmq` อยู่หลัง profile `brokers` (`make infra-brokers-up`) |
+| `outbox_events` (PG) | relay อยู่ใน dedicated `job-worker`; poison row ถูก retire และ retry/DLQ ใช้ target ใน outbox |
+| Docker compose | RabbitMQ อยู่ใน `infra-up`; Redpanda ยังอยู่หลัง profile `kafka` จน K1 |
 
 ## ข้อตัดสินใจ (D1–D10)
 
@@ -229,29 +244,26 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 **R2 — Job foundation ใน PostgreSQL** (ทำแล้ว)
 - migration `007_async_jobs.sql` + `JobService::create` (idempotency key ต่อ `(user_id, kind, key)`) → job row + outbox row ใน transaction เดียว (D5)
 - `JobService::relay_once`: `SELECT … FROM outbox_events WHERE aggregate_type = 'async_job' … FOR UPDATE SKIP LOCKED` → `publish` + confirm → ตั้ง `published_at`; หยุดที่ publish แรกที่ล้มเหลวแล้ว commit เท่าที่สำเร็จ; row ที่ decode ไม่ได้ log แล้วข้าม
-- **poison row ยังไม่ block คิวจริงเฉพาะเมื่อจำนวนน้อยกว่า batch:** row ที่ decode ไม่ได้คง `published_at IS NULL` ตลอดไป และ `ORDER BY created_at LIMIT n` จะดึงมันกลับมาทุกรอบ — สะสมครบ `RELAY_BATCH` เมื่อไหร่ real job หยุดไหล โอกาสต่ำ (มีแต่ `create` ที่เขียน row พวกนี้) แต่ต้องมีคอลัมน์ `failed_at`/DLQ ให้ relay ทิ้ง poison row — ทำใน R3
+- poison row มี `failed_at`/`failure_code` ตั้งแต่ R3: relay retire แถวที่ decode หรือ target ไม่ได้ และ dead-letter สถานะ job เพื่อไม่ให้ค้างบล็อกงานที่ถูกต้องด้านหลัง
 - `JobService::sweep_once`: job `running` ที่ `lease_expires_at` เลยเวลา → re-enqueue ผ่าน outbox row ใหม่ `attempt + 1`; ครบ `JOB_RETRY_DELAYS.len()` → `dead_lettered`
 - `GET /api/v2/jobs/:job_id` ตรวจ ownership (`user_id = caller`); system job และ job ของคนอื่นเป็น 404
-- **ต่างจากแผนเดิม:** relay รันใน process ของ `wakaclock-server` (spawn จาก `main.rs` เมื่อมี `ATOAXIS_JOB_QUEUE_URL` + `POSTGRES_URL`) ไม่ใช่ binary แยก เพราะ crate ไม่มี library target ให้ `src/bin/*` แชร์ services ได้ `src/bin/outbox-relay.rs` เหลือไว้เป็น stub ที่ error ชี้มาที่นี่ **binary แยกต้องมี lib target ก่อน — เป็น PR ของตัวเอง ทำก่อนหรือระหว่าง R3**
-- worker-side transitions (claim/complete/fail) ย้ายไป R3 เพราะยังไม่มีผู้เรียกจนกว่า worker จะมี; `JobService::create` มี `#[expect(dead_code)]` จน R4 ต่อเข้า `/reprocess`
+- **ต่างจากแผนเดิม:** relay อยู่ใน process ของ `job-worker` ซึ่งใช้ `src/lib.rs` แชร์ services กับ API; `wakaclock-server` ไม่เปิด RabbitMQ connection เอง และ `src/bin/outbox-relay.rs` เหลือไว้เป็น stub สำหรับ deploy script เก่า
+- worker-side transitions (claim/complete/fail) ถูกเพิ่มใน R3 และ `JobService::create` ต่อเข้ากับ `/reprocess` ใน R4
 - เกณฑ์ผ่าน (ทำแล้ว): partial relay pass ที่ publish ล้มเหลว → row ที่ confirm แล้วถูก mark, ที่เหลือ retry รอบหน้า, ไม่ publish ซ้ำ (path นี้ commit สะอาด); foreign outbox row (`aggregate_type` อื่น) ไม่ถูกแตะ; Idempotency-Key ซ้ำได้ `job_id` เดิมและไม่เขียน outbox เพิ่ม
 - **การรับประกันคือ at-least-once ไม่ใช่ exactly-once:** process ตายหลัง publish ถูก confirm แต่ก่อน `tx.commit()` → `published_at` rollback → รอบถัดไป publish ซ้ำ นี่คือเหตุผลที่ `JobEnvelope` ถือ `job_id` คงที่ และ worker ของ R3 ต้อง idempotent ต่อ `job_id`; งานไม่หาย
 
-**R3 — Worker runtime** (1 PR, + ตัดสินเรื่อง lib target)
-- ตัดสินก่อน: เพิ่ม `src/lib.rs` ให้ worker เป็น process แยก (ต้องแก้ `#![expect(dead_code)]` หลายจุดที่ contracts/rabbitmq/brokers ถือไว้) หรือรัน worker loop ใน process เดียวกับ API แบบที่ relay ทำใน R2 — เลือกอย่างหลังถ้าอยากเลี่ยง refactor ใหญ่ใน PR นี้
-- แทน `worker_runtime.rs` ด้วย runtime จริง: ลงทะเบียน processor ต่อ routing key, concurrency = prefetch,
-  claim job → เขียน `async_jobs.status = 'running'` + `lease_expires_at` (ตัวที่ sweeper ของ R2 คอยดู) → complete/fail, แยก error ชั่วคราว/ถาวร, graceful shutdown (หยุดรับ → รองานที่ทำอยู่ → nack ที่เหลือ)
-- claim/complete/fail transitions ของ `JobService` (ยังไม่มีใน R2) เพิ่มที่นี่
-- **worker ต้อง dedupe ต่อ `job_id`** (relay เป็น at-least-once — ดู R2): claim ที่เจอ `async_jobs.status` เป็น `succeeded`/`running` อยู่แล้วให้ ack ทิ้งโดยไม่รัน processor ซ้ำ
-- readiness = เชื่อมต่อได้ + มี processor
-- `require_background_processor()` เปลี่ยนเป็นตรวจราย job type จาก registry และส่งผลไปที่
-  capabilities (F12) — feature ที่ worker ยังไม่พร้อมยังตอบ 503 ต่อไป
+**R3 — Worker runtime** (เสร็จ 2026-09-13)
+- เพิ่ม `src/lib.rs` และ `src/bin/job-worker.rs` ให้ worker เป็น process แยก; API ยังทำงานแบบ sync ได้เมื่อไม่ได้เปิด job mode
+- runtime รับ `analytics.reprocess` ด้วย concurrency = RabbitMQ prefetch, claim พร้อม lease owner, renew, complete/fail และ graceful drain
+- `JobService` มี claim/renew/complete/retry/dead-letter แบบ owner-fenced; retry/DLQ เขียน transactional outbox target เดียวกับการเปลี่ยนสถานะ
+- worker dedupe ต่อ `job_id`: running/terminal/stale delivery ถูก acknowledge โดยไม่รัน processor ซ้ำ; poison outbox ถูก retire ไม่ให้บล็อกแถวถัดไป
+- readiness = เชื่อมต่อ RabbitMQ + มี processor และมี `/live`/`/ready` ที่พอร์ต 8081 (ปรับได้ด้วย env)
 
-**R4 — งานแรก: `analytics.reprocess`** (1 PR)
+**R4 — งานแรก: `analytics.reprocess` (เสร็จ 2026-09-13)**
 - เลือกเพราะไม่ต้องพึ่งระบบภายนอกเพิ่ม (export ต้องมี object store, report ต้องมีช่องทางส่ง,
   integration ต้องมี vault) และมี PG advisory lock อยู่แล้ว
-- ย้าย body ของ `ReprocessService::run` ไปเป็น processor; `POST /api/v1/reprocess` ตอบ `202` + `job_id`
-  เมื่อ `ATOAXIS_REPROCESS_MODE=job`
+- ย้าย body ของ `ReprocessService::run` ไปเป็น processor; `POST /api/v1/reprocess` ตอบ `202` + `job_id` และ `Location: /api/v2/jobs/:job_id` เมื่อ `ATOAXIS_REPROCESS_MODE=job`
+- job mode ตรวจ date range ก่อนสร้างงานและบังคับ `Idempotency-Key` แบบ ASCII 1–128 bytes; key เดิมคืน job เดิมโดยไม่เพิ่ม outbox row
 - **ข้อควรระวัง:** endpoint นี้ใช้งานได้อยู่วันนี้ (ต่างจากตัวอื่นที่ตอบ 503) จึงคง path แบบ sync
   ไว้หลัง flag จนกว่าจะยืนยันผลใน production
 - ค้น `frontend/app` แล้ว (2026-09-10) ไม่พบผู้เรียก `analytics/rebuild`, `reprocess` หรือ `repair`
@@ -259,22 +271,26 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
   ซึ่งต้องตรวจก่อนเปลี่ยน default
 - `projection.rebuild` ที่แตกออกมาได้ child job id แบบ deterministic
 - ถอดเงื่อนไข `ReprocessMode::Job` ออกจาก `BrokerConfig::ensure_supported` ใน PR นี้ (K3/K4 ทำแบบเดียวกันกับ `IngestMode`)
-- เกณฑ์ผ่าน: restart worker กลางงานแล้วทำต่อได้ผลเท่าเดิม; งานซ้ำไม่ทำให้ rebuild ขนานกัน;
-  ปิดข้อ "reprocess ยังไม่ใช่ durable job" ของ F10
+- เกณฑ์ผ่านที่ตรวจแล้ว: restart broker ระหว่าง retry แล้วงานยังกลับมา, worker claim/transition ถูก fence และ duplicate delivery ไม่รันซ้ำ; ปิดข้อ "reprocess ยังไม่ใช่ durable job" ของ F10
 
 **R5 — งานที่เหลือ งานละ 1 PR** (ถอด 503 guard ของงานนั้นหลังผ่าน e2e test เท่านั้น)
 
+ส่วน foundation ที่ไม่เสี่ยงต่อการเปิด traffic ปกติทำไว้แล้วบางส่วน ได้แก่ shared
+worker runtime, projection rebuild แบบ opt-in, export idempotency/checksum/object-store
+adapter และ terminal-failure fencing. งานที่ยังไม่มี provider หรือการลบข้าม store ที่
+พิสูจน์ได้จะไม่ถูกเปิดเพียงเพราะ binary compile ผ่าน
+
 | งาน | ต้องมีก่อน |
 |---|---|
-| `export.generate` | `ObjectStore` adapter (S3/MinIO), signed URL, checksum, expiry |
-| `report.deliver` + scheduler | ช่องทางส่ง (email provider); scheduler เลือกงานที่ถึงเวลาด้วย `SKIP LOCKED` |
-| `integration.sync` | `CredentialVault` (F11) — ต่อยอดจาก `infrastructure/secret_box.rs` ได้ |
-| `account.delete` | ลบข้าม PG + ClickHouse + object store พร้อม verification |
-| `billing.reconcile` | billing provider |
+| `export.generate` | foundation มี `ObjectStore` adapter (S3/MinIO), signed URL, checksum, expiry, aggregate row/byte bounds, idempotency และ lease fencing แล้ว; `ATOAXIS_EXPORT_MODE=job` เปิดรับงานได้เฉพาะเมื่อ PG/RabbitMQ/S3 ครบ แต่ยังต้องผ่าน full-stack object-store, retry/fencing และ end-to-end gates ก่อน production |
+| `report.deliver` + scheduler | scheduler foundation มี `next_run_at`, `SKIP LOCKED`, occurrence ledger และ job/outbox transaction แล้ว; ยังต้องมีช่องทางส่งที่เลือกใช้จริง (เช่น email provider), delivery processor, audit transitions และ e2e ก่อนเปิด |
+| `integration.sync` | มี `CredentialVault` สำหรับตรวจ envelope แล้ว; ต้องมี provider adapters, token refresh, generation fencing และ integration e2e ก่อนเปิด |
+| `account.delete` | ✅ foundation ลงแล้ว: `DELETE /api/v2/me` (session-only + explicit confirmation), tombstone, system job/outbox, dedicated worker, shared account lock, cross-store allowlist verification และ metadata-only audit; ยังปิดจนกว่า cross-store e2e จะผ่าน |
+| `billing.reconcile` | ต้องเลือก billing provider/source of truth แล้วทำ ledger/reconcile processor และ retry/DLQ audit ให้ครบ |
 
 ### Kafka track
 
-**K0 — Spike ความถูกต้อง (gate, ไม่มีโค้ด production)**
+**K0 — Spike ความถูกต้อง (gate; harness แยก feature จาก production)**
 รันกับ ClickHouse + Redpanda จริง แล้วบันทึกผลเป็น `docs/kafka-ingest-dedup-spike-<date>.md`:
 1. ส่ง record ของ heartbeat ที่มี id ซ้ำ (consumer ประมวลผล partition ตามลำดับ + ตรวจ revision) →
    ไม่นับซ้ำใน `heartbeats`, `activity_intervals`, `mv_inc_*`
@@ -285,7 +301,9 @@ Env ที่เสนอ (ชื่อเท่านั้น; ต้องเ
 
 6. นับแถวที่ `heartbeat_id` ยาวเกิน `MAX_SOURCE_ID_LEN` (256) ที่มีอยู่แล้ว — ดูข้อจำกัดด้านล่าง
 
-ผลลัพธ์: ตัดสิน D6 เป็นลายลักษณ์อักษร ก่อนเริ่ม K2
+ผลลัพธ์: `backend/api/src/bin/kafka-spike.rs` และ
+`docs/kafka-ingest-dedup-spike-2026-09-13.md` เตรียม isolated topic/decision record
+แล้ว แต่ต้องรันกับ endpoint จริงเพื่อเติม counts และตัดสิน D6 ก่อนเปิด cohort production
 
 **เงื่อนไขก่อน K1/K2:** `StableEventId::heartbeat` ปฏิเสธ id ที่ยาวเกิน 256 bytes แต่
 `Heartbeat::validate` ใน `wakaclock-core` ตรวจแค่ว่า id ไม่ว่าง ในโหมด Kafka heartbeat ที่ id ยาวจะ

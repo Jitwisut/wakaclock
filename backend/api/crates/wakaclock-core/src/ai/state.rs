@@ -4,6 +4,7 @@ use crate::ai::revision::{
     prove_alias, AliasEvidence, AttributionRetentionPolicy, AttributionRevision, RevisionCandidate,
     RevisionWriteOutcome,
 };
+use crate::ai::usage::AiUsageRecord;
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -21,6 +22,13 @@ use std::path::{Path, PathBuf};
 /// integration writes directly, while the CLI lock prevents duplicate sync work.
 pub struct AiAttributionState {
     conn: Connection,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingUsage {
+    pub record: AiUsageRecord,
+    pub attempt: u32,
+    pub next_retry_at: i64,
 }
 
 impl AiAttributionState {
@@ -61,7 +69,33 @@ impl AiAttributionState {
             -- process crash therefore remains safely retryable.
             CREATE TABLE IF NOT EXISTS delivered_usage (
                 usage_event_id TEXT PRIMARY KEY,
+                -- The already-sanitised record lets a later transcript scan
+                -- detect an ID collision instead of silently treating a changed
+                -- payload as an old successful delivery. NULL is retained for
+                -- rows created by older clients before this column existed.
+                record_json    TEXT,
                 delivered_at   INTEGER NOT NULL
+            );
+
+            -- Usage is persisted before the network call. The JSON is the already
+            -- sanitised AiUsageRecord, never a raw transcript line. This queue is
+            -- intentionally independent from heartbeat_queue because its stable
+            -- identity and retry semantics are different.
+            CREATE TABLE IF NOT EXISTS pending_usage (
+                usage_event_id TEXT PRIMARY KEY,
+                record_json    TEXT NOT NULL,
+                next_retry_at  INTEGER NOT NULL DEFAULT 0,
+                attempt        INTEGER NOT NULL DEFAULT 0,
+                error_code     TEXT,
+                created_at     INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_dead_letters (
+                usage_event_id TEXT PRIMARY KEY,
+                record_json    TEXT NOT NULL,
+                attempt        INTEGER NOT NULL,
+                error_code     TEXT NOT NULL,
+                failed_at      INTEGER NOT NULL
             );
 
             -- A single cursor for activity observed outside the editor (Claude/Codex
@@ -126,6 +160,27 @@ impl AiAttributionState {
             );
             ",
         )?;
+        // `CREATE TABLE IF NOT EXISTS` does not add columns to an installation
+        // created by an older client. Upgrade this one additive column without
+        // making concurrent CLI starts fail when one process wins the schema race.
+        let has_delivered_record = conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('delivered_usage') WHERE name = 'record_json'",
+                [],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !has_delivered_record {
+            match conn.execute(
+                "ALTER TABLE delivered_usage ADD COLUMN record_json TEXT",
+                [],
+            ) {
+                Ok(_) => {}
+                Err(error) if error.to_string().contains("duplicate column name") => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(Self { conn })
     }
 
@@ -344,16 +399,192 @@ impl AiAttributionState {
     /// Marks an acknowledged usage batch. `INSERT OR IGNORE` makes this safe when
     /// a retry races with another scan or when a process restarts after the server
     /// accepted the request but before local state was persisted.
-    pub fn mark_usage_delivered(&self, usage_event_ids: &[String]) -> Result<(), AppError> {
+    pub fn mark_usage_delivered(&mut self, usage_event_ids: &[String]) -> Result<(), AppError> {
         let now = chrono::Utc::now().timestamp();
+        let tx = self.conn.transaction()?;
         for usage_event_id in usage_event_ids {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO delivered_usage (usage_event_id, delivered_at)
-                 VALUES (?1, ?2)",
-                params![usage_event_id, now],
+            let pending_record: Option<String> = tx
+                .query_row(
+                    "SELECT record_json FROM pending_usage WHERE usage_event_id = ?1",
+                    params![usage_event_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO delivered_usage
+                 (usage_event_id, record_json, delivered_at)
+                 VALUES (?1, ?2, ?3)",
+                params![usage_event_id, pending_record, now],
+            )?;
+            tx.execute(
+                "DELETE FROM pending_usage WHERE usage_event_id = ?1",
+                params![usage_event_id],
             )?;
         }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Persist usage before attempting delivery. A repeated identical record is
+    /// a no-op; a local ID collision with different sanitised payload is rejected
+    /// before it can turn into an ambiguous retry.
+    pub fn enqueue_pending_usage(&self, records: &[AiUsageRecord]) -> Result<usize, AppError> {
+        let now = chrono::Utc::now().timestamp();
+        // Validate and insert the complete batch under one SQLite transaction. A
+        // conflict in a later record must not leave an earlier sibling queued when
+        // the caller receives the batch-level error.
+        let tx = self.conn.unchecked_transaction()?;
+        let mut inserted = 0;
+        for record in records {
+            record.validate().map_err(AppError::Validation)?;
+            let record_json = serde_json::to_string(record)?;
+            if let Some(existing) = tx
+                .query_row(
+                    "SELECT record_json FROM pending_usage WHERE usage_event_id = ?1",
+                    params![&record.usage_event_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+            {
+                if existing != record_json {
+                    return Err(AppError::Conflict(
+                        "pending usage id has conflicting payload".to_string(),
+                    ));
+                }
+                continue;
+            }
+            let delivered_record: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT record_json FROM delivered_usage WHERE usage_event_id = ?1",
+                    params![&record.usage_event_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(stored_record) = delivered_record {
+                if let Some(stored_record) = stored_record {
+                    if stored_record != record_json {
+                        return Err(AppError::Conflict(
+                            "delivered usage id has conflicting payload".to_string(),
+                        ));
+                    }
+                }
+                continue;
+            }
+            // A permanent HTTP 4xx was already recorded in the local dead-letter
+            // table.  Transcript scans are intentionally replayable, so without
+            // this guard the next watcher tick would recreate the same pending
+            // row and turn a non-retryable failure into an infinite retry loop.
+            let dead_letter_record: Option<String> = tx
+                .query_row(
+                    "SELECT record_json FROM usage_dead_letters WHERE usage_event_id = ?1",
+                    params![&record.usage_event_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(dead_letter_record) = dead_letter_record {
+                if dead_letter_record != record_json {
+                    return Err(AppError::Conflict(
+                        "dead-lettered usage id has conflicting payload".to_string(),
+                    ));
+                }
+                continue;
+            }
+            inserted += tx.execute(
+                "INSERT OR IGNORE INTO pending_usage
+                 (usage_event_id, record_json, next_retry_at, attempt, error_code, created_at)
+                 VALUES (?1, ?2, 0, 0, NULL, ?3)",
+                params![&record.usage_event_id, record_json, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    /// Return only records whose retry timer has elapsed. Ordering by creation
+    /// and ID makes batch retries deterministic across watcher restarts.
+    pub fn pending_usage_due(&self, now: i64) -> Result<Vec<PendingUsage>, AppError> {
+        let mut statement = self.conn.prepare(
+            "SELECT record_json, attempt, next_retry_at
+             FROM pending_usage
+             WHERE next_retry_at <= ?1
+             ORDER BY created_at, usage_event_id",
+        )?;
+        let rows = statement.query_map(params![now], |row| {
+            let record_json: String = row.get(0)?;
+            let record = serde_json::from_str::<AiUsageRecord>(&record_json).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok(PendingUsage {
+                record,
+                attempt: row.get::<_, u32>(1)?,
+                next_retry_at: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    /// Keep a transient failure queued with a bounded, sanitized error code.
+    pub fn mark_usage_retry(
+        &mut self,
+        usage_event_ids: &[String],
+        next_retry_at: i64,
+        error_code: &str,
+    ) -> Result<(), AppError> {
+        let code = sanitize_usage_error_code(error_code);
+        let tx = self.conn.transaction()?;
+        for usage_event_id in usage_event_ids {
+            tx.execute(
+                "UPDATE pending_usage
+                 SET attempt = attempt + 1, next_retry_at = ?2, error_code = ?3
+                 WHERE usage_event_id = ?1",
+                params![usage_event_id, next_retry_at, code],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Permanent 4xx responses leave a bounded local audit trail and stop retrying
+    /// forever. The stored record remains metadata-only and can be repaired by a
+    /// future operator tool without reopening the transcript.
+    pub fn move_usage_dead_letter(
+        &mut self,
+        usage_event_ids: &[String],
+        error_code: &str,
+    ) -> Result<usize, AppError> {
+        let code = sanitize_usage_error_code(error_code);
+        let now = chrono::Utc::now().timestamp();
+        let tx = self.conn.transaction()?;
+        let mut moved = 0;
+        for usage_event_id in usage_event_ids {
+            let Some((record_json, attempt)) = tx
+                .query_row(
+                    "SELECT record_json, attempt FROM pending_usage WHERE usage_event_id = ?1",
+                    params![usage_event_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
+                )
+                .optional()?
+            else {
+                continue;
+            };
+            tx.execute(
+                "INSERT OR REPLACE INTO usage_dead_letters
+                 (usage_event_id, record_json, attempt, error_code, failed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![usage_event_id, record_json, attempt, code, now],
+            )?;
+            tx.execute(
+                "DELETE FROM pending_usage WHERE usage_event_id = ?1",
+                params![usage_event_id],
+            )?;
+            moved += 1;
+        }
+        tx.commit()?;
+        Ok(moved)
     }
 
     pub fn mark_fingerprint(
@@ -710,6 +941,25 @@ impl AiAttributionState {
     }
 }
 
+fn sanitize_usage_error_code(code: &str) -> String {
+    let normalized: String = code
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    if normalized.is_empty() {
+        "unknown".to_string()
+    } else {
+        normalized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,6 +999,25 @@ mod tests {
             output_tokens: None,
             source: AiEventSource::Transcript,
             confidence: AiConfidence::Verified,
+        }
+    }
+
+    fn sample_usage(id: &str) -> AiUsageRecord {
+        AiUsageRecord {
+            usage_event_id: id.to_string(),
+            ai_session_id: "session-1".to_string(),
+            occurred_at: chrono::Utc::now(),
+            agent: "claude-code".to_string(),
+            provider: Some("anthropic".to_string()),
+            model: Some("claude-sonnet-5".to_string()),
+            prompt_count: 1,
+            prompt_character_count: Some(10),
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            token_source: crate::ai::usage::TokenSource::Transcript,
+            project_hint: Some("wakaclock".to_string()),
         }
     }
 
@@ -870,7 +1139,7 @@ mod tests {
     fn usage_ids_are_filtered_until_the_api_acknowledges_them() {
         let path = temp_db_path("usage-delivery");
         let _ = std::fs::remove_file(&path);
-        let state = AiAttributionState::open_at(&path).unwrap();
+        let mut state = AiAttributionState::open_at(&path).unwrap();
         let ids = vec!["usage-1".to_string(), "usage-2".to_string()];
 
         assert_eq!(state.filter_undelivered_usage(&ids).unwrap().len(), 2);
@@ -886,6 +1155,170 @@ mod tests {
             .filter_undelivered_usage(&ids[..1])
             .unwrap()
             .contains("usage-1"));
+    }
+
+    #[test]
+    fn pending_usage_survives_reopen_and_acknowledgement_is_atomic() {
+        let path = temp_db_path("pending-usage");
+        let _ = std::fs::remove_file(&path);
+        let record = sample_usage("pending-1");
+        {
+            let state = AiAttributionState::open_at(&path).unwrap();
+            assert_eq!(
+                state
+                    .enqueue_pending_usage(std::slice::from_ref(&record))
+                    .unwrap(),
+                1
+            );
+        }
+        {
+            let mut state = AiAttributionState::open_at(&path).unwrap();
+            let pending = state
+                .pending_usage_due(chrono::Utc::now().timestamp())
+                .unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].record, record);
+            state
+                .mark_usage_delivered(&["pending-1".to_string()])
+                .unwrap();
+            assert!(state
+                .pending_usage_due(chrono::Utc::now().timestamp())
+                .unwrap()
+                .is_empty());
+            assert!(state
+                .filter_undelivered_usage(&["pending-1".to_string()])
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn a_conflicting_usage_batch_rolls_back_all_pending_siblings() {
+        let path = temp_db_path("pending-usage-atomic-conflict");
+        let _ = std::fs::remove_file(&path);
+        let first = sample_usage("batch-first");
+        let sibling = sample_usage("batch-sibling");
+        let mut conflicting = first.clone();
+        conflicting.output_tokens = Some(999);
+        let state = AiAttributionState::open_at(&path).unwrap();
+
+        assert!(state
+            .enqueue_pending_usage(&[sibling, first, conflicting])
+            .is_err());
+        assert!(state
+            .pending_usage_due(chrono::Utc::now().timestamp())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn delivered_usage_rejects_a_later_payload_collision() {
+        let path = temp_db_path("delivered-usage-collision");
+        let _ = std::fs::remove_file(&path);
+        let first = sample_usage("delivered-collision");
+        {
+            let state = AiAttributionState::open_at(&path).unwrap();
+            state
+                .enqueue_pending_usage(std::slice::from_ref(&first))
+                .unwrap();
+            let mut state = state;
+            state
+                .mark_usage_delivered(std::slice::from_ref(&first.usage_event_id))
+                .unwrap();
+        }
+
+        let mut conflicting = first;
+        conflicting.output_tokens = Some(999);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let error = state
+            .enqueue_pending_usage(&[conflicting])
+            .expect_err("a delivered ID must not silently absorb a changed payload");
+        assert!(
+            matches!(error, AppError::Conflict(message) if message.contains("delivered usage"))
+        );
+    }
+
+    #[test]
+    fn dead_lettered_usage_rejects_a_later_payload_collision() {
+        let path = temp_db_path("dead-letter-usage-collision");
+        let _ = std::fs::remove_file(&path);
+        let first = sample_usage("dead-letter-collision");
+        {
+            let state = AiAttributionState::open_at(&path).unwrap();
+            state
+                .enqueue_pending_usage(std::slice::from_ref(&first))
+                .unwrap();
+            let mut state = state;
+            state
+                .move_usage_dead_letter(std::slice::from_ref(&first.usage_event_id), "validation")
+                .unwrap();
+        }
+
+        let mut conflicting = first;
+        conflicting.output_tokens = Some(999);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let error = state
+            .enqueue_pending_usage(&[conflicting])
+            .expect_err("a dead-lettered ID must not silently absorb a changed payload");
+        assert!(
+            matches!(error, AppError::Conflict(message) if message.contains("dead-lettered usage"))
+        );
+    }
+
+    #[test]
+    fn transient_usage_retry_is_bounded_and_permanent_error_dead_letters() {
+        let path = temp_db_path("usage-retry-dlq");
+        let _ = std::fs::remove_file(&path);
+        let first = sample_usage("retry-1");
+        let second = sample_usage("dead-1");
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+        state.enqueue_pending_usage(&[first, second]).unwrap();
+        state
+            .mark_usage_retry(
+                &["retry-1".to_string()],
+                chrono::Utc::now().timestamp() + 60,
+                "http_503",
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .pending_usage_due(chrono::Utc::now().timestamp())
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .move_usage_dead_letter(&["dead-1".to_string()], "validation")
+                .unwrap(),
+            1
+        );
+        assert_eq!(state.pending_usage_due(i64::MAX).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_dead_lettered_usage_id_is_not_recreated_by_the_next_transcript_scan() {
+        let path = temp_db_path("usage-dead-letter-sticky");
+        let _ = std::fs::remove_file(&path);
+        let record = sample_usage("dead-sticky");
+        let mut state = AiAttributionState::open_at(&path).unwrap();
+        assert_eq!(
+            state
+                .enqueue_pending_usage(std::slice::from_ref(&record))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state
+                .move_usage_dead_letter(
+                    std::slice::from_ref(&record.usage_event_id),
+                    "permanent_http_4xx",
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(state.enqueue_pending_usage(&[record]).unwrap(), 0);
+        assert!(state.pending_usage_due(i64::MAX).unwrap().is_empty());
     }
 
     #[test]

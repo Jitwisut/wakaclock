@@ -18,9 +18,12 @@ Redpanda settings are parsed and validated by
 [../../backend/api/src/config/brokers.rs](../../backend/api/src/config/brokers.rs).
 The RabbitMQ adapter
 ([../../backend/api/src/infrastructure/rabbitmq.rs](../../backend/api/src/infrastructure/rabbitmq.rs))
-is driven at runtime by the in-process outbox relay (plan R2), started from
-`main.rs` when `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL` are both set. Redpanda
-has no adapter. Qdrant is referenced only by dead code —
+is driven at runtime by the dedicated `job-worker` process (plans R3/R4), which
+starts the outbox relay when `ATOAXIS_JOB_QUEUE_URL` and `POSTGRES_URL` are set.
+The API publishes Kafka telemetry when a broker-backed ingest mode is selected and
+writes PostgreSQL job/outbox rows for background work. AI usage facts are consumed
+by `ai-usage-ingest`; `ai.session.reconcile` is relayed to the dedicated
+`ai-session-worker`. Qdrant is referenced only by dead code —
 [../dead-code.md](../dead-code.md).
 
 ## ClickHouse — shape

@@ -79,12 +79,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run strict Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run unit and service tests
         run: cargo test --workspace
+      - name: Compile Kafka adapter and fact-sink worker
+        run: cargo check -p wakaclock-server --all-targets --features kafka
       - name: Run Phase 2 broker acceptance tests
         run: |
           cargo test -p wakaclock-core broker:: -- --test-threads=1
@@ -100,6 +104,55 @@ jobs:
       - name: Run AI attribution external-process integration checks
         working-directory: .
         run: python3 scripts/ai-attribution-integration.py
+
+  backend-kafka:
+    name: Rust Kafka/K5 strict gates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+      - name: Check workspace with Kafka feature
+        run: cargo check --workspace --features kafka
+      - name: Run strict Kafka Clippy gate
+        run: cargo clippy --workspace --all-targets --features kafka -- -D warnings
+      - name: Run workspace tests with Kafka feature
+        run: cargo test --workspace --features kafka
+
+  k5-integration:
+    name: K0/K5 isolated Kafka and RabbitMQ integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+      - name: Start isolated K5 infrastructure
+        run: docker compose -p wakaclock-k5 -f docker-compose.kafka-spike.yml up -d --wait
+      - name: Re-run the K0 11-scenario matrix
+        run: make kafka-spike K0_COMPOSE_PROJECT=wakaclock-k5
+      - name: Run the K5 fact, dedup, DLQ, relay and reconcile harness
+        run: make k5-ai-usage-spike K5_COMPOSE_PROJECT=wakaclock-k5
+      - name: Capture isolated broker logs
+        if: always()
+        run: docker compose -p wakaclock-k5 -f docker-compose.kafka-spike.yml logs --no-color > "${RUNNER_TEMP}/wakaclock-k5-compose.log"
+      - name: Upload isolated broker logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wakaclock-k5-compose-logs
+          path: ${{ runner.temp }}/wakaclock-k5-compose.log
+      - name: Tear down isolated K5 infrastructure
+        if: always()
+        run: docker compose -p wakaclock-k5 -f docker-compose.kafka-spike.yml down -v --remove-orphans
 
   duration-baseline:
     name: Phase 0 duration and attribution baseline

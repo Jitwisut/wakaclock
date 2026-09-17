@@ -93,6 +93,12 @@ function mockChild(result = {}) {
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--project");
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("Daniel");
     });
+    (0, vitest_1.it)("passes the original event timestamp to the CLI", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], { time: 123.25 });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(vitest_1.expect.arrayContaining(["--time", "123.25"]));
+    });
     (0, vitest_1.it)("passes AI attribution metadata to the CLI", async () => {
         spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
         const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));

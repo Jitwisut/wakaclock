@@ -1,21 +1,13 @@
 use anyhow::{Context, Result};
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer};
 use tracing::{error, info};
 
-mod config;
-mod handlers;
-mod helpers;
-mod infrastructure;
-mod middleware;
-mod model;
-mod repository;
-mod services;
-#[cfg(test)]
-mod test_support;
-use config::CorsOrigins;
-use infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
+use wakaclock_server::config::CorsOrigins;
+use wakaclock_server::handlers;
+use wakaclock_server::infrastructure::app::{create_app_state, AppHealth, AppState, HealthStatus};
+use wakaclock_server::infrastructure::metrics::global_kafka_metrics;
 
 fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
     match origins {
@@ -35,7 +27,13 @@ fn build_cors_layer(origins: &CorsOrigins) -> CorsLayer {
                     Method::PATCH,
                     Method::DELETE,
                 ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .allow_headers([
+                    header::AUTHORIZATION,
+                    header::CONTENT_TYPE,
+                    header::HeaderName::from_static("idempotency-key"),
+                    header::HeaderName::from_static("x-atoaxis-ai-usage-contract"),
+                ])
+                .expose_headers([header::LOCATION])
         }
     }
 }
@@ -48,6 +46,37 @@ async fn health_endpoint(state: Arc<AppState>) -> (axum::http::StatusCode, axum:
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     };
     (status, axum::Json(health))
+}
+
+async fn metrics_endpoint() -> (StatusCode, [(header::HeaderName, HeaderValue); 1], String) {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+        )],
+        global_kafka_metrics().render_prometheus("api"),
+    )
+}
+
+async fn migrate_clickhouse(state: &AppState) -> Result<()> {
+    info!("Running ClickHouse migrations...");
+    state.heartbeat_repo.migrate().await?;
+    state.project_merge_repo.migrate().await?;
+    state.project_rule_repo.migrate().await?;
+    state.analytics_repo.migrate().await?;
+    state.external_duration_repo.migrate().await?;
+    state.follow_up_repo.migrate().await?;
+    state.account_analytics_repo.migrate().await?;
+    state.ai_usage_repo.migrate().await?;
+    // Must follow heartbeat_repo and analytics_repo: this one widens `heartbeats` and
+    // `project_daily` with a nullable project_id, so both have to exist first.
+    state.project_identity_repo.migrate().await?;
+    state.reprocess_service.migrate().await?;
+    state.org_repo.migrate().await?;
+    state.team_repo.migrate().await?;
+    state.coworking_session_repo.migrate().await?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -69,61 +98,19 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    // 2. Perform Database Migrations
-    info!("Running ClickHouse migrations...");
-    if let Err(e) = app_state.heartbeat_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.project_merge_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.project_rule_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.analytics_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.external_duration_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.follow_up_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.account_analytics_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.ai_usage_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    // Must follow heartbeat_repo and analytics_repo: this one widens `heartbeats` and
-    // `project_daily` with a nullable project_id, so both have to exist first.
-    if let Err(e) = app_state.project_identity_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.reprocess_service.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.org_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.team_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
-    }
-    if let Err(e) = app_state.coworking_session_repo.migrate().await {
-        error!("Migration failed: {}", e);
-        return Err(e);
+    // 2. Perform Database Migrations. Kafka mode must be able to start while
+    // ClickHouse is unavailable: the API only needs PostgreSQL state and broker
+    // acknowledgement on that path. The fact-sink owns ClickHouse migrations.
+    // ClickHouse may be skipped only when this API process has no direct or
+    // verify writer at all. A Kafka rollout for one stream must not suppress
+    // migrations needed by the other stream's direct/verify path.
+    let clickhouse_required = app_state.config.brokers.api_requires_clickhouse();
+    if clickhouse_required {
+        migrate_clickhouse(&app_state)
+            .await
+            .context("ClickHouse migration failed")?;
+    } else {
+        info!("Skipping ClickHouse migrations while Kafka ingest mode is active");
     }
     if let Some(postgres) = &app_state.postgres {
         info!("Running PostgreSQL Phase 10 foundation migration...");
@@ -134,19 +121,14 @@ async fn main() -> Result<()> {
     }
     info!("Migrations completed successfully.");
 
-    app_state.user_service.migrate_legacy_credentials().await?;
+    if clickhouse_required {
+        app_state.user_service.migrate_legacy_credentials().await?;
+    }
     drop(migration_guard);
 
-    // Outbox relay: turns `async_jobs` rows into RabbitMQ messages (plan R2). It runs
-    // in-process because the crate has no library target a standalone binary could
-    // share services with. Started only when a job queue and PostgreSQL are both
-    // configured; every replica runs one and they coordinate through SKIP LOCKED.
-    if app_state.postgres.is_some() {
-        if let Some(job_queue) = app_state.config.brokers.job_queue.clone() {
-            infrastructure::job_relay::spawn(app_state.job_service.clone(), job_queue);
-            info!("Outbox relay started");
-        }
-    }
+    // Background jobs are handled by the dedicated `job-worker` process. The API only
+    // writes PostgreSQL job/outbox rows, so a worker restart never loses an accepted job
+    // and an API replica does not compete with workers for RabbitMQ consumer slots.
 
     // Reconcile active Redis projections into ClickHouse even when no browser is currently
     // connected. This closes sessions after lease expiry and provides the recovery timeout
@@ -281,6 +263,30 @@ async fn main() -> Result<()> {
     let port = app_state.config.server.port;
     let bind_addr = format!("{}:{}", host, port);
 
+    // The API exposes the same metadata-only registry on its local metrics
+    // endpoint. Deployments may scrape this listener directly or keep it behind
+    // an internal proxy; no tenant, path, payload or credential is ever emitted.
+    let metrics_host = app_state.config.brokers.ingest.metrics_host.clone();
+    let metrics_port = app_state.config.brokers.ingest.metrics_port;
+    let metrics_task = match tokio::net::TcpListener::bind((metrics_host.as_str(), metrics_port))
+        .await
+    {
+        Ok(metrics_listener) => Some(tokio::spawn(async move {
+            let metrics_router =
+                axum::Router::new().route("/metrics", axum::routing::get(metrics_endpoint));
+            if let Err(error) = axum::serve(metrics_listener, metrics_router).await {
+                tracing::warn!(%error, "metrics listener stopped");
+            }
+        })),
+        Err(error) => {
+            // The primary API listener already exposes /metrics.  Keep startup
+            // compatible with local development where a second API replica may
+            // have claimed the optional internal scrape port.
+            tracing::warn!(%error, host = %metrics_host, port = metrics_port, "optional metrics listener unavailable; using API listener");
+            None
+        }
+    };
+
     info!("Starting server on {}", bind_addr);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
@@ -297,6 +303,10 @@ async fn main() -> Result<()> {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .context("Server error")?;
+
+    if let Some(metrics_task) = metrics_task {
+        metrics_task.abort();
+    }
 
     Ok(())
 }
@@ -358,6 +368,34 @@ mod tests {
                 Some(&HeaderValue::from_str(origin).unwrap())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reprocess_job_headers_are_allowed_by_preflight() {
+        let response = cors_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/health")
+                    .header(header::ORIGIN, "https://www.atoaxis.com")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "content-type, idempotency-key",
+                    )
+                    .body(Body::empty())
+                    .expect("job preflight request is valid"),
+            )
+            .await
+            .expect("CORS layer should return a response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let allowed = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(allowed.contains("idempotency-key"));
     }
 
     #[tokio::test]

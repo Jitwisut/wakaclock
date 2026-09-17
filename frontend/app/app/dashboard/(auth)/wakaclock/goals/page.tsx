@@ -16,17 +16,11 @@ import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
 import { getProjects } from '@/lib/wakaclock/endpoints';
-import {
-  createGoal,
-  deleteGoal,
-  getGoalProgress,
-  listGoals,
-} from '@/lib/wakaclock/endpoints-v2';
+import { createGoal, deleteGoal, getGoalProgress, listGoals } from '@/lib/wakaclock/endpoints-v2';
 import { daysAgoDateString, formatSeconds, todayDateString } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { Goal } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
-
 
 /** Mirrors `validate_goal` in services/goals.rs — a value not listed there is a 400. */
 const METRICS = [
@@ -121,7 +115,12 @@ function GoalForm({ onCreated }: { onCreated: () => void }) {
   const { data: projects } = useQuery({
     enabled: Boolean(userId) && filterKind === 'project',
     queryFn: () => getProjects(userId, daysAgoDateString(90), todayDateString()),
-    queryKey: wakaclockKeys.projects(userId, daysAgoDateString(90), todayDateString()),
+    queryKey: wakaclockKeys.projects(
+      userId,
+      daysAgoDateString(90),
+      todayDateString(),
+      Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+    ),
   });
 
   const mutation = useMutation({
@@ -278,8 +277,7 @@ function GoalsPanel() {
     queryKey: wakaclockKeys.goals(userId),
   });
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: wakaclockKeys.goals(userId) });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: wakaclockKeys.goals(userId) });
 
   const removal = useMutation({
     mutationFn: deleteGoal,

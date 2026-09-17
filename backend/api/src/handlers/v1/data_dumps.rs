@@ -61,6 +61,33 @@ pub async fn create(
     Json(input): Json<DataDumpRequest>,
 ) -> Result<(StatusCode, Json<DataDumpResponse>), (StatusCode, Json<serde_json::Value>)> {
     let user_id = require_export_scope(&state, &headers).await?;
+    // Keep the legacy alias fail-closed before mirroring the account into
+    // PostgreSQL. `ExportService::create` repeats this guard as the service
+    // boundary, but checking here avoids a needless identity side effect when
+    // the dedicated object-store worker is disabled or not ready.
+    if !state.export_service.capability_available() {
+        return Err(internal_error(anyhow::anyhow!(
+            "export background processor is unavailable"
+        )));
+    }
+    state
+        .user_service
+        .ensure_postgres_identity(user_id)
+        .await
+        .map_err(internal_error)?;
+    let idempotency_key = headers
+        .get("Idempotency-Key")
+        .map(|value| {
+            value.to_str().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "Idempotency-Key must be ASCII"
+                    })),
+                )
+            })
+        })
+        .transpose()?;
     let job = state
         .export_service
         .create(
@@ -69,11 +96,14 @@ pub async fn create(
                 format: input.format,
                 scope: input.scope,
             },
+            idempotency_key,
         )
         .await
         .map_err(|error| {
             let message = error.to_string();
-            let status = if message.contains("unsupported") {
+            let status = if message.contains("conflicts with existing") {
+                StatusCode::CONFLICT
+            } else if message.contains("unsupported") || message.contains("Idempotency-Key") {
                 StatusCode::BAD_REQUEST
             } else {
                 StatusCode::SERVICE_UNAVAILABLE

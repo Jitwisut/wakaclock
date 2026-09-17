@@ -14,6 +14,7 @@ use crate::model::projects::ProjectsResponse;
 pub struct ProjectsQuery {
     pub start: String,
     pub end: String,
+    pub timezone: Option<String>,
 }
 
 pub async fn list(
@@ -25,7 +26,12 @@ pub async fn list(
 
     let response = state
         .projects_service
-        .get_range(user_id, &params.start, &params.end)
+        .get_range_in_timezone(
+            user_id,
+            &params.start,
+            &params.end,
+            params.timezone.as_deref(),
+        )
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 

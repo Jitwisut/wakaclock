@@ -16,6 +16,10 @@ python3 verify_certification.py    # validate a committed sanitized release reco
 WAKATIME_COMPARE_START=YYYY-MM-DD WAKATIME_COMPARE_END=YYYY-MM-DD \
   WAKATIME_API_KEY=... WAKACLOCK_API_KEY=... python3 compare_wakatime.py
                                    # advisory external-oracle comparison; env-only credentials
+WAKATIME_COMPARE_START=YYYY-MM-DD WAKATIME_COMPARE_END=YYYY-MM-DD \
+  WAKATIME_TIMEZONE=Asia/Bangkok WAKACLOCK_RAW_HEARTBEATS=hb.jsonl \
+  WAKATIME_API_KEY=... WAKACLOCK_API_KEY=... python3 compare_wakatime.py
+                                   # includes a metadata-only heartbeat/gap baseline
 python3 ladder.py                 # per-day: raw_sum / segments / canonical / bridged / wakatime
 python3 decompose.py              # where the reported seconds come from, and who emits them
 python3 sensitivity.py            # idle-timeout sweep, human-only vs agent-only
@@ -42,7 +46,21 @@ observation window where WakaTime and Wakaclock are both active on the same mach
 the same date range and IANA timezone. It reads `WAKATIME_API_KEY`, `WAKACLOCK_API_KEY`,
 `WAKATIME_COMPARE_START`, `WAKATIME_COMPARE_END`, and `WAKATIME_TIMEZONE` from the
 environment, and writes only aggregate totals, dates, timezone, commit SHA, and error
-metrics to `certifications/wakatime-parity.json`.
+metrics to `certifications/wakatime-parity.json`. When `hb.jsonl` exists it also embeds a
+sanitized baseline: observed versus measured heartbeats, timeout-sized gaps, invalid
+records, and any pending/failed delivery status explicitly reported by the export. An
+empty day or missing export is marked `unavailable`; it is never converted to zero.
+Set `WAKACLOCK_SETTLE_SECONDS` (0–300, optional) when the client may still be flushing its
+offline queue; the bounded wait is recorded in the report before either read-only snapshot.
+The delay gives eventual ingestion time to settle but cannot recover a queue that was never
+delivered, so pending/failed rows remain visible in the baseline.
+
+The API exposes the rollout switch `DURATION_CALCULATION_MODE=legacy|combined_v2`. Keep
+`legacy` while collecting a baseline. `combined_v2` computes the main total as the union
+of WakaTime-comparable editor ranges and measured AI ranges, counts overlaps once, and
+reports `comparable_seconds`, `ai_measured_seconds`, `ai_additional_seconds`, and
+`calculation_version` alongside the legacy total. The server does not turn an open
+process, a completion-only record, or an AI gap into duration without an observed range.
 
 The CI certification gate also rejects a malformed or stale `latest.json`; the
 sanitized record must have a timezone-aware `checked_at_utc` no more than 30 days
@@ -54,3 +72,37 @@ machine-readable acceptance manifest; it is the only baseline used for Phase 0.
 The runner fails when total error exceeds 1%, an active day (at least 60 seconds)
 exceeds 3%, a duration/actor/project breakdown no longer partitions its total, or
 any expected actor type/confidence changes.
+
+## Correctness follow-up (2026-09-16)
+
+The external runner now requires the server's additive `calculation` metadata,
+uses the effective timeout in WakaTime's documented request, pins writes-only to
+false, validates timezone and rejects incompatible category scopes. Unsupported
+summary filter overrides return an error instead of being silently ignored.
+WakaTime responses need not echo optional request preferences; when present the
+echoes must agree. Per-day timezone and category totals must be available.
+A non-editor/AI category makes this runner non-comparable rather than subtracting
+potentially overlapping totals. A separate interval-level oracle remains necessary
+for mixed editor/AI comparisons.
+
+Seven measured zero days do not certify capture completeness. The observation gate
+requires seven active completed days, records dirty-worktree state and the runner
+hash, and remains advisory. It does not certify delivered binaries or real working
+time by itself. No historical certificate was refreshed by the code change.
+`certify_live.py` labels its reference as internal API replay consistency; its
+legacy `wakatime_seconds` field is an algorithm reference, not a WakaTime response.
+
+Metadata-only line repair inventory (does not write to either API):
+
+```bash
+python3 scripts/ai-coverage/audit_measurement_repair.py \
+  --canonical canonical-metadata.json \
+  --reparsed fresh-parser-report.json \
+  --output repair-inventory.json
+```
+
+The canonical input must contain current winner rows with stable event/session
+references. The reparsed input may be the CLI's `ai repair --json` candidate report.
+Missing source events and reused/multi-file ambiguous references stay unresolved.
+Changing historical line/outcome values still needs a dedicated revision apply
+path; the identity-only repair endpoint cannot perform this operation.

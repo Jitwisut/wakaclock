@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AiAgentsTable } from '@/components/wakaclock/ai-agents-table';
 import type { ActorType, AiAgentItem } from '@/lib/wakaclock/types';
@@ -24,6 +24,29 @@ function agent(actor_type: ActorType, overrides: Partial<AiAgentItem> = {}): AiA
 }
 
 describe('AiAgentsTable', () => {
+  it('distinguishes a measured zero from missing and partial line counts', () => {
+    render(
+      <AiAgentsTable
+        agents={[
+          agent('ai_verified', {
+            ai_lines_added: 0,
+            ai_added_measured_heartbeats: 5,
+            ai_lines_deleted: 0,
+            ai_deleted_measured_heartbeats: 0,
+          }),
+          agent('ai_inferred', {
+            ai_lines_added: 12,
+            ai_added_measured_heartbeats: 2,
+            ai_deleted_measured_heartbeats: 5,
+          }),
+        ]}
+      />
+    );
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    expect(screen.getByText('12 (partial: 2/5)')).toBeInTheDocument();
+    expect(screen.getAllByText('0').length).toBeGreaterThan(0);
+  });
+
   it('names the agent for verified AI evidence', () => {
     render(<AiAgentsTable agents={[agent('ai_verified', { agent: 'claude-code' })]} />);
 
@@ -50,7 +73,7 @@ describe('AiAgentsTable', () => {
     );
 
     expect(screen.getByText('AI inferred')).toBeInTheDocument();
-    expect(screen.getByText('42')).toBeInTheDocument();
+    expect(screen.getByText('42 (coverage unavailable)')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
   });
 
@@ -94,5 +117,38 @@ describe('AiAgentsTable', () => {
 
     expect(screen.getByText('Provider not reported / gpt-5.6-sol')).toBeInTheDocument();
     expect(screen.getByText('openai / Model not reported')).toBeInTheDocument();
+  });
+
+  it('keeps unresolved groups with different identity statuses on unique React keys', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      render(
+        <AiAgentsTable
+          agents={[
+            agent('ai_verified', {
+              agent: 'claude-code',
+              provider: 'anthropic',
+              model: 'claude-opus-5',
+              identity_status: 'confirmed',
+              identity_reason: 'context_unavailable',
+              identity_source: 'transcript',
+            }),
+            agent('ai_verified', {
+              agent: 'claude-code',
+              provider: 'anthropic',
+              model: 'claude-opus-5',
+              identity_status: 'unavailable',
+              identity_reason: 'context_unavailable',
+              identity_source: 'transcript',
+            }),
+          ]}
+        />
+      );
+
+      expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

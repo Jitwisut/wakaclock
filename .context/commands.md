@@ -62,9 +62,9 @@ make help
 `docker-compose.dev.yaml` and e-commerce/Caddy/Qdrant services are legacy
 template material and are not referenced by the live Makefile or server.
 
-Redpanda sits behind the `kafka` compose profile because no server code connects
-to it yet (see [dead-code.md](dead-code.md)). When the Kafka adapter lands (plan
-K1), move it into `infra-up` and drop the profile.
+Redpanda is started by the local baseline and is consumed only by feature-enabled
+workers. Use `make dev-heartbeat-enrichment`, `make dev-ai-usage-ingest` or
+`make dev-ai-usage-verifier` after setting the matching rollout mode.
 
 RabbitMQ adapter tests are opt-in like the ClickHouse ones and need their own
 URL, never the application's `ATOAXIS_JOB_QUEUE_URL`:

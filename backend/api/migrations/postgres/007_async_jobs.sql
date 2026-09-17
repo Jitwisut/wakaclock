@@ -1,14 +1,14 @@
 -- Owner-triggered background jobs (plans/plan-kafka-rabbitmq-adoption.md, R2).
 --
 -- State is authoritative in this table. Creating a job also writes one row into
--- outbox_events in the same transaction; the in-process relay
+-- outbox_events in the same transaction; the dedicated job-worker relay
 -- (src/infrastructure/job_relay.rs) turns that row into a RabbitMQ message. A job
 -- never depends on the broker being reachable at create time.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS async_jobs (
     id UUID PRIMARY KEY,
-    -- NULL for system jobs (pricing/billing reconcile); every other kind names the
+    -- NULL for system jobs (pricing/account delete/billing reconcile); every other kind names the
     -- account it acts on so a worker never infers scope from the payload.
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     -- The JobKind routing key, e.g. 'analytics.reprocess'.
@@ -31,8 +31,9 @@ CREATE TABLE IF NOT EXISTS async_jobs (
     finished_at TIMESTAMPTZ
 );
 
--- One job per (account, kind, Idempotency-Key). System jobs (user_id IS NULL) are
--- not deduplicated by key here; they are scheduler-triggered and gain that in R5.
+-- One job per (account, kind, Idempotency-Key). System jobs (user_id IS NULL) gain
+-- their separate kind/key index in migration 012 because PostgreSQL NULL semantics
+-- make the account-scoped index inapplicable to them.
 CREATE UNIQUE INDEX IF NOT EXISTS async_jobs_idempotency_idx
     ON async_jobs (user_id, kind, idempotency_key)
     WHERE idempotency_key IS NOT NULL;

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_ACTIVITY_GAP_MS = exports.MAX_ACTIVITY_GAP_SECONDS = void 0;
+exports.MAX_ACTIVITY_GAP_MS = exports.MAX_ACTIVITY_GAP_SECONDS = exports.ACTIVE_LEASE_SECONDS = void 0;
 exports.unionSeconds = unionSeconds;
 exports.appendSegment = appendSegment;
 /**
@@ -13,7 +13,15 @@ exports.appendSegment = appendSegment;
  * match) for the two windows that do that job, each sized for what it measures.
  * Do not unify these three constants — they answer different questions.
  */
-exports.MAX_ACTIVITY_GAP_SECONDS = 120;
+/**
+ * A human editor event leases at most fifteen seconds of Active time.  The
+ * heartbeat transport is still rate limited independently (normally 120s), but
+ * that network cadence must never become duration evidence.  This is the same
+ * user-visible timeout as WakaTime's default idle timeout while keeping the
+ * evidence boundary explicit on every segment.
+ */
+exports.ACTIVE_LEASE_SECONDS = 15;
+exports.MAX_ACTIVITY_GAP_SECONDS = exports.ACTIVE_LEASE_SECONDS;
 exports.MAX_ACTIVITY_GAP_MS = exports.MAX_ACTIVITY_GAP_SECONDS * 1000;
 /** Return the length covered by the union of valid activity intervals. */
 function unionSeconds(segments) {

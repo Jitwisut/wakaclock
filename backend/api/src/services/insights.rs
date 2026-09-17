@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
+use crate::model::date_range::ResolvedRange;
 use crate::model::insights::{InsightItem, InsightRow, InsightsAllTimeRangeRow, InsightsResponse};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
@@ -26,24 +27,36 @@ impl InsightsService {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get_by_type_and_range(
         &self,
         user_id: Uuid,
         insight_type: &str,
         range: &str,
     ) -> Result<InsightsResponse> {
+        self.get_by_type_and_range_in_timezone(user_id, insight_type, range, None)
+            .await
+    }
+
+    pub async fn get_by_type_and_range_in_timezone(
+        &self,
+        user_id: Uuid,
+        insight_type: &str,
+        range: &str,
+        timezone: Option<&str>,
+    ) -> Result<InsightsResponse> {
         let dimension = map_insight_type(insight_type)?;
-        let (start, end) = self.resolve_range(user_id, range).await?;
-        let rows = self
-            .fetch_insights(user_id, &start, &end, dimension)
-            .await?;
+        let resolved = self.resolve_range(user_id, range, timezone).await?;
+        let (start, end) = (resolved.start.to_string(), resolved.end.to_string());
+        let result = self.fetch_insights(user_id, &resolved, dimension).await?;
 
         Ok(InsightsResponse {
             r#type: insight_type.to_string(),
             range: range.to_string(),
             start,
             end,
-            data: rows
+            data: result
+                .rows
                 .into_iter()
                 .map(|row| InsightItem {
                     name: row.name,
@@ -54,22 +67,48 @@ impl InsightsService {
                     days: row.days,
                 })
                 .collect(),
+            comparable_seconds: Some(result.comparable_seconds),
+            ai_measured_seconds: Some(result.ai_measured_seconds),
+            ai_additional_seconds: Some(result.ai_additional_seconds),
+            calculation_version: Some(result.calculation_version),
         })
     }
 
-    async fn resolve_range(&self, user_id: Uuid, range: &str) -> Result<(String, String)> {
-        let today = Local::now().date_naive();
+    async fn resolve_range(
+        &self,
+        user_id: Uuid,
+        range: &str,
+        timezone: Option<&str>,
+    ) -> Result<ResolvedRange> {
+        let today = ResolvedRange::today_date_string(timezone)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let today = NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
 
         match range {
-            "today" => Ok((fmt_date(today), fmt_date(today))),
-            "last_7_days" => Ok((fmt_date(today - Duration::days(6)), fmt_date(today))),
-            "last_30_days" => Ok((fmt_date(today - Duration::days(29)), fmt_date(today))),
+            "today" => ResolvedRange::parse(&fmt_date(today), &fmt_date(today), timezone)
+                .map_err(|error| anyhow::anyhow!(error.to_string())),
+            "last_7_days" => ResolvedRange::parse(
+                &fmt_date(today - Duration::days(6)),
+                &fmt_date(today),
+                timezone,
+            )
+            .map_err(|error| anyhow::anyhow!(error.to_string())),
+            "last_30_days" => ResolvedRange::parse(
+                &fmt_date(today - Duration::days(29)),
+                &fmt_date(today),
+                timezone,
+            )
+            .map_err(|error| anyhow::anyhow!(error.to_string())),
             "all_time" => {
-                let row = self.fetch_all_time_range(user_id).await?;
-                Ok(match (row.start, row.end) {
+                let row = self
+                    .fetch_all_time_range(user_id, timezone.unwrap_or("UTC"))
+                    .await?;
+                let (start, end) = match (row.start, row.end) {
                     (Some(start), Some(end)) => (start, end),
                     _ => (fmt_date(today), fmt_date(today)),
-                })
+                };
+                ResolvedRange::parse_unbounded(&start, &end, timezone)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))
             }
             _ => anyhow::bail!(
                 "Invalid insights range, expected one of: today, last_7_days, last_30_days, all_time"
@@ -77,14 +116,20 @@ impl InsightsService {
         }
     }
 
-    async fn fetch_all_time_range(&self, user_id: Uuid) -> Result<InsightsAllTimeRangeRow> {
+    async fn fetch_all_time_range(
+        &self,
+        user_id: Uuid,
+        timezone: &str,
+    ) -> Result<InsightsAllTimeRangeRow> {
         self.clickhouse
             .get_client()
             .query(
                 "
                 SELECT
-                    if(count() = 0, NULL, toString(min(date))) AS start_day,
-                    if(count() = 0, NULL, toString(max(date))) AS end_day
+                    if(count() = 0, NULL,
+                        toString(min(toDate(toDateTime(toUInt32(time), ?))))) AS start_day,
+                    if(count() = 0, NULL,
+                        toString(max(toDate(toDateTime(toUInt32(time), ?))))) AS end_day
                 -- Read the span from the heartbeats themselves. A `SummingMergeTree`
                 -- rollup survives deletion of its source rows, so an aggregate that has
                 -- been repaired or partially cleaned can report an all-time range that
@@ -94,6 +139,8 @@ impl InsightsService {
                 WHERE user_id = ?
                 ",
             )
+            .bind(timezone)
+            .bind(timezone)
             .bind(user_id)
             .fetch_one::<InsightsAllTimeRangeRow>()
             .await
@@ -109,22 +156,22 @@ impl InsightsService {
     async fn fetch_insights(
         &self,
         user_id: Uuid,
-        start: &str,
-        end: &str,
+        range: &ResolvedRange,
         dimension: Dimension,
-    ) -> Result<Vec<InsightRow>> {
-        let (start_epoch, end_epoch) = local_day_bounds(start, end)?;
-        let canonical = self
+    ) -> Result<InsightsResult> {
+        let (start_epoch, end_epoch) = range.unix_bounds();
+        let timeline = self
             .timeline
-            .canonical(user_id, start_epoch, end_epoch)
+            .build_timeline(user_id, start_epoch, end_epoch)
             .await?;
+        let canonical = timeline.bridged;
 
         let mut grouped: HashMap<String, (f64, HashSet<String>, HashSet<String>)> = HashMap::new();
         for interval in &canonical {
             let entry = grouped.entry(dimension.value_of(interval)).or_default();
             entry.0 += interval.end - interval.start;
             entry.1.insert(interval.heartbeat_id.clone());
-            if let Some(day) = local_day(interval.start) {
+            if let Some(day) = local_day(interval.start, range.timezone) {
                 entry.2.insert(day);
             }
         }
@@ -145,30 +192,28 @@ impl InsightsService {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| left.name.cmp(&right.name))
         });
-        Ok(rows)
+        Ok(InsightsResult {
+            rows,
+            comparable_seconds: timeline.comparable_seconds,
+            ai_measured_seconds: timeline.ai_measured_seconds,
+            ai_additional_seconds: timeline.ai_additional_seconds,
+            calculation_version: timeline.calculation_version,
+        })
     }
 }
 
-/// Inclusive `YYYY-MM-DD` days in the server's local zone, as epoch bounds. The insights
-/// range has always been expressed in local days; only the storage it resolves against
-/// changed.
-fn local_day_bounds(start: &str, end: &str) -> Result<(f64, f64)> {
-    let start_day = NaiveDate::parse_from_str(start, "%Y-%m-%d")
-        .with_context(|| format!("invalid insights start date: {start}"))?;
-    let end_day = NaiveDate::parse_from_str(end, "%Y-%m-%d")
-        .with_context(|| format!("invalid insights end date: {end}"))?;
-    let to_epoch = |day: NaiveDate| -> Result<f64> {
-        day.and_hms_opt(0, 0, 0)
-            .and_then(|naive| naive.and_local_timezone(Local).single())
-            .map(|dt| dt.timestamp() as f64)
-            .ok_or_else(|| anyhow::anyhow!("ambiguous local midnight for {day}"))
-    };
-    Ok((to_epoch(start_day)?, to_epoch(end_day + Duration::days(1))?))
+struct InsightsResult {
+    rows: Vec<InsightRow>,
+    comparable_seconds: f64,
+    ai_measured_seconds: f64,
+    ai_additional_seconds: f64,
+    calculation_version: &'static str,
 }
 
-fn local_day(epoch: f64) -> Option<String> {
-    chrono::DateTime::from_timestamp(epoch as i64, 0)
-        .map(|dt| fmt_date(dt.with_timezone(&Local).date_naive()))
+fn local_day(epoch: f64, timezone: chrono_tz::Tz) -> Option<String> {
+    Utc.timestamp_opt(epoch as i64, 0)
+        .single()
+        .map(|dt| fmt_date(dt.with_timezone(&timezone).date_naive()))
 }
 
 fn map_insight_type(insight_type: &str) -> Result<Dimension> {

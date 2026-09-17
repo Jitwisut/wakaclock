@@ -69,6 +69,12 @@ pub struct RangeQuery {
     pub timezone: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountDeletionConfirmation {
+    pub confirm: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CapabilityData {
     pub api_version: &'static str,
@@ -176,7 +182,7 @@ pub struct AnalyticsData {
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/capabilities", get(capabilities))
-        .route("/me", get(me))
+        .route("/me", get(me).delete(account_delete))
         .route("/me/analytics", get(analytics))
         .route(
             "/me/presence/rooms",
@@ -379,21 +385,76 @@ pub fn router(app_state: Arc<AppState>) -> Router {
 }
 
 /// Public capability discovery endpoint used by clients and the plugin directory.
-fn feature_available(key: &str, postgres: bool) -> bool {
+///
+/// These capabilities describe the currently shipped product surface, not merely the
+/// database columns or HTTP routes that happen to exist.  In particular, a route backed
+/// by a queued row but without a registered worker must stay unavailable; advertising it
+/// as ready would make clients submit work that can never finish.
+const RUNTIME_DISABLED_FEATURES: &[&str] = &[
+    // These features remain outside the first Production Core cutover until their
+    // processors/providers are implemented and independently certified.
+    crate::services::RuntimeFeature::DailyWeeklyMonthlyReports.key(),
+    crate::services::RuntimeFeature::CalendarIntegrations.key(),
+    crate::services::RuntimeFeature::PublicProfilesAndEmbeds.key(),
+    crate::services::RuntimeFeature::PrivateLeaderboards.key(),
+    crate::services::RuntimeFeature::SsoOidcSaml.key(),
+    crate::services::RuntimeFeature::Scim.key(),
+    crate::services::RuntimeFeature::SeatBillingEntitlements.key(),
+];
+
+fn feature_available(
+    key: &str,
+    postgres: bool,
+    export_available: bool,
+    account_deletion_available: bool,
+) -> bool {
+    if RUNTIME_DISABLED_FEATURES.contains(&key) {
+        return false;
+    }
+
     match key {
-        "data_exports" | "daily_weekly_monthly_reports" | "calendar_integrations" => false,
+        "data_exports" => export_available && postgres,
         "postgres_transactional_store"
         | "personal_organizations"
         | "goals_crud"
         | "oauth_pkce_and_device_flow"
         | "git_commit_pr_analytics"
-        | "public_profiles_and_embeds"
-        | "private_leaderboards"
-        | "organization_analytics"
-        | "sso_oidc_saml"
-        | "scim"
-        | "seat_billing_entitlements" => postgres,
-        _ => true,
+        | "organization_analytics" => postgres,
+        "complete_history"
+        | "heartbeat_ingestion"
+        | "wakatime_protocol"
+        | "wakatime_rest_compatibility"
+        | "atoaxis_v2_envelope"
+        | "ai_line_attribution"
+        | "ai_tokens_and_cost"
+        | "ai_prompt_length"
+        | "ai_human_follow_up"
+        | "oauth_scope_enforcement"
+        | "desktop_tracker"
+        | "browser_extensions"
+        | "language_registry_600_plus"
+        | "external_durations" => true,
+        "account_deletion" => account_deletion_available && postgres,
+        // New matrix entries must opt in explicitly once their runtime contract
+        // and dependency health are implemented. A new key must never become
+        // available merely because it was added to the documentation JSON.
+        _ => false,
+    }
+}
+
+fn feature_runtime_status(
+    key: &str,
+    declared_status: &str,
+    postgres: bool,
+    export_available: bool,
+    account_deletion_available: bool,
+) -> String {
+    if RUNTIME_DISABLED_FEATURES.contains(&key) {
+        "disabled".to_string()
+    } else if !feature_available(key, postgres, export_available, account_deletion_available) {
+        "unavailable".to_string()
+    } else {
+        declared_status.to_string()
     }
 }
 
@@ -405,6 +466,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             .expect("wakatime-compatibility-manifest.json must remain valid JSON");
     let features: FeatureMatrix = serde_json::from_str(PHASE10_FEATURE_MATRIX)
         .expect("phase-10-feature-matrix.json must remain valid JSON");
+    let account_deletion_available = state.account_deletion_service.request_mode_enabled()
+        && state.account_deletion_service.processor_ready();
     let routes = inventory
         .get("documented_routes")
         .and_then(Value::as_array)
@@ -452,15 +515,19 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                 .features
                 .into_iter()
                 .map(|feature| FeatureCapability {
-                    available: feature_available(&feature.key, state.postgres.is_some()),
-                    status: if matches!(
-                        feature.key.as_str(),
-                        "data_exports" | "daily_weekly_monthly_reports" | "calendar_integrations"
-                    ) {
-                        "partial".to_string()
-                    } else {
-                        feature.status
-                    },
+                    available: feature_available(
+                        &feature.key,
+                        state.postgres.is_some(),
+                        state.export_service.capability_available(),
+                        account_deletion_available,
+                    ),
+                    status: feature_runtime_status(
+                        &feature.key,
+                        &feature.status,
+                        state.postgres.is_some(),
+                        state.export_service.capability_available(),
+                        account_deletion_available,
+                    ),
                     key: feature.key,
                     api: feature.api,
                 })
@@ -491,16 +558,62 @@ pub async fn me(
     )))
 }
 
+/// DELETE /api/v2/me — start the account deletion workflow.
+///
+/// This is session-only and requires an explicit JSON confirmation. The handler
+/// returns after the PostgreSQL tombstone and system job/outbox have committed;
+/// the dedicated worker performs cross-store cleanup before the final delete.
+pub async fn account_delete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<AccountDeletionConfirmation>,
+) -> Result<(StatusCode, Json<V2Envelope<Value>>), ApiError> {
+    let user_id = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if !input.confirm {
+        return Err(ApiError::bad_request("confirm must be true"));
+    }
+    let job = state
+        .account_deletion_service
+        .request(user_id)
+        .await
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains("not enabled") || message.contains("requires") {
+                ApiError::service_unavailable("account deletion is unavailable")
+            } else if message.contains("not found") {
+                ApiError::not_found("account not found")
+            } else if message.contains("already unavailable") {
+                ApiError::conflict("account deletion is already in progress")
+            } else {
+                tracing::error!(%error, "failed to enqueue account deletion");
+                ApiError::service_unavailable("account deletion could not be queued")
+            }
+        })?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(envelope(
+            json!({
+                "job_id": job.id,
+                "processing_state": "pending",
+            }),
+            "UTC",
+            None,
+        )),
+    ))
+}
+
 pub async fn analytics(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AnalyticsData>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_stats").await?;
-    let (start, end) = resolve_range(query.start, query.end)?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let summary = state
         .summary_service
-        .get_range(user_id, &start, &end)
+        .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(envelope(
@@ -518,7 +631,7 @@ pub async fn ai_effectiveness(
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<AiEffectivenessData>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
-    let (start, end) = resolve_range(query.start, query.end)?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let stats = state
         .ai_stats_service
         .get_range(user_id, &start, &end)
@@ -622,7 +735,7 @@ pub async fn follow_up_stats(
     Query(query): Query<RangeQuery>,
 ) -> Result<Json<V2Envelope<HumanFollowUpStats>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
-    let (start_date, end_date) = resolve_range(query.start, query.end)?;
+    let (start_date, end_date) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let range = ResolvedRange::parse(&start_date, &end_date, query.timezone.as_deref())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let (start, end) = range.unix_bounds();
@@ -763,14 +876,30 @@ pub async fn exports_create(
     Json(input): Json<CreateExportRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ExportJob>>), ApiError> {
     let user_id = require_scope(&state, &headers, "export_data").await?;
+    if !state.export_service.capability_available() {
+        return Err(ApiError::service_unavailable(
+            "export background processor is unavailable",
+        ));
+    }
     ensure_pg_identity(&state, user_id).await?;
+    let idempotency_key = match headers.get("Idempotency-Key") {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .map_err(|_| ApiError::bad_request("Idempotency-Key must be ASCII"))?,
+        ),
+    };
     let job = state
         .export_service
-        .create(user_id, input)
+        .create(user_id, input, idempotency_key)
         .await
         .map_err(|error| {
-            if error.to_string().contains("unsupported") {
-                ApiError::bad_request(error.to_string())
+            let message = error.to_string();
+            if message.contains("conflicts with existing") {
+                ApiError::conflict(message)
+            } else if message.contains("unsupported") || message.contains("Idempotency-Key") {
+                ApiError::bad_request(message)
             } else {
                 ApiError::service_unavailable(error)
             }
@@ -874,6 +1003,9 @@ pub async fn profile_update(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    // Fail before touching PostgreSQL so a disabled public-profile surface
+    // cannot mutate visibility or profile settings as a side effect.
+    require_runtime_feature(crate::services::RuntimeFeature::PublicProfilesAndEmbeds)?;
     ensure_pg_identity(&state, user_id).await?;
     let profile = state
         .profile_service
@@ -897,6 +1029,7 @@ pub async fn share_links_create(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    require_runtime_feature(crate::services::RuntimeFeature::PublicProfilesAndEmbeds)?;
     ensure_pg_identity(&state, user_id).await?;
     let link = state
         .profile_service
@@ -957,6 +1090,7 @@ pub async fn report_schedules_create(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    crate::services::require_background_processor().map_err(ApiError::service_unavailable)?;
     ensure_pg_identity(&state, user_id).await?;
     let schedule = state
         .report_service
@@ -1022,6 +1156,7 @@ pub async fn integration_connect(
     Json(input): Json<CreateIntegrationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<IntegrationConnection>>), ApiError> {
     let user_id = require_scope(&state, &headers, "manage_integrations").await?;
+    crate::services::require_background_processor().map_err(ApiError::service_unavailable)?;
     ensure_pg_identity(&state, user_id).await?;
     let connection = state
         .integration_service
@@ -1359,6 +1494,7 @@ pub async fn leaderboards_list(
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<Leaderboard>>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     let boards = state
         .leaderboard_service
         .list(user_id)
@@ -1375,6 +1511,7 @@ pub async fn leaderboards_create(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     ensure_pg_identity(&state, user_id).await?;
     let board = state
         .leaderboard_service
@@ -1399,6 +1536,7 @@ pub async fn leaderboard_get(
     Path(leaderboard_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Leaderboard>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     let board = state
         .leaderboard_service
         .get(user_id, leaderboard_id)
@@ -1414,6 +1552,7 @@ pub async fn leaderboard_members(
     Path(leaderboard_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Vec<LeaderboardMember>>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_private_leaderboards").await?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     let members = state
         .leaderboard_service
         .members(user_id, leaderboard_id)
@@ -1431,6 +1570,7 @@ pub async fn leaderboard_add_member(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     if state
         .leaderboard_service
         .add_member(user_id, leaderboard_id, input)
@@ -1453,6 +1593,7 @@ pub async fn leaderboard_remove_member(
     let user_id = auth::require_account_user(&state, &headers)
         .await
         .ok_or_else(ApiError::unauthorized)?;
+    require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     if state
         .leaderboard_service
         .remove_member(user_id, leaderboard_id, member_user_id)
@@ -1478,8 +1619,15 @@ fn envelope<T>(data: T, timezone: &str, coverage: Option<Value>) -> V2Envelope<T
     }
 }
 
-fn resolve_range(start: Option<String>, end: Option<String>) -> Result<(String, String), ApiError> {
-    let today = Utc::now().date_naive();
+fn resolve_range(
+    start: Option<String>,
+    end: Option<String>,
+    timezone: Option<&str>,
+) -> Result<(String, String), ApiError> {
+    let today = ResolvedRange::today_date_string(timezone)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let today = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
+        .map_err(|_| ApiError::bad_request("today could not be resolved"))?;
     let default_start = today - Duration::days(29);
     let start = start.unwrap_or_else(|| default_start.to_string());
     let end = end.unwrap_or_else(|| today.to_string());
@@ -1506,6 +1654,100 @@ fn compatibility_route_status(
         .unwrap_or_else(|| "not_started".to_string())
 }
 
+#[cfg(test)]
+mod capability_tests {
+    use super::{feature_available, feature_runtime_status};
+
+    #[test]
+    fn unfinished_worker_features_are_not_advertised_as_available() {
+        for key in [
+            "daily_weekly_monthly_reports",
+            "calendar_integrations",
+            "public_profiles_and_embeds",
+            "private_leaderboards",
+            "sso_oidc_saml",
+            "scim",
+            "seat_billing_entitlements",
+        ] {
+            assert!(
+                !feature_available(key, true, false, false),
+                "{key} must stay disabled"
+            );
+            assert_eq!(
+                feature_runtime_status(key, "beta", true, false, false),
+                "disabled"
+            );
+        }
+        assert!(!feature_available("data_exports", true, false, false));
+        assert_eq!(
+            feature_runtime_status("data_exports", "partial", true, false, false),
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn postgres_backed_feature_is_unavailable_without_postgres() {
+        assert!(!feature_available("goals_crud", false, false, false));
+        assert_eq!(
+            feature_runtime_status("goals_crud", "beta", false, false, false),
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn available_feature_keeps_declared_status() {
+        assert!(feature_available("complete_history", false, false, false));
+        assert_eq!(
+            feature_runtime_status("complete_history", "production_ready", false, false, false,),
+            "production_ready"
+        );
+    }
+
+    #[test]
+    fn unknown_capability_keys_fail_closed() {
+        assert!(!feature_available("future_feature", true, false, false));
+        assert_eq!(
+            feature_runtime_status("future_feature", "beta", true, false, false),
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn configured_export_processor_is_advertised() {
+        assert!(feature_available("data_exports", true, true, false));
+        assert_eq!(
+            feature_runtime_status("data_exports", "partial", true, true, false),
+            "partial"
+        );
+    }
+
+    #[test]
+    fn account_deletion_requires_an_explicitly_enabled_processor() {
+        assert!(!feature_available("account_deletion", true, false, false));
+        assert_eq!(
+            feature_runtime_status("account_deletion", "partial", true, false, false),
+            "unavailable"
+        );
+        assert!(feature_available("account_deletion", true, false, true));
+        assert_eq!(
+            feature_runtime_status("account_deletion", "partial", true, false, true),
+            "partial"
+        );
+    }
+
+    #[test]
+    fn disabled_feature_route_guard_returns_a_sanitized_unavailable_error() {
+        let error =
+            super::require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)
+                .expect_err("private leaderboards are not enabled");
+        assert_eq!(error.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            error.message,
+            "feature private_leaderboards is unavailable in this deployment"
+        );
+    }
+}
+
 /// Mirror an authenticated identity into PostgreSQL before a PostgreSQL-backed write
 /// puts a foreign key on it.
 ///
@@ -1520,6 +1762,13 @@ async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), ApiEr
         .ensure_postgres_identity(user_id)
         .await
         .map_err(ApiError::service_unavailable)
+}
+
+/// Guard disabled product mutations before an identity mirror or other helper
+/// can write PostgreSQL. Services repeat the guard as a defense-in-depth check
+/// for non-HTTP callers.
+fn require_runtime_feature(feature: crate::services::RuntimeFeature) -> Result<(), ApiError> {
+    crate::services::require_runtime_feature(feature).map_err(ApiError::service_unavailable)
 }
 
 async fn require_scope(
@@ -1553,6 +1802,13 @@ impl ApiError {
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message: message.into(),
         }
     }

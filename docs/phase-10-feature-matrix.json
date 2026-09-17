@@ -39,6 +39,7 @@
     { "key": "sso_oidc_saml", "status": "beta", "api": "/api/v2/organizations/:id/sso" },
     { "key": "scim", "status": "beta", "api": "/scim/v2" },
     { "key": "seat_billing_entitlements", "status": "partial", "api": "/api/v2/organizations/:id/billing" },
-    { "key": "data_exports", "status": "partial", "api": "/api/v2/exports" }
+    { "key": "data_exports", "status": "partial", "api": "/api/v2/exports" },
+    { "key": "account_deletion", "status": "partial", "api": "/api/v2/me" }
   ]
 }

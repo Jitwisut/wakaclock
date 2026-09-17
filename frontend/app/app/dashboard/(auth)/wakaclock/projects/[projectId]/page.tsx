@@ -164,9 +164,27 @@ function DetailPanel() {
                 label="Project time"
                 value={formatDurationShort(detail.summary.project_seconds)}
               />
+              {detail.summary.comparable_seconds !== undefined && (
+                <>
+                  <Metric
+                    label="WakaTime-comparable activity"
+                    value={formatDurationShort(detail.summary.comparable_seconds)}
+                  />
+                  <Metric
+                    label="Additional measured AI time"
+                    value={formatDurationShort(detail.summary.ai_additional_seconds ?? 0)}
+                  />
+                </>
+              )}
               <Metric label="AI attribution" value={percentage(detail.ai.ai_percentage)} />
-              <Metric label="AI verified lines" value={detail.ai.ai_verified_lines.toLocaleString()} />
-              <Metric label="AI inferred lines" value={detail.ai.ai_inferred_lines.toLocaleString()} />
+              <Metric
+                label="AI verified lines"
+                value={detail.ai.ai_verified_lines.toLocaleString()}
+              />
+              <Metric
+                label="AI inferred lines"
+                value={detail.ai.ai_inferred_lines.toLocaleString()}
+              />
               <Metric
                 label="Unknown lines"
                 value={(detail.ai.unknown_lines ?? 0).toLocaleString()}
@@ -179,7 +197,10 @@ function DetailPanel() {
               <Metric label="Prompts" value={count(detail.ai.prompts)} />
               <Metric label="AI sessions" value={count(detail.ai.sessions)} />
               <Metric label="Reported tokens" value={count(detail.ai.tokens.total)} />
-              <Metric label="Estimated spend" value={spend(detail.ai.estimated_spend.amount_microusd)} />
+              <Metric
+                label="Estimated spend"
+                value={spend(detail.ai.estimated_spend.amount_microusd)}
+              />
             </CardContent>
           </Card>
 
@@ -240,19 +261,21 @@ function DetailPanel() {
                 <CardTitle className="text-base">Branches</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {(branchItems.length > 0 ? branchItems : detail.branches).slice(0, 8).map((item) => (
-                  <button
-                    className="hover:text-primary flex w-full items-center justify-between gap-3 text-left text-sm"
-                    key={item.branch}
-                    onClick={() => setBranch(item.branch)}
-                    type="button"
-                  >
-                    <span className="truncate">{item.branch}</span>
-                    <span className="text-muted-foreground shrink-0">
-                      {formatDurationShort(item.total_seconds)}
-                    </span>
-                  </button>
-                ))}
+                {(branchItems.length > 0 ? branchItems : detail.branches)
+                  .slice(0, 8)
+                  .map((item) => (
+                    <button
+                      className="hover:text-primary flex w-full items-center justify-between gap-3 text-left text-sm"
+                      key={item.branch}
+                      onClick={() => setBranch(item.branch)}
+                      type="button"
+                    >
+                      <span className="truncate">{item.branch}</span>
+                      <span className="text-muted-foreground shrink-0">
+                        {formatDurationShort(item.total_seconds)}
+                      </span>
+                    </button>
+                  ))}
                 {branchesQuery.hasNextPage && (
                   <Button
                     disabled={branchesQuery.isFetchingNextPage}

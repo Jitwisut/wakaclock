@@ -7,7 +7,7 @@
 //! here is measured from real ingested data, and unavailable usage/pricing remains null.
 
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -22,7 +22,7 @@ use crate::model::dashboard_analytics::{
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
 use crate::services::activity_timeline::{
-    canonicalize_bridged, ActivityTimelineService, BridgeConfig,
+    totals_by, ActivityTimelineService, BridgeConfig, Dimension,
 };
 
 /// Weekday order the chart always renders, including days with no activity, so the axis
@@ -42,6 +42,19 @@ pub struct DashboardAnalyticsService {
     bridge: BridgeConfig,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DurationMetrics {
+    comparable_seconds: f64,
+    ai_measured_seconds: f64,
+    ai_additional_seconds: f64,
+    calculation_version: &'static str,
+}
+
+struct DailyTotalsResult {
+    rows: Vec<DailyTotalRow>,
+    metrics: DurationMetrics,
+}
+
 impl DashboardAnalyticsService {
     pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
         Self {
@@ -55,7 +68,9 @@ impl DashboardAnalyticsService {
         user_id: Uuid,
         range: &ResolvedRange,
     ) -> Result<DashboardAnalyticsResponse> {
-        let daily = self.daily_totals(user_id, range).await?;
+        let current_totals = self.daily_totals(user_id, range).await?;
+        let daily = current_totals.rows;
+        let duration_metrics = current_totals.metrics;
         let daily_attribution = self.daily_attribution(user_id, range).await?;
         let usage = self.usage_summary(user_id, range).await?;
 
@@ -63,6 +78,7 @@ impl DashboardAnalyticsService {
         let previous_total: i64 = self
             .daily_totals(user_id, &previous)
             .await?
+            .rows
             .iter()
             .map(|row| row.total)
             .sum();
@@ -131,6 +147,10 @@ impl DashboardAnalyticsService {
             summary: DashboardSummary {
                 today_seconds,
                 today_text: format_duration(today_seconds),
+                comparable_seconds: Some(duration_metrics.comparable_seconds),
+                ai_measured_seconds: Some(duration_metrics.ai_measured_seconds),
+                ai_additional_seconds: Some(duration_metrics.ai_additional_seconds),
+                calculation_version: Some(duration_metrics.calculation_version),
                 averages: DailyAverages::new(&daily_values, range.days_included()),
                 most_active_day,
                 previous_period: PeriodComparison::new(current_total, previous_total),
@@ -171,24 +191,46 @@ impl DashboardAnalyticsService {
         &self,
         user_id: Uuid,
         range: &ResolvedRange,
-    ) -> Result<Vec<DailyTotalRow>> {
+    ) -> Result<DailyTotalsResult> {
         let (start_epoch, end_epoch) = range.unix_bounds();
         let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
-        let intervals = timeline.intervals(user_id, start_epoch, end_epoch).await?;
-        let canonical = canonicalize_bridged(&intervals, self.bridge);
+        let timeline = timeline
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
         let mut totals = HashMap::<String, i64>::new();
-        for interval in canonical {
-            let timestamp = DateTime::<Utc>::from_timestamp(interval.start.floor() as i64, 0)
-                .unwrap_or_else(Utc::now)
-                .with_timezone(&range.timezone);
-            let day = timestamp.date_naive().to_string();
-            *totals.entry(day).or_default() += (interval.end - interval.start).round() as i64;
+        for offset in 0..range.days_included() {
+            let day = range.start + Duration::days(offset);
+            let day_range = ResolvedRange {
+                start: day,
+                end: day,
+                timezone: range.timezone,
+            };
+            let (day_start, day_end) = day_range.unix_bounds();
+            let total = timeline
+                .bridged
+                .iter()
+                .filter_map(|interval| {
+                    let start = interval.start.max(day_start);
+                    let end = interval.end.min(day_end);
+                    (end > start).then_some(end - start)
+                })
+                .sum::<f64>()
+                .round() as i64;
+            totals.insert(day.to_string(), total);
         }
         let rows = totals
             .into_iter()
             .map(|(day, total)| DailyTotalRow { day, total })
             .collect::<Vec<_>>();
-        Ok(zero_fill_totals(rows, range))
+        Ok(DailyTotalsResult {
+            rows: zero_fill_totals(rows, range),
+            metrics: DurationMetrics {
+                comparable_seconds: timeline.comparable_seconds,
+                ai_measured_seconds: timeline.ai_measured_seconds,
+                ai_additional_seconds: timeline.ai_additional_seconds,
+                calculation_version: timeline.calculation_version,
+            },
+        })
     }
 
     async fn daily_attribution(
@@ -300,6 +342,32 @@ impl DashboardAnalyticsService {
         column: &str,
     ) -> Result<Breakdown> {
         let (start_epoch, end_epoch) = range.unix_bounds();
+        // Dimensions available on the canonical interval projection must use the same
+        // overlap union and idle policy as the headline. The old aggregate-table path
+        // summed raw active_seconds and made dashboard bars disagree with the total.
+        if let Some(dimension) = match column {
+            "editor" => Some(Dimension::Editor),
+            "language" => Some(Dimension::Language),
+            "operating_system" => Some(Dimension::OperatingSystem),
+            "machine" => Some(Dimension::Machine),
+            "category" => Some(Dimension::Category),
+            "project" => Some(Dimension::Project),
+            "branch" => Some(Dimension::Branch),
+            _ => None,
+        } {
+            let timeline = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
+            let canonical = timeline
+                .build_timeline(user_id, start_epoch, end_epoch)
+                .await?
+                .bridged;
+            let rows = totals_by(&canonical, dimension)
+                .into_iter()
+                .take(20)
+                .map(|(name, seconds, _)| (name, seconds.round() as i64))
+                .collect();
+            return Ok(Breakdown::new(Metric::ActiveDuration, rows));
+        }
+
         let name_expression = normalized_dimension(column);
         let sql = format!(
             "
@@ -386,7 +454,10 @@ fn normalized_dimension(column: &str) -> String {
 }
 
 fn normalized_ai_model_dimension() -> &'static str {
-    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ai_model, 'Unattributed AI')"
+    // `ai_model` is Nullable(String) in ClickHouse. Normalize it in the selected
+    // branch as well as the fallback so the aliased `name` column is plain String;
+    // NamedTotalRow intentionally does not decode nullable names.
+    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
 }
 
 /// Group daily totals into Monday–Sunday, always emitting all seven days.
@@ -589,7 +660,7 @@ mod tests {
     fn inferred_ai_models_are_grouped_as_unattributed() {
         assert_eq!(
             normalized_ai_model_dimension(),
-    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ai_model, 'Unattributed AI')"
+    "if(actor_type = 'ai_verified' AND lower(trim(ifNull(identity_status, ''))) = 'confirmed' AND lower(trim(ifNull(identity_reason, ''))) = '' AND lower(trim(ifNull(ai_agent, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>') AND lower(trim(ifNull(ai_provider, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'provider not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_model, ''))) NOT IN ('', 'null', 'undefined', 'unknown', '<unknown>', 'not reported', 'model not reported', '<synthetic>', 'synthetic', 'internal model marker', 'internal_model_marker') AND lower(trim(ifNull(ai_confidence, ''))) IN ('verified', 'correlated') AND lower(trim(ifNull(identity_source, ifNull(ai_source, '')))) IN ('agent_hook', 'mcp', 'structured_mcp', 'transcript'), ifNull(nullIf(ai_model, ''), 'Unknown'), 'Unattributed AI')"
         );
     }
 
@@ -708,9 +779,11 @@ mod tests {
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "dashboard-regression-priced".to_string(),
+                    event_payload_hash: None,
                     ai_session_id: "dashboard-session-priced".to_string(),
                     event_time: unix_day * 86_400 + 60,
                     project_id: None,
+                    project_attribution_method: None,
                     ai_agent: "test".to_string(),
                     ai_provider: Some("test".to_string()),
                     ai_model: Some("test".to_string()),
@@ -730,9 +803,11 @@ mod tests {
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "dashboard-regression-unpriced".to_string(),
+                    event_payload_hash: None,
                     ai_session_id: "dashboard-session-unpriced".to_string(),
                     event_time: unix_day * 86_400 + 120,
                     project_id: None,
+                    project_attribution_method: None,
                     ai_agent: "test".to_string(),
                     ai_provider: None,
                     ai_model: None,

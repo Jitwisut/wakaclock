@@ -59,6 +59,8 @@ export class WakaclockCliService {
             args.push("--write");
         }
 
+        this.pushOptionalNumber(args, "--time", primaryExtra.time);
+
         this.pushOptionalNumber(
             args,
             "--line-number",
@@ -513,6 +515,23 @@ export class WakaclockCliService {
 
             let stdout = "";
             let stderr = "";
+            let settled = false;
+            const finish = (callback: () => void) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(deadline);
+                callback();
+            };
+            const deadline = setTimeout(() => {
+                if (!child.killed) {
+                    child.kill();
+                }
+                finish(() => reject(new Error(
+                    `wakaclock-cli timed out after 45 seconds while running ${args[0] ?? "command"}`,
+                )));
+            }, 45_000);
 
             child.stdout.setEncoding("utf8");
             child.stderr.setEncoding("utf8");
@@ -524,24 +543,24 @@ export class WakaclockCliService {
             });
 
             child.on("error", (error) => {
-                reject(
+                finish(() => reject(
                     new Error(
                         `Failed to start wakaclock-cli at "${cliPath}". ${error.message}. The bundled AtoAxis CLI may be unavailable; check the Extension installation or use the advanced cliPath override.`,
                     ),
-                );
+                ));
             });
 
             child.on("close", (code) => {
                 const exitCode = code ?? -1;
                 if (exitCode !== 0) {
-                    reject(
+                    finish(() => reject(
                         new Error(
                             `wakaclock-cli exited with code ${exitCode}. ${stderr.trim() || stdout.trim()}`,
                         ),
-                    );
+                    ));
                     return;
                 }
-                resolve({ stdout, stderr, exitCode });
+                finish(() => resolve({ stdout, stderr, exitCode }));
             });
 
             if (stdinPayload) {

@@ -29,3 +29,17 @@ pub struct ReprocessResponse {
     pub status: String,
     pub data: ReprocessData,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ReprocessAcceptedData {
+    pub job_id: Uuid,
+    pub job_status: String,
+    pub deduplicated: bool,
+    pub status_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReprocessAcceptedResponse {
+    pub status: String,
+    pub data: ReprocessAcceptedData,
+}

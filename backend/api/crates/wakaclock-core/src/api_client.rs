@@ -3,20 +3,20 @@ use crate::{
         normalize_identity_agent, normalize_identity_model, normalize_identity_provider,
         normalize_identity_reason, normalize_identity_reference, normalize_identity_source,
         normalize_identity_status, resolve_identity, AiDiagnosticsReport, AiDiagnosticsReportV2,
-        AiUsageIngestReport, AiUsageRecord, IDENTITY_SCHEMA_VERSION,
+        AiUsageIngestReport, AiUsageIngestReportV2, AiUsageProcessingState, AiUsageRecord,
+        IDENTITY_SCHEMA_VERSION,
     },
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
-    queue::Queue,
+    queue::{Queue, QueueScope},
 };
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
-
-const API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+use sha2::{Digest, Sha256};
+use std::time::Duration;
+use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusBarSnapshot {
@@ -39,12 +39,24 @@ pub struct StatusBarSnapshot {
     pub agent_health: Option<serde_json::Value>,
     #[serde(default)]
     pub covered_intervals: Vec<crate::heartbeat::ActivitySegment>,
+    /// Raw strict Active v1 intervals. These exclude idle-bridge time and are used to
+    /// union server-confirmed activity with local queue entries after a crash/retry.
+    #[serde(default)]
+    pub active_intervals: Vec<crate::heartbeat::ActivitySegment>,
     #[serde(default)]
     pub last_increment_seconds: Option<f64>,
     #[serde(default)]
     pub last_increment_source: Option<String>,
     #[serde(default)]
     pub discarded_seconds: f64,
+    /// Strict Active v1 timing, when the server has at least one explicit v1
+    /// evidence marker in the requested range. Older servers omit these fields.
+    #[serde(default)]
+    pub active_seconds: Option<f64>,
+    #[serde(default)]
+    pub active_coverage: Option<String>,
+    #[serde(default)]
+    pub wakatime_compatible_seconds: Option<f64>,
 }
 
 /// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
@@ -119,6 +131,67 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
         DeliveryFailureKind::Network
     } else {
         DeliveryFailureKind::Other
+    }
+}
+
+/// Whether a failed HTTP delivery should remain in the durable retry queue.
+///
+/// A transport error has no response and is safe to retry.  For an HTTP
+/// response, only the statuses explicitly called out by the ingest contract
+/// are generally retryable. Heartbeat flushes additionally preserve credential
+/// failures because a repaired key can make the same captured activity valid.
+pub fn is_retryable_delivery_error(error: &AppError) -> bool {
+    match error {
+        AppError::Http(_) => true,
+        AppError::HttpStatus { status, .. } => {
+            *status == 408 || *status == 429 || (500..=599).contains(status)
+        }
+        AppError::HttpStatusRetry { status, .. } => {
+            *status == 408 || *status == 429 || (500..=599).contains(status)
+        }
+        AppError::Protocol(_) => true,
+        _ => false,
+    }
+}
+
+/// Heartbeat delivery has one additional durable-capture case: HTTP 402 means
+/// the account entitlement is inactive, not that the captured activity is
+/// invalid. Keep that heartbeat in the local queue so it can be delivered when
+/// billing is restored. AI usage uses `is_retryable_delivery_error` directly;
+/// its permanent-4xx dead-letter contract must remain stricter.
+fn is_retryable_heartbeat_delivery_error(error: &AppError) -> bool {
+    match error {
+        AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. }
+            if *status == 402 =>
+        {
+            true
+        }
+        _ => is_retryable_delivery_error(error),
+    }
+}
+
+fn is_credential_delivery_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Auth(_)
+            | AppError::HttpStatus {
+                status: 401 | 403,
+                ..
+            }
+            | AppError::HttpStatusRetry {
+                status: 401 | 403,
+                ..
+            }
+    )
+}
+
+pub fn retry_after_seconds(error: &AppError) -> Option<u64> {
+    match error {
+        AppError::HttpStatusRetry {
+            retry_after_seconds,
+            ..
+        } => *retry_after_seconds,
+        _ => None,
     }
 }
 
@@ -238,11 +311,24 @@ impl ApiClient {
         }
 
         let client = Client::builder()
-            .connect_timeout(API_CONNECT_TIMEOUT)
-            .timeout(API_REQUEST_TIMEOUT)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
             .default_headers(headers)
             .build()?;
         Ok(Self { config, client })
+    }
+
+    pub fn queue_scope(&self) -> QueueScope {
+        let owner = self
+            .config
+            .api_key
+            .as_deref()
+            .map(|key| format!("key:{:x}", Sha256::digest(key.as_bytes())))
+            .unwrap_or_else(|| format!("anonymous:{}", self.config.user_id));
+        QueueScope {
+            destination: self.config.server_url.trim_end_matches('/').to_string(),
+            owner,
+        }
     }
 
     pub async fn send_heartbeat(&self, heartbeat: Heartbeat) -> AppResult<SendReport> {
@@ -336,18 +422,25 @@ impl ApiClient {
             }
             Err(error) => {
                 self.record_delivery_failure(&error.to_string());
-                for payload in &payloads {
-                    queue.push(payload)?;
+                if is_retryable_heartbeat_delivery_error(&error) {
+                    for payload in &payloads {
+                        queue.push_scoped(payload, &self.queue_scope())?;
+                    }
+                    // Do not persist a failed payload in the local last-heartbeat
+                    // cache: the stable ID must remain retryable, and the durable
+                    // queue already provides the deduplication needed while the
+                    // server is offline.
+                    Ok(SendReport::queued(
+                        0,
+                        deduped,
+                        payloads.len(),
+                        Some(error.to_string()),
+                    ))
+                } else {
+                    // Permanent validation/auth/conflict responses are reported to
+                    // the caller and deliberately never enter the retry queue.
+                    Err(error)
                 }
-                // Do not persist a failed payload in the local last-heartbeat cache:
-                // the stable ID must remain retryable, and the durable queue already
-                // provides the deduplication needed while the server is offline.
-                Ok(SendReport::queued(
-                    0,
-                    deduped,
-                    payloads.len(),
-                    Some(error.to_string()),
-                ))
             }
         }
     }
@@ -413,20 +506,45 @@ impl ApiClient {
         Ok(response.json::<StatusBarSnapshot>().await?)
     }
 
-    /// Upload sanitized token/session usage parsed from an agent transcript. Unlike
-    /// heartbeats this stream is not placed in the offline heartbeat queue: each event
-    /// has its own stable provider id, so a failed or retried batch can simply be sent
-    /// again without ever duplicating usage at the server.
-    pub async fn send_ai_usage(&self, records: &[AiUsageRecord]) -> AppResult<AiUsageIngestReport> {
+    /// Upload sanitized token/session usage parsed from an agent transcript. The
+    /// capability header opts the caller into the nullable response contract used by
+    /// the Kafka cutover; older binaries that omit it continue to receive the legacy
+    /// direct-path response.
+    pub async fn send_ai_usage(
+        &self,
+        records: &[AiUsageRecord],
+    ) -> AppResult<AiUsageIngestReportV2> {
         let response = self
             .client
             .post(format!("{}/api/v1/ai/usage", self.config.server_url))
+            .header("X-AtoAxis-Ai-Usage-Contract", "2")
             .json(records)
             .send()
             .await?;
         let response = Self::reject_unauthorized(response)?;
         let response = Self::error_for_status_with_body(response).await?;
-        Ok(response.json::<AiUsageIngestReport>().await?)
+        let body = response.json::<Value>().await.map_err(|_| {
+            AppError::Protocol("AI usage response could not be decoded".to_string())
+        })?;
+        if let Ok(report) = serde_json::from_value::<AiUsageIngestReportV2>(body.clone()) {
+            return Ok(report);
+        }
+        // During a rolling server upgrade an API replica may still return the
+        // legacy direct-path shape. Treat that successful response as stored so
+        // the durable client queue is not needlessly retried or dead-lettered.
+        let legacy = serde_json::from_value::<AiUsageIngestReport>(body).map_err(|_| {
+            AppError::Protocol("AI usage response did not match a known contract".to_string())
+        })?;
+        Ok(AiUsageIngestReportV2 {
+            contract_version: 2,
+            processing_state: AiUsageProcessingState::Stored,
+            received: legacy.received,
+            accepted: legacy.received.saturating_sub(legacy.duplicates_in_batch),
+            duplicates_in_batch: legacy.duplicates_in_batch,
+            stored: Some(legacy.stored),
+            unpriced: Some(legacy.unpriced),
+            sessions_touched: Some(legacy.sessions_touched),
+        })
     }
 
     /// Upload a metadata-only AI diagnostics snapshot.  Diagnostics are optional
@@ -521,7 +639,8 @@ impl ApiClient {
     }
 
     async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
-        let pending = queue.pop_all()?;
+        let lease_owner = uuid::Uuid::new_v4().to_string();
+        let pending = queue.claim_batch_scoped(&self.queue_scope(), &lease_owner)?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
@@ -537,10 +656,33 @@ impl ApiClient {
                 }
                 Err(error) => {
                     stopped_because = Some(error.to_string());
-                    queue.mark_retry(id)?;
+                    // A queue flush is also a delivery attempt. Persist the latest
+                    // failure so status-bar clients do not keep showing an old
+                    // outage after the queue has recovered, or hide a new one
+                    // behind a previous success.
+                    self.record_delivery_failure(&error.to_string());
+                    if is_credential_delivery_error(&error) {
+                        // Credentials may be repaired. Keep the only durable copy and
+                        // pause this owner-bound queue rather than deleting activity.
+                        queue.mark_retry_after(id, Some(300))?;
+                    } else if is_retryable_heartbeat_delivery_error(&error) {
+                        queue.mark_retry_after(id, retry_after_seconds(&error))?;
+                    } else {
+                        queue.dead_letter(id, &error.to_string())?;
+                    }
+                    queue.release_claim(&lease_owner)?;
                     break;
                 }
             }
+        }
+
+        queue.release_claim(&lease_owner)?;
+
+        // `wakaclock status` may be the only command that drains a backlog. Clear
+        // the persisted refusal only after every currently eligible row was
+        // accepted; a partial flush must continue to show its latest failure.
+        if flushed > 0 && stopped_because.is_none() {
+            self.clear_delivery_failure();
         }
 
         Ok(FlushReport {
@@ -574,6 +716,11 @@ impl ApiClient {
             return Ok(response);
         }
 
+        let retry_after_seconds = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
         let body = response.text().await.unwrap_or_default();
         let body = body.trim();
         let message = if body.is_empty() {
@@ -584,9 +731,10 @@ impl ApiClient {
         } else {
             body.chars().take(2_048).collect::<String>()
         };
-        Err(AppError::HttpStatus {
+        Err(AppError::HttpStatusRetry {
             status: status.as_u16(),
             message,
+            retry_after_seconds,
         })
     }
 
@@ -1089,6 +1237,50 @@ mod tests {
             classify_delivery_failure("Authentication failed: API key was rejected by the server"),
             DeliveryFailureKind::Auth401
         );
+    }
+
+    #[test]
+    fn only_transport_and_retryable_statuses_are_queued() {
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 408,
+            message: "timeout".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 429,
+            message: "rate limited".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 503,
+            message: "unavailable".to_string(),
+        }));
+        assert!(!is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 400,
+            message: "invalid heartbeat".to_string(),
+        }));
+        assert!(!is_retryable_delivery_error(&AppError::HttpStatus {
+            status: 401,
+            message: "unauthorized".to_string(),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::HttpStatusRetry {
+            status: 503,
+            message: "down".to_string(),
+            retry_after_seconds: Some(5),
+        }));
+        assert!(is_retryable_delivery_error(&AppError::Protocol(
+            "AI usage response did not match a known contract".to_string(),
+        )));
+        assert!(!is_retryable_delivery_error(&AppError::Conflict(
+            "duplicate".to_string()
+        )));
+        assert!(is_credential_delivery_error(&AppError::HttpStatus {
+            status: 401,
+            message: "replace the key".to_string(),
+        }));
+        assert!(is_credential_delivery_error(&AppError::HttpStatusRetry {
+            status: 403,
+            message: "permission changed".to_string(),
+            retry_after_seconds: None,
+        }));
     }
 
     #[test]

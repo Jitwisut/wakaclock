@@ -10,7 +10,8 @@ import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { StatTile } from '@/components/wakaclock/stat-tile';
-import { getStats } from '@/lib/wakaclock/endpoints';
+import { getBrowserTimezone, getStats } from '@/lib/wakaclock/endpoints';
+import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { StatsRange } from '@/lib/wakaclock/types';
 import { STATS_RANGES } from '@/lib/wakaclock/types';
@@ -36,14 +37,16 @@ export function RangeStats() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [range, setRange] = React.useState<StatsRange>('last_7_days');
   const [breakdown, setBreakdown] = React.useState<keyof typeof BREAKDOWN_LABELS>('languages');
+  const timezone = getBrowserTimezone();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.stats(userId, range),
+    queryKey: wakaclockKeys.stats(userId, range, timezone),
     queryFn: () => getStats(userId, range),
     enabled: Boolean(userId),
   });
 
   const stats = data?.data;
+  const activeAvailable = stats?.active_coverage === 'measured';
 
   return (
     <Card>
@@ -82,7 +85,11 @@ export function RangeStats() {
           {stats && (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatTile label="Total" value={stats.text} />
+                <StatTile
+                  label={activeAvailable ? 'Active coding' : 'Total'}
+                  subtext={activeAvailable ? `WakaTime-compatible: ${stats.text}` : undefined}
+                  value={activeAvailable ? formatDurationShort(stats.active_seconds ?? 0) : stats.text}
+                />
                 <StatTile label="Daily average" value={stats.daily_average_text} />
                 <StatTile
                   label="Days active"

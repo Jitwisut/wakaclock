@@ -11,7 +11,9 @@ use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::analytics_explorer::AnalyticsExplorerResponse;
 use crate::model::date_range::ResolvedRange;
-use crate::services::analytics_explorer::{build_explorer_response, ExplorerFilters};
+use crate::services::analytics_explorer::{
+    build_explorer_response_with_metrics, ExplorerDurationMetrics, ExplorerFilters,
+};
 use wakaclock_core::heartbeat::ActorType;
 
 #[derive(Debug, Deserialize)]
@@ -47,9 +49,9 @@ pub async fn get(
         actor_type: parse_actor_type(query.actor_type)?,
     };
     let (start, end) = range.unix_bounds();
-    let intervals = state
+    let timeline = state
         .activity_timeline_service
-        .canonical(user_id, start, end)
+        .build_timeline(user_id, start, end)
         .await
         .map_err(|error| {
             tracing::error!(error = %error, "analytics explorer timeline request failed");
@@ -59,7 +61,26 @@ pub async fn get(
             )
         })?;
 
-    Ok(Json(build_explorer_response(&intervals, &range, &filters)))
+    let metrics = (filters.category.is_none()
+        && filters.editor.is_none()
+        && filters.language.is_none()
+        && filters.operating_system.is_none()
+        && filters.project_id.is_none()
+        && filters.source.is_none()
+        && filters.actor_type.is_none())
+    .then_some(ExplorerDurationMetrics {
+        comparable_seconds: timeline.comparable_seconds,
+        ai_measured_seconds: timeline.ai_measured_seconds,
+        ai_additional_seconds: timeline.ai_additional_seconds,
+        calculation_version: timeline.calculation_version,
+    });
+
+    Ok(Json(build_explorer_response_with_metrics(
+        &timeline.bridged,
+        &range,
+        &filters,
+        metrics,
+    )))
 }
 
 fn clean_filter(

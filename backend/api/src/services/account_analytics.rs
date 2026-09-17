@@ -44,6 +44,13 @@ impl AccountAnalyticsService {
             source_usage_events,
         })
     }
+
+    /// Validate a queued rebuild before a worker claims it. Keeping the pure
+    /// validation next to the synchronous implementation prevents the async
+    /// worker from accepting a range that the direct path would reject.
+    pub fn validate_request(start: &str, end: &str) -> Result<()> {
+        validate_date_range(start, end)
+    }
 }
 
 fn validate_date_range(start: &str, end: &str) -> Result<()> {

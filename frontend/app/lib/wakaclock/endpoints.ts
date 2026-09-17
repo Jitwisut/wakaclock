@@ -70,15 +70,7 @@ export async function loginAccount(username: string, password: string) {
 // automatically by the axios interceptor in client.ts. The browser's IANA timezone
 // keeps the day boundary aligned with the person viewing the dashboard.
 export async function getStatusBar() {
-  let timezone: string | undefined;
-  try {
-    timezone =
-      typeof window === 'undefined'
-        ? undefined
-        : Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    timezone = undefined;
-  }
+  const timezone = getBrowserTimezone();
   const { data } = await wakaclockClient.get<StatusBarResponse>('/status_bar/today', {
     params: { timezone },
   });
@@ -88,7 +80,7 @@ export async function getStatusBar() {
 // GET /all_time_since_today
 export async function getAllTime(userId: string) {
   const { data } = await wakaclockClient.get<AllTimeResponse>('/all_time_since_today', {
-    params: { user_id: userId },
+    params: { user_id: userId, timezone: getBrowserTimezone() },
   });
   return data;
 }
@@ -96,7 +88,7 @@ export async function getAllTime(userId: string) {
 // GET /stats/:range
 export async function getStats(userId: string, range: StatsRange) {
   const { data } = await wakaclockClient.get<StatsResponse>(`/stats/${range}`, {
-    params: { user_id: userId },
+    params: { user_id: userId, timezone: getBrowserTimezone() },
   });
   return data;
 }
@@ -104,9 +96,19 @@ export async function getStats(userId: string, range: StatsRange) {
 // GET /summaries?start=&end=
 export async function getSummaries(userId: string, start: string, end: string) {
   const { data } = await wakaclockClient.get<SummariesResponse>('/summaries', {
-    params: { user_id: userId, start, end },
+    params: { user_id: userId, start, end, timezone: getBrowserTimezone() },
   });
   return data;
+}
+
+export function getBrowserTimezone(): string | undefined {
+  try {
+    return typeof window === 'undefined'
+      ? undefined
+      : Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // GET /durations?date=&timezone=&user_id=
@@ -120,7 +122,7 @@ export async function getDurations(userId: string, date: string, timezone?: stri
 // GET /projects?start=&end= — applies project_merges at read time
 export async function getProjects(userId: string, start: string, end: string) {
   const { data } = await wakaclockClient.get<ProjectsResponse>('/projects', {
-    params: { user_id: userId, start, end },
+    params: { user_id: userId, start, end, timezone: getBrowserTimezone() },
   });
   return data;
 }
@@ -128,7 +130,7 @@ export async function getProjects(userId: string, start: string, end: string) {
 // GET /insights/:type/:range
 export async function getInsights(userId: string, type: InsightType, range: StatsRange) {
   const { data } = await wakaclockClient.get<InsightsResponse>(`/insights/${type}/${range}`, {
-    params: { user_id: userId },
+    params: { user_id: userId, timezone: getBrowserTimezone() },
   });
   return data;
 }

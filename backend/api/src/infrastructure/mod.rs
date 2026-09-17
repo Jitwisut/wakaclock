@@ -2,7 +2,11 @@ pub mod app;
 pub mod contracts;
 pub mod database;
 pub mod job_relay;
+#[cfg(feature = "kafka")]
+pub mod kafka;
 pub mod logger;
+pub mod metrics;
+pub mod object_store;
 pub mod postgres;
 pub mod presence_store;
 pub mod rabbitmq;

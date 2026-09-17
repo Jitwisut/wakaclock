@@ -1,7 +1,7 @@
-#[path = "../worker_runtime.rs"]
-mod worker_runtime;
+#[path = "../account_deletion_worker.rs"]
+mod account_deletion_worker;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    worker_runtime::run("account-deletion").await
+    account_deletion_worker::run().await
 }

@@ -125,7 +125,7 @@ pub use revision::{
     EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
     PENDING_OBSERVATION_RETENTION_SECONDS,
 };
-pub use state::AiAttributionState;
+pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{
     from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,
     TopologyIdentityInput, WorkspaceMapping, WorkspaceMappingRegistry, TOPOLOGY_SCHEMA_VERSION,
@@ -138,5 +138,6 @@ pub use topology_handoff::{
 };
 pub use usage::{
     parse_claude_usage, parse_claude_usage_str, parse_codex_usage, parse_codex_usage_str,
-    parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageRecord, TokenSource,
+    parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageIngestReportV2,
+    AiUsageProcessingState, AiUsageRecord, TokenSource, MAX_USAGE_IDENTIFIER_BYTES,
 };

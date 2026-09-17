@@ -40,6 +40,15 @@ is accepted for parsing and downgraded to `observe_only`.
 
 ## Phases and deliverables
 
+### Correctness follow-up — 2026-09-15
+
+The [time and AI correctness remediation plan](time-ai-correctness-remediation-2026-09-15.md)
+tracks the newly reproduced tool-outcome and line-counting defects, measurement
+definitions, identity coverage, duration comparison, historical repair, and live
+release evidence. Execute its correctness fixes before expanding attribution
+coverage. Its implementation and live-certification statuses remain separate;
+existing historical certificates do not close these new findings.
+
 ### P0 — Enforce the accuracy boundary (land first)
 
 - Sanitize inferred/unverified identity at both CLI/broker and API boundaries.

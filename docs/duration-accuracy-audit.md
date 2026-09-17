@@ -189,8 +189,8 @@ computed by unrelated code paths:
 
 | Surface | Source | Algorithm |
 | --- | --- | --- |
-| `summaries[].grand_total`, `/durations`, `/status_bar/today`, `/stats` totals | `heartbeats` + `activity_intervals` | `canonicalize_bridged` — overlap-free union, 900s bridge, per-heartbeat evidence clamped to 120s |
-| `summaries[].projects/languages/editors/operating_systems`, `insights` | `project_daily` etc. via `mv_*_summary` | `sum(active_seconds)` — no union, no bridge, **no clamp** |
+| `summaries[].grand_total`, `/durations`, `/status_bar/today`, `/stats` totals | canonical heartbeat view | shared timeline — overlap-free union, configured editor bridge, per-heartbeat evidence clamped to 120s |
+| summary breakdowns, `/insights`, `/projects`, dashboard/project analytics | canonical heartbeat view | the same shared timeline and `totals_by` union; line/token fields remain per-heartbeat facts |
 
 They cannot agree. Over the 14 days the MV path reports 4h24m against the
 canonical path's 2h48m of the same evidence, and 13h18m as the headline.
@@ -221,10 +221,10 @@ times.
 
 `every_breakdown_sums_to_the_total` in `activity_timeline.rs` pins the invariant.
 
-**Still on the aggregate tables**, and therefore still disagreeing:
-`account_analytics`, `dashboard_analytics`, `project_analytics`, `insights`,
-`projects`, `goals`. Those were out of scope for this pass; the same
-`totals_by` helper is what they need.
+The account snapshot builder still writes aggregate tables for batch exports, but live duration
+surfaces no longer read them. Dashboard, project, insight, project-list and goal duration reads
+use the shared timeline; snapshot line/token fields remain additive facts rather than duration
+evidence.
 
 ## Finding 5 — aggregate drift (minor)
 
@@ -368,10 +368,9 @@ column rather than overwritten; no historical row was rewritten or deleted.
 Six tests in that module pin the behaviour, including the union case and the
 "heartbeat that proves nothing is still a heartbeat" anchor case.
 
-**Still on the aggregate tables**, and therefore still summing rather than unioning:
-`account_analytics`, `dashboard_analytics`, `project_analytics`, `insights`, `projects`,
-`goals`. They now sum a clamped number instead of a raw claim, which removes the worst of
-the disagreement, but only the shared `totals_by` helper will make them agree exactly.
+The account snapshot builder still sums the clamped heartbeat value for its batch-only
+projections. No live duration endpoint reads those tables, so their eventual consistency does
+not change the numbers shown in the dashboard.
 
 ## Finding 8 — the split is about attribution, not about lowering the number *(fixed)*
 
@@ -736,11 +735,13 @@ WakaTime parity is unchanged at 0% overall, every day within 3%.
 
 ### Still open
 
-- **A branch filter cannot use the timeline.** `activity_intervals` carries no branch, so
-  `?branch=` views keep the aggregate figure and remain a known disagreement. Closing it
-  means carrying branch on the interval, the same additive move `project_id` just made.
-- **`account_analytics::publish_snapshot`** (8 sites) and `insights` / `goals` are still on
-  the aggregate tables.
+- **Project branch and daily totals now use the timeline.** Heartbeat evidence carries the
+  branch through `ActivityInterval`, so `?branch=` detail views and their daily duration
+  values use the same overlap union and timeout policy as the headline. File-level and
+  branch-level line attribution still comes from the aggregate projection because those
+  counters are per-heartbeat facts rather than duration evidence.
+- **`account_analytics::publish_snapshot`** (8 sites) still writes batch projections. The live
+  `insights` and goal duration paths now use the canonical timeline.
 - **Finding 5 is unchanged**: `ALTER TABLE ... DELETE` on `heartbeats` leaves the
   `SummingMergeTree` rows behind, so `daily_totals` can drift above the surviving
   heartbeats and nothing reconciles them.
@@ -818,3 +819,88 @@ batch jobs, not live reads — for no user-visible effect today. They also now s
 clamped, unioned `active_seconds` that Finding 4 put on the heartbeat row, so they are
 building on a better number than before. Recorded as deliberately out of scope rather than
 silently skipped.
+
+## Combined duration rollout *(implemented 2026-09-12)*
+
+The duration comparison plan is now implemented behind one server-side switch. The default
+remains `DURATION_CALCULATION_MODE=legacy`, so an existing deployment keeps its previous
+headline value while a parity window is collected. Set the value to `combined_v2` only after
+staging checks; an invalid value fails application startup instead of silently selecting a
+different definition. Rolling back is therefore a configuration change back to `legacy`, with
+no heartbeat or timestamp rewrite.
+
+### One timeline and explicit metrics
+
+`ActivityTimelineService::build_timeline` is the shared read path for summaries, stats,
+durations, dashboard analytics, insights, projects, project analytics and goals. It reads the
+canonical heartbeat revision, includes enough neighbouring records to resolve a range boundary,
+and clips the final union to the requested IANA calendar range. A heartbeat timestamp is kept as
+a zero-length anchor even when its buffered segment ended earlier; the anchor cannot add seconds
+by itself, but it prevents a real WakaTime-style session from being cut short at a flush boundary.
+
+In `combined_v2` the values are calculated from ranges, before presentation rounding:
+
+```text
+comparable_seconds = union(human/editor ranges bridged with the configured idle timeout)
+ai_measured_seconds = union(observed AI ranges with a real start and end)
+total_seconds = union(comparable ranges, AI measured ranges)
+ai_additional_seconds = total_seconds - comparable_seconds
+```
+
+AI ranges are never bridged across a gap merely because a process or session remained open.
+Overlapping agents count once, a failed call contributes only the interval it actually proved,
+and an open session stops at its last observed event. A completion timestamp without a start/end
+range contributes no duration. Human/editor ranges retain the WakaTime-compatible timeout rule;
+the two streams are unioned only after each stream has been resolved independently. `legacy`
+continues to use the existing single/split bridge policy for a safe comparison and rollback.
+
+The optional fields `comparable_seconds`, `ai_measured_seconds`, `ai_additional_seconds` and
+`calculation_version` are exposed on duration summaries and evidence objects. They are additive,
+so older clients can continue reading `total_seconds`, `hours`, `text` and the existing
+breakdowns. Every daily slice clips the already-built range union at local midnight, which keeps
+cross-midnight activity additive and prevents a timeout from leaking into an adjacent day.
+
+### Audit, repair and rollout workflow
+
+Run the read-only comparison with the same dates, timezone, timeout and filters for both systems:
+
+```bash
+WAKATIME_COMPARE_START=2026-09-12 \
+WAKATIME_COMPARE_END=2026-09-12 \
+WAKATIME_TIMEZONE=Asia/Bangkok \
+WAKATIME_API_KEY=... WAKACLOCK_API_KEY=... \
+python3 scripts/duration-audit/compare_wakatime.py
+```
+
+When an editor may still be flushing its offline queue, set
+`WAKACLOCK_SETTLE_SECONDS=0..300`; the command waits that bounded interval before taking
+either read-only snapshot and records the delay in its report. This is a delivery grace
+period, not a synthetic activity source: an event that never reaches the server remains
+unresolved in the baseline.
+
+The report keeps each day separate, marks a current or missing day as provisional/unavailable,
+and accepts a complete observation window only when at least seven completed days are present and
+every day is within 120 seconds. A total-only response cannot explain a missing interval; when a
+local `WAKACLOCK_RAW_HEARTBEATS` export is supplied, the report adds metadata-only counts for
+observed/measured heartbeats, timeout-sized gaps, invalid rows and delivery rows reported as
+pending or failed. It never creates a substitute heartbeat and never writes to WakaTime.
+
+Historical correction uses the existing canonical revision/reprocess mechanisms in dry-run mode
+first. Apply mode may rebuild a projection or write a correction revision with the same activity
+timestamps and measured seconds; it must not insert synthetic heartbeats, alter the original
+timestamps, or apply a percentage multiplier. Re-running an apply is idempotent because the
+canonical query selects the winning revision before calculating the timeline. If the source
+transcript or heartbeat reference needed to explain a gap is absent, the record stays unresolved
+and its original total remains visible.
+
+### What is and is not certified
+
+The code and regression fixtures cover overlap, timeout edges, cross-midnight clipping, AI
+failures/cancellations, idle processes, duplicate/replayed heartbeats, independent agents and
+restart-safe range reads. They do not constitute a live WakaTime certification by themselves.
+The 2026-09-12 example (4h38m versus 4h20m) still needs a running deployment, matching client
+versions and credentials to produce an interval-level baseline. Until the seven-day observation
+window passes, the implementation status is complete while the external parity status remains
+pending. Aggregate account snapshot tables are still batch projections; live machine breakdowns
+now carry the machine identity through the canonical interval timeline, while those snapshots
+remain outside the live duration read path.

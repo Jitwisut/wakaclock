@@ -37,13 +37,18 @@ pub async fn list(
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 
-    let rows = state
+    let result = state
         .duration_service
-        .get_by_date(user_id, &range)
+        .get_by_date_with_metrics(user_id, &range)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 
-    let data = rows
+    let comparable_seconds = result.comparable_seconds;
+    let ai_measured_seconds = result.ai_measured_seconds;
+    let ai_additional_seconds = result.ai_additional_seconds;
+    let calculation_version = result.calculation_version;
+    let data = result
+        .blocks
         .into_iter()
         .map(|row| DurationBlock {
             start: row.start,
@@ -66,6 +71,22 @@ pub async fn list(
         range_end,
         total_seconds,
         data,
+        comparable_seconds: Some(comparable_seconds),
+        ai_measured_seconds: Some(ai_measured_seconds),
+        ai_additional_seconds: Some(ai_additional_seconds),
+        calculation_version: Some(calculation_version),
+        active_seconds: Some(result.active_seconds),
+        active_human_seconds: Some(result.active_human_seconds),
+        active_human_only_seconds: Some(
+            (result.active_human_seconds - result.active_overlap_seconds).max(0.0),
+        ),
+        active_ai_only_seconds: Some(
+            (result.active_ai_seconds - result.active_overlap_seconds).max(0.0),
+        ),
+        active_ai_seconds: Some(result.active_ai_seconds),
+        active_overlap_seconds: Some(result.active_overlap_seconds),
+        active_coverage: Some(result.active_coverage),
+        wakatime_compatible_seconds: Some(result.wakatime_compatible_seconds),
     }))
 }
 
