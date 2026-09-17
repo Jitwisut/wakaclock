@@ -44,9 +44,10 @@ export function registerEventSubscriptions(
   // a workspace-scoped receiver alive for that second path and feed it into the same
   // CLI/queue adapter used by the normal buffer.
   const externalFileObserver = new ExternalFileObserver(
-    (entity, metadata, now, project) =>
-      bufferManager.recordExternalFileChange(entity, metadata, now, project),
+    (entity, metadata, now, project, workspaceRoot) =>
+      bufferManager.recordExternalFileChange(entity, metadata, now, project, workspaceRoot),
     (uri) => vscode.workspace.getWorkspaceFolder(uri)?.name,
+    (uri) => vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath,
     logger,
   );
   for (const folder of vscode.workspace.workspaceFolders ?? []) {

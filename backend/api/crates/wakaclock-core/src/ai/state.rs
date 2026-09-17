@@ -987,6 +987,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: None,
+            producer_surface: None,
             occurred_at: chrono::Utc::now(),
             entity: StdPathBuf::from("src/lib.rs"),
             project_root: None,

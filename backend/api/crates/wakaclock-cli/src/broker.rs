@@ -6,7 +6,7 @@
 
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -31,9 +31,10 @@ use wakaclock_core::{
     broker::{
         broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck, BrokerClient,
         BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
-        BrokerStore, BrokerStoreStats, QuarantineDiagnostic, TransportKind,
-        AI_SIDECAR_SCHEMA_VERSION, BROKER_SCHEMA_VERSION, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
-        MAX_EVENT_BYTES,
+        BrokerStore, BrokerStoreStats, EditorObservationAck, EditorObservationIngestOutcome,
+        EditorObservationV1, QuarantineDiagnostic, TransportKind, AI_SIDECAR_SCHEMA_VERSION,
+        BROKER_SCHEMA_VERSION, EDITOR_WAIT_SECONDS, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
+        MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
@@ -100,6 +101,7 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         actor_confidence: None,
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
+        content_fingerprint: None,
         active_seconds: Some(active_seconds.clamp(0.0, MAX_ACTIVITY_GAP_SECONDS)),
         transport: None,
         tool: None,
@@ -108,6 +110,7 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         // there is no live env to declare an editor from — let `build_ai_heartbeat`'s
         // fallback (env, else agent name) decide when this is eventually processed.
         editor: None,
+        producer_surface: event.producer_surface.clone(),
     }
 }
 
@@ -176,6 +179,73 @@ pub(crate) async fn submit_event(
         .into_iter()
         .next()
         .ok_or_else(|| AppError::Validation("broker returned an empty acknowledgement".to_string()))
+}
+
+pub(crate) async fn submit_editor_observation_from_stdin(
+    config: &Config,
+    api_client: &ApiClient,
+) -> Result<EditorObservationAck, AppError> {
+    let mut stdin = String::new();
+    std::io::stdin().read_to_string(&mut stdin)?;
+    let observation = serde_json::from_str::<EditorObservationV1>(&stdin).map_err(|_| {
+        AppError::Validation("editor observation failed metadata validation".to_string())
+    })?;
+    let observation = observation.normalize()?;
+    let mode = std::env::var("WAKACLOCK_BROKER_MODE")
+        .unwrap_or_else(|_| "auto".to_string())
+        .to_ascii_lowercase();
+    if mode != "direct" {
+        if let Ok(Some(client)) = BrokerClient::discover() {
+            match client.submit_editor_observation(&observation).await {
+                Ok(status) => return Ok(status),
+                Err(error) if can_fallback(&error) && mode == "auto" => {}
+                Err(error) => return Err(error),
+            }
+        } else if mode == "service" {
+            return Err(AppError::NotFound(
+                "broker service is not running or discovery metadata is unavailable".to_string(),
+            ));
+        }
+    }
+    let (outcome, status) = BrokerStore::open()?.ingest_editor_observation(&observation)?;
+    if matches!(
+        outcome,
+        EditorObservationIngestOutcome::Accepted
+            | EditorObservationIngestOutcome::Duplicate
+            | EditorObservationIngestOutcome::Matched
+    ) {
+        let _ = process_pending(config, api_client, MAX_BATCH_EVENTS).await;
+    }
+    Ok(status)
+}
+
+pub(crate) async fn editor_observation_status_for_cli(
+    observation_id: &str,
+) -> Result<EditorObservationAck, AppError> {
+    if !wakaclock_core::ai::event::is_safe_event_id(observation_id) {
+        return Err(AppError::NotFound(
+            "editor observation was not found".to_string(),
+        ));
+    }
+    let mode = std::env::var("WAKACLOCK_BROKER_MODE")
+        .unwrap_or_else(|_| "auto".to_string())
+        .to_ascii_lowercase();
+    if mode != "direct" {
+        if let Ok(Some(client)) = BrokerClient::discover() {
+            match client.editor_observation_status(observation_id).await {
+                Ok(status) => return Ok(status),
+                Err(error) if can_fallback(&error) && mode == "auto" => {}
+                Err(error) => return Err(error),
+            }
+        } else if mode == "service" {
+            return Err(AppError::NotFound(
+                "broker service is not running or discovery metadata is unavailable".to_string(),
+            ));
+        }
+    }
+    BrokerStore::open()?
+        .editor_observation_status(observation_id)?
+        .ok_or_else(|| AppError::NotFound("editor observation was not found".to_string()))
 }
 
 pub(crate) async fn submit_events_chunked(
@@ -258,14 +328,15 @@ pub(crate) async fn process_pending(
     };
 
     for record in records {
-        match process_record(config, api_client, &record.event).await {
-            Ok(()) => {
+        match process_record(config, api_client, &record).await {
+            Ok(ProcessRecordOutcome::Processed) => {
                 if BrokerStore::open()?
                     .mark_processed_for_attempt(&record.event_id, record.attempt_count)?
                 {
                     report.processed += 1;
                 }
             }
+            Ok(ProcessRecordOutcome::Deferred) => {}
             Err(error) => {
                 let status = BrokerStore::open()?.mark_retry_for_attempt(
                     &record.event_id,
@@ -288,6 +359,11 @@ pub(crate) async fn process_pending(
     Ok(report)
 }
 
+enum ProcessRecordOutcome {
+    Processed,
+    Deferred,
+}
+
 fn error_code(error: &AppError) -> &'static str {
     match error {
         AppError::Validation(_) => "validation",
@@ -308,8 +384,9 @@ fn error_code(error: &AppError) -> &'static str {
 async fn process_record(
     config: &Config,
     api_client: &ApiClient,
-    event: &BrokerEventV1,
-) -> Result<(), AppError> {
+    record: &wakaclock_core::broker::BrokerRecord,
+) -> Result<ProcessRecordOutcome, AppError> {
+    let event = &record.event;
     let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
 
     // Write correlation evidence as soon as the durable inbox has handed the event to
@@ -319,6 +396,40 @@ async fn process_record(
     // records.
     if append_broker_sidecar(event).is_err() {
         eprintln!("Warning: could not append AI attribution sidecar code=io");
+    }
+
+    let mut matched_editor = if event
+        .editor
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        event.editor.clone()
+    } else {
+        BrokerStore::open()?.match_editor_observation_for_event(&record.event_id, event)?
+    };
+    // An observation can arrive between the first lookup and the defer write. Recheck
+    // immediately before parking the event so a just-arrived VS Code signal is used
+    // in this attempt instead of adding an unnecessary three-second delay.
+    if matched_editor.is_none()
+        && event.editor.is_none()
+        && event.agent == "codex"
+        && record.editor_wait_until.is_none()
+    {
+        matched_editor =
+            BrokerStore::open()?.match_editor_observation_for_event(&record.event_id, event)?;
+    }
+    if matched_editor.is_none()
+        && event.editor.is_none()
+        && event.agent == "codex"
+        && record.editor_wait_until.is_none()
+    {
+        let wait_until = Utc::now().timestamp().saturating_add(EDITOR_WAIT_SECONDS);
+        BrokerStore::open()?.defer_for_editor(
+            &record.event_id,
+            record.attempt_count,
+            wait_until,
+        )?;
+        return Ok(ProcessRecordOutcome::Deferred);
     }
 
     // Only a completed tool operation with an explicit elapsed duration carries
@@ -353,6 +464,7 @@ async fn process_record(
         identity_reason: event.identity_reason.clone(),
         identity_source: event.identity_source.clone(),
         tool_event_id: event.tool_event_id.clone(),
+        producer_surface: event.producer_surface.clone(),
         occurred_at: event.occurred_at,
         entity: PathBuf::from(&event.entity),
         project_root: event.project_root.as_deref().map(PathBuf::from),
@@ -376,6 +488,15 @@ async fn process_record(
         .filter(|value| !value.is_empty())
     {
         heartbeat.editor = editor.to_string();
+    }
+    if let Some(editor) = matched_editor {
+        heartbeat.editor = editor;
+    } else if let Some(surface) = event
+        .producer_surface
+        .as_deref()
+        .filter(|surface| *surface == "codex-desktop")
+    {
+        heartbeat.editor = surface.to_string();
     }
     heartbeat.heartbeat_id = Some(event.heartbeat_id());
     heartbeat.ai_change_id = event.tool_event_id.clone();
@@ -433,7 +554,7 @@ async fn process_record(
     );
     state.mark_delivered(&delivery_id, "broker")?;
     agent_service::record_heartbeat();
-    Ok(())
+    Ok(ProcessRecordOutcome::Processed)
 }
 
 /// A tool id identifies an operation for attribution, but it does not by itself
@@ -500,6 +621,7 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         "transport": event.transport,
         "tool": event.tool,
         "tool_event_id": event.tool_event_id,
+        "producer_surface": event.producer_surface,
         "content_fingerprint": content_fingerprint,
         "change_kind": event.change_kind.as_str(),
         "previous_entity": event.previous_entity,
@@ -594,6 +716,11 @@ fn router(state: BrokerHttpState) -> Router {
         .route("/v1/status", get(status_handler))
         .route("/v1/events", post(event_handler))
         .route("/v1/events/batch", post(batch_handler))
+        .route("/v1/editor-observations", post(editor_observation_handler))
+        .route(
+            "/v1/editor-observations/:observation_id",
+            get(editor_observation_status_handler),
+        )
         .layer(DefaultBodyLimit::max(MAX_BATCH_BYTES))
         .with_state(state)
 }
@@ -633,7 +760,13 @@ pub(crate) fn status_for_cli() -> Result<serde_json::Value, AppError> {
         cleanup_discovery();
         None
     };
-    Ok(status_json(stats, queue_count, discovery, service_running))
+    // launchd can report a job as `running` while the executable is still stuck
+    // inside dyld (or before the broker has written its authenticated discovery
+    // record). Treat only an actual broker discovery record as ready; this lets the
+    // VS Code host start its owned fallback instead of trusting a false-positive OS
+    // service state.
+    let broker_ready = service_running && discovery.is_some();
+    Ok(status_json(stats, queue_count, discovery, broker_ready))
 }
 
 async fn worker_loop(
@@ -643,6 +776,10 @@ async fn worker_loop(
     mut stop_rx: watch::Receiver<bool>,
 ) {
     let mut api_client = api_client;
+    // Transcript parsers perform synchronous filesystem/SQLite work internally.
+    // Keep their bounded pass off the async runtime worker so a large transcript
+    // cannot block editor observations or the durable heartbeat inbox.
+    let mut ai_sync_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut interval = tokio::time::interval(Duration::from_secs(
         interval_seconds.max(BROKER_POLL_SECONDS),
     ));
@@ -664,10 +801,28 @@ async fn worker_loop(
                 // The broker is the always-on runtime.  Keep transcript recovery in
                 // this same bounded worker so a user never has to remember a manual
                 // `wakaclock ai sync` after an agent's native hook is missed or an
-                // event arrives while the machine was offline.  The sync owns its
-                // cross-process lock and timeout; a slow/failed parser cannot stop
-                // inbox delivery or ordinary heartbeat processing.
-                crate::run_bounded_ai_sync(&config, &api_client).await;
+                // event arrives while the machine was offline. The parser performs
+                // blocking work, so run it on Tokio's blocking pool. The sync owns
+                // its cross-process lock and timeout; a slow/failed parser cannot
+                // stop inbox delivery or ordinary heartbeat processing.
+                let sync_finished = ai_sync_task
+                    .as_ref()
+                    .map(|task| task.is_finished())
+                    .unwrap_or(true);
+                if sync_finished {
+                    if let Some(task) = ai_sync_task.take() {
+                        let _ = task.await;
+                    }
+                    let sync_config = config.clone();
+                    let sync_api_client = api_client.clone();
+                    let runtime_handle = tokio::runtime::Handle::current();
+                    ai_sync_task = Some(tokio::task::spawn_blocking(move || {
+                        runtime_handle.block_on(crate::run_bounded_ai_sync(
+                            &sync_config,
+                            &sync_api_client,
+                        ));
+                    }));
+                }
                 match process_pending(&config, &api_client, MAX_BATCH_EVENTS).await {
                     Ok(report) if report.claimed > 0 => agent_service::append_log(&format!(
                         "broker processed={} retried={} dead_lettered={}",
@@ -907,6 +1062,73 @@ async fn batch_handler(
     (status, Json(ack)).into_response()
 }
 
+async fn editor_observation_handler(
+    headers: HeaderMap,
+    State(state): State<BrokerHttpState>,
+    body: Bytes,
+) -> Response {
+    if !authorize(&headers, &state) {
+        return error_response(StatusCode::UNAUTHORIZED, "broker token is invalid");
+    }
+    if body.len() > MAX_EDITOR_OBSERVATION_BYTES {
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "editor observation is too large",
+        );
+    }
+    let observation = match serde_json::from_slice::<EditorObservationV1>(&body) {
+        Ok(observation) => observation,
+        Err(_) => {
+            return error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "editor observation failed metadata validation",
+            )
+        }
+    };
+    let observation = match observation.normalize() {
+        Ok(observation) => observation,
+        Err(_) => {
+            return error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "editor observation failed metadata validation",
+            )
+        }
+    };
+    let result = match open_store(Some(&state))
+        .and_then(|store| store.ingest_editor_observation(&observation))
+    {
+        Ok(result) => result,
+        Err(error) => return store_error_response(error),
+    };
+    let status = match result.0 {
+        EditorObservationIngestOutcome::Accepted => StatusCode::ACCEPTED,
+        EditorObservationIngestOutcome::Duplicate | EditorObservationIngestOutcome::Matched => {
+            StatusCode::OK
+        }
+    };
+    (status, Json(result.1)).into_response()
+}
+
+async fn editor_observation_status_handler(
+    headers: HeaderMap,
+    State(state): State<BrokerHttpState>,
+    AxumPath(observation_id): AxumPath<String>,
+) -> Response {
+    if !authorize(&headers, &state) {
+        return error_response(StatusCode::UNAUTHORIZED, "broker token is invalid");
+    }
+    if !wakaclock_core::ai::event::is_safe_event_id(&observation_id) {
+        return error_response(StatusCode::NOT_FOUND, "editor observation was not found");
+    }
+    match open_store(Some(&state))
+        .and_then(|store| store.editor_observation_status(&observation_id))
+    {
+        Ok(Some(status)) => Json(status).into_response(),
+        Ok(None) => error_response(StatusCode::NOT_FOUND, "editor observation was not found"),
+        Err(error) => store_error_response(error),
+    }
+}
+
 fn authorize(headers: &HeaderMap, state: &BrokerHttpState) -> bool {
     headers
         .get(header::AUTHORIZATION)
@@ -1073,11 +1295,13 @@ mod tests {
             actor_confidence: None,
             lines_added: Some(1),
             lines_deleted: Some(0),
+            content_fingerprint: None,
             active_seconds: Some(1.0),
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),
             tool_event_id: Some("tool".to_string()),
             editor: None,
+            producer_surface: None,
         }
     }
 
@@ -1109,6 +1333,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: None,
+            producer_surface: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/lib.rs"),
             project_root: Some(PathBuf::from("/workspace")),
@@ -1145,6 +1370,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: Some("call-rename".to_string()),
+            producer_surface: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("/workspace/src/new.rs"),
             project_root: Some(PathBuf::from("/workspace")),
@@ -1252,6 +1478,113 @@ mod tests {
                     .body(Body::from(
                         serde_json::to_vec(&event("auth-event")).unwrap(),
                     ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("db-wal"));
+        let _ = fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[tokio::test]
+    async fn http_editor_observation_correlates_and_reports_status() {
+        let path = temp_db("editor-observation-http");
+        let app = router(BrokerHttpState {
+            token: Arc::from("test-token"),
+            store_path: Some(path.clone()),
+        });
+        let request = |method: &'static str, uri: &'static str, body: Vec<u8>| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+
+        let ai_event = event("editor-http-event").normalize().unwrap();
+        let event_response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/v1/events",
+                serde_json::to_vec(&ai_event).unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(event_response.status(), StatusCode::ACCEPTED);
+
+        let observation = EditorObservationV1 {
+            schema_version: wakaclock_core::broker::EDITOR_OBSERVATION_SCHEMA_VERSION,
+            observation_id: "editor-http-observation".to_string(),
+            editor: "vscode".to_string(),
+            entity: ai_event.entity.clone(),
+            workspace_root: "/workspace".to_string(),
+            occurred_at: ai_event.occurred_at,
+            change_kind: ai_event.change_kind,
+            previous_entity: None,
+            lines_added: ai_event.lines_added,
+            lines_deleted: ai_event.lines_deleted,
+            content_fingerprint: None,
+        };
+        let observation_response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/v1/editor-observations",
+                serde_json::to_vec(&observation).unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(observation_response.status(), StatusCode::OK);
+        let observation_body = axum::body::to_bytes(
+            observation_response.into_body(),
+            MAX_EDITOR_OBSERVATION_BYTES,
+        )
+        .await
+        .unwrap();
+        let observation_ack: EditorObservationAck =
+            serde_json::from_slice(&observation_body).unwrap();
+        assert_eq!(observation_ack.status, "matched");
+        assert_eq!(
+            observation_ack.matched_event_id.as_deref(),
+            Some("editor-http-event")
+        );
+
+        let status_response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/editor-observations/editor-http-observation",
+                Vec::new(),
+            ))
+            .await
+            .unwrap();
+        let status_code = status_response.status();
+        let status_body =
+            axum::body::to_bytes(status_response.into_body(), MAX_EDITOR_OBSERVATION_BYTES)
+                .await
+                .unwrap();
+        assert_eq!(
+            status_code,
+            StatusCode::OK,
+            "status response: {}",
+            String::from_utf8_lossy(&status_body)
+        );
+        let status: EditorObservationAck = serde_json::from_slice(&status_body).unwrap();
+        assert_eq!(status.status, "matched");
+
+        let unauthorized = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/editor-observations")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&observation).unwrap()))
                     .unwrap(),
             )
             .await

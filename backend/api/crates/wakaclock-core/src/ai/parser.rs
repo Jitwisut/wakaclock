@@ -93,6 +93,18 @@ pub struct ParserContext {
     /// file edit cannot silently inherit whichever record happened to be last.
     #[serde(default)]
     pub provider_conflict: bool,
+    /// The execution surface reported by transcript session metadata. This is
+    /// intentionally separate from editor evidence: `originator` can tell us
+    /// that Codex Desktop produced the transcript, but cannot prove that VS Code
+    /// was open for the same workspace.
+    #[serde(default)]
+    pub producer_surface: Option<String>,
+    /// True once the adapter has read the session metadata for this transcript.
+    /// This lets an upgrade replay only the bounded metadata prefix once when an
+    /// old checkpoint did not yet persist `originator`, without rescanning every
+    /// pass for agents that have no surface label.
+    #[serde(default)]
+    pub producer_surface_seen: bool,
     #[serde(default)]
     pub current_turn_id: Option<String>,
     #[serde(default)]

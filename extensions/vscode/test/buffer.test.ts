@@ -748,19 +748,43 @@ describe("HeartbeatBufferManager", () => {
       new Logger(() => false)
     );
 
-    manager.updateCursor(
+    await manager.updateCursor(
       { uri: fileUri("C:/project/a.ts") },
       selection(0, 0),
       "Daniel",
       1_000
     );
-    manager.updateCursor(
+    await manager.updateCursor(
       { uri: fileUri("C:/project/a.ts") },
       selection(10, 4),
       "Daniel",
       61_000
     );
-    await manager.flushDueBuffers("timer", 90_000);
+    await manager.flushDueBuffers("timer", 121_000);
+
+    expect(sendHeartbeat).toHaveBeenCalledTimes(0);
+  });
+
+  it("does not emit a heartbeat for sparse cursor activity without file evidence", async () => {
+    const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const manager = new HeartbeatBufferManager(
+      createConfig,
+      { sendHeartbeat },
+      new Logger(() => false)
+    );
+
+    await manager.updateCursor(
+      { uri: fileUri("C:/project/readme.md") },
+      selection(0, 0),
+      "project",
+      1_000
+    );
+    await manager.updateCursor(
+      { uri: fileUri("C:/project/readme.md") },
+      selection(20, 0),
+      "project",
+      301_000
+    );
 
     expect(sendHeartbeat).toHaveBeenCalledTimes(0);
   });
@@ -908,7 +932,7 @@ describe("HeartbeatBufferManager", () => {
         selection(0, 3),
         105_000
       );
-      await manager.flushDueBuffers("timer", 130_000);
+      await manager.flushDueBuffers("timer", 181_000);
 
       const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
       // The agent owns the line counts and the interval its own edit closed; the
@@ -1018,7 +1042,7 @@ describe("HeartbeatBufferManager", () => {
         selection(0, 3),
         105_000
       );
-      await manager.flushDueBuffers("timer", 130_000);
+      await manager.flushDueBuffers("timer", 181_000);
 
       const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
       expect(payload.human_lines_added).toBeUndefined();
@@ -1092,6 +1116,93 @@ describe("HeartbeatBufferManager", () => {
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
     }
+  });
+
+  it("sends a matched VS Code observation without an unknown fallback heartbeat", async () => {
+    const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const sendEditorObservation = vi.fn().mockResolvedValue({
+      observation_id: "observer:rename-1",
+      status: "matched",
+      matched_event_id: "codex-event-1",
+      expires_at: 2_000
+    });
+    const getEditorObservationStatus = vi.fn();
+    const manager = new HeartbeatBufferManager(
+      createConfig,
+      { sendHeartbeat, sendEditorObservation, getEditorObservationStatus },
+      new Logger(() => false)
+    );
+
+    await manager.recordExternalFileChange(
+      "/workspace/new.md",
+      {
+        event_id: "observer:rename-1",
+        change_kind: "rename",
+        previous_entity: "/workspace/old.md",
+        lines_added: 2,
+        lines_deleted: 1,
+        content_fingerprint: "sha256:abc"
+      },
+      1_000,
+      "wakaclock",
+      "/workspace"
+    );
+
+    expect(sendEditorObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        observation_id: "observer:rename-1",
+        editor: "vscode",
+        entity: "/workspace/new.md",
+        workspace_root: "/workspace",
+        change_kind: "rename",
+        previous_entity: "/workspace/old.md",
+        lines_added: 2,
+        lines_deleted: 1
+      })
+    );
+    expect(getEditorObservationStatus).not.toHaveBeenCalled();
+    expect(sendHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("falls back to one unknown heartbeat when an editor observation expires", async () => {
+    const sendHeartbeat = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    const sendEditorObservation = vi.fn().mockResolvedValue({
+      observation_id: "observer:unmatched-1",
+      status: "expired",
+      expires_at: 1_000
+    });
+    const manager = new HeartbeatBufferManager(
+      createConfig,
+      { sendHeartbeat, sendEditorObservation },
+      new Logger(() => false)
+    );
+
+    await manager.recordExternalFileChange(
+      "/workspace/new.md",
+      {
+        event_id: "observer:unmatched-1",
+        change_kind: "modify",
+        lines_added: 1,
+        content_fingerprint: "sha256:def"
+      },
+      1_000,
+      "wakaclock",
+      "/workspace"
+    );
+
+    expect(sendHeartbeat).toHaveBeenCalledTimes(1);
+    expect(sendHeartbeat).toHaveBeenCalledWith(
+      "/workspace/new.md",
+      true,
+      "coding",
+      [],
+      expect.objectContaining({
+        actor_type: "unknown",
+        write: true,
+        unattributed_lines_added: 1,
+        heartbeat_id: "observer:unmatched-1"
+      })
+    );
   });
 
   it("does not attribute prettier or eslint whole-file reformat to AI without sidecar evidence", async () => {

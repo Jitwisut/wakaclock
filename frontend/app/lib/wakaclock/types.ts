@@ -300,8 +300,12 @@ export interface DurationsResponse {
   comparable_seconds?: number;
   data: DurationBlock[];
   date: string;
+  range_end?: number;
+  range_start?: number;
+  timezone?: string;
   wakatime_compatible_seconds?: number;
   total: number;
+  total_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------

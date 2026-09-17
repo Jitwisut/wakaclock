@@ -34,6 +34,10 @@ pub const BROKER_LEASE_SECONDS: i64 = 60;
 pub const BROKER_MAX_ATTEMPTS: i64 = 20;
 pub const BROKER_PAYLOAD_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
 pub const BROKER_ID_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+pub const EDITOR_OBSERVATION_SCHEMA_VERSION: u8 = 1;
+pub const EDITOR_CORRELATION_WINDOW_SECONDS: i64 = 15;
+pub const EDITOR_WAIT_SECONDS: i64 = 3;
+pub const MAX_EDITOR_OBSERVATION_BYTES: usize = 16 * 1024;
 /// Version for the metadata-only editor sidecar. Legacy rows omitted this field and
 /// remain readable as v1; new rows carry a stream identity and sequence.
 pub const AI_SIDECAR_SCHEMA_VERSION: u8 = 2;
@@ -244,11 +248,13 @@ pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
     "actor_confidence",
     "lines_added",
     "lines_deleted",
+    "content_fingerprint",
     "active_seconds",
     "transport",
     "tool",
     "tool_event_id",
     "editor",
+    "producer_surface",
 ];
 
 /// Field names that carry model or user content and must never reach the broker.
@@ -399,6 +405,10 @@ pub struct BrokerEventV1 {
     pub lines_added: Option<u32>,
     #[serde(default)]
     pub lines_deleted: Option<u32>,
+    /// Optional metadata-only content identity. Producers may omit it when they
+    /// only have a diff; if both sides provide one, correlation requires equality.
+    #[serde(default)]
+    pub content_fingerprint: Option<String>,
     #[serde(default)]
     pub active_seconds: Option<f64>,
     #[serde(default)]
@@ -413,6 +423,10 @@ pub struct BrokerEventV1 {
     /// means the producer had no editor context to declare (a headless agent host).
     #[serde(default)]
     pub editor: Option<String>,
+    /// Native producer surface used only as the final editor fallback. The broker
+    /// never treats this field as proof that a separate editor is open.
+    #[serde(default)]
+    pub producer_surface: Option<String>,
 }
 
 /// planai2.md Phase 2 (p2.1): producer priority. When several broker events are
@@ -537,6 +551,11 @@ impl BrokerEventV1 {
         self.identity_message_id =
             normalize_identity_reference(self.identity_message_id.as_deref());
         self.tool_event_id = normalize_identity_reference(self.tool_event_id.as_deref());
+        self.producer_surface = self
+            .producer_surface
+            .as_deref()
+            .map(normalize_producer_surface)
+            .transpose()?;
         if self.identity_status.as_deref() == Some("conflict") {
             // A conflict is a first-class diagnostic state. Never let one side of
             // contradictory evidence survive normalization as the canonical tuple.
@@ -681,6 +700,7 @@ pub struct BrokerRecord {
     pub event: BrokerEventV1,
     pub status: BrokerEventStatus,
     pub attempt_count: i64,
+    pub editor_wait_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -728,6 +748,112 @@ pub struct BrokerBatchAck {
     pub accepted: usize,
     pub duplicate: usize,
     pub results: Vec<BrokerEventAck>,
+}
+
+/// Metadata emitted by the VS Code extension when its workspace watcher sees a
+/// real file mutation. The payload intentionally contains no source, diff or
+/// command output; the broker uses it only to annotate an already-proven AI event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EditorObservationV1 {
+    pub schema_version: u8,
+    pub observation_id: String,
+    pub editor: String,
+    pub entity: String,
+    pub workspace_root: String,
+    pub occurred_at: DateTime<Utc>,
+    pub change_kind: BrokerChangeKind,
+    #[serde(default)]
+    pub previous_entity: Option<String>,
+    #[serde(default)]
+    pub lines_added: Option<u32>,
+    #[serde(default)]
+    pub lines_deleted: Option<u32>,
+    #[serde(default)]
+    pub content_fingerprint: Option<String>,
+}
+
+impl EditorObservationV1 {
+    pub fn normalize(mut self) -> Result<Self, AppError> {
+        if self.schema_version != EDITOR_OBSERVATION_SCHEMA_VERSION {
+            return Err(AppError::Validation(format!(
+                "unsupported editor observation schema_version: {}",
+                self.schema_version
+            )));
+        }
+        self.observation_id = clean_required("observation_id", self.observation_id)?;
+        if !is_safe_event_id(&self.observation_id) {
+            return Err(AppError::Validation(
+                "observation_id contains unsupported characters".to_string(),
+            ));
+        }
+        self.editor = normalize_editor_id(&self.editor)?;
+        self.entity = normalize_absolute_path("entity", &self.entity)?;
+        self.workspace_root = normalize_absolute_path("workspace_root", &self.workspace_root)?;
+        if !Path::new(&self.entity).starts_with(&self.workspace_root) {
+            return Err(AppError::Validation(
+                "entity must be inside workspace_root".to_string(),
+            ));
+        }
+        self.previous_entity = self
+            .previous_entity
+            .as_deref()
+            .map(|value| normalize_absolute_path("previous_entity", value))
+            .transpose()?;
+        if matches!(self.change_kind, BrokerChangeKind::Rename) {
+            let Some(previous_entity) = self.previous_entity.as_deref() else {
+                return Err(AppError::Validation(
+                    "rename observations require previous_entity".to_string(),
+                ));
+            };
+            if !Path::new(previous_entity).starts_with(&self.workspace_root) {
+                return Err(AppError::Validation(
+                    "previous_entity must be inside workspace_root".to_string(),
+                ));
+            }
+        } else if self.previous_entity.is_some() {
+            return Err(AppError::Validation(
+                "previous_entity is only valid for rename observations".to_string(),
+            ));
+        }
+        self.content_fingerprint = self
+            .content_fingerprint
+            .as_deref()
+            .map(normalize_content_fingerprint)
+            .transpose()?;
+        if self.occurred_at > Utc::now() + Duration::minutes(5) {
+            return Err(AppError::Validation(
+                "occurred_at cannot be more than five minutes in the future".to_string(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+fn normalize_editor_id(value: &str) -> Result<String, AppError> {
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+    if normalized != "vscode" {
+        return Err(AppError::Validation(
+            "editor observation editor must be vscode".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EditorObservationAck {
+    pub observation_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub matched_event_id: Option<String>,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorObservationIngestOutcome {
+    Accepted,
+    Duplicate,
+    Matched,
 }
 
 /// Small HTTP client shared by CLI producers and external integrations. Discovery is
@@ -841,6 +967,32 @@ impl BrokerClient {
         self.post("/v1/events/batch", &normalized).await
     }
 
+    pub async fn submit_editor_observation(
+        &self,
+        observation: &EditorObservationV1,
+    ) -> Result<EditorObservationAck, AppError> {
+        let observation = observation.clone().normalize()?;
+        if serde_json::to_vec(&observation)?.len() > MAX_EDITOR_OBSERVATION_BYTES {
+            return Err(AppError::Validation(
+                "editor observation is too large".to_string(),
+            ));
+        }
+        self.post("/v1/editor-observations", &observation).await
+    }
+
+    pub async fn editor_observation_status(
+        &self,
+        observation_id: &str,
+    ) -> Result<EditorObservationAck, AppError> {
+        if !is_safe_event_id(observation_id) {
+            return Err(AppError::Validation(
+                "observation_id contains unsupported characters".to_string(),
+            ));
+        }
+        self.get(&format!("/v1/editor-observations/{observation_id}"))
+            .await
+    }
+
     async fn post<T, R>(&self, path: &str, payload: &T) -> Result<R, AppError>
     where
         T: Serialize + ?Sized,
@@ -851,6 +1003,35 @@ impl BrokerClient {
             .post(format!("{}{}", self.endpoint, path))
             .bearer_auth(&self.token)
             .json(payload)
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let message = if body.trim().is_empty() {
+                status
+                    .canonical_reason()
+                    .unwrap_or("broker request failed")
+                    .to_string()
+            } else {
+                body.chars().take(2_048).collect()
+            };
+            return Err(AppError::HttpStatus {
+                status: status.as_u16(),
+                message,
+            });
+        }
+        Ok(response.json::<R>().await?)
+    }
+
+    async fn get<R>(&self, path: &str) -> Result<R, AppError>
+    where
+        R: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .client
+            .get(format!("{}{}", self.endpoint, path))
+            .bearer_auth(&self.token)
             .send()
             .await?;
         let status = response.status();
@@ -918,6 +1099,7 @@ impl BrokerStore {
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at INTEGER NOT NULL DEFAULT 0,
                 lease_until INTEGER,
+                editor_wait_until INTEGER,
                 processed_at INTEGER,
                 last_error_code TEXT,
                 last_error_message TEXT
@@ -957,6 +1139,35 @@ impl BrokerStore {
                 [],
             )?;
         }
+        if !columns.iter().any(|column| column == "editor_wait_until") {
+            conn.execute(
+                "ALTER TABLE broker_events ADD COLUMN editor_wait_until INTEGER",
+                [],
+            )?;
+        }
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS broker_editor_observations (
+                observation_id TEXT PRIMARY KEY NOT NULL,
+                editor TEXT NOT NULL,
+                entity TEXT NOT NULL,
+                workspace_root TEXT NOT NULL,
+                occurred_at INTEGER NOT NULL,
+                change_kind TEXT NOT NULL,
+                previous_entity TEXT,
+                lines_added INTEGER,
+                lines_deleted INTEGER,
+                content_fingerprint TEXT,
+                received_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'matched', 'expired')),
+                matched_event_id TEXT,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS broker_editor_observations_match_idx
+                ON broker_editor_observations(status, expires_at, occurred_at, entity);
+            ",
+        )?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1105,6 +1316,7 @@ impl BrokerStore {
             params![storage_event_id, event.schema_version, json, hash, now],
         )?;
         if inserted > 0 {
+            let _ = self.match_editor_observation_for_event(&storage_event_id, event)?;
             return Ok(BrokerIngestOutcome::Accepted);
         }
 
@@ -1117,7 +1329,10 @@ impl BrokerStore {
             )
             .optional()?;
         match existing_hash {
-            Some(existing_hash) if existing_hash == hash => Ok(BrokerIngestOutcome::Duplicate),
+            Some(existing_hash) if existing_hash == hash => {
+                let _ = self.match_editor_observation_for_event(&storage_event_id, event)?;
+                Ok(BrokerIngestOutcome::Duplicate)
+            }
             Some(_) => Ok(BrokerIngestOutcome::Conflict),
             None => Err(AppError::Conflict(
                 "broker event disappeared during concurrent ingestion".to_string(),
@@ -1276,7 +1491,310 @@ impl BrokerStore {
             )?;
         }
         tx.commit()?;
+        for ((event, outcome), storage_event_id) in normalized
+            .iter()
+            .zip(existing.iter())
+            .zip(storage_ids.iter())
+        {
+            if *outcome == BrokerIngestOutcome::Accepted
+                || *outcome == BrokerIngestOutcome::Duplicate
+            {
+                let _ = self.match_editor_observation_for_event(storage_event_id, event)?;
+            }
+        }
         Ok(existing)
+    }
+
+    /// Persist one VS Code observation and immediately correlate it with any
+    /// unprocessed AI event already in the inbox. The returned status is safe for
+    /// the extension to poll and contains only identifiers/timestamps.
+    pub fn ingest_editor_observation(
+        &self,
+        observation: &EditorObservationV1,
+    ) -> Result<(EditorObservationIngestOutcome, EditorObservationAck), AppError> {
+        let observation = observation.clone().normalize()?;
+        if serde_json::to_vec(&observation)?.len() > MAX_EDITOR_OBSERVATION_BYTES {
+            return Err(AppError::Validation(
+                "editor observation is too large".to_string(),
+            ));
+        }
+        let now = Utc::now().timestamp();
+        let expires_at = observation
+            .occurred_at
+            .timestamp()
+            .saturating_add(EDITOR_CORRELATION_WINDOW_SECONDS);
+        let existing = self.load_editor_observation(&observation.observation_id)?;
+        if let Some(existing) = existing {
+            if existing.observation != observation {
+                return Err(AppError::Conflict(
+                    "editor observation_id already exists with a different payload".to_string(),
+                ));
+            }
+            let _ = self.match_pending_observation(&observation.observation_id, now)?;
+            let ack = self
+                .editor_observation_status(&observation.observation_id)?
+                .ok_or_else(|| AppError::Conflict("editor observation disappeared".to_string()))?;
+            let outcome = if ack.status == "matched" {
+                EditorObservationIngestOutcome::Matched
+            } else {
+                EditorObservationIngestOutcome::Duplicate
+            };
+            return Ok((outcome, ack));
+        }
+
+        self.conn.execute(
+            "INSERT INTO broker_editor_observations
+             (observation_id, editor, entity, workspace_root, occurred_at, change_kind,
+              previous_entity, lines_added, lines_deleted, content_fingerprint,
+              received_at, expires_at, status, matched_event_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending', NULL, ?11)",
+            params![
+                observation.observation_id,
+                observation.editor,
+                observation.entity,
+                observation.workspace_root,
+                observation.occurred_at.timestamp_millis(),
+                observation.change_kind.as_str(),
+                observation.previous_entity,
+                observation.lines_added,
+                observation.lines_deleted,
+                observation.content_fingerprint,
+                now,
+                expires_at,
+            ],
+        )?;
+
+        let _ = self.match_pending_observation(&observation.observation_id, now)?;
+        let ack = self
+            .editor_observation_status(&observation.observation_id)?
+            .ok_or_else(|| AppError::Conflict("editor observation disappeared".to_string()))?;
+        let outcome = if ack.status == "matched" {
+            EditorObservationIngestOutcome::Matched
+        } else {
+            EditorObservationIngestOutcome::Accepted
+        };
+        Ok((outcome, ack))
+    }
+
+    pub fn editor_observation_status(
+        &self,
+        observation_id: &str,
+    ) -> Result<Option<EditorObservationAck>, AppError> {
+        let now = Utc::now().timestamp();
+        let Some(stored) = self.load_editor_observation(observation_id)? else {
+            return Ok(None);
+        };
+        if stored.status == "pending" && stored.expires_at <= now {
+            self.conn.execute(
+                "UPDATE broker_editor_observations SET status = 'expired', updated_at = ?2
+                 WHERE observation_id = ?1 AND status = 'pending'",
+                params![observation_id, now],
+            )?;
+            return Ok(Some(EditorObservationAck {
+                observation_id: observation_id.to_string(),
+                status: "expired".to_string(),
+                matched_event_id: None,
+                expires_at: stored.expires_at,
+            }));
+        }
+        let matched_event_id = stored.matched_event_id.as_deref().and_then(|storage_id| {
+            self.conn
+                .query_row(
+                    "SELECT normalized_payload_json FROM broker_events WHERE event_id = ?1",
+                    params![storage_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .flatten()
+                .and_then(|json| serde_json::from_str::<BrokerEventV1>(&json).ok())
+                .map(|event| event.event_id)
+                .or_else(|| storage_id.split("|session:").next().map(str::to_string))
+        });
+        Ok(Some(EditorObservationAck {
+            observation_id: observation_id.to_string(),
+            status: stored.status,
+            matched_event_id,
+            expires_at: stored.expires_at,
+        }))
+    }
+
+    /// Match a claimed AI event against pending editor observations. A match is
+    /// durable before the caller sends the heartbeat, so a restart cannot make a
+    /// later retry lose the editor label.
+    pub fn match_editor_observation_for_event(
+        &self,
+        storage_event_id: &str,
+        event: &BrokerEventV1,
+    ) -> Result<Option<String>, AppError> {
+        if event
+            .editor
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(event.editor.clone());
+        }
+        if let Some(existing) = self
+            .conn
+            .query_row(
+                "SELECT editor FROM broker_editor_observations
+                 WHERE matched_event_id = ?1 AND status = 'matched' LIMIT 1",
+                params![storage_event_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(Some(existing));
+        }
+        let now = Utc::now().timestamp();
+        let candidates = self.pending_observations(now)?;
+        let matches: Vec<&StoredEditorObservation> = candidates
+            .iter()
+            .filter(|candidate| observation_matches_event(&candidate.observation, event))
+            .collect();
+        if matches.len() != 1 {
+            return Ok(None);
+        }
+        let observation = matches[0];
+        self.link_editor_observation(&observation.observation.observation_id, storage_event_id)?;
+        Ok(Some(observation.observation.editor.clone()))
+    }
+
+    pub fn defer_for_editor(
+        &self,
+        storage_event_id: &str,
+        attempt_count: i64,
+        wait_until: i64,
+    ) -> Result<bool, AppError> {
+        let now = Utc::now().timestamp();
+        let changed = self.conn.execute(
+            "UPDATE broker_events SET status = 'pending', attempt_count = CASE
+                 WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
+                 next_attempt_at = ?3, editor_wait_until = ?3,
+                 lease_until = NULL, updated_at = ?4
+             WHERE event_id = ?1 AND status = 'processing' AND attempt_count = ?2",
+            params![storage_event_id, attempt_count, wait_until, now],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn match_pending_observation(
+        &self,
+        observation_id: &str,
+        now: i64,
+    ) -> Result<Option<String>, AppError> {
+        let Some(stored) = self.load_editor_observation(observation_id)? else {
+            return Ok(None);
+        };
+        if stored.status != "pending" || stored.expires_at <= now {
+            if stored.status == "pending" && stored.expires_at <= now {
+                self.conn.execute(
+                    "UPDATE broker_editor_observations SET status = 'expired', updated_at = ?2
+                     WHERE observation_id = ?1 AND status = 'pending'",
+                    params![observation_id, now],
+                )?;
+            }
+            return Ok(None);
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT event_id, normalized_payload_json FROM broker_events
+             WHERE normalized_payload_json IS NOT NULL
+               AND status IN ('pending', 'retry', 'processing')",
+        )?;
+        let mut matches = Vec::new();
+        for row in statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
+            let (storage_event_id, json) = row?;
+            let Ok(event) = serde_json::from_str::<BrokerEventV1>(&json) else {
+                continue;
+            };
+            if observation_matches_event(&stored.observation, &event) {
+                matches.push((storage_event_id, event));
+            }
+        }
+        drop(statement);
+        if matches.len() != 1 {
+            return Ok(None);
+        }
+        let (storage_event_id, _) = matches.remove(0);
+        self.link_editor_observation(observation_id, &storage_event_id)?;
+        Ok(Some(storage_event_id))
+    }
+
+    fn load_editor_observation(
+        &self,
+        observation_id: &str,
+    ) -> Result<Option<StoredEditorObservation>, AppError> {
+        self.conn
+            .query_row(
+                "SELECT observation_id, editor, entity, workspace_root, occurred_at,
+                        change_kind, previous_entity, lines_added, lines_deleted,
+                        content_fingerprint, expires_at, status, matched_event_id
+                 FROM broker_editor_observations WHERE observation_id = ?1",
+                params![observation_id],
+                |row| {
+                    let change_kind = parse_change_kind(&row.get::<_, String>(5)?)?;
+                    Ok(StoredEditorObservation {
+                        observation: EditorObservationV1 {
+                            schema_version: EDITOR_OBSERVATION_SCHEMA_VERSION,
+                            observation_id: row.get(0)?,
+                            editor: row.get(1)?,
+                            entity: row.get(2)?,
+                            workspace_root: row.get(3)?,
+                            occurred_at: DateTime::from_timestamp_millis(row.get(4)?)
+                                .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                            change_kind,
+                            previous_entity: row.get(6)?,
+                            lines_added: row.get(7)?,
+                            lines_deleted: row.get(8)?,
+                            content_fingerprint: row.get(9)?,
+                        },
+                        expires_at: row.get(10)?,
+                        status: row.get(11)?,
+                        matched_event_id: row.get(12)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(AppError::from)
+    }
+
+    fn pending_observations(&self, now: i64) -> Result<Vec<StoredEditorObservation>, AppError> {
+        let mut statement = self.conn.prepare(
+            "SELECT observation_id FROM broker_editor_observations
+             WHERE status = 'pending' AND expires_at > ?1",
+        )?;
+        let ids = statement
+            .query_map(params![now], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        ids.into_iter()
+            .map(|id| {
+                self.load_editor_observation(&id)?
+                    .ok_or_else(|| AppError::Conflict("editor observation disappeared".to_string()))
+            })
+            .collect()
+    }
+
+    fn link_editor_observation(
+        &self,
+        observation_id: &str,
+        storage_event_id: &str,
+    ) -> Result<(), AppError> {
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE broker_editor_observations SET status = 'matched', matched_event_id = ?2,
+             updated_at = ?3 WHERE observation_id = ?1 AND status = 'pending'",
+            params![observation_id, storage_event_id, now],
+        )?;
+        self.conn.execute(
+            "UPDATE broker_events SET next_attempt_at = 0, editor_wait_until = NULL,
+             updated_at = ?2 WHERE event_id = ?1 AND status IN ('pending', 'retry')",
+            params![storage_event_id, now],
+        )?;
+        Ok(())
     }
 
     /// Claim a bounded batch. Expired processing leases are recoverable after a crash.
@@ -1287,7 +1805,8 @@ impl BrokerStore {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut statement = tx.prepare(
-            "SELECT event_id, normalized_payload_json, status, attempt_count
+            "SELECT event_id, normalized_payload_json, status, attempt_count,
+                    editor_wait_until
              FROM broker_events
              WHERE normalized_payload_json IS NOT NULL AND (
                    (status IN ('pending', 'retry') AND next_attempt_at <= ?1)
@@ -1295,15 +1814,21 @@ impl BrokerStore {
              )
              ORDER BY received_at ASC LIMIT ?2",
         )?;
-        let rows: Vec<(String, String, String, i64)> = statement
+        let rows: Vec<(String, String, String, i64, Option<i64>)> = statement
             .query_map(params![now, limit as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         drop(statement);
 
         let mut records = Vec::with_capacity(rows.len());
-        for (event_id, normalized_payload_json, status, attempt_count) in rows {
+        for (event_id, normalized_payload_json, status, attempt_count, editor_wait_until) in rows {
             let next_attempt = attempt_count + 1;
             let changed = tx.execute(
                 "UPDATE broker_events SET status = 'processing', attempt_count = ?2,
@@ -1322,6 +1847,7 @@ impl BrokerStore {
                 event,
                 status: BrokerEventStatus::parse(&status)?,
                 attempt_count: next_attempt,
+                editor_wait_until,
             });
         }
         tx.commit()?;
@@ -1332,7 +1858,8 @@ impl BrokerStore {
         let now = Utc::now().timestamp();
         self.conn.execute(
             "UPDATE broker_events SET status = 'processed', processed_at = ?2,
-             updated_at = ?2, lease_until = NULL, last_error_code = NULL,
+             updated_at = ?2, lease_until = NULL, editor_wait_until = NULL,
+             last_error_code = NULL,
              last_error_message = NULL WHERE event_id = ?1",
             params![event_id, now],
         )?;
@@ -1350,7 +1877,8 @@ impl BrokerStore {
         let now = Utc::now().timestamp();
         let changed = self.conn.execute(
             "UPDATE broker_events SET status = 'processed', processed_at = ?3,
-             updated_at = ?3, lease_until = NULL, last_error_code = NULL,
+             updated_at = ?3, lease_until = NULL, editor_wait_until = NULL,
+             last_error_code = NULL,
              last_error_message = NULL WHERE event_id = ?1 AND status = 'processing'
              AND attempt_count = ?2",
             params![event_id, attempt_count, now],
@@ -1509,12 +2037,108 @@ impl BrokerStore {
     }
 }
 
+struct StoredEditorObservation {
+    observation: EditorObservationV1,
+    expires_at: i64,
+    status: String,
+    matched_event_id: Option<String>,
+}
+
+fn parse_change_kind(value: &str) -> Result<BrokerChangeKind, rusqlite::Error> {
+    match value {
+        "create" => Ok(BrokerChangeKind::Create),
+        "modify" => Ok(BrokerChangeKind::Modify),
+        "rename" => Ok(BrokerChangeKind::Rename),
+        "delete" => Ok(BrokerChangeKind::Delete),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+fn observation_matches_event(observation: &EditorObservationV1, event: &BrokerEventV1) -> bool {
+    if event
+        .editor
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    if observation.entity != event.entity
+        || !Path::new(&event.entity).starts_with(&observation.workspace_root)
+    {
+        return false;
+    }
+    if event
+        .project_root
+        .as_deref()
+        .is_some_and(|root| root != observation.workspace_root)
+    {
+        return false;
+    }
+    if observation.change_kind != event.change_kind {
+        return false;
+    }
+    if observation.previous_entity.as_deref() != event.previous_entity.as_deref() {
+        return false;
+    }
+    if let (Some(observed), Some(ai)) = (observation.lines_added, event.lines_added) {
+        if observed != ai {
+            return false;
+        }
+    }
+    if let (Some(observed), Some(ai)) = (observation.lines_deleted, event.lines_deleted) {
+        if observed != ai {
+            return false;
+        }
+    }
+    if let (Some(observed), Some(ai)) = (
+        observation.content_fingerprint.as_deref(),
+        event.content_fingerprint.as_deref(),
+    ) {
+        if observed != ai {
+            return false;
+        }
+    }
+    let event_ms = event.occurred_at.timestamp_millis();
+    let observation_ms = observation.occurred_at.timestamp_millis();
+    (event_ms - observation_ms).abs() <= EDITOR_CORRELATION_WINDOW_SECONDS * 1_000
+}
+
 fn clean_required(name: &str, value: String) -> Result<String, AppError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(AppError::Validation(format!("{name} must not be empty")));
     }
     Ok(trimmed.to_string())
+}
+
+fn normalize_producer_surface(value: &str) -> Result<String, AppError> {
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+    if normalized.is_empty()
+        || normalized.len() > 64
+        || !normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+    {
+        return Err(AppError::Validation(
+            "producer_surface must be a short metadata label".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn normalize_content_fingerprint(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    let valid = value.len() == "sha256:".len() + 64
+        && value.starts_with("sha256:")
+        && value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit());
+    if !valid {
+        return Err(AppError::Validation(
+            "content_fingerprint must be a sha256 hex fingerprint".to_string(),
+        ));
+    }
+    Ok(value.to_ascii_lowercase())
 }
 
 fn normalize_absolute_path(name: &str, value: &str) -> Result<String, AppError> {
@@ -1600,11 +2224,13 @@ mod tests {
             actor_confidence: None,
             lines_added: Some(2),
             lines_deleted: Some(1),
+            content_fingerprint: None,
             active_seconds: Some(1.0),
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),
             tool_event_id: Some("tool-1".to_string()),
             editor: None,
+            producer_surface: None,
         }
     }
 
@@ -1614,6 +2240,22 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("wakaclock-broker-{name}-{nonce}.db"))
+    }
+
+    fn sample_observation(id: &str, occurred_at: DateTime<Utc>) -> EditorObservationV1 {
+        EditorObservationV1 {
+            schema_version: EDITOR_OBSERVATION_SCHEMA_VERSION,
+            observation_id: id.to_string(),
+            editor: "vscode".to_string(),
+            entity: "/workspace/src/lib.rs".to_string(),
+            workspace_root: "/workspace".to_string(),
+            occurred_at,
+            change_kind: BrokerChangeKind::Modify,
+            previous_entity: None,
+            lines_added: Some(2),
+            lines_deleted: Some(1),
+            content_fingerprint: None,
+        }
     }
 
     #[test]
@@ -1970,6 +2612,145 @@ mod tests {
             keys, allowed,
             "ALLOWED_EVENT_FIELDS is out of sync with BrokerEventV1"
         );
+    }
+
+    #[test]
+    fn editor_observation_first_matches_one_pending_ai_event() {
+        let path = temp_db("editor-observation-first");
+        let occurred_at = Utc::now();
+        let store = BrokerStore::open_at(&path).unwrap();
+        let observation = sample_observation("observation-first", occurred_at);
+        let (_, pending) = store.ingest_editor_observation(&observation).unwrap();
+        assert_eq!(pending.status, "pending");
+
+        let mut event = sample_event("ai-after-observation");
+        event.occurred_at = occurred_at;
+        assert_eq!(store.ingest(&event).unwrap(), BrokerIngestOutcome::Accepted);
+
+        let status = store
+            .editor_observation_status("observation-first")
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.status, "matched");
+        assert_eq!(
+            status.matched_event_id.as_deref(),
+            Some("ai-after-observation")
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ai_event_first_waits_without_incrementing_retry_and_is_woken_by_observation() {
+        let path = temp_db("ai-event-first");
+        let occurred_at = Utc::now();
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let mut event = sample_event("ai-before-observation");
+        event.occurred_at = occurred_at;
+        assert_eq!(store.ingest(&event).unwrap(), BrokerIngestOutcome::Accepted);
+
+        let mut claimed = store.claim_ready(1).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let attempt_count = claimed.remove(0).attempt_count;
+        let wait_until = Utc::now().timestamp() + EDITOR_WAIT_SECONDS;
+        assert!(store
+            .defer_for_editor("ai-before-observation", attempt_count, wait_until)
+            .unwrap());
+
+        let observation = sample_observation("observation-after", occurred_at);
+        let (_, status) = store.ingest_editor_observation(&observation).unwrap();
+        assert_eq!(status.status, "matched");
+
+        let mut reopened = BrokerStore::open_at(&path).unwrap();
+        let claimed_again = reopened.claim_ready(1).unwrap();
+        assert_eq!(claimed_again.len(), 1);
+        assert_eq!(claimed_again[0].attempt_count, attempt_count);
+        assert_eq!(claimed_again[0].editor_wait_until, None);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn editor_observation_requires_exact_workspace_and_rejects_ambiguous_candidates() {
+        let path = temp_db("editor-observation-ambiguity");
+        let occurred_at = Utc::now();
+        let store = BrokerStore::open_at(&path).unwrap();
+
+        let mut wrong_workspace = sample_observation("wrong-workspace", occurred_at);
+        wrong_workspace.workspace_root = "/other-workspace".to_string();
+        wrong_workspace.entity = "/other-workspace/src/lib.rs".to_string();
+        store.ingest_editor_observation(&wrong_workspace).unwrap();
+        let mut mismatched_event = sample_event("workspace-mismatch");
+        mismatched_event.entity = "/workspace/src/lib.rs".to_string();
+        mismatched_event.project_root = Some("/workspace".to_string());
+        mismatched_event.occurred_at = occurred_at;
+        assert_eq!(
+            store.ingest(&mismatched_event).unwrap(),
+            BrokerIngestOutcome::Accepted
+        );
+        assert_eq!(
+            store
+                .editor_observation_status("wrong-workspace")
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+
+        let mut first = sample_observation("ambiguous-one", occurred_at);
+        first.entity = "/workspace/src/ambiguous.rs".to_string();
+        let mut second = first.clone();
+        second.observation_id = "ambiguous-two".to_string();
+        store.ingest_editor_observation(&first).unwrap();
+        store.ingest_editor_observation(&second).unwrap();
+        let mut ambiguous_event = sample_event("ambiguous-event");
+        ambiguous_event.entity = "/workspace/src/ambiguous.rs".to_string();
+        ambiguous_event.occurred_at = occurred_at;
+        assert_eq!(
+            store.ingest(&ambiguous_event).unwrap(),
+            BrokerIngestOutcome::Accepted
+        );
+        for id in ["ambiguous-one", "ambiguous-two"] {
+            assert_eq!(
+                store.editor_observation_status(id).unwrap().unwrap().status,
+                "pending"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn editor_correlation_compares_fingerprint_when_both_sides_provide_one() {
+        let path = temp_db("editor-observation-fingerprint");
+        let occurred_at = Utc::now();
+        let fingerprint = format!("sha256:{}", "a".repeat(64));
+        let store = BrokerStore::open_at(&path).unwrap();
+        let mut observation = sample_observation("fingerprint-observation", occurred_at);
+        observation.content_fingerprint = Some(fingerprint.clone());
+        store.ingest_editor_observation(&observation).unwrap();
+
+        let mut event = sample_event("fingerprint-event");
+        event.occurred_at = occurred_at;
+        event.content_fingerprint = Some(format!("sha256:{}", "b".repeat(64)));
+        assert_eq!(store.ingest(&event).unwrap(), BrokerIngestOutcome::Accepted);
+        assert_eq!(
+            store
+                .editor_observation_status("fingerprint-observation")
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+
+        let raw_event: String = store
+            .conn
+            .query_row(
+                "SELECT normalized_payload_json FROM broker_events WHERE event_id = 'fingerprint-event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw_event.contains("unified_diff"));
+        assert!(!raw_event.contains("source code"));
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

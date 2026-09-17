@@ -70,6 +70,19 @@ export function DurationTimeline() {
   const projectTotals = timelineProjectTotals(
     blocks.map((block) => ({ durationSeconds: block.duration_seconds, project: block.project }))
   );
+  const rangeStart = data?.range_start;
+  const rangeEnd = data?.range_end;
+  const rangeSeconds =
+    typeof rangeStart === 'number' && typeof rangeEnd === 'number' && rangeEnd > rangeStart
+      ? rangeEnd - rangeStart
+      : DAY_SECONDS;
+
+  function timelineOffset(epochSeconds: number) {
+    if (typeof rangeStart === 'number') {
+      return Math.max(0, Math.min(rangeSeconds, epochSeconds - rangeStart));
+    }
+    return secondsSinceMidnight(epochSeconds);
+  }
   const hasDurationV2 = data?.comparable_seconds != null || data?.ai_additional_seconds != null;
   const activeAvailable = data?.active_coverage === 'measured';
 
@@ -83,6 +96,7 @@ export function DurationTimeline() {
               <Button className="gap-1.5" size="sm" variant="outline">
                 <CalendarIcon className="size-3.5" />
                 {format(new Date(date), 'MMM d, yyyy')}
+                <span className="text-muted-foreground">· {data?.timezone ?? timezone}</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
@@ -180,9 +194,9 @@ export function DurationTimeline() {
 
                             {projectBlocks.map((block: DurationBlock) => {
                               const startPct =
-                                (secondsSinceMidnight(block.start) / DAY_SECONDS) * 100;
+                                (timelineOffset(block.start) / rangeSeconds) * 100;
                               const widthPct = Math.max(
-                                (block.duration_seconds / DAY_SECONDS) * 100,
+                                (block.duration_seconds / rangeSeconds) * 100,
                                 0.35
                               );
 

@@ -21,10 +21,34 @@ export interface ClipboardPasteMetrics {
 export interface ExternalFileChangeMetadata {
     /** Stable receiver identity used to make watcher retries idempotent. */
     event_id?: string;
-    change_kind?: "create" | "modify" | "delete";
+    change_kind?: "create" | "modify" | "delete" | "rename";
+    previous_entity?: string;
     lines_added?: number;
     lines_deleted?: number;
     content_fingerprint?: string;
+}
+
+/** Metadata sent by the workspace watcher to correlate an external write with
+ * the local broker's native AI event. File contents never leave VS Code. */
+export interface EditorObservationPayload {
+    schema_version: 1;
+    observation_id: string;
+    editor: "vscode";
+    entity: string;
+    workspace_root: string;
+    occurred_at: string;
+    change_kind: "create" | "modify" | "delete" | "rename";
+    previous_entity?: string;
+    lines_added?: number;
+    lines_deleted?: number;
+    content_fingerprint?: string;
+}
+
+export interface EditorObservationStatus {
+    observation_id: string;
+    status: "accepted" | "pending" | "matched" | "expired" | "duplicate";
+    matched_event_id?: string;
+    expires_at: number;
 }
 
 export type FlushReason =

@@ -311,16 +311,22 @@ mod tests {
             session_id: Some("session-1".to_string()),
             turn_id: None,
             identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            producer_surface: None,
             source: AiEventSource::AgentHook,
             confidence: AiConfidence::Verified,
             actor_type: None,
             actor_confidence: None,
             lines_added: Some(2),
             lines_deleted: Some(1),
+            content_fingerprint: None,
             active_seconds: Some(1.0),
             transport: transport.map(str::to_string),
             tool: Some("apply_patch".to_string()),
             tool_event_id: Some("tool-1".to_string()),
+            editor: None,
         }
     }
 

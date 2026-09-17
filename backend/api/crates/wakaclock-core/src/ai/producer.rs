@@ -258,6 +258,7 @@ pub fn build_file_change_event(input: ProducerFileChange) -> Result<BrokerEventV
         identity_status: None,
         identity_reason: None,
         identity_source: None,
+        producer_surface: None,
         source: input.source,
         confidence: input.confidence,
         // Let the broker derive the canonical actor from the source/confidence
@@ -267,6 +268,7 @@ pub fn build_file_change_event(input: ProducerFileChange) -> Result<BrokerEventV
         actor_confidence: None,
         lines_added: input.lines_added,
         lines_deleted: input.lines_deleted,
+        content_fingerprint: None,
         active_seconds: input.active_seconds,
         transport,
         tool,

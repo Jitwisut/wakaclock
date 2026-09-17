@@ -3,7 +3,7 @@
   "bundle_version": "0.1.0",
   "files": {
     ".claude-plugin/marketplace.json": "fdeca352ffc64974268730e201e751ff7b046e103467b4f04f63c7d51006ba83",
-    "README.md": "a915935ae88263bbeedc653531e5af9370a864783d383a4e8be28503dd24c5ca",
+    "README.md": "71c60747ab426a4d23cbc09001affd2aea37002cccef6e571020f2cb67d40483",
     "codex/README.md": "6ce7be871c8c81b6e926f02ec106750f498fcc2ee40097e3c73954e25cc850a1",
     "codex/git-sweep-after.sh": "e00803870767b7c41cdc469031e37622c1408c42a91e2eb0e710a55fdbff1294",
     "codex/git-sweep-before.sh": "7e9f3d83a0c6e81c94bf4a5b6637651cb70eefd359fe6686ef69366df9d90b73",
@@ -11,7 +11,7 @@
     "codex/tests/heartbeat-hook.test.sh": "b3fc074299f872d94af6c7c76734d2056e0339b3205ea11f34d1252c6b0d104c",
     "codex/tool-abort.sh": "acb84d136a95da3f590d20c8d2ff7ac078a91d5c3125374dac4c5259c0a6da24",
     "common/README.md": "9ad47f3a18faca9cea41d6f41ddfdc3378f65f7415017cfdccb6044bb8433f35",
-    "common/emit-event.sh": "80debe3e39be01752884b4ecbcd9fb6f433249049e862e9929ab9ee67be03782",
+    "common/emit-event.sh": "4964edb22dd43c54205e025fbe953d77ab8c8dfa4efd47a78380c22c425ad6d2",
     "common/git-sweep-after.sh": "04f764c8f592564421c1ce5ba255685726157fe25622b4f1fb36038c24b84e13",
     "common/git-sweep-before.sh": "0e65149d27617f5caeb2e1d796ff27422a18e38c5cc053a2e2f1147fc76170de",
     "common/session-event.sh": "fa4d955c2f03136b626805205ff689d356c6e1fd78565a39250a73367483b498",
@@ -33,12 +33,12 @@
     "kilo-code/installer/install.sh": "1a17428cbeffe01ca6a3fa623f8a7070f416f17dd85e11ef0845680e35ab40e5",
     "kilo-code/package.json": "07fbd0f8239c8b7ddc401f4464b46b485bb5773aae2fdcd6d4ff6d8e2cd9d1af",
     "kilo-code/src/event-normalizer.ts": "b60baf076a058ddc28f3f79961bdb08f062607c581bb133819da866d9be368db",
-    "kilo-code/src/plugin.ts": "b2915730ac2300fead5bc8b56c3433a61f738efa3ae84dc904bee50aebf0eb32",
+    "kilo-code/src/plugin.ts": "e14b65bd190410bda0684a90ddc4777c71cbd0521f0513ca260e674fd8ae0a53",
     "kilo-code/src/producer-client.ts": "375f867acc924b1f95bed413c5ee9837c7a9ea178c41eca056e6f67d538bce81",
     "kilo-code/src/provider-identity.ts": "d371c855cef041250c32779f2a331192657e9ec49b32be671a41c6827c9cbe80",
     "kilo-code/test/event-normalizer.test.ts": "744e4284e30cbc8ab542d633dfe26b3edddeb3516c627a3788fb15eb72cbb26c",
     "kilo-code/test/installer.test.sh": "db0ec367a82ddf2c6e5f6d9bd7c3e7e77a381dd93e5f11db694cde44fda53672",
-    "kilo-code/test/plugin.test.ts": "7f627d45402cceb61f5f0fcf57b952a3b7d9d119182e52cff898313a8fdfd619",
+    "kilo-code/test/plugin.test.ts": "57838f560bb3a97d467718a996fa1ed3ae4f42a8167eac9db647787d06a04796",
     "kilo-code/tsconfig.json": "f7c02f538544e4e0f987b569d858112b703a184df299ac02831b71753ec8f532",
     "kimi-code/README.md": "40364a6ffefb378d5fbd6e8e4aef2d28d46197a4a31e5b2a6dd5425f47025aa2",
     "kimi-code/hooks/post-tool-use-failure.sh": "0e78960b2d67cd8a166377daadf63925631c2c1f41d4b46bb3f1fe82ec164ad3",
@@ -61,5 +61,5 @@
     "plugins/atoaxis-heartbeat/scripts/tool-abort.sh": "015e64a0b657e4cab3a023aca87f84da84f4511c6745dbf86db57f976a1249df",
     "plugins/atoaxis-heartbeat/tests/heartbeat.test.sh": "3e10227a9eda0c5009d84bf96765def4ffde0147e21ce4e560656e07f0876c06"
   },
-  "digest": "99eca3befd5abb98a97808f06da80c88310d05e67baeb1acb619fae7a34613b6"
+  "digest": "755dc34b863cbac678886fd9c473608e16f2102531459dfa315076f14d96e390"
 }

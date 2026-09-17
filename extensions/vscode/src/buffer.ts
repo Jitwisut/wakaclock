@@ -15,6 +15,7 @@ import type {
   BufferedFileState,
   ClipboardCopyMetrics,
   ClipboardPasteMetrics,
+  EditorObservationPayload,
   ExtraHeartbeatPayload,
   ExternalFileChangeMetadata,
   FlushOverrides,
@@ -103,7 +104,8 @@ export class HeartbeatBufferManager {
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
-    private readonly cli: Pick<WakaclockCliService, "sendHeartbeat">,
+    private readonly cli: Pick<WakaclockCliService, "sendHeartbeat"> &
+      Partial<Pick<WakaclockCliService, "sendEditorObservation" | "getEditorObservationStatus">>,
     private readonly logger: Logger,
     private readonly onHeartbeatSent?: HeartbeatSentHandler,
     private readonly aiAttributionStore: AiAttributionStore = new AiAttributionStore(),
@@ -225,26 +227,74 @@ export class HeartbeatBufferManager {
   }
 
   /**
-   * Deliver a write marker for a file that changed on disk without a VS Code
-   * document event.  Codex Desktop, formatter processes and atomic-save tools can
-   * all take this path.  It deliberately bypasses the human activity buffer: an
-   * external write proves that a file changed, but it does not prove that the
-   * developer was typing during the write.  If a native AI sidecar has an exact
-   * line/fingerprint match, the native event already owns the heartbeat and this
-   * recovery marker is suppressed; otherwise it remains Unknown/Unattributed instead
-   * of guessing Human or AI.
+   * Correlate an OS-level workspace write with the broker's native AI event. The
+   * broker owns the attribution decision; this method only sends metadata and emits
+   * the old unknown fallback if the observation window expires.
    */
   public async recordExternalFileChange(
     entity: string,
     metadata: ExternalFileChangeMetadata = {},
     now = Date.now(),
     project?: string,
+    workspaceRoot?: string,
   ): Promise<void> {
     const normalizedEntity = normalizeFsPath(entity);
-    if (!normalizedEntity) {
-      return;
+    const normalizedWorkspaceRoot = workspaceRoot ? normalizeFsPath(workspaceRoot) : undefined;
+    if (!normalizedEntity) return;
+
+    const sendObservation = this.cli.sendEditorObservation;
+    const getObservationStatus = this.cli.getEditorObservationStatus;
+    const observationId =
+      metadata.event_id ??
+      `observer:${createHash("sha256")
+        .update(normalizedEntity)
+        .update("\0")
+        .update(metadata.change_kind ?? "modify")
+        .update("\0")
+        .update(metadata.content_fingerprint ?? String(now))
+        .digest("hex")}`;
+
+    if (sendObservation && getObservationStatus && normalizedWorkspaceRoot) {
+      const observation: EditorObservationPayload = {
+        schema_version: 1,
+        observation_id: observationId,
+        editor: "vscode",
+        entity: normalizedEntity,
+        workspace_root: normalizedWorkspaceRoot,
+        occurred_at: new Date(now).toISOString(),
+        change_kind: metadata.change_kind ?? "modify",
+        previous_entity: metadata.previous_entity
+          ? normalizeFsPath(metadata.previous_entity)
+          : undefined,
+        lines_added: metadata.lines_added,
+        lines_deleted: metadata.lines_deleted,
+        content_fingerprint: metadata.content_fingerprint,
+      };
+      try {
+        let status = await sendObservation.call(this.cli, observation);
+        if (status.status === "matched") return;
+        const deadline = Date.now() + 15_000;
+        while (status.status !== "expired" && Date.now() < deadline) {
+          await wait(250);
+          status = await getObservationStatus.call(this.cli, observationId);
+          if (status.status === "matched") return;
+        }
+        if (status.status !== "expired") {
+          this.logger.debug("editor observation window elapsed", {
+            entity: normalizedEntity,
+            observationId,
+          });
+        }
+      } catch (error) {
+        this.logger.debug("editor observation submission failed", {
+          entity: normalizedEntity,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
+    // Older CLIs do not expose editor observations. Keep the sidecar fallback for
+    // those installations and for a transient observation endpoint failure.
     let classification:
       | Awaited<ReturnType<AiAttributionStore["classify"]>>
       | undefined;
@@ -280,14 +330,6 @@ export class HeartbeatBufferManager {
       });
       return;
     }
-    const heartbeatId = metadata.event_id ?? `external:${createHash("sha256")
-      .update(normalizedEntity)
-      .update("\0")
-      .update(metadata.change_kind ?? "modify")
-      .update("\0")
-      .update(metadata.content_fingerprint ?? String(now))
-      .digest("hex")}`;
-
     const payload: ExtraHeartbeatPayload = {
       entity: normalizedEntity,
       time: now / 1000,
@@ -296,7 +338,7 @@ export class HeartbeatBufferManager {
       category: "coding",
       write: true,
       active_seconds: 0,
-      heartbeat_id: heartbeatId,
+      heartbeat_id: observationId,
       actor_type: "unknown",
       actor_confidence: 0,
       unattributed_lines_added: linesAdded,
@@ -320,8 +362,9 @@ export class HeartbeatBufferManager {
 
   public async recordEditorSwitch(
     previousEditor?: Pick<TextEditor, "document">,
-    currentEditorOrNow?: Pick<TextEditor, "document"> | number,
-    now = Date.now()
+    currentEditorOrNow?: Pick<TextEditor, "document" | "selection"> | number,
+    now = Date.now(),
+    project?: string,
   ): Promise<void> {
     const currentEditor =
       typeof currentEditorOrNow === "number" ? undefined : currentEditorOrNow;
@@ -338,6 +381,8 @@ export class HeartbeatBufferManager {
     if (currentEntity && currentEditor) this.lineMeasurements.observe(currentEntity, currentEditor.document);
     if (currentEntity && currentEntity !== previousEntity) {
       const state = this.getOrCreateState(currentEntity);
+      this.updateProjectState(state, project);
+      this.updateSelectionState(state, currentEditor?.selection);
       // A switch is an activity marker even when the file has no pending edits.
       await this.flushFile(currentEntity, "switch", { now, force: true });
       this.logger.debug("recorded active editor switch", {
@@ -879,6 +924,10 @@ export class HeartbeatBufferManager {
     }
     state.project = trimmed;
   }
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 /** Metadata-only content identity used for exact cross-producer reconciliation. */

@@ -30,6 +30,12 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 import { SendHeartbeatDialog } from './components/send-heartbeat-dialog';
 
+function displayEditor(editor?: null | string) {
+  if (editor === 'vscode') return 'VS Code';
+  if (editor === 'codex-desktop') return 'Codex Desktop';
+  return editor || '—';
+}
+
 function HeartbeatsPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
@@ -119,7 +125,7 @@ function HeartbeatsPanel() {
                       <Badge variant="outline">{hb.category}</Badge>
                     </TableCell>
                     <TableCell>{hb.is_write ? 'yes' : 'no'}</TableCell>
-                    <TableCell className="text-muted-foreground">{hb.editor || '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{displayEditor(hb.editor)}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {hb.operating_system || '—'}
                     </TableCell>
