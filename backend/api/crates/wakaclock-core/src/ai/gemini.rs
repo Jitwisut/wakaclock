@@ -308,6 +308,7 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
         identity_reason: None,
         identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
         tool_event_id: Some(operation_id),
+        producer_surface: None,
         occurred_at,
         entity,
         project_root: root,

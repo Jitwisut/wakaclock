@@ -16,6 +16,13 @@ pub struct DurationBlock {
 #[derive(Debug, Serialize)]
 pub struct DurationsResponse {
     pub date: String,
+    /// IANA timezone used to resolve this calendar day.
+    pub timezone: String,
+    /// Exact UTC epoch bounds of the requested local day. Clients should position
+    /// timeline blocks against these instead of reinterpreting epochs in another zone.
+    pub range_start: f64,
+    pub range_end: f64,
+    pub total_seconds: f64,
     pub total: usize,
     pub data: Vec<DurationBlock>,
 }

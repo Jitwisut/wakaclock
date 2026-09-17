@@ -4,12 +4,14 @@ use crate::ai::parser::{
     AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
 };
+use crate::ai::patch::{
+    count_content_lines, count_unified_diff_lines, parse_apply_patch, LineDelta,
+};
+use crate::ai::path::resolve_within_workspace;
 use crate::ai::{
     is_internal_marker, normalize_identity_model, normalize_identity_provider, IdentityStatus,
     REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
 };
-use crate::ai::patch::{count_unified_diff_lines, parse_apply_patch};
-use crate::ai::path::resolve_within_workspace;
 use crate::broker::BrokerChangeKind;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -152,13 +154,17 @@ impl AiActivityParser for CodexParser {
         })?;
         let source_path = PathBuf::from(&cursor.source_path);
 
-        // Checkpoints written before identity context existed are replayed from a
-        // bounded prefix. Events before the old cursor are suppressed, but their
-        // session/turn/call metadata rebuilds the context needed by the unread tail.
-        let replay_prefix = cursor.context.is_none() && cursor.byte_offset > 0;
+        // Checkpoints written before identity context existed — including the
+        // producer-surface field added for Codex Desktop — are replayed from a
+        // bounded prefix once. Events before the old cursor are suppressed, but
+        // their session/turn/call metadata rebuilds the context needed by the
+        // unread tail.
+        let saved_context = cursor.context.clone().unwrap_or_default();
+        let replay_prefix = cursor.byte_offset > 0
+            && (cursor.context.is_none() || !saved_context.producer_surface_seen);
         let read_offset = if replay_prefix { 0 } else { cursor.byte_offset };
-        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(
-            |error| match error.kind() {
+        let mut reader = JsonlCursorReader::open(&source_path, read_offset).map_err(|error| {
+            match error.kind() {
                 std::io::ErrorKind::NotFound => AiParseError::NotFound {
                     path: cursor.source_path.clone(),
                 },
@@ -166,12 +172,11 @@ impl AiActivityParser for CodexParser {
                     path: cursor.source_path.clone(),
                 },
                 _ => AiParseError::Io(error),
-            },
-        )?;
+            }
+        })?;
 
         let mut events = Vec::new();
         let mut warnings = Vec::new();
-        let saved_context = cursor.context.clone().unwrap_or_default();
         let mut turn_context: HashMap<String, TurnContext> = saved_context
             .turns
             .iter()
@@ -195,6 +200,8 @@ impl AiActivityParser for CodexParser {
             .and_then(|provider| normalize_identity_provider(Some(provider)));
         let mut session_provider_reason = saved_context.provider_reason.clone();
         let mut session_provider_conflict = saved_context.provider_conflict;
+        let mut producer_surface = saved_context.producer_surface.clone();
+        let mut producer_surface_seen = saved_context.producer_surface_seen;
         let mut last_offset = read_offset;
         let mut last_record_time: Option<DateTime<Utc>> = cursor.last_record_time;
         let mut last_record_id: Option<String> = cursor.last_record_id.clone();
@@ -291,6 +298,8 @@ impl AiActivityParser for CodexParser {
                         }
                         session_id = next_session_id;
                         session_cwd = meta.cwd.map(PathBuf::from);
+                        producer_surface = normalize_codex_surface(meta.originator.as_deref());
+                        producer_surface_seen = true;
                         let provider = normalize_identity_provider(meta.model_provider.as_deref());
                         let provider_marker = meta
                             .model_provider
@@ -319,10 +328,7 @@ impl AiActivityParser for CodexParser {
                     if let Ok(turn) = parsed {
                         current_turn_id = Some(turn.turn_id.clone());
                         let model = normalize_identity_model(turn.model.as_deref());
-                        let model_marker = turn
-                            .model
-                            .as_deref()
-                            .is_some_and(is_internal_marker);
+                        let model_marker = turn.model.as_deref().is_some_and(is_internal_marker);
                         let cwd = turn.cwd.map(PathBuf::from);
                         if let Some(previous) = turn_context.get_mut(&turn.turn_id) {
                             if let (Some(previous_model), Some(next_model)) =
@@ -338,8 +344,7 @@ impl AiActivityParser for CodexParser {
                                 previous.model = model;
                                 previous.identity_reason = None;
                             } else if !previous.identity_conflict && model_marker {
-                                previous.identity_reason =
-                                    Some(REASON_INTERNAL_MARKER.to_string());
+                                previous.identity_reason = Some(REASON_INTERNAL_MARKER.to_string());
                             }
                             if previous.cwd.is_none() {
                                 previous.cwd = cwd;
@@ -364,6 +369,153 @@ impl AiActivityParser for CodexParser {
                         .get("type")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default();
+                    if inner_type == "item_completed" {
+                        let parsed: ItemCompletedPayload =
+                            match serde_json::from_value(record.payload) {
+                                Ok(payload) => payload,
+                                Err(error) => {
+                                    warnings.push(ParseWarning {
+                                        record_id: None,
+                                        message: format!(
+                                            "malformed item_completed payload: {error}"
+                                        ),
+                                    });
+                                    continue;
+                                }
+                            };
+                        if parsed.item.item_type != "FileChange"
+                            || parsed.item.status.as_deref() != Some("completed")
+                        {
+                            continue;
+                        }
+                        let Some(item_id) = parsed.item.id.as_deref().filter(|id| !id.is_empty())
+                        else {
+                            continue;
+                        };
+                        if completed_apply_patch.contains(item_id) {
+                            // A legacy response_item completion and the newer native
+                            // FileChange completion can describe one exec bridge call.
+                            // The operation has already been emitted, so keep one
+                            // event rather than creating a duplicate heartbeat.
+                            continue;
+                        }
+
+                        let event_turn_id =
+                            parsed.turn_id.clone().or_else(|| current_turn_id.clone());
+                        let turn = event_turn_id.as_ref().and_then(|id| turn_context.get(id));
+                        let project_root = turn
+                            .and_then(|context| context.cwd.clone())
+                            .or_else(|| session_cwd.clone());
+                        let model = turn.and_then(|context| context.model.clone());
+                        let identity_reason = turn
+                            .and_then(|context| context.identity_reason.clone())
+                            .or_else(|| session_provider_reason.clone());
+                        let identity_conflict = session_provider_conflict
+                            || turn.is_some_and(|context| context.identity_conflict);
+                        let occurred_at = timestamp_from_millis(
+                            parsed.completed_at_ms.or(parsed.item.completed_at_ms),
+                            record.timestamp,
+                        );
+                        let mut changes: Vec<(String, CodexItemChange)> =
+                            parsed.item.changes.into_iter().collect();
+                        changes.sort_by(|left, right| left.0.cmp(&right.0));
+                        // The Desktop bridge writes the response-item `exec` call
+                        // before this native completion. If both records describe
+                        // the same patch, remember the wrapper call as completed so
+                        // its output record cannot emit a second copy below. Keep
+                        // this correlation metadata-only: patch text is inspected
+                        // in memory and never enters the cursor or broker payload.
+                        let native_shapes: Vec<FileChangeShape> = changes
+                            .iter()
+                            .filter_map(|(raw_path, change)| {
+                                native_item_change_shape(raw_path, change, project_root.as_deref())
+                            })
+                            .collect();
+                        if native_shapes.len() == changes.len() && !native_shapes.is_empty() {
+                            let aliases: Vec<String> = pending_apply_patch
+                                .iter()
+                                .filter(|(_, pending)| {
+                                    pending_apply_patch_matches_native(
+                                        pending,
+                                        &native_shapes,
+                                        occurred_at,
+                                        event_turn_id.as_deref(),
+                                        project_root.as_deref(),
+                                    )
+                                })
+                                .map(|(call_id, _)| call_id.clone())
+                                .collect();
+                            // More than one matching wrapper is ambiguous. In that
+                            // case leave the pending calls alone and let the normal
+                            // event-level dedupe decide without guessing ownership.
+                            if aliases.len() == 1 {
+                                let call_id = aliases.into_iter().next().unwrap();
+                                pending_apply_patch.remove(&call_id);
+                                completed_apply_patch.insert(call_id);
+                            }
+                        }
+                        for (raw_path, change) in changes {
+                            let Some(operation) = change.change_type.as_deref() else {
+                                continue;
+                            };
+                            let mut change_kind = BrokerChangeKind::from_tool_operation(operation);
+                            let mut entity_path = raw_path.clone();
+                            let mut previous_path = None;
+                            // Codex Desktop records a move as the old path keyed in
+                            // `changes`, with the destination in `move_path`. Some
+                            // builds label that operation `update`, so move_path is
+                            // authoritative when it is present.
+                            if let Some(destination) = change
+                                .move_path
+                                .as_deref()
+                                .filter(|path| !path.trim().is_empty())
+                            {
+                                entity_path = destination.to_string();
+                                previous_path = Some(raw_path.as_str());
+                                change_kind = Some(BrokerChangeKind::Rename);
+                            } else if matches!(change_kind, Some(BrokerChangeKind::Rename)) {
+                                // A rename without both sides cannot satisfy the
+                                // broker's identity invariant. Preserve the proven
+                                // completion as a normal update until both paths are
+                                // present in a future native record.
+                                change_kind = Some(BrokerChangeKind::Modify);
+                            }
+                            let Some(change_kind) = change_kind else {
+                                continue;
+                            };
+                            let delta = count_item_change_lines(&change, change_kind);
+                            if replay_prefix && line.offset_before < cursor.byte_offset {
+                                continue;
+                            }
+                            push_codex_event(
+                                &mut events,
+                                build_codex_file_event(
+                                    "codex-v2",
+                                    &format!("{}:{}", session_id.as_deref().unwrap_or(""), item_id),
+                                    &entity_path,
+                                    previous_path.as_deref(),
+                                    change_kind,
+                                    delta,
+                                    occurred_at,
+                                    session_id.clone(),
+                                    event_turn_id.clone(),
+                                    project_root.clone(),
+                                    (!identity_conflict)
+                                        .then(|| session_provider.clone())
+                                        .flatten(),
+                                    (!identity_conflict)
+                                        .then(|| normalize_identity_model(model.as_deref()))
+                                        .flatten(),
+                                    identity_reason.clone(),
+                                    identity_conflict,
+                                    producer_surface.clone(),
+                                ),
+                            );
+                        }
+                        completed_apply_patch.insert(item_id.to_string());
+                        last_record_id = Some(item_id.to_string());
+                        continue;
+                    }
                     if inner_type != "patch_apply_end" {
                         continue;
                     }
@@ -436,6 +588,11 @@ impl AiActivityParser for CodexParser {
                             .previous_path
                             .as_deref()
                             .map(|path| resolve_entity(path, project_root.as_deref()));
+                        let event_project_root = effective_project_root(
+                            &entity,
+                            previous_entity.as_deref(),
+                            project_root.clone(),
+                        );
                         // A rename without its source path cannot satisfy the broker's
                         // identity invariant. Keep the edit observable as a modify until
                         // the transcript provides both sides of the rename.
@@ -453,7 +610,9 @@ impl AiActivityParser for CodexParser {
                         events.push(AiEditEvent {
                             event_id: opaque_file_event_id("codex-v1", &parsed.call_id, &raw_path),
                             agent: "codex".to_string(),
-                            provider: (!identity_conflict).then(|| session_provider.clone()).flatten(),
+                            provider: (!identity_conflict)
+                                .then(|| session_provider.clone())
+                                .flatten(),
                             model: (!identity_conflict)
                                 .then(|| normalize_identity_model(model.as_deref()))
                                 .flatten(),
@@ -463,18 +622,19 @@ impl AiActivityParser for CodexParser {
                             identity_status: identity_conflict
                                 .then(|| IdentityStatus::Conflict.as_str().to_string())
                                 .or_else(|| {
-                                    identity_reason.as_ref().map(|_| {
-                                        IdentityStatus::Partial.as_str().to_string()
-                                    })
+                                    identity_reason
+                                        .as_ref()
+                                        .map(|_| IdentityStatus::Partial.as_str().to_string())
                                 }),
                             identity_reason: identity_conflict
                                 .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
                                 .or(identity_reason.clone()),
                             identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
                             tool_event_id: Some(parsed.call_id.clone()),
+                            producer_surface: producer_surface.clone(),
                             occurred_at: record.timestamp,
                             entity,
-                            project_root: project_root.clone(),
+                            project_root: event_project_root,
                             lines_added: Some(delta.added),
                             lines_deleted: Some(delta.deleted),
                             change_kind,
@@ -540,8 +700,8 @@ impl AiActivityParser for CodexParser {
                                     .as_ref()
                                     .and_then(|turn_id| turn_context.get(turn_id));
                                 let reported_model = turn.and_then(|turn| turn.model.clone());
-                                let mut identity_reason = turn
-                                    .and_then(|turn| turn.identity_reason.clone());
+                                let mut identity_reason =
+                                    turn.and_then(|turn| turn.identity_reason.clone());
                                 let mut model = reported_model.clone();
                                 let mut identity_conflict = session_provider_conflict
                                     || turn.is_some_and(|turn| turn.identity_conflict);
@@ -650,54 +810,64 @@ impl AiActivityParser for CodexParser {
                                 };
                                 *occurrence += 1;
                                 let entity = resolve_entity(&change.path, project_root.as_deref());
+                                let previous_entity = change
+                                    .previous_path
+                                    .as_deref()
+                                    .map(|path| resolve_entity(path, project_root.as_deref()));
+                                let event_project_root = effective_project_root(
+                                    &entity,
+                                    previous_entity.as_deref(),
+                                    project_root.clone(),
+                                );
                                 if replay_prefix && line.offset_before < cursor.byte_offset {
                                     continue;
                                 }
-                                events.push(AiEditEvent {
-                                    event_id: opaque_file_event_id(
-                                        "codex-v2",
-                                        &operation_id,
-                                        &change.path,
-                                    ),
-                                    agent: "codex".to_string(),
-                                    provider: (!identity_conflict)
-                                        .then(|| session_provider.clone())
-                                        .flatten(),
-                                    model: (!identity_conflict)
-                                        .then(|| normalize_identity_model(model.as_deref()))
-                                        .flatten(),
-                                    session_id: session_id.clone(),
-                                    turn_id: pending.turn_id.clone(),
-                                    identity_message_id: None,
-                                    identity_status: identity_conflict
-                                        .then(|| IdentityStatus::Conflict.as_str().to_string())
-                                        .or_else(|| {
-                                            identity_reason.as_ref().map(|_| {
-                                                IdentityStatus::Partial.as_str().to_string()
-                                            })
-                                        }),
-                                    identity_reason: identity_conflict
-                                        .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
-                                        .or(identity_reason.clone()),
-                                    identity_source: Some(
-                                        AiEventSource::Transcript.as_str().to_string(),
-                                    ),
-                                    tool_event_id: Some(call_id.clone()),
-                                    occurred_at: pending.timestamp,
-                                    entity,
-                                    project_root: project_root.clone(),
-                                    lines_added: Some(change.delta.added),
-                                    lines_deleted: Some(change.delta.deleted),
-                                    change_kind: change.change_kind,
-                                    previous_entity: change
-                                        .previous_path
-                                        .as_deref()
-                                        .map(|path| resolve_entity(path, project_root.as_deref())),
-                                    input_tokens: None,
-                                    output_tokens: None,
-                                    source: AiEventSource::Transcript,
-                                    confidence: AiConfidence::Verified,
-                                });
+                                push_codex_event(
+                                    &mut events,
+                                    AiEditEvent {
+                                        event_id: opaque_file_event_id(
+                                            "codex-v2",
+                                            &operation_id,
+                                            &change.path,
+                                        ),
+                                        agent: "codex".to_string(),
+                                        provider: (!identity_conflict)
+                                            .then(|| session_provider.clone())
+                                            .flatten(),
+                                        model: (!identity_conflict)
+                                            .then(|| normalize_identity_model(model.as_deref()))
+                                            .flatten(),
+                                        session_id: session_id.clone(),
+                                        turn_id: pending.turn_id.clone(),
+                                        identity_message_id: None,
+                                        identity_status: identity_conflict
+                                            .then(|| IdentityStatus::Conflict.as_str().to_string())
+                                            .or_else(|| {
+                                                identity_reason.as_ref().map(|_| {
+                                                    IdentityStatus::Partial.as_str().to_string()
+                                                })
+                                            }),
+                                        identity_reason: identity_conflict
+                                            .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+                                            .or(identity_reason.clone()),
+                                        identity_source: Some(
+                                            AiEventSource::Transcript.as_str().to_string(),
+                                        ),
+                                        tool_event_id: Some(call_id.clone()),
+                                        producer_surface: producer_surface.clone(),
+                                        occurred_at: pending.timestamp,
+                                        entity,
+                                        project_root: event_project_root,
+                                        lines_added: Some(change.delta.added),
+                                        lines_deleted: Some(change.delta.deleted),
+                                        change_kind: change.change_kind,
+                                        previous_entity,
+                                        input_tokens: None,
+                                        output_tokens: None,
+                                        source: AiEventSource::Transcript,
+                                        confidence: AiConfidence::Verified,
+                                    },
+                                );
                             }
                         }
                         _ => {}
@@ -740,7 +910,10 @@ impl AiActivityParser for CodexParser {
             if let Some(turn) = turn_context.get(turn_id) {
                 serialized_turns.push(ParserTurnContext {
                     id: turn_id.clone(),
-                    cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                    cwd: turn
+                        .cwd
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
                     model: turn.model.clone(),
                     identity_reason: turn.identity_reason.clone(),
                     identity_conflict: turn.identity_conflict,
@@ -749,13 +922,18 @@ impl AiActivityParser for CodexParser {
         }
         for (id, turn) in turn_context.iter() {
             if serialized_turns.len() >= 128
-                || serialized_turns.iter().any(|saved| saved.id.as_str() == id.as_str())
+                || serialized_turns
+                    .iter()
+                    .any(|saved| saved.id.as_str() == id.as_str())
             {
                 continue;
             }
             serialized_turns.push(ParserTurnContext {
                 id: id.clone(),
-                cwd: turn.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                cwd: turn
+                    .cwd
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
                 model: turn.model.clone(),
                 identity_reason: turn.identity_reason.clone(),
                 identity_conflict: turn.identity_conflict,
@@ -768,10 +946,11 @@ impl AiActivityParser for CodexParser {
                 turn_id: pending.turn_id.clone(),
                 identity_message_id: None,
                 model: pending.model.clone().or_else(|| {
-                    pending
-                        .turn_id
-                        .as_ref()
-                        .and_then(|turn_id| turn_context.get(turn_id).and_then(|turn| turn.model.clone()))
+                    pending.turn_id.as_ref().and_then(|turn_id| {
+                        turn_context
+                            .get(turn_id)
+                            .and_then(|turn| turn.model.clone())
+                    })
                 }),
                 identity_reason: pending.identity_reason.clone().or_else(|| {
                     pending
@@ -812,6 +991,8 @@ impl AiActivityParser for CodexParser {
                     provider: session_provider,
                     provider_reason: session_provider_reason,
                     provider_conflict: session_provider_conflict,
+                    producer_surface,
+                    producer_surface_seen,
                     current_turn_id,
                     turns: serialized_turns,
                     pending_calls: serialized_pending,
@@ -830,6 +1011,59 @@ fn resolve_entity(raw_path: &str, project_root: Option<&Path>) -> PathBuf {
         }
         None => candidate.to_path_buf(),
     }
+}
+
+/// Choose the narrowest trustworthy workspace root for a completed file change.
+///
+/// Codex Desktop can keep one conversation alive while the user asks it to edit a
+/// different checkout. In that case the turn/session cwd is stale, while the native
+/// FileChange path is absolute and authoritative. Keeping the stale cwd makes broker
+/// validation reject the event as outside `project_root`. Discover a local project
+/// marker from the changed path instead; if none exists, omit the root so the event is
+/// still delivered without inventing a project name.
+fn effective_project_root(
+    entity: &Path,
+    previous_entity: Option<&Path>,
+    declared_root: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(root) = declared_root.as_ref() {
+        if entity.starts_with(root)
+            && previous_entity.is_none_or(|previous| previous.starts_with(root))
+            && has_codex_project_marker(root)
+        {
+            return declared_root;
+        }
+    }
+
+    let start = if entity.is_dir() {
+        entity
+    } else {
+        entity.parent()?
+    };
+    start
+        .ancestors()
+        .find(|candidate| has_codex_project_marker(candidate))
+        .filter(|root| previous_entity.is_none_or(|previous| previous.starts_with(root)))
+        .map(Path::to_path_buf)
+}
+
+fn has_codex_project_marker(path: &Path) -> bool {
+    if path.join(".git").exists() {
+        return true;
+    }
+    [
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "composer.json",
+        "pnpm-workspace.yaml",
+        "lerna.json",
+        "nx.json",
+        "rush.json",
+    ]
+    .iter()
+    .any(|marker| path.join(marker).is_file())
 }
 
 /// Extract the apply_patch DSL from Codex Desktop's `exec` bridge input.
@@ -953,6 +1187,8 @@ struct SessionMetaPayload {
     cwd: Option<String>,
     #[serde(default)]
     model_provider: Option<String>,
+    #[serde(default)]
+    originator: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -989,10 +1225,333 @@ struct CodexChange {
     unified_diff: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ItemCompletedPayload {
+    #[serde(default)]
+    turn_id: Option<String>,
+    /// Current Codex Desktop places completion time on the event payload, while
+    /// a few prerelease shapes placed it inside the item. Prefer this field and
+    /// retain the nested fallback for compatibility.
+    #[serde(default)]
+    completed_at_ms: Option<i64>,
+    item: FileChangeItem,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileChangeItem {
+    #[serde(rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    completed_at_ms: Option<i64>,
+    #[serde(default)]
+    changes: HashMap<String, CodexItemChange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexItemChange {
+    #[serde(rename = "type", default)]
+    change_type: Option<String>,
+    #[serde(default)]
+    unified_diff: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    move_path: Option<String>,
+}
+
+/// Metadata-only identity used to correlate a native `FileChange` item with the
+/// response-item `exec` wrapper that caused it. It deliberately contains no patch
+/// text, file content, or command output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileChangeShape {
+    entity: PathBuf,
+    previous_entity: Option<PathBuf>,
+    change_kind: BrokerChangeKind,
+    delta: LineDelta,
+}
+
+fn normalize_codex_surface(originator: Option<&str>) -> Option<String> {
+    let originator = originator?.trim().to_ascii_lowercase();
+    (originator.contains("codex desktop") || originator == "codex")
+        .then(|| "codex-desktop".to_string())
+}
+
+fn timestamp_from_millis(value: Option<i64>, fallback: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .and_then(DateTime::<Utc>::from_timestamp_millis)
+        .unwrap_or(fallback)
+}
+
+fn count_item_change_lines(change: &CodexItemChange, kind: BrokerChangeKind) -> LineDelta {
+    if let Some(diff) = change.unified_diff.as_deref() {
+        return count_unified_diff_lines(diff);
+    }
+    let Some(content) = change.content.as_deref() else {
+        return LineDelta::default();
+    };
+    match kind {
+        BrokerChangeKind::Create => LineDelta {
+            added: count_content_lines(content),
+            deleted: 0,
+        },
+        BrokerChangeKind::Delete => LineDelta {
+            added: 0,
+            deleted: count_content_lines(content),
+        },
+        // A full replacement without a diff still proves a mutation. Treat the
+        // available content as added lines and leave the deleted side at zero;
+        // the broker never receives the content itself.
+        BrokerChangeKind::Modify | BrokerChangeKind::Rename => LineDelta {
+            added: count_content_lines(content),
+            deleted: 0,
+        },
+    }
+}
+
+fn native_item_change_shape(
+    raw_path: &str,
+    change: &CodexItemChange,
+    project_root: Option<&Path>,
+) -> Option<FileChangeShape> {
+    let operation = change.change_type.as_deref()?;
+    let mut change_kind = BrokerChangeKind::from_tool_operation(operation);
+    let mut entity_path = raw_path;
+    let mut previous_path = None;
+    if let Some(destination) = change
+        .move_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    {
+        entity_path = destination;
+        previous_path = Some(raw_path);
+        change_kind = Some(BrokerChangeKind::Rename);
+    } else if matches!(change_kind, Some(BrokerChangeKind::Rename)) {
+        change_kind = Some(BrokerChangeKind::Modify);
+    }
+    let change_kind = change_kind?;
+    Some(FileChangeShape {
+        entity: resolve_entity(entity_path, project_root),
+        previous_entity: previous_path.map(|path| resolve_entity(path, project_root)),
+        change_kind,
+        delta: count_item_change_lines(change, change_kind),
+    })
+}
+
+fn apply_patch_change_shape(
+    change: &crate::ai::patch::ApplyPatchFileChange,
+    project_root: Option<&Path>,
+) -> FileChangeShape {
+    FileChangeShape {
+        entity: resolve_entity(&change.path, project_root),
+        previous_entity: change
+            .previous_path
+            .as_deref()
+            .map(|path| resolve_entity(path, project_root)),
+        change_kind: change.change_kind,
+        delta: change.delta,
+    }
+}
+
+fn file_change_shape_order(left: &FileChangeShape, right: &FileChangeShape) -> std::cmp::Ordering {
+    left.entity
+        .cmp(&right.entity)
+        .then_with(|| left.previous_entity.cmp(&right.previous_entity))
+        .then_with(|| left.change_kind.as_str().cmp(right.change_kind.as_str()))
+        .then_with(|| left.delta.added.cmp(&right.delta.added))
+        .then_with(|| left.delta.deleted.cmp(&right.delta.deleted))
+}
+
+fn line_deltas_compatible(left: LineDelta, right: LineDelta) -> bool {
+    // A marker-only apply_patch section carries no line body, so zero/zero is
+    // unknown rather than a proven empty edit. Treat it as a wildcard when the
+    // native FileChange has a content-derived count (notably Delete File).
+    (left.added == 0 && left.deleted == 0)
+        || (right.added == 0 && right.deleted == 0)
+        || left == right
+}
+
+fn pending_apply_patch_matches_native(
+    pending: &PendingApplyPatch,
+    native_shapes: &[FileChangeShape],
+    occurred_at: DateTime<Utc>,
+    event_turn_id: Option<&str>,
+    project_root: Option<&Path>,
+) -> bool {
+    if let (Some(pending_turn), Some(event_turn)) = (pending.turn_id.as_deref(), event_turn_id) {
+        if pending_turn != event_turn {
+            return false;
+        }
+    }
+    if (pending.timestamp.timestamp_millis() - occurred_at.timestamp_millis()).abs() > 5_000 {
+        return false;
+    }
+
+    let mut patch_shapes: Vec<FileChangeShape> = parse_apply_patch(&pending.input)
+        .iter()
+        .map(|change| apply_patch_change_shape(change, project_root))
+        .collect();
+    if patch_shapes.len() != native_shapes.len() || patch_shapes.is_empty() {
+        return false;
+    }
+    let mut native_shapes = native_shapes.to_vec();
+    patch_shapes.sort_by(file_change_shape_order);
+    native_shapes.sort_by(file_change_shape_order);
+    patch_shapes
+        .iter()
+        .zip(native_shapes.iter())
+        .all(|(patch, native)| {
+            patch.entity == native.entity
+                && patch.previous_entity == native.previous_entity
+                && patch.change_kind == native.change_kind
+                && line_deltas_compatible(patch.delta, native.delta)
+        })
+}
+
+fn build_codex_file_event(
+    id_prefix: &str,
+    operation_id: &str,
+    raw_path: &str,
+    previous_path: Option<&str>,
+    change_kind: BrokerChangeKind,
+    delta: LineDelta,
+    occurred_at: DateTime<Utc>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    project_root: Option<PathBuf>,
+    provider: Option<String>,
+    model: Option<String>,
+    identity_reason: Option<String>,
+    identity_conflict: bool,
+    producer_surface: Option<String>,
+) -> AiEditEvent {
+    let entity = resolve_entity(raw_path, project_root.as_deref());
+    let previous_entity = previous_path.map(|path| resolve_entity(path, project_root.as_deref()));
+    let project_root = effective_project_root(&entity, previous_entity.as_deref(), project_root);
+    AiEditEvent {
+        event_id: opaque_file_event_id(id_prefix, operation_id, raw_path),
+        agent: "codex".to_string(),
+        provider,
+        model,
+        session_id,
+        turn_id,
+        identity_message_id: None,
+        identity_status: identity_conflict
+            .then(|| IdentityStatus::Conflict.as_str().to_string())
+            .or_else(|| {
+                identity_reason
+                    .as_ref()
+                    .map(|_| IdentityStatus::Partial.as_str().to_string())
+            }),
+        identity_reason: identity_conflict
+            .then(|| REASON_CONFLICTING_EVIDENCE.to_string())
+            .or(identity_reason),
+        identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
+        tool_event_id: Some(operation_id.to_string()),
+        producer_surface,
+        occurred_at,
+        entity,
+        project_root,
+        lines_added: Some(delta.added),
+        lines_deleted: Some(delta.deleted),
+        change_kind,
+        previous_entity,
+        input_tokens: None,
+        output_tokens: None,
+        source: AiEventSource::Transcript,
+        confidence: AiConfidence::Verified,
+    }
+}
+
+/// The same Codex Desktop mutation can be represented twice in one transcript:
+/// the response-item `exec` bridge proves the tool call, then the native
+/// `item_completed/FileChange` event describes the completed file. Keep the first
+/// metadata record and suppress the second representation without comparing or
+/// persisting either side's source text.
+fn push_codex_event(events: &mut Vec<AiEditEvent>, candidate: AiEditEvent) {
+    let duplicate = events.iter().any(|existing| {
+        existing.agent == candidate.agent
+            && existing.entity == candidate.entity
+            && existing.change_kind == candidate.change_kind
+            && existing.previous_entity == candidate.previous_entity
+            && existing.session_id == candidate.session_id
+            && optional_values_compatible(existing.turn_id.as_deref(), candidate.turn_id.as_deref())
+            && line_count_values_compatible(existing.lines_added, candidate.lines_added)
+            && line_count_values_compatible(existing.lines_deleted, candidate.lines_deleted)
+            && (existing.occurred_at.timestamp_millis() - candidate.occurred_at.timestamp_millis())
+                .abs()
+                <= 5_000
+    });
+    if !duplicate {
+        events.push(candidate);
+    }
+}
+
+fn optional_values_compatible<T: PartialEq>(left: Option<T>, right: Option<T>) -> bool {
+    left.is_none() || right.is_none() || left == right
+}
+
+fn line_count_values_compatible(left: Option<u32>, right: Option<u32>) -> bool {
+    optional_values_compatible(left, right)
+        || matches!((left, right), (Some(0), Some(value)) | (Some(value), Some(0)) if value > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn file_change_outside_stale_session_root_uses_its_own_project_marker() {
+        let base = std::env::temp_dir().join(format!(
+            "wakaclock-codex-cross-project-{}",
+            std::process::id()
+        ));
+        let stale_root = base.join("original-project");
+        let actual_root = base.join("testatoaxis");
+        let entity = actual_root.join("src/session-tracker.js");
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::create_dir_all(&stale_root).unwrap();
+        fs::write(
+            actual_root.join("package.json"),
+            r#"{"name":"testatoaxis"}"#,
+        )
+        .unwrap();
+        fs::write(&entity, "export const value = 1;\n").unwrap();
+
+        assert_eq!(
+            effective_project_root(&entity, None, Some(stale_root)),
+            Some(actual_root.clone())
+        );
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn file_change_without_a_trusted_marker_does_not_invent_a_root() {
+        let entity = std::env::temp_dir()
+            .join(format!("wakaclock-codex-no-project-{}", std::process::id()))
+            .join("notes.txt");
+
+        assert_eq!(
+            effective_project_root(&entity, None, Some(PathBuf::from("/different"))),
+            None
+        );
+    }
+
+    #[test]
+    fn stale_declared_root_without_a_marker_is_not_forwarded_to_the_broker() {
+        let root = std::env::temp_dir().join(format!(
+            "wakaclock-codex-unmarked-root-{}",
+            std::process::id()
+        ));
+        let entity = root.join("src/notes.txt");
+
+        assert_eq!(effective_project_root(&entity, None, Some(root)), None);
+    }
 
     fn write_fixture_copy(name: &str) -> PathBuf {
         let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
@@ -1058,6 +1617,102 @@ mod tests {
             let compact: serde_json::Value = serde_json::from_str(line).unwrap();
             writeln!(file, "{}", serde_json::to_string(&compact).unwrap()).unwrap();
         }
+        path
+    }
+
+    fn write_item_completed_fixture_copy(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-item-completed-test-{}-{name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-test.jsonl");
+        let completed_at_ms = DateTime::parse_from_rfc3339("2026-09-16T12:00:03Z")
+            .unwrap()
+            .timestamp_millis();
+        let records = [
+            serde_json::json!({
+                "type": "session_meta",
+                "timestamp": "2026-09-16T12:00:00Z",
+                "payload": {
+                    "id": "native-session",
+                    "cwd": "/workspace",
+                    "model_provider": "openai",
+                    "originator": "Codex Desktop"
+                }
+            }),
+            serde_json::json!({
+                "type": "turn_context",
+                "timestamp": "2026-09-16T12:00:01Z",
+                "payload": {
+                    "turn_id": "native-turn",
+                    "cwd": "/workspace",
+                    "model": "gpt-5.6-sol"
+                }
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-09-16T12:00:03Z",
+                "payload": {
+                    "type": "item_completed",
+                    "completed_at_ms": completed_at_ms,
+                    "turn_id": "native-turn",
+                    "item": {
+                        "type": "FileChange",
+                        "id": "file-change-completed",
+                        "status": "completed",
+                        "changes": {
+                            "/workspace/new.md": {
+                                "type": "create",
+                                "content": "one\ntwo\n"
+                            },
+                            "/workspace/old.md": {
+                                "type": "update",
+                                "unified_diff": "@@ -1 +1 @@\n-old\n+new\n"
+                            },
+                            "/workspace/remove.md": {
+                                "type": "delete",
+                                "content": "gone\n"
+                            },
+                            "/workspace/old-name.md": {
+                                "type": "update",
+                                "move_path": "/workspace/new-name.md",
+                                "content": "renamed\n"
+                            }
+                        }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-09-16T12:00:04Z",
+                "payload": {
+                    "type": "item_completed",
+                    "turn_id": "native-turn",
+                    "item": {
+                        "type": "FileChange",
+                        "id": "file-change-failed",
+                        "status": "failed",
+                        "changes": {
+                            "/workspace/should-not-appear.md": {
+                                "type": "create",
+                                "content": "secret"
+                            }
+                        }
+                    }
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
         path
     }
 
@@ -1511,6 +2166,259 @@ mod tests {
     }
 
     #[test]
+    fn parse_since_reads_native_file_change_operations_and_ignores_failed_items() {
+        let path = write_item_completed_fixture_copy("operations");
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 4);
+        assert!(batch
+            .events
+            .iter()
+            .all(|event| event.producer_surface.as_deref() == Some("codex-desktop")));
+        let created = batch
+            .events
+            .iter()
+            .find(|event| event.entity.ends_with("new.md"))
+            .unwrap();
+        assert_eq!(created.change_kind, BrokerChangeKind::Create);
+        assert_eq!(created.lines_added, Some(2));
+        assert_eq!(created.lines_deleted, Some(0));
+
+        let modified = batch
+            .events
+            .iter()
+            .find(|event| event.entity.ends_with("old.md"))
+            .unwrap();
+        assert_eq!(modified.change_kind, BrokerChangeKind::Modify);
+        assert_eq!(modified.lines_added, Some(1));
+        assert_eq!(modified.lines_deleted, Some(1));
+
+        let deleted = batch
+            .events
+            .iter()
+            .find(|event| event.entity.ends_with("remove.md"))
+            .unwrap();
+        assert_eq!(deleted.change_kind, BrokerChangeKind::Delete);
+        assert_eq!(deleted.lines_added, Some(0));
+        assert_eq!(deleted.lines_deleted, Some(1));
+
+        let renamed = batch
+            .events
+            .iter()
+            .find(|event| event.entity.ends_with("new-name.md"))
+            .unwrap();
+        assert_eq!(renamed.change_kind, BrokerChangeKind::Rename);
+        assert!(renamed
+            .previous_entity
+            .as_ref()
+            .is_some_and(|entity| entity.ends_with("old-name.md")));
+        let completed_at_ms = DateTime::parse_from_rfc3339("2026-09-16T12:00:03Z")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(renamed.occurred_at.timestamp_millis(), completed_at_ms);
+        assert!(!batch
+            .events
+            .iter()
+            .any(|event| event.entity.ends_with("should-not-appear.md")));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_since_rebuilds_codex_desktop_surface_for_an_old_checkpoint() {
+        let path = write_item_completed_fixture_copy("surface-migration");
+        let bytes = fs::read(&path).unwrap();
+        let third_record_offset = bytes
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte == b'\n')
+            .nth(1)
+            .map(|(index, _)| index + 1)
+            .unwrap() as u64;
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: third_record_offset,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: Some(ParserContext {
+                        session_id: Some("native-session".to_string()),
+                        producer_surface: None,
+                        producer_surface_seen: false,
+                        ..ParserContext::default()
+                    }),
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 4);
+        assert!(batch
+            .events
+            .iter()
+            .all(|event| event.producer_surface.as_deref() == Some("codex-desktop")));
+        assert!(batch
+            .next_cursor
+            .context
+            .as_ref()
+            .is_some_and(|context| context.producer_surface_seen));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_since_deduplicates_wrapped_exec_and_native_file_change() {
+        let path = write_exec_response_item_fixture_copy("native-duplicate");
+        let native = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-14T09:19:43.000Z",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "FileChange",
+                    "id": "native-file-change-id",
+                    "status": "completed",
+                    "changes": {
+                        "/home/dev/example-project/src/desktop_wrapper.rs": {
+                            "type": "create",
+                            "content": "pub fn from_desktop_wrapper() {}\n"
+                        }
+                    }
+                }
+            }
+        });
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", native).unwrap();
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert!(batch.events[0].entity.ends_with("desktop_wrapper.rs"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_since_deduplicates_native_file_change_before_wrapped_exec_output() {
+        // Current Codex Desktop ordering is: custom_tool_call -> native
+        // FileChange completion -> custom_tool_call_output. The native item id
+        // and wrapper call id differ, so this exercises the metadata correlation
+        // rather than only the in-batch event comparison above.
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let turn_context = fs::read_to_string(format!("{fixtures}turn_context.json")).unwrap();
+        let call_id = "call_native_before_output";
+        let file_path = "/home/dev/example-project/src/native_before_output.rs";
+        let patch_text = format!("*** Begin Patch\n*** Delete File: {file_path}\n*** End Patch");
+        let call = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.000Z",
+            "payload": {
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "exec",
+                "input": format!(
+                    "const patch = {}; text(await tools.apply_patch(patch));",
+                    serde_json::to_string(&patch_text).unwrap()
+                )
+            }
+        });
+        let completed_at_ms = DateTime::parse_from_rfc3339("2026-08-14T09:19:42.100Z")
+            .unwrap()
+            .timestamp_millis();
+        let native = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-14T09:19:42.100Z",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "018f0000-bbbb-7000-8000-000000000002",
+                "completed_at_ms": completed_at_ms,
+                "item": {
+                        "type": "FileChange",
+                        "id": "native-file-change-before-output",
+                        "status": "completed",
+                        "changes": {
+                            file_path: {
+                            "type": "delete",
+                            "content": "line one\nline two\n"
+                        }
+                    }
+                }
+            }
+        });
+        let output = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.500Z",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": call_id
+            }
+        });
+
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-native-before-output-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = fs::File::create(&path).unwrap();
+        for value in [
+            serde_json::from_str::<serde_json::Value>(&session_meta).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&turn_context).unwrap(),
+            call,
+            native,
+            output,
+        ] {
+            writeln!(file, "{}", serde_json::to_string(&value).unwrap()).unwrap();
+        }
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(
+            batch.events[0].tool_event_id.as_deref(),
+            Some("018f0000-bbbb-7000-8000-000000000000:native-file-change-before-output")
+        );
+        assert_eq!(batch.events[0].lines_added, Some(0));
+        assert_eq!(batch.events[0].lines_deleted, Some(2));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn parse_since_prefers_patch_apply_end_over_duplicate_output() {
         let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
         let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
@@ -1694,9 +2602,9 @@ mod tests {
                     source_path: path.to_string_lossy().into_owned(),
                     file_identity: None,
                     byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
                 }),
             )
             .unwrap();
@@ -1747,9 +2655,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+            last_record_id: None,
+            last_record_time: None,
+            context: None,
         };
         let batch = parser
             .parse_since(&ParseContext::default(), Some(&cursor))
@@ -1766,9 +2674,9 @@ mod tests {
             source_path: path.to_string_lossy().into_owned(),
             file_identity: None,
             byte_offset: 0,
-        last_record_id: None,
-        last_record_time: None,
-        context: None,
+            last_record_id: None,
+            last_record_time: None,
+            context: None,
         };
         let first_batch = parser
             .parse_since(&ParseContext::default(), Some(&first_cursor))

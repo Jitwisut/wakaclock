@@ -99,6 +99,30 @@ class WakaclockCliService {
             return this.runCli(stripClipboardArgs(args), stdinPayload);
         }
     }
+    /** Send workspace metadata through the CLI; the broker token remains in the
+     * CLI/runtime boundary and is never handed to the extension watcher. */
+    async sendEditorObservation(observation) {
+        const result = await this.runCli(["broker", "editor-observe", "--json"], JSON.stringify(observation));
+        const status = this.parseJson(result.stdout);
+        if (!status) {
+            throw new Error("wakaclock-cli returned no editor observation status");
+        }
+        return status;
+    }
+    async getEditorObservationStatus(observationId) {
+        const result = await this.runCli([
+            "broker",
+            "editor-observation-status",
+            "--observation-id",
+            observationId,
+            "--json",
+        ]);
+        const status = this.parseJson(result.stdout);
+        if (!status) {
+            throw new Error("wakaclock-cli returned no editor observation status");
+        }
+        return status;
+    }
     async getToday(timezone) {
         const args = ["today"];
         if (timezone?.trim()) {

@@ -312,11 +312,21 @@ function createConfig() {
     (0, vitest_1.it)("counts cursor activity without inventing overlapping file time", async () => {
         const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
         const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
-        manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 0), "Daniel", 1_000);
-        manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(10, 4), "Daniel", 61_000);
-        await manager.flushDueBuffers("timer", 90_000);
-        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
-        (0, vitest_1.expect)(sendHeartbeat.mock.calls[0][4]).toEqual(vitest_1.expect.objectContaining({ active_seconds: 60, line_number: 11, cursor_position: 5 }));
+        await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(0, 0), "Daniel", 1_000);
+        await manager.updateCursor({ uri: fileUri("C:/project/a.ts") }, selection(10, 4), "Daniel", 61_000);
+        await manager.flushDueBuffers("timer", 121_000);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(2);
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[0][4]).toEqual(vitest_1.expect.objectContaining({ active_seconds: 0, line_number: 1, cursor_position: 1 }));
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[1][4]).toEqual(vitest_1.expect.objectContaining({ active_seconds: 60, line_number: 11, cursor_position: 5 }));
+    });
+    (0, vitest_1.it)("emits sparse cursor activity as WakaTime-compatible timestamp anchors", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat }, new logging_1.Logger(() => false));
+        await manager.updateCursor({ uri: fileUri("C:/project/readme.md") }, selection(0, 0), "project", 1_000);
+        await manager.updateCursor({ uri: fileUri("C:/project/readme.md") }, selection(20, 0), "project", 301_000);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(2);
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[0][4]).toEqual(vitest_1.expect.objectContaining({ active_seconds: 0, actor_type: "human" }));
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[1][4]).toEqual(vitest_1.expect.objectContaining({ active_seconds: 0, actor_type: "human" }));
     });
     (0, vitest_1.it)("does not claim a small edit as human when a nearby agent rewrite is ambiguous", async () => {
         // Regression test. The match used to be `event.lines_added >= linesAdded`, so an
@@ -399,7 +409,7 @@ function createConfig() {
             // ...then, five seconds later, the agent patches the same file and its sidecar
             // event matches the change exactly.
             await manager.recordTextChange(document("C:/project/a.ts", "hello"), [{ text: "hello", rangeLength: 0 }], selection(0, 3), 105_000);
-            await manager.flushDueBuffers("timer", 130_000);
+            await manager.flushDueBuffers("timer", 181_000);
             const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
             // The agent owns the line counts and the interval its own edit closed; the
             // developer keeps the 40 seconds they had already earned.
@@ -472,7 +482,7 @@ function createConfig() {
                     range: { start: { line: 0, character: 0 }, end: { line: 200, character: 0 } }
                 }
             ], selection(0, 3), 105_000);
-            await manager.flushDueBuffers("timer", 130_000);
+            await manager.flushDueBuffers("timer", 181_000);
             const payload = sendHeartbeat.mock.calls.at(-1)?.[4];
             (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
             (0, vitest_1.expect)(payload.active_seconds).toBe(40);
@@ -539,6 +549,59 @@ function createConfig() {
         finally {
             await fs.rm(homeDir, { recursive: true, force: true });
         }
+    });
+    (0, vitest_1.it)("sends a matched VS Code observation without an unknown fallback heartbeat", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const sendEditorObservation = vitest_1.vi.fn().mockResolvedValue({
+            observation_id: "observer:rename-1",
+            status: "matched",
+            matched_event_id: "codex-event-1",
+            expires_at: 2_000
+        });
+        const getEditorObservationStatus = vitest_1.vi.fn();
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat, sendEditorObservation, getEditorObservationStatus }, new logging_1.Logger(() => false));
+        await manager.recordExternalFileChange("/workspace/new.md", {
+            event_id: "observer:rename-1",
+            change_kind: "rename",
+            previous_entity: "/workspace/old.md",
+            lines_added: 2,
+            lines_deleted: 1,
+            content_fingerprint: "sha256:abc"
+        }, 1_000, "wakaclock", "/workspace");
+        (0, vitest_1.expect)(sendEditorObservation).toHaveBeenCalledWith(vitest_1.expect.objectContaining({
+            observation_id: "observer:rename-1",
+            editor: "vscode",
+            entity: "/workspace/new.md",
+            workspace_root: "/workspace",
+            change_kind: "rename",
+            previous_entity: "/workspace/old.md",
+            lines_added: 2,
+            lines_deleted: 1
+        }));
+        (0, vitest_1.expect)(getEditorObservationStatus).not.toHaveBeenCalled();
+        (0, vitest_1.expect)(sendHeartbeat).not.toHaveBeenCalled();
+    });
+    (0, vitest_1.it)("falls back to one unknown heartbeat when an editor observation expires", async () => {
+        const sendHeartbeat = vitest_1.vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+        const sendEditorObservation = vitest_1.vi.fn().mockResolvedValue({
+            observation_id: "observer:unmatched-1",
+            status: "expired",
+            expires_at: 1_000
+        });
+        const manager = new buffer_1.HeartbeatBufferManager(createConfig, { sendHeartbeat, sendEditorObservation }, new logging_1.Logger(() => false));
+        await manager.recordExternalFileChange("/workspace/new.md", {
+            event_id: "observer:unmatched-1",
+            change_kind: "modify",
+            lines_added: 1,
+            content_fingerprint: "sha256:def"
+        }, 1_000, "wakaclock", "/workspace");
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("/workspace/new.md", true, "coding", [], vitest_1.expect.objectContaining({
+            actor_type: "unknown",
+            write: true,
+            unattributed_lines_added: 1,
+            heartbeat_id: "observer:unmatched-1"
+        }));
     });
     (0, vitest_1.it)("does not attribute prettier or eslint whole-file reformat to AI without sidecar evidence", async () => {
         // Guards the A-2 whole-file-overwrite rule above: a large edit that looks like an

@@ -29,6 +29,7 @@ pub async fn list(
     };
     let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
+    let (range_start, range_end) = range.unix_bounds();
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
         .ok_or_else(auth::unauthorized)?;
@@ -55,10 +56,15 @@ pub async fn list(
             entity: row.entity,
         })
         .collect::<Vec<_>>();
+    let total_seconds = data.iter().map(|block| block.duration_seconds).sum();
 
     Ok(Json(DurationsResponse {
         total: data.len(),
         date,
+        timezone: range.timezone.to_string(),
+        range_start,
+        range_end,
+        total_seconds,
         data,
     }))
 }

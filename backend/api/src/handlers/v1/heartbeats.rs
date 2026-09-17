@@ -549,7 +549,9 @@ fn project_history_attribution(
     ai_confidence: Option<&str>,
 ) -> HistoryAttributionProjection {
     let trusted_partial_identity = matches!(
-        identity_status.map(|value| value.trim().to_ascii_lowercase()).as_deref(),
+        identity_status
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
         Some("partial" | "conflict")
     ) && ai_agent.is_some_and(is_known_agent_id)
         && identity_source
@@ -606,30 +608,19 @@ fn row_has_verified_identity(row: &HeartbeatRow) -> bool {
             .ai_agent
             .as_deref()
             .is_some_and(|agent| !agent.trim().is_empty() && is_known_agent_id(agent))
-        && row
-            .ai_provider
-            .as_deref()
-            .is_some_and(|provider| {
-                normalize_identity_provider(Some(provider)).is_some()
-                    && !provider.trim().is_empty()
-                    && !is_internal_marker(provider)
-                    && !is_placeholder(provider)
-            })
-        && row
-            .ai_model
-            .as_deref()
-            .is_some_and(|model| {
-                !model.trim().is_empty()
-                    && !is_internal_marker(model)
-                    && !is_placeholder(model)
-            })
-        && row
-            .ai_confidence
-            .as_deref()
-            .is_some_and(|value| {
-                value.trim().eq_ignore_ascii_case("verified")
-                    || value.trim().eq_ignore_ascii_case("correlated")
-            })
+        && row.ai_provider.as_deref().is_some_and(|provider| {
+            normalize_identity_provider(Some(provider)).is_some()
+                && !provider.trim().is_empty()
+                && !is_internal_marker(provider)
+                && !is_placeholder(provider)
+        })
+        && row.ai_model.as_deref().is_some_and(|model| {
+            !model.trim().is_empty() && !is_internal_marker(model) && !is_placeholder(model)
+        })
+        && row.ai_confidence.as_deref().is_some_and(|value| {
+            value.trim().eq_ignore_ascii_case("verified")
+                || value.trim().eq_ignore_ascii_case("correlated")
+        })
         && row
             .identity_source
             .as_deref()

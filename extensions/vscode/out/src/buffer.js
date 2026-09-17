@@ -151,7 +151,100 @@ class HeartbeatBufferManager {
         this.onActivity?.();
         await this.flushFile(entity, "save", { now, write: true, force: true });
     }
-    async recordEditorSwitch(previousEditor, currentEditorOrNow, now = Date.now()) {
+    /**
+     * Correlate an OS-level workspace write with the broker's native AI event. The
+     * broker owns the attribution decision; this method only sends metadata and emits
+     * the old unknown fallback if the 15-second observation window expires.
+     */
+    async recordExternalFileChange(entity, metadata = {}, now = Date.now(), project, workspaceRoot) {
+        const normalizedEntity = (0, utils_1.normalizeFsPath)(entity);
+        const normalizedWorkspaceRoot = workspaceRoot ? (0, utils_1.normalizeFsPath)(workspaceRoot) : undefined;
+        if (!normalizedEntity)
+            return;
+        const sendObservation = this.cli.sendEditorObservation;
+        const getObservationStatus = this.cli.getEditorObservationStatus;
+        const observationId = metadata.event_id ??
+            `observer:${(0, node_crypto_1.createHash)("sha256")
+                .update(normalizedEntity)
+                .update("\0")
+                .update(metadata.change_kind ?? "modify")
+                .update("\0")
+                .update(metadata.content_fingerprint ?? String(now))
+                .digest("hex")}`;
+        if (sendObservation && getObservationStatus && normalizedWorkspaceRoot) {
+            const observation = {
+                schema_version: 1,
+                observation_id: observationId,
+                editor: "vscode",
+                entity: normalizedEntity,
+                workspace_root: normalizedWorkspaceRoot,
+                occurred_at: new Date(now).toISOString(),
+                change_kind: metadata.change_kind ?? "modify",
+                previous_entity: metadata.previous_entity
+                    ? (0, utils_1.normalizeFsPath)(metadata.previous_entity)
+                    : undefined,
+                lines_added: metadata.lines_added,
+                lines_deleted: metadata.lines_deleted,
+                content_fingerprint: metadata.content_fingerprint,
+            };
+            try {
+                let status = await sendObservation.call(this.cli, observation);
+                if (status.status === "matched")
+                    return;
+                const deadline = Date.now() + 15_000;
+                while (status.status !== "expired" && Date.now() < deadline) {
+                    await wait(250);
+                    status = await getObservationStatus.call(this.cli, observationId);
+                    if (status.status === "matched")
+                        return;
+                }
+                if (status.status !== "expired") {
+                    // Treat a silent/legacy broker as unmatched after the bounded window.
+                    this.logger.debug("editor observation window elapsed", {
+                        entity: normalizedEntity,
+                        observationId,
+                    });
+                }
+            }
+            catch (error) {
+                this.logger.debug("editor observation submission failed", {
+                    entity: normalizedEntity,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+        const payload = {
+            entity: normalizedEntity,
+            entity_type: "file",
+            project,
+            category: "coding",
+            write: true,
+            active_seconds: 0,
+            heartbeat_id: observationId,
+            actor_type: "unknown",
+            actor_confidence: 0,
+            unattributed_lines_added: metadata.lines_added,
+            unattributed_lines_deleted: metadata.lines_deleted,
+        };
+        try {
+            await this.cli.sendHeartbeat(normalizedEntity, true, "coding", [], payload);
+            this.onHeartbeatSent?.();
+            this.logger.debug("flushed unmatched external file-change heartbeat", {
+                entity: normalizedEntity,
+                changeKind: metadata.change_kind ?? "modify",
+            });
+        }
+        catch (error) {
+            this.logger.error(`failed to flush external heartbeat for ${normalizedEntity}`, { error });
+        }
+    }
+    forgetDocument(document) {
+        const entity = (0, utils_1.normalizeFsPath)(document.uri.fsPath);
+        const state = this.states.get(entity);
+        if (state && !this.hasPendingActivity(state))
+            this.states.delete(entity);
+    }
+    async recordEditorSwitch(previousEditor, currentEditorOrNow, now = Date.now(), project) {
         const currentEditor = typeof currentEditorOrNow === "number" ? undefined : currentEditorOrNow;
         if (typeof currentEditorOrNow === "number") {
             now = currentEditorOrNow;
@@ -163,6 +256,12 @@ class HeartbeatBufferManager {
         const currentEntity = (0, utils_1.getEditorEntity)(currentEditor);
         if (currentEntity && currentEntity !== previousEntity) {
             const state = this.getOrCreateState(currentEntity);
+            this.updateProjectState(state, project);
+            this.updateSelectionState(state, currentEditor?.selection);
+            this.observeActivity(state, now);
+            state.pendingPresence = true;
+            state.heartbeatId ||= (0, node_crypto_2.randomUUID)();
+            this.onActivity?.();
             // A switch is an activity marker even when the file has no pending edits.
             await this.flushFile(currentEntity, "switch", { now, force: true });
             this.logger.debug("recorded active editor switch", {
@@ -171,7 +270,7 @@ class HeartbeatBufferManager {
             });
         }
     }
-    updateCursor(document, selection, project, now = Date.now()) {
+    async updateCursor(document, selection, project, now = Date.now()) {
         if (!(0, utils_1.isFileDocument)(document)) {
             return;
         }
@@ -181,6 +280,15 @@ class HeartbeatBufferManager {
         this.updateSelectionState(state, selection);
         this.observeActivity(state, now);
         this.onActivity?.();
+        // A sparse navigation/read session may never create an activity segment: the next
+        // cursor event can be more than the strict 120-second evidence window away. Emit
+        // the first rate-eligible instant as a zero-duration anchor, matching WakaTime.
+        if (state.lastHeartbeatAt === undefined ||
+            now - state.lastHeartbeatAt >= this.getConfig().heartbeatRateLimitMs) {
+            state.pendingPresence = true;
+            state.heartbeatId ||= (0, node_crypto_2.randomUUID)();
+            await this.flushFile(entity, "gap", { now });
+        }
     }
     async flushCurrentEditor(editor, reason = "manual", overrides, project) {
         const entity = (0, utils_1.getEditorEntity)(editor);
@@ -326,6 +434,7 @@ class HeartbeatBufferManager {
             pasteSameFileActions: 0,
             pasteSameWorkspaceActions: 0,
             pasteExternalOrUnknownActions: 0,
+            pendingPresence: false,
             pendingWrite: false,
             pendingEditorChanges: []
         };
@@ -344,6 +453,7 @@ class HeartbeatBufferManager {
             state.unattributedLinesDeleted > 0 ||
             state.copyActions > 0 ||
             state.pasteActions > 0 ||
+            state.pendingPresence ||
             state.activitySegments.length > 0);
     }
     shouldFlushOnTimer(state, now) {
@@ -368,6 +478,7 @@ class HeartbeatBufferManager {
             state.charsAdded > 0 ||
             state.charsDeleted > 0 ||
             state.copyActions > 0 ||
+            state.pendingPresence ||
             state.activitySegments.length > 0;
         // `state.aiEventId` is set only when this flush is reporting an edit the broker
         // sidecar already matched to an agent (see classifyPendingAttribution). That takes
@@ -578,6 +689,7 @@ class HeartbeatBufferManager {
         state.pasteSameFileActions = 0;
         state.pasteSameWorkspaceActions = 0;
         state.pasteExternalOrUnknownActions = 0;
+        state.pendingPresence = false;
         state.activeSeconds = 0;
         state.activitySegments = [];
         state.heartbeatId = undefined;
@@ -671,6 +783,9 @@ class HeartbeatBufferManager {
     }
 }
 exports.HeartbeatBufferManager = HeartbeatBufferManager;
+function wait(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 /** Metadata-only content identity used for exact cross-producer reconciliation. */
 function fingerprintDocument(document) {
     if (typeof document.getText !== "function") {

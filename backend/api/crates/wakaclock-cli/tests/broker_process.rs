@@ -83,11 +83,13 @@ fn event(id: &str) -> BrokerEventV1 {
         actor_confidence: None,
         lines_added: Some(1),
         lines_deleted: Some(0),
+        content_fingerprint: None,
         active_seconds: Some(1.0),
         transport: Some("test".to_string()),
         tool: Some("test".to_string()),
         tool_event_id: Some("tool-process".to_string()),
         editor: None,
+        producer_surface: None,
     }
 }
 
@@ -314,24 +316,80 @@ fn total_rows(db: &Path) -> u64 {
     stats.pending + stats.processing + stats.processed + stats.retry + stats.dead_letter
 }
 
-fn write_codex_transcript(home: &Path) -> PathBuf {
+fn write_native_codex_transcript(home: &Path) -> (PathBuf, PathBuf) {
     let root = home.join(".codex/sessions/2026/09/02");
     fs::create_dir_all(&root).unwrap();
     let path = root.join("rollout-auto-scan.jsonl");
-    let fixture_root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../wakaclock-core/src/ai/fixtures/codex");
+    let workspace_root = home.join("Desktop/AI-tiktok");
+    fs::create_dir_all(workspace_root.join("src")).unwrap();
+    fs::write(
+        workspace_root.join("package.json"),
+        r#"{"name":"ai-tiktok","private":true}"#,
+    )
+    .unwrap();
+
+    let first_entity = workspace_root.join("src/prompt-engine.ts");
+    let second_entity = workspace_root.join("src/video-service.ts");
+    let now = Utc::now();
+    let mut changes = serde_json::Map::new();
+    changes.insert(
+        first_entity.to_string_lossy().into_owned(),
+        serde_json::json!({
+            "type": "add",
+            "content": "export const prompt = 'verified';\n",
+        }),
+    );
+    changes.insert(
+        second_entity.to_string_lossy().into_owned(),
+        serde_json::json!({
+            "type": "update",
+            "unified_diff": "@@ -1 +1,2 @@\n-export const version = 1;\n+export const version = 2;\n+export const ready = true;\n",
+        }),
+    );
+    let records = [
+        serde_json::json!({
+            "type": "session_meta",
+            "timestamp": now.to_rfc3339(),
+            "payload": {
+                "id": "native-auto-scan-session",
+                "session_id": "native-auto-scan-session",
+                "cwd": workspace_root,
+                "originator": "Codex Desktop",
+                "source": "vscode",
+                "model_provider": "openai",
+            },
+        }),
+        serde_json::json!({
+            "type": "turn_context",
+            "timestamp": now.to_rfc3339(),
+            "payload": {
+                "turn_id": "native-auto-scan-turn",
+                "cwd": workspace_root,
+                "workspace_roots": [workspace_root],
+                "model": "gpt-5.6-sol",
+            },
+        }),
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": now.to_rfc3339(),
+            "payload": {
+                "type": "item_completed",
+                "completed_at_ms": now.timestamp_millis(),
+                "turn_id": "native-auto-scan-turn",
+                "item": {
+                    "type": "FileChange",
+                    "id": "native-auto-scan-file-change",
+                    "status": "completed",
+                    "changes": serde_json::Value::Object(changes),
+                },
+            },
+        }),
+    ];
     let mut file = fs::File::create(&path).unwrap();
-    for name in [
-        "session_meta.json",
-        "turn_context.json",
-        "custom_tool_call.json",
-        "custom_tool_call_output.json",
-    ] {
-        let value: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(fixture_root.join(name)).unwrap()).unwrap();
+    for value in records {
         writeln!(file, "{}", serde_json::to_string(&value).unwrap()).unwrap();
     }
-    path
+    (path, workspace_root)
 }
 
 async fn wait_for_codex_sidecar(home: &Path, minimum: usize) {
@@ -361,14 +419,16 @@ async fn wait_for_codex_sidecar(home: &Path, minimum: usize) {
 }
 
 /// Phase 0.4/0.5 — the always-on broker starts transcript recovery itself.  A
-/// fresh Codex JSONL file is placed in the isolated HOME before the broker starts;
-/// no `wakaclock ai sync` child process is invoked by this test.  The 402 backend
-/// keeps the check local and proves capture survives delivery refusal.
+/// fresh Codex Desktop `item_completed/FileChange` JSONL file is placed in the
+/// isolated HOME before the broker starts; no `wakaclock ai sync` child process is
+/// invoked by this test. The workspace name deliberately contains a hyphen, matching
+/// the real `AI-tiktok` regression. The 402 backend keeps the check local and proves
+/// capture survives delivery refusal with the Codex Desktop fallback editor intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_autostarts_codex_transcript_scan_without_manual_sync() {
     let home = temp_home("auto-scan");
     let db = home.join(".wakaclock/broker.db");
-    let _transcript = write_codex_transcript(&home);
+    let (_transcript, workspace_root) = write_native_codex_transcript(&home);
     let (server_url, server_task) = status_server("402 Payment Required").await;
     let mut broker = spawn_broker(&home, &server_url);
     let _discovery = wait_for_discovery(&home).await;
@@ -391,6 +451,35 @@ async fn broker_autostarts_codex_transcript_scan_without_manual_sync() {
     );
     assert_eq!(stats.dead_letter, 0);
     assert_eq!(stats.retry, 0);
+
+    let connection = Connection::open(&db).unwrap();
+    let (event_count, project_root, producer_surface): (i64, String, String) = connection
+        .query_row(
+            "SELECT COUNT(*),
+                    MIN(json_extract(normalized_payload_json, '$.project_root')),
+                    MIN(json_extract(normalized_payload_json, '$.producer_surface'))
+             FROM broker_events
+             WHERE event_id LIKE 'codex-v2:%'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(event_count, 2);
+    assert_eq!(project_root, workspace_root.to_string_lossy());
+    assert_eq!(producer_surface, "codex-desktop");
+
+    let queue = Connection::open(home.join(".wakaclock/queue.db")).unwrap();
+    let (queued_count, editor): (i64, String) = queue
+        .query_row(
+            "SELECT COUNT(*), MIN(json_extract(payload, '$.editor'))
+             FROM heartbeat_queue
+             WHERE json_extract(payload, '$.ai_agent') = 'codex'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(queued_count, 2);
+    assert_eq!(editor, "codex-desktop");
 
     broker.kill();
     server_task.abort();

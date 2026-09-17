@@ -11,6 +11,38 @@ export interface ClipboardPasteMetrics {
     origin: PasteOrigin;
 }
 
+/** Metadata sent by the workspace watcher to correlate an external write with
+ * the local broker's native AI event. File contents never leave VS Code. */
+export interface ExternalFileChangeMetadata {
+    event_id?: string;
+    change_kind?: "create" | "modify" | "delete" | "rename";
+    previous_entity?: string;
+    lines_added?: number;
+    lines_deleted?: number;
+    content_fingerprint?: string;
+}
+
+export interface EditorObservationPayload {
+    schema_version: 1;
+    observation_id: string;
+    editor: "vscode";
+    entity: string;
+    workspace_root: string;
+    occurred_at: string;
+    change_kind: "create" | "modify" | "delete" | "rename";
+    previous_entity?: string;
+    lines_added?: number;
+    lines_deleted?: number;
+    content_fingerprint?: string;
+}
+
+export interface EditorObservationStatus {
+    observation_id: string;
+    status: "accepted" | "pending" | "matched" | "expired" | "duplicate";
+    matched_event_id?: string;
+    expires_at: number;
+}
+
 export type FlushReason =
     | "save"
     | "timer"
@@ -58,6 +90,8 @@ export interface BufferedFileState {
     pasteExternalOrUnknownActions: number;
     lineNumber?: number;
     cursorPosition?: number;
+    /** A real editor-presence instant waiting to be emitted as a heartbeat anchor. */
+    pendingPresence: boolean;
     pendingWrite: boolean;
     /**
      * Set only when the pending edit was matched against a broker sidecar event

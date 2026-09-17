@@ -13,7 +13,10 @@ use crate::{
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+
+const API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusBarSnapshot {
@@ -234,7 +237,11 @@ impl ApiClient {
             headers.insert(header::AUTHORIZATION, value);
         }
 
-        let client = Client::builder().default_headers(headers).build()?;
+        let client = Client::builder()
+            .connect_timeout(API_CONNECT_TIMEOUT)
+            .timeout(API_REQUEST_TIMEOUT)
+            .default_headers(headers)
+            .build()?;
         Ok(Self { config, client })
     }
 
@@ -468,7 +475,10 @@ impl ApiClient {
     ) -> AppResult<AiIdentityRepairReport> {
         let response = self
             .client
-            .post(format!("{}/api/v1/ai/identity/repair", self.config.server_url))
+            .post(format!(
+                "{}/api/v1/ai/identity/repair",
+                self.config.server_url
+            ))
             .json(request)
             .send()
             .await?;
@@ -692,7 +702,8 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     let identity_source = normalize_identity_source(queued_string_value(object, "identity_source"))
         .or_else(|| normalize_identity_source(source.as_deref()));
     let identity_status = normalize_identity_status(queued_string_value(object, "identity_status"));
-    let _identity_reason = normalize_identity_reason(queued_string_value(object, "identity_reason"));
+    let _identity_reason =
+        normalize_identity_reason(queued_string_value(object, "identity_reason"));
     for key in ["identity_turn_id", "identity_message_id"] {
         let normalized = object
             .get(key)
@@ -880,7 +891,10 @@ fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     payload
 }
 
-fn queued_string_value<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+fn queued_string_value<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
     object
         .get(key)
         .and_then(Value::as_str)
@@ -1094,9 +1108,19 @@ mod tests {
         };
         let value = serde_json::to_value(&request).expect("serializes");
         let object = value.as_object().expect("object");
-        for forbidden in ["prompt", "response", "patch", "content", "source_text", "time"] {
+        for forbidden in [
+            "prompt",
+            "response",
+            "patch",
+            "content",
+            "source_text",
+            "time",
+        ] {
             assert!(!object.contains_key(forbidden));
         }
-        assert_eq!(serde_json::from_value::<AiIdentityRepairRequest>(value).unwrap(), request);
+        assert_eq!(
+            serde_json::from_value::<AiIdentityRepairRequest>(value).unwrap(),
+            request
+        );
     }
 }

@@ -102,7 +102,10 @@ impl PostgresClient {
         for (name, sql) in [
             ("foundation", FOUNDATION_MIGRATION),
             ("presence", PRESENCE_MIGRATION),
-            ("presence office", include_str!("../../migrations/postgres/007_presence_office.sql")),
+            (
+                "presence office",
+                include_str!("../../migrations/postgres/007_presence_office.sql"),
+            ),
             ("AI diagnostics", AI_DIAGNOSTICS_MIGRATION),
             ("early access", EARLY_ACCESS_MIGRATION),
             ("credential migrations", CREDENTIAL_MIGRATIONS_MIGRATION),

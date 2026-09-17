@@ -333,6 +333,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: None,
+            producer_surface: None,
             occurred_at,
             entity: PathBuf::from(entity),
             project_root: Some(PathBuf::from("/home/dev/example-project")),

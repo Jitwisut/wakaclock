@@ -5,11 +5,11 @@
 //! per model request. A single assistant message can edit three files — attaching its token
 //! counts to each edit would triple the tokens. The two never merge.
 
+use crate::ai::{normalize_identity_model, normalize_identity_provider};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use crate::ai::{normalize_identity_model, normalize_identity_provider};
 
 /// One model request's usage, keyed by the provider's own message id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,11 +271,14 @@ fn parse_generic_usage_str(
                 })
             })
             .and_then(|value| normalize_identity_model(Some(&value)));
-        let explicit_provider = first_string_value(&value, &["provider", "provider_id", "providerId"])
-            .or_else(|| value.get("payload").and_then(|payload| {
-                first_string_value(payload, &["provider", "provider_id", "providerId"])
-            }))
-            .and_then(|value| normalize_identity_provider(Some(&value)));
+        let explicit_provider =
+            first_string_value(&value, &["provider", "provider_id", "providerId"])
+                .or_else(|| {
+                    value.get("payload").and_then(|payload| {
+                        first_string_value(payload, &["provider", "provider_id", "providerId"])
+                    })
+                })
+                .and_then(|value| normalize_identity_provider(Some(&value)));
         let input = first_u64_value(
             usage,
             &[
@@ -322,7 +325,8 @@ fn parse_generic_usage_str(
             ai_session_id: session.clone(),
             occurred_at,
             agent: agent.to_string(),
-            provider: explicit_provider.or_else(|| provider.and_then(|value| normalize_identity_provider(Some(value)))),
+            provider: explicit_provider
+                .or_else(|| provider.and_then(|value| normalize_identity_provider(Some(value)))),
             model,
             prompt_count,
             prompt_character_count: (prompt_count > 0)

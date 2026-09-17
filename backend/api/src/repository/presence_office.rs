@@ -174,7 +174,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(office.messages(room.id, None).await.unwrap().len(), 1);
-        let child_id = office.create_space(room.id, owner, "Meeting", "meeting").await.unwrap();
+        let child_id = office
+            .create_space(room.id, owner, "Meeting", "meeting")
+            .await
+            .unwrap();
         let child = rooms.get(child_id).await.unwrap().unwrap();
         assert_eq!(rooms.zones(child.id).await.unwrap().len(), 3);
         assert!(child.expires_at <= room.expires_at);

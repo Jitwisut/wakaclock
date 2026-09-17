@@ -6,6 +6,7 @@ import {
   ATOAXIS_CLIPBOARD_MIME,
   ClipboardActivityTracker
 } from "./clipboardTracking";
+import { ExternalFileObserver } from "./externalFileObserver";
 
 export function registerEventSubscriptions(
   context: vscode.ExtensionContext,
@@ -21,6 +22,8 @@ export function registerEventSubscriptions(
     | "getBufferedSegments"
     | "flushCurrentEditor"
     | "flushDueBuffers"
+    | "recordExternalFileChange"
+    | "forgetDocument"
   >,
   logger: Logger
 ): void {
@@ -32,11 +35,40 @@ export function registerEventSubscriptions(
     if (!document) {
       return undefined;
     }
-    return vscode.workspace.getWorkspaceFolder(document.uri)?.name;
+    return workspaceProjectForUri(document.uri);
+  }
+
+  function workspaceProjectForUri(uri: vscode.Uri): string | undefined {
+    return vscode.workspace.getWorkspaceFolder(uri)?.name;
+  }
+
+  const externalFileObserver = new ExternalFileObserver(
+    (entity, metadata, now, project, workspaceRoot) =>
+      bufferManager.recordExternalFileChange(entity, metadata, now, project, workspaceRoot),
+    (uri) => workspaceProjectForUri(uri),
+    (uri) => vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath,
+    logger,
+  );
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    externalFileObserver.watchWorkspace(folder.uri);
+  }
+  for (const document of vscode.workspace.textDocuments) {
+    externalFileObserver.seedDocument(document);
   }
 
   context.subscriptions.push(
+    externalFileObserver,
     vscode.workspace.onDidChangeTextDocument((event) => {
+      // A dirty document change is caused by an edit inside VS Code. External
+      // reloads arrive with `isDirty === false`; leaving those unsuppressed is
+      // what lets the watcher prove that an AI process changed the file.
+      if (event.document.isDirty) {
+        externalFileObserver.noteEditorChange(
+          event.document.uri,
+          safeDocumentText(event.document),
+          true,
+        );
+      }
       const activeSelection =
         vscode.window.activeTextEditor?.document.uri.toString() === event.document.uri.toString()
           ? vscode.window.activeTextEditor.selection
@@ -97,22 +129,39 @@ export function registerEventSubscriptions(
       }
     ),
     vscode.workspace.onDidSaveTextDocument((document) => {
+      externalFileObserver.noteEditorChange(
+        document.uri,
+        safeDocumentText(document),
+        false,
+      );
       void bufferManager.recordSave(document, Date.now(), workspaceProject(document));
+    }),
+    vscode.workspace.onDidRenameFiles((event) => {
+      for (const file of event.files) {
+        void externalFileObserver.observeRename(file.oldUri, file.newUri);
+      }
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      bufferManager.forgetDocument(document);
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+      for (const folder of event.added) {
+        externalFileObserver.watchWorkspace(folder.uri);
+      }
+      for (const folder of event.removed) {
+        externalFileObserver.unwatchWorkspace(folder.uri);
+      }
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       const now = Date.now();
-      // Observe the new editor first: that closes the previous file's WakaTime-style
-      // interval before its buffer is flushed, avoiding a race that could discard the
-      // time between the last edit and the editor switch.
-      if (editor) {
-        bufferManager.updateCursor(
-          editor.document,
-          editor.selection,
-          workspaceProject(editor.document),
-          now
-        );
-      }
-      void bufferManager.recordEditorSwitch(previousEditor ?? undefined, editor ?? undefined, now);
+      // The switch method records and flushes the new editor's presence itself. Calling
+      // updateCursor first would race two zero-duration heartbeats for one switch.
+      void bufferManager.recordEditorSwitch(
+        previousEditor ?? undefined,
+        editor ?? undefined,
+        now,
+        workspaceProject(editor?.document),
+      );
       previousEditor = editor;
     }),
     // Losing focus is the last moment the editor can prove the developer was here.
@@ -120,12 +169,21 @@ export function registerEventSubscriptions(
     // which, if the session simply ended, never came.
     vscode.window.onDidChangeWindowState((windowState) => {
       if (windowState.focused) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+          void bufferManager.updateCursor(
+            editor.document,
+            editor.selection,
+            workspaceProject(editor.document),
+            Date.now(),
+          );
+        }
         return;
       }
       void bufferManager.flushDueBuffers("focus-lost");
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
-      bufferManager.updateCursor(
+      void bufferManager.updateCursor(
         event.textEditor.document,
         event.selections[0],
         workspaceProject(event.textEditor.document),
@@ -206,12 +264,25 @@ export function registerEventSubscriptions(
   // started. Without this, opening VS Code into an existing file produced no heartbeat
   // until the first text edit or cursor movement.
   if (previousEditor) {
-    void bufferManager.recordEditorSwitch(undefined, previousEditor, Date.now());
+    void bufferManager.recordEditorSwitch(
+      undefined,
+      previousEditor,
+      Date.now(),
+      workspaceProject(previousEditor.document),
+    );
   }
 
   function startFlushTimer(): NodeJS.Timeout {
     return setInterval(() => {
       void bufferManager.flushDueBuffers("timer");
     }, configService.getSnapshot().flushIntervalMs);
+  }
+}
+
+function safeDocumentText(document: Pick<vscode.TextDocument, "getText">): string | undefined {
+  try {
+    return document.getText();
+  } catch {
+    return undefined;
   }
 }

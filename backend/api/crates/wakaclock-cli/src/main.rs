@@ -26,17 +26,16 @@ use wakaclock_core::ai::topology_handoff::{
 use wakaclock_core::{
     ai::{
         editor_capability_catalog, is_known_agent_id, normalize_agent_id, normalize_client_id,
-        normalize_model_id,
-        normalize_provider_id, parse_claude_usage, parse_codex_usage, parse_gemini_usage,
-        normalize_identity_reference,
+        normalize_identity_reference, normalize_model_id, normalize_provider_id,
+        parse_claude_usage, parse_codex_usage, parse_gemini_usage, resolve_identity,
         AdapterFreshnessV2, AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence,
         AiDiagnosticsReportV2, AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple,
         ClaudeCodeParser, CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext,
         DiscoveryResult, DiscoveryState, EditorSurface, ExecutionSurface, GeminiCliParser,
-        MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2,
-        RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag, VerificationStatus,
-        resolve_identity, IdentityStatus, IDENTITY_SCHEMA_VERSION, REASON_CONFLICTING_EVIDENCE,
-        REASON_INTERNAL_MARKER, FINGERPRINT_SCHEME_V1, PRODUCER_CONTRACT_VERSION,
+        IdentityStatus, MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor,
+        ParserLagSummaryV2, RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag,
+        VerificationStatus, FINGERPRINT_SCHEME_V1, IDENTITY_SCHEMA_VERSION,
+        PRODUCER_CONTRACT_VERSION, REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
     },
     api_client::{
         AiIdentityCorrection, AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
@@ -381,6 +380,22 @@ enum BrokerAction {
     },
     /// Rotate the local bearer token and restart the service.
     RotateToken {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Submit one metadata-only VS Code workspace observation to the local broker.
+    /// The JSON payload is read from stdin so no broker token is exposed to the
+    /// extension process or its command line.
+    #[command(name = "editor-observe")]
+    EditorObserve {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Read the correlation status for a previously submitted VS Code observation.
+    #[command(name = "editor-observation-status")]
+    EditorObservationStatus {
+        #[arg(long)]
+        observation_id: String,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -1728,6 +1743,26 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     );
                 } else {
                     println!("Broker token rotated; service restart requested.");
+                }
+            }
+            BrokerAction::EditorObserve { json } => {
+                let status =
+                    broker::submit_editor_observation_from_stdin(&config, &api_client).await?;
+                if json {
+                    println!("{}", serde_json::to_string(&status)?);
+                } else {
+                    println!("Editor observation: {}", status.status);
+                }
+            }
+            BrokerAction::EditorObservationStatus {
+                observation_id,
+                json,
+            } => {
+                let status = broker::editor_observation_status_for_cli(&observation_id).await?;
+                if json {
+                    println!("{}", serde_json::to_string(&status)?);
+                } else {
+                    println!("Editor observation: {}", status.status);
                 }
             }
         },
@@ -3819,12 +3854,12 @@ async fn run_ai_identity_repair(
                     events_by_id.entry(event_key).or_insert(event);
                 }
                 if !batch.warnings.is_empty() {
-                    warnings.extend(batch.warnings.into_iter().map(|warning| {
-                        format!(
-                            "{id}: {}",
-                            warning.message
-                        )
-                    }));
+                    warnings.extend(
+                        batch
+                            .warnings
+                            .into_iter()
+                            .map(|warning| format!("{id}: {}", warning.message)),
+                    );
                 }
                 let next_cursor = batch.next_cursor;
                 let pending = next_cursor
@@ -3999,9 +4034,18 @@ async fn run_ai_identity_repair(
         println!("Mode: {}", if report.dry_run { "dry-run" } else { "apply" });
         println!("Transcripts scanned: {}", report.transcripts_scanned.len());
         println!("Events / heartbeats observed: {}", report.event_count);
-        println!("Lines added / deleted: {} / {}", report.lines_added, report.lines_deleted);
-        println!("Confirmed identity candidates: {}", report.confirmed_candidates);
-        println!("Candidates with stable references: {}", report.candidates_with_reference);
+        println!(
+            "Lines added / deleted: {} / {}",
+            report.lines_added, report.lines_deleted
+        );
+        println!(
+            "Confirmed identity candidates: {}",
+            report.confirmed_candidates
+        );
+        println!(
+            "Candidates with stable references: {}",
+            report.candidates_with_reference
+        );
         println!("Identity statuses: {:?}", report.status_counts);
         println!("Identity reasons: {:?}", report.reason_counts);
         if let Some(remote) = &report.remote {
@@ -4205,9 +4249,7 @@ async fn run_ai_sync(
             let candidate_keys: Vec<String> = batch
                 .events
                 .iter()
-                .map(|event| {
-                    scoped_storage_event_id(&event.event_id, event.session_id.as_deref())
-                })
+                .map(|event| scoped_storage_event_id(&event.event_id, event.session_id.as_deref()))
                 .collect();
             let undelivered = state.filter_undelivered(&candidate_keys)?;
             let new_events: Vec<&AiEditEvent> = batch
@@ -4979,6 +5021,7 @@ fn generic_ai_edit_event(input: &GenericAiEventInput) -> Result<AiEditEvent, Box
         identity_reason: None,
         identity_source: None,
         tool_event_id: normalize_optional_text(input.tool_event_id.clone()),
+        producer_surface: None,
         occurred_at: input.occurred_at.unwrap_or_else(chrono::Utc::now),
         entity,
         project_root,
@@ -5051,11 +5094,13 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         actor_confidence: input.actor_confidence,
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
+        content_fingerprint: None,
         active_seconds: input.active_seconds,
         transport: input.transport.clone(),
         tool: input.tool.clone(),
         tool_event_id: input.tool_event_id.clone(),
         editor: input.editor.clone(),
+        producer_surface: event.producer_surface.clone(),
     })
 }
 
@@ -5147,6 +5192,7 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         actor_confidence: Some(heartbeat.actor_confidence),
         lines_added: heartbeat.ai_lines_added,
         lines_deleted: heartbeat.ai_lines_deleted,
+        content_fingerprint: None,
         active_seconds: heartbeat.active_seconds,
         transport: Some("cli_compat".to_string()),
         tool: None,
@@ -5156,6 +5202,7 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         // generic fallback, which carries no information worth forwarding.
         editor: Some(heartbeat.editor.clone())
             .filter(|value| !value.trim().is_empty() && value != GENERIC_EDITOR_FALLBACK),
+        producer_surface: None,
     })
 }
 
@@ -5468,11 +5515,31 @@ pub(crate) fn build_ai_heartbeat(
         "wakaclock-cli/ai-sync".to_string(),
     );
 
-    let git_info = git::discover(&entity_path);
+    // Codex's native transcript already carries the workspace root. Avoid a second
+    // repository discovery here: gix ref resolution can block while a checkout is
+    // changing (notably for nested `codex/...` branches), which would hold the broker
+    // worker before it can deliver the heartbeat. The root-based project fallback
+    // below is sufficient for this metadata-only transcript path; ordinary editor
+    // heartbeats still use the full Git discovery path.
+    let git_info = if event.project_root.is_none() {
+        git::discover(&entity_path)
+    } else {
+        None
+    };
     heartbeat.project = git_info
         .as_ref()
         .map(|info| info.project.clone())
-        .or_else(|| infer_non_git_project_name(Path::new(&entity_path)))
+        // A transcript parser that supplies project_root has already resolved and
+        // validated the workspace boundary. Do not walk/open the entity path again:
+        // a macOS LaunchAgent can block indefinitely when it probes a new Desktop
+        // folder through TCC, stalling the durable broker queue behind one event.
+        .or_else(|| {
+            event
+                .project_root
+                .is_none()
+                .then(|| infer_non_git_project_name(Path::new(&entity_path)))
+                .flatten()
+        })
         // `project_root` คือ cwd ที่ agent รายงานมาเอง ซึ่งอาจเป็นโฟลเดอร์อะไรก็ได้ —
         // การรับชื่อมันดื้อ ๆ ทำให้ smoke test ใน `/private/tmp` กลายเป็น project ชื่อ
         // `tmp` ปนอยู่ใน dashboard ต้องมี marker ยืนยันว่าเป็น root ของโปรเจกต์จริงก่อน
@@ -5481,7 +5548,11 @@ pub(crate) fn build_ai_heartbeat(
             event
                 .project_root
                 .as_deref()
-                .filter(|root| has_workspace_marker(root) || has_project_marker(root))
+                .filter(|root| {
+                    (event.agent == "codex" && event.source == AiEventSource::Transcript)
+                        || has_workspace_marker(root)
+                        || has_project_marker(root)
+                })
                 .and_then(|root| project_name_from_root(Some(root)))
         });
     heartbeat.branch = git_info.map(|info| info.branch);
@@ -5497,24 +5568,20 @@ pub(crate) fn build_ai_heartbeat(
     // none, name the actual source honestly (the AI agent itself) rather than a
     // meaningless generic fallback: an agent host that isn't an editor (a headless
     // hook runner, a desktop AI app) simply has no editor to report.
-    heartbeat.editor = detect_editor_env().unwrap_or_else(|| event.agent.clone());
+    heartbeat.editor = detect_editor_env()
+        .or_else(|| event.producer_surface.clone())
+        .unwrap_or_else(|| event.agent.clone());
     heartbeat.heartbeat_id = Some(format!("ai:{}", event.event_id));
     heartbeat.session_id = event.session_id.clone();
     heartbeat.time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
     heartbeat.date = Heartbeat::date_from_time(heartbeat.time);
 
-    let entity_file = Path::new(&entity_path);
-    if entity_file.exists() {
-        if let Ok(lines) = count_file_lines(entity_file) {
-            heartbeat.lines = Some(lines);
-        }
-        if let Ok(Some(ast)) = detect_file(entity_file) {
-            heartbeat.language = Some(ast.language.clone());
-            heartbeat.ast_language = Some(ast.language);
-            heartbeat.ast_confidence = Some(ast.confidence);
-            heartbeat.dependencies = ast.dependencies;
-        }
-    }
+    // A broker launched by launchd may not have permission to open a workspace
+    // file under Desktop/Documents. More importantly, a transcript event already
+    // carries the authoritative line delta, so do not read source bytes again just
+    // to decorate this heartbeat. Infer the display language from the extension;
+    // all source/diff inspection stays inside the parser's bounded memory path.
+    heartbeat.language = infer_language_from_path(&entity_path);
 
     heartbeat.ai_agent = Some(event.agent.clone());
     heartbeat.ai_provider = event.provider.clone();
@@ -5595,6 +5662,43 @@ fn project_name_from_root(root: Option<&Path>) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+fn infer_language_from_path(entity: &str) -> Option<String> {
+    let extension = Path::new(entity)
+        .extension()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+    let language = match extension.as_str() {
+        "md" | "markdown" => "Markdown",
+        "ts" => "TypeScript",
+        "tsx" => "TSX",
+        "js" | "mjs" | "cjs" => "JavaScript",
+        "jsx" => "JSX",
+        "json" | "jsonc" => "JSON",
+        "rs" => "Rust",
+        "py" => "Python",
+        "go" => "Go",
+        "java" => "Java",
+        "kt" | "kts" => "Kotlin",
+        "swift" => "Swift",
+        "css" => "CSS",
+        "scss" => "SCSS",
+        "html" | "htm" => "HTML",
+        "vue" => "Vue",
+        "svelte" => "Svelte",
+        "yaml" | "yml" => "YAML",
+        "toml" => "TOML",
+        "sh" | "bash" | "zsh" | "fish" => "Shell",
+        "sql" => "SQL",
+        "c" => "C",
+        "h" => "C Header",
+        "cc" | "cpp" | "cxx" | "hpp" => "C++",
+        "xml" => "XML",
+        "txt" => "Text",
+        _ => return None,
+    };
+    Some(language.to_string())
+}
+
 /// Resolve a stable project name for a non-Git workspace.
 ///
 /// Git remains authoritative when present. For folders that are intentionally not Git
@@ -5645,6 +5749,16 @@ fn has_workspace_marker(path: &Path) -> bool {
 }
 
 fn has_project_marker(path: &Path) -> bool {
+    // Transcript events already carry their authoritative workspace root. A bare
+    // Git repository does not need a language-specific manifest at that root (this
+    // repository, for example, keeps Cargo.toml and package.json in subfolders).
+    // Treat both a normal `.git/` directory and a worktree `.git` file as strong
+    // project evidence so create/delete events keep their project name even when
+    // the changed entity no longer exists by the time the broker processes it.
+    if path.join(".git").exists() {
+        return true;
+    }
+
     [
         "package.json",
         "Cargo.toml",
@@ -5953,6 +6067,21 @@ fn format_duration(seconds: f64) -> String {
 #[cfg(test)]
 mod generic_ai_ingress_tests {
     use super::*;
+
+    #[test]
+    fn git_root_is_a_project_marker_without_a_root_manifest() {
+        let root = std::env::temp_dir().join(format!("wakaclock-git-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert!(has_project_marker(&root));
+        assert_eq!(
+            project_name_from_root(Some(&root)),
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn non_git_monorepo_root_wins_over_nested_package_names() {

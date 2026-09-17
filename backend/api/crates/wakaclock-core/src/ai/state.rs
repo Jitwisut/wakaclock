@@ -737,6 +737,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: None,
+            producer_surface: None,
             occurred_at: chrono::Utc::now(),
             entity: StdPathBuf::from("src/lib.rs"),
             project_root: None,
@@ -821,7 +822,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(state.load_cursor("codex:session.jsonl").unwrap(), Some(cursor));
+        assert_eq!(
+            state.load_cursor("codex:session.jsonl").unwrap(),
+            Some(cursor)
+        );
         let undelivered = state
             .filter_undelivered(&["event-1".to_string(), "event-2".to_string()])
             .unwrap();

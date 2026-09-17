@@ -219,7 +219,11 @@ export interface DurationBlock {
 export interface DurationsResponse {
   data: DurationBlock[];
   date: string;
+  range_end?: number;
+  range_start?: number;
+  timezone?: string;
   total: number;
+  total_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------

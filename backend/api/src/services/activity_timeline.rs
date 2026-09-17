@@ -781,12 +781,10 @@ fn bridge_by_attendance(
     // separately keeps each decision about the events that actually happened.
     let mut previous_source: Option<String> = None;
     for event in events {
-        let (at, candidate, is_anchor) = match event {
-            Event::Interval(interval) => (interval.start, interval, false),
-            Event::Anchor(anchor) => (anchor.start, anchor, true),
+        let (at, candidate) = match event {
+            Event::Interval(interval) => (interval.start, interval),
+            Event::Anchor(anchor) => (anchor.start, anchor),
         };
-        let mut timeout = idle_timeout_seconds;
-        let mut inserted_handover = false;
         if let Some(previous) = result.last() {
             let previous_source = previous_source.as_deref().unwrap_or(&previous.source);
             let gap = at - previous.end;
@@ -794,7 +792,7 @@ fn bridge_by_attendance(
             // activity — the unattended-run case it exists to catch. A pause with a human
             // on either side is a developer driving an agent, which is ordinary attended
             // work and gets the human timeout.
-            timeout = if is_attended(previous_source) || is_attended(&candidate.source) {
+            let timeout = if is_attended(previous_source) || is_attended(&candidate.source) {
                 idle_timeout_seconds
             } else {
                 agent_idle_timeout_seconds
@@ -820,7 +818,6 @@ fn bridge_by_attendance(
                         ..previous.clone()
                     };
                     result.push(bridged);
-                    inserted_handover = true;
                 }
             }
         }
@@ -841,14 +838,11 @@ fn bridge_by_attendance(
                 // `canonicalize` already resolved ownership; never double-count.
                 previous.end = candidate.start;
             }
-            if is_anchor && !inserted_handover && at - previous.end <= timeout {
-                // The anchor has done its job by extending the run above. It still opens a
-                // run of its own when it was out of bridging reach, which is what lets a
-                // session resume after a break.
-                previous_source = Some(candidate.source);
-                continue;
-            }
         }
+        // Keep a zero-length anchor after it closes the preceding gap. It becomes the
+        // owner of the *next* gap, preserving project/file/editor dimensions when a
+        // session moves between files or workspaces. The final trailing anchor is still
+        // removed below, so an isolated heartbeat never invents duration.
         previous_source = Some(candidate.source.clone());
         result.push(candidate);
     }
@@ -1201,6 +1195,25 @@ mod tests {
 
         // 0..360 continuous: the 240s handover is real work, not idle time.
         assert_eq!(total_seconds(&bridged), 360.0);
+    }
+
+    #[test]
+    fn agent_anchor_chain_switches_project_ownership_without_changing_total() {
+        let mut first = anchor_at("first", "ai", 0.0);
+        first.project = Some("alpha".to_string());
+        let mut second = anchor_at("second", "ai", 60.0);
+        second.project = Some("beta".to_string());
+        let mut third = anchor_at("third", "ai", 120.0);
+        third.project = Some("gamma".to_string());
+
+        let bridged = bridge_by_attendance(Vec::new(), &[first, second, third], 900.0, 900.0);
+
+        assert_eq!(total_seconds(&bridged), 120.0);
+        assert_eq!(bridged.len(), 2);
+        assert_eq!(bridged[0].project.as_deref(), Some("alpha"));
+        assert_eq!((bridged[0].start, bridged[0].end), (0.0, 60.0));
+        assert_eq!(bridged[1].project.as_deref(), Some("beta"));
+        assert_eq!((bridged[1].start, bridged[1].end), (60.0, 120.0));
     }
 
     /// ...but it belongs to neither side. Extending the preceding interval — what a single
@@ -1659,6 +1672,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Attribution must never change the headline clock. With equal human and agent
+    /// timeouts, alternating editor/Codex anchors describe the same presence stream as
+    /// WakaTime's source-agnostic builder; handover gaps may move into `other`, but no
+    /// seconds may disappear from the total.
+    #[test]
+    fn mixed_source_anchors_match_wakatime_when_timeouts_are_equal() {
+        let events = [
+            (0.0, "editor"),
+            (120.0, "editor"),
+            (420.0, "ai"),
+            (720.0, "editor"),
+            (1_700.0, "ai"),
+            (1_820.0, "ai"),
+        ];
+        let intervals = events
+            .iter()
+            .enumerate()
+            .map(|(index, (at, source))| anchor_at(&format!("mixed-{index}"), source, *at))
+            .collect::<Vec<_>>();
+        let times = events.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+
+        let ours = total_seconds(&canonicalize_bridged(
+            &intervals,
+            BridgeConfig::split(900.0, 900.0),
+        ));
+        let reference = wakatime_reference(&times, 900.0);
+
+        assert!(
+            (ours - reference).abs() < 1e-6,
+            "ours={ours}, reference={reference}"
+        );
     }
 
     /// With measured segments in the stream wakaclock may report *more* than WakaTime,

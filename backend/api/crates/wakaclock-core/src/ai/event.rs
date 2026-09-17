@@ -151,6 +151,11 @@ pub struct AiEditEvent {
     /// synthesized from path, time, or line counts.
     #[serde(default)]
     pub tool_event_id: Option<String>,
+    /// Native host surface reported by the producer, when available. This is
+    /// only a fallback label (for example `codex-desktop`); editor attribution
+    /// is supplied later by durable broker/editor correlation.
+    #[serde(default)]
+    pub producer_surface: Option<String>,
     pub occurred_at: DateTime<Utc>,
     pub entity: PathBuf,
     pub project_root: Option<PathBuf>,
@@ -250,6 +255,7 @@ mod tests {
             identity_reason: None,
             identity_source: None,
             tool_event_id: None,
+            producer_surface: None,
             occurred_at: Utc::now(),
             entity: PathBuf::from("src/lib.rs"),
             project_root: None,
