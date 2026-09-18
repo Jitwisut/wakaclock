@@ -7,7 +7,11 @@
 worker/verify implementation ลงใน branch นี้แล้ว. R5 มี shared worker runtime,
 projection rebuild, export artifact foundation และ account-deletion workflow เพิ่มแล้ว
 แต่ยังคง fail-closed สำหรับงานที่ยังไม่มี provider/cross-store processor. Production ยังไม่เปิดจนกว่า K3/K4 และ K5
-staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence จะผ่าน
+staging, parity, load, rollback, 24-hour cohort และ 30-day stability evidence จะผ่าน.
+Branch `features/kafka-rabbitmq-production-readiness` เพิ่ม isolated full-stack
+readiness/domain evidence และ CI gates แล้ว; รายละเอียดอยู่ใน
+[`docs/kafka-rabbitmq-production-readiness-2026-09-18.md`](../docs/kafka-rabbitmq-production-readiness-2026-09-18.md)
+และ runbook อยู่ใน [`docs/kafka-rabbitmq-production-readiness-runbook.md`](../docs/kafka-rabbitmq-production-readiness-runbook.md)
 
 | ขั้น | สถานะ |
 |---|---|
@@ -22,9 +26,11 @@ staging, parity, load, rollback, 24-hour cohort และ 30-day stability evide
 | K0.5 PostgreSQL ingest state | ✅ migration `009_ingest_state.sql`, backfill command, dual/postgres source wiring, value-level access/rule parity report |
 | K1 Kafka producer | ✅ `rdkafka` feature, idempotent producer, typed heartbeat envelope, topic/infra config |
 | K2 heartbeat consumer | ✅ manual-offset fact-sink worker, strict/replay-safe writes, per-partition offset watermarking, retry seek/pause/resume, sanitized DLQ classification and health endpoints; K0 e2e/rebalance/outage matrix passed |
-| K3 verify + K4 cohort rollout | 🟡 orchestration, PostgreSQL audit, parity verifier, metrics and API response implemented; staging/load/cohort gate pending |
-| K5 AI usage Kafka + session reconcile | 🟡 contract v2/header routing, independent config, durable CLI pending queue, `ai-usage-ingest`, `ai-session-worker`, verifier/audit schema, payload-hash conflict guard and runbook implemented; isolated full-stack, real-account and rollout gates pending |
-| R5 งานชนิดอื่น | 🟡 shared runtime, `projection.rebuild`, export artifact foundation และ account-deletion tombstone/worker ทำแล้ว; export/account deletion มี explicit gates และยังต้องผ่าน cross-store e2e; report/integration/billing ยังไม่มี provider processor ที่พร้อมเปิด |
+| K3 verify + K4 cohort rollout | 🟡 orchestration, PostgreSQL audit, parity verifier, bounded metrics, API response และ isolated transport matrix/CI gate implemented; real staging 24-hour, load, rollback และ cohort gates pending |
+| K5 AI usage Kafka + session reconcile | 🟡 contract v2/header routing, independent config, durable CLI pending queue, `ai-usage-ingest`, `ai-session-worker`, verifier/audit schema, payload-hash conflict guard, isolated 6-scenario full-stack gate and CI implemented; real-account and rollout/30-day gates pending |
+| R5 `projection.rebuild` | 🟡 real worker readiness, deterministic idempotent job, duplicate delivery, lease expiry and broker/worker harness evidence passed locally; staging operational gate pending |
+| R5 `export.generate` + `account.delete` | 🟡 real worker readiness and isolated 3-scenario full-stack E2E passed with MinIO/cross-store checks; staging destructive-operation approval and operational gate pending |
+| R5 provider-neutral (`report.deliver`, `integration.sync`, `billing.reconcile`) | 🟡 contracts/fakes/ledger and capability fail-closed behavior implemented; `available: false`, 503 before persistence, provider selection and provider-specific E2E still required |
 
 การตัดสินใจที่ได้แล้ว (2026-09-11): **production ใช้ managed**, **ยอมรับ D5 (outbox) และ K3 (verify mode)**,
 **งานแรกคือ `analytics.reprocess`** — ยังไม่ได้เลือกผู้ให้บริการ managed รายไหน
@@ -302,8 +308,9 @@ adapter และ terminal-failure fencing. งานที่ยังไม่
 6. นับแถวที่ `heartbeat_id` ยาวเกิน `MAX_SOURCE_ID_LEN` (256) ที่มีอยู่แล้ว — ดูข้อจำกัดด้านล่าง
 
 ผลลัพธ์: `backend/api/src/bin/kafka-spike.rs` และ
-`docs/kafka-ingest-dedup-spike-2026-09-13.md` เตรียม isolated topic/decision record
-แล้ว แต่ต้องรันกับ endpoint จริงเพื่อเติม counts และตัดสิน D6 ก่อนเปิด cohort production
+`docs/kafka-ingest-dedup-spike-2026-09-13.md` มี isolated topic/decision record
+และ full 11/11 endpoint run แล้ว. K3/K4 ยังต้องมี staging account, load,
+rollback และ 24-hour cohort evidence ก่อนเปิด production
 
 **เงื่อนไขก่อน K1/K2:** `StableEventId::heartbeat` ปฏิเสธ id ที่ยาวเกิน 256 bytes แต่
 `Heartbeat::validate` ใน `wakaclock-core` ตรวจแค่ว่า id ไม่ว่าง ในโหมด Kafka heartbeat ที่ id ยาวจะ
@@ -330,6 +337,9 @@ compression, `linger.ms` ต่ำ, delivery timeout; key = `user_id`; สคร
   ตัวเดียวกับ path ตรง สิ่งที่ต้องพิสูจน์คือ transport (ข้อมูลหาย, ลำดับ, serialization, lag)
   ไม่ใช่การคำนวณ จึงไม่ต้องสร้าง schema เงา
 - เกณฑ์ผ่าน: รันกับบัญชีจริงอย่างน้อยหนึ่งช่วงที่ใช้งานปกติ ไม่มี mismatch
+- Branch readiness harness เพิ่ม `/live`/`/ready`, bounded metrics และ CI job
+  สำหรับ transport/routing regression แล้ว; local evidence ไม่แทน staging
+  24-hour gate และต้องเก็บ verification audit ที่ไม่มี sensitive payload
 
 **K4 — สลับทีละกลุ่มผู้ใช้** (1 PR + ช่วงเฝ้าดู)
 - `ATOAXIS_INGEST_MODE=kafka` + cohort (เริ่มจาก allowlist บัญชีของทีม → เปอร์เซ็นต์ตาม hash ของ `user_id`)
@@ -338,12 +348,17 @@ compression, `linger.ms` ต่ำ, delivery timeout; key = `user_id`; สคร
   และแสดงให้ผู้ใช้เห็น ไม่ใช่ซ่อนความล้มเหลว
 - load test ตามเป้า §9.22 (ack p95 < 250 ms, lag < 60 s) + เป้า read-your-writes ของ D8
 - เพิ่ม metrics exporter ก่อน load test (repo ยังไม่มี metrics crate)
+- CI รัน config/heartbeat routing tests และ isolated K0/K2 matrix เป็น preflight;
+  load target, CLI/VS Code 503 replay, rollback drain และการถือแต่ละ cohort
+  24 ชั่วโมงยังเป็น operational gate หลัง merge
 
 **K5 — ขยายและถอด path ตรง** (หลาย PR)
 - `/api/v1/ai/usage` → `wakaclock.ai-usage.v1`; consumer group แยกสำหรับงานอื่น
   (เช่น trigger `ai.session.reconcile` เข้า RabbitMQ)
 - ถอด path เขียน ClickHouse ตรงหลังผ่าน replay/rollback tests ตาม §9.22 ขั้น 7 เท่านั้น;
   ระหว่างนั้นเก็บ `direct` ไว้เป็น break-glass
+- `make k5-integration` เป็น mandatory isolated gate ใน branch นี้; real-account
+  verify/Kafka windows, cohort progression และ 30-day stability ยังไม่ปิด
 
 ## Definition of done ของทุก PR
 
