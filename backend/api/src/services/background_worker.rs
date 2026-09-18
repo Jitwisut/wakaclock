@@ -183,7 +183,10 @@ pub async fn run_worker(
     ));
     health_bound_rx
         .await
-        .context("background worker health server failed to bind")?;
+        .context("background worker health server failed to bind")?
+        .map_err(|error| {
+            anyhow::anyhow!("background worker health server failed to bind: {error}")
+        })?;
     let queue = match RabbitMqJobQueue::connect(&job_queue)
         .await
         .context("connect background worker to RabbitMQ")
@@ -523,7 +526,7 @@ fn spawn_lease_renewer(
 async fn serve_health(
     config: WorkerRuntimeConfig,
     state: HealthState,
-    bound: oneshot::Sender<()>,
+    bound: oneshot::Sender<std::result::Result<(), String>>,
     postgres: Arc<crate::infrastructure::postgres::PostgresClient>,
     clickhouse: Arc<crate::infrastructure::database::ClickHouseClient>,
     port: u16,
@@ -551,8 +554,15 @@ async fn serve_health(
         )
         .route("/metrics", get(move || metrics_response(metrics_service)))
         .with_state(());
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    let _ = bound.send(());
+    let listener = match tokio::net::TcpListener::bind(address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = bound.send(Err(message.clone()));
+            return Err(error.into());
+        }
+    };
+    let _ = bound.send(Ok(()));
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await

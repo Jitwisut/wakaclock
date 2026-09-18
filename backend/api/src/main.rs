@@ -234,10 +234,19 @@ async fn main() -> Result<()> {
         .with_state(app_state.clone());
 
     let health_state = app_state.clone();
+    let readiness_state = app_state.clone();
     let router = axum::Router::new()
+        .route(
+            "/live",
+            axum::routing::get(|| async { StatusCode::OK }),
+        )
         .route(
             "/health",
             axum::routing::get(move || health_endpoint(health_state.clone())),
+        )
+        .route(
+            "/ready",
+            axum::routing::get(move || health_endpoint(readiness_state.clone())),
         )
         .nest("/api/v1", api_v1)
         .nest("/api/v2", api_v2)

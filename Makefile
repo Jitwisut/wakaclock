@@ -11,6 +11,18 @@ K0_COMPOSE_PROJECT ?= wakaclock-k0
 K0_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
 K5_COMPOSE_PROJECT ?= wakaclock-k5
 K5_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
+R5_COMPOSE_PROJECT ?= wakaclock-r5
+R5_COMPOSE_FILE ?= docker-compose.kafka-spike.yml
+R5_OBJECT_STORE_BUCKET ?= wakaclock-r5-acceptance
+R5_POSTGRES_PORT ?= 25432
+R5_KAFKA_PORT ?= 29092
+R5_CLICKHOUSE_PORT ?= 28123
+R5_RABBITMQ_PORT ?= 25673
+R5_RABBITMQ_MANAGEMENT_PORT ?= 25674
+R5_REDIS_PORT ?= 26379
+R5_MINIO_PORT ?= 29000
+R5_MINIO_CONSOLE_PORT ?= 29001
+R5_EVIDENCE_DIR ?=
 
 .DEFAULT_GOAL := help
 
@@ -73,6 +85,69 @@ k5-integration: ## Run K0 and K5 isolated broker acceptance harnesses
 	@$(MAKE) k5-ai-usage-infra-up
 	@$(MAKE) kafka-spike K0_COMPOSE_PROJECT=$(K5_COMPOSE_PROJECT)
 	@$(MAKE) k5-ai-usage-spike K5_COMPOSE_PROJECT=$(K5_COMPOSE_PROJECT)
+
+.PHONY: r5-integration
+r5-integration: ## Run isolated RabbitMQ R5 projection/export/deletion acceptance harness
+	@set -eu; \
+	r5_cleanup() { \
+		status=$$?; \
+		if [ -n "$(R5_EVIDENCE_DIR)" ]; then \
+			mkdir -p "$(R5_EVIDENCE_DIR)"; \
+			$(COMPOSE) -p $(R5_COMPOSE_PROJECT) -f $(R5_COMPOSE_FILE) logs --no-color > "$(R5_EVIDENCE_DIR)/compose.log" 2>&1 || true; \
+		fi; \
+		$(MAKE) -C "$(CURDIR)" r5-infra-down; \
+		exit $$status; \
+	}; \
+	trap r5_cleanup EXIT INT TERM; \
+	$(MAKE) r5-infra-up; \
+	$(COMPOSE) -p $(R5_COMPOSE_PROJECT) -f $(R5_COMPOSE_FILE) exec -T minio \
+		mc alias set local http://127.0.0.1:9000 atoaxis atoaxis-test; \
+	$(COMPOSE) -p $(R5_COMPOSE_PROJECT) -f $(R5_COMPOSE_FILE) exec -T minio \
+		mc mb --ignore-existing local/$(R5_OBJECT_STORE_BUCKET); \
+	R5_READINESS_POSTGRES_URL="postgres://atoaxis:atoaxis-test@localhost:$(R5_POSTGRES_PORT)/atoaxis_k0" \
+	R5_READINESS_CLICKHOUSE_URL="http://localhost:$(R5_CLICKHOUSE_PORT)" \
+	R5_READINESS_RABBITMQ_URL="amqp://atoaxis:atoaxis-test@localhost:$(R5_RABBITMQ_PORT)/%2f" \
+	R5_READINESS_REDIS_URL="redis://127.0.0.1:$(R5_REDIS_PORT)" \
+	R5_READINESS_OBJECT_STORE_ENDPOINT="http://127.0.0.1:$(R5_MINIO_PORT)" \
+	R5_READINESS_OBJECT_STORE_BUCKET="$(R5_OBJECT_STORE_BUCKET)" \
+	R5_READINESS_POSTGRES_PORT="$(R5_POSTGRES_PORT)" \
+	R5_READINESS_CLICKHOUSE_PORT="$(R5_CLICKHOUSE_PORT)" \
+	R5_READINESS_RABBITMQ_PORT="$(R5_RABBITMQ_PORT)" \
+	R5_READINESS_REDIS_PORT="$(R5_REDIS_PORT)" \
+	R5_READINESS_MINIO_PORT="$(R5_MINIO_PORT)" \
+	bash scripts/rabbitmq-r5-readiness.sh; \
+	cd $(BACKEND_DIR) && \
+		CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:$(R5_CLICKHOUSE_PORT)/wakaclock}" \
+		POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@localhost:$(R5_POSTGRES_PORT)/atoaxis_k0}" \
+		RABBITMQ_TEST_URL="$${RABBITMQ_TEST_URL:-amqp://atoaxis:atoaxis-test@localhost:$(R5_RABBITMQ_PORT)/%2f}" \
+		REDIS_TEST_URL="$${REDIS_TEST_URL:-redis://127.0.0.1:$(R5_REDIS_PORT)}" \
+		OBJECT_STORE_TEST_ENDPOINT="$${OBJECT_STORE_TEST_ENDPOINT:-http://127.0.0.1:$(R5_MINIO_PORT)}" \
+		OBJECT_STORE_TEST_BUCKET="$(R5_OBJECT_STORE_BUCKET)" \
+		$(CARGO) run --bin rabbitmq-spike --features r5-spike
+
+.PHONY: r5-infra-up
+r5-infra-up: ## Start the isolated PostgreSQL/ClickHouse/Redis/RabbitMQ/MinIO R5 stack
+	@KAFKA_SPIKE_POSTGRES_PORT=$(R5_POSTGRES_PORT) \
+		KAFKA_SPIKE_KAFKA_PORT=$(R5_KAFKA_PORT) \
+		KAFKA_SPIKE_CLICKHOUSE_PORT=$(R5_CLICKHOUSE_PORT) \
+		KAFKA_SPIKE_RABBITMQ_PORT=$(R5_RABBITMQ_PORT) \
+		KAFKA_SPIKE_RABBITMQ_MANAGEMENT_PORT=$(R5_RABBITMQ_MANAGEMENT_PORT) \
+		KAFKA_SPIKE_REDIS_PORT=$(R5_REDIS_PORT) \
+		KAFKA_SPIKE_MINIO_PORT=$(R5_MINIO_PORT) \
+		KAFKA_SPIKE_MINIO_CONSOLE_PORT=$(R5_MINIO_CONSOLE_PORT) \
+		$(COMPOSE) -p $(R5_COMPOSE_PROJECT) -f $(R5_COMPOSE_FILE) up -d --wait
+
+.PHONY: r5-infra-down
+r5-infra-down: ## Stop R5 infrastructure and remove only its test volumes
+	@KAFKA_SPIKE_POSTGRES_PORT=$(R5_POSTGRES_PORT) \
+		KAFKA_SPIKE_KAFKA_PORT=$(R5_KAFKA_PORT) \
+		KAFKA_SPIKE_CLICKHOUSE_PORT=$(R5_CLICKHOUSE_PORT) \
+		KAFKA_SPIKE_RABBITMQ_PORT=$(R5_RABBITMQ_PORT) \
+		KAFKA_SPIKE_RABBITMQ_MANAGEMENT_PORT=$(R5_RABBITMQ_MANAGEMENT_PORT) \
+		KAFKA_SPIKE_REDIS_PORT=$(R5_REDIS_PORT) \
+		KAFKA_SPIKE_MINIO_PORT=$(R5_MINIO_PORT) \
+		KAFKA_SPIKE_MINIO_CONSOLE_PORT=$(R5_MINIO_CONSOLE_PORT) \
+		$(COMPOSE) -p $(R5_COMPOSE_PROJECT) -f $(R5_COMPOSE_FILE) down -v --remove-orphans
 
 .PHONY: infra-down
 infra-down: ## Stop local infrastructure containers, including Redpanda
