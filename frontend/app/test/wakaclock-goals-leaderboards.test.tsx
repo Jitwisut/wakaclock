@@ -36,7 +36,9 @@ vi.mock('@/lib/wakaclock/endpoints-v2', () => ({
   removeLeaderboardMember: vi.fn(),
 }));
 
-vi.mock('@/lib/wakaclock/endpoints', () => ({ getProjects: vi.fn().mockResolvedValue({ data: [] }) }));
+vi.mock('@/lib/wakaclock/endpoints', () => ({
+  getProjects: vi.fn().mockResolvedValue({ data: [] }),
+}));
 
 vi.mock('@/components/wakaclock/require-user', () => ({
   RequireUser: ({ children }: { children: React.ReactNode }) => children,
@@ -84,7 +86,18 @@ function renderPage(page: React.ReactElement) {
 }
 
 beforeEach(() => {
-  v2.getCapabilities.mockResolvedValue({ postgres_enabled: true });
+  vi.clearAllMocks();
+  v2.getCapabilities.mockResolvedValue({
+    features: [
+      {
+        api: '/leaderboards',
+        available: true,
+        key: 'private_leaderboards',
+        status: 'beta',
+      },
+    ],
+    postgres_enabled: true,
+  });
 });
 
 describe('Goals page', () => {
@@ -146,5 +159,27 @@ describe('Leaderboards page', () => {
 
     expect(await screen.findByText(/All coding time · Weekly/)).toBeInTheDocument();
     expect(await screen.findByText('jit')).toBeInTheDocument();
+  });
+
+  it('explains an unavailable deployment without calling the disabled endpoint', async () => {
+    v2.getCapabilities.mockResolvedValue({
+      features: [
+        {
+          api: '/leaderboards',
+          available: false,
+          key: 'private_leaderboards',
+          status: 'disabled',
+        },
+      ],
+      postgres_enabled: true,
+    });
+
+    renderPage(<LeaderboardsPage />);
+
+    expect(
+      await screen.findByText(/Leaderboards is unavailable in this deployment/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('New leaderboard')).not.toBeInTheDocument();
+    expect(v2.listLeaderboards).not.toHaveBeenCalled();
   });
 });

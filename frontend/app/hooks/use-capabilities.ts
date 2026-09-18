@@ -18,13 +18,23 @@ import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
  * the account, and the answer does not change while the tab is open.
  */
 export function useCapabilities() {
-  // Selecting the two fields callers need, rather than spreading the query result, keeps
-  // this from subscribing to every internal query state change.
+  // Selecting the fields callers need, rather than spreading the query result, keeps
+  // this hook's public surface focused on deployment capabilities.
   const { data, isLoading } = useQuery({
     queryFn: getCapabilities,
     queryKey: wakaclockKeys.capabilities(),
     staleTime: 30 * 60 * 1000,
   });
+
+  // The server's feature matrix is the source of truth for capabilities that can
+  // still be fail-closed even when their storage dependency is configured. For
+  // example, private leaderboards have routes and PostgreSQL tables but are not
+  // enabled until their complete runtime contract is ready.
+  const featureAvailability = data
+    ? Object.fromEntries(
+        (data.features ?? []).map((feature) => [feature.key, feature.available === true])
+      )
+    : undefined;
 
   return {
     isLoading,
@@ -34,5 +44,6 @@ export function useCapabilities() {
      */
     postgresEnabled: data?.postgres_enabled,
     presenceV2Available: data?.presence_v2_available,
+    featureAvailability,
   };
 }
