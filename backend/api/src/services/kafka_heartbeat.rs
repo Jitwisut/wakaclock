@@ -40,6 +40,14 @@ pub async fn process_batch(
     deliveries.sort_by_key(|delivery| (delivery.partition, delivery.offset));
     let mut outcome = BatchOutcome::default();
     let mut blocked = BTreeSet::new();
+    // A Kafka poll can contain multiple physical deliveries for the same stable
+    // heartbeat identity.  The repository revision lookup protects replays that
+    // arrive in a later poll, but it cannot observe rows inserted earlier in this
+    // loop until ClickHouse makes them visible to a subsequent query.  Keep a
+    // batch-local completion set so a duplicate in one poll never reaches the raw
+    // insert boundary twice.  Do not add an identity until its side effects are
+    // durable, so a transient failure can still be retried safely.
+    let mut completed_identities = BTreeSet::<(uuid::Uuid, String, Option<String>, u32)>::new();
     let metrics = global_kafka_metrics();
 
     for delivery in deliveries {
@@ -82,6 +90,24 @@ pub async fn process_batch(
         }
 
         let tenant_id = delivery.event.tenant_id;
+        let heartbeat_identity = event.heartbeat.heartbeat_id.as_ref().map(|heartbeat_id| {
+            (
+                tenant_id,
+                heartbeat_id.clone(),
+                event.heartbeat.session_id.clone(),
+                event.heartbeat.revision,
+            )
+        });
+        if let Some(identity) = heartbeat_identity.as_ref() {
+            if completed_identities.contains(identity) {
+                outcome.committed.push(delivery);
+                outcome.deduplicated += 1;
+                metrics
+                    .deduplicated_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+        }
         let Some(postgres) = state.postgres.as_ref() else {
             block_partition(&mut outcome, &mut blocked, &delivery);
             tracing::warn!("heartbeat fact-sink has no PostgreSQL account guard");
@@ -151,6 +177,9 @@ pub async fn process_batch(
             .await
         {
             Ok(inserted) => {
+                if let Some(identity) = heartbeat_identity {
+                    completed_identities.insert(identity);
+                }
                 metrics
                     .observe_insert(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
                 if inserted == 0 {

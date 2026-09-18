@@ -197,6 +197,25 @@ async fn publish_heartbeat(
 }
 
 #[cfg(feature = "kafka-spike")]
+async fn seed_spike_user(
+    state: &std::sync::Arc<wakaclock_server::infrastructure::app::AppState>,
+    user_id: uuid::Uuid,
+) -> anyhow::Result<()> {
+    let postgres = state
+        .postgres
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("K0 harness requires PostgreSQL"))?;
+    postgres
+        .execute(
+            "INSERT INTO users (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+            &[&user_id, &format!("k0-harness-{user_id}")],
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("seed K0 harness user {user_id}: {error}"))?;
+    Ok(())
+}
+
+#[cfg(feature = "kafka-spike")]
 fn sample_heartbeat(
     user_id: uuid::Uuid,
     heartbeat_id: &str,
@@ -369,6 +388,7 @@ async fn run_duplicate_publish(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-duplicate-{}", uuid::Uuid::now_v7());
     let heartbeat = sample_heartbeat(user, &id, 0, "src/k0-duplicate.rs");
     for _ in 0..100 {
@@ -399,6 +419,7 @@ async fn run_revision_replay(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-revision-{}", uuid::Uuid::now_v7());
     publish_heartbeat(
         bus,
@@ -459,6 +480,7 @@ async fn run_revision_gap(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-gap-{}", uuid::Uuid::now_v7());
     publish_heartbeat(bus, topic, sample_heartbeat(user, &id, 1, "src/k0-gap.rs")).await?;
     let outcome = consume_once(state, bus, topic, "main", 10).await?;
@@ -482,6 +504,7 @@ async fn run_legacy_server_id(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let mut heartbeat = sample_heartbeat(user, "legacy-placeholder", 0, "src/k0-legacy.rs");
     heartbeat.heartbeat_id = None;
     state
@@ -506,6 +529,7 @@ async fn run_batch_boundary(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let first = format!("k0-batch-a-{}", uuid::Uuid::now_v7());
     let second = format!("k0-batch-b-{}", uuid::Uuid::now_v7());
     publish_heartbeat(
@@ -546,6 +570,7 @@ async fn run_raw_before_interval_replay(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-raw-crash-{}", uuid::Uuid::now_v7());
     publish_heartbeat(
         bus,
@@ -627,6 +652,7 @@ async fn run_precommit_replay(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-precommit-{}", uuid::Uuid::now_v7());
     publish_heartbeat(
         bus,
@@ -758,6 +784,7 @@ async fn run_rebalance(
     let mut ids = Vec::new();
     for _ in 0..24 {
         let user = uuid::Uuid::now_v7();
+        seed_spike_user(state, user).await?;
         let id = format!("k0-rebalance-{}", uuid::Uuid::now_v7());
         ids.push((user, id.clone()));
         publish_heartbeat(
@@ -849,6 +876,7 @@ async fn run_clickhouse_outage_replay(
     use wakaclock_server::infrastructure::contracts::{EventConsumer, EventTopic};
     use wakaclock_server::infrastructure::kafka::KafkaEventConsumer;
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-outage-{}", uuid::Uuid::now_v7());
     let config = state
         .config
@@ -931,6 +959,7 @@ async fn run_tombstone_replay(
     topic: &str,
 ) -> anyhow::Result<usize> {
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-tombstone-{}", uuid::Uuid::now_v7());
     let heartbeat = sample_heartbeat(user, &id, 0, "src/k0-tombstone.rs");
     publish_heartbeat(bus, topic, heartbeat.clone()).await?;
@@ -968,6 +997,7 @@ async fn run_safe_entity_parity(
 ) -> anyhow::Result<usize> {
     use wakaclock_server::infrastructure::contracts::{safe_event_entity, HeartbeatEventV1};
     let user = uuid::Uuid::now_v7();
+    seed_spike_user(state, user).await?;
     let id = format!("k0-safe-{}", uuid::Uuid::now_v7());
     let absolute = format!("/Users/test/project/{id}.rs");
     let event = HeartbeatEventV1::from_heartbeat(sample_heartbeat(user, &id, 0, &absolute))

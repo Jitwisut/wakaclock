@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: atoaxis-test
       POSTGRES_DB: atoaxis_k0
     ports:
-      - "15432:5432"
+      - "${KAFKA_SPIKE_POSTGRES_PORT:-15432}:5432"
     volumes:
       - k0_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -29,7 +29,7 @@ services:
       - --kafka-addr=PLAINTEXT://0.0.0.0:19092
       - --advertise-kafka-addr=PLAINTEXT://localhost:19092
     ports:
-      - "19092:19092"
+      - "${KAFKA_SPIKE_KAFKA_PORT:-19092}:19092"
     volumes:
       - k0_redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -49,11 +49,23 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       CLICKHOUSE_PASSWORD: default
     ports:
-      - "18123:8123"
+      - "${KAFKA_SPIKE_CLICKHOUSE_PORT:-18123}:8123"
     volumes:
       - k0_clickhouse_data:/var/lib/clickhouse
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "${KAFKA_SPIKE_REDIS_PORT:-16379}:6379"
+    volumes:
+      - k0_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -64,8 +76,8 @@ services:
       RABBITMQ_DEFAULT_USER: atoaxis
       RABBITMQ_DEFAULT_PASS: atoaxis-test
     ports:
-      - "15673:5672"
-      - "15672:15672"
+      - "${KAFKA_SPIKE_RABBITMQ_PORT:-15673}:5672"
+      - "${KAFKA_SPIKE_RABBITMQ_MANAGEMENT_PORT:-15674}:15672"
     volumes:
       - k0_rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -74,8 +86,27 @@ services:
       timeout: 5s
       retries: 20
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: atoaxis
+      MINIO_ROOT_PASSWORD: atoaxis-test
+    ports:
+      - "${KAFKA_SPIKE_MINIO_PORT:-19000}:9000"
+      - "${KAFKA_SPIKE_MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - k0_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
 volumes:
   k0_postgres_data:
   k0_redpanda_data:
   k0_clickhouse_data:
+  k0_redis_data:
   k0_rabbitmq_data:
+  k0_minio_data:
