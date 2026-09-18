@@ -154,6 +154,54 @@ jobs:
         if: always()
         run: docker compose -p wakaclock-k5 -f docker-compose.kafka-spike.yml down -v --remove-orphans
 
+  kafka-heartbeat-acceptance:
+    name: K3/K4 heartbeat transport and rollout gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+      - name: Start isolated heartbeat broker stack
+        run: docker compose -p wakaclock-k3-k4 -f docker-compose.kafka-spike.yml up -d --wait
+      - name: Run K3/K4 configuration and heartbeat routing tests
+        working-directory: backend/api
+        run: |
+          cargo test -p wakaclock-server --features kafka config::brokers -- --test-threads=1
+          cargo test -p wakaclock-server --features kafka heartbeat_ingest -- --test-threads=1
+      - name: Run the isolated transport/replay matrix used by K3/K4 promotion
+        run: make kafka-spike K0_COMPOSE_PROJECT=wakaclock-k3-k4
+      - name: Capture isolated heartbeat broker logs
+        if: always()
+        run: docker compose -p wakaclock-k3-k4 -f docker-compose.kafka-spike.yml logs --no-color > "${RUNNER_TEMP}/wakaclock-k3-k4-compose.log"
+      - name: Upload isolated heartbeat broker logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wakaclock-k3-k4-compose-logs
+          path: ${{ runner.temp }}/wakaclock-k3-k4-compose.log
+      - name: Tear down isolated heartbeat stack
+        if: always()
+        run: docker compose -p wakaclock-k3-k4 -f docker-compose.kafka-spike.yml down -v --remove-orphans
+
+  rabbitmq-r5-integration:
+    name: R5 projection/export/account deletion full-stack acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native Kafka build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+      - name: Run R5 readiness and cross-store acceptance suite
+        run: make r5-integration R5_EVIDENCE_DIR="${RUNNER_TEMP}/wakaclock-r5-evidence"
+      - name: Upload R5 broker evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wakaclock-r5-compose-logs
+          path: ${{ runner.temp }}/wakaclock-r5-evidence
+          if-no-files-found: warn
+
   duration-baseline:
     name: Phase 0 duration and attribution baseline
     runs-on: ubuntu-latest
