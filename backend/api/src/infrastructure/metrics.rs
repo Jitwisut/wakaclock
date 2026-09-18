@@ -63,6 +63,7 @@ pub struct JobMetrics {
     pub dead_lettered_total: AtomicU64,
     pub requeued_total: AtomicU64,
     pub lease_lost_total: AtomicU64,
+    pub oldest_outbox_age_seconds: AtomicU64,
     pub processing_latency_ms_total: AtomicU64,
     pub processing_latency_count: AtomicU64,
 }
@@ -180,6 +181,11 @@ impl JobMetrics {
             &mut output,
             "lease_lost_total",
             self.lease_lost_total.load(Ordering::Relaxed),
+        );
+        write_job_gauge(
+            &mut output,
+            "oldest_outbox_age_seconds",
+            self.oldest_outbox_age_seconds.load(Ordering::Relaxed),
         );
         write_job_counter(
             &mut output,
@@ -520,6 +526,11 @@ fn write_counter_with_prefix(output: &mut String, prefix: &str, name: &str, valu
 fn write_gauge(output: &mut String, name: &str, value: u64) {
     let _ = writeln!(output, "# TYPE atoaxis_kafka_{} gauge", name);
     let _ = writeln!(output, "atoaxis_kafka_{} {}", name, value);
+}
+
+fn write_job_gauge(output: &mut String, name: &str, value: u64) {
+    let _ = writeln!(output, "# TYPE atoaxis_job_{} gauge", name);
+    let _ = writeln!(output, "atoaxis_job_{} {}", name, value);
 }
 
 fn escape(value: &str) -> String {

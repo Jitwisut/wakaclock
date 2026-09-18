@@ -106,6 +106,29 @@ impl JobService {
             .ok_or_else(|| anyhow!("background jobs require POSTGRES_URL"))
     }
 
+    /// Returns the age of the oldest unpublished async-job outbox row.  The
+    /// value is an aggregate only: it deliberately exposes no tenant, job ID or
+    /// payload data to the metrics endpoint.
+    pub async fn oldest_outbox_age_seconds(&self) -> Result<u64> {
+        let postgres = self.required()?;
+        let row = postgres
+            .client()
+            .query_one(
+                "SELECT COALESCE(
+                            GREATEST(EXTRACT(EPOCH FROM (now() - MIN(created_at))), 0),
+                            0
+                        )::bigint
+                 FROM outbox_events
+                 WHERE published_at IS NULL AND failed_at IS NULL
+                   AND aggregate_type = $1",
+                &[&OUTBOX_AGGREGATE],
+            )
+            .await
+            .context("read oldest async-job outbox age")?;
+        let age: i64 = row.get(0);
+        Ok(age.max(0) as u64)
+    }
+
     /// Creates a job and, in the same transaction, the outbox row the relay will
     /// publish. A repeated `idempotency_key` for the same account and kind returns the
     /// job the first call created and writes nothing new.

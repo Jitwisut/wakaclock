@@ -38,6 +38,7 @@ pub mod project_identity;
 pub mod project_merge;
 pub mod project_rule;
 pub mod projects;
+pub mod provider_neutral;
 pub mod reports;
 pub mod reprocess;
 pub mod stats;

@@ -85,6 +85,9 @@ pub struct CapabilityData {
     pub presence_v2_available: bool,
     pub privacy: PrivacyCapabilities,
     pub clients: ClientCapabilities,
+    /// Provider-neutral R5 jobs remain visible to clients but closed until a
+    /// production provider/source of truth is selected and certified.
+    pub background_jobs: &'static [crate::services::provider_neutral::ProviderNeutralCapability],
     pub features: Vec<FeatureCapability>,
     pub wakatime_routes: Vec<WakaTimeRouteCapability>,
 }
@@ -511,6 +514,7 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                 desktop_tracker: "privacy-policy-skeleton",
                 browser_extensions: "webextension-core",
             },
+            background_jobs: crate::services::provider_neutral::PROVIDER_NEUTRAL_CAPABILITIES,
             features: features
                 .features
                 .into_iter()

@@ -71,6 +71,9 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
                         .outbox_publish_failures_total
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tracing::warn!(%error, "relay publish failed; reconnecting");
+                    if let Err(age_error) = update_outbox_age(job_service).await {
+                        tracing::warn!(%age_error, "could not update async-job outbox age metric");
+                    }
                     return;
                 }
             }
@@ -78,6 +81,10 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
                 // A PostgreSQL-side failure — keep the broker connection and retry.
                 tracing::warn!(%error, "relay could not read the outbox");
             }
+        }
+
+        if let Err(error) = update_outbox_age(job_service).await {
+            tracing::warn!(%error, "could not update async-job outbox age metric");
         }
 
         match job_service.sweep_once(SWEEP_BATCH).await {
@@ -101,4 +108,12 @@ async fn run_until_broker_error(job_service: &JobService, queue: &RabbitMqJobQue
             Err(error) => tracing::warn!(%error, "job lease sweep failed"),
         }
     }
+}
+
+async fn update_outbox_age(job_service: &JobService) -> anyhow::Result<()> {
+    let age = job_service.oldest_outbox_age_seconds().await?;
+    global_job_metrics()
+        .oldest_outbox_age_seconds
+        .store(age, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
