@@ -69,6 +69,8 @@ export type NavItem = {
   items?: NavItem;
   /** Opens link in new tab when true */
   newTab?: boolean;
+  /** Hide this item unless the server capability matrix marks the feature as available. */
+  requiresFeature?: string;
   /**
    * Hide this item unless the server has a transactional store. Goals and leaderboards
    * live in PostgreSQL, and a ClickHouse-only deployment is a supported configuration —
@@ -122,7 +124,11 @@ export const navItems: NavGroup[] = [
         items: [
           { title: 'Activity Timeline', href: '/dashboard/wakaclock/analytics/timeline' },
           { title: 'Human vs AI', href: '/dashboard/wakaclock/analytics/human-ai' },
-          { title: 'Projects', href: '/dashboard/wakaclock/analytics/projects', icon: FolderGit2Icon },
+          {
+            title: 'Projects',
+            href: '/dashboard/wakaclock/analytics/projects',
+            icon: FolderGit2Icon,
+          },
           { title: 'Activity Heatmap', href: '/dashboard/wakaclock/analytics/heatmap' },
         ],
       },
@@ -140,6 +146,7 @@ export const navItems: NavGroup[] = [
         href: '/dashboard/wakaclock/leaderboards',
         icon: TrophyIcon,
         requiresPostgres: true,
+        requiresFeature: 'private_leaderboards',
       },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
       { title: 'Presence (prototype)', href: '/dashboard/wakaclock/presence', icon: RadioIcon },
@@ -245,7 +252,10 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                                 className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10! active:bg-[var(--primary)]/10!"
                                 key={subMenuItem.title}
                               >
-                                <a data-testid={subMenuItem.testId} href={analyticsHref(subMenuItem.href)}>
+                                <a
+                                  data-testid={subMenuItem.testId}
+                                  href={analyticsHref(subMenuItem.href)}
+                                >
                                   {subMenuItem.title}
                                 </a>
                               </DropdownMenuItem>
@@ -276,7 +286,8 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                               <SidebarMenuSubItem key={subItem.href}>
                                 <SidebarMenuSubButton
                                   aria-current={
-                                    pathname === subItem.href || pathname.startsWith(`${subItem.href}/`)
+                                    pathname === subItem.href ||
+                                    pathname.startsWith(`${subItem.href}/`)
                                       ? 'page'
                                       : undefined
                                   }
@@ -284,10 +295,14 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                                   className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10 active:bg-[var(--primary)]/10"
                                   data-testid={subItem.testId}
                                   isActive={
-                                    pathname === subItem.href || pathname.startsWith(`${subItem.href}/`)
+                                    pathname === subItem.href ||
+                                    pathname.startsWith(`${subItem.href}/`)
                                   }
                                 >
-                                  <Link href={analyticsHref(subItem.href)} target={subItem.newTab ? '_blank' : ''}>
+                                  <Link
+                                    href={analyticsHref(subItem.href)}
+                                    target={subItem.newTab ? '_blank' : ''}
+                                  >
                                     <span>
                                       {subItem.title}
                                       <LinkPending label={labels?.loading ?? 'Loading page'} />

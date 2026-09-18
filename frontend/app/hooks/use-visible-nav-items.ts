@@ -12,11 +12,11 @@ import { useCapabilities } from '@/hooks/use-capabilities';
  * them means a ClickHouse-only install hides Goals from the sidebar and then offers it
  * in search — the same dead end, one keystroke further away.
  *
- * While capabilities are unknown the Postgres-only entries stay hidden rather than
- * appearing and then vanishing, which is the more jarring of the two flickers.
+ * While capabilities are unknown the gated entries stay hidden rather than appearing
+ * and then vanishing, which is the more jarring of the two flickers.
  */
 export function useVisibleNavItems(items: NavGroup[] = navItems): NavGroup[] {
-  const { postgresEnabled } = useCapabilities();
+  const { featureAvailability, postgresEnabled } = useCapabilities();
 
   return React.useMemo(
     () =>
@@ -24,10 +24,12 @@ export function useVisibleNavItems(items: NavGroup[] = navItems): NavGroup[] {
         .map((group) => ({
           ...group,
           items: group.items.filter(
-            (item) => !item.requiresPostgres || postgresEnabled === true
+            (item) =>
+              (!item.requiresPostgres || postgresEnabled === true) &&
+              (!item.requiresFeature || featureAvailability?.[item.requiresFeature] === true)
           ),
         }))
         .filter((group) => group.items.length > 0),
-    [items, postgresEnabled]
+    [featureAvailability, items, postgresEnabled]
   );
 }

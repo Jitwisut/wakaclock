@@ -14,7 +14,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
-import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
+import { RequiresFeature } from '@/components/wakaclock/requires-feature';
 import {
   addLeaderboardMember,
   createLeaderboard,
@@ -26,7 +26,6 @@ import { formatUnixSeconds } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { Leaderboard } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
-
 
 /** Mirrors the validation in services/leaderboards.rs. */
 const METRICS = [
@@ -276,9 +275,9 @@ export default function LeaderboardsPage() {
         title="Leaderboards"
       />
       <RequireUser>
-        <RequiresPostgres feature="Leaderboards">
+        <RequiresFeature feature="Leaderboards" featureKey="private_leaderboards">
           <LeaderboardsPanel />
-        </RequiresPostgres>
+        </RequiresFeature>
       </RequireUser>
     </div>
   );
