@@ -493,7 +493,7 @@ impl AiActivityParser for CodexParser {
                                     "codex-v2",
                                     &format!("{}:{}", session_id.as_deref().unwrap_or(""), item_id),
                                     &entity_path,
-                                    previous_path.as_deref(),
+                                    previous_path,
                                     change_kind,
                                     delta,
                                     occurred_at,
@@ -1567,6 +1567,7 @@ fn pending_apply_patch_matches_native(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_codex_file_event(
     id_prefix: &str,
     operation_id: &str,

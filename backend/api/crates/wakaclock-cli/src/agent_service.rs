@@ -232,7 +232,7 @@ fn service_executable() -> Result<PathBuf, String> {
                 )
             })?;
         }
-        return Ok(target);
+        Ok(target)
     }
     #[cfg(not(target_os = "macos"))]
     Ok(current)
