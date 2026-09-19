@@ -16,6 +16,23 @@ import {
 } from "./secrets";
 import type { StatusBarController } from "./statusBar";
 import { localTimezone } from "./utils";
+import type { ServerConnectionState } from "./types";
+
+/** Same typed state the status bar uses, so the popup and the bar never disagree. */
+function connectionNote(state: ServerConnectionState | undefined): string {
+  switch (state) {
+    case "offline":
+      return " — offline: the server is unreachable; activity stays queued locally.";
+    case "retryable_server_error":
+      return " — the server asked to retry later; activity stays queued locally.";
+    case "auth_rejected":
+      return " — the server rejected this API key.";
+    case "subscription_required":
+      return " — this account needs an active AtoAxis subscription.";
+    default:
+      return "";
+  }
+}
 
 export interface AiIntegrationController {
   getStatus(): Promise<AiAgentStatus[]>;
@@ -133,7 +150,8 @@ export function registerCommands(
         // bar could read "0s" while this popup read "11m 46s".
         const today = await cliService.getToday(localTimezone());
         await vscode.window.showInformationMessage(
-          `Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`
+          `Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)` +
+            connectionNote(today.connection?.state)
         );
       } catch (error) {
         await vscode.window.showErrorMessage(

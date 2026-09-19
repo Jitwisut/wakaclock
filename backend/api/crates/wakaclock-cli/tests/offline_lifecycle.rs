@@ -19,12 +19,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::Mutex,
     task::JoinHandle,
     time::timeout,
 };
@@ -152,25 +153,26 @@ impl MockApi {
         Self { url, state, task }
     }
 
-    fn set_online(&self, online: bool) {
-        self.state.lock().unwrap().online = online;
+    async fn set_online(&self, online: bool) {
+        self.state.lock().await.online = online;
     }
 
-    fn set_heartbeats(&self, reply: Reply) {
-        self.state.lock().unwrap().heartbeats = reply;
+    async fn set_heartbeats(&self, reply: Reply) {
+        self.state.lock().await.heartbeats = reply;
     }
 
-    fn set_today(&self, reply: Reply) {
-        self.state.lock().unwrap().today = reply;
+    async fn set_today(&self, reply: Reply) {
+        self.state.lock().await.today = reply;
     }
 
-    fn received(&self) -> Vec<ReceivedHeartbeat> {
-        self.state.lock().unwrap().received.clone()
+    async fn received(&self) -> Vec<ReceivedHeartbeat> {
+        self.state.lock().await.received.clone()
     }
 
-    fn received_ids(&self) -> Vec<String> {
+    async fn received_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
             .received()
+            .await
             .into_iter()
             .map(|heartbeat| heartbeat.heartbeat_id)
             .collect();
@@ -186,7 +188,7 @@ impl Drop for MockApi {
 }
 
 async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
-    if !state.lock().unwrap().online {
+    if !state.lock().await.online {
         drop(stream);
         return;
     }
@@ -245,7 +247,7 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
         .to_string();
 
     let (status, retry_after, body) = {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().await;
         let account = state.accounts.get(&bearer).cloned();
         match (method.as_str(), path.as_str(), account) {
             (_, _, None) => (401, None, r#"{"error":"invalid api key"}"#.to_string()),
@@ -511,11 +513,7 @@ fn sorted(ids: &[&str]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-01 baseline: today reports no structured connection state; a network failure is printed as `Delivery: REFUSED`"]
 async fn network_failure_is_not_reported_as_subscription_required() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("network-not-subscription");
     let origin = dead_origin().await;
 
@@ -550,11 +548,7 @@ async fn network_failure_is_not_reported_as_subscription_required() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-02 baseline: today exits successfully with a zero snapshot and no connection state when the server is down and the queue is empty"]
 async fn offline_today_with_an_empty_queue_is_not_verified() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("offline-empty");
     let origin = dead_origin().await;
 
@@ -572,11 +566,7 @@ async fn offline_today_with_an_empty_queue_is_not_verified() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-02 baseline: today --json has no structured `queue` object (depth/seconds_today)"]
 async fn offline_today_reports_scoped_queue_depth_and_seconds() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("offline-depth");
     let origin = dead_origin().await;
     let t = now();
@@ -623,11 +613,7 @@ async fn offline_today_reports_scoped_queue_depth_and_seconds() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-01 baseline: today exits with an error on 401 instead of reporting auth_rejected"]
 async fn http_401_reports_auth_rejected_not_offline() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("http-401");
     // KEY_A is unknown to this server, so every request gets 401.
     let api = MockApi::start(&[]).await;
@@ -645,14 +631,10 @@ async fn http_401_reports_auth_rejected_not_offline() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-01 baseline: a 402 is queued but today reports no structured subscription_required state"]
 async fn http_402_keeps_rows_queued_and_reports_subscription_required() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("http-402");
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
-    api.set_heartbeats(Reply::Status(402));
+    api.set_heartbeats(Reply::Status(402)).await;
 
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-402-1", now() - 3.0).await,
@@ -677,15 +659,11 @@ async fn http_402_keeps_rows_queued_and_reports_subscription_required() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-01 baseline: a 503 today response is reported as a generic error string, not retryable_server_error"]
 async fn http_503_keeps_rows_queued_and_reports_retryable_server_error() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("http-503");
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
-    api.set_heartbeats(Reply::Status(503));
-    api.set_today(Reply::Status(503));
+    api.set_heartbeats(Reply::Status(503)).await;
+    api.set_today(Reply::Status(503)).await;
 
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-503-1", now() - 3.0).await,
@@ -711,14 +689,14 @@ async fn http_429_retry_after_is_respected_by_a_queue_flush() {
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
     let origin_down = api.url.clone();
 
-    api.set_online(false);
+    api.set_online(false).await;
     assert_queued(
         &heartbeat(&home, &origin_down, KEY_A, "hb-429-1", now() - 3.0).await,
         1,
     );
 
-    api.set_online(true);
-    api.set_heartbeats(Reply::StatusRetryAfter(429, 120));
+    api.set_online(true).await;
+    api.set_heartbeats(Reply::StatusRetryAfter(429, 120)).await;
     let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
     assert!(status.success, "{}", status.describe());
 
@@ -733,7 +711,7 @@ async fn http_429_retry_after_is_respected_by_a_queue_flush() {
         rows[0].next_retry_at - rows[0].created_at >= 120,
         "Retry-After must delay the row by at least 120s: {rows:?}"
     );
-    assert!(api.received().is_empty());
+    assert!(api.received().await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -744,7 +722,7 @@ async fn http_429_retry_after_is_respected_for_a_newly_queued_row() {
     }
     let home = TempHome::new("http-429-send");
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
-    api.set_heartbeats(Reply::StatusRetryAfter(429, 120));
+    api.set_heartbeats(Reply::StatusRetryAfter(429, 120)).await;
 
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-429-send", now() - 3.0).await,
@@ -768,7 +746,7 @@ async fn reconnect_with_the_same_key_drains_each_row_exactly_once() {
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
     let t = now();
 
-    api.set_online(false);
+    api.set_online(false).await;
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-rc-1", t - 4.0).await,
         1,
@@ -778,7 +756,7 @@ async fn reconnect_with_the_same_key_drains_each_row_exactly_once() {
         1,
     );
 
-    api.set_online(true);
+    api.set_online(true).await;
     for _ in 0..2 {
         let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
         assert!(status.success, "{}", status.describe());
@@ -787,10 +765,10 @@ async fn reconnect_with_the_same_key_drains_each_row_exactly_once() {
     assert!(sent.success, "{}", sent.describe());
 
     assert_eq!(
-        api.received_ids(),
+        api.received_ids().await,
         sorted(&["hb-rc-1", "hb-rc-2", "hb-rc-3"])
     );
-    let received = api.received();
+    let received = api.received().await;
     let original = |id: &str| received.iter().find(|h| h.heartbeat_id == id).unwrap().time;
     assert_eq!(
         original("hb-rc-1"),
@@ -813,7 +791,7 @@ async fn same_account_key_rotation_preserves_and_rebinds_every_row() {
     let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_B, "account-1")]).await;
     let t = now();
 
-    api.set_online(false);
+    api.set_online(false).await;
     for (index, id) in ["hb-rot-1", "hb-rot-2", "hb-rot-3"].iter().enumerate() {
         assert_queued(
             &heartbeat(&home, &api.url, KEY_A, id, t - 10.0 + index as f64).await,
@@ -824,7 +802,7 @@ async fn same_account_key_rotation_preserves_and_rebinds_every_row() {
 
     // The user rotates to KEY_B while offline, then the server returns. The server
     // reports the same opaque account for both keys — the only acceptable proof.
-    api.set_online(true);
+    api.set_online(true).await;
     let verify = cli(&home, &api.url, KEY_B, &["verify", "--json"]).await;
     assert!(verify.success, "{}", verify.describe());
     let status = cli(&home, &api.url, KEY_B, &["status", "--json"]).await;
@@ -833,15 +811,15 @@ async fn same_account_key_rotation_preserves_and_rebinds_every_row() {
     assert!(sent.success, "{}", sent.describe());
 
     assert_eq!(
-        api.received_ids(),
+        api.received_ids().await,
         sorted(&["hb-rot-1", "hb-rot-2", "hb-rot-3", "hb-rot-new"]),
         "every row queued under the old key must be delivered exactly once; queue={:?}",
         queue_rows(&home)
     );
-    for received in api.received() {
+    for received in api.received().await {
         assert_eq!(received.bearer, KEY_B, "delivery must use the current key");
     }
-    let received = api.received();
+    let received = api.received().await;
     for (index, id) in ["hb-rot-1", "hb-rot-2", "hb-rot-3"].iter().enumerate() {
         let time = received
             .iter()
@@ -860,7 +838,7 @@ async fn different_account_key_cannot_claim_existing_rows() {
     let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_C, "account-2")]).await;
     let t = now();
 
-    api.set_online(false);
+    api.set_online(false).await;
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-acct1-1", t - 5.0).await,
         1,
@@ -871,7 +849,7 @@ async fn different_account_key_cannot_claim_existing_rows() {
     );
     let before = queue_rows(&home);
 
-    api.set_online(true);
+    api.set_online(true).await;
     let verify = cli(&home, &api.url, KEY_C, &["verify", "--json"]).await;
     assert!(verify.success, "{}", verify.describe());
     let status = cli(&home, &api.url, KEY_C, &["status", "--json"]).await;
@@ -879,7 +857,7 @@ async fn different_account_key_cannot_claim_existing_rows() {
     let sent = heartbeat(&home, &api.url, KEY_C, "hb-acct2-1", t - 1.0).await;
     assert!(sent.success, "{}", sent.describe());
 
-    assert_eq!(api.received_ids(), sorted(&["hb-acct2-1"]));
+    assert_eq!(api.received_ids().await, sorted(&["hb-acct2-1"]));
     let after = queue_rows(&home);
     assert_eq!(after.len(), 2, "foreign rows must never be deleted");
     for (old, new) in before.iter().zip(after.iter()) {
@@ -910,7 +888,7 @@ async fn different_origin_cannot_claim_existing_rows() {
     let sent = heartbeat(&home, &api.url, KEY_A, "hb-origin-new", t - 1.0).await;
     assert!(sent.success, "{}", sent.describe());
 
-    assert_eq!(api.received_ids(), sorted(&["hb-origin-new"]));
+    assert_eq!(api.received_ids().await, sorted(&["hb-origin-new"]));
     let rows = queue_rows(&home);
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row.destination == old_origin));
@@ -962,7 +940,7 @@ async fn successful_recovery_clears_only_the_matching_scope_failure() {
     }
     let home = TempHome::new("scoped-recovery");
     let refusing = MockApi::start(&[(KEY_A, "account-1")]).await;
-    refusing.set_heartbeats(Reply::Status(402));
+    refusing.set_heartbeats(Reply::Status(402)).await;
     let healthy = MockApi::start(&[(KEY_C, "account-2")]).await;
 
     assert_queued(
@@ -971,7 +949,7 @@ async fn successful_recovery_clears_only_the_matching_scope_failure() {
     );
     let sent = heartbeat(&home, &healthy.url, KEY_C, "hb-scope-ok", now() - 2.0).await;
     assert!(sent.success, "{}", sent.describe());
-    assert_eq!(healthy.received_ids(), sorted(&["hb-scope-ok"]));
+    assert_eq!(healthy.received_ids().await, sorted(&["hb-scope-ok"]));
 
     let today = today_json(&home, &refusing.url, KEY_A).await;
     assert!(today.success, "{}", today.describe());
@@ -987,4 +965,182 @@ async fn successful_recovery_clears_only_the_matching_scope_failure() {
         "{}",
         today.describe()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 01 — structured status contract
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn today_json_reports_offline_even_when_queue_is_empty() {
+    let home = TempHome::new("p01-offline-empty");
+    let origin = dead_origin().await;
+
+    let json = today_json(&home, &origin, KEY_A).await.json();
+    assert_eq!(json["connection"]["state"], "offline");
+    assert_eq!(json["connection"]["reachable"], false);
+    assert!(json["connection"]["authenticated"].is_null());
+    assert!(json["connection"]["http_status"].is_null());
+    assert_eq!(json["connection"]["last_error_kind"], "network");
+    assert_eq!(json["queue"]["depth"], 0);
+    assert_eq!(json["queue"]["seconds_today"], 0.0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn today_json_keeps_legacy_top_level_fields() {
+    let home = TempHome::new("p01-legacy-fields");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+
+    let today = today_json(&home, &api.url, KEY_A).await;
+    let json = today.json();
+    for key in [
+        "confirmed_seconds",
+        "queued_seconds",
+        "total_seconds",
+        "human_readable",
+        "heartbeat_count",
+        "last_heartbeat_at",
+        "covered_intervals",
+        "active_intervals",
+        "discarded_seconds",
+        "timezone",
+        "agent_health",
+        "error",
+        "queued_heartbeats",
+        "queued_active_seconds",
+        "delivery_failure",
+    ] {
+        assert!(
+            json.get(key).is_some(),
+            "missing legacy key {key}: {}",
+            today.describe()
+        );
+    }
+    assert_eq!(json["connection"]["state"], "online");
+    assert_eq!(json["connection"]["reachable"], true);
+    assert_eq!(json["connection"]["authenticated"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn today_text_reports_offline_and_keeps_the_legacy_auth_exit() {
+    let home = TempHome::new("p01-text");
+    let origin = dead_origin().await;
+    assert_queued(
+        &heartbeat(&home, &origin, KEY_A, "hb-text-1", now() - 3.0).await,
+        1,
+    );
+
+    let text = cli(&home, &origin, KEY_A, &["today", "--timezone", "UTC"]).await;
+    assert!(text.success, "{}", text.describe());
+    assert!(
+        text.stdout.contains("Connection: offline"),
+        "{}",
+        text.describe()
+    );
+    assert!(
+        text.stdout.contains("Delivery: OFFLINE - "),
+        "{}",
+        text.describe()
+    );
+    assert!(!text.stdout.contains("REFUSED"), "{}", text.describe());
+
+    // Older editor builds detect a rejected key from text mode's non-zero exit.
+    let rejecting = MockApi::start(&[]).await;
+    let auth = cli(
+        &home,
+        &rejecting.url,
+        KEY_A,
+        &["today", "--timezone", "UTC"],
+    )
+    .await;
+    assert!(!auth.success, "{}", auth.describe());
+    assert!(
+        auth.stderr.contains("API key was rejected"),
+        "{}",
+        auth.describe()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn today_text_still_reports_a_real_402_as_refused() {
+    let home = TempHome::new("p01-text-402");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.set_heartbeats(Reply::Status(402)).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-text-402", now() - 3.0).await,
+        1,
+    );
+
+    let text = cli(&home, &api.url, KEY_A, &["today", "--timezone", "UTC"]).await;
+    assert!(text.success, "{}", text.describe());
+    assert!(
+        text.stdout.contains("Connection: subscription_required"),
+        "{}",
+        text.describe()
+    );
+    assert!(
+        text.stdout.contains("Delivery: REFUSED - HTTP status 402"),
+        "{}",
+        text.describe()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_json_statuses_are_unchanged() {
+    let home = TempHome::new("p01-verify");
+    let origin = dead_origin().await;
+    let unreachable = cli(&home, &origin, KEY_A, &["verify", "--json"])
+        .await
+        .json();
+    assert_eq!(unreachable["status"], "unreachable");
+    assert_eq!(unreachable["reachable"], false);
+
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let verified = cli(&home, &api.url, KEY_A, &["verify", "--json"])
+        .await
+        .json();
+    assert_eq!(verified["status"], "verified");
+    let invalid = cli(&home, &api.url, KEY_C, &["verify", "--json"])
+        .await
+        .json();
+    assert_eq!(invalid["status"], "invalid_key");
+    assert_eq!(invalid["reachable"], true);
+
+    api.set_today(Reply::Status(402)).await;
+    let paying = cli(&home, &api.url, KEY_A, &["verify", "--json"])
+        .await
+        .json();
+    assert_eq!(paying["status"], "subscription_required");
+    api.set_today(Reply::Status(503)).await;
+    let down = cli(&home, &api.url, KEY_A, &["verify", "--json"])
+        .await
+        .json();
+    assert_eq!(down["status"], "server_error");
+    assert_eq!(down["reachable"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recorded_401_does_not_override_a_successful_authenticated_probe() {
+    let home = TempHome::new("p01-stale-401");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+
+    // A POST rejected with 401 records an auth failure (the key was later fixed
+    // server-side, or the refusal was transient).
+    api.set_heartbeats(Reply::Status(401)).await;
+    let _ = heartbeat(&home, &api.url, KEY_A, "hb-401-then-ok", now() - 3.0).await;
+    let failure = fs::read_to_string(home.path().join(".wakaclock/last-delivery-failure.json"))
+        .expect("the 401 refusal is recorded");
+    assert!(failure.contains("auth_401"), "{failure}");
+
+    // GET today succeeds with the same key: the key demonstrably works.
+    let today = today_json(&home, &api.url, KEY_A).await;
+    let json = today.json();
+    assert_eq!(
+        json["connection"]["state"],
+        "online",
+        "{}",
+        today.describe()
+    );
+    assert_eq!(json["connection"]["authenticated"], true);
+    assert_eq!(json["connection"]["last_error_kind"], "auth_401");
 }

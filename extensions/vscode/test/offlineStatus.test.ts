@@ -5,8 +5,9 @@
  * `showWarningMessage`: a refused-delivery snapshot would throw inside `refresh()`
  * and fall into the catch path, which hides exactly the mapping these tests pin.
  *
- * `it.fails(...)` marks an OFF-0x contract that is broken on the pre-fix code. The
- * phase that fixes the bug changes it to `it(...)`; never weaken the assertion.
+ * `it.fails(...)` marks an OFF-0x contract that is still broken (OFF-07 lands in
+ * Phase 05). The phase that fixes it changes it to `it(...)`; never weaken the
+ * assertion.
  */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -160,7 +161,7 @@ describe("offline status contract", () => {
 
   // OFF-01: `Delivery: REFUSED` is printed for *any* recorded failure, including
   // a connection refused, and the status bar maps every REFUSED to subscription.
-  it.fails("network_failure_is_not_reported_as_subscription_required", async () => {
+  it("network_failure_is_not_reported_as_subscription_required", async () => {
     const snapshot: StatusBarSnapshot = {
       humanReadable: "30s",
       totalSeconds: 30,
@@ -211,7 +212,7 @@ describe("offline status contract", () => {
   // OFF-02: the CLI → parser → status bar path. The text parser drops the
   // `Server error:` line, so an unreachable server with an empty queue renders
   // exactly like a verified, idle day.
-  it.fails("offline_today_with_an_empty_queue_is_not_verified", async () => {
+  it("offline_today_with_an_empty_queue_is_not_verified", async () => {
     fakeOfflineCli();
     const cli = new WakaclockCliService(createConfig, logger);
     const controller = new StatusBarController(createConfig, cli, logger);
@@ -220,6 +221,100 @@ describe("offline status contract", () => {
 
     expect(item.text).not.toBe("$(clock) 0s");
     expect(item.text.startsWith("$(cloud-offline)")).toBe(true);
+  });
+
+  // Phase 01 — the typed `connection.state` decides the status bar.
+  function controllerFor(snapshot: StatusBarSnapshot) {
+    return new StatusBarController(
+      createConfig,
+      { getToday: vi.fn().mockResolvedValue(snapshot) },
+      logger,
+    );
+  }
+
+  const base: StatusBarSnapshot = { humanReadable: "0s", totalSeconds: 0, heartbeatCount: 0 };
+
+  it("renders_cloud_offline_for_network_failure_with_empty_queue", async () => {
+    await controllerFor({
+      ...base,
+      queuedHeartbeats: 0,
+      connection: { state: "offline", reachable: false, lastErrorKind: "network" },
+    }).refresh();
+
+    expect(item.text).toBe("$(cloud-offline) AtoAxis: 0s");
+    expect(String(item.tooltip)).toContain("Offline");
+    expect(item.command).toBe("wakaclock.showToday");
+    expect(showWarningMessage).not.toHaveBeenCalled();
+    expect(showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("renders_subscription_required_only_for_payment_402", async () => {
+    await controllerFor({
+      ...base,
+      queuedHeartbeats: 1,
+      delivery: 'REFUSED - HTTP status 402: {"error":"trial expired"}',
+      connection: { state: "subscription_required", reachable: true, httpStatus: 402 },
+    }).refresh();
+    expect(item.text.startsWith("$(warning) AtoAxis:")).toBe(true);
+    expect(showWarningMessage).toHaveBeenCalledTimes(1);
+
+    // Every other typed state must not produce the subscription warning.
+    for (const state of ["online", "offline", "retryable_server_error", "validation_rejected"] as const) {
+      showWarningMessage.mockClear();
+      await controllerFor({ ...base, connection: { state } }).refresh();
+      expect(item.text.startsWith("$(warning)"), state).toBe(false);
+      expect(showWarningMessage, state).not.toHaveBeenCalled();
+    }
+  });
+
+  it("renders_key_rejected_only_for_auth_401", async () => {
+    await controllerFor({
+      ...base,
+      connection: { state: "auth_rejected", reachable: true, authenticated: false, httpStatus: 401 },
+    }).refresh();
+    expect(item.text).toBe("$(warning) Wakaclock: key rejected");
+    expect(item.command).toBe("wakaclock.setApiKey");
+    expect(showErrorMessage).toHaveBeenCalledTimes(1);
+
+    for (const state of ["offline", "subscription_required", "retryable_server_error"] as const) {
+      showErrorMessage.mockClear();
+      await controllerFor({ ...base, connection: { state } }).refresh();
+      expect(item.text, state).not.toContain("key rejected");
+      expect(showErrorMessage, state).not.toHaveBeenCalled();
+    }
+  });
+
+  it("renders_a_retryable_server_error_as_degraded_not_invalid_key", async () => {
+    await controllerFor({
+      ...base,
+      queuedHeartbeats: 2,
+      connection: { state: "retryable_server_error", reachable: true, httpStatus: 503 },
+    }).refresh();
+    expect(item.text.startsWith("$(cloud-offline)")).toBe(true);
+    expect(String(item.tooltip)).toContain("Service degraded");
+    expect(item.command).toBe("wakaclock.showToday");
+  });
+
+  it("an_online_server_with_a_draining_backlog_is_not_offline", async () => {
+    await controllerFor({
+      ...base,
+      queuedHeartbeats: 3,
+      queuedSeconds: 90,
+      connection: { state: "online", reachable: true, authenticated: true },
+    }).refresh();
+    expect(item.text).toBe("$(clock) 0s");
+    expect(String(item.tooltip)).toContain("Held locally: 3 heartbeat(s)");
+  });
+
+  it("a_legacy_cli_refusal_without_a_402_status_is_treated_as_offline", async () => {
+    // Pre-Phase-01 CLIs printed REFUSED for every recorded failure.
+    await controllerFor({
+      ...base,
+      queuedHeartbeats: 1,
+      delivery: "REFUSED - HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+    }).refresh();
+    expect(item.text.startsWith("$(cloud-offline)")).toBe(true);
+    expect(showWarningMessage).not.toHaveBeenCalled();
   });
 
   // OFF-07: every call starts another `wakaclock today` child process while the

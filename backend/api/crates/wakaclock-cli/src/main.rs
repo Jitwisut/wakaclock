@@ -38,8 +38,9 @@ use wakaclock_core::{
         PRODUCER_CONTRACT_VERSION, REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
     },
     api_client::{
-        is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
-        AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
+        http_status_of, is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
+        AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient, ConnectionState,
+        DeliveryFailure, DeliveryFailureKind,
     },
     broker::{scoped_storage_event_id, BrokerEventV1},
     config::Config,
@@ -973,6 +974,71 @@ async fn main() {
     }
 }
 
+/// `verify --json` status for a failed probe, from the same classifier as `today`.
+/// The emitted values are unchanged; `reachable` means the server sent a response.
+fn verify_outcome(error: &AppError) -> (&'static str, bool) {
+    let reachable = match error {
+        AppError::Http(inner) => inner.status().is_some(),
+        AppError::Auth(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => true,
+        _ => false,
+    };
+    let status = match DeliveryFailureKind::from_error(error) {
+        DeliveryFailureKind::Auth401 => "invalid_key",
+        DeliveryFailureKind::Payment402 => "subscription_required",
+        DeliveryFailureKind::Network => "unreachable",
+        _ => "server_error",
+    };
+    (status, reachable)
+}
+
+/// Structured reachability for `wakaclock today --json`.
+///
+/// The GET probe decides reachability. When it succeeds, a recorded POST refusal
+/// for entitlement (402) or payload (400/422) still wins, because reading today's
+/// total keeps working while heartbeat delivery is refused. A recorded 401 does not:
+/// the successful GET was authenticated with the same credential, so it proves the
+/// key works now. Recorded network/server failures are likewise superseded and only
+/// reported as `last_error_kind`.
+fn today_connection(
+    probe_failure: Option<(DeliveryFailureKind, Option<u16>)>,
+    recorded: Option<&DeliveryFailure>,
+) -> serde_json::Value {
+    if let Some((kind, http_status)) = probe_failure {
+        let authenticated = match kind {
+            DeliveryFailureKind::Auth401 => Some(false),
+            DeliveryFailureKind::Payment402 | DeliveryFailureKind::Validation => Some(true),
+            _ => None,
+        };
+        return serde_json::json!({
+            "state": ConnectionState::from_failure_kind(kind).as_str(),
+            "reachable": kind != DeliveryFailureKind::Network,
+            "authenticated": authenticated,
+            "http_status": http_status,
+            "last_error_kind": kind.as_str(),
+            "last_error_at": chrono::Utc::now().timestamp() as f64,
+        });
+    }
+    let refusal = recorded
+        .map(|failure| (failure, failure.kind()))
+        .filter(|(_, kind)| {
+            matches!(
+                kind,
+                DeliveryFailureKind::Payment402 | DeliveryFailureKind::Validation
+            )
+        });
+    let state = refusal
+        .map(|(_, kind)| ConnectionState::from_failure_kind(kind))
+        .unwrap_or(ConnectionState::Online);
+    serde_json::json!({
+        "state": state.as_str(),
+        "reachable": true,
+        "authenticated": true,
+        "http_status": refusal.and_then(|(failure, _)| failure.http_status),
+        "last_error_kind": recorded.map(|failure| failure.kind().as_str()),
+        "last_error_at": recorded.map(|failure| failure.at),
+    })
+}
+
 /// Environment overrides layered on top of `config.toml`.
 ///
 /// An API key from the environment (set by the VS Code extension via SecretStorage)
@@ -1401,10 +1467,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::Today { timezone, json } => {
-            let (mut snapshot, server_error) =
+            // `--json` reports a rejected key as `connection.state = auth_rejected` so
+            // editors decide on a typed state. Text mode keeps the historical non-zero
+            // exit, which older editor builds rely on to show "key rejected".
+            let (mut snapshot, server_error, probe_failure) =
                 match api_client.today_with_timezone(timezone.as_deref()).await {
-                    Ok(snapshot) => (snapshot, None),
-                    Err(AppError::Auth(message)) => return Err(message.into()),
+                    Ok(snapshot) => (snapshot, None, None),
+                    Err(AppError::Auth(message)) if !json => return Err(message.into()),
                     Err(error) => (
                         wakaclock_core::api_client::StatusBarSnapshot {
                             total_seconds: 0.0,
@@ -1426,6 +1495,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             wakatime_compatible_seconds: None,
                         },
                         Some(error.to_string()),
+                        Some((
+                            DeliveryFailureKind::from_error(&error),
+                            http_status_of(&error),
+                        )),
                     ),
                 };
             let queue = Queue::open()?;
@@ -1480,6 +1553,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             if snapshot.agent_health.is_none() {
                 snapshot.agent_health = Some(agent_health);
             }
+            let connection = today_connection(probe_failure, delivery_failure.as_ref());
             if json {
                 println!(
                     "{}",
@@ -1508,6 +1582,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "queued_heartbeats": queued_heartbeats,
                     "queued_active_seconds": queued_active_seconds,
                     "delivery_failure": delivery_failure,
+                    // Typed state for editor clients. Queue depth/seconds are reported
+                    // separately and never decide whether the server is reachable.
+                    "connection": connection,
+                    "queue": {
+                        "depth": queued_heartbeats,
+                        "seconds_today": displayed_queued_seconds,
+                    },
                     }))?
                 );
             } else {
@@ -1515,6 +1596,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     println!("Server error: {error}");
                 }
                 println!("Today: {}", snapshot.human_readable);
+                if let Some(state) = connection["state"].as_str() {
+                    println!("Connection: {state}");
+                }
                 println!("Total seconds: {}", snapshot.total_seconds);
                 println!("Confirmed seconds: {}", confirmed_seconds);
                 println!("Queued seconds: {}", displayed_queued_seconds);
@@ -1527,7 +1611,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     );
                 }
                 if let Some(failure) = &delivery_failure {
-                    println!("Delivery: REFUSED - {}", failure.message);
+                    // Only a server refusal is "REFUSED"; older editor builds map that
+                    // word to "subscription required", so an outage must not use it.
+                    let label = match failure.kind() {
+                        DeliveryFailureKind::Network => "OFFLINE",
+                        DeliveryFailureKind::ServerError => "RETRYING",
+                        _ => "REFUSED",
+                    };
+                    println!("Delivery: {label} - {}", failure.message);
                     println!(
                         "  No heartbeat accepted since {}. Queued activity stays local until one is.",
                         chrono::DateTime::from_timestamp(failure.at as i64, 0)
@@ -1569,28 +1660,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let queue_count = queue_count();
             let (status, authenticated, reachable, error) = match api_client.verify().await {
                 Ok(()) => ("verified", true, true, None),
-                Err(AppError::Auth(message)) => ("invalid_key", false, true, Some(message)),
-                Err(AppError::Http(error)) => {
-                    let status = error.status().map(|value| value.as_u16());
-                    let outcome = match status {
-                        Some(402) => "subscription_required",
-                        Some(value) if value >= 500 => "server_error",
-                        Some(401) => "invalid_key",
-                        Some(_) => "server_error",
-                        None => "unreachable",
+                Err(error) => {
+                    let (status, reachable) = verify_outcome(&error);
+                    let detail = match &error {
+                        AppError::Auth(message) | AppError::HttpStatus { message, .. } => {
+                            message.clone()
+                        }
+                        AppError::Http(inner) => inner.to_string(),
+                        other => other.to_string(),
                     };
-                    (outcome, false, status.is_some(), Some(error.to_string()))
+                    (status, false, reachable, Some(detail))
                 }
-                Err(AppError::HttpStatus { status, message }) => {
-                    let outcome = match status {
-                        402 => "subscription_required",
-                        401 => "invalid_key",
-                        value if value >= 500 => "server_error",
-                        _ => "server_error",
-                    };
-                    (outcome, false, true, Some(message))
-                }
-                Err(error) => ("server_error", false, false, Some(error.to_string())),
             };
             if json {
                 println!(

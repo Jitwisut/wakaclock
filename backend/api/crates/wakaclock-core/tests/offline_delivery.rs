@@ -6,10 +6,8 @@
 //! `~/.wakaclock`, so those paths are exercised only from child processes in
 //! `wakaclock-cli/tests/offline_lifecycle.rs`.
 //!
-//! Tests marked `#[ignore = "OFF-.. baseline: ..."]` assert the target contract and
-//! fail on the pre-fix code. Run them with `WAKACLOCK_OFFLINE_BASELINE=1 cargo test -p
-//! wakaclock-core --test offline_delivery -- --include-ignored`; the phase that fixes the bug removes the
-//! attribute. Never weaken the assertion to make one pass.
+//! The OFF-01 classification tests started as ignored baseline tests in Phase 00
+//! and are enforced since Phase 01. Never weaken an assertion to make one pass.
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -22,17 +20,6 @@ use wakaclock_core::{
     error::AppError,
     queue::{Queue, QueueScope},
 };
-
-/// Baseline tests are expected to fail until their phase lands. CI's ClickHouse
-/// job runs `cargo test --workspace -- --ignored`, so `#[ignore]` alone would put
-/// them in that sweep; they only execute when this variable is also set.
-fn offline_baseline_enabled() -> bool {
-    if std::env::var_os("WAKACLOCK_OFFLINE_BASELINE").is_some() {
-        return true;
-    }
-    eprintln!("skipped: set WAKACLOCK_OFFLINE_BASELINE=1 to run offline baseline tests");
-    false
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -149,11 +136,7 @@ const CONNECT_REFUSED_PLAIN: &str =
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "OFF-01 baseline: a transport error whose URL contains \"402\" is classified as payment_402"]
 fn network_failure_is_not_reported_as_subscription_required() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let kind = classify_delivery_failure(CONNECT_REFUSED_ON_PORT_40213);
     assert_ne!(
         kind,
@@ -164,22 +147,14 @@ fn network_failure_is_not_reported_as_subscription_required() {
 }
 
 #[test]
-#[ignore = "OFF-01 baseline: a transport error whose URL contains \"401\" is classified as auth_401"]
 fn network_failure_is_not_reported_as_auth_rejected() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let kind = classify_delivery_failure(CONNECT_REFUSED_ON_PORT_54017);
     assert_ne!(kind, DeliveryFailureKind::Auth401);
     assert_eq!(kind, DeliveryFailureKind::Network);
 }
 
 #[test]
-#[ignore = "OFF-01 baseline: reqwest's \"error sending request\" transport message is classified as other"]
 fn transport_error_without_a_response_is_classified_as_network() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     assert_eq!(
         classify_delivery_failure(CONNECT_REFUSED_PLAIN),
         DeliveryFailureKind::Network

@@ -1,6 +1,6 @@
 # Phase 01 — Structured Offline Status
 
-สถานะ: Planned  
+สถานะ: Implemented (branch `feat/offline-phase01-structured-status`)  
 ครอบคลุม: OFF-01, OFF-02  
 ขึ้นกับ: Phase 00
 
@@ -157,3 +157,43 @@ cd extensions/vscode
 npm run lint
 npm test
 ```
+
+## Implementation notes (2026-09-19)
+
+สิ่งที่ทำจริงเทียบกับแผน:
+
+- `DeliveryFailureKind::from_error` เป็น source of truth: transport error ที่ไม่มี HTTP
+  response = `network` เสมอ ไม่ว่า URL/message จะมี "402" หรือไม่.
+- `classify_delivery_failure` (สำหรับ record เก่าที่ไม่มี `kind`) อ่าน status เฉพาะรูป
+  `HTTP status NNN:` และ `HTTP status client/server error (NNN ...)`.
+- `DeliveryFailure` เก็บ `kind` และ `http_status` เพิ่ม (additive; record เก่ายังอ่านได้).
+- เพิ่ม `DeliveryFailureKind::ServerError` (408/429/5xx): `wakaclock doctor ai` จะแสดง
+  `category: "server_error"` แทน `"other"` สำหรับกรณีนี้.
+- `today --json` เพิ่ม `connection` และ `queue.{depth,seconds_today}`; `queue.eligible_now`
+  **ยังไม่ทำ** เพราะต้องเพิ่ม query ใน `queue.rs` ซึ่งอยู่นอก scope ที่อนุมัติ — ย้ายไป Phase 03.
+- `today --json` บน 401 คืน exit 0 + `auth_rejected`; text mode ยัง exit ≠ 0 เพื่อ extension เก่า.
+- Text mode: `Connection: <state>` และ `Delivery: OFFLINE|RETRYING|REFUSED - ...`
+  (`REFUSED` เฉพาะ 401/402/400/422).
+- เมื่อ GET today สำเร็จ: refusal ที่บันทึกไว้แบบ 402 หรือ 400/422 ยังชนะ; 401 ที่บันทึกไว้
+  **ไม่ชนะ** เพราะ GET ที่สำเร็จใช้ key เดียวกันจึงพิสูจน์ว่า key ใช้ได้ (ป้องกัน state
+  `auth_rejected` + `authenticated: true` ที่ขัดกันเอง); network/5xx เก่าถูกแทนด้วย `online`
+  และเหลือเพียง `last_error_kind`.
+- `kind` ใน `last-delivery-failure.json` ใช้ชื่อเดียวกับ `as_str()` (`auth_401`,
+  `payment_402`, ...). Rollback ปลอดภัย: binary เก่าไม่มี field `kind` จึงข้ามไป; binary
+  ใหม่อ่านค่า `kind` ที่ไม่รู้จักเป็น "ไม่มี" แล้ว classify จาก message แทนการทิ้งทั้ง record.
+- `verify --json` ใช้ classifier เดียวกัน ค่า status เดิม (403 เปลี่ยนจาก `server_error`
+  เป็น `invalid_key`).
+- VS Code: `getToday` ใช้ `today --json` → fallback text เมื่อ CLI ไม่รู้จัก flag (จำไว้ต่อ
+  service instance); status bar ตัดสินจาก `connection.state`; legacy CLI ที่ไม่มี field
+  ใช้ rule แคบ (REFUSED + `HTTP status 402`/`trial expired` เท่านั้นจึงเป็น subscription).
+- พบระหว่างทำ: `syncAndVerifyApiKey` (legacy path) อาศัย `getToday()` throw เมื่อ key ผิด
+  → แก้ให้ตรวจ `connection.state === "auth_rejected"` ด้วย มี test ครอบ.
+
+ยังเปิดอยู่ (ไม่อยู่ใน Phase นี้): OFF-03 (Phase 02), OFF-04 และ send-path `Retry-After`
+(Phase 03), OFF-07 single-flight (Phase 05). failure file ยัง global จึงอาจเห็น 402 ของ
+scope อื่นจนกว่า Phase 03 จะเสร็จ.
+
+Clippy: `cargo clippy --all-targets -- -D warnings` บน toolchain 1.96 fail อยู่แล้วบน `main`
+จาก 3 lint ในไฟล์ที่ไม่ได้แตะ (`ai/codex.rs`: `needless_option_as_deref`,
+`too_many_arguments`; `agent_service.rs`: `needless_return`). โค้ดที่เปลี่ยนใน Phase นี้ผ่าน
+clippy เมื่อ allow เฉพาะ 3 lint นั้น.

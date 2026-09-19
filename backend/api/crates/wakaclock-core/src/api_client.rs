@@ -65,6 +65,28 @@ pub struct StatusBarSnapshot {
 pub struct DeliveryFailure {
     pub at: f64,
     pub message: String,
+    /// Classified from the typed error when the failure was recorded. Records written
+    /// by older binaries omit it and fall back to [`classify_delivery_failure`]; a
+    /// value this binary does not know (written by a newer one) is read as absent
+    /// rather than discarding the whole record.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_known_failure_kind"
+    )]
+    pub kind: Option<DeliveryFailureKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+}
+
+fn deserialize_known_failure_kind<'de, D>(
+    deserializer: D,
+) -> Result<Option<DeliveryFailureKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// `wakaclock doctor ai` reports a delivery refusal split into `401` (bad/expired
@@ -72,13 +94,17 @@ pub struct DeliveryFailure {
 /// failure), a network/transport problem, and a request the server rejected as
 /// malformed. Collapsing these hides the one case — 402 — where local capture is
 /// working perfectly and only billing is wrong.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryFailureKind {
+    #[serde(rename = "auth_401")]
     Auth401,
+    #[serde(rename = "payment_402")]
     Payment402,
     Network,
     Validation,
+    /// 408, 429 or 5xx: the server answered but asked the client to retry later.
+    ServerError,
     Other,
 }
 
@@ -89,37 +115,118 @@ impl DeliveryFailureKind {
             Self::Payment402 => "payment_402",
             Self::Network => "network",
             Self::Validation => "validation",
+            Self::ServerError => "server_error",
             Self::Other => "other",
+        }
+    }
+
+    /// Classify an HTTP status the server actually returned.
+    pub fn from_http_status(status: u16) -> Self {
+        match status {
+            401 | 403 => Self::Auth401,
+            402 => Self::Payment402,
+            400 | 422 => Self::Validation,
+            408 | 429 | 500..=599 => Self::ServerError,
+            _ => Self::Other,
+        }
+    }
+
+    /// Classify a typed delivery/probe error. This is the source of truth: a
+    /// transport error without an HTTP response is `Network` no matter what its
+    /// URL or message happens to contain.
+    pub fn from_error(error: &AppError) -> Self {
+        match error {
+            AppError::Http(inner) => inner
+                .status()
+                .map(|status| Self::from_http_status(status.as_u16()))
+                .unwrap_or(Self::Network),
+            AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. } => {
+                Self::from_http_status(*status)
+            }
+            AppError::Auth(_) => Self::Auth401,
+            AppError::Validation(_) => Self::Validation,
+            _ => Self::Other,
         }
     }
 }
 
-/// Classify a recorded refusal message. The messages come from `AppError`'s
-/// `Display` (`"HTTP status <code>: <body>"`) and from `reqwest` transport errors,
-/// so this matches on the shapes those produce rather than parsing structured data.
+/// The HTTP status carried by an error, when the server returned one.
+pub fn http_status_of(error: &AppError) -> Option<u16> {
+    match error {
+        AppError::Http(inner) => inner.status().map(|status| status.as_u16()),
+        AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. } => {
+            Some(*status)
+        }
+        AppError::Auth(_) => Some(401),
+        _ => None,
+    }
+}
+
+/// User-facing connection state shared by `wakaclock today --json`, `verify` and
+/// editor clients. Decisions are made on this enum, never on free-form messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionState {
+    Online,
+    Offline,
+    AuthRejected,
+    SubscriptionRequired,
+    RetryableServerError,
+    ValidationRejected,
+    UnknownError,
+}
+
+impl ConnectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::AuthRejected => "auth_rejected",
+            Self::SubscriptionRequired => "subscription_required",
+            Self::RetryableServerError => "retryable_server_error",
+            Self::ValidationRejected => "validation_rejected",
+            Self::UnknownError => "unknown_error",
+        }
+    }
+
+    pub fn from_failure_kind(kind: DeliveryFailureKind) -> Self {
+        match kind {
+            DeliveryFailureKind::Network => Self::Offline,
+            DeliveryFailureKind::Auth401 => Self::AuthRejected,
+            DeliveryFailureKind::Payment402 => Self::SubscriptionRequired,
+            DeliveryFailureKind::ServerError => Self::RetryableServerError,
+            DeliveryFailureKind::Validation => Self::ValidationRejected,
+            DeliveryFailureKind::Other => Self::UnknownError,
+        }
+    }
+}
+
+/// Classify a recorded failure message from a record that predates the typed
+/// `kind` field. The messages come from `AppError`'s `Display`
+/// (`"HTTP status <code>: <body>"`, `"HTTP error: <reqwest error>"`), so a status
+/// code is read only from those explicit shapes — never from an arbitrary "402"
+/// substring, which a URL port such as `:40213` would otherwise match.
 pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("402")
-        || lower.contains("trial expired")
-        || lower.contains("subscription inactive")
-    {
+    if let Some(status) = http_status_in_message(&lower) {
+        return DeliveryFailureKind::from_http_status(status);
+    }
+    if lower.contains("trial expired") || lower.contains("subscription inactive") {
         DeliveryFailureKind::Payment402
-    } else if lower.contains("401")
-        || lower.contains("unauthorized")
+    } else if lower.contains("unauthorized")
         || lower.contains("invalid api key")
         || lower.contains("api key was rejected")
         || lower.contains("api key rejected")
         || lower.contains("authentication failed")
     {
         DeliveryFailureKind::Auth401
-    } else if lower.contains("400")
-        || lower.contains("422")
-        || lower.contains("validation")
+    } else if lower.contains("validation")
         || lower.contains("malformed")
         || lower.contains("invalid heartbeat")
     {
         DeliveryFailureKind::Validation
-    } else if lower.contains("dns")
+    } else if lower.contains("error sending request")
+        || lower.contains("dns")
         || lower.contains("timed out")
         || lower.contains("timeout")
         || lower.contains("connection")
@@ -131,6 +238,22 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
         DeliveryFailureKind::Network
     } else {
         DeliveryFailureKind::Other
+    }
+}
+
+/// Read a status code from `http status 402: ...` (`AppError::HttpStatus`) or
+/// reqwest's `http status client error (402 payment required) ...`.
+fn http_status_in_message(lower: &str) -> Option<u16> {
+    let rest = &lower[lower.find("http status ")? + "http status ".len()..];
+    let digits = rest
+        .strip_prefix("client error (")
+        .or_else(|| rest.strip_prefix("server error ("))
+        .unwrap_or(rest);
+    let code: String = digits.chars().take_while(char::is_ascii_digit).collect();
+    if code.len() == 3 {
+        code.parse().ok()
+    } else {
+        None
     }
 }
 
@@ -197,7 +320,8 @@ pub fn retry_after_seconds(error: &AppError) -> Option<u64> {
 
 impl DeliveryFailure {
     pub fn kind(&self) -> DeliveryFailureKind {
-        classify_delivery_failure(&self.message)
+        self.kind
+            .unwrap_or_else(|| classify_delivery_failure(&self.message))
     }
 }
 
@@ -421,7 +545,7 @@ impl ApiClient {
                 })
             }
             Err(error) => {
-                self.record_delivery_failure(&error.to_string());
+                self.record_delivery_failure(&error);
                 if is_retryable_heartbeat_delivery_error(&error) {
                     for payload in &payloads {
                         queue.push_scoped(payload, &self.queue_scope())?;
@@ -660,7 +784,7 @@ impl ApiClient {
                     // failure so status-bar clients do not keep showing an old
                     // outage after the queue has recovered, or hide a new one
                     // behind a previous success.
-                    self.record_delivery_failure(&error.to_string());
+                    self.record_delivery_failure(&error);
                     if is_credential_delivery_error(&error) {
                         // Credentials may be repaired. Keep the only durable copy and
                         // pause this owner-bound queue rather than deleting activity.
@@ -802,7 +926,7 @@ impl ApiClient {
     /// Writing the reason down is what lets `wakaclock status` and `doctor ai` say "the
     /// server is refusing these" instead of nothing at all. Best-effort: failing to
     /// record a failure must never turn into a second failure.
-    fn record_delivery_failure(&self, message: &str) {
+    fn record_delivery_failure(&self, error: &AppError) {
         let Ok(path) = Self::delivery_failure_path() else {
             return;
         };
@@ -811,7 +935,9 @@ impl ApiClient {
         }
         let failure = DeliveryFailure {
             at: chrono::Utc::now().timestamp() as f64,
-            message: message.to_string(),
+            message: error.to_string(),
+            kind: Some(DeliveryFailureKind::from_error(error)),
+            http_status: http_status_of(error),
         };
         if let Ok(serialized) = serde_json::to_string(&failure) {
             let _ = fs::write(&path, serialized);
@@ -1236,6 +1362,142 @@ mod tests {
         assert_eq!(
             classify_delivery_failure("Authentication failed: API key was rejected by the server"),
             DeliveryFailureKind::Auth401
+        );
+    }
+
+    fn status_error(status: u16) -> AppError {
+        AppError::HttpStatusRetry {
+            status,
+            message: "fixture".to_string(),
+            retry_after_seconds: None,
+        }
+    }
+
+    #[test]
+    fn network_transport_maps_to_offline() {
+        // A real transport error with no HTTP response (nothing listens on port 1).
+        let error = AppError::Http(
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap()
+                .get("http://127.0.0.1:1/api/v1/status_bar/today")
+                .send()
+                .expect_err("port 1 must refuse the connection"),
+        );
+        assert_eq!(
+            DeliveryFailureKind::from_error(&error),
+            DeliveryFailureKind::Network
+        );
+        assert_eq!(http_status_of(&error), None);
+        assert_eq!(
+            ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+            ConnectionState::Offline
+        );
+        // The persisted message form classifies the same way.
+        assert_eq!(
+            classify_delivery_failure(&error.to_string()),
+            DeliveryFailureKind::Network
+        );
+    }
+
+    #[test]
+    fn http_402_maps_only_to_subscription_required() {
+        let kind = DeliveryFailureKind::from_error(&status_error(402));
+        assert_eq!(kind, DeliveryFailureKind::Payment402);
+        assert_eq!(
+            ConnectionState::from_failure_kind(kind),
+            ConnectionState::SubscriptionRequired
+        );
+        for status in [400, 401, 403, 408, 422, 429, 500, 503] {
+            assert_ne!(
+                DeliveryFailureKind::from_http_status(status),
+                DeliveryFailureKind::Payment402,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_401_maps_only_to_auth_rejected() {
+        for error in [
+            status_error(401),
+            status_error(403),
+            AppError::Auth("API key was rejected by the server".into()),
+        ] {
+            assert_eq!(
+                ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+                ConnectionState::AuthRejected
+            );
+        }
+        for status in [402, 408, 429, 500, 503] {
+            assert_ne!(
+                DeliveryFailureKind::from_http_status(status),
+                DeliveryFailureKind::Auth401,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_429_and_503_are_retryable_server_errors() {
+        for status in [408, 429, 500, 503] {
+            let error = status_error(status);
+            assert_eq!(
+                ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+                ConnectionState::RetryableServerError,
+                "{status}"
+            );
+            // The status mapping must agree with the unchanged retry policy.
+            assert!(is_retryable_delivery_error(&error), "{status}");
+        }
+    }
+
+    #[test]
+    fn persisted_failure_prefers_the_recorded_kind_and_reads_legacy_records() {
+        let future: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {}","kind":"a_kind_from_a_newer_binary"}"#,
+        )
+        .expect("an unknown kind must not discard the record");
+        assert_eq!(future.kind, None);
+        assert_eq!(future.kind(), DeliveryFailureKind::Payment402);
+
+        // The persisted names match `as_str()`.
+        for kind in [
+            DeliveryFailureKind::Auth401,
+            DeliveryFailureKind::Payment402,
+            DeliveryFailureKind::Network,
+            DeliveryFailureKind::Validation,
+            DeliveryFailureKind::ServerError,
+            DeliveryFailureKind::Other,
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+
+        let future: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {}","kind":"a_kind_from_a_newer_binary"}"#,
+        )
+        .expect("an unknown kind must not discard the record");
+        assert_eq!(future.kind, None);
+        assert_eq!(future.kind(), DeliveryFailureKind::Payment402);
+
+        let typed: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP error: error sending request for url (http://127.0.0.1:40213/)","kind":"network"}"#,
+        )
+        .unwrap();
+        assert_eq!(typed.kind(), DeliveryFailureKind::Network);
+
+        // Written by an older binary: no `kind`, message-only.
+        let legacy: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {\"error\":\"trial expired\"}"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.kind(), DeliveryFailureKind::Payment402);
+        assert_eq!(
+            classify_delivery_failure(
+                "HTTP error: HTTP status server error (503 Service Unavailable) for url (http://x/)"
+            ),
+            DeliveryFailureKind::ServerError
         );
     }
 
