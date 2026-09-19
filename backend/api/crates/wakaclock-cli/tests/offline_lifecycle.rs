@@ -259,9 +259,9 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
                         "total_seconds": 0.0,
                         "human_readable": "0s",
                         "heartbeat_count": 0,
-                        // Phase 02 proposes an opaque server-issued owner id as the
-                        // only valid same-account proof for queue rebinding.
-                        "queue_owner_id": account,
+                        // Same shape as the server: an opaque SHA-256 hex digest per
+                        // account, the only valid same-account proof for a rebind.
+                        "queue_owner_id": owner_digest(&account),
                     })
                     .to_string(),
                 ),
@@ -329,6 +329,14 @@ fn error_reply(reply: Reply) -> (u16, Option<u64>, String) {
             (status, Some(seconds), r#"{"error":"fixture"}"#.to_string())
         }
     }
+}
+
+fn owner_digest(account: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("fixture-owner:{account}").as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -782,14 +790,17 @@ async fn reconnect_with_the_same_key_drains_each_row_exactly_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-03 baseline: rows queued under the old key hash are stranded after rotation to a same-account key"]
 async fn same_account_key_rotation_preserves_and_rebinds_every_row() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("rotation-same-account");
     let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_B, "account-1")]).await;
     let t = now();
+
+    // Precondition (Phase 02): KEY_A was used online at least once, so the server's
+    // ownership proof for it is recorded. Editors refresh `today` every 15s, so any
+    // key that was ever connected has one. Without it see
+    // `key_rotation_without_proof_keeps_rows_as_orphaned`.
+    let online_a = today_json(&home, &api.url, KEY_A).await;
+    assert_eq!(online_a.json()["connection"]["state"], "online");
 
     api.set_online(false).await;
     for (index, id) in ["hb-rot-1", "hb-rot-2", "hb-rot-3"].iter().enumerate() {
@@ -1143,4 +1154,49 @@ async fn a_recorded_401_does_not_override_a_successful_authenticated_probe() {
     );
     assert_eq!(json["connection"]["authenticated"], true);
     assert_eq!(json["connection"]["last_error_kind"], "auth_401");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn key_rotation_without_proof_keeps_rows_as_orphaned() {
+    let home = TempHome::new("rotation-no-proof");
+    let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_B, "account-1")]).await;
+    let t = now();
+
+    // KEY_A never reached the server, so there is no proof of which account owns
+    // these rows. They must not be moved, sent or deleted.
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-np-1", t - 5.0).await,
+        1,
+    );
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-np-2", t - 4.0).await,
+        1,
+    );
+    let before = queue_rows(&home);
+
+    api.set_online(true).await;
+    let status = cli(&home, &api.url, KEY_B, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(status.json()["orphaned_queued_heartbeats"], 2);
+    let today = today_json(&home, &api.url, KEY_B).await.json();
+    assert_eq!(today["queue"]["orphaned"], 2);
+    assert_eq!(today["queue"]["depth"], 0);
+
+    assert!(api.received_ids().await.is_empty());
+    let after = queue_rows(&home);
+    assert_eq!(after.len(), 2);
+    for (old, new) in before.iter().zip(after.iter()) {
+        assert_eq!(old.owner_scope, new.owner_scope);
+        assert_eq!(old.heartbeat_id, new.heartbeat_id);
+    }
+
+    // Once KEY_A itself is verified again, the proof exists and the same-account
+    // rows are adopted by the current key and delivered exactly once.
+    let _ = today_json(&home, &api.url, KEY_A).await;
+    let _ = cli(&home, &api.url, KEY_B, &["verify", "--json"]).await;
+    let status = cli(&home, &api.url, KEY_B, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(api.received_ids().await, sorted(&["hb-np-1", "hb-np-2"]));
+    assert!(queue_rows(&home).is_empty());
 }
