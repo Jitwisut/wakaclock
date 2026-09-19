@@ -279,6 +279,36 @@ describe("WakaclockCliService", () => {
     });
   });
 
+  // Offline-reliability OFF-02 (Phase 00 baseline): an unreachable server is only
+  // visible on the `Server error:` line, which the text parser drops, so the
+  // snapshot is indistinguishable from a verified idle day. Phase 01 moves this to
+  // `today --json`; the fake CLI answers either form.
+  it.fails("offline_today_is_parsed_with_its_connection_state", async () => {
+    spawnMock.mockImplementation((_path: string, args: string[]) =>
+      mockChild({
+        stdout: args.includes("--json")
+          ? JSON.stringify({
+              total_seconds: 0,
+              human_readable: "0s",
+              heartbeat_count: 0,
+              queued_heartbeats: 0,
+              error: "HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)",
+              connection: { state: "offline", reachable: false, last_error_kind: "network" },
+              queue: { depth: 0, seconds_today: 0, eligible_now: 0 }
+            })
+          : "Server error: HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)\nToday: 0s\nTotal seconds: 0\nConfirmed seconds: 0\nQueued seconds: 0\nHeartbeats: 0\n",
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = (await service.getToday("UTC")) as unknown as {
+      connection?: { state?: string };
+    };
+
+    expect(snapshot.connection?.state).toBe("offline");
+  });
+
   it("surfaces missing cli errors", async () => {
     spawnMock.mockImplementation(() =>
       mockChild({
