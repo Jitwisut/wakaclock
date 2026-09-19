@@ -4,6 +4,8 @@ import { Logger } from "./logging";
 import type {
   BrokerStatusSnapshot,
   ConnectionState,
+  ServerConnectionState,
+  StatusBarSnapshot,
   WakaclockConfigSnapshot,
 } from "./types";
 import type { ActivitySegment } from "./types";
@@ -34,6 +36,54 @@ function formatLiveDuration(seconds: number): string {
 function isAuthFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /API key was rejected|authentication required/i.test(message);
+}
+
+/**
+ * Server state for a CLI that predates `connection` in `today --json`. Only the
+ * CLI's own delivery verdict and explicit HTTP status shapes are read; an old CLI
+ * printed "REFUSED" for a connection failure too, so anything that is not a proven
+ * 401/402 refusal is treated as offline rather than as a subscription problem.
+ */
+function legacyServerState(snapshot: StatusBarSnapshot): ServerConnectionState | undefined {
+  const delivery = snapshot.delivery;
+  if (!delivery) {
+    return undefined;
+  }
+  if (delivery.startsWith("RETRYING")) {
+    return "retryable_server_error";
+  }
+  if (!delivery.startsWith("REFUSED")) {
+    return "offline";
+  }
+  if (/HTTP status 40[13]\b|API key was rejected|authentication failed/i.test(delivery)) {
+    return "auth_rejected";
+  }
+  if (/HTTP status 402\b|trial expired|subscription inactive/i.test(delivery)) {
+    return "subscription_required";
+  }
+  return "offline";
+}
+
+/** Map the server state to what the status bar shows. Queue depth is supporting
+ *  detail: it never turns an online server into "offline" or the reverse. */
+function uiStateFor(server: ServerConnectionState | undefined, queued: boolean): ConnectionState {
+  switch (server) {
+    case "offline":
+      return queued ? "offline-queued" : "offline";
+    case "auth_rejected":
+      return "key-rejected";
+    case "subscription_required":
+      return "subscription-required";
+    case "retryable_server_error":
+      return "service-degraded";
+    case "online":
+    case "validation_rejected":
+    case "unknown_error":
+      return "verified";
+    default:
+      // Legacy CLI without a verdict: the historical queue heuristic.
+      return queued ? "offline-queued" : "verified";
+  }
 }
 
 export class StatusBarController implements vscode.Disposable {
@@ -129,27 +179,24 @@ export class StatusBarController implements vscode.Disposable {
     try {
       const snapshot = await this.cli.getToday(localTimezone());
       this.lastSnapshot = snapshot;
-      // A refusal is not an outage and must not be reported as one. Reading today's
-      // total is a GET and keeps working while POST /heartbeats returns 402, so this
-      // branch is the *success* path even when nothing is being recorded — which is
-      // exactly how an expired trial spent a day and a half looking like an idle one.
-      // `queuedSeconds` cannot catch it either: it is scoped to today, so yesterday's
-      // refused backlog reads zero.
-      const refused = snapshot.delivery?.startsWith("REFUSED") ?? false;
+      // Reading today's total is a GET and keeps working while POST /heartbeats is
+      // refused, so a refusal arrives on this success path. The CLI's typed
+      // `connection.state` decides what it means; a network outage is never shown
+      // as a subscription problem.
       const backlog = snapshot.queuedHeartbeats ?? 0;
-      this.connectionState = refused
-        ? "subscription-required"
-        : (snapshot.queuedSeconds && snapshot.queuedSeconds > 0) || backlog > 0
-          ? "offline-queued"
-          : "verified";
-      if (refused && !this.deliveryFailureReported) {
+      const queued = (snapshot.queuedSeconds ?? 0) > 0 || backlog > 0;
+      const server = snapshot.connection?.state ?? legacyServerState(snapshot);
+      this.connectionState = uiStateFor(server, queued);
+      const subscription = this.connectionState === "subscription-required";
+      const keyRejected = this.connectionState === "key-rejected";
+      if (subscription && !this.deliveryFailureReported) {
         this.deliveryFailureReported = true;
         void vscode.window.showWarningMessage(
-          `AtoAxis is not recording your time: ${snapshot.delivery}. ` +
+          `AtoAxis is not recording your time: ${snapshot.delivery ?? "the account needs an active subscription"}. ` +
             `${backlog} heartbeat(s) are held locally and will be sent once the server accepts them.`
         );
       }
-      if (!refused) {
+      if (!subscription) {
         this.deliveryFailureReported = false;
       }
       this.render(snapshot);
@@ -159,11 +206,16 @@ export class StatusBarController implements vscode.Disposable {
           "wakaclock-cli is too old for timezone-aware status totals. Upgrade the CLI to the current workspace version."
         );
       }
-      this.item.backgroundColor = refused
-        ? new vscode.ThemeColor("statusBarItem.warningBackground")
-        : undefined;
-      this.item.command = "wakaclock.showToday";
-      this.authFailureReported = false;
+      this.item.backgroundColor =
+        subscription || keyRejected
+          ? new vscode.ThemeColor("statusBarItem.warningBackground")
+          : undefined;
+      this.item.command = keyRejected ? "wakaclock.setApiKey" : "wakaclock.showToday";
+      if (keyRejected) {
+        this.reportAuthFailureOnce();
+      } else {
+        this.authFailureReported = false;
+      }
       this.item.show();
     } catch (error) {
       this.logger.warn("failed to refresh status bar", error);
@@ -179,29 +231,15 @@ export class StatusBarController implements vscode.Disposable {
           "The server rejected this API key, so coding time is not being recorded.\nRun \"Wakaclock: Set API Key\" with a fresh key from Settings → API key.";
         this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
         this.item.command = "wakaclock.setApiKey";
-        this.connectionState = /subscription|402/i.test(error instanceof Error ? error.message : String(error))
-          ? "subscription-required"
-          : "needs-api-key";
+        this.connectionState = "key-rejected";
         this.item.show();
         this.reportAuthFailureOnce();
         return;
       }
 
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (/subscription|required.*plan|402/.test(errorMessage.toLowerCase())) {
-        this.connectionState = "subscription-required";
-        this.item.text = "$(warning) AtoAxis: Subscription required";
-        this.item.tooltip =
-          "Your API key is valid, but this account needs an active AtoAxis subscription.";
-        this.item.command = "wakaclock.setApiKey";
-        this.item.show();
-        return;
-      }
-
-      this.item.text = "$(clock) Wakaclock";
-      const message = errorMessage;
+      const message = error instanceof Error ? error.message : String(error);
       const cliUnavailable = /bundled.*cli|cli.*unavailable|unsupported.*platform/i.test(message);
-      this.connectionState = cliUnavailable ? "cli-unavailable" : "offline-queued";
+      this.connectionState = cliUnavailable ? "cli-unavailable" : "offline";
       this.item.text = cliUnavailable ? "$(error) AtoAxis: CLI unavailable" : "$(clock) Wakaclock";
       this.item.tooltip = cliUnavailable
         ? `${message}\nReinstall the platform-specific AtoAxis Extension or use the advanced cliPath override.`
@@ -209,7 +247,6 @@ export class StatusBarController implements vscode.Disposable {
       this.item.backgroundColor = undefined;
       this.item.command = "wakaclock.showToday";
       this.item.show();
-      this.connectionState = "offline-queued";
     }
   }
 
@@ -243,15 +280,33 @@ export class StatusBarController implements vscode.Disposable {
     if (this.connectionState === "needs-api-key") {
       this.item.text = "$(plug) AtoAxis: Connect";
       this.item.command = "wakaclock.setApiKey";
+    } else if (this.connectionState === "key-rejected") {
+      this.item.text = "$(warning) Wakaclock: key rejected";
+      this.item.command = "wakaclock.setApiKey";
     } else if (this.connectionState === "subscription-required") {
       this.item.text = `$(warning) AtoAxis: ${humanReadable}`;
       this.item.command = "wakaclock.setApiKey";
-    } else if (this.connectionState === "offline-queued") {
+    } else if (
+      this.connectionState === "offline" ||
+      this.connectionState === "offline-queued" ||
+      this.connectionState === "service-degraded"
+    ) {
       this.item.text = `$(cloud-offline) AtoAxis: ${humanReadable}`;
     } else {
       this.item.text = `$(clock) ${humanReadable}`;
     }
+    const stateLine =
+      this.connectionState === "offline" || this.connectionState === "offline-queued"
+        ? "Offline: the AtoAxis server is unreachable; activity stays queued locally.\n"
+        : this.connectionState === "service-degraded"
+          ? "Service degraded: the AtoAxis server asked to retry later; activity stays queued locally.\n"
+          : this.connectionState === "key-rejected"
+            ? "The server rejected this API key, so coding time is not being recorded.\nRun \"Wakaclock: Set API Key\" with a fresh key from Settings → API key.\n"
+            : this.connectionState === "subscription-required"
+              ? "Your API key is valid, but this account needs an active AtoAxis subscription.\n"
+              : "";
     this.item.tooltip =
+      stateLine +
       `Today: ${humanReadable}\nHeartbeats: ${snapshot.heartbeatCount}` +
       `\nConfirmed: ${formatLiveDuration(confirmed)}` +
       `\nOffline queued: ${formatLiveDuration(queued)}` +

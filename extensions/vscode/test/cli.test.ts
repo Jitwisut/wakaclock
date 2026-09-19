@@ -279,11 +279,10 @@ describe("WakaclockCliService", () => {
     });
   });
 
-  // Offline-reliability OFF-02 (Phase 00 baseline): an unreachable server is only
-  // visible on the `Server error:` line, which the text parser drops, so the
-  // snapshot is indistinguishable from a verified idle day. Phase 01 moves this to
-  // `today --json`; the fake CLI answers either form.
-  it.fails("offline_today_is_parsed_with_its_connection_state", async () => {
+  // Offline-reliability OFF-02 (baseline in Phase 00, fixed in Phase 01): the text
+  // parser used to drop the `Server error:` line, so an unreachable server read as a
+  // verified idle day. `getToday` now reads `today --json`; the fake answers either.
+  it("offline_today_is_parsed_with_its_connection_state", async () => {
     spawnMock.mockImplementation((_path: string, args: string[]) =>
       mockChild({
         stdout: args.includes("--json")
@@ -307,6 +306,107 @@ describe("WakaclockCliService", () => {
     };
 
     expect(snapshot.connection?.state).toBe("offline");
+  });
+
+  it("parses_structured_today_json", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({
+          confirmed_seconds: 300,
+          queued_seconds: 4,
+          total_seconds: 304,
+          human_readable: "5m 4s",
+          heartbeat_count: 42,
+          last_heartbeat_at: 1770000000,
+          covered_intervals: [],
+          discarded_seconds: 0,
+          agent_health: { installed: true, running: false },
+          queued_heartbeats: 2,
+          delivery_failure: {
+            at: 1770000000,
+            message: "HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+            kind: "network"
+          },
+          connection: {
+            state: "offline",
+            reachable: false,
+            authenticated: null,
+            http_status: null,
+            last_error_kind: "network",
+            last_error_at: 1770000001
+          },
+          queue: { depth: 2, seconds_today: 4 }
+        }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = await service.getToday("Asia/Bangkok");
+
+    expect(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok", "--json"]);
+    expect(snapshot).toEqual({
+      humanReadable: "5m 4s",
+      totalSeconds: 304,
+      heartbeatCount: 42,
+      confirmedSeconds: 300,
+      queuedSeconds: 4,
+      lastHeartbeatAt: 1770000000,
+      agentHealth: { state: "installed (stopped)" },
+      discardedSeconds: 0,
+      queuedHeartbeats: 2,
+      delivery:
+        "OFFLINE - HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+      connection: {
+        state: "offline",
+        reachable: false,
+        authenticated: null,
+        httpStatus: null,
+        lastErrorKind: "network",
+        lastErrorAt: 1770000001
+      }
+    });
+  });
+
+  it("falls_back_to_legacy_text_without_losing_timezone_behavior", async () => {
+    // A CLI without `today --json`, and an older one without `--timezone` either.
+    spawnMock.mockImplementation((_path: string, args: string[]) => {
+      if (args.includes("--json") || args.includes("--timezone")) {
+        return mockChild({
+          stderr: `error: unexpected argument '${args.includes("--json") ? "--json" : "--timezone"}' found\n\nUsage: wakaclock today`,
+          exitCode: 2
+        });
+      }
+      return mockChild({ stdout: "Today: 1m\nTotal seconds: 60\nHeartbeats: 3\n", exitCode: 0 });
+    });
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(service.getToday("Asia/Bangkok")).resolves.toEqual({
+      humanReadable: "1m",
+      totalSeconds: 60,
+      heartbeatCount: 3,
+      legacyCli: true
+    });
+    expect(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+      ["today", "--timezone", "Asia/Bangkok", "--json"],
+      ["today", "--timezone", "Asia/Bangkok"],
+      ["today"]
+    ]);
+
+    // The unsupported flag is remembered: the next refresh does not retry --json.
+    spawnMock.mockClear();
+    await service.getToday("Asia/Bangkok");
+    expect(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok"]);
+  });
+
+  it("does not retry text mode when today --json fails for another reason", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({ stderr: "Error: API key was rejected by the server.", exitCode: 1 })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(service.getToday("UTC")).rejects.toThrow("API key was rejected");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces missing cli errors", async () => {
@@ -336,7 +436,29 @@ describe("WakaclockCliService", () => {
 
       expect(result).toEqual({ mirroredToCliConfig: true, verified: true });
       expect(spawnMock.mock.calls[0][1]).toEqual(["config", "set-key", "wcl_good"]);
-      expect(spawnMock.mock.calls[1][1]).toEqual(["today"]);
+      expect(spawnMock.mock.calls[1][1]).toEqual(["today", "--json"]);
+    });
+
+    it("reports not verified when today --json says the key was rejected", async () => {
+      spawnMock
+        .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }))
+        .mockImplementationOnce(() =>
+          mockChild({
+            stdout: JSON.stringify({
+              total_seconds: 0,
+              human_readable: "0s",
+              heartbeat_count: 0,
+              connection: { state: "auth_rejected", reachable: true, http_status: 401 }
+            }),
+            exitCode: 0
+          })
+        );
+      const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+      const result = await service.syncAndVerifyApiKey("wcl_revoked");
+
+      expect(result.verified).toBe(false);
+      expect(result.verifyError).toContain("rejected");
     });
 
     // The failure that made a wrong key undetectable: the key saves fine, and only a

@@ -5,6 +5,8 @@ import type {
     CliResult,
     ExtraHeartbeatPayload,
     HeartbeatCategory,
+    ServerConnectionSnapshot,
+    ServerConnectionState,
     StatusBarSnapshot,
     StatusSnapshot,
     BrokerStatusSnapshot,
@@ -17,8 +19,61 @@ import { Logger } from "./logging";
 import type { CliPathResolver } from "./managedCli";
 import type { AiDiagnosticsSnapshot } from "./aiDetectionSelfTest";
 
+const SERVER_CONNECTION_STATES: ReadonlySet<string> = new Set<ServerConnectionState>([
+    "online",
+    "offline",
+    "auth_rejected",
+    "subscription_required",
+    "retryable_server_error",
+    "validation_rejected",
+    "unknown_error",
+]);
+
+/** The subset of `wakaclock today --json` this extension reads. */
+interface TodayJson {
+    total_seconds?: number;
+    human_readable?: string;
+    heartbeat_count?: number;
+    confirmed_seconds?: number | null;
+    queued_seconds?: number | null;
+    last_heartbeat_at?: number | null;
+    covered_intervals?: ActivitySegment[];
+    last_increment_seconds?: number | null;
+    last_increment_source?: string | null;
+    discarded_seconds?: number | null;
+    agent_health?: unknown;
+    queued_heartbeats?: number | null;
+    delivery_failure?: { message?: string; kind?: string } | null;
+    connection?: {
+        state?: string;
+        reachable?: boolean;
+        authenticated?: boolean | null;
+        http_status?: number | null;
+        last_error_kind?: string | null;
+        last_error_at?: number | null;
+    } | null;
+}
+
+function isUnsupportedArgument(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /unexpected argument|found argument|usage:/i.test(message);
+}
+
+/** Same wording as the CLI's text mode: only a server refusal is "REFUSED". */
+function deliveryLabel(kind?: string | null): string {
+    if (kind === "network") {
+        return "OFFLINE";
+    }
+    if (kind === "server_error") {
+        return "RETRYING";
+    }
+    return "REFUSED";
+}
+
 export class WakaclockCliService {
     private clipboardCapability: boolean | undefined;
+    /** Set once a CLI rejects `today --json`, so later refreshes spawn it once. */
+    private todayJsonUnsupported = false;
     public constructor(
         private readonly getConfig: () => WakaclockConfigSnapshot,
         private readonly logger: Logger,
@@ -205,6 +260,26 @@ export class WakaclockCliService {
         if (timezone?.trim()) {
             args.push("--timezone", timezone.trim());
         }
+        if (!this.todayJsonUnsupported) {
+            try {
+                const result = await this.runCli([...args, "--json"]);
+                const parsed = this.parseJson<TodayJson>(result.stdout.trim());
+                if (parsed && typeof parsed === "object" && typeof parsed.total_seconds === "number") {
+                    return this.snapshotFromTodayJson(parsed);
+                }
+                // A CLI that accepted the flag but printed text: read that output.
+                return this.parseTodayText(result.stdout, false);
+            } catch (error) {
+                if (!isUnsupportedArgument(error)) {
+                    throw error;
+                }
+                this.todayJsonUnsupported = true;
+                this.logger.warn("wakaclock-cli does not support today --json; using text output", {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
+
         let legacyCli = false;
         let result: CliResult;
         try {
@@ -225,12 +300,84 @@ export class WakaclockCliService {
             });
             result = await this.runCli(["today"]);
         }
-        const lines = this.parseKeyValueLines(result.stdout);
+        return this.parseTodayText(result.stdout, legacyCli);
+    }
+
+    private snapshotFromTodayJson(json: TodayJson): StatusBarSnapshot {
+        const optionalNumber = (value: unknown): number | undefined =>
+            typeof value === "number" && Number.isFinite(value) ? value : undefined;
+        const connection = this.connectionFromJson(json.connection);
+        const failure = json.delivery_failure;
+        const agentHealth = json.agent_health as
+            | { state?: unknown; running?: unknown; installed?: unknown }
+            | null
+            | undefined;
+        const agentState =
+            agentHealth && typeof agentHealth === "object"
+                ? "state" in agentHealth
+                    ? String(agentHealth.state)
+                    : agentHealth.running
+                      ? "running"
+                      : agentHealth.installed
+                        ? "installed (stopped)"
+                        : "not installed"
+                : undefined;
+        const snapshot: StatusBarSnapshot = {
+            humanReadable: json.human_readable ?? "0s",
+            totalSeconds: json.total_seconds ?? 0,
+            heartbeatCount: json.heartbeat_count ?? 0,
+        };
+        const assign = <K extends keyof StatusBarSnapshot>(key: K, value: StatusBarSnapshot[K] | undefined) => {
+            if (value !== undefined) {
+                snapshot[key] = value;
+            }
+        };
+        assign("confirmedSeconds", optionalNumber(json.confirmed_seconds));
+        assign("queuedSeconds", optionalNumber(json.queued_seconds));
+        assign("lastHeartbeatAt", optionalNumber(json.last_heartbeat_at));
+        assign("agentHealth", agentState === undefined ? undefined : { state: agentState });
+        assign(
+            "coveredIntervals",
+            Array.isArray(json.covered_intervals) && json.covered_intervals.length > 0
+                ? json.covered_intervals
+                : undefined,
+        );
+        assign("lastIncrementSeconds", optionalNumber(json.last_increment_seconds));
+        assign("lastIncrementSource", json.last_increment_source ?? undefined);
+        assign("discardedSeconds", optionalNumber(json.discarded_seconds));
+        assign("queuedHeartbeats", optionalNumber(json.queued_heartbeats));
+        assign(
+            "delivery",
+            failure?.message
+                ? `${deliveryLabel(failure.kind)} - ${failure.message}`
+                : undefined,
+        );
+        assign("connection", connection);
+        return snapshot;
+    }
+
+    private connectionFromJson(value: TodayJson["connection"]): ServerConnectionSnapshot | undefined {
+        if (!value || typeof value.state !== "string" || !SERVER_CONNECTION_STATES.has(value.state)) {
+            return undefined;
+        }
+        return {
+            state: value.state as ServerConnectionState,
+            ...(value.reachable === undefined ? {} : { reachable: value.reachable }),
+            ...(value.authenticated === undefined ? {} : { authenticated: value.authenticated }),
+            ...(value.http_status === undefined ? {} : { httpStatus: value.http_status }),
+            ...(value.last_error_kind === undefined ? {} : { lastErrorKind: value.last_error_kind }),
+            ...(value.last_error_at === undefined ? {} : { lastErrorAt: value.last_error_at }),
+        };
+    }
+
+    private parseTodayText(stdout: string, legacyCli: boolean): StatusBarSnapshot {
+        const lines = this.parseKeyValueLines(stdout);
         const queuedSeconds = lines["Queued seconds"];
         const confirmedSeconds = lines["Confirmed seconds"];
         const lastHeartbeatAt = lines["Last heartbeat at"];
         const agentState = lines.Agent;
         const coveredIntervals = this.parseJson<ActivitySegment[]>(lines["Covered intervals"]);
+        const connectionState = lines.Connection;
         return {
             humanReadable: lines.Today ?? "0s",
             totalSeconds: Number(lines["Total seconds"] ?? "0"),
@@ -264,6 +411,9 @@ export class WakaclockCliService {
                 ? {}
                 : { queuedHeartbeats: Number.parseInt(lines["Queued heartbeats"], 10) }),
             ...(lines.Delivery === undefined ? {} : { delivery: lines.Delivery }),
+            ...(connectionState !== undefined && SERVER_CONNECTION_STATES.has(connectionState)
+                ? { connection: { state: connectionState as ServerConnectionState } }
+                : {}),
             ...(legacyCli ? { legacyCli: true } : {}),
         };
     }
@@ -353,8 +503,14 @@ export class WakaclockCliService {
                 legacy.mirrorError = error instanceof Error ? error.message : String(error);
             }
             try {
-                await this.getToday();
-                legacy.verified = true;
+                const today = await this.getToday();
+                // `today --json` reports a rejected key as a typed state with exit 0;
+                // only text mode signals it by failing.
+                if (today.connection?.state === "auth_rejected") {
+                    legacy.verifyError = "API key was rejected by the server.";
+                } else {
+                    legacy.verified = true;
+                }
             } catch (error) {
                 legacy.verifyError = error instanceof Error ? error.message : String(error);
             }

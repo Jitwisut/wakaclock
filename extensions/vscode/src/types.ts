@@ -204,9 +204,31 @@ export type ConnectionState =
   | "needs-api-key"
   | "connecting"
   | "verified"
+  | "offline"
   | "offline-queued"
+  | "key-rejected"
   | "subscription-required"
+  | "service-degraded"
   | "cli-unavailable";
+
+/** `connection.state` from `wakaclock today --json` (wakaclock-core `ConnectionState`). */
+export type ServerConnectionState =
+  | "online"
+  | "offline"
+  | "auth_rejected"
+  | "subscription_required"
+  | "retryable_server_error"
+  | "validation_rejected"
+  | "unknown_error";
+
+export interface ServerConnectionSnapshot {
+  state: ServerConnectionState;
+  reachable?: boolean;
+  authenticated?: boolean | null;
+  httpStatus?: number | null;
+  lastErrorKind?: string | null;
+  lastErrorAt?: number | null;
+}
 
 export interface VerifyResult {
   status: VerifyStatus;
@@ -237,6 +259,9 @@ export interface StatusBarSnapshot {
      *  turning heartbeats away (an expired trial, a revoked key), which is otherwise
      *  indistinguishable from a quiet day. */
     delivery?: string;
+    /** Typed server state. Absent only for CLIs that predate the structured
+     *  `today --json` contract; the status bar then falls back to legacy rules. */
+    connection?: ServerConnectionSnapshot;
     legacyCli?: boolean;
 }
 
