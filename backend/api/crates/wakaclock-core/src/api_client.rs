@@ -57,6 +57,10 @@ pub struct StatusBarSnapshot {
     pub active_coverage: Option<String>,
     #[serde(default)]
     pub wakatime_compatible_seconds: Option<f64>,
+    /// Opaque, server-issued account identity for queue ownership. Stable across
+    /// API-key rotation and different for every account; older servers omit it.
+    #[serde(default)]
+    pub queue_owner_id: Option<String>,
 }
 
 /// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
@@ -148,6 +152,15 @@ impl DeliveryFailureKind {
             _ => Self::Other,
         }
     }
+}
+
+/// A server `queue_owner_id` is a lowercase SHA-256 hex digest; anything else is
+/// ignored rather than trusted as ownership proof.
+fn is_valid_queue_owner_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// The HTTP status carried by an error, when the server returned one.
@@ -591,7 +604,13 @@ impl ApiClient {
             .send()
             .await?;
         let response = Self::reject_unauthorized(response)?;
-        response.error_for_status()?;
+        let response = response.error_for_status()?;
+        // The body is optional for verification; only the ownership proof is read.
+        if let Ok(body) = response.json::<Value>().await {
+            if let Some(owner_id) = body.get("queue_owner_id").and_then(Value::as_str) {
+                self.adopt_verified_owner(owner_id);
+            }
+        }
         Ok(())
     }
 
@@ -627,7 +646,46 @@ impl ApiClient {
         let response = request.send().await?;
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
-        Ok(response.json::<StatusBarSnapshot>().await?)
+        let snapshot = response.json::<StatusBarSnapshot>().await?;
+        if let Some(owner_id) = snapshot.queue_owner_id.as_deref() {
+            self.adopt_verified_owner(owner_id);
+        }
+        Ok(snapshot)
+    }
+
+    /// Record the server's proof of this credential's account and move rows queued
+    /// under an earlier credential of the same account onto it (API-key rotation).
+    ///
+    /// Only called with an owner id from a response the server authenticated with
+    /// this client's own key. Best-effort: a local queue problem must never turn a
+    /// successful probe into a failure.
+    fn adopt_verified_owner(&self, owner_id: &str) {
+        if self.config.api_key.is_none() || !is_valid_queue_owner_id(owner_id) {
+            return;
+        }
+        let queue = match Queue::open() {
+            Ok(queue) => queue,
+            Err(error) => {
+                tracing::warn!(%error, "could not open queue to record credential owner");
+                return;
+            }
+        };
+        let scope = self.queue_scope();
+        if let Err(error) = queue.record_credential_owner(&scope, owner_id) {
+            tracing::warn!(%error, "could not record credential owner");
+            return;
+        }
+        match queue.rebind_same_owner(&scope, owner_id) {
+            Ok(report) if report.rows_moved + report.duplicates_dropped > 0 => {
+                tracing::info!(
+                    rows_moved = report.rows_moved,
+                    duplicates_dropped = report.duplicates_dropped,
+                    "rebound queued heartbeats from a rotated API key of the same account"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "same-account queue rebind failed"),
+        }
     }
 
     /// Upload sanitized token/session usage parsed from an agent transcript. The

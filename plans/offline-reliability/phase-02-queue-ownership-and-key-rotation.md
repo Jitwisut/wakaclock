@@ -1,6 +1,6 @@
 # Phase 02 — Stable Queue Ownership and Safe API-Key Rotation
 
-สถานะ: Planned  
+สถานะ: Implemented (server + CLI/core; VS Code ไม่ต้องเปลี่ยน)  
 ครอบคลุม: OFF-03  
 ขึ้นกับ: Phase 00–01
 
@@ -177,3 +177,30 @@ npm run lint
 npm test
 ```
 
+
+## Implementation notes (2026-09-19)
+
+- Server: `GET /api/v1/status_bar/today` (และ alias `/users/current/status_bar/today`)
+  คืน `queue_owner_id = sha256("atoaxis:queue-owner:v1:" + user_id)` แบบ hex. `user_id`
+  มาจาก `require_scoped_user` เท่านั้น. ไม่ใช้ HMAC ด้วย `JWT_SECRET` เพราะหมุน secret
+  แล้ว owner id จะเปลี่ยนและ queue จะค้างอีก. Field เป็น additive.
+- `queue.rs` (additive schema): ตาราง `credential_owner(destination, credential_scope,
+  owner_id, verified_at)` และ `queue_rebind_audit` (metadata only ไม่มี key/payload).
+  `rebind_same_owner(current, owner_id)` ทำใน transaction เดียว: ต้องมี proof ของ
+  credential ปัจจุบัน; ย้ายเฉพาะ rows ของ credential อื่นใน origin เดียวกันที่ proof
+  ชี้ owner เดียวกัน; row ที่ delivery identity ซ้ำทุกมิติ (id, session, entity,
+  revision) ถูก drop แทนการย้าย; payload/timestamp/retry state คงเดิม; error ใด ๆ rollback.
+- `ApiClient::today_with_timezone`/`verify` เรียก `adopt_verified_owner` หลัง authenticated
+  response สำเร็จ (best-effort, ไม่ทำให้ probe fail) และรับเฉพาะ owner id รูป 64-hex.
+- CLI: `today --json` เพิ่ม `queue.orphaned` + `orphaned_queued_heartbeats`; `status --json`
+  เพิ่ม `orphaned_queued_heartbeats` และ text บอกจำนวน orphaned.
+- VS Code ไม่ต้องแก้: pending-key flow เดิมเรียก `verify` เมื่อกลับมาออนไลน์ และ status bar
+  เรียก `today` ทุก 15s ซึ่งบันทึก proof ของ key ที่ใช้อยู่แล้ว. Credential-flow items ของ
+  VS Code ในแผนจึงยังไม่ทำ.
+- Phase 00 test `same_account_key_rotation_preserves_and_rebinds_every_row`: แก้เฉพาะ
+  precondition (key เก่าต้องเคย online หนึ่งครั้ง) ตามที่ผู้ใช้อนุมัติ; assertion เดิม
+  ทั้งหมดคงไว้. กรณีไม่มี proof ครอบด้วย `key_rotation_without_proof_keeps_rows_as_orphaned`.
+
+ข้อจำกัดที่รู้: key ที่ไม่เคยติดต่อ server สำเร็จเลย (เช่นตั้ง key ตอน offline แล้วถูก
+revoke ก่อนออนไลน์) ไม่มี proof → rows เป็น orphaned จนกว่าจะมี recovery workflow
+(ยังไม่ทำใน Phase นี้). ไม่มีการลบอัตโนมัติ.

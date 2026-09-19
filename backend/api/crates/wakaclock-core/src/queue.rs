@@ -16,6 +16,13 @@ pub struct Queue {
     conn: Connection,
 }
 
+/// What a same-account rebind changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RebindReport {
+    pub rows_moved: usize,
+    pub duplicates_dropped: usize,
+}
+
 /// Authenticated transport boundary that owns queued activity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueScope {
@@ -84,6 +91,30 @@ impl Queue {
 
             -- Unsent activity is never expired implicitly. Delivery, explicit
             -- recovery, or a visible dead-letter transition owns deletion.
+
+            -- Server-issued proof of which account a credential belongs to, per
+            -- origin. `credential_scope` is the queue owner scope (a hash of the API
+            -- key, never the key); `owner_id` is the opaque `queue_owner_id` the
+            -- server returned for an authenticated request with that credential.
+            CREATE TABLE IF NOT EXISTS credential_owner (
+                destination      TEXT NOT NULL,
+                credential_scope TEXT NOT NULL,
+                owner_id         TEXT NOT NULL,
+                verified_at      INTEGER NOT NULL,
+                PRIMARY KEY (destination, credential_scope)
+            );
+
+            -- Metadata-only record of every same-account queue rebind.
+            CREATE TABLE IF NOT EXISTS queue_rebind_audit (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                destination        TEXT NOT NULL,
+                from_scope         TEXT NOT NULL,
+                to_scope           TEXT NOT NULL,
+                owner_id           TEXT NOT NULL,
+                rows_moved         INTEGER NOT NULL,
+                duplicates_dropped INTEGER NOT NULL,
+                rebound_at         INTEGER NOT NULL
+            );
         ",
         )
         .map_err(AppError::Queue)?;
@@ -539,6 +570,136 @@ impl Queue {
             .map_err(AppError::Queue)
     }
 
+    /// Rows this scope cannot deliver: queued under another credential or origin.
+    /// They are kept, never deleted, until a same-account proof rebinds them or the
+    /// matching credential/origin is used again.
+    pub fn orphaned_len(&self, current: &QueueScope) -> Result<usize, AppError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM heartbeat_queue
+                 WHERE NOT (destination = ?1 AND owner_scope = ?2)",
+                params![&current.destination, &current.owner],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)
+    }
+
+    /// Record the server's proof of which account `scope`'s credential belongs to.
+    pub fn record_credential_owner(
+        &self,
+        scope: &QueueScope,
+        owner_id: &str,
+    ) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "INSERT INTO credential_owner (destination, credential_scope, owner_id, verified_at)
+                 VALUES (?1, ?2, ?3, strftime('%s', 'now'))
+                 ON CONFLICT(destination, credential_scope)
+                 DO UPDATE SET owner_id = excluded.owner_id, verified_at = excluded.verified_at",
+                params![&scope.destination, &scope.owner, owner_id],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Move rows queued under an older credential of the *same account* onto
+    /// `current`, atomically.
+    ///
+    /// Only credentials whose recorded server proof (`credential_owner`) names the
+    /// same `owner_id` on the same origin qualify, and `current` itself must carry
+    /// that proof. A row whose exact delivery identity (heartbeat id, session,
+    /// entity, revision) is already queued under `current` is dropped instead of
+    /// moved; every other row keeps its payload bytes, timestamp and retry state.
+    /// Any failure rolls the whole rebind back.
+    pub fn rebind_same_owner(
+        &self,
+        current: &QueueScope,
+        owner_id: &str,
+    ) -> Result<RebindReport, AppError> {
+        let transaction = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        let current_owner: Option<String> = transaction
+            .query_row(
+                "SELECT owner_id FROM credential_owner
+                 WHERE destination = ?1 AND credential_scope = ?2",
+                params![&current.destination, &current.owner],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::Queue)?;
+        if current_owner.as_deref() != Some(owner_id) {
+            return Err(AppError::Validation(
+                "queue rebind requires a recorded owner proof for the current credential"
+                    .to_string(),
+            ));
+        }
+        let from_scopes: Vec<String> = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT credential_scope FROM credential_owner
+                     WHERE destination = ?1 AND owner_id = ?2 AND credential_scope != ?3",
+                )
+                .map_err(AppError::Queue)?;
+            let rows = statement
+                .query_map(
+                    params![&current.destination, owner_id, &current.owner],
+                    |row| row.get(0),
+                )
+                .map_err(AppError::Queue)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(AppError::Queue)?;
+            rows
+        };
+
+        let mut report = RebindReport::default();
+        for from_scope in from_scopes {
+            let duplicates = transaction
+                .execute(
+                    "DELETE FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2 AND heartbeat_id IS NOT NULL
+                       AND EXISTS (
+                         SELECT 1 FROM heartbeat_queue AS kept
+                         WHERE kept.destination = heartbeat_queue.destination
+                           AND kept.owner_scope = ?3
+                           AND kept.heartbeat_id = heartbeat_queue.heartbeat_id
+                           AND kept.session_id = heartbeat_queue.session_id
+                           AND kept.entity = heartbeat_queue.entity
+                           AND kept.revision = heartbeat_queue.revision
+                       )",
+                    params![&current.destination, &from_scope, &current.owner],
+                )
+                .map_err(AppError::Queue)?;
+            let moved = transaction
+                .execute(
+                    "UPDATE heartbeat_queue SET owner_scope = ?3
+                     WHERE destination = ?1 AND owner_scope = ?2",
+                    params![&current.destination, &from_scope, &current.owner],
+                )
+                .map_err(AppError::Queue)?;
+            if moved + duplicates > 0 {
+                transaction
+                    .execute(
+                        "INSERT INTO queue_rebind_audit
+                         (destination, from_scope, to_scope, owner_id, rows_moved,
+                          duplicates_dropped, rebound_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'))",
+                        params![
+                            &current.destination,
+                            &from_scope,
+                            &current.owner,
+                            owner_id,
+                            moved as i64,
+                            duplicates as i64
+                        ],
+                    )
+                    .map_err(AppError::Queue)?;
+            }
+            report.rows_moved += moved;
+            report.duplicates_dropped += duplicates;
+        }
+        transaction.commit().map_err(AppError::Queue)?;
+        Ok(report)
+    }
+
     /// Whether the durable heartbeat queue has no pending rows.
     pub fn is_empty(&self) -> Result<bool, AppError> {
         Ok(self.len()? == 0)
@@ -925,5 +1086,271 @@ mod tests {
         assert_eq!(queue.dead_letter_len().unwrap(), 1);
         drop(queue);
         let _ = std::fs::remove_file(path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Offline reliability Phase 02 — same-account queue rebind
+    // -----------------------------------------------------------------------
+
+    const ORIGIN: &str = "https://api.example.test";
+    const OWNER_1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const OWNER_2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    struct TempQueue {
+        path: std::path::PathBuf,
+        queue: Queue,
+    }
+
+    impl TempQueue {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("wakaclock-rebind-queue-{}.db", Uuid::new_v4()));
+            let queue = Queue::open_at(&path).unwrap();
+            Self { path, queue }
+        }
+
+        /// (heartbeat_id, owner_scope, destination, payload bytes, retry_count)
+        fn rows(&self) -> Vec<(String, String, String, String, i64)> {
+            let mut statement = self
+                .queue
+                .conn
+                .prepare(
+                    "SELECT heartbeat_id, owner_scope, destination, payload, retry_count
+                     FROM heartbeat_queue ORDER BY id",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        }
+    }
+
+    impl Drop for TempQueue {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    fn scope(destination: &str, key: &str) -> QueueScope {
+        QueueScope {
+            destination: destination.to_string(),
+            owner: format!("key:{key}"),
+        }
+    }
+
+    fn row(heartbeat_id: &str, time: f64, revision: u64) -> serde_json::Value {
+        serde_json::json!({
+            "heartbeat_id": heartbeat_id,
+            "entity": "/fixture/main.rs",
+            "time": time,
+            "revision": revision,
+            "active_seconds": 30.0,
+        })
+    }
+
+    #[test]
+    fn same_owner_rebind_is_atomic_and_preserves_every_row() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        for index in 0..5 {
+            temp.queue
+                .push_scoped(
+                    &row(&format!("hb-{index}"), 1_000.0 + index as f64, 0),
+                    &old,
+                )
+                .unwrap();
+        }
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+
+        let report = temp.queue.rebind_same_owner(&new, OWNER_1).unwrap();
+
+        assert_eq!(report.rows_moved, 5);
+        assert_eq!(report.duplicates_dropped, 0);
+        assert_eq!(temp.queue.len_scoped(&old).unwrap(), 0);
+        assert_eq!(temp.queue.len_scoped(&new).unwrap(), 5);
+        assert_eq!(temp.queue.len().unwrap(), 5);
+        let audits: i64 = temp
+            .queue
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_rebind_audit", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(audits, 1);
+        // A second rebind is a no-op.
+        assert_eq!(
+            temp.queue.rebind_same_owner(&new, OWNER_1).unwrap(),
+            RebindReport::default()
+        );
+    }
+
+    #[test]
+    fn rebind_preserves_heartbeat_id_timestamp_revision_and_payload_bytes() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        temp.queue
+            .push_scoped(&row("hb-keep", 1_234.5, 3), &old)
+            .unwrap();
+        let (id, _) = temp
+            .queue
+            .claim_batch_scoped(&old, "lease")
+            .unwrap()
+            .remove(0);
+        temp.queue.mark_retry(id).unwrap();
+        let before = temp.rows();
+
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+        temp.queue.rebind_same_owner(&new, OWNER_1).unwrap();
+
+        let after = temp.rows();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].0, before[0].0, "heartbeat id");
+        assert_eq!(
+            after[0].3, before[0].3,
+            "payload bytes (time, revision) unchanged"
+        );
+        assert_eq!(after[0].4, before[0].4, "retry state unchanged");
+        assert_eq!(after[0].1, new.owner);
+    }
+
+    #[test]
+    fn different_owner_proof_is_rejected_without_mutation() {
+        let temp = TempQueue::new();
+        let (account_1, account_2) = (scope(ORIGIN, "acct1"), scope(ORIGIN, "acct2"));
+        temp.queue
+            .push_scoped(&row("hb-a", 1_000.0, 0), &account_1)
+            .unwrap();
+        temp.queue
+            .record_credential_owner(&account_1, OWNER_1)
+            .unwrap();
+        temp.queue
+            .record_credential_owner(&account_2, OWNER_2)
+            .unwrap();
+        let before = temp.rows();
+
+        // Account 2 has its own proof, but it names a different owner.
+        assert_eq!(
+            temp.queue.rebind_same_owner(&account_2, OWNER_2).unwrap(),
+            RebindReport::default()
+        );
+        // Claiming account 1's owner without a matching recorded proof fails.
+        assert!(temp.queue.rebind_same_owner(&account_2, OWNER_1).is_err());
+        assert_eq!(temp.rows(), before);
+    }
+
+    #[test]
+    fn different_origin_rebind_is_rejected() {
+        let temp = TempQueue::new();
+        let old = scope("https://old.example.test", "old");
+        let new = scope(ORIGIN, "new");
+        temp.queue
+            .push_scoped(&row("hb-origin", 1_000.0, 0), &old)
+            .unwrap();
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+        let before = temp.rows();
+
+        assert_eq!(
+            temp.queue.rebind_same_owner(&new, OWNER_1).unwrap(),
+            RebindReport::default()
+        );
+        assert_eq!(temp.rows(), before);
+        assert_eq!(temp.queue.orphaned_len(&new).unwrap(), 1);
+    }
+
+    #[test]
+    fn rebind_conflict_deduplicates_only_exact_delivery_identity() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        // Same delivery identity queued under both credentials (retry after rotation).
+        temp.queue
+            .push_scoped(&row("hb-same", 1_000.0, 0), &old)
+            .unwrap();
+        temp.queue
+            .push_scoped(&row("hb-same", 1_000.0, 0), &new)
+            .unwrap();
+        // Same heartbeat id but a newer revision: a distinct correction, must survive.
+        temp.queue
+            .push_scoped(&row("hb-same", 1_000.0, 1), &old)
+            .unwrap();
+        temp.queue
+            .push_scoped(&row("hb-other", 1_001.0, 0), &old)
+            .unwrap();
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+
+        let report = temp.queue.rebind_same_owner(&new, OWNER_1).unwrap();
+
+        assert_eq!(report.duplicates_dropped, 1);
+        assert_eq!(report.rows_moved, 2);
+        assert_eq!(temp.queue.len_scoped(&new).unwrap(), 3);
+        assert_eq!(temp.queue.len().unwrap(), 3);
+    }
+
+    #[test]
+    fn crash_before_commit_leaves_the_old_scope_intact() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        temp.queue
+            .push_scoped(&row("hb-1", 1_000.0, 0), &old)
+            .unwrap();
+        temp.queue
+            .push_scoped(&row("hb-2", 1_001.0, 0), &old)
+            .unwrap();
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+        let before = temp.rows();
+        // Force the final write of the transaction (the audit insert) to fail after
+        // the rows were already updated inside it.
+        temp.queue
+            .conn
+            .execute("DROP TABLE queue_rebind_audit", [])
+            .unwrap();
+
+        assert!(temp.queue.rebind_same_owner(&new, OWNER_1).is_err());
+        assert_eq!(
+            temp.rows(),
+            before,
+            "a failed rebind must roll back entirely"
+        );
+    }
+
+    #[test]
+    fn legacy_rows_are_visible_as_recovery_required_not_deleted() {
+        let temp = TempQueue::new();
+        let (legacy, new) = (scope(ORIGIN, "revoked"), scope(ORIGIN, "new"));
+        // Rows from a key that was never verified: no owner proof exists for it.
+        temp.queue
+            .push_scoped(&row("hb-legacy-1", 1_000.0, 0), &legacy)
+            .unwrap();
+        temp.queue
+            .push_scoped(&row("hb-legacy-2", 1_001.0, 0), &legacy)
+            .unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+
+        assert_eq!(
+            temp.queue.rebind_same_owner(&new, OWNER_1).unwrap(),
+            RebindReport::default()
+        );
+        assert_eq!(temp.queue.orphaned_len(&new).unwrap(), 2);
+        assert_eq!(temp.queue.len_scoped(&legacy).unwrap(), 2);
+        assert!(temp
+            .queue
+            .claim_batch_scoped(&new, "lease")
+            .unwrap()
+            .is_empty());
     }
 }

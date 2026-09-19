@@ -10,7 +10,9 @@ use axum::{
 };
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct StatusBarResponse {
@@ -66,6 +68,11 @@ pub struct StatusBarResponse {
     pub active_coverage: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wakatime_compatible_seconds: Option<f64>,
+    /// Opaque account identity for client offline-queue ownership: stable across
+    /// API-key rotation, different for every account, and not the raw user id. A
+    /// client may move queued rows between its own credentials only when both
+    /// report the same value from authenticated requests on the same origin.
+    pub queue_owner_id: String,
     /// How much of `total_seconds` a client actually measured versus how much the idle
     /// bridge inferred, and how much was attended versus agent-produced. On real data
     /// the inferred half is the larger one; nothing used to say so.
@@ -103,6 +110,7 @@ pub async fn today(
     Query(params): Query<StatusBarQuery>,
 ) -> Result<Json<StatusBarResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_scoped_user(&state, &headers, "read_stats").await?;
+    let owner_id = queue_owner_id(user_id);
     let date = ResolvedRange::today_date_string(params.timezone.as_deref())
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let range = ResolvedRange::parse(&date, &date, params.timezone.as_deref())
@@ -211,6 +219,7 @@ pub async fn today(
                 active_overlap_seconds: Some(timeline.active_overlap_seconds),
                 active_coverage: Some(timeline.active_coverage),
                 wakatime_compatible_seconds: Some(wakatime_total),
+                queue_owner_id: owner_id,
                 evidence,
             })
         }
@@ -241,9 +250,18 @@ pub async fn today(
             active_overlap_seconds: None,
             active_coverage: None,
             wakatime_compatible_seconds: None,
+            queue_owner_id: owner_id,
             evidence: crate::services::activity_timeline::EvidenceSplit::default(),
         }),
     })
+}
+
+/// Derived only from the server-resolved `user_id`, never from request input.
+/// Deliberately not keyed by `JWT_SECRET`: rotating that secret must not change
+/// every account's identity and strand offline queues again.
+pub fn queue_owner_id(user_id: Uuid) -> String {
+    let digest = Sha256::digest(format!("atoaxis:queue-owner:v1:{user_id}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -258,5 +276,29 @@ fn format_duration(secs: f64) -> String {
         format!("{}h {}m", hours, minutes)
     } else {
         format!("{}m", minutes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_owner_id_is_stable_per_account_and_distinct_across_accounts() {
+        let account = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let other = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+
+        // Same account (e.g. before and after an API-key rotation) → same id.
+        assert_eq!(queue_owner_id(account), queue_owner_id(account));
+        assert_ne!(queue_owner_id(account), queue_owner_id(other));
+
+        let id = queue_owner_id(account);
+        assert_eq!(id.len(), 64);
+        assert!(id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+        // Opaque: the raw user id is not exposed.
+        assert!(!id.contains(&account.simple().to_string()));
+        assert_ne!(id, account.to_string());
     }
 }

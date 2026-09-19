@@ -1400,6 +1400,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             };
 
             let flush = api_client.flush_queue().await?;
+            // After the key check: a verified same-account key has already rebound
+            // its older rows, so only rows that still lack proof are counted.
+            let orphaned = queue.orphaned_len(&api_client.queue_scope()).unwrap_or(0);
 
             if json {
                 println!(
@@ -1412,6 +1415,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "server_url": config.server_url,
                         "identity": identity_line(&config),
                         "queued_heartbeats": queued,
+                        "orphaned_queued_heartbeats": orphaned,
                         "key_check": key_check,
                         "key_check_detail": key_check_detail,
                         "flushed_now": flush.flushed,
@@ -1432,6 +1436,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
                 println!("{}", identity_line(&config));
                 println!("Queued heartbeats: {queued}");
+                if orphaned > 0 {
+                    println!(
+                        "Orphaned heartbeats: {orphaned} (queued under another API key or server; kept until the same account is verified)"
+                    );
+                }
                 println!("Capabilities: clipboard_metrics_v1, ai_producer_v1 (contract v{PRODUCER_CONTRACT_VERSION})");
                 match key_check {
                     "verified" => {
@@ -1493,6 +1502,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             active_seconds: None,
                             active_coverage: None,
                             wakatime_compatible_seconds: None,
+                            queue_owner_id: None,
                         },
                         Some(error.to_string()),
                         Some((
@@ -1507,6 +1517,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let queued_segments =
                 queue.queued_segments_for_day_scoped(timezone.as_deref(), &queue_scope)?;
             let queued_heartbeats = queue.len_scoped(&queue_scope).unwrap_or(0);
+            // Rows under another credential/origin that this scope cannot deliver.
+            // Never deleted: a same-account proof rebinds them (API-key rotation).
+            let orphaned_heartbeats = queue.orphaned_len(&queue_scope).unwrap_or(0);
             let queued_seconds = union_activity_seconds(&queued_segments);
             let queued_active_segments = queued_segments
                 .iter()
@@ -1588,7 +1601,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "queue": {
                         "depth": queued_heartbeats,
                         "seconds_today": displayed_queued_seconds,
+                        "orphaned": orphaned_heartbeats,
                     },
+                    "orphaned_queued_heartbeats": orphaned_heartbeats,
                     }))?
                 );
             } else {
