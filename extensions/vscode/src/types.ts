@@ -67,7 +67,8 @@ export type FlushReason =
 export interface BufferedFileState {
     entity: string;
     heartbeatId?: string;
-    project?: string;
+    /** Workspace-folder name; the CLI uses it only when it cannot detect a project. */
+    alternateProject?: string;
     /** Timestamp of the most recent text edit, kept separate from cross-file activity time. */
     lastEditAt?: number;
     /**
@@ -134,7 +135,11 @@ export interface ExtraHeartbeatPayload {
     /** Unix seconds when the captured editor activity occurred. */
     time?: number;
     entity_type?: "file" | "domain" | "url" | "app";
-    project?: string;
+    /**
+     * Fallback project name (WakaTime `alternate_project`). The CLI resolves the real
+     * project from the entity (git root first) and uses this only when none is found.
+     */
+    alternate_project?: string;
     category?: string;
     write?: boolean;
     line_number?: number;

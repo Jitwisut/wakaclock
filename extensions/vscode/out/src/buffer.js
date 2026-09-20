@@ -233,7 +233,7 @@ class HeartbeatBufferManager {
             entity: normalizedEntity,
             time: now / 1000,
             entity_type: "file",
-            project,
+            alternate_project: project,
             category: "coding",
             write: true,
             active_seconds: 0,
@@ -508,7 +508,7 @@ class HeartbeatBufferManager {
             entity: state.entity,
             time: state.lastActivityAt === undefined ? undefined : state.lastActivityAt / 1000,
             entity_type: "file",
-            project: state.project,
+            alternate_project: state.alternateProject,
             category,
             write,
             line_number: state.lineNumber,
@@ -733,7 +733,7 @@ class HeartbeatBufferManager {
         if (!trimmed) {
             return;
         }
-        state.project = trimmed;
+        state.alternateProject = trimmed;
     }
 }
 exports.HeartbeatBufferManager = HeartbeatBufferManager;
