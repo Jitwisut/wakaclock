@@ -9,7 +9,6 @@ import {
   SITE_TAGLINE,
   SITE_URL,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from './site';
 
 /**
@@ -98,9 +97,7 @@ export function softwareApplicationSchema(): JsonLdValue {
     disambiguatingDescription: `${SITE_NAME} is a hosted developer time-tracking service compatible with the WakaTime API. It is unrelated to similarly named products such as ATOSS, Atto or Axis ERP.`,
     applicationCategory: 'DeveloperApplication',
     applicationSubCategory: 'Time tracking and developer analytics',
-    codeRepository: SOURCE_REPOSITORY_URL,
     operatingSystem: 'Linux, macOS, Windows',
-    sameAs: [SOURCE_REPOSITORY_URL],
     slogan: SITE_TAGLINE,
     dateModified: SITE_MODIFIED,
     author: { '@id': ORGANIZATION_ID },

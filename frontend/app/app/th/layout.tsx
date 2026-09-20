@@ -1,11 +1,18 @@
 import { MarketingLayoutFrame } from '@/components/marketing/marketing-layout-frame';
+import { RootDocument } from '@/lib/seo/root-document';
 
+import '../globals.css';
 // Next.js requires global marketing styles to be imported by this route layout too.
 // eslint-disable-next-line boundaries/element-types
 import '../(marketing)/marketing.css';
 
 export const dynamic = 'force-static';
+export { SITE_METADATA as metadata, SITE_VIEWPORT as viewport } from '@/lib/seo/root-document';
 
 export default function ThaiMarketingLayout({ children }: { children: React.ReactNode }) {
-  return <MarketingLayoutFrame locale="th">{children}</MarketingLayoutFrame>;
+  return (
+    <RootDocument lang="th">
+      <MarketingLayoutFrame locale="th">{children}</MarketingLayoutFrame>
+    </RootDocument>
+  );
 }

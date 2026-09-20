@@ -14,9 +14,9 @@ import {
   createMarketingMetadata,
   localizedPath,
   ORGANIZATION,
+  PUBLIC_EVIDENCE_URL,
   SITE_NAME,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { AnswerGuide, hasAnswerGuide } from './answer-guide';
@@ -285,8 +285,8 @@ export function LocalizedMarketingPage({
             <a href={localizedPath(locale, '/about')}>
               {locale === 'th' ? 'รู้จักทีมผู้พัฒนา' : 'Meet the team'}
             </a>
-            <a href={SOURCE_REPOSITORY_URL} rel="noopener noreferrer" target="_blank">
-              {locale === 'th' ? 'ดูซอร์สโค้ดผลิตภัณฑ์' : 'Explore the product source'}
+            <a href={localizedPath(locale, PUBLIC_EVIDENCE_URL)}>
+              {locale === 'th' ? 'อ่านเอกสารผลิตภัณฑ์' : 'Read product documentation'}
             </a>
             <a href={localizedPath(locale, '/contact')}>
               {locale === 'th' ? 'สอบถามข้อมูล' : 'Ask a question'}

@@ -21,7 +21,6 @@ import {
   PUBLIC_ROUTE_DEFINITIONS,
   PUBLIC_ROUTES,
   SITE_NAME,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 /** Reads the JSON-LD payload back out of a rendered <JsonLd /> block. */
@@ -67,7 +66,8 @@ describe('structured data', () => {
 
     expect(schema.name).toBe(SITE_NAME);
     expect(schema.applicationCategory).toBe('DeveloperApplication');
-    expect(schema.sameAs).toContain(SOURCE_REPOSITORY_URL);
+    expect(schema.sameAs).toBeUndefined();
+    expect(schema.codeRepository).toBeUndefined();
   });
 
   it('never fabricates ratings, reviews or download counts', () => {
@@ -86,6 +86,14 @@ describe('structured data', () => {
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('does not publish a private repository as public evidence', () => {
+    const serialized = JSON.stringify(
+      graph(organizationSchema(), websiteSchema(), softwareApplicationSchema())
+    );
+
+    expect(serialized).not.toContain('github.com/Jitwisut/wakaclock');
   });
 
   it('contains no undefined values', () => {

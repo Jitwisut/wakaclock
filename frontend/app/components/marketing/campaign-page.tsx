@@ -8,10 +8,11 @@ import {
   createMarketingMetadata,
   localizedPath,
   PRICING,
+  PRODUCT_STATUS,
+  PUBLIC_EVIDENCE_URL,
   SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { EarlyAccessForm } from './early-access-form';
@@ -46,8 +47,7 @@ const COPY = {
     lead: `${SITE_NAME} turns editor heartbeats into time, project, language and AI-attribution analytics, and never ages your history out to a recent window. Point an existing WakaTime plugin at it and keep the setup you already have.`,
     primaryCta: 'Get my Early Access key',
     secondaryCta: 'See the 5-minute setup',
-    honesty:
-      'Early Access is a waiting list, not a checkout. Nothing is charged, no card is collected, and the hosted product has no free tier at launch.',
+    honesty: `${PRODUCT_STATUS.en.label} is a waiting list, not a checkout. ${PRODUCT_STATUS.en.signup} The hosted product has no free tier at launch.`,
     valueHeading: 'What you get on day one',
     values: [
       {
@@ -94,7 +94,7 @@ const COPY = {
     ],
     factsHeading: 'Key facts',
     facts: [
-      ['Status', 'Early Access — a waiting list, not a checkout.'],
+      ['Status', `${PRODUCT_STATUS.en.label} — a waiting list, not a checkout.`],
       ['Planned price', `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year, one plan.`],
       ['Protocol', 'WakaTime API, so an existing compatible plugin keeps working.'],
       ['History', 'Complete coding history included, with no rolling window.'],
@@ -108,9 +108,9 @@ const COPY = {
         note: 'a fuller migration comparison',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis implementation',
-        note: 'verifiable evidence for the claims on this page',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
+        note: 'documented evidence for the claims on this page',
       },
     ] as const,
   },
@@ -121,8 +121,7 @@ const COPY = {
     lead: `${SITE_NAME} เปลี่ยน heartbeat จาก editor เป็นข้อมูลเวลา โปรเจกต์ ภาษา และ AI attribution โดยไม่ตัดประวัติเหลือเฉพาะช่วงล่าสุด ถ้าคุณมี WakaTime plugin อยู่แล้ว ก็ชี้มาที่นี่ได้เลยโดยไม่ต้องเปลี่ยนวิธีทำงาน`,
     primaryCta: 'ขอ key สำหรับ Early Access',
     secondaryCta: 'ดูวิธีติดตั้งใน 5 นาที',
-    honesty:
-      'Early Access คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน เราไม่เรียกเก็บเงิน ไม่เก็บข้อมูลบัตร และผลิตภัณฑ์ hosted จะไม่มี free tier ตอนเปิดตัว',
+    honesty: `${PRODUCT_STATUS.th.label} คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน ${PRODUCT_STATUS.th.signup} ผลิตภัณฑ์ hosted จะไม่มี free tier ตอนเปิดตัว`,
     valueHeading: 'สิ่งที่ได้ตั้งแต่วันแรก',
     values: [
       {
@@ -169,7 +168,7 @@ const COPY = {
     ],
     factsHeading: 'ข้อมูลสำคัญ',
     facts: [
-      ['สถานะ', 'Early Access คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน'],
+      ['สถานะ', `${PRODUCT_STATUS.th.label} คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน`],
       ['ราคาที่วางไว้', `$${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แผนเดียว`],
       ['Protocol', 'รองรับ WakaTime API ทำให้ plugin เดิมยังใช้ได้'],
       ['ประวัติ', 'เก็บประวัติการเขียนโค้ดครบถ้วน ไม่จำกัดช่วงเวลา'],
@@ -183,9 +182,9 @@ const COPY = {
         note: 'การเปรียบเทียบการย้ายระบบแบบละเอียด',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'ซอร์สโค้ดผลิตภัณฑ์',
-        note: 'หลักฐานที่ตรวจสอบข้อความในหน้านี้ได้',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'เอกสารสาธารณะของ AtoAxis',
+        note: 'หลักฐานที่อธิบายขอบเขตของผลิตภัณฑ์ในหน้านี้',
       },
     ] as const,
   },

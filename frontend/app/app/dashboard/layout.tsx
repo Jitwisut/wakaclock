@@ -10,6 +10,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { DASHBOARD_PANELS_COOKIE, readHiddenPanels } from '@/lib/dashboard-panels';
 import { fontVariables } from '@/lib/fonts';
+import { RootDocument, SITE_METADATA } from '@/lib/seo/root-document';
 import {
   DEFAULT_THEME,
   type ThemeContentLayout,
@@ -22,9 +23,13 @@ import { WakaclockUserProvider } from '@/lib/wakaclock/user-store';
 
 import type { Metadata } from 'next';
 
+import '../globals.css';
+
 export const metadata: Metadata = {
+  ...SITE_METADATA,
   robots: { index: false, follow: false, nocache: true },
 };
+export { SITE_VIEWPORT as viewport } from '@/lib/seo/root-document';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,7 +54,8 @@ export default async function DashboardLayout({
   const hiddenPanels = readHiddenPanels(cookieStore.get(DASHBOARD_PANELS_COOKIE)?.value);
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
+    <RootDocument lang="en">
+      <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
       {/*
         `fontVariables` has to sit on the same element as the theme attributes. A preset
         declares `--text-family: var(--font-space-mono), …`, and a var() whose variable is
@@ -77,6 +83,7 @@ export default async function DashboardLayout({
         </QueryProvider>
         <NextTopLoader color="var(--primary)" height={2} shadow-sm="none" showSpinner={false} />
       </ActiveThemeProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </RootDocument>
   );
 }
