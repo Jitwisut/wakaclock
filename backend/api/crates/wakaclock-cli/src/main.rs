@@ -40,7 +40,7 @@ use wakaclock_core::{
     api_client::{
         http_status_of, is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
         AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient, ConnectionState,
-        DeliveryFailure, DeliveryFailureKind,
+        DeliveryFailureKind,
     },
     broker::{scoped_storage_event_id, BrokerEventV1},
     config::Config,
@@ -991,6 +991,23 @@ fn verify_outcome(error: &AppError) -> (&'static str, bool) {
     (status, reachable)
 }
 
+/// Render one scope's delivery failure. `category`/`http_status`/`message_code` are
+/// what callers decide on; `message` stays a bounded local diagnostic, and `at` keeps
+/// the pre-scope field name so existing readers do not break.
+fn delivery_failure_json(
+    failure: wakaclock_core::queue::DeliveryFailureRecord,
+) -> serde_json::Value {
+    serde_json::json!({
+        "at": failure.recorded_at as f64,
+        "last_attempt_at": failure.last_attempt_at as f64,
+        "message": failure.detail.clone().unwrap_or_default(),
+        "category": failure.kind,
+        "http_status": failure.http_status,
+        "message_code": failure.message_code,
+        "consecutive_failures": failure.consecutive_failures,
+    })
+}
+
 /// Structured reachability for `wakaclock today --json`.
 ///
 /// The GET probe decides reachability. When it succeeds, a recorded POST refusal
@@ -1001,7 +1018,7 @@ fn verify_outcome(error: &AppError) -> (&'static str, bool) {
 /// reported as `last_error_kind`.
 fn today_connection(
     probe_failure: Option<(DeliveryFailureKind, Option<u16>)>,
-    recorded: Option<&DeliveryFailure>,
+    recorded: Option<&wakaclock_core::queue::DeliveryFailureRecord>,
 ) -> serde_json::Value {
     if let Some((kind, http_status)) = probe_failure {
         let authenticated = match kind {
@@ -1018,24 +1035,22 @@ fn today_connection(
             "last_error_at": chrono::Utc::now().timestamp() as f64,
         });
     }
-    let refusal = recorded
-        .map(|failure| (failure, failure.kind()))
-        .filter(|(_, kind)| {
-            matches!(
-                kind,
-                DeliveryFailureKind::Payment402 | DeliveryFailureKind::Validation
-            )
-        });
+    let refusal =
+        recorded.filter(|failure| matches!(failure.kind.as_str(), "payment_402" | "validation"));
     let state = refusal
-        .map(|(_, kind)| ConnectionState::from_failure_kind(kind))
+        .and_then(|failure| match failure.kind.as_str() {
+            "payment_402" => Some(ConnectionState::SubscriptionRequired),
+            "validation" => Some(ConnectionState::ValidationRejected),
+            _ => None,
+        })
         .unwrap_or(ConnectionState::Online);
     serde_json::json!({
         "state": state.as_str(),
         "reachable": true,
         "authenticated": true,
-        "http_status": refusal.and_then(|(failure, _)| failure.http_status),
-        "last_error_kind": recorded.map(|failure| failure.kind().as_str()),
-        "last_error_at": recorded.map(|failure| failure.at),
+        "http_status": refusal.and_then(|failure| failure.http_status),
+        "last_error_kind": recorded.map(|failure| failure.kind.clone()),
+        "last_error_at": recorded.map(|failure| failure.recorded_at as f64),
     })
 }
 
@@ -1513,13 +1528,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 };
             let queue = Queue::open()?;
             let queue_scope = api_client.queue_scope();
-            let delivery_failure = wakaclock_core::api_client::ApiClient::last_delivery_failure();
+            // Scoped to this origin + credential: another account's or server's
+            // refusal must never describe this one (and a pre-scope record never does).
+            let delivery_record = api_client.delivery_failure();
+            let delivery_failure = delivery_record.clone().map(delivery_failure_json);
             let queued_segments =
                 queue.queued_segments_for_day_scoped(timezone.as_deref(), &queue_scope)?;
             let queued_heartbeats = queue.len_scoped(&queue_scope).unwrap_or(0);
             // Rows under another credential/origin that this scope cannot deliver.
             // Never deleted: a same-account proof rebinds them (API-key rotation).
             let orphaned_heartbeats = queue.orphaned_len(&queue_scope).unwrap_or(0);
+            // Rows a flush would pick up right now: the rest are waiting on a retry
+            // backoff, which is a different answer to "why is nothing being sent".
+            let eligible_heartbeats = queue.eligible_len_scoped(&queue_scope).unwrap_or(0);
             let queued_seconds = union_activity_seconds(&queued_segments);
             let queued_active_segments = queued_segments
                 .iter()
@@ -1566,7 +1587,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             if snapshot.agent_health.is_none() {
                 snapshot.agent_health = Some(agent_health);
             }
-            let connection = today_connection(probe_failure, delivery_failure.as_ref());
+            let connection = today_connection(probe_failure, delivery_record.as_ref());
             if json {
                 println!(
                     "{}",
@@ -1601,6 +1622,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "queue": {
                         "depth": queued_heartbeats,
                         "seconds_today": displayed_queued_seconds,
+                        "eligible_now": eligible_heartbeats,
                         "orphaned": orphaned_heartbeats,
                     },
                     "orphaned_queued_heartbeats": orphaned_heartbeats,
@@ -1625,18 +1647,21 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "Queued heartbeats: {queued_heartbeats} (not yet accepted by the server)"
                     );
                 }
-                if let Some(failure) = &delivery_failure {
+                if let Some(failure) = &delivery_record {
                     // Only a server refusal is "REFUSED"; older editor builds map that
                     // word to "subscription required", so an outage must not use it.
-                    let label = match failure.kind() {
-                        DeliveryFailureKind::Network => "OFFLINE",
-                        DeliveryFailureKind::ServerError => "RETRYING",
+                    let label = match failure.kind.as_str() {
+                        "network" => "OFFLINE",
+                        "server_error" => "RETRYING",
                         _ => "REFUSED",
                     };
-                    println!("Delivery: {label} - {}", failure.message);
+                    println!(
+                        "Delivery: {label} - {}",
+                        failure.detail.as_deref().unwrap_or(&failure.message_code)
+                    );
                     println!(
                         "  No heartbeat accepted since {}. Queued activity stays local until one is.",
-                        chrono::DateTime::from_timestamp(failure.at as i64, 0)
+                        chrono::DateTime::from_timestamp(failure.recorded_at, 0)
                             .map(|at| at.to_rfc3339())
                             .unwrap_or_else(|| "an earlier time".to_string())
                     );
@@ -3462,14 +3487,10 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
     // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
     // network failure without eyeballing the raw message.
-    let last_delivery_failure =
-        wakaclock_core::api_client::ApiClient::last_delivery_failure().map(|failure| {
-            serde_json::json!({
-                "at": failure.at,
-                "message": failure.message,
-                "category": failure.kind().as_str(),
-            })
-        });
+    let last_delivery_failure = ApiClient::new(config.clone())
+        .ok()
+        .and_then(|client| client.delivery_failure())
+        .map(delivery_failure_json);
     let latest_native_hook_event_at = latest_sidecar_event_time();
 
     let identity = build_identity();
