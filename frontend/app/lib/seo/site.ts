@@ -72,7 +72,8 @@ function resolveSiteUrl(): string {
 export const SITE_URL = resolveSiteUrl();
 
 export const SOCIAL_IMAGE_PATH = '/opengraph-image';
-export const SOURCE_REPOSITORY_URL = 'https://github.com/Jitwisut/wakaclock';
+/** Public evidence for product claims; the implementation repository is private. */
+export const PUBLIC_EVIDENCE_URL = '/docs';
 
 export function localizedPath(locale: SiteLocale, path: string): string {
   let normalized = path;
@@ -111,6 +112,20 @@ export const PRICING = {
   annualUsd: 99,
   currency: 'USD',
   status: 'planned',
+} as const;
+
+/** Shared availability wording used by page copy and machine-readable discovery files. */
+export const PRODUCT_STATUS = {
+  access: 'invite-only',
+  billing: 'not-open',
+  en: {
+    label: 'Invite-only Early Access',
+    signup: 'Joining the list records interest; it does not create an account or charge a payment method.',
+  },
+  th: {
+    label: 'Early Access แบบเชิญ',
+    signup: 'การลงชื่อคือการแสดงความสนใจ ยังไม่สร้างบัญชีและไม่มีการเรียกเก็บเงิน',
+  },
 } as const;
 
 /**
@@ -160,6 +175,9 @@ export const EN_PUBLIC_ROUTES = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/how-coding-time-is-calculated',
+  '/docs/ai-attribution-and-coverage',
+  '/docs/ai-cost-methodology',
   '/about',
   '/contact',
   '/terms',
@@ -186,6 +204,7 @@ export interface PublicRouteDefinition {
 const AUDIT_REVIEW_DATE = '2026-09-11';
 /** Round 3 of the SEOScore audit response — see docs/seoscore-audit-2026-09-12-round-3.md. */
 const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
+const NEW_GUIDES_DATE = '2026-09-20';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': AUDIT_REVIEW_DATE,
   '/teams': AUDIT_REVIEW_DATE,
@@ -196,6 +215,9 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/integrations': AUDIT_REVIEW_DATE,
   '/docs': AUDIT_REVIEW_DATE,
   '/ai-cost-tracking': '2026-08-23',
+  '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
+  '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
+  '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
   '/about': AUDIT_REVIEW_DATE_ROUND_3,
   '/contact': AUDIT_REVIEW_DATE_ROUND_3,
   '/terms': AUDIT_REVIEW_DATE_ROUND_3,
@@ -205,10 +227,13 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/integrations/vscode': AUDIT_REVIEW_DATE_ROUND_3,
   '/join': AUDIT_REVIEW_DATE_ROUND_3,
 };
-/** Thai-only content dates, for pages whose Thai copy changed independently of English. */
+/** Thai route-specific content dates, including guides authored in both languages. */
 const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/wakatime-alternative': AUDIT_REVIEW_DATE_ROUND_3,
   '/ai-coding-tracker': AUDIT_REVIEW_DATE_ROUND_3,
+  '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
+  '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
+  '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {

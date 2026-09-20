@@ -1,7 +1,13 @@
 /* eslint-disable sonarjs/cognitive-complexity, sonarjs/no-all-duplicated-branches, sonarjs/no-duplicate-string */
 
 import type { FaqEntry } from '@/lib/seo/schema';
-import { PRICING, SITE_NAME, type SiteLocale } from '@/lib/seo/site';
+import {
+  PRICING,
+  PRODUCT_STATUS,
+  PUBLIC_EVIDENCE_URL,
+  SITE_NAME,
+  type SiteLocale,
+} from '@/lib/seo/site';
 
 export type Localized<T> = Readonly<Record<SiteLocale, T>>;
 
@@ -63,6 +69,9 @@ export const MARKETING_PAGE_KEYS = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/how-coding-time-is-calculated',
+  '/docs/ai-attribution-and-coverage',
+  '/docs/ai-cost-methodology',
   '/about',
   '/contact',
   '/terms',
@@ -93,7 +102,7 @@ const local = (en: MarketingPageCopy, th: MarketingPageCopy): Localized<Marketin
 
 export const EN_HOME = {
   badge: 'Complete history, and it works with the WakaTime API',
-  title: 'Developer time tracking\nwith your full history.',
+  title: 'AtoAxis — Developer Time Tracking & AI Coding Analytics',
   tagline: 'One timeline for everything you do.',
   // Kept under ~155 characters so search engines show it whole rather than truncating
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
@@ -188,7 +197,7 @@ export const EN_HOME = {
     heading: `${SITE_NAME} at a glance`,
     entries: [
       { label: 'Product', value: 'Hosted developer time tracking service' },
-      { label: 'Status', value: 'Early Access — checkout is not open yet' },
+      { label: 'Status', value: `${PRODUCT_STATUS.en.label} — checkout is not open yet` },
       {
         label: 'Planned price',
         value: `$${PRICING.monthlyUsd} per month, or $${PRICING.annualUsd} per year`,
@@ -249,6 +258,11 @@ export const EN_HOME = {
           'Language is confirmed by parsing the file, not guessed from its extension. Nine languages have a grammar — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++ and Objective-C — which is how an ambiguous extension like .h is resolved.',
         href: 'https://tree-sitter.github.io/tree-sitter/',
         label: 'Tree-sitter',
+      },
+      {
+        claim: 'Current product boundaries and availability are explained in the AtoAxis public guides.',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
       },
     ],
   },
@@ -312,7 +326,7 @@ export const EN_HOME = {
 
 export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
-  title: 'ติดตามเวลาการเขียนโค้ด\nพร้อมประวัติของคุณครบถ้วน',
+  title: 'AtoAxis — ติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI',
   tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
   // Same length budget as the English description above.
   description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
@@ -355,7 +369,7 @@ export const TH_HOME = {
     heading: `${SITE_NAME} โดยสรุป`,
     entries: [
       { label: 'ผลิตภัณฑ์', value: 'บริการติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา (hosted)' },
-      { label: 'สถานะ', value: 'Early Access — ยังไม่เปิดให้ชำระเงิน' },
+      { label: 'สถานะ', value: `${PRODUCT_STATUS.th.label} — ยังไม่เปิดให้ชำระเงิน` },
       {
         label: 'ราคาที่วางแผนไว้',
         value: `$${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี`,
@@ -388,7 +402,7 @@ export const TH_HOME = {
   ],
   sources: {
     heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',
-    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่ตรวจสอบได้ใน repository โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
+    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่อธิบายไว้ในคู่มือ integration โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
     items: [
       {
         claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
@@ -415,6 +429,11 @@ export const TH_HOME = {
           'ระบุภาษาด้วยการ parse ไฟล์จริง ไม่ใช่เดาจากนามสกุล มีไวยากรณ์รองรับ 9 ภาษา ได้แก่ Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++ และ Objective-C จึงแยกนามสกุลกำกวมอย่าง .h ได้',
         href: 'https://tree-sitter.github.io/tree-sitter/',
         label: 'Tree-sitter',
+      },
+      {
+        claim: 'ขอบเขตและสถานะของผลิตภัณฑ์อธิบายไว้ในคู่มือสาธารณะของ AtoAxis',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'เอกสารสาธารณะของ AtoAxis',
       },
     ],
   },
@@ -852,14 +871,14 @@ const developerAnalytics = local(
     ]),
   },
   {
-    metadataTitle: 'Developer Analytics และ Coding Metrics',
+    metadataTitle: 'AtoAxis Developer analytics และ coding metrics',
     description:
       'ดู analytics ของเวลา โปรเจกต์ ภาษา branch keystrokes และ AI attribution พร้อมวิธีคำนวณที่อธิบายได้',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Developer analytics', path: '/developer-analytics' },
     ],
-    title: 'Developer analytics',
+    title: 'AtoAxis Developer analytics',
     lead: `${SITE_NAME} เปลี่ยน editor heartbeat เป็นเวลารวม ค่าเฉลี่ยต่อวัน และ breakdown ตาม project, language, editor, operating system และ branch ทุกมุมมองกรองและ drill down ต่อได้ พร้อม keystrokes, characters และ AI-attributed lines`,
     sections: [
       section('Metrics ที่มีให้ดู', 'metrics', [
@@ -1670,14 +1689,14 @@ emptyPagePair(
     ]),
   },
   {
-    metadataTitle: 'Editor Integrations',
+    metadataTitle: 'การเชื่อมต่อ Editor กับ AtoAxis',
     description:
       'เชื่อม VS Code ด้วย AtoAxis extension หรือใช้ WakaTime-compatible plugin กับ hosted API',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Integrations', path: '/integrations' },
     ],
-    title: 'Editor integrations',
+    title: 'การเชื่อมต่อ Editor กับ AtoAxis',
     lead: 'เชื่อมต่อ editor ที่คุณใช้อยู่ได้เลย VS Code มี first-party extension ส่วน editor อื่นใช้ WakaTime-compatible plugin แล้วเปลี่ยน api_url ให้ชี้ไป hosted API',
     sections: [
       section('การเชื่อมต่อที่เราดูแลเอง', 'first-party', [
@@ -1886,12 +1905,18 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'Getting started: requirements, API key, editor setup, verification',
+              'How coding time is calculated: heartbeat intervals, idle timeout and duration examples',
+              'AI attribution and coverage: evidence for AI, human and Unattributed changes',
+              'AI cost methodology: token classes, effective prices and unknown estimates',
               'VS Code integration: what the extension sends, its settings and its limits',
               'AI coding tracker: how Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI activity is attributed',
               'Privacy: the exact heartbeat fields, and the fields that do not exist',
             ]
           : [
               'เริ่มต้นใช้งาน: สิ่งที่ต้องเตรียม, API key, การตั้งค่า editor และการตรวจสอบ',
+              'วิธีคำนวณเวลาการเขียนโค้ด: heartbeat, idle timeout และตัวอย่าง duration',
+              'AI attribution และ coverage: หลักฐานของ AI, human และ Unattributed',
+              'วิธีคำนวณค่าใช้จ่าย AI: ประเภท token ราคา effective และยอดที่ไม่ทราบ',
               'VS Code integration: extension ส่งอะไร มี settings อะไร และมีข้อจำกัดอะไร',
               'AI coding tracker: วิธี attribute งานจาก Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
               'Privacy: field ใน heartbeat ทั้งหมด และ field ที่ไม่มีอยู่จริง',
@@ -2642,6 +2667,21 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         description: en ? 'Connect an editor' : 'เชื่อม editor',
       },
       {
+        href: '/docs/how-coding-time-is-calculated',
+        label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
+        description: en ? 'Heartbeats, idle gaps and duration blocks' : 'heartbeat, idle gap และ duration block',
+      },
+      {
+        href: '/docs/ai-attribution-and-coverage',
+        label: en ? 'AI attribution and coverage' : 'AI attribution และ coverage',
+        description: en ? 'Evidence behind AI and human totals' : 'หลักฐานเบื้องหลังยอด AI และ human',
+      },
+      {
+        href: '/docs/ai-cost-methodology',
+        label: en ? 'AI cost methodology' : 'วิธีคำนวณค่าใช้จ่าย AI',
+        description: en ? 'Token prices and unknown estimates' : 'ราคา token และยอดที่ไม่ทราบ',
+      },
+      {
         href: '/integrations',
         label: en ? 'Editor integrations' : 'การเชื่อมต่อ editor',
         description: en
@@ -2746,7 +2786,7 @@ generic(
     ],
   },
   {
-    title: 'VS Code time tracking extension',
+    title: 'ส่วนขยาย AtoAxis สำหรับติดตามเวลาใน VS Code',
     description: 'ติดตั้งและตั้งค่า AtoAxis VS Code extension',
     lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
     headings: [
@@ -2999,9 +3039,19 @@ generic(
           'Yes. The AI coding tracker guide explains supported agent hooks, attribution categories, token coverage and unknown cost handling.',
       },
       {
+        question: 'Where is the coding-time calculation explained?',
+        answer:
+          'The coding-time guide explains duration blocks, the default idle timeout, short-gap bridging and why trailing gaps are not counted.',
+      },
+      {
+        question: 'Where is the AI cost formula documented?',
+        answer:
+          'The AI cost methodology guide shows token classes, effective-dated provider/model prices, micro-USD arithmetic and unknown-cost handling.',
+      },
+      {
         question: 'Can I verify behavior against the implementation?',
         answer:
-          'Yes. The documentation links to the public source repository and identifies the shipped CLI commands, configuration paths and integration boundaries.',
+          'Yes. The documentation identifies the shipped CLI commands, configuration paths and integration boundaries, and the contact page can answer implementation questions that are not covered there.',
       },
     ],
   },
@@ -3009,7 +3059,7 @@ generic(
     title: 'เอกสาร AtoAxis',
     description: 'เอกสาร setup, editor integration และ heartbeat privacy',
     lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
-    headings: ['เริ่มต้นที่นี่'],
+    headings: ['เอกสารนี้มีอะไรบ้าง?', 'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?', 'ตรวจสอบ integration และ privacy ที่ไหน?'],
     faqEntries: [
       {
         question: 'ผู้ใช้ AtoAxis ใหม่ควรเริ่มที่ไหน?',
@@ -3032,9 +3082,19 @@ generic(
           'ครอบคลุม คู่มือ AI coding tracker อธิบาย agent hooks ที่รองรับ หมวด attribution, token coverage และการจัดการ cost ที่ไม่ทราบค่า',
       },
       {
+        question: 'อธิบายวิธีคำนวณ coding time ที่ไหน?',
+        answer:
+          'ดูคู่มือวิธีคำนวณเวลาการเขียนโค้ด ซึ่งอธิบาย duration block, idle timeout, การเชื่อม gap สั้น และเหตุผลที่ไม่รวมเวลาหลัง event สุดท้าย',
+      },
+      {
+        question: 'สูตรคำนวณค่าใช้จ่าย AI อยู่ที่ไหน?',
+        answer:
+          'ดูคู่มือวิธีคำนวณค่าใช้จ่าย AI ซึ่งแสดงประเภท token, ราคา provider/model ตามช่วงเวลา หน่วย micro-USD และการจัดการราคาที่ไม่ทราบ',
+      },
+      {
         question: 'ตรวจสอบข้อมูลกับ implementation ได้หรือไม่?',
         answer:
-          'ได้ เอกสารเชื่อมไปยัง source repository สาธารณะและระบุ CLI command, config path และขอบเขต integration ที่มีอยู่จริง',
+          'ได้ เอกสารระบุ CLI command, config path และขอบเขต integration ที่มีอยู่จริง ส่วนคำถามที่เอกสารยังไม่ครอบคลุมสามารถสอบถามผ่านหน้าติดต่อได้',
       },
     ],
   }
@@ -3655,6 +3715,628 @@ dualPage(
         question: 'ต้องเก็บ prompt หรือ response เพื่อคำนวณค่าใช้จ่ายหรือไม่?',
         answer:
           'ไม่ต้อง usage stream มีเฉพาะ identifier และตัวเลข ความยาว prompt นับในเครื่องแล้วทิ้งข้อความ',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/how-coding-time-is-calculated',
+  {
+    metadataTitle: 'How AtoAxis calculates coding time',
+    description:
+      'Learn how AtoAxis turns editor heartbeats into duration blocks, bridges short idle gaps and leaves long or trailing gaps uncounted.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'How coding time is calculated', path: '/docs/how-coding-time-is-calculated' },
+    ],
+    title: 'How AtoAxis calculates coding time',
+    lead: 'AtoAxis derives coding time from editor heartbeats. Nearby evidence becomes a duration block; a long or trailing gap stays outside the total.',
+    howTo: {
+      name: 'Calculate coding time from editor heartbeats',
+      description: 'Follow the data path from a heartbeat to a duration total.',
+    },
+    sections: [
+      section('What a heartbeat proves', 'inputs', [
+        p(
+          'A heartbeat is an event from a connected editor. It can include a timestamp, file and project metadata, branch, language, editor and activity counts. It describes observed editor activity; it does not prove that every minute spent planning, reading or talking produced coding time.'
+        ),
+        bullets([
+          'The timestamp places the event on the account timeline.',
+          'Metadata lets the same interval be filtered by project, language, branch or editor.',
+          'Counts and attribution fields remain separate from the duration calculation.',
+        ]),
+      ]),
+      section('From events to duration blocks', 'blocks', [
+        p(
+          'AtoAxis canonicalises overlapping evidence first, then orders the remaining intervals. The duration of a block is the union of its intervals, so two sources cannot count the same seconds twice. A single isolated event proves an instant but does not invent a long session after it.'
+        ),
+        code(
+          '09:00 interval ───── 09:05 interval ───── 09:10 interval\n          one continuous duration block',
+          'Illustrative timeline'
+        ),
+      ]),
+      section('How idle gaps are handled', 'idle', [
+        p(
+          'The default human idle timeout is 15 minutes. When two proven intervals are separated by a positive gap no longer than that timeout, the gap is bridged to the earlier interval, matching the WakaTime-compatible session model. A gap longer than the configured timeout closes the block. The timeout is configurable per deployment, so the deployed setting is the source of truth.'
+        ),
+        bullets([
+          'A short gap between two real events can be included in the earlier block.',
+          'A gap longer than the timeout starts a new block instead of padding the old one.',
+          'Time after the final event is never added just because the session was once active.',
+          'Agent activity can use its own timeout when that deployment enables the split timeline.',
+        ]),
+      ]),
+      section('Worked example', 'example', [
+        p(
+          'Illustrative example, not customer data: suppose an interval ends at 09:00 and the next begins at 09:10. With the default 15-minute timeout, that 10-minute gap is bridged. If the next interval begins at 09:30, the 20-minute gap is too long, so the first block ends and a second block begins. Time after the final interval remains uncounted.'
+        ),
+        code(
+          '09:00 ──(10 min gap)── 09:10    bridged\n09:10 ──(20 min gap)── 09:30    new block',
+          'Worked example'
+        ),
+        p(
+          'The arithmetic explains the rule, not a promise about a particular dashboard total. Check the timeline and its interval evidence when a total looks surprising.'
+        ),
+      ]),
+      section('How to read the result', 'interpretation', [
+        bullets([
+          'Coding time is observed editor activity, not all time spent on a task.',
+          'A duration total does not measure code quality, value, focus or productivity.',
+          'Use project, language, branch and editor filters to find which evidence produced a total.',
+          'Compare the duration with the activity timeline and coverage fields before drawing a conclusion.',
+        ]),
+      ]),
+      section('Verify your first total', 'verify', [
+        p(
+          'Connect one editor, run wakaclock-cli status, make a small change and wait for the first heartbeat. The dashboard timeline should show the event and the Overview page should use the same duration model. If it does not, check the API key, server URL and local queue before adding another client.'
+        ),
+        p('Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/docs/getting-started',
+          label: 'Getting started',
+          description: 'Connect an editor and verify a first heartbeat',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'See the metrics and filters built on this timeline',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy and data collection',
+          description: 'Review the fields a heartbeat can carry',
+        },
+      ]),
+    ],
+    faq: faq('Coding time FAQ', [
+      {
+        question: 'Does AtoAxis count time after my last heartbeat?',
+        answer:
+          'No. A trailing gap after the final observed event is not added to the duration total.',
+      },
+      {
+        question: 'What is the default idle timeout?',
+        answer:
+          'The default human timeout is 15 minutes. A deployment can configure it, so check the deployed setting when comparing totals.',
+      },
+      {
+        question: 'Does a heartbeat include my source code?',
+        answer:
+          'No. Heartbeats carry activity metadata and counts; source code, prompts and responses are outside the payload.',
+      },
+      {
+        question: 'Is coding time a productivity score?',
+        answer:
+          'No. It is a record of observed editor activity and should be read with its limits and coverage.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'AtoAxis คำนวณเวลาการเขียนโค้ดอย่างไร',
+    description:
+      'ดูวิธีที่ AtoAxis เปลี่ยน editor heartbeat เป็นช่วงเวลา เชื่อมช่วงว่างสั้น และไม่นับช่วงว่างยาวหรือเวลาหลัง heartbeat สุดท้าย',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'วิธีคำนวณเวลาการเขียนโค้ด', path: '/docs/how-coding-time-is-calculated' },
+    ],
+    title: 'AtoAxis คำนวณเวลาการเขียนโค้ดอย่างไร',
+    lead: 'AtoAxis คำนวณเวลาจาก editor heartbeat หลักฐานที่อยู่ใกล้กันจะรวมเป็นช่วงเวลา ส่วนช่วงว่างยาวหรือหลังเหตุการณ์สุดท้ายจะไม่ถูกเติมเข้าไป',
+    howTo: {
+      name: 'คำนวณเวลาจาก editor heartbeat',
+      description: 'ตามเส้นทางข้อมูลตั้งแต่ heartbeat ไปจนถึงยอดเวลาที่แสดง',
+    },
+    sections: [
+      section('Heartbeat ยืนยันอะไร', 'inputs', [
+        p(
+          'Heartbeat คือ event จาก editor ที่เชื่อมต่ออยู่ อาจมีเวลา file และ project metadata, branch, language, editor และ activity counts ข้อมูลนี้ยืนยันกิจกรรมที่ editor สังเกตได้ ไม่ได้หมายความว่าเวลาวางแผน อ่าน หรือประชุมทุกนาทีจะกลายเป็น coding time'
+        ),
+        bullets([
+          'เวลาใน event วางกิจกรรมบน timeline ของบัญชี',
+          'Metadata ทำให้กรองตาม project, language, branch หรือ editor ได้',
+          'Counts และ attribution แยกจากการคำนวณ duration',
+        ]),
+      ]),
+      section('จาก event เป็น duration block', 'blocks', [
+        p(
+          'AtoAxis รวมหลักฐานที่ทับซ้อนกันก่อน แล้วเรียง interval ที่เหลือ ระยะเวลาของ block คือ union ของ interval จึงไม่นับวินาทีซ้ำจากหลายแหล่ง event เดี่ยวพิสูจน์เพียงจุดเวลา ไม่ได้สร้าง session ยาวต่อท้ายเอง'
+        ),
+        code(
+          '09:00 interval ───── 09:05 interval ───── 09:10 interval\n          เป็น duration block เดียวกัน',
+          'Timeline ตัวอย่าง'
+        ),
+      ]),
+      section('จัดการ idle gap อย่างไร', 'idle', [
+        p(
+          'ค่าเริ่มต้นของ idle timeout สำหรับกิจกรรมจากคนคือ 15 นาที หาก interval ที่พิสูจน์ได้สองช่วงมี gap ไม่เกินค่านี้ ระบบจะเชื่อม gap ให้กับ interval ก่อนหน้า ตาม session model ที่เข้ากันได้กับ WakaTime หาก gap ยาวกว่านั้น block เดิมจะจบและเริ่ม block ใหม่ ค่า timeout ปรับได้ตาม deployment จึงควรยึดค่าของระบบที่ใช้งานจริง'
+        ),
+        bullets([
+          'gap สั้นระหว่าง event จริงอาจถูกรวมใน block ก่อนหน้า',
+          'gap ยาวกว่าค่าที่ตั้งจะปิด block เดิม ไม่เติมเวลาให้',
+          'หลัง event สุดท้ายจะไม่เติมเวลาเพียงเพราะ session เคย active',
+          'กิจกรรมจาก agent อาจใช้ timeout แยก หาก deployment เปิด timeline แบบแยก',
+        ]),
+      ]),
+      section('ตัวอย่างการคำนวณ', 'example', [
+        p(
+          'ตัวอย่างสมมติ ไม่ใช่ข้อมูลลูกค้า: interval หนึ่งจบเวลา 09:00 และช่วงถัดไปเริ่ม 09:10 เมื่อ timeout เริ่มต้นคือ 15 นาที gap 10 นาทีจึงเชื่อมกัน หากช่วงถัดไปเริ่ม 09:30 gap 20 นาทีจะยาวเกินไป block แรกจึงจบและเริ่ม block ที่สอง เวลาหลัง interval สุดท้ายไม่ถูกนับ'
+        ),
+        code(
+          '09:00 ──(gap 10 นาที)── 09:10    เชื่อมกัน\n09:10 ──(gap 20 นาที)── 09:30    block ใหม่',
+          'ตัวอย่าง'
+        ),
+        p('ตัวเลขนี้อธิบายกติกา ไม่ใช่การรับประกันยอด dashboard ใด ๆ ให้ดู timeline และหลักฐานของ interval เมื่อยอดไม่ตรงกับความคาดหมาย'),
+      ]),
+      section('อ่านผลลัพธ์อย่างไร', 'interpretation', [
+        bullets([
+          'Coding time คือกิจกรรมจาก editor ที่สังเกตได้ ไม่ใช่เวลาทั้งหมดของงาน',
+          'ยอด duration ไม่ใช่คะแนนคุณภาพ คุณค่า สมาธิ หรือ productivity',
+          'ใช้ filter ตาม project, language, branch และ editor เพื่อหา evidence ของยอดนั้น',
+          'อ่าน timeline คู่กับ coverage ก่อนสรุปผล',
+        ]),
+      ]),
+      section('ตรวจสอบยอดแรก', 'verify', [
+        p(
+          'เชื่อม editor หนึ่งตัว รัน wakaclock-cli status แก้ไฟล์เล็กน้อย และรอ heartbeat แรก หน้า timeline ควรเห็น event และหน้า Overview ควรใช้ duration model เดียวกัน หากไม่เห็น ให้ตรวจ API key, server URL และ local queue ก่อนเพิ่ม client ตัวอื่น'
+        ),
+        p('ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/docs/getting-started',
+          label: 'เริ่มต้นใช้งาน',
+          description: 'เชื่อม editor และยืนยัน heartbeat แรก',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'metric และ filter ที่สร้างจาก timeline นี้',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy และข้อมูลที่เก็บ',
+          description: 'field ที่ heartbeat อาจส่ง',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่องการคำนวณ coding time', [
+      {
+        question: 'หลัง heartbeat สุดท้ายระบบนับเวลาต่อหรือไม่?',
+        answer: 'ไม่ เวลาหลัง event ที่สังเกตได้สุดท้ายจะไม่ถูกเติมในยอด duration',
+      },
+      {
+        question: 'ค่า idle timeout เริ่มต้นเท่าไร?',
+        answer: 'ค่าเริ่มต้นของกิจกรรมจากคนคือ 15 นาที แต่ deployment ปรับได้ ให้ตรวจค่าของระบบจริง',
+      },
+      {
+        question: 'Heartbeat ส่ง source code หรือไม่?',
+        answer: 'ไม่ ส่ง metadata และ counts ของกิจกรรม ส่วน source code, prompt และ response ไม่อยู่ใน payload',
+      },
+      {
+        question: 'Coding time เป็น productivity score หรือไม่?',
+        answer: 'ไม่ เป็นบันทึกกิจกรรมจาก editor ที่สังเกตได้และต้องอ่านคู่กับข้อจำกัดและ coverage',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/ai-attribution-and-coverage',
+  {
+    metadataTitle: 'AtoAxis AI attribution and coverage',
+    description:
+      'Understand how AtoAxis separates AI, human and Unattributed line changes and reports the evidence coverage behind each total.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'AI attribution and coverage', path: '/docs/ai-attribution-and-coverage' },
+    ],
+    title: 'AtoAxis AI attribution and coverage',
+    lead: 'AtoAxis keeps AI, human and Unattributed changes separate. Coverage tells you how much of the observed change set has evidence instead of turning uncertainty into a confident zero.',
+    sections: [
+      section('The three attribution buckets', 'buckets', [
+        bullets([
+          'AI: a hook or client explicitly marks the activity as AI-assisted and can provide an agent name and line counts.',
+          'Human: the editor reports hand-typed keystrokes or characters and the corresponding measured changes.',
+          'Unattributed: the system has observed a change but cannot prove which source produced it.',
+        ]),
+        p(
+          'The buckets are mutually exclusive in the canonical totals. Unattributed is evidence that is missing, not a synonym for human work and not a reason to guess.'
+        ),
+      ]),
+      section('Where evidence comes from', 'evidence', [
+        p(
+          'AI attribution comes from explicit fields supplied by a supported hook or client, such as an agent name, is_ai_generated flag and line counts. Human attribution uses editor activity fields such as keystrokes and characters. A compatible editor can send time without sending every attribution field, so missing fields remain visible.'
+        ),
+        code(
+          '{\n  "is_ai_generated": true,\n  "ai_agent": "your-agent-name",\n  "ai_lines_added": 42,\n  "ai_lines_deleted": 3\n}',
+          'Illustrative heartbeat fields'
+        ),
+      ]),
+      section('What coverage means', 'coverage', [
+        p(
+          'Line coverage is calculated from the same canonical totals: attributed AI and human line changes divided by attributed plus Unattributed line changes. The response also exposes the denominators and an explicit status. With no activity, the percentage is unavailable rather than a misleading 0%.'
+        ),
+        code(
+          'Illustrative change set: 40 AI + 35 human + 25 Unattributed = 100 lines\nAttributed line coverage: (40 + 35) / 100 = 75%',
+          'Worked example — not customer data'
+        ),
+        p(
+          'Data coverage is a separate question from the AI share. A result can have a high AI percentage among known lines while still having incomplete evidence for the whole period. Read both the line totals and the coverage status.'
+        ),
+      ]),
+      section('How to compare agents', 'compare', [
+        bullets([
+          'Compare agents only over the same date range, project filters and evidence status.',
+          'Check whether a tool has a bundled hook or a provider-specific adapter before expecting automatic attribution.',
+          'Do not treat line counts as correctness, maintainability, time saved or business value.',
+          'Keep Unattributed visible when a tool reports activity without attribution metadata.',
+        ]),
+      ]),
+      section('Privacy boundary', 'privacy', [
+        p(
+          'Attribution carries labels, identifiers and numeric counts. It does not require sending source code, prompts or AI response text. Provider usage can add token metadata, but the text of the transcript remains outside the usage event.'
+        ),
+      ]),
+      section('Review and verification', 'review', [
+        p(
+          'Use the AI coding tracker page for supported hooks and the dashboard analytics response for the denominators behind a result. Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'AI coding activity tracking',
+          description: 'Supported hooks and attribution limits',
+        },
+        {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'Usage fields and estimated cost coverage',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy and data collection',
+          description: 'The heartbeat payload boundary',
+        },
+      ]),
+    ],
+    faq: faq('AI attribution FAQ', [
+      {
+        question: 'Does Unattributed mean human?',
+        answer:
+          'No. Unattributed means the available evidence cannot establish AI or human attribution.',
+      },
+      {
+        question: 'How is line coverage calculated?',
+        answer:
+          'Attributed AI and human line changes are divided by attributed plus Unattributed line changes from the canonical totals.',
+      },
+      {
+        question: 'Can AtoAxis infer AI activity from line count alone?',
+        answer:
+          'No. AI attribution requires explicit metadata from a supported hook or client; unsupported evidence stays Unattributed.',
+      },
+      {
+        question: 'Are prompts stored for attribution?',
+        answer:
+          'No. Attribution uses labels, identifiers and counts, not prompt or response text.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'AtoAxis แยก AI attribution และ coverage อย่างไร',
+    description:
+      'ทำความเข้าใจการแยกการเปลี่ยนแปลงเป็น AI, human และ Unattributed พร้อม coverage ของหลักฐานที่อยู่เบื้องหลังยอดรวม',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'AI attribution และ coverage', path: '/docs/ai-attribution-and-coverage' },
+    ],
+    title: 'AtoAxis แยก AI attribution และ coverage อย่างไร',
+    lead: 'AtoAxis แยกการเปลี่ยนแปลงเป็น AI, human และ Unattributed พร้อมบอก coverage ของหลักฐาน แทนการเปลี่ยนข้อมูลที่ไม่แน่ใจให้เป็นศูนย์อย่างมั่นใจเกินจริง',
+    sections: [
+      section('สามกลุ่มของ attribution', 'buckets', [
+        bullets([
+          'AI: hook หรือ client ระบุชัดว่าเป็นงานที่ AI ช่วย และอาจส่งชื่อ agent กับจำนวนบรรทัด',
+          'Human: editor รายงาน keystroke หรือ character ที่พิมพ์เองและการเปลี่ยนแปลงที่วัดได้',
+          'Unattributed: ระบบเห็นการเปลี่ยนแปลงแต่พิสูจน์ไม่ได้ว่าเกิดจากแหล่งใด',
+        ]),
+        p('ยอด canonical ทำให้ทั้งสามกลุ่มไม่ทับกัน Unattributed คือหลักฐานที่ขาด ไม่ใช่คำพ้องกับ human และไม่ใช่เหตุผลให้ระบบเดา'),
+      ]),
+      section('หลักฐานมาจากไหน', 'evidence', [
+        p(
+          'AI attribution มาจาก field ที่ hook หรือ client ที่รองรับส่งมาโดยตรง เช่น ชื่อ agent, is_ai_generated และ line counts ส่วน human attribution ใช้ข้อมูลกิจกรรมจาก editor เช่น keystroke และ character editor ที่รองรับ protocol อาจส่งเวลาได้โดยไม่ส่ง attribution ครบ field ที่ไม่มีจึงคงเป็นข้อมูลที่ขาด'
+        ),
+        code(
+          '{\n  "is_ai_generated": true,\n  "ai_agent": "your-agent-name",\n  "ai_lines_added": 42,\n  "ai_lines_deleted": 3\n}',
+          'field ตัวอย่าง'
+        ),
+      ]),
+      section('Coverage หมายถึงอะไร', 'coverage', [
+        p(
+          'Line coverage คำนวณจากยอด canonical ชุดเดียวกัน คือ line change ของ AI และ human ที่มีหลักฐาน หารด้วยยอดที่มีหลักฐานรวมกับ Unattributed response ยังแสดง denominator และ status และถ้าไม่มี activity จะไม่สร้างเปอร์เซ็นต์ 0% ปลอม'
+        ),
+        code(
+          'ตัวอย่างสมมติ: AI 40 + human 35 + Unattributed 25 = 100 บรรทัด\nline coverage: (40 + 35) / 100 = 75%',
+          'ตัวอย่าง ไม่ใช่ข้อมูลลูกค้า'
+        ),
+        p('AI share ในบรรทัดที่รู้ กับ coverage ของหลักฐานทั้งช่วงเวลาเป็นคนละเรื่อง จึงควรอ่านทั้งยอดและ status'),
+      ]),
+      section('เปรียบเทียบ agent อย่างไร', 'compare', [
+        bullets([
+          'ใช้ช่วงเวลาและ filter project เดียวกันก่อนเทียบ agent',
+          'ตรวจว่าเครื่องมือมี bundled hook หรือ adapter เฉพาะ provider ก่อนคาดหวัง attribution อัตโนมัติ',
+          'อย่าแปลจำนวนบรรทัดเป็นความถูกต้อง คุณภาพ เวลาที่ประหยัด หรือคุณค่าทางธุรกิจ',
+          'เก็บ Unattributed ให้เห็นเมื่อเครื่องมือส่ง activity แต่ไม่มี metadata ของ attribution',
+        ]),
+      ]),
+      section('ขอบเขตความเป็นส่วนตัว', 'privacy', [
+        p('Attribution ส่ง label, identifier และจำนวน ไม่ต้องส่ง source code, prompt หรือข้อความตอบของ AI Provider usage อาจเพิ่ม token metadata แต่ไม่ส่งข้อความ transcript'),
+      ]),
+      section('ทบทวนและตรวจสอบ', 'review', [
+        p('ดูหน้าติดตาม AI coding activity สำหรับ hook ที่รองรับ และดู denominator ใน dashboard analytics เมื่อต้องการตรวจยอด ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'ติดตาม AI coding activity',
+          description: 'hook ที่รองรับและข้อจำกัดของ attribution',
+        },
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'field ของ usage และ coverage ของค่าใช้จ่าย',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy และข้อมูลที่เก็บ',
+          description: 'ขอบเขตข้อมูลใน heartbeat',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่อง AI attribution', [
+      {
+        question: 'Unattributed แปลว่า human หรือไม่?',
+        answer: 'ไม่ หมายถึงหลักฐานที่มีอยู่ยังยืนยันไม่ได้ว่าเป็น AI หรือ human',
+      },
+      {
+        question: 'Line coverage คำนวณอย่างไร?',
+        answer: 'นำ line change ของ AI และ human ที่มีหลักฐานหารด้วยยอดดังกล่าวรวมกับ Unattributed จาก canonical totals',
+      },
+      {
+        question: 'AtoAxis เดา AI จากจำนวนบรรทัดได้หรือไม่?',
+        answer: 'ไม่ได้ ต้องมี metadata จาก hook หรือ client ที่รองรับ หากไม่มีหลักฐานจะเป็น Unattributed',
+      },
+      {
+        question: 'ต้องเก็บ prompt เพื่อทำ attribution หรือไม่?',
+        answer: 'ไม่ ใช้ label, identifier และ counts โดยไม่เก็บ prompt หรือ response text',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/ai-cost-methodology',
+  {
+    metadataTitle: 'AtoAxis AI cost methodology',
+    description:
+      'See how AtoAxis estimates AI cost from reported token classes, provider and model price windows, and why unknown prices stay unknown.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'AI cost methodology', path: '/docs/ai-cost-methodology' },
+    ],
+    title: 'AtoAxis AI cost methodology',
+    lead: 'AtoAxis estimates usage cost from provider-reported token classes and the price that was effective when the event occurred. Missing prices produce an unknown estimate, not a zero.',
+    sections: [
+      section('What is recorded', 'usage', [
+        p(
+          'A usage event contains identifiers, provider and model names, an event time and numeric token counts. Input, output, cache-read and cache-write tokens remain separate because providers can price each class differently.'
+        ),
+        code(
+          '{\n  "provider": "example-provider",\n  "model": "example-model",\n  "input_tokens": 1000000,\n  "output_tokens": 500000,\n  "token_source": "reported"\n}',
+          'Illustrative usage event'
+        ),
+      ]),
+      section('How the estimate is calculated', 'formula', [
+        p(
+          'For every token class that the provider reports, AtoAxis multiplies the count by that class rate per million tokens, divides by 1,000,000 and adds the result in micro-USD. A class that is absent does not block the estimate; a reported class without a known rate makes the event cost unknown so a partial total cannot look complete.'
+        ),
+        code(
+          'Example rates (illustrative only):\ninput 1,000,000 × $3.00 / 1M = $3.00\noutput 500,000 × $15.00 / 1M = $7.50\nestimated total = $10.50 = 10,500,000 micro-USD',
+          'Worked arithmetic — not a live price'
+        ),
+      ]),
+      section('Provider, model and effective date', 'price-window', [
+        p(
+          'The lookup matches both provider and model. It then selects the price window whose effective-from and effective-to dates contain the event timestamp. A later price change therefore does not silently rewrite an older event, and the pricing version can be inspected with the result.'
+        ),
+        bullets([
+          'The same model label at two providers is treated as two different price records.',
+          'A provider or model with no matching price remains unpriced.',
+          'A cache class with no rate makes cost unknown when that class is present.',
+          'Historical events keep the rate effective at their own event time.',
+        ]),
+      ]),
+      section('Why unknown is not zero', 'unknown', [
+        p(
+          'A zero could mean free usage, missing usage, an unpriced provider or a genuinely zero count. Those cases are not equivalent. AtoAxis reports token usage when it has it and leaves estimated cost unavailable when the price evidence is incomplete, with coverage explaining how much of the range is priced.'
+        ),
+      ]),
+      section('Project totals and limitations', 'limits', [
+        bullets([
+          'Usage is grouped by project when the session provides an unambiguous project context.',
+          'A session that spans several projects stays Unattributed instead of being copied into every project.',
+          'An estimate is not an invoice: negotiated rates, subscriptions and provider-side adjustments may be outside the visible data.',
+          'Prompt and response text are not required and are not stored in the usage event.',
+        ]),
+      ]),
+      section('Review and verification', 'review', [
+        p(
+          'Use the AI cost tracking page for supported agents, then compare the dashboard token total, priced-token coverage and pricing version for the same range. Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'Supported agents and project breakdowns',
+        },
+        {
+          href: '/docs/ai-attribution-and-coverage',
+          label: 'AI attribution and coverage',
+          description: 'Interpret AI, human and Unattributed changes',
+        },
+        {
+          href: '/pricing',
+          label: 'Planned AtoAxis pricing',
+          description: 'Hosted product pricing and Early Access status',
+        },
+      ]),
+    ],
+    faq: faq('AI cost methodology FAQ', [
+      {
+        question: 'Does the estimate equal my provider invoice?',
+        answer:
+          'No. It is based on reported usage and visible price rows; negotiated rates, subscriptions and provider adjustments may not be available.',
+      },
+      {
+        question: 'What happens when a model price is unknown?',
+        answer:
+          'Token usage can remain visible, but the estimated cost is unavailable rather than reported as zero.',
+      },
+      {
+        question: 'Why do cache tokens have their own fields?',
+        answer:
+          'Providers can price cache reads and writes differently from input and output, so combining them would hide the calculation.',
+      },
+      {
+        question: 'Does AtoAxis store prompts to calculate cost?',
+        answer:
+          'No. The usage event needs numeric token counts and identifiers, not prompt or response text.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'วิธีคำนวณค่าใช้จ่าย AI ของ AtoAxis',
+    description:
+      'ดูวิธีที่ AtoAxis ประมาณค่าใช้จ่ายจาก token ที่ provider รายงานและราคาตามช่วงเวลา พร้อมเหตุผลที่ราคาที่ไม่รู้จะไม่กลายเป็นศูนย์',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'วิธีคำนวณค่าใช้จ่าย AI', path: '/docs/ai-cost-methodology' },
+    ],
+    title: 'วิธีคำนวณค่าใช้จ่าย AI ของ AtoAxis',
+    lead: 'AtoAxis ประมาณค่าใช้จ่ายจาก token ที่ provider รายงานและราคาที่มีผลในเวลาที่ event เกิด หากหลักฐานราคาไม่ครบ ระบบจะรายงานว่าไม่ทราบ ไม่ใช่ศูนย์',
+    sections: [
+      section('ข้อมูลที่บันทึก', 'usage', [
+        p('Usage event มี identifier, ชื่อ provider และ model, เวลา event และจำนวน token แยก input, output, cache-read และ cache-write เพราะ provider อาจตั้งราคาแต่ละประเภทไม่เท่ากัน'),
+        code(
+          '{\n  "provider": "example-provider",\n  "model": "example-model",\n  "input_tokens": 1000000,\n  "output_tokens": 500000,\n  "token_source": "reported"\n}',
+          'usage event ตัวอย่าง'
+        ),
+      ]),
+      section('สูตรประมาณค่าใช้จ่าย', 'formula', [
+        p('ทุก token class ที่ provider รายงานจะคูณกับ rate ต่อหนึ่งล้าน token หารด้วย 1,000,000 แล้วรวมเป็นหน่วย micro-USD class ที่ไม่มีการรายงานจะไม่ขัดขวางการคำนวณ แต่ถ้ามี class ที่รายงานแล้วไม่มี rate ระบบจะทำให้ cost ของ event นั้นเป็นไม่ทราบ เพื่อไม่ให้ยอดบางส่วนดูเหมือนครบ'),
+        code(
+          'ตัวอย่างราคา (สมมติ ไม่ใช่ราคาปัจจุบัน):\ninput 1,000,000 × $3.00 / 1M = $3.00\noutput 500,000 × $15.00 / 1M = $7.50\nยอดประมาณ = $10.50 = 10,500,000 micro-USD',
+          'ตัวอย่างการคำนวณ'
+        ),
+      ]),
+      section('Provider, model และวันที่มีผล', 'price-window', [
+        p('ระบบจับคู่ทั้ง provider และ model แล้วเลือก price window ที่ effective-from และ effective-to ครอบคลุมเวลา event การเปลี่ยนราคาในภายหลังจึงไม่เขียนทับ event เก่า และผลลัพธ์ตรวจ pricing version ได้'),
+        bullets([
+          'model ชื่อเหมือนกันแต่คนละ provider ถือเป็นราคาอีกชุดหนึ่ง',
+          'provider หรือ model ที่ไม่มีราคา matching จะยังเป็น unpriced',
+          'ถ้า cache class มีข้อมูลแต่ไม่มี rate cost จะเป็นไม่ทราบ',
+          'event เก่าใช้ราคาที่มีผลในเวลาเกิด event นั้น',
+        ]),
+      ]),
+      section('ทำไมไม่ทราบจึงไม่ใช่ศูนย์', 'unknown', [
+        p('เลขศูนย์อาจหมายถึงใช้ฟรี ไม่มีข้อมูล provider ไม่มีราคา หรือจำนวนเป็นศูนย์ ซึ่งไม่ใช่ความหมายเดียวกัน AtoAxis จึงแสดง token เมื่อมีข้อมูลและเว้น estimated cost เมื่อหลักฐานราคาไม่ครบ พร้อม coverage ว่าช่วงใดคิดราคาได้'),
+      ]),
+      section('ยอดต่อโปรเจกต์และข้อจำกัด', 'limits', [
+        bullets([
+          'ระบบจัด usage ตาม project เมื่อ session ให้บริบทที่ชัดเจน',
+          'session ที่แตะหลาย project จะคงเป็น Unattributed แทนการคัดลอกไปทุก project',
+          'ยอดประมาณไม่ใช่ใบแจ้งหนี้ ราคา negotiated, subscription และการปรับฝั่ง provider อาจอยู่นอกข้อมูล',
+          'ไม่ต้องและไม่เก็บ prompt หรือ response text เพื่อคำนวณ',
+        ]),
+      ]),
+      section('ทบทวนและตรวจสอบ', 'review', [
+        p('ดูหน้าติดตามค่าใช้จ่าย AI สำหรับ agent ที่รองรับ แล้วเทียบ token total, priced-token coverage และ pricing version ในช่วงเวลาเดียวกัน ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'agent ที่รองรับและยอดแยกตาม project',
+        },
+        {
+          href: '/docs/ai-attribution-and-coverage',
+          label: 'AI attribution และ coverage',
+          description: 'อ่าน AI, human และ Unattributed',
+        },
+        {
+          href: '/pricing',
+          label: 'ราคา AtoAxis ที่วางแผนไว้',
+          description: 'สถานะ hosted product และ Early Access',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่องวิธีคำนวณค่าใช้จ่าย AI', [
+      {
+        question: 'ยอดประมาณตรงกับใบแจ้งหนี้ provider หรือไม่?',
+        answer: 'ไม่ คำนวณจาก usage ที่รายงานและ price row ที่มองเห็น ราคา negotiated, subscription และการปรับฝั่ง provider อาจไม่มีในข้อมูล',
+      },
+      {
+        question: 'ถ้าไม่รู้ราคา model จะเกิดอะไรขึ้น?',
+        answer: 'ยังแสดง token ได้ แต่ estimated cost จะเป็นไม่ทราบ ไม่รายงานเป็นศูนย์',
+      },
+      {
+        question: 'ทำไม cache token ต้องแยก field?',
+        answer: 'เพราะ provider อาจตั้งราคา cache read และ cache write ต่างจาก input และ output การรวมทันทีจะซ่อนที่มาของสูตร',
+      },
+      {
+        question: 'ต้องเก็บ prompt เพื่อคำนวณหรือไม่?',
+        answer: 'ไม่ ใช้จำนวน token และ identifier โดยไม่เก็บ prompt หรือ response text',
       },
     ]),
   }

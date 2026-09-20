@@ -374,7 +374,8 @@ describe("WakaclockCliService", () => {
           delivery_failure: {
             at: 1770000000,
             message: "HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
-            kind: "network"
+            category: "network",
+            message_code: "connect_failed"
           },
           connection: {
             state: "offline",
@@ -415,6 +416,29 @@ describe("WakaclockCliService", () => {
         lastErrorAt: 1770000001
       }
     });
+  });
+
+  it("labels a scoped network failure as offline, not a server refusal", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({
+          total_seconds: 0,
+          human_readable: "0s",
+          heartbeat_count: 0,
+          queued_heartbeats: 1,
+          // Phase 03 renamed the classified field to `category`; a pre-Phase-03
+          // binary emits `kind` instead and must keep working.
+          delivery_failure: { message: "connection refused", category: "network" },
+          connection: { state: "offline", reachable: false, last_error_kind: "network" }
+        }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = await service.getToday("UTC");
+
+    expect(snapshot.delivery).toBe("OFFLINE - connection refused");
   });
 
   it("falls_back_to_legacy_text_without_losing_timezone_behavior", async () => {

@@ -841,7 +841,15 @@ async fn worker_loop(
                             agent_service::append_log(&format!("broker flushed {} queued heartbeat(s)", report.flushed));
                         }
                         if report.stopped_because.is_some() {
-                            agent_service::append_log("broker queue flush stopped code=delivery");
+                            // Log the classified kind for this scope, never the raw
+                            // message: it can carry a URL and server response body.
+                            let kind = api_client
+                                .delivery_failure()
+                                .map(|failure| failure.kind)
+                                .unwrap_or_else(|| "unknown".to_string());
+                            agent_service::append_log(&format!(
+                                "broker queue flush stopped code=delivery kind={kind}"
+                            ));
                         }
                     }
                     Err(_) => agent_service::append_log("broker queue flush failed code=delivery"),

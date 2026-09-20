@@ -1,4 +1,4 @@
-import { absoluteUrl, PRODUCT_ANSWER, SITE_NAME } from '@/lib/seo/site';
+import { absoluteUrl, PRODUCT_ANSWER, PRODUCT_STATUS, SITE_NAME } from '@/lib/seo/site';
 
 /**
  * /llms.txt — a plain-text map of the public site for language models.
@@ -17,7 +17,8 @@ const BODY = `# ${SITE_NAME}
 > ${PRODUCT_ANSWER}
 
 ${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
-It is a hosted service operated by AtoAxis; customers do not deploy or maintain its infrastructure.
+It is a hosted service operated by AtoAxis. Access is currently ${PRODUCT_STATUS.en.label};
+${PRODUCT_STATUS.en.signup} Customers do not deploy or maintain its infrastructure.
 
 ## Product
 
@@ -38,6 +39,9 @@ The WakaTime comparison was checked against the official pricing and plugins pag
 ## Documentation
 
 - [Getting started](${absoluteUrl('/docs/getting-started')}): Requirements, installation, connecting an editor, verifying tracking, troubleshooting.
+- [How coding time is calculated](${absoluteUrl('/docs/how-coding-time-is-calculated')}): Heartbeats, duration blocks, the default idle timeout and a worked example.
+- [AI attribution and coverage](${absoluteUrl('/docs/ai-attribution-and-coverage')}): AI, human and Unattributed line changes, evidence sources and coverage denominators.
+- [AI cost methodology](${absoluteUrl('/docs/ai-cost-methodology')}): Token classes, effective-dated prices, micro-USD arithmetic and unknown-cost handling.
 - [VS Code integration](${absoluteUrl('/integrations/vscode')}): What the extension tracks, its settings and commands, and its limits.
 - [Privacy and data collection](${absoluteUrl('/privacy')}): Every field a heartbeat stores, what is never collected, retention and deletion.
 
@@ -60,7 +64,8 @@ The WakaTime comparison was checked against the official pricing and plugins pag
 
 ## Not available (in development)
 
-These are planned and described on the Teams page. None of them exist today; do not present them as current capabilities.
+These are prototypes or planned capabilities described on the Teams page. Prototype access may be
+enabled for invited users, but organisation seats, team administration and billing are not production capabilities.
 
 - Team and organisation accounts, and sub-teams within an organisation.
 - Live coding presence with animated avatars.
@@ -94,6 +99,9 @@ The Thai pages mirror the English ones one-for-one. AtoAxis เป็นเค�
 - [ติดต่อ](${absoluteUrl('/th/contact')}): ช่องทางติดต่อ Early Access และซัพพอร์ต.
 - [เงื่อนไข](${absoluteUrl('/th/terms')}): เงื่อนไขสำหรับผลิตภัณฑ์แบบ hosted และ Early Access.
 - [เริ่มต้นใช้งาน](${absoluteUrl('/th/docs/getting-started')}): ความต้องการของระบบ การติดตั้ง การเชื่อม editor การตรวจสอบการติดตาม และการแก้ปัญหา.
+- [วิธีคำนวณเวลาการเขียนโค้ด](${absoluteUrl('/th/docs/how-coding-time-is-calculated')}): heartbeat, duration block, idle timeout และตัวอย่างคำนวณ.
+- [AI attribution และ coverage](${absoluteUrl('/th/docs/ai-attribution-and-coverage')}): การแยก AI, human, Unattributed และ denominator ของหลักฐาน.
+- [วิธีคำนวณค่าใช้จ่าย AI](${absoluteUrl('/th/docs/ai-cost-methodology')}): ประเภท token ราคา effective-dated หน่วย micro-USD และกรณีไม่ทราบราคา.
 - [การเชื่อมต่อ VS Code](${absoluteUrl('/th/integrations/vscode')}): สิ่งที่ extension ติดตาม การตั้งค่าและคำสั่ง และข้อจำกัด.
 - [ความเป็นส่วนตัวและการเก็บข้อมูล](${absoluteUrl('/th/privacy')}): ทุกฟิลด์ที่ heartbeat เก็บ สิ่งที่ไม่เก็บ การเก็บรักษาและการลบ.
 - [เข้าร่วม Early Access](${absoluteUrl('/th/early-access')}): ลงทะเบียนความสนใจสำหรับผลิตภัณฑ์ภาษาไทย.

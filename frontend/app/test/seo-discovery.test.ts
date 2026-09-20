@@ -19,7 +19,7 @@ describe('SEO and AI discovery routes', () => {
   it('publishes bilingual machine-readable summary and FAQ documents', async () => {
     const summary = (await getSummary().json()) as {
       languages: { en: { capabilities: string[] }; th: { limitations: string[] } };
-      sourceRepository: string;
+      sourceRepository?: string;
     };
     const faq = (await getFaq().json()) as {
       languages: { en: unknown[]; th: unknown[] };
@@ -27,7 +27,7 @@ describe('SEO and AI discovery routes', () => {
 
     expect(summary.languages.en.capabilities.length).toBeGreaterThan(0);
     expect(summary.languages.th.limitations.length).toBeGreaterThan(0);
-    expect(summary.sourceRepository).toContain('github.com/');
+    expect(summary.sourceRepository).toBeUndefined();
     expect(faq.languages.en).toHaveLength(faq.languages.th.length);
   });
 

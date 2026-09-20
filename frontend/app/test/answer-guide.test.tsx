@@ -30,7 +30,7 @@ describe('audit answer guides', () => {
     expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
       contentModified(path, 'en')
     );
-    expect(container.querySelectorAll('a[href^="https://"]')).not.toHaveLength(0);
+    expect(container.querySelectorAll('a[href^="/"], a[href^="https://"]')).not.toHaveLength(0);
     expect(container.textContent).toContain('illustrative, not customer research');
   });
 

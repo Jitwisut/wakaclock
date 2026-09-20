@@ -1,6 +1,6 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- The overflow table region must be keyboard-scrollable. */
-/* eslint-disable sonarjs/no-duplicate-string -- Source labels like "AtoAxis implementation" and
-   "For example, " openers are meant to repeat verbatim across guides; see the same disable in
+/* eslint-disable sonarjs/no-duplicate-string -- Source labels and "For example, " openers are
+   meant to repeat verbatim across guides; see the same disable in
    marketing-copy.ts. */
 import Link from 'next/link';
 
@@ -8,9 +8,9 @@ import {
   contentModified,
   localizedPath,
   PRICING,
+  PUBLIC_EVIDENCE_URL,
   SITE_MODIFIED,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 const WAKATIME_DEVELOPER_URL = 'https://wakatime.com/developers';
@@ -49,9 +49,9 @@ const DEFAULT_TABLE: GuideTable = {
 
 const DEFAULT_SOURCES: readonly GuideSource[] = [
   {
-    href: SOURCE_REPOSITORY_URL,
-    label: 'AtoAxis implementation',
-    note: 'product behavior and data handling',
+    href: PUBLIC_EVIDENCE_URL,
+    label: 'AtoAxis public documentation',
+    note: 'documented product behavior and data handling',
   },
   {
     href: '/docs/getting-started',
@@ -78,9 +78,9 @@ const DEFAULT_SOURCES: readonly GuideSource[] = [
  */
 const THAI_DEFAULT_SOURCES: readonly GuideSource[] = [
   {
-    href: SOURCE_REPOSITORY_URL,
-    label: 'ซอร์สโค้ดผลิตภัณฑ์',
-    note: 'หลักฐานพฤติกรรมจริงและขอบเขตข้อมูล',
+    href: PUBLIC_EVIDENCE_URL,
+    label: 'เอกสารสาธารณะของ AtoAxis',
+    note: 'พฤติกรรมและขอบเขตข้อมูลที่อธิบายไว้ต่อสาธารณะ',
   },
   {
     href: '/docs/getting-started',
@@ -222,8 +222,8 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'current availability and signup terms',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis implementation',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
         note: 'features currently represented in the product',
       },
       {
@@ -268,9 +268,9 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'the heartbeat protocol used by compatible plugins',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis integration source',
-        note: 'the shipped clients and hook implementations',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis integration documentation',
+        note: 'the supported clients, hooks and stated limitations',
       },
     ],
     table: {
@@ -301,7 +301,7 @@ const EN_GUIDES: Record<string, Guide> = {
     example:
       'Start with the getting-started guide and connect one editor. Generate an API key only when Early Access provides access, then send a heartbeat and check the dashboard before adding more clients. Next, read the integration page for your editor and the privacy page for the payload boundary. Use the AI tracker guide only if you need agent attribution.',
     recommendation:
-      'Follow the setup pages in order and keep your API key out of source control. If a heartbeat does not appear, verify the server URL, key and CLI path before changing multiple settings. Use the product source when you need implementation-level evidence. Use the WakaTime documentation when you need details about the compatibility protocol.',
+      'Follow the setup pages in order and keep your API key out of source control. If a heartbeat does not appear, verify the server URL, key and CLI path before changing multiple settings. Use the dated public guides when you need behavior evidence. Use the WakaTime documentation when you need details about the compatibility protocol.',
     sources: [
       {
         href: '/docs/getting-started',
@@ -314,9 +314,9 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'the protocol used by compatible editor plugins',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis source repository',
-        note: 'implementation details for the documented behavior',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
+        note: 'implementation behavior explained in the public guides',
       },
     ],
     table: {
@@ -337,11 +337,11 @@ const EN_GUIDES: Record<string, Guide> = {
       ['Team', 'A fourth-year student team designs, builds and operates the hosted service.'],
       ['Status', 'Early Access: heartbeat ingestion and analytics run; billing and team seats do not.'],
       ['Working today', 'Heartbeat ingestion, project and language analytics, and AI attribution.'],
-      ['Verification', 'Product claims can be checked against the public source repository.'],
+      ['Verification', 'Product claims can be checked against the public documentation and support channel.'],
     ],
     question: 'How should you verify a claim made on this site?',
     example:
-      'For example, before trusting a capability described on the pricing or integrations page, check it against the source repository link in this section or ask a specific question through the contact page. A team publishing its own source and a working contact channel is a verifiable claim; a marketing statement alone is not.',
+      'For example, before trusting a capability described on the pricing or integrations page, check the matching public guide in this section or ask a specific question through the contact page. A dated guide and a working contact channel make a claim easier to verify than a marketing statement alone.',
     recommendation:
       'Treat this page as the entity record for AtoAxis, not as a sales pitch: it names who operates the service and what is actually running today. Use the contact page for questions this page does not answer, and check the "Not yet" items on this page before assuming a team or billing feature already exists.',
     sources: [
@@ -351,8 +351,8 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'the reachable channel for product questions',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis implementation',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
         note: 'verifiable evidence for the claims on this page',
       },
       {
@@ -365,7 +365,7 @@ const EN_GUIDES: Record<string, Guide> = {
       caption: 'AtoAxis status, by area',
       columns: ['Area', 'Status', 'Where to verify'],
       rows: [
-        ['Heartbeat ingestion and analytics', 'Working', 'Product source repository'],
+        ['Heartbeat ingestion and analytics', 'Working', 'Getting-started and privacy guides'],
         ['AI attribution hooks', 'Working, 5 agents', 'Integrations page'],
         ['Billing, team and organisation seats', 'In development', 'This page, "Current status"'],
       ],
@@ -398,9 +398,9 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'the field-level answer to most data questions',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis implementation',
-        note: 'the source behind every claim this page and the contact form describe',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
+        note: 'the public evidence behind every claim this page and the contact form describe',
       },
     ],
   },
@@ -431,8 +431,8 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'where to ask about a specific clause',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis implementation',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
         note: 'what the hosted service actually does today',
       },
     ],
@@ -449,14 +449,14 @@ const EN_GUIDES: Record<string, Guide> = {
     ],
     question: 'How can you verify the privacy boundary yourself, rather than take the claim on faith?',
     example:
-      'For example, run the CLI with logging enabled and inspect what it actually sends over the network, or read the heartbeat handler in the linked source repository. Both show the same field list this page describes: metadata and counts, with no field defined anywhere for file contents or AI transcript text.',
+      'For example, run the CLI with logging enabled and inspect what it actually sends over the network, then compare the fields with the privacy guide. The documented boundary is metadata and counts, with no field for file contents or AI transcript text.',
     recommendation:
       'Read "What is never collected" before connecting a sensitive project, and request deletion by email if you stop using the service. Revoking an API key stops new data immediately but does not delete history already stored; use the deletion request for that.',
     sources: [
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis heartbeat handler source',
-        note: 'the exact fields a heartbeat request can contain',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis privacy documentation',
+        note: 'the exact fields a heartbeat may contain',
       },
       {
         href: '/docs/getting-started',
@@ -544,9 +544,9 @@ const EN_GUIDES: Record<string, Guide> = {
         note: 'the heartbeat protocol compatible editor plugins use',
       },
       {
-        href: SOURCE_REPOSITORY_URL,
-        label: 'AtoAxis CLI source',
-        note: 'the exact behavior of the commands in this guide',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis setup documentation',
+        note: 'the documented behavior of the commands in this guide',
       },
     ],
     table: {
@@ -629,8 +629,8 @@ const THAI_HOME_GUIDE: Guide = {
       note: 'ที่มาของรูปแบบ heartbeat ที่รองรับ',
     },
     {
-      href: SOURCE_REPOSITORY_URL,
-      label: 'ซอร์สโค้ดผลิตภัณฑ์',
+      href: PUBLIC_EVIDENCE_URL,
+      label: 'เอกสารสาธารณะของ AtoAxis',
       note: 'หลักฐานการทำงานและขอบเขตข้อมูลของระบบ',
     },
   ],

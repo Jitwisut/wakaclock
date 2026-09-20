@@ -9,7 +9,7 @@ use crate::{
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
-    queue::{Queue, QueueScope},
+    queue::{DeliveryFailureRecord, Queue, QueueScope},
 };
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
@@ -151,6 +151,34 @@ impl DeliveryFailureKind {
             AppError::Validation(_) => Self::Validation,
             _ => Self::Other,
         }
+    }
+}
+
+/// Scope used for a refusal migrated from the pre-scope JSON file. Deliberately not
+/// a real origin/owner so it can never match a live scope's lookup.
+pub const LEGACY_UNSCOPED_DESTINATION: &str = "legacy_unscoped";
+pub const LEGACY_UNSCOPED_OWNER: &str = "legacy_unscoped";
+
+/// Short stable code for a delivery failure. UI decisions use `kind`/`http_status`;
+/// this narrows "why" without exposing a free-form message.
+pub fn delivery_message_code(error: &AppError) -> &'static str {
+    match error {
+        AppError::Http(inner) => {
+            if inner.is_timeout() {
+                "timeout"
+            } else if inner.is_connect() {
+                "connect_failed"
+            } else if inner.status().is_some() {
+                "http_status"
+            } else {
+                "transport_failed"
+            }
+        }
+        AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => "http_status",
+        AppError::Auth(_) => "credential_rejected",
+        AppError::Validation(_) => "payload_rejected",
+        AppError::Protocol(_) => "protocol_mismatch",
+        _ => "unknown",
     }
 }
 
@@ -524,7 +552,7 @@ impl ApiClient {
 
         match send_result {
             Ok(()) => {
-                self.clear_delivery_failure();
+                self.clear_delivery_failure(&queue);
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 // The server has accepted the current payload at this point. Cache and
@@ -558,10 +586,14 @@ impl ApiClient {
                 })
             }
             Err(error) => {
-                self.record_delivery_failure(&error);
+                self.record_delivery_failure(&queue, &error);
                 if is_retryable_heartbeat_delivery_error(&error) {
+                    // A `Retry-After` applies to this first attempt too: without it the
+                    // row is eligible again immediately and the next flush ignores what
+                    // the server just asked for.
+                    let retry_after = retry_after_seconds(&error);
                     for payload in &payloads {
-                        queue.push_scoped(payload, &self.queue_scope())?;
+                        queue.push_scoped_after(payload, &self.queue_scope(), retry_after)?;
                     }
                     // Do not persist a failed payload in the local last-heartbeat
                     // cache: the stable ID must remain retryable, and the durable
@@ -606,11 +638,12 @@ impl ApiClient {
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
         // The body is optional for verification; only the ownership proof is read.
-        if let Ok(body) = response.json::<Value>().await {
-            if let Some(owner_id) = body.get("queue_owner_id").and_then(Value::as_str) {
-                self.adopt_verified_owner(owner_id);
-            }
-        }
+        let owner_id = response.json::<Value>().await.ok().and_then(|body| {
+            body.get("queue_owner_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        self.on_successful_probe(owner_id.as_deref());
         Ok(())
     }
 
@@ -647,10 +680,32 @@ impl ApiClient {
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
         let snapshot = response.json::<StatusBarSnapshot>().await?;
-        if let Some(owner_id) = snapshot.queue_owner_id.as_deref() {
+        self.on_successful_probe(snapshot.queue_owner_id.as_deref());
+        Ok(snapshot)
+    }
+
+    /// An authenticated read succeeded for this scope.
+    ///
+    /// That proves the server is reachable and the credential works, so a recorded
+    /// network/server failure for this scope is stale and is cleared. A 401/402 is
+    /// **not** cleared here: reading today's total keeps working while delivery is
+    /// refused, so only a successful delivery resolves those.
+    fn on_successful_probe(&self, owner_id: Option<&str>) {
+        if let Ok(queue) = Queue::open() {
+            Self::migrate_legacy_delivery_failure(&queue);
+            if let Err(error) = queue.clear_delivery_failure(
+                &self.queue_scope(),
+                Some(&[
+                    DeliveryFailureKind::Network.as_str(),
+                    DeliveryFailureKind::ServerError.as_str(),
+                ]),
+            ) {
+                tracing::warn!(%error, "could not clear a stale delivery failure");
+            }
+        }
+        if let Some(owner_id) = owner_id {
             self.adopt_verified_owner(owner_id);
         }
-        Ok(snapshot)
     }
 
     /// Record the server's proof of this credential's account and move rows queued
@@ -842,7 +897,7 @@ impl ApiClient {
                     // failure so status-bar clients do not keep showing an old
                     // outage after the queue has recovered, or hide a new one
                     // behind a previous success.
-                    self.record_delivery_failure(&error);
+                    self.record_delivery_failure(queue, &error);
                     if is_credential_delivery_error(&error) {
                         // Credentials may be repaired. Keep the only durable copy and
                         // pause this owner-bound queue rather than deleting activity.
@@ -864,7 +919,7 @@ impl ApiClient {
         // the persisted refusal only after every currently eligible row was
         // accepted; a partial flush must continue to show its latest failure.
         if flushed > 0 && stopped_because.is_none() {
-            self.clear_delivery_failure();
+            self.clear_delivery_failure(queue);
         }
 
         Ok(FlushReport {
@@ -971,41 +1026,75 @@ impl ApiClient {
         Ok(home.join(".wakaclock").join("last-delivery-failure.json"))
     }
 
-    /// The last recorded refusal, if the server has not accepted anything since.
+    /// The legacy, unscoped refusal file written by binaries before delivery state
+    /// moved into the queue database. Only read for the one-time migration and for
+    /// diagnostics; it must never drive user-facing state, because it cannot say
+    /// which server or account it was about.
     pub fn last_delivery_failure() -> Option<DeliveryFailure> {
         let path = Self::delivery_failure_path().ok()?;
         let raw = fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
     }
 
-    /// Without this, a real 402 (trial/subscription lapsed) or 401 (bad key) shows up
-    /// only as a light day in the dashboard — the heartbeat is captured and durably
-    /// queued, so nothing looks broken locally, but the server keeps refusing it.
-    /// Writing the reason down is what lets `wakaclock status` and `doctor ai` say "the
-    /// server is refusing these" instead of nothing at all. Best-effort: failing to
-    /// record a failure must never turn into a second failure.
-    fn record_delivery_failure(&self, error: &AppError) {
+    /// This client's own (origin + credential) delivery failure, if unresolved.
+    pub fn delivery_failure(&self) -> Option<DeliveryFailureRecord> {
+        let queue = Queue::open().ok()?;
+        Self::migrate_legacy_delivery_failure(&queue);
+        queue
+            .delivery_failure_for(&self.queue_scope())
+            .ok()
+            .flatten()
+    }
+
+    /// Move a pre-scope refusal file into the queue database once, under a scope that
+    /// is explicitly not any real origin/account, then delete the file. Nothing reads
+    /// `LEGACY_UNSCOPED_*` for status; it exists so the record is not silently lost.
+    fn migrate_legacy_delivery_failure(queue: &Queue) {
         let Ok(path) = Self::delivery_failure_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let failure = DeliveryFailure {
-            at: chrono::Utc::now().timestamp() as f64,
-            message: error.to_string(),
-            kind: Some(DeliveryFailureKind::from_error(error)),
-            http_status: http_status_of(error),
+        let Some(failure) = Self::last_delivery_failure() else {
+            return;
         };
-        if let Ok(serialized) = serde_json::to_string(&failure) {
-            let _ = fs::write(&path, serialized);
+        let kind = failure.kind();
+        let scope = QueueScope {
+            destination: LEGACY_UNSCOPED_DESTINATION.to_string(),
+            owner: LEGACY_UNSCOPED_OWNER.to_string(),
+        };
+        let record = DeliveryFailureRecord::new(
+            kind.as_str(),
+            failure.http_status,
+            "legacy_unscoped_record",
+        )
+        .with_detail(failure.message.clone());
+        // Delete only after the record is safely persisted.
+        if queue.record_delivery_failure(&scope, &record).is_ok() {
+            let _ = fs::remove_file(path);
         }
     }
 
-    /// A send got through, so whatever was wrong no longer is.
-    fn clear_delivery_failure(&self) {
-        if let Ok(path) = Self::delivery_failure_path() {
-            let _ = fs::remove_file(path);
+    /// Without this, a real 402 (trial/subscription lapsed) or 401 (bad key) shows up
+    /// only as a light day in the dashboard — the heartbeat is captured and durably
+    /// queued, so nothing looks broken locally, but the server keeps refusing it.
+    /// Recorded per origin + credential so one account's refusal never describes
+    /// another's. Best-effort: failing to record a failure must never become a second
+    /// failure.
+    fn record_delivery_failure(&self, queue: &Queue, error: &AppError) {
+        let record = DeliveryFailureRecord::new(
+            DeliveryFailureKind::from_error(error).as_str(),
+            http_status_of(error),
+            delivery_message_code(error),
+        )
+        .with_detail(error.to_string());
+        if let Err(error) = queue.record_delivery_failure(&self.queue_scope(), &record) {
+            tracing::warn!(%error, "could not record delivery failure");
+        }
+    }
+
+    /// A delivery got through for this scope, so nothing about it is failing.
+    fn clear_delivery_failure(&self, queue: &Queue) {
+        if let Err(error) = queue.clear_delivery_failure(&self.queue_scope(), None) {
+            tracing::warn!(%error, "could not clear delivery failure");
         }
     }
 }

@@ -6,7 +6,7 @@ import { CheckIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
-import { localizedPath, PRICING, type SiteLocale } from '@/lib/seo/site';
+import { localizedPath, PRICING, PRODUCT_STATUS, type SiteLocale } from '@/lib/seo/site';
 
 const MKT_FG_MUTED = 'var(--mkt-fg-muted)';
 const MKT_ACCENT = 'var(--mkt-accent)';
@@ -15,7 +15,7 @@ const COPY = {
   en: {
     heading: 'One plan. Everything included.',
     description:
-      'Planned launch pricing: one hosted plan with the complete product. Checkout is not open during Early Access.',
+      `Planned launch pricing: one hosted plan with the complete product. ${PRODUCT_STATUS.en.label}; checkout is not open yet.`,
     billing: 'Billing period',
     monthly: 'Monthly billing',
     annual: 'Annual billing',
@@ -32,12 +32,12 @@ const COPY = {
       'Complete coding history, never trimmed',
     ],
     cta: 'Join early access',
-    note: `Planned pricing: $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year. No charge now.`,
+    note: `Planned pricing: $${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year. ${PRODUCT_STATUS.en.signup}`,
   },
   th: {
     heading: 'แผนเดียว รวมทุกอย่าง',
     description:
-      'ราคาเปิดตัวที่วางแผนไว้สำหรับ hosted plan เดียว ช่วง Early Access ยังไม่เปิด checkout',
+      `ราคาเปิดตัวที่วางแผนไว้สำหรับ hosted plan เดียว ${PRODUCT_STATUS.th.label} และยังไม่เปิด checkout`,
     billing: 'รอบการเรียกเก็บเงิน',
     monthly: 'รายเดือน',
     annual: 'รายปี',
@@ -54,7 +54,7 @@ const COPY = {
       'coding history ครบถ้วน ไม่ตัดทอน',
     ],
     cta: 'เข้าร่วม Early Access',
-    note: `ราคาที่วางแผนไว้: $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี ยังไม่มีการเรียกเก็บเงิน`,
+    note: `ราคาที่วางแผนไว้: $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี ${PRODUCT_STATUS.th.signup}`,
   },
 } as const;
 

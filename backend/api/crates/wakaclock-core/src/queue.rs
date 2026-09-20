@@ -16,6 +16,38 @@ pub struct Queue {
     conn: Connection,
 }
 
+/// One scope's delivery failure. `kind` and `http_status` are what user-facing
+/// state is decided from; `detail` is a bounded local diagnostic only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryFailureRecord {
+    pub kind: String,
+    pub http_status: Option<u16>,
+    pub message_code: String,
+    pub detail: Option<String>,
+    pub recorded_at: i64,
+    pub last_attempt_at: i64,
+    pub consecutive_failures: i64,
+}
+
+impl DeliveryFailureRecord {
+    pub fn new(kind: &str, http_status: Option<u16>, message_code: &str) -> Self {
+        Self {
+            kind: kind.to_string(),
+            http_status,
+            message_code: message_code.to_string(),
+            detail: None,
+            recorded_at: 0,
+            last_attempt_at: 0,
+            consecutive_failures: 0,
+        }
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
 /// What a same-account rebind changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RebindReport {
@@ -102,6 +134,22 @@ impl Queue {
                 owner_id         TEXT NOT NULL,
                 verified_at      INTEGER NOT NULL,
                 PRIMARY KEY (destination, credential_scope)
+            );
+
+            -- Why delivery last failed, per origin + queue owner. Scoped so a
+            -- refusal for one account/server never describes another, and stored
+            -- beside the rows it is about so both move in one transaction.
+            CREATE TABLE IF NOT EXISTS delivery_state (
+                destination          TEXT NOT NULL,
+                owner_scope          TEXT NOT NULL,
+                kind                 TEXT NOT NULL,
+                http_status          INTEGER,
+                message_code         TEXT NOT NULL,
+                sanitized_detail     TEXT,
+                recorded_at          INTEGER NOT NULL,
+                last_attempt_at      INTEGER NOT NULL,
+                consecutive_failures INTEGER NOT NULL,
+                PRIMARY KEY (destination, owner_scope)
             );
 
             -- Metadata-only record of every same-account queue rebind.
@@ -302,6 +350,21 @@ impl Queue {
         payload: &serde_json::Value,
         scope: &QueueScope,
     ) -> Result<(), AppError> {
+        self.push_scoped_after(payload, scope, None)
+    }
+
+    /// Queue a payload that is not eligible for delivery yet.
+    ///
+    /// A server that answers 429/503 with `Retry-After` is asking for that delay on
+    /// the *first* attempt too, not only on a later flush; without this the row was
+    /// immediately eligible and the next flush ignored the server's request.
+    pub fn push_scoped_after(
+        &self,
+        payload: &serde_json::Value,
+        scope: &QueueScope,
+        retry_after_seconds: Option<u64>,
+    ) -> Result<(), AppError> {
+        let retry_delay = retry_after_seconds.unwrap_or(0).min(86_400) as i64;
         let json = serde_json::to_string(payload).map_err(AppError::Serde)?;
         let now = chrono::Utc::now().timestamp();
         let heartbeat_id = payload
@@ -351,8 +414,9 @@ impl Queue {
             .execute(
                 "INSERT OR IGNORE INTO heartbeat_queue
                  (heartbeat_id, payload, created_at, destination, owner_scope,
-                  session_id, entity, revision)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                  session_id, entity, revision, next_retry_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                         strftime('%s', 'now') + ?9)",
                 params![
                     heartbeat_id,
                     json,
@@ -361,7 +425,8 @@ impl Queue {
                     &scope.owner,
                     session_id,
                     entity,
-                    revision
+                    revision,
+                    retry_delay
                 ],
             )
             .map_err(AppError::Queue)?;
@@ -567,6 +632,139 @@ impl Queue {
                 params![&scope.destination, &scope.owner],
                 |row| row.get(0),
             )
+            .map_err(AppError::Queue)
+    }
+
+    /// Rows this scope could deliver right now: not leased and past their retry
+    /// deadline. `len_scoped` counts the backlog; this counts what a flush would
+    /// actually pick up, which is what "the queue is stuck" versus "waiting on a
+    /// backoff" means to a user.
+    pub fn eligible_len_scoped(&self, scope: &QueueScope) -> Result<usize, AppError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM heartbeat_queue
+                 WHERE destination = ?1 AND owner_scope = ?2
+                   AND next_retry_at <= strftime('%s', 'now')
+                   AND (lease_owner IS NULL OR lease_until <= strftime('%s', 'now'))",
+                params![&scope.destination, &scope.owner],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)
+    }
+
+    /// Record why delivery failed for exactly this origin + owner.
+    ///
+    /// `consecutive_failures` keeps counting while the same scope keeps failing and
+    /// resets when it is cleared, so a single blip is distinguishable from an
+    /// outage. `detail` is bounded and only ever a local diagnostic: user-facing
+    /// decisions use `kind`/`http_status`/`message_code`.
+    pub fn record_delivery_failure(
+        &self,
+        scope: &QueueScope,
+        failure: &DeliveryFailureRecord,
+    ) -> Result<(), AppError> {
+        let detail: Option<String> = failure
+            .detail
+            .as_deref()
+            .map(|detail| detail.chars().take(512).collect());
+        self.conn
+            .execute(
+                "INSERT INTO delivery_state
+                 (destination, owner_scope, kind, http_status, message_code,
+                  sanitized_detail, recorded_at, last_attempt_at, consecutive_failures)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s', 'now'),
+                         strftime('%s', 'now'), 1)
+                 ON CONFLICT(destination, owner_scope) DO UPDATE SET
+                     kind = excluded.kind,
+                     http_status = excluded.http_status,
+                     message_code = excluded.message_code,
+                     sanitized_detail = excluded.sanitized_detail,
+                     last_attempt_at = excluded.last_attempt_at,
+                     -- A different failure starts its own streak; the same one continues.
+                     recorded_at = CASE
+                         WHEN delivery_state.kind = excluded.kind
+                         THEN delivery_state.recorded_at ELSE excluded.recorded_at END,
+                     consecutive_failures = CASE
+                         WHEN delivery_state.kind = excluded.kind
+                         THEN delivery_state.consecutive_failures + 1 ELSE 1 END",
+                params![
+                    &scope.destination,
+                    &scope.owner,
+                    &failure.kind,
+                    failure.http_status.map(i64::from),
+                    &failure.message_code,
+                    detail
+                ],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Clear this scope's failure, optionally only when it is one of `kinds`.
+    ///
+    /// A successful *probe* proves reachability, so it may clear a network or
+    /// server failure — but not a 401/402, which only a successful delivery (or a
+    /// repaired credential/entitlement) resolves. Returns whether a row was cleared.
+    pub fn clear_delivery_failure(
+        &self,
+        scope: &QueueScope,
+        kinds: Option<&[&str]>,
+    ) -> Result<bool, AppError> {
+        let cleared = match kinds {
+            None => self
+                .conn
+                .execute(
+                    "DELETE FROM delivery_state WHERE destination = ?1 AND owner_scope = ?2",
+                    params![&scope.destination, &scope.owner],
+                )
+                .map_err(AppError::Queue)?,
+            Some([]) => 0,
+            Some(kinds) => {
+                let placeholders = (3..3 + kinds.len())
+                    .map(|index| format!("?{index}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut values: Vec<&dyn rusqlite::ToSql> = vec![&scope.destination, &scope.owner];
+                values.extend(kinds.iter().map(|kind| kind as &dyn rusqlite::ToSql));
+                self.conn
+                    .execute(
+                        &format!(
+                            "DELETE FROM delivery_state
+                             WHERE destination = ?1 AND owner_scope = ?2
+                               AND kind IN ({placeholders})"
+                        ),
+                        values.as_slice(),
+                    )
+                    .map_err(AppError::Queue)?
+            }
+        };
+        Ok(cleared > 0)
+    }
+
+    /// This scope's delivery failure, if it has one that is still unresolved.
+    pub fn delivery_failure_for(
+        &self,
+        scope: &QueueScope,
+    ) -> Result<Option<DeliveryFailureRecord>, AppError> {
+        self.conn
+            .query_row(
+                "SELECT kind, http_status, message_code, sanitized_detail, recorded_at,
+                        last_attempt_at, consecutive_failures
+                 FROM delivery_state WHERE destination = ?1 AND owner_scope = ?2",
+                params![&scope.destination, &scope.owner],
+                |row| {
+                    Ok(DeliveryFailureRecord {
+                        kind: row.get(0)?,
+                        http_status: row.get::<_, Option<i64>>(1)?.map(|value| value as u16),
+                        message_code: row.get(2)?,
+                        detail: row.get(3)?,
+                        recorded_at: row.get(4)?,
+                        last_attempt_at: row.get(5)?,
+                        consecutive_failures: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
             .map_err(AppError::Queue)
     }
 
@@ -1350,6 +1548,185 @@ mod tests {
         assert!(temp
             .queue
             .claim_batch_scoped(&new, "lease")
+            .unwrap()
+            .is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Offline reliability Phase 03 — scoped delivery state and recovery leases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn failure_state_is_isolated_by_origin_and_owner() {
+        let temp = TempQueue::new();
+        let mine = scope(ORIGIN, "mine");
+        let other_account = scope(ORIGIN, "other");
+        let other_origin = scope("https://other.example.test", "mine");
+
+        temp.queue
+            .record_delivery_failure(
+                &mine,
+                &DeliveryFailureRecord::new("payment_402", Some(402), "http_status"),
+            )
+            .unwrap();
+
+        assert_eq!(
+            temp.queue
+                .delivery_failure_for(&mine)
+                .unwrap()
+                .unwrap()
+                .kind,
+            "payment_402"
+        );
+        assert!(temp
+            .queue
+            .delivery_failure_for(&other_account)
+            .unwrap()
+            .is_none());
+        assert!(temp
+            .queue
+            .delivery_failure_for(&other_origin)
+            .unwrap()
+            .is_none());
+
+        // A success elsewhere must not resolve this scope's refusal.
+        temp.queue
+            .clear_delivery_failure(&other_account, None)
+            .unwrap();
+        temp.queue
+            .clear_delivery_failure(&other_origin, None)
+            .unwrap();
+        assert!(temp.queue.delivery_failure_for(&mine).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_probe_clears_only_network_and_server_failures() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        let probe_kinds = ["network", "server_error"];
+
+        for (kind, status) in [("network", None), ("server_error", Some(503))] {
+            temp.queue
+                .record_delivery_failure(&target, &DeliveryFailureRecord::new(kind, status, "x"))
+                .unwrap();
+            assert!(temp
+                .queue
+                .clear_delivery_failure(&target, Some(&probe_kinds))
+                .unwrap());
+            assert!(temp.queue.delivery_failure_for(&target).unwrap().is_none());
+        }
+
+        for (kind, status) in [("auth_401", Some(401)), ("payment_402", Some(402))] {
+            temp.queue
+                .record_delivery_failure(&target, &DeliveryFailureRecord::new(kind, status, "x"))
+                .unwrap();
+            assert!(!temp
+                .queue
+                .clear_delivery_failure(&target, Some(&probe_kinds))
+                .unwrap());
+            let kept = temp.queue.delivery_failure_for(&target).unwrap().unwrap();
+            assert_eq!(kept.kind, kind, "a probe must not resolve a refusal");
+            // A delivery success clears it.
+            assert!(temp.queue.clear_delivery_failure(&target, None).unwrap());
+        }
+    }
+
+    #[test]
+    fn repeated_failures_of_the_same_kind_count_up_and_a_new_kind_restarts() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        let network = DeliveryFailureRecord::new("network", None, "connect_failed");
+        temp.queue
+            .record_delivery_failure(&target, &network)
+            .unwrap();
+        temp.queue
+            .record_delivery_failure(&target, &network)
+            .unwrap();
+        let repeated = temp.queue.delivery_failure_for(&target).unwrap().unwrap();
+        assert_eq!(repeated.consecutive_failures, 2);
+
+        temp.queue
+            .record_delivery_failure(
+                &target,
+                &DeliveryFailureRecord::new("payment_402", Some(402), "http_status"),
+            )
+            .unwrap();
+        let switched = temp.queue.delivery_failure_for(&target).unwrap().unwrap();
+        assert_eq!(switched.kind, "payment_402");
+        assert_eq!(switched.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn two_recovery_workers_do_not_deliver_the_same_lease() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        for index in 0..3 {
+            temp.queue
+                .push_scoped(
+                    &row(&format!("hb-{index}"), 1_000.0 + index as f64, 0),
+                    &target,
+                )
+                .unwrap();
+        }
+
+        let first = temp.queue.claim_batch_scoped(&target, "worker-a").unwrap();
+        let second = temp.queue.claim_batch_scoped(&target, "worker-b").unwrap();
+
+        assert_eq!(first.len(), 3);
+        assert!(second.is_empty(), "a leased row must not be claimed twice");
+        assert_eq!(temp.queue.eligible_len_scoped(&target).unwrap(), 0);
+    }
+
+    #[test]
+    fn shutdown_and_restart_reclaim_expired_lease() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        temp.queue
+            .push_scoped(&row("hb-crash", 1_000.0, 0), &target)
+            .unwrap();
+        let claimed = temp
+            .queue
+            .claim_batch_scoped(&target, "worker-crashed")
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        // The process died without releasing: nothing else may take it yet.
+        assert!(temp
+            .queue
+            .claim_batch_scoped(&target, "worker-new")
+            .unwrap()
+            .is_empty());
+
+        // Once the lease deadline passes, the row is recoverable.
+        temp.queue
+            .conn
+            .execute("UPDATE heartbeat_queue SET lease_until = 0", [])
+            .unwrap();
+        let reclaimed = temp
+            .queue
+            .claim_batch_scoped(&target, "worker-new")
+            .unwrap();
+        assert_eq!(reclaimed.len(), 1);
+        assert_eq!(
+            temp.rows().len(),
+            1,
+            "the row is delivered, never duplicated"
+        );
+    }
+
+    #[test]
+    fn a_row_waiting_on_a_backoff_is_queued_but_not_eligible() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        temp.queue
+            .push_scoped_after(&row("hb-delayed", 1_000.0, 0), &target, Some(120))
+            .unwrap();
+
+        assert_eq!(temp.queue.len_scoped(&target).unwrap(), 1);
+        assert_eq!(temp.queue.eligible_len_scoped(&target).unwrap(), 0);
+        assert!(temp
+            .queue
+            .claim_batch_scoped(&target, "worker")
             .unwrap()
             .is_empty());
     }

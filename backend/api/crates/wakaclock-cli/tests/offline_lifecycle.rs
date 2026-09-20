@@ -38,17 +38,6 @@ const KEY_A: &str = "fixture-key-account-1-old";
 const KEY_B: &str = "fixture-key-account-1-rotated";
 const KEY_C: &str = "fixture-key-account-2";
 
-/// Baseline tests are expected to fail until their phase lands. CI's ClickHouse
-/// job runs `cargo test --workspace -- --ignored`, so `#[ignore]` alone would put
-/// them in that sweep; they only execute when this variable is also set.
-fn offline_baseline_enabled() -> bool {
-    if std::env::var_os("WAKACLOCK_OFFLINE_BASELINE").is_some() {
-        return true;
-    }
-    eprintln!("skipped: set WAKACLOCK_OFFLINE_BASELINE=1 to run offline baseline tests");
-    false
-}
-
 // ---------------------------------------------------------------------------
 // Disposable home
 // ---------------------------------------------------------------------------
@@ -510,6 +499,24 @@ fn queue_rows(home: &TempHome) -> Vec<QueueRowMeta> {
     rows
 }
 
+/// (kind, http_status) per scope in the queue's delivery-state table.
+fn delivery_state(home: &TempHome) -> Vec<(String, Option<i64>)> {
+    let path = home.queue_db();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let connection = Connection::open(path).unwrap();
+    let mut statement = connection
+        .prepare("SELECT kind, http_status FROM delivery_state ORDER BY destination, owner_scope")
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    rows
+}
+
 fn sorted(ids: &[&str]) -> Vec<String> {
     let mut ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
     ids.sort();
@@ -723,11 +730,7 @@ async fn http_429_retry_after_is_respected_by_a_queue_flush() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "baseline: Retry-After on the first (send-path) failure is dropped; the new row is immediately eligible"]
 async fn http_429_retry_after_is_respected_for_a_newly_queued_row() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("http-429-send");
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
     api.set_heartbeats(Reply::StatusRetryAfter(429, 120)).await;
@@ -910,11 +913,7 @@ async fn different_origin_cannot_claim_existing_rows() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-04 baseline: last-delivery-failure.json is global, so another origin/account's failure is reported"]
 async fn a_stale_failure_from_another_scope_is_ignored() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("stale-failure");
     let old_origin = dead_origin().await;
     let api = MockApi::start(&[(KEY_C, "account-2")]).await;
@@ -944,11 +943,7 @@ async fn a_stale_failure_from_another_scope_is_ignored() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "OFF-04 baseline: a success in one scope clears the global failure file, hiding another scope's unresolved 402"]
 async fn successful_recovery_clears_only_the_matching_scope_failure() {
-    if !offline_baseline_enabled() {
-        return;
-    }
     let home = TempHome::new("scoped-recovery");
     let refusing = MockApi::start(&[(KEY_A, "account-1")]).await;
     refusing.set_heartbeats(Reply::Status(402)).await;
@@ -1139,9 +1134,15 @@ async fn a_recorded_401_does_not_override_a_successful_authenticated_probe() {
     // server-side, or the refusal was transient).
     api.set_heartbeats(Reply::Status(401)).await;
     let _ = heartbeat(&home, &api.url, KEY_A, "hb-401-then-ok", now() - 3.0).await;
-    let failure = fs::read_to_string(home.path().join(".wakaclock/last-delivery-failure.json"))
-        .expect("the 401 refusal is recorded");
-    assert!(failure.contains("auth_401"), "{failure}");
+    let failure = delivery_state(&home);
+    assert_eq!(
+        failure
+            .iter()
+            .map(|(kind, _)| kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["auth_401"],
+        "the 401 refusal is recorded for this scope: {failure:?}"
+    );
 
     // GET today succeeds with the same key: the key demonstrably works.
     let today = today_json(&home, &api.url, KEY_A).await;
@@ -1199,4 +1200,195 @@ async fn key_rotation_without_proof_keeps_rows_as_orphaned() {
     assert!(status.success, "{}", status.describe());
     assert_eq!(api.received_ids().await, sorted(&["hb-np-1", "hb-np-2"]));
     assert!(queue_rows(&home).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 03 — scoped delivery state, recovery without new activity
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_unscoped_failure_never_drives_user_facing_state() {
+    let home = TempHome::new("p03-legacy-record");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    // A refusal written by a pre-scope binary: it cannot say which server or
+    // account it was about.
+    fs::create_dir_all(home.path().join(".wakaclock")).unwrap();
+    fs::write(
+        home.path().join(".wakaclock/last-delivery-failure.json"),
+        r#"{"at":1789000000.0,"message":"HTTP status 402: trial expired"}"#,
+    )
+    .unwrap();
+
+    let today = today_json(&home, &api.url, KEY_A).await;
+    let json = today.json();
+    assert_eq!(
+        json["connection"]["state"],
+        "online",
+        "{}",
+        today.describe()
+    );
+    assert!(json["delivery_failure"].is_null(), "{}", today.describe());
+
+    // It is migrated once, under a scope that matches no real origin/account, and
+    // the old file is gone.
+    assert!(!home
+        .path()
+        .join(".wakaclock/last-delivery-failure.json")
+        .exists());
+    let states = delivery_state(&home);
+    // The kind is recovered by classifying the old message; `http_status` stays
+    // unknown because pre-scope records never carried one.
+    assert_eq!(states, vec![("payment_402".to_string(), None)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_backlog_drains_after_recovery_without_new_activity() {
+    let home = TempHome::new("p03-drain");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let t = now();
+
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-drain-1", t - 5.0).await,
+        1,
+    );
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-drain-2", t - 4.0).await,
+        1,
+    );
+    assert_eq!(
+        delivery_state(&home),
+        vec![("network".to_string(), None)],
+        "the outage is recorded for this scope"
+    );
+
+    // The server returns. No new editor activity happens: `status` is the same
+    // bounded flush the broker runs on its own tick.
+    api.set_online(true).await;
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(status.json()["flushed_now"], 2, "{}", status.describe());
+
+    assert_eq!(
+        api.received_ids().await,
+        sorted(&["hb-drain-1", "hb-drain-2"])
+    );
+    assert!(queue_rows(&home).is_empty());
+    assert!(
+        delivery_state(&home).is_empty(),
+        "a fully drained scope has no failure left"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovery_never_changes_heartbeat_payload_or_timestamp() {
+    let home = TempHome::new("p03-payload");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let t = now();
+
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-exact", t - 7.0).await,
+        1,
+    );
+    api.set_online(true).await;
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+
+    let delivered = api.received().await;
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].heartbeat_id, "hb-exact");
+    assert_eq!(
+        delivered[0].time,
+        Some((((t - 7.0) * 1000.0).round()) / 1000.0)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successful_probe_clears_only_the_matching_network_failure() {
+    let home = TempHome::new("p03-probe-clear");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+
+    // A transport failure, then the server comes back: reading today proves it is
+    // reachable, so the outage record is stale and goes away.
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-probe-1", now() - 3.0).await,
+        1,
+    );
+    assert_eq!(delivery_state(&home), vec![("network".to_string(), None)]);
+
+    api.set_online(true).await;
+    api.set_heartbeats(Reply::Status(402)).await;
+    let today = today_json(&home, &api.url, KEY_A).await;
+    assert!(today.success, "{}", today.describe());
+    assert!(delivery_state(&home).is_empty());
+
+    // A 402 is different: `today` keeps working while delivery is refused, so a
+    // successful probe must not clear it.
+    let sent = heartbeat(&home, &api.url, KEY_A, "hb-probe-2", now() - 2.0).await;
+    assert!(sent.success, "{}", sent.describe());
+    assert_eq!(
+        delivery_state(&home),
+        vec![("payment_402".to_string(), Some(402))]
+    );
+    let after = today_json(&home, &api.url, KEY_A).await.json();
+    assert_eq!(after["connection"]["state"], "subscription_required");
+    assert_eq!(
+        delivery_state(&home),
+        vec![("payment_402".to_string(), Some(402))]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permanent_validation_error_moves_to_recoverable_dead_letter() {
+    let home = TempHome::new("p03-dead-letter");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+
+    // Queue a row while offline, then have the server reject it permanently.
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-bad", now() - 3.0).await,
+        1,
+    );
+    api.set_online(true).await;
+    api.set_heartbeats(Reply::Status(422)).await;
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+
+    // It leaves the live queue but is kept for recovery, never silently dropped.
+    assert!(queue_rows(&home).is_empty());
+    let connection = Connection::open(home.queue_db()).unwrap();
+    let (dead, kept_id): (i64, String) = connection
+        .query_row(
+            "SELECT COUNT(*), MIN(heartbeat_id) FROM heartbeat_dead_letter",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(dead, 1);
+    assert_eq!(kept_id, "hb-bad");
+    assert_eq!(
+        delivery_state(&home),
+        vec![("validation".to_string(), Some(422))]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn today_json_reports_eligible_rows_separately_from_depth() {
+    let home = TempHome::new("p03-eligible");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.set_heartbeats(Reply::StatusRetryAfter(429, 120)).await;
+
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-eligible", now() - 3.0).await,
+        1,
+    );
+
+    let json = today_json(&home, &api.url, KEY_A).await.json();
+    assert_eq!(json["queue"]["depth"], 1);
+    assert_eq!(
+        json["queue"]["eligible_now"], 0,
+        "a row waiting on Retry-After is queued but not eligible"
+    );
 }

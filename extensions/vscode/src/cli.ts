@@ -43,7 +43,14 @@ interface TodayJson {
     discarded_seconds?: number | null;
     agent_health?: unknown;
     queued_heartbeats?: number | null;
-    delivery_failure?: { message?: string; kind?: string } | null;
+    delivery_failure?: {
+        message?: string;
+        /** Classified kind. `category` is what the CLI emits; `kind` is the
+         *  pre-Phase-03 name kept for older binaries. */
+        category?: string;
+        kind?: string;
+        message_code?: string;
+    } | null;
     connection?: {
         state?: string;
         reachable?: boolean;
@@ -359,8 +366,8 @@ export class WakaclockCliService {
         assign("queuedHeartbeats", optionalNumber(json.queued_heartbeats));
         assign(
             "delivery",
-            failure?.message
-                ? `${deliveryLabel(failure.kind)} - ${failure.message}`
+            failure?.message || failure?.message_code
+                ? `${deliveryLabel(failure.category ?? failure.kind)} - ${failure.message}`
                 : undefined,
         );
         assign("connection", connection);

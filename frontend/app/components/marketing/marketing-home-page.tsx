@@ -9,10 +9,10 @@ import {
   createMarketingMetadata,
   localizedPath,
   ORGANIZATION,
+  PUBLIC_EVIDENCE_URL,
   SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { AnswerGuide } from './answer-guide';
@@ -35,49 +35,50 @@ const ACCOUNTABILITY_COPY = {
   en: {
     heading: 'Who publishes and reviews this page?',
     intro:
-      'AtoAxis product engineering writes and reviews this page against the shipped code and the primary documentation linked below. The publisher is named here so every capability claim has an accountable owner rather than an anonymous byline.',
+      'AtoAxis product engineering writes and reviews this page against published product behavior and the primary documentation linked below. The publisher is named here so every capability claim has an accountable owner rather than an anonymous byline.',
     publisher: 'Publisher',
     reviewer: 'Reviewed by',
     reviewerValue: 'AtoAxis product engineering',
     markCaption: 'The AtoAxis product mark, used by the publisher named below.',
     reviewed: 'Last reviewed',
     evidence: 'Evidence',
-    evidenceValue: 'Public source code and primary vendor documentation',
+    evidenceValue: 'Public product documentation and primary vendor documentation',
     policies: 'Policies and contact',
     about: 'About the publisher',
     privacy: 'Privacy',
     contact: 'Contact',
-    source: 'Source repository',
+    source: 'Product documentation',
   },
   th: {
     heading: 'ใครเป็นผู้เผยแพร่และตรวจทานหน้านี้?',
     intro:
-      'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับโค้ดที่ใช้งานจริงและเอกสารต้นทางที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ ไม่ใช่บทความนิรนาม',
+      'ทีมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับพฤติกรรมที่เผยแพร่ในเอกสารและแหล่งข้อมูลทางการที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ',
     publisher: 'ผู้เผยแพร่',
     reviewer: 'ผู้ตรวจทาน',
     reviewerValue: 'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis',
     markCaption: 'เครื่องหมายผลิตภัณฑ์ AtoAxis ใช้โดยผู้เผยแพร่ที่ระบุด้านล่าง',
     reviewed: 'ตรวจทานล่าสุด',
     evidence: 'หลักฐาน',
-    evidenceValue: 'source code สาธารณะและเอกสารต้นทางของผู้ให้บริการ',
+    evidenceValue: 'เอกสารผลิตภัณฑ์สาธารณะและเอกสารต้นทางของผู้ให้บริการ',
     policies: 'นโยบายและช่องทางติดต่อ',
     about: 'เกี่ยวกับผู้เผยแพร่',
     privacy: 'ความเป็นส่วนตัว',
     contact: 'ติดต่อ',
-    source: 'source repository',
+    source: 'เอกสารผลิตภัณฑ์',
   },
 } as const;
 
 export function marketingHomeMetadata(locale: SiteLocale) {
   const copy = HOME_COPY[locale];
+  const title = copy.title.replace('\n', ' ');
   return {
     ...createMarketingMetadata({
       description: copy.description,
       locale,
       path: '/',
-      title: `${SITE_NAME} — ${copy.title.replace('\n', ' ')}`,
+      title,
     }),
-    title: { absolute: `${SITE_NAME} — ${copy.title.replace('\n', ' ')}` },
+    title: { absolute: title },
   };
 }
 
@@ -258,9 +259,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
               <dd style={MUTED_TEXT}>
                 <a
                   className="underline underline-offset-4"
-                  href={SOURCE_REPOSITORY_URL}
-                  rel="noopener noreferrer"
-                  target="_blank"
+                  href={localizedPath(locale, PUBLIC_EVIDENCE_URL)}
                 >
                   {accountability.evidenceValue}
                 </a>

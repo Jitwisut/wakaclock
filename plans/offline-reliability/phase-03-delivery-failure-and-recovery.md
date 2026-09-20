@@ -1,6 +1,6 @@
 # Phase 03 — Scoped Delivery Failure and Recovery Lifecycle
 
-สถานะ: Planned  
+สถานะ: Implemented (Desktop ส่วนของ Phase นี้เลื่อนไป Phase 04)  
 ครอบคลุม: OFF-04 และ backlog ที่ไม่ drain หลัง network recovery  
 ขึ้นกับ: Phase 01–02
 
@@ -168,3 +168,34 @@ python3 scripts/duration-audit/golden.py
 python3 scripts/duration-audit/verify_port.py
 ```
 
+
+## Implementation notes (2026-09-20)
+
+- `queue.rs`: ตาราง `delivery_state` (PK = destination + owner_scope) เก็บ `kind`,
+  `http_status`, `message_code`, `sanitized_detail` (bounded 512 ตัวอักษร),
+  `recorded_at`, `last_attempt_at`, `consecutive_failures`. `consecutive_failures`
+  นับต่อเมื่อ kind เดิมซ้ำ และรีเซ็ตเมื่อ kind เปลี่ยน.
+- `clear_delivery_failure(scope, kinds)` รับ list ของ kind ที่อนุญาตให้ล้าง:
+  probe ที่สำเร็จล้างได้เฉพาะ `network`/`server_error`; `auth_401`/`payment_402`
+  ต้องส่งสำเร็จจริงจึงล้าง.
+- Migration: ไฟล์ `~/.wakaclock/last-delivery-failure.json` ถูกอ่านครั้งเดียวและเก็บลง
+  scope `legacy_unscoped` (ไม่ตรงกับ origin/owner จริงใด ๆ จึงไม่ถูกใช้ตัดสินสถานะ)
+  แล้วลบไฟล์ต่อเมื่อ persist สำเร็จ. `http_status` ของ record เก่าเป็น unknown
+  เพราะ binary เดิมไม่ได้บันทึกไว้.
+- `push_scoped_after()` ทำให้ `Retry-After` มีผลตั้งแต่ครั้งแรกที่ queue (บั๊กที่พบใน
+  Phase 00); backoff เดิม 60s→3600s ไม่เปลี่ยน.
+- `eligible_len_scoped()` แยก "ค้างเพราะรอ backoff" ออกจาก "ค้างเพราะส่งไม่ได้";
+  `today --json` มี `queue.eligible_now` แล้ว (ค้างมาจาก Phase 01).
+- CLI: `today`/`doctor` อ่าน state ตาม scope. `delivery_failure` ใน JSON เพิ่ม
+  `http_status`, `message_code`, `consecutive_failures` และเปลี่ยนชื่อ kind เป็น
+  `category` (ชื่อเดียวกับที่ `doctor ai` ใช้อยู่เดิม).
+- `broker.rs`: ไม่ต้องเขียน recovery worker ใหม่ — loop เดิมเรียก `flush_queue` ทุก tick
+  และ `claim_batch_scoped` เคารพ `next_retry_at` กับ lease อยู่แล้ว จึง drain เองได้โดยไม่ต้อง
+  มี activity ใหม่ (มีเทสต์ยืนยัน). เปลี่ยนเฉพาะ log ให้บอก `kind` ของ scope ปัจจุบัน.
+- VS Code: `cli.ts` อ่าน `category` (fallback เป็น `kind` สำหรับ CLI รุ่นเก่า) เพื่อไม่ให้
+  tooltip เรียก network failure ว่า REFUSED.
+- **ไม่ใส่ jitter** ใน backoff: queue เป็นของเครื่องเดียวและมี lease กันส่งซ้ำอยู่แล้ว
+  jitter จะทำให้เทสต์ไม่ deterministic โดยไม่ได้ลดภาระ server จริง.
+
+เลื่อนไป Phase 04: การปลุก recovery worker ใน `apps/desktop/src-tauri/src/engine.rs`
+(ไฟล์เดียวกับที่ Phase 04 ต้องแยก seam อยู่แล้ว).
