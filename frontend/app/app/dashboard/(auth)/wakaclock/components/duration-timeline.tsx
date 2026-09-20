@@ -23,6 +23,7 @@ import { QueryState } from '@/components/wakaclock/query-state';
 import { getDurations } from '@/lib/wakaclock/endpoints';
 import { formatEpochRange, todayDateString } from '@/lib/wakaclock/format';
 import {
+  isUnassignedTimelineProject,
   orderedTimelineProjects,
   timelineProjectColor,
   timelineProjectLabel,
@@ -66,9 +67,21 @@ export function DurationTimeline() {
   });
 
   const blocks = data?.data ?? [];
-  const projects = orderedTimelineProjects(blocks.map((block) => block.project));
+  // Time outside any project gets no row: an "Unassigned" lane reads as a project of
+  // its own. It is still counted, and disclosed below the chart.
+  const visibleBlocks = blocks.filter((block) => !isUnassignedTimelineProject(block.project));
+  const hiddenSeconds = Math.max(
+    0,
+    blocks
+      .filter((block) => isUnassignedTimelineProject(block.project))
+      .reduce((total, block) => total + block.duration_seconds, 0)
+  );
+  const projects = orderedTimelineProjects(visibleBlocks.map((block) => block.project));
   const projectTotals = timelineProjectTotals(
-    blocks.map((block) => ({ durationSeconds: block.duration_seconds, project: block.project }))
+    visibleBlocks.map((block) => ({
+      durationSeconds: block.duration_seconds,
+      project: block.project,
+    }))
   );
   const rangeStart = data?.range_start;
   const rangeEnd = data?.range_end;
@@ -113,7 +126,7 @@ export function DurationTimeline() {
         <QueryState
           emptyTitle="No sessions on this day"
           error={error}
-          isEmpty={timezone !== null && !isLoading && !error && blocks.length === 0}
+          isEmpty={timezone !== null && !isLoading && !error && visibleBlocks.length === 0}
           isLoading={timezone === null || isLoading}
         >
           <div className="space-y-4">
@@ -157,7 +170,7 @@ export function DurationTimeline() {
 
                   <div className="overflow-hidden rounded-md border">
                     {projects.map((project) => {
-                      const projectBlocks = blocks.filter(
+                      const projectBlocks = visibleBlocks.filter(
                         (block) => timelineProjectLabel(block.project) === project
                       );
                       const projectTotal = projectTotals.get(project) ?? 0;
@@ -241,6 +254,12 @@ export function DurationTimeline() {
               </div>
             </TooltipProvider>
 
+            {hiddenSeconds > 0 && (
+              <p className="text-muted-foreground text-xs">
+                {formatProjectDuration(hiddenSeconds)} outside any project not shown
+              </p>
+            )}
+
             <div className="overflow-x-auto rounded-md border">
               <Table>
                 <TableHeader>
@@ -254,7 +273,7 @@ export function DurationTimeline() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {blocks.map((block) => {
+                  {visibleBlocks.map((block) => {
                     const project = timelineProjectLabel(block.project);
                     return (
                       <TableRow key={`${block.entity}-${block.start}-${block.end}`}>

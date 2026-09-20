@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isUnassignedTimelineProject,
   orderedTimelineProjects,
   timelineProjectColor,
   timelineProjectLabel,
   timelineProjectTotals,
+  UNASSIGNED_PROJECT,
 } from '@/lib/wakaclock/project-timeline-colors';
 
 describe('project timeline colors', () => {
@@ -21,6 +23,15 @@ describe('project timeline colors', () => {
     expect(timelineProjectLabel(null)).toBe('Unassigned');
     expect(timelineProjectLabel('   ')).toBe('Unassigned');
     expect(timelineProjectColor(null)).toBe(timelineProjectColor('Unassigned'));
+  });
+
+  it('treats only missing or blank project names as unassigned', () => {
+    expect(isUnassignedTimelineProject(null)).toBe(true);
+    expect(isUnassignedTimelineProject('')).toBe(true);
+    expect(isUnassignedTimelineProject('   ')).toBe(true);
+    expect(isUnassignedTimelineProject('wakaclock')).toBe(false);
+    expect(isUnassignedTimelineProject(' wakaclock ')).toBe(false);
+    expect(timelineProjectLabel(null)).toBe(UNASSIGNED_PROJECT);
   });
 
   it('keeps project row order stable by first appearance and removes duplicates', () => {

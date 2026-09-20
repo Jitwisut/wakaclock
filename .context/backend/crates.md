@@ -16,8 +16,33 @@ consumes them.
 | `config` | client config (`WAKACLOCK_SERVER_URL`, `WAKACLOCK_API_KEY`, …) |
 | `queue` | offline queue (rusqlite-backed) so heartbeats survive being offline |
 | `git` | repo/branch detection via `gix` |
+| `project` | `resolve_project` — **the only place a project name is decided** (see below) |
 | `error` | `AppError` |
 | `ai` | AI-assistance detection and attribution |
+
+### Project names: `wakaclock-core::project`
+
+`resolve_project(entity, hint_root)` decides a heartbeat's project from the
+entity path with a plain stat walk (no `gix`, so it is safe inside the broker):
+
+1. nearest Git working tree — a linked worktree reports the **main**
+   repository's name (`.worktrees/phase8/...` → `wakaclock`);
+2. non-Git workspace marker (`pnpm-workspace.yaml`, `lerna.json`, `nx.json`,
+   `rush.json`, `package.json` with `workspaces`);
+3. `hint_root` (a producer-reported cwd) only if it contains the entity and has
+   a manifest;
+4. nearest single-project manifest (`Cargo.toml`, `package.json`, …);
+5. `None`.
+
+`/`, `$HOME` and its ancestors, temp folders, `~/.claude`, `~/.codex`,
+`~/Desktop`, `~/Documents` and `~/Downloads` are never a project root.
+
+Callers: `build_ai_heartbeat` (every agent and source — a transcript or hook
+cwd never names a project), `build_heartbeat` (`--project` override → `gix` →
+Git from the resolver → `--alternate-project` → non-Git markers) and Codex's
+`effective_project_root`. **Do not add another name-deriving path** (cwd
+basename, nearest manifest); that is how `wakaclock-core`, `vscode`, `api`,
+`app`, `phase8` and `tmp` each became dashboard projects.
 
 ### `wakaclock-core::ai`
 

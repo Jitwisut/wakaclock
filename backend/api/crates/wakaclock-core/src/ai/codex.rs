@@ -493,7 +493,7 @@ impl AiActivityParser for CodexParser {
                                     "codex-v2",
                                     &format!("{}:{}", session_id.as_deref().unwrap_or(""), item_id),
                                     &entity_path,
-                                    previous_path.as_deref(),
+                                    previous_path,
                                     change_kind,
                                     delta,
                                     occurred_at,
@@ -1049,9 +1049,9 @@ fn resolve_entity(raw_path: &str, project_root: Option<&Path>) -> PathBuf {
 /// Codex Desktop can keep one conversation alive while the user asks it to edit a
 /// different checkout. In that case the turn/session cwd is stale, while the native
 /// FileChange path is absolute and authoritative. Keeping the stale cwd makes broker
-/// validation reject the event as outside `project_root`. Discover a local project
-/// marker from the changed path instead; if none exists, omit the root so the event is
-/// still delivered without inventing a project name.
+/// validation reject the event as outside `project_root`. Resolve the project that owns
+/// the changed path instead (see `crate::project`); if none exists, omit the root so the
+/// event is still delivered without inventing a project name.
 fn effective_project_root(
     entity: &Path,
     previous_entity: Option<&Path>,
@@ -1066,16 +1066,12 @@ fn effective_project_root(
         }
     }
 
-    let start = if entity.is_dir() {
-        entity
-    } else {
-        entity.parent()?
-    };
-    start
-        .ancestors()
-        .find(|candidate| has_codex_project_marker(candidate))
+    // Resolve from the changed path itself. The repository root wins over any nested
+    // manifest, so an edit under `crates/wakaclock-cli` is bounded by the repository
+    // rather than by that crate's `Cargo.toml`.
+    crate::project::resolve_project(entity, None)
+        .map(|resolved| resolved.root)
         .filter(|root| previous_entity.is_none_or(|previous| previous.starts_with(root)))
-        .map(Path::to_path_buf)
 }
 
 fn has_codex_project_marker(path: &Path) -> bool {
@@ -1567,6 +1563,7 @@ fn pending_apply_patch_matches_native(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_codex_file_event(
     id_prefix: &str,
     operation_id: &str,
@@ -1686,6 +1683,37 @@ mod tests {
         assert_eq!(
             effective_project_root(&entity, None, Some(stale_root)),
             Some(actual_root.clone())
+        );
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn file_change_in_a_nested_crate_is_bounded_by_the_repository_not_the_crate() {
+        let base = std::env::temp_dir().join(format!(
+            "wakaclock-codex-nested-crate-{}",
+            std::process::id()
+        ));
+        let repo = base.join("wakaclock");
+        let crate_root = repo.join("backend/api/crates/wakaclock-cli");
+        let entity = crate_root.join("src/broker.rs");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"wakaclock-cli\"\n",
+        )
+        .unwrap();
+
+        // Missing turn cwd, and a stale cwd from another checkout, both fall back to the
+        // repository root.
+        assert_eq!(
+            effective_project_root(&entity, None, None),
+            Some(repo.clone())
+        );
+        assert_eq!(
+            effective_project_root(&entity, None, Some(base.join("AI-tiktok"))),
+            Some(repo.clone())
         );
 
         fs::remove_dir_all(base).unwrap();

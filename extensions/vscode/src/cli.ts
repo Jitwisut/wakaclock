@@ -106,8 +106,11 @@ export class WakaclockCliService {
             primaryCategory,
         ];
 
-        if (primaryExtra.project) {
-            args.push("--project", primaryExtra.project);
+        // Never `--project`: that is a hard override, and the workspace-folder name is
+        // only a fallback for files the CLI cannot place in a repository or project
+        // (WakaTime's `--alternate-project`).
+        if (primaryExtra.alternate_project) {
+            args.push("--alternate-project", primaryExtra.alternate_project);
         }
 
         if (primaryWrite) {
@@ -211,14 +214,22 @@ export class WakaclockCliService {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             const hadClipboardFlags = args.includes("--clipboard-tracking-version");
-            if (!hadClipboardFlags || !/unexpected argument|found argument|usage:/i.test(message)) {
+            const hadAlternateProject = args.includes("--alternate-project");
+            if (
+                (!hadClipboardFlags && !hadAlternateProject) ||
+                !/unexpected argument|found argument|usage:/i.test(message)
+            ) {
                 throw error;
             }
-            this.clipboardCapability = false;
-            this.logger.warn("legacy wakaclock-cli does not support clipboard metrics", {
+            if (hadClipboardFlags) {
+                this.clipboardCapability = false;
+            }
+            this.logger.warn("legacy wakaclock-cli rejected newer heartbeat flags", {
                 error: message
             });
-            return this.runCli(stripClipboardArgs(args), stdinPayload);
+            // Drop the fallback name rather than converting it to `--project`: an older CLI
+            // still detects the repository itself, and `--project` would override it.
+            return this.runCli(stripLegacyArgs(args), stdinPayload);
         }
     }
 
@@ -805,10 +816,10 @@ const CLIPBOARD_FLAGS = new Set([
     "--paste-external-or-unknown-actions",
 ]);
 
-function stripClipboardArgs(args: string[]): string[] {
+function stripLegacyArgs(args: string[]): string[] {
     const stripped: string[] = [];
     for (let index = 0; index < args.length; index += 1) {
-        if (CLIPBOARD_FLAGS.has(args[index])) {
+        if (CLIPBOARD_FLAGS.has(args[index]) || args[index] === "--alternate-project") {
             index += 1;
             continue;
         }

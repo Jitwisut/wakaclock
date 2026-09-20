@@ -1,4 +1,9 @@
-const UNASSIGNED_PROJECT = 'Unassigned';
+export const UNASSIGNED_PROJECT = 'Unassigned';
+
+/** True when a timeline block carries no project (null or blank). */
+export function isUnassignedTimelineProject(project: null | string): boolean {
+  return !project?.trim();
+}
 
 function hashProjectName(value: string) {
   let hash = 2_166_136_261;

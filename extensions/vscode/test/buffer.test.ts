@@ -73,9 +73,10 @@ describe("HeartbeatBufferManager", () => {
         actor_confidence: 0,
         unattributed_lines_added: 2,
         unattributed_lines_deleted: 1,
-        project: "wakaclock",
+        alternate_project: "wakaclock",
       }),
     );
+    expect(sendHeartbeat.mock.calls[0][4]).not.toHaveProperty("project");
   });
 
   it("does not duplicate a native AI heartbeat when the external change matches its sidecar", async () => {
@@ -244,7 +245,7 @@ describe("HeartbeatBufferManager", () => {
       "coding",
       [],
       expect.objectContaining({
-        project: "Daniel",
+        alternate_project: "Daniel",
         keystrokes: undefined,
         chars_added: 5,
         // Like WakaTime, one isolated heartbeat has no duration until another
@@ -258,6 +259,7 @@ describe("HeartbeatBufferManager", () => {
         cursor_position: 3
       })
     );
+    expect(sendHeartbeat.mock.calls[0][4]).not.toHaveProperty("project");
   });
 
   it("reports undo character volume without fabricating keys or unversioned line totals", async () => {

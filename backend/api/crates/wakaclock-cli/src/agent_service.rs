@@ -232,6 +232,7 @@ fn service_executable() -> Result<PathBuf, String> {
                 )
             })?;
         }
+        #[allow(clippy::needless_return)]
         return Ok(target);
     }
     #[cfg(not(target_os = "macos"))]
