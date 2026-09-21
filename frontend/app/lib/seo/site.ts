@@ -204,6 +204,7 @@ const AUDIT_REVIEW_DATE = '2026-09-11';
 /** Round 3 of the SEOScore audit response — see docs/seoscore-audit-2026-09-12-round-3.md. */
 const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
 const NEW_GUIDES_DATE = '2026-09-20';
+const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': AUDIT_REVIEW_DATE,
   '/teams': AUDIT_REVIEW_DATE,
@@ -217,7 +218,7 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
-  '/about': AUDIT_REVIEW_DATE_ROUND_3,
+  '/about': ATTRIBUTION_UPDATE_DATE,
   '/contact': AUDIT_REVIEW_DATE_ROUND_3,
   '/terms': AUDIT_REVIEW_DATE_ROUND_3,
   '/privacy': AUDIT_REVIEW_DATE_ROUND_3,
@@ -228,6 +229,7 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
 };
 /** Thai route-specific content dates, including guides authored in both languages. */
 const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
+  '/about': ATTRIBUTION_UPDATE_DATE,
   '/wakatime-alternative': AUDIT_REVIEW_DATE_ROUND_3,
   '/ai-coding-tracker': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,

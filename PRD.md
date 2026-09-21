@@ -6,11 +6,11 @@ Outdoor Activity Booking & Venue Management Platform
 
 Version 4.0  |  March 2026  |  50 Sport Categories
 
-Confidential — Lodash Thailand
+Confidential — team Atoaxis
 
 | Field | Details |
 | :---- | :---- |
-| Author | Arm (CDO, Lodash Thailand) |
+| Author | Arm (team Atoaxis) |
 | Status | Draft v4 |
 | Target Launch | Q4 2026 |
 | Sport Categories | 50 types across 7 groups |
@@ -20,7 +20,7 @@ Confidential — Lodash Thailand
 
 PlayField is an all-in-one platform that lets outdoor activity venues manage bookings, on-site operations (check-in, POS, equipment rental), self-service F\&B kiosks with kitchen order management, and coach booking from a single system. Customers get a frictionless experience from discovery to checkout.
 
-The platform serves three user groups through dedicated interfaces: customers (mobile app), venue operators (management dashboard), and Lodash administrators (platform oversight portal).
+The platform serves three user groups through dedicated interfaces: customers (mobile app), venue operators (management dashboard), and AtoAxis administrators (platform oversight portal).
 
 # **2\. Problem Statement**
 
@@ -54,9 +54,9 @@ The platform serves three user groups through dedicated interfaces: customers (m
 
 **Pain:** Juggling LINE, spreadsheets, a separate POS, paper equipment logs, and manual cash reconciliation.
 
-## **3.3 Lodash Admin**
+## **3.3 AtoAxis Admin**
 
-**Who:** Lodash Thailand platform team managing the multi-venue marketplace.
+**Who:** team Atoaxis managing the multi-venue marketplace.
 
 **Goal:** Onboard venues, ensure quality, track platform revenue, resolve disputes, maintain health.
 
@@ -305,17 +305,17 @@ PlayField supports 50 sport/activity categories organized into 7 groups by resou
 | S-20 | As a venue operator, I want revenue reports broken down by source. | Report: revenue by category (booking, rental, F\&B, coach), by payment method, by day/week/month. Exportable. |
 | S-21 | As a venue operator, I want occupancy heatmaps to optimize scheduling. | Heatmap: X \= hour, Y \= day of week. Color \= occupancy %. Per resource or aggregated. 30/90 day range. |
 
-## **5.3 Lodash Admin Stories**
+## **5.3 AtoAxis Admin Stories**
 
 | ID | User Story | Acceptance Criteria |
 | :---- | :---- | :---- |
-| A-01 | As a Lodash admin, I want to review and approve new venue applications. | Queue of pending venues: business docs, photos, location, Stripe setup status. Approve/reject with notes. |
-| A-02 | As a Lodash admin, I want platform-wide analytics: GMV, bookings, and venue rankings. | Dashboard: total GMV, booking count, active venues, active users, growth trend. Venue leaderboard. |
-| A-03 | As a Lodash admin, I want to track commissions and manage payout schedules. | Commission per transaction visible. Payout schedule configurable. Payout history with transfer IDs. |
-| A-04 | As a Lodash admin, I want to moderate flagged reviews and content. | Moderation queue: flagged reviews, reported photos. Preview \+ context. Approve, remove, or warn. |
-| A-05 | As a Lodash admin, I want to verify coach certifications before they go live. | Verification queue: uploaded certs, ID. Admin marks verified/rejected. Only verified coaches visible. |
-| A-06 | As a Lodash admin, I want to override refunds and resolve disputes. | Support console: search by booking ID, customer, or venue. Issue a manual refund. Full audit trail. |
-| A-07 | As a Lodash admin, I want to manage the master list of sport categories and their equipment. | Sport category editor: add/remove/edit the 50 categories. Define mandatory vs optional equipment per sport. |
+| A-01 | As an AtoAxis admin, I want to review and approve new venue applications. | Queue of pending venues: business docs, photos, location, Stripe setup status. Approve/reject with notes. |
+| A-02 | As an AtoAxis admin, I want platform-wide analytics: GMV, bookings, and venue rankings. | Dashboard: total GMV, booking count, active venues, active users, growth trend. Venue leaderboard. |
+| A-03 | As an AtoAxis admin, I want to track commissions and manage payout schedules. | Commission per transaction visible. Payout schedule configurable. Payout history with transfer IDs. |
+| A-04 | As an AtoAxis admin, I want to moderate flagged reviews and content. | Moderation queue: flagged reviews, reported photos. Preview \+ context. Approve, remove, or warn. |
+| A-05 | As an AtoAxis admin, I want to verify coach certifications before they go live. | Verification queue: uploaded certs, ID. Admin marks verified/rejected. Only verified coaches visible. |
+| A-06 | As an AtoAxis admin, I want to override refunds and resolve disputes. | Support console: search by booking ID, customer, venue. Issue a manual refund. Full audit trail. |
+| A-07 | As an AtoAxis admin, I want to manage the master list of sport categories and their equipment. | Sport category editor: add/remove/edit the 50 categories. Define mandatory vs optional equipment per sport. |
 
 # 
 
@@ -429,5 +429,4 @@ PlayField supports 50 sport/activity categories organized into 7 groups by resou
 
 * Equipment safety checks: staff must confirm safety gear is properly fitted before the session starts (paintball mask, climbing harness, etc.).
 
-* Incident reporting: staff can log incidents (injury, equipment failure) linked to a booking. Auto-notifies venue owner and Lodash admin.
-
+* Incident reporting: staff can log incidents (injury, equipment failure) linked to a booking. Auto-notifies the venue owner and AtoAxis admin.
