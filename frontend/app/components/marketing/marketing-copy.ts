@@ -3194,7 +3194,7 @@ generic(
   {
     title: `About ${SITE_NAME}`,
     description: `Learn why ${SITE_NAME} exists and who builds it.`,
-    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
+    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product developed by team Atoaxis. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
     headings: ['Why we are building it', 'Current status', 'Who builds it'],
     faqEntries: [
       {
@@ -3203,7 +3203,7 @@ generic(
       },
       {
         question: 'Who builds AtoAxis?',
-        answer: 'A team of fourth-year students designs, builds and operates the hosted service.',
+        answer: 'Team Atoaxis designs, develops and operates the hosted service.',
       },
       {
         question: 'What is actually working today?',
@@ -3220,7 +3220,7 @@ generic(
   {
     title: `เกี่ยวกับ ${SITE_NAME}`,
     description: `รู้จักเหตุผลและผู้พัฒนา ${SITE_NAME}`,
-    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาโดยนักศึกษาปี 4 ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
+    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาขึ้น โดย team Atoaxis ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
     headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้พัฒนา'],
     faqEntries: [
       {
@@ -3229,7 +3229,7 @@ generic(
       },
       {
         question: `ใครเป็นผู้พัฒนา ${SITE_NAME}?`,
-        answer: 'ทีมนักศึกษาปี 4 เป็นผู้ออกแบบ พัฒนา และดูแลบริการ hosted นี้',
+        answer: 'พัฒนาขึ้น โดย team Atoaxis ซึ่งเป็นผู้ออกแบบ พัฒนา และดูแลบริการ hosted นี้',
       },
       {
         question: 'ตอนนี้ใช้งานได้จริงส่วนไหนบ้าง?',

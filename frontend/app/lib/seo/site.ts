@@ -95,11 +95,10 @@ export function absoluteUrl(path: string): string {
   return new URL(path, `${SITE_URL}/`).toString();
 }
 
-/** Who builds the product — AtoAxis is developed by a team of fourth-year students. */
+/** Who builds the product — AtoAxis is developed by team Atoaxis. */
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
-  // No separate registered entity exists yet (student project) — the product name
-  // doubles as the legal/publisher name in structured data until that changes.
+  // The product name is also used as the publisher identity in structured data.
   legalName: SITE_NAME,
   logo: absoluteUrl('/atoaxis-symbol-v2.png'),
   name: SITE_NAME,

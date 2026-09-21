@@ -332,9 +332,9 @@ const EN_GUIDES: Record<string, Guide> = {
   '/about': {
     heading: 'Who builds AtoAxis, and can you verify that?',
     answer:
-      'AtoAxis is built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.',
+      'AtoAxis is developed by team Atoaxis. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.',
     facts: [
-      ['Team', 'A fourth-year student team designs, builds and operates the hosted service.'],
+      ['Team', 'Team Atoaxis designs, develops and operates the hosted service.'],
       ['Status', 'Early Access: heartbeat ingestion and analytics run; billing and team seats do not.'],
       ['Working today', 'Heartbeat ingestion, project and language analytics, and AI attribution.'],
       ['Verification', 'Product claims can be checked against the public documentation and support channel.'],

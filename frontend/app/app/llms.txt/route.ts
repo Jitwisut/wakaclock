@@ -16,7 +16,7 @@ const BODY = `# ${SITE_NAME}
 
 > ${PRODUCT_ANSWER}
 
-${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
+${SITE_NAME} is a commercial, proprietary product developed by team Atoaxis.
 It is a hosted service operated by AtoAxis. Access is currently ${PRODUCT_STATUS.en.label};
 ${PRODUCT_STATUS.en.signup} Customers do not deploy or maintain its infrastructure.
 
