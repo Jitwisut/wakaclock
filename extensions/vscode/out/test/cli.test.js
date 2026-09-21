@@ -84,14 +84,36 @@ function mockChild(result = {}) {
         (0, vitest_1.expect)(stdinPayload).toContain("\"entity\": \"C:/project/b.ts\"");
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--extra-heartbeats");
     });
-    (0, vitest_1.it)("passes --project for the primary heartbeat when provided", async () => {
+    (0, vitest_1.it)("passes the workspace name as --alternate-project, never as a --project override", async () => {
         spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
         const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
         await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
-            project: "Daniel"
+            alternate_project: "Daniel"
         });
-        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--project");
-        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("Daniel");
+        const args = spawnMock.mock.calls[0][1];
+        const flagIndex = args.indexOf("--alternate-project");
+        (0, vitest_1.expect)(flagIndex).toBeGreaterThan(-1);
+        (0, vitest_1.expect)(args[flagIndex + 1]).toBe("Daniel");
+        (0, vitest_1.expect)(args).not.toContain("--project");
+    });
+    (0, vitest_1.it)("omits --alternate-project when no workspace name is known", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {});
+        const args = spawnMock.mock.calls[0][1];
+        (0, vitest_1.expect)(args).not.toContain("--alternate-project");
+        (0, vitest_1.expect)(args).not.toContain("--project");
+    });
+    (0, vitest_1.it)("sends alternate_project, not project, in extra heartbeat payloads", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await service.sendHeartbeat("C:/project/a.ts", false, "coding", [
+            { entity: "C:/project/b.ts", alternate_project: "Daniel" }
+        ]);
+        const child = spawnMock.mock.results[0]?.value;
+        const extras = JSON.parse(child.stdin.read()?.toString() ?? "[]");
+        (0, vitest_1.expect)(extras[0]).toMatchObject({ entity: "C:/project/b.ts", alternate_project: "Daniel" });
+        (0, vitest_1.expect)(extras[0]).not.toHaveProperty("project");
     });
     (0, vitest_1.it)("passes the original event timestamp to the CLI", async () => {
         spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
@@ -162,6 +184,20 @@ function mockChild(result = {}) {
         })).resolves.toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--copy-actions");
         (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).not.toContain("--copy-actions");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).toContain("--entity");
+    });
+    (0, vitest_1.it)("retries without the fallback project name, never as --project, on a legacy CLI", async () => {
+        spawnMock
+            .mockImplementationOnce(() => mockChild({ stderr: "error: unexpected argument '--alternate-project' found", exitCode: 2 }))
+            .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+            alternate_project: "vscode"
+        })).resolves.toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toContain("--alternate-project");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).not.toContain("--alternate-project");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).not.toContain("--project");
+        (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).not.toContain("vscode");
         (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).toContain("--entity");
     });
     (0, vitest_1.it)("passes stable heartbeat ids and explicit activity segments", async () => {

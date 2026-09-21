@@ -50,6 +50,7 @@ use wakaclock_core::{
         resolve_attribution, union_activity_seconds, ActivitySegment, ActorType, AttributionInput,
         Category, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
     },
+    project::{resolve_project, ProjectSource},
     queue::Queue,
 };
 
@@ -127,8 +128,14 @@ enum Commands {
         #[arg(long = "type", default_value = "file")]
         entity_type: String,
 
+        /// Force this project name, overriding repository detection.
         #[arg(long)]
         project: Option<String>,
+
+        /// Fallback project name (e.g. the editor's workspace folder), used only when no
+        /// repository or project marker identifies the entity.
+        #[arg(long)]
+        alternate_project: Option<String>,
 
         #[arg(long, default_value = "coding")]
         category: String,
@@ -634,6 +641,8 @@ struct ExtraHeartbeatInput {
     #[serde(default)]
     project: Option<String>,
     #[serde(default)]
+    alternate_project: Option<String>,
+    #[serde(default)]
     category: Option<String>,
     #[serde(default)]
     write: Option<bool>,
@@ -1105,6 +1114,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             entity,
             entity_type,
             project,
+            alternate_project,
             category,
             write,
             line_number,
@@ -1186,6 +1196,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 entity: entity.clone(),
                 entity_type: None,
                 project: None,
+                alternate_project: None,
                 category: None,
                 write: Some(write),
                 line_number,
@@ -1226,7 +1237,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 &config,
                 &entity,
                 entity_type,
-                project,
+                project.clone(),
+                alternate_project.clone(),
                 category,
                 write,
                 Some(primary_extra),
@@ -1261,8 +1273,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         .map(EntityType::from_str)
                         .transpose()?
                         .unwrap_or_else(|| primary.entity_type.clone());
-                    let resolved_project =
-                        extra.project.clone().or_else(|| primary.project.clone());
+                    // Inherit the raw command-line names, not `primary.project`: that value
+                    // may have come from the primary entity's repository, and an extra
+                    // entity can live in a different one.
+                    let resolved_project = extra.project.clone().or_else(|| project.clone());
+                    let resolved_alternate_project = extra
+                        .alternate_project
+                        .clone()
+                        .or_else(|| alternate_project.clone());
                     let resolved_category = extra
                         .category
                         .as_deref()
@@ -1274,6 +1292,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         &resolved_entity,
                         resolved_entity_type,
                         resolved_project,
+                        resolved_alternate_project,
                         resolved_category,
                         extra.write.unwrap_or(false),
                         Some(extra),
@@ -5887,34 +5906,17 @@ pub(crate) fn build_ai_heartbeat(
     } else {
         None
     };
+    // The project name is decided from the entity path alone, never from the reported
+    // cwd: agents `cd` into subfolders and Codex Desktop keeps stale session roots, so a
+    // cwd basename (or its nearest manifest) turned `backend/api/crates/wakaclock-core`
+    // into a project of its own. `resolve_project` is a stat walk without `gix`, so it
+    // keeps the broker free of the ref-resolution stalls described above.
     heartbeat.project = git_info
         .as_ref()
         .map(|info| info.project.clone())
-        // A transcript parser that supplies project_root has already resolved and
-        // validated the workspace boundary. Do not walk/open the entity path again:
-        // a macOS LaunchAgent can block indefinitely when it probes a new Desktop
-        // folder through TCC, stalling the durable broker queue behind one event.
         .or_else(|| {
-            event
-                .project_root
-                .is_none()
-                .then(|| infer_non_git_project_name(Path::new(&entity_path)))
-                .flatten()
-        })
-        // `project_root` คือ cwd ที่ agent รายงานมาเอง ซึ่งอาจเป็นโฟลเดอร์อะไรก็ได้ —
-        // การรับชื่อมันดื้อ ๆ ทำให้ smoke test ใน `/private/tmp` กลายเป็น project ชื่อ
-        // `tmp` ปนอยู่ใน dashboard ต้องมี marker ยืนยันว่าเป็น root ของโปรเจกต์จริงก่อน
-        // ไม่งั้นปล่อยเป็น NULL ดีกว่ารายงานชื่อที่ไม่ใช่ project ของใครเลย
-        .or_else(|| {
-            event
-                .project_root
-                .as_deref()
-                .filter(|root| {
-                    (event.agent == "codex" && event.source == AiEventSource::Transcript)
-                        || has_workspace_marker(root)
-                        || has_project_marker(root)
-                })
-                .and_then(|root| project_name_from_root(Some(root)))
+            resolve_project(&event.entity, event.project_root.as_deref())
+                .map(|resolved| resolved.name)
         });
     heartbeat.branch = git_info.map(|info| info.branch);
     heartbeat.is_write = true;
@@ -6020,12 +6022,6 @@ fn count_file_lines(path: &Path) -> io::Result<u32> {
     Ok(newline_count.saturating_add(1))
 }
 
-fn project_name_from_root(root: Option<&Path>) -> Option<String> {
-    root.and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().trim().to_string())
-        .filter(|name| !name.is_empty())
-}
-
 fn infer_language_from_path(entity: &str) -> Option<String> {
     let extension = Path::new(entity)
         .extension()
@@ -6063,82 +6059,12 @@ fn infer_language_from_path(entity: &str) -> Option<String> {
     Some(language.to_string())
 }
 
-/// Resolve a stable project name for a non-Git workspace.
-///
-/// Git remains authoritative when present. For folders that are intentionally not Git
-/// repositories (for example a pnpm monorepo copied from elsewhere), prefer a strong
-/// workspace marker over a nested package.json. This prevents an edit inside
-/// `apps/foo/node_modules/bar` or `apps/foo` from being reported as project `bar`/`foo`
-/// when the real workspace root is the parent monorepo.
-fn infer_non_git_project_name(entity_path: &Path) -> Option<String> {
-    discover_non_git_workspace_root(entity_path)
-        .as_deref()
-        .and_then(|root| project_name_from_root(Some(root)))
-}
-
-fn discover_non_git_workspace_root(entity_path: &Path) -> Option<PathBuf> {
-    let start = if entity_path.is_dir() {
-        entity_path
-    } else {
-        entity_path.parent()?
-    };
-    let mut nearest_project_root = None;
-
-    for ancestor in start.ancestors() {
-        if has_workspace_marker(ancestor) {
-            return Some(ancestor.to_path_buf());
-        }
-        if nearest_project_root.is_none() && has_project_marker(ancestor) {
-            nearest_project_root = Some(ancestor.to_path_buf());
-        }
-    }
-
-    nearest_project_root
-}
-
-fn has_workspace_marker(path: &Path) -> bool {
-    if ["pnpm-workspace.yaml", "lerna.json", "nx.json", "rush.json"]
-        .iter()
-        .any(|marker| path.join(marker).is_file())
-    {
-        return true;
-    }
-
-    let package_json = path.join("package.json");
-    fs::read_to_string(package_json)
-        .ok()
-        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-        .and_then(|value| value.get("workspaces").cloned())
-        .is_some()
-}
-
-fn has_project_marker(path: &Path) -> bool {
-    // Transcript events already carry their authoritative workspace root. A bare
-    // Git repository does not need a language-specific manifest at that root (this
-    // repository, for example, keeps Cargo.toml and package.json in subfolders).
-    // Treat both a normal `.git/` directory and a worktree `.git` file as strong
-    // project evidence so create/delete events keep their project name even when
-    // the changed entity no longer exists by the time the broker processes it.
-    if path.join(".git").exists() {
-        return true;
-    }
-
-    [
-        "package.json",
-        "Cargo.toml",
-        "pyproject.toml",
-        "go.mod",
-        "composer.json",
-    ]
-    .iter()
-    .any(|marker| path.join(marker).is_file())
-}
-
 fn build_heartbeat(
     config: &Config,
     entity: &str,
     entity_type: EntityType,
     project_override: Option<String>,
+    alternate_project: Option<String>,
     category: Category,
     is_write: bool,
     extra: Option<ExtraHeartbeatInput>,
@@ -6152,9 +6078,19 @@ fn build_heartbeat(
     );
 
     let git_info = git::discover(&entity_path);
-    heartbeat.project = project_override
-        .or_else(|| git_info.as_ref().map(|g| g.project.clone()))
-        .or_else(|| infer_non_git_project_name(Path::new(&entity_path)));
+    // WakaTime order: an explicit `--project` override, then the repository, then the
+    // editor's `--alternate-project` (its workspace folder name), then non-Git markers.
+    // The stat-walk repository check backs up `gix`, so a workspace folder opened on a
+    // repository subfolder (`extensions/vscode`) can never outrank the repository.
+    heartbeat.project = project_override.or_else(|| {
+        git_info.as_ref().map(|g| g.project.clone()).or_else(|| {
+            let resolved = resolve_project(Path::new(&entity_path), None);
+            match resolved {
+                Some(resolved) if resolved.source == ProjectSource::Git => Some(resolved.name),
+                other => alternate_project.or_else(|| other.map(|resolved| resolved.name)),
+            }
+        })
+    });
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
     heartbeat.category = category;
@@ -6450,67 +6386,116 @@ fn active_seconds_with_queued(server: &[ActivitySegment], queued: &[ActivitySegm
 mod generic_ai_ingress_tests {
     use super::*;
 
-    #[test]
-    fn git_root_is_a_project_marker_without_a_root_manifest() {
-        let root = std::env::temp_dir().join(format!("wakaclock-git-root-{}", Uuid::new_v4()));
-        fs::create_dir_all(root.join(".git")).unwrap();
-
-        assert!(has_project_marker(&root));
-        assert_eq!(
-            project_name_from_root(Some(&root)),
-            root.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        );
-
-        fs::remove_dir_all(root).unwrap();
+    fn ai_event_for(agent: &str, entity: PathBuf, project_root: Option<PathBuf>) -> AiEditEvent {
+        AiEditEvent {
+            event_id: format!("{agent}-project-test"),
+            agent: agent.to_string(),
+            provider: None,
+            model: None,
+            session_id: None,
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            tool_event_id: None,
+            producer_surface: None,
+            occurred_at: chrono::Utc::now(),
+            entity,
+            project_root,
+            change_kind: wakaclock_core::broker::BrokerChangeKind::Modify,
+            previous_entity: None,
+            lines_added: Some(1),
+            lines_deleted: None,
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        }
     }
 
     #[test]
-    fn non_git_monorepo_root_wins_over_nested_package_names() {
-        let root = std::env::temp_dir().join(format!("wakaclock-project-root-{}", Uuid::new_v4()));
-        let nested = root
-            .join("apps/desktop/node_modules/ibm-plex-sans-thai/src")
-            .join("styles.css");
-        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fn ai_heartbeat_names_the_repository_not_the_agent_cwd_or_nested_crate() {
+        let base = std::env::temp_dir().join(format!("wakaclock-ai-project-{}", Uuid::new_v4()));
+        let repo = base.join("wakaclock");
+        let api = repo.join("backend/api");
+        let crate_root = api.join("crates/wakaclock-core");
+        let entity = crate_root.join("src/ai/codex.rs");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(api.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(
-            root.join("pnpm-workspace.yaml"),
-            "packages:\n  - 'apps/*'\n",
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"wakaclock-core\"\n",
         )
         .unwrap();
-        fs::write(
-            root.join("package.json"),
-            r#"{"private":true,"workspaces":["apps/*"]}"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join("apps/desktop/node_modules/ibm-plex-sans-thai/package.json"),
-            r#"{"name":"ibm-plex-sans-thai"}"#,
-        )
-        .unwrap();
-        fs::write(&nested, "body {}\n").unwrap();
+        let config = Config::default();
 
+        // Claude records follow `cd`, so its reported root can be a manifest subfolder.
+        let claude = ai_event_for("claude-code", entity.clone(), Some(api.clone()));
         assert_eq!(
-            infer_non_git_project_name(&nested),
-            project_name_from_root(Some(&root))
+            build_ai_heartbeat(&config, &claude, 0.0).project.as_deref(),
+            Some("wakaclock")
+        );
+        // Codex transcripts used to bypass every check and name the root folder.
+        let codex = ai_event_for("codex", entity.clone(), Some(crate_root.clone()));
+        assert_eq!(
+            build_ai_heartbeat(&config, &codex, 0.0).project.as_deref(),
+            Some("wakaclock")
+        );
+        let rootless = ai_event_for("codex", repo.join("WAKACLOCK-SMOKE.md"), None);
+        assert_eq!(
+            build_ai_heartbeat(&config, &rootless, 0.0)
+                .project
+                .as_deref(),
+            Some("wakaclock")
         );
 
-        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
-    fn plain_non_git_package_uses_its_package_root() {
-        let root = std::env::temp_dir().join(format!("wakaclock-package-root-{}", Uuid::new_v4()));
-        let nested = root.join("src/lib.ts");
-        fs::create_dir_all(nested.parent().unwrap()).unwrap();
-        fs::write(root.join("package.json"), r#"{"name":"plain-project"}"#).unwrap();
-        fs::write(&nested, "export {};\n").unwrap();
+    fn editor_alternate_project_is_only_a_fallback_below_the_repository() {
+        let base = std::env::temp_dir().join(format!("wakaclock-alt-project-{}", Uuid::new_v4()));
+        let repo = base.join("wakaclock");
+        let entity = repo.join("extensions/vscode/src/cli.ts");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(repo.join("extensions/vscode/package.json"), "{}").unwrap();
+        fs::write(&entity, "export {};\n").unwrap();
+        let loose = base.join("loose/notes.txt");
+        fs::create_dir_all(loose.parent().unwrap()).unwrap();
+        fs::write(&loose, "x").unwrap();
+        let config = Config::default();
+        let project_of = |entity: &Path, project: Option<&str>, alternate: Option<&str>| {
+            build_heartbeat(
+                &config,
+                entity.to_str().unwrap(),
+                EntityType::File,
+                project.map(str::to_string),
+                alternate.map(str::to_string),
+                Category::Coding,
+                false,
+                None,
+            )
+            .unwrap()
+            .project
+        };
 
         assert_eq!(
-            infer_non_git_project_name(&nested),
-            project_name_from_root(Some(&root))
+            project_of(&entity, None, Some("vscode")).as_deref(),
+            Some("wakaclock")
+        );
+        assert_eq!(
+            project_of(&loose, None, Some("notes-folder")).as_deref(),
+            Some("notes-folder")
+        );
+        assert_eq!(
+            project_of(&entity, Some("forced"), Some("vscode")).as_deref(),
+            Some("forced")
         );
 
-        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn sample_input() -> GenericAiEventInput {

@@ -1210,7 +1210,9 @@ export interface ProjectRuleMutationResponse {
 }
 
 // ---------------------------------------------------------------------------
-// project_merges — user_id REQUIRED; only /projects applies these at read time
+// project_merges — user_id REQUIRED; applied at read time by /projects and by every
+// duration surface built on the backend's build_timeline (durations/session timeline,
+// stats, all-time, project analytics)
 // ---------------------------------------------------------------------------
 export interface ProjectMergeItem {
   created_at: number;

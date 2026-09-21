@@ -117,16 +117,44 @@ describe("WakaclockCliService", () => {
     expect(spawnMock.mock.calls[0][1]).toContain("--extra-heartbeats");
   });
 
-  it("passes --project for the primary heartbeat when provided", async () => {
+  it("passes the workspace name as --alternate-project, never as a --project override", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));
 
     await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
-      project: "Daniel"
+      alternate_project: "Daniel"
     });
 
-    expect(spawnMock.mock.calls[0][1]).toContain("--project");
-    expect(spawnMock.mock.calls[0][1]).toContain("Daniel");
+    const args = spawnMock.mock.calls[0][1] as string[];
+    const flagIndex = args.indexOf("--alternate-project");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(args[flagIndex + 1]).toBe("Daniel");
+    expect(args).not.toContain("--project");
+  });
+
+  it("omits --alternate-project when no workspace name is known", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {});
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain("--alternate-project");
+    expect(args).not.toContain("--project");
+  });
+
+  it("sends alternate_project, not project, in extra heartbeat payloads", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await service.sendHeartbeat("C:/project/a.ts", false, "coding", [
+      { entity: "C:/project/b.ts", alternate_project: "Daniel" }
+    ]);
+
+    const child = spawnMock.mock.results[0]?.value as ReturnType<typeof mockChild>;
+    const extras = JSON.parse(child.stdin.read()?.toString() ?? "[]") as Record<string, unknown>[];
+    expect(extras[0]).toMatchObject({ entity: "C:/project/b.ts", alternate_project: "Daniel" });
+    expect(extras[0]).not.toHaveProperty("project");
   });
 
   it("passes the original event timestamp to the CLI", async () => {
@@ -219,6 +247,27 @@ describe("WakaclockCliService", () => {
 
     expect(spawnMock.mock.calls[0][1]).toContain("--copy-actions");
     expect(spawnMock.mock.calls[1][1]).not.toContain("--copy-actions");
+    expect(spawnMock.mock.calls[1][1]).toContain("--entity");
+  });
+
+  it("retries without the fallback project name, never as --project, on a legacy CLI", async () => {
+    spawnMock
+      .mockImplementationOnce(() =>
+        mockChild({ stderr: "error: unexpected argument '--alternate-project' found", exitCode: 2 })
+      )
+      .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(
+      service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+        alternate_project: "vscode"
+      })
+    ).resolves.toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+
+    expect(spawnMock.mock.calls[0][1]).toContain("--alternate-project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("--alternate-project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("--project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("vscode");
     expect(spawnMock.mock.calls[1][1]).toContain("--entity");
   });
 
