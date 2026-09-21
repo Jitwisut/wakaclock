@@ -84,7 +84,7 @@ const BODY = `# ${SITE_NAME} — full text
 
 > ${PRODUCT_ANSWER}
 
-${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
+${SITE_NAME} is a commercial, proprietary product developed by team Atoaxis.
 It is a hosted service currently in ${PRODUCT_STATUS.en.label}. ${PRODUCT_STATUS.en.signup} Customers do not deploy or maintain its infrastructure.
 
 Every page below is also published in Thai under /th with the same content, and each page
