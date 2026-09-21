@@ -3506,10 +3506,26 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
     // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
     // network failure without eyeballing the raw message.
-    let last_delivery_failure = ApiClient::new(config.clone())
-        .ok()
-        .and_then(|client| client.delivery_failure())
-        .map(delivery_failure_json);
+    // Diagnostics show this scope's failure first; a record migrated from the
+    // pre-scope file is still reported, but labelled so it is never read as the
+    // current server/account's state.
+    let last_delivery_failure = ApiClient::new(config.clone()).ok().and_then(|client| {
+        client
+            .delivery_failure()
+            .map(|failure| (failure, "current"))
+            .or_else(|| {
+                client
+                    .legacy_unscoped_delivery_failure()
+                    .map(|failure| (failure, "legacy_unscoped"))
+            })
+            .map(|(failure, scope)| {
+                let mut value = delivery_failure_json(failure);
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("scope".to_string(), serde_json::json!(scope));
+                }
+                value
+            })
+    });
     let latest_native_hook_event_at = latest_sidecar_event_time();
 
     let identity = build_identity();
