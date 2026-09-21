@@ -47,6 +47,7 @@ const logging_1 = require("./logging");
 const managedCli_1 = require("./managedCli");
 const secrets_1 = require("./secrets");
 const statusBar_1 = require("./statusBar");
+const singleFlight_1 = require("./singleFlight");
 let activeBufferManager;
 function activate(context) {
     console.log("[wakaclock] extension activated");
@@ -107,13 +108,13 @@ function activate(context) {
         statusBar.setConnectionState(key ? "connecting" : "needs-api-key");
     })();
     statusBar.start();
-    (0, commands_1.registerCommands)(context, configService, cliService, bufferManager, statusBar, aiIntegrations, () => void initializeConnection(context, cliService, aiIntegrations, logger));
+    (0, commands_1.registerCommands)(context, configService, cliService, bufferManager, statusBar, aiIntegrations, () => startConnectionBootstrap(context, cliService, aiIntegrations, logger));
     (0, events_1.registerEventSubscriptions)(context, configService, bufferManager, logger);
     void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
     // AI discovery/setup is deliberately detached from the editor heartbeat pipeline.
     // It starts only after an authenticated key is available and never blocks the
     // event listeners or their serialized buffer snapshots.
-    void initializeConnection(context, cliService, aiIntegrations, logger);
+    startConnectionBootstrap(context, cliService, aiIntegrations, logger);
     logger.debug("wakaclock extension activated");
 }
 async function warnIgnoredWorkspaceOverrides(context, logger) {
@@ -128,6 +129,19 @@ async function warnIgnoredWorkspaceOverrides(context, logger) {
     await context.globalState.update("atoaxis.workspaceOverrideWarning", true);
     logger.warn("ignored workspace-level AtoAxis security settings", { keys: ignored });
     void vscode.window.showWarningMessage("AtoAxis ignores workspace cliPath/serverUrl settings for security. Configure these values globally only.");
+}
+/**
+ * One verification retry loop per extension context.
+ *
+ * The loop below retries an unreachable server with a growing delay and never
+ * returns while the outage lasts. Activation starts one, and the "reconnect"
+ * command starts another — so each invocation used to add a loop that outlived
+ * it, each one spawning its own CLI. A second trigger now queues exactly one
+ * follow-up run instead.
+ */
+const connectionBootstrap = new singleFlight_1.SingleFlight();
+function startConnectionBootstrap(context, cliService, aiIntegrations, logger) {
+    void connectionBootstrap.run(() => initializeConnection(context, cliService, aiIntegrations, logger));
 }
 async function initializeConnection(context, cliService, aiIntegrations, logger) {
     try {

@@ -5,9 +5,8 @@
  * `showWarningMessage`: a refused-delivery snapshot would throw inside `refresh()`
  * and fall into the catch path, which hides exactly the mapping these tests pin.
  *
- * `it.fails(...)` marks an OFF-0x contract that is still broken (OFF-07 lands in
- * Phase 05). The phase that fixes it changes it to `it(...)`; never weaken the
- * assertion.
+ * Every contract here started as an ignored/failing baseline test in Phase 00 and
+ * is enforced since Phase 05. Never weaken an assertion to make one pass.
  */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -319,7 +318,7 @@ describe("offline status contract", () => {
 
   // OFF-07: every call starts another `wakaclock today` child process while the
   // previous one is still waiting on the network.
-  it.fails("status_bar_refresh_is_single_flight", async () => {
+  it("status_bar_refresh_is_single_flight", async () => {
     const pending = deferred<StatusBarSnapshot>();
     const getToday = vi
       .fn()
@@ -338,9 +337,88 @@ describe("offline status contract", () => {
     expect(getToday.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
+  it("activity_repaint_does_not_spawn_a_network_refresh_when_snapshot_exists", async () => {
+    const getToday = vi.fn().mockResolvedValue({
+      humanReadable: "1m",
+      totalSeconds: 60,
+      heartbeatCount: 2,
+      connection: { state: "online" as const },
+    });
+    const controller = new StatusBarController(createConfig, { getToday }, logger);
+
+    await controller.refresh();
+    expect(getToday).toHaveBeenCalledTimes(1);
+
+    // Local typing repaints from the snapshot already held; it must not start
+    // another CLI process per keystroke burst.
+    controller.setBufferedSecondsProvider(() => 30);
+    controller.handleActivity();
+    controller.handleActivity();
+    await flushMicrotasks();
+
+    expect(getToday).toHaveBeenCalledTimes(1);
+    expect(String(item.tooltip)).toContain("Local pending: 30s");
+  });
+
+  it("late_offline_response_cannot_replace_a_newer_online_snapshot", async () => {
+    const slowOffline = deferred<StatusBarSnapshot>();
+    const getToday = vi
+      .fn()
+      .mockImplementationOnce(() => slowOffline.promise)
+      .mockResolvedValue({
+        humanReadable: "5m",
+        totalSeconds: 300,
+        heartbeatCount: 9,
+        connection: { state: "online" as const, reachable: true },
+      });
+    const controller = new StatusBarController(createConfig, { getToday }, logger);
+
+    const stale = controller.refresh();
+    await flushMicrotasks();
+    // The key or server changed while that request was still running, so its
+    // answer describes an account this bar no longer shows.
+    controller.invalidateScope();
+    slowOffline.resolve({
+      humanReadable: "0s",
+      totalSeconds: 0,
+      heartbeatCount: 0,
+      queuedHeartbeats: 4,
+      connection: { state: "offline" as const, reachable: false },
+    });
+    await stale;
+    await flushMicrotasks();
+
+    expect(item.text).toBe("");
+    expect(item.show).not.toHaveBeenCalled();
+
+    // The next refresh, in the current scope, is what paints.
+    await controller.refresh();
+    expect(item.text).toBe("$(clock) 5m 0s");
+  });
+
+  it("dispose_ignores_late_results_and_clears_timers", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<StatusBarSnapshot>();
+    const getToday = vi.fn().mockReturnValue(pending.promise);
+    const controller = new StatusBarController(createConfig, { getToday }, logger);
+
+    controller.start();
+    await flushMicrotasks();
+    expect(getToday).toHaveBeenCalledTimes(1);
+
+    controller.dispose();
+    await vi.advanceTimersByTimeAsync(60_000);
+    pending.resolve({ humanReadable: "9m", totalSeconds: 540, heartbeatCount: 1 });
+    await flushMicrotasks();
+
+    // No further refreshes after dispose, and the late result repaints nothing.
+    expect(getToday).toHaveBeenCalledTimes(1);
+    expect(item.text).not.toContain("9m");
+  });
+
   // OFF-07 with the fake clock: a hung request must not let the 15s poll stack
   // one CLI process per tick.
-  it.fails("status_bar_polling_does_not_stack_while_a_refresh_is_in_flight", async () => {
+  it("status_bar_polling_does_not_stack_while_a_refresh_is_in_flight", async () => {
     vi.useFakeTimers();
     const pending = deferred<StatusBarSnapshot>();
     const getToday = vi.fn().mockImplementation(() => pending.promise);

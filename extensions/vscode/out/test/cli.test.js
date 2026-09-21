@@ -243,6 +243,135 @@ function mockChild(result = {}) {
             lastHeartbeatAt: 1770000000
         });
     });
+    // Offline-reliability OFF-02 (baseline in Phase 00, fixed in Phase 01): the text
+    // parser used to drop the `Server error:` line, so an unreachable server read as a
+    // verified idle day. `getToday` now reads `today --json`; the fake answers either.
+    (0, vitest_1.it)("offline_today_is_parsed_with_its_connection_state", async () => {
+        spawnMock.mockImplementation((_path, args) => mockChild({
+            stdout: args.includes("--json")
+                ? JSON.stringify({
+                    total_seconds: 0,
+                    human_readable: "0s",
+                    heartbeat_count: 0,
+                    queued_heartbeats: 0,
+                    error: "HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)",
+                    connection: { state: "offline", reachable: false, last_error_kind: "network" },
+                    queue: { depth: 0, seconds_today: 0, eligible_now: 0 }
+                })
+                : "Server error: HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)\nToday: 0s\nTotal seconds: 0\nConfirmed seconds: 0\nQueued seconds: 0\nHeartbeats: 0\n",
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        const snapshot = (await service.getToday("UTC"));
+        (0, vitest_1.expect)(snapshot.connection?.state).toBe("offline");
+    });
+    (0, vitest_1.it)("parses_structured_today_json", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            stdout: JSON.stringify({
+                confirmed_seconds: 300,
+                queued_seconds: 4,
+                total_seconds: 304,
+                human_readable: "5m 4s",
+                heartbeat_count: 42,
+                last_heartbeat_at: 1770000000,
+                covered_intervals: [],
+                discarded_seconds: 0,
+                agent_health: { installed: true, running: false },
+                queued_heartbeats: 2,
+                delivery_failure: {
+                    at: 1770000000,
+                    message: "HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+                    category: "network",
+                    message_code: "connect_failed"
+                },
+                connection: {
+                    state: "offline",
+                    reachable: false,
+                    authenticated: null,
+                    http_status: null,
+                    last_error_kind: "network",
+                    last_error_at: 1770000001
+                },
+                queue: { depth: 2, seconds_today: 4 }
+            }),
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        const snapshot = await service.getToday("Asia/Bangkok");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok", "--json"]);
+        (0, vitest_1.expect)(snapshot).toEqual({
+            humanReadable: "5m 4s",
+            totalSeconds: 304,
+            heartbeatCount: 42,
+            confirmedSeconds: 300,
+            queuedSeconds: 4,
+            lastHeartbeatAt: 1770000000,
+            agentHealth: { state: "installed (stopped)" },
+            discardedSeconds: 0,
+            queuedHeartbeats: 2,
+            delivery: "OFFLINE - HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+            connection: {
+                state: "offline",
+                reachable: false,
+                authenticated: null,
+                httpStatus: null,
+                lastErrorKind: "network",
+                lastErrorAt: 1770000001
+            }
+        });
+    });
+    (0, vitest_1.it)("labels a scoped network failure as offline, not a server refusal", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            stdout: JSON.stringify({
+                total_seconds: 0,
+                human_readable: "0s",
+                heartbeat_count: 0,
+                queued_heartbeats: 1,
+                // Phase 03 renamed the classified field to `category`; a pre-Phase-03
+                // binary emits `kind` instead and must keep working.
+                delivery_failure: { message: "connection refused", category: "network" },
+                connection: { state: "offline", reachable: false, last_error_kind: "network" }
+            }),
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        const snapshot = await service.getToday("UTC");
+        (0, vitest_1.expect)(snapshot.delivery).toBe("OFFLINE - connection refused");
+    });
+    (0, vitest_1.it)("falls_back_to_legacy_text_without_losing_timezone_behavior", async () => {
+        // A CLI without `today --json`, and an older one without `--timezone` either.
+        spawnMock.mockImplementation((_path, args) => {
+            if (args.includes("--json") || args.includes("--timezone")) {
+                return mockChild({
+                    stderr: `error: unexpected argument '${args.includes("--json") ? "--json" : "--timezone"}' found\n\nUsage: wakaclock today`,
+                    exitCode: 2
+                });
+            }
+            return mockChild({ stdout: "Today: 1m\nTotal seconds: 60\nHeartbeats: 3\n", exitCode: 0 });
+        });
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.getToday("Asia/Bangkok")).resolves.toEqual({
+            humanReadable: "1m",
+            totalSeconds: 60,
+            heartbeatCount: 3,
+            legacyCli: true
+        });
+        (0, vitest_1.expect)(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+            ["today", "--timezone", "Asia/Bangkok", "--json"],
+            ["today", "--timezone", "Asia/Bangkok"],
+            ["today"]
+        ]);
+        // The unsupported flag is remembered: the next refresh does not retry --json.
+        spawnMock.mockClear();
+        await service.getToday("Asia/Bangkok");
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok"]);
+    });
+    (0, vitest_1.it)("does not retry text mode when today --json fails for another reason", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stderr: "Error: API key was rejected by the server.", exitCode: 1 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await (0, vitest_1.expect)(service.getToday("UTC")).rejects.toThrow("API key was rejected");
+        (0, vitest_1.expect)(spawnMock).toHaveBeenCalledTimes(1);
+    });
     (0, vitest_1.it)("surfaces missing cli errors", async () => {
         spawnMock.mockImplementation(() => mockChild({
             error: new Error("spawn wakaclock-cli ENOENT")
@@ -262,7 +391,24 @@ function mockChild(result = {}) {
             const result = await service.syncAndVerifyApiKey("wcl_good");
             (0, vitest_1.expect)(result).toEqual({ mirroredToCliConfig: true, verified: true });
             (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["config", "set-key", "wcl_good"]);
-            (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).toEqual(["today"]);
+            (0, vitest_1.expect)(spawnMock.mock.calls[1][1]).toEqual(["today", "--json"]);
+        });
+        (0, vitest_1.it)("reports not verified when today --json says the key was rejected", async () => {
+            spawnMock
+                .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }))
+                .mockImplementationOnce(() => mockChild({
+                stdout: JSON.stringify({
+                    total_seconds: 0,
+                    human_readable: "0s",
+                    heartbeat_count: 0,
+                    connection: { state: "auth_rejected", reachable: true, http_status: 401 }
+                }),
+                exitCode: 0
+            }));
+            const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+            const result = await service.syncAndVerifyApiKey("wcl_revoked");
+            (0, vitest_1.expect)(result.verified).toBe(false);
+            (0, vitest_1.expect)(result.verifyError).toContain("rejected");
         });
         // The failure that made a wrong key undetectable: the key saves fine, and only a
         // real authenticated request reveals the server rejects it.

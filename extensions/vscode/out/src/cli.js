@@ -2,6 +2,29 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WakaclockCliService = void 0;
 const node_child_process_1 = require("node:child_process");
+const SERVER_CONNECTION_STATES = new Set([
+    "online",
+    "offline",
+    "auth_rejected",
+    "subscription_required",
+    "retryable_server_error",
+    "validation_rejected",
+    "unknown_error",
+]);
+function isUnsupportedArgument(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return /unexpected argument|found argument|usage:/i.test(message);
+}
+/** Same wording as the CLI's text mode: only a server refusal is "REFUSED". */
+function deliveryLabel(kind) {
+    if (kind === "network") {
+        return "OFFLINE";
+    }
+    if (kind === "server_error") {
+        return "RETRYING";
+    }
+    return "REFUSED";
+}
 class WakaclockCliService {
     getConfig;
     logger;
@@ -10,6 +33,8 @@ class WakaclockCliService {
     pluginId;
     executionSurface;
     clipboardCapability;
+    /** Set once a CLI rejects `today --json`, so later refreshes spawn it once. */
+    todayJsonUnsupported = false;
     constructor(getConfig, logger, 
     // Optional so existing 2-arg call sites (tests) keep working unauthenticated.
     getApiKey = () => Promise.resolve(undefined), managedCli, 
@@ -35,7 +60,8 @@ class WakaclockCliService {
             primaryCategory,
         ];
         // Never `--project`: that is a hard override, and the workspace-folder name is
-        // only a fallback for files the CLI cannot place in a repository or project.
+        // only a fallback for files the CLI cannot place in a repository or project
+        // (WakaTime's `--alternate-project`).
         if (primaryExtra.alternate_project) {
             args.push("--alternate-project", primaryExtra.alternate_project);
         }
@@ -137,6 +163,26 @@ class WakaclockCliService {
         if (timezone?.trim()) {
             args.push("--timezone", timezone.trim());
         }
+        if (!this.todayJsonUnsupported) {
+            try {
+                const result = await this.runCli([...args, "--json"]);
+                const parsed = this.parseJson(result.stdout.trim());
+                if (parsed && typeof parsed === "object" && typeof parsed.total_seconds === "number") {
+                    return this.snapshotFromTodayJson(parsed);
+                }
+                // A CLI that accepted the flag but printed text: read that output.
+                return this.parseTodayText(result.stdout, false);
+            }
+            catch (error) {
+                if (!isUnsupportedArgument(error)) {
+                    throw error;
+                }
+                this.todayJsonUnsupported = true;
+                this.logger.warn("wakaclock-cli does not support today --json; using text output", {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        }
         let legacyCli = false;
         let result;
         try {
@@ -156,12 +202,70 @@ class WakaclockCliService {
             });
             result = await this.runCli(["today"]);
         }
-        const lines = this.parseKeyValueLines(result.stdout);
+        return this.parseTodayText(result.stdout, legacyCli);
+    }
+    snapshotFromTodayJson(json) {
+        const optionalNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+        const connection = this.connectionFromJson(json.connection);
+        const failure = json.delivery_failure;
+        const agentHealth = json.agent_health;
+        const agentState = agentHealth && typeof agentHealth === "object"
+            ? "state" in agentHealth
+                ? String(agentHealth.state)
+                : agentHealth.running
+                    ? "running"
+                    : agentHealth.installed
+                        ? "installed (stopped)"
+                        : "not installed"
+            : undefined;
+        const snapshot = {
+            humanReadable: json.human_readable ?? "0s",
+            totalSeconds: json.total_seconds ?? 0,
+            heartbeatCount: json.heartbeat_count ?? 0,
+        };
+        const assign = (key, value) => {
+            if (value !== undefined) {
+                snapshot[key] = value;
+            }
+        };
+        assign("confirmedSeconds", optionalNumber(json.confirmed_seconds));
+        assign("queuedSeconds", optionalNumber(json.queued_seconds));
+        assign("lastHeartbeatAt", optionalNumber(json.last_heartbeat_at));
+        assign("agentHealth", agentState === undefined ? undefined : { state: agentState });
+        assign("coveredIntervals", Array.isArray(json.covered_intervals) && json.covered_intervals.length > 0
+            ? json.covered_intervals
+            : undefined);
+        assign("lastIncrementSeconds", optionalNumber(json.last_increment_seconds));
+        assign("lastIncrementSource", json.last_increment_source ?? undefined);
+        assign("discardedSeconds", optionalNumber(json.discarded_seconds));
+        assign("queuedHeartbeats", optionalNumber(json.queued_heartbeats));
+        assign("delivery", failure?.message || failure?.message_code
+            ? `${deliveryLabel(failure.category ?? failure.kind)} - ${failure.message}`
+            : undefined);
+        assign("connection", connection);
+        return snapshot;
+    }
+    connectionFromJson(value) {
+        if (!value || typeof value.state !== "string" || !SERVER_CONNECTION_STATES.has(value.state)) {
+            return undefined;
+        }
+        return {
+            state: value.state,
+            ...(value.reachable === undefined ? {} : { reachable: value.reachable }),
+            ...(value.authenticated === undefined ? {} : { authenticated: value.authenticated }),
+            ...(value.http_status === undefined ? {} : { httpStatus: value.http_status }),
+            ...(value.last_error_kind === undefined ? {} : { lastErrorKind: value.last_error_kind }),
+            ...(value.last_error_at === undefined ? {} : { lastErrorAt: value.last_error_at }),
+        };
+    }
+    parseTodayText(stdout, legacyCli) {
+        const lines = this.parseKeyValueLines(stdout);
         const queuedSeconds = lines["Queued seconds"];
         const confirmedSeconds = lines["Confirmed seconds"];
         const lastHeartbeatAt = lines["Last heartbeat at"];
         const agentState = lines.Agent;
         const coveredIntervals = this.parseJson(lines["Covered intervals"]);
+        const connectionState = lines.Connection;
         return {
             humanReadable: lines.Today ?? "0s",
             totalSeconds: Number(lines["Total seconds"] ?? "0"),
@@ -195,6 +299,9 @@ class WakaclockCliService {
                 ? {}
                 : { queuedHeartbeats: Number.parseInt(lines["Queued heartbeats"], 10) }),
             ...(lines.Delivery === undefined ? {} : { delivery: lines.Delivery }),
+            ...(connectionState !== undefined && SERVER_CONNECTION_STATES.has(connectionState)
+                ? { connection: { state: connectionState } }
+                : {}),
             ...(legacyCli ? { legacyCli: true } : {}),
         };
     }
@@ -273,8 +380,15 @@ class WakaclockCliService {
                 legacy.mirrorError = error instanceof Error ? error.message : String(error);
             }
             try {
-                await this.getToday();
-                legacy.verified = true;
+                const today = await this.getToday();
+                // `today --json` reports a rejected key as a typed state with exit 0;
+                // only text mode signals it by failing.
+                if (today.connection?.state === "auth_rejected") {
+                    legacy.verifyError = "API key was rejected by the server.";
+                }
+                else {
+                    legacy.verified = true;
+                }
             }
             catch (error) {
                 legacy.verifyError = error instanceof Error ? error.message : String(error);
