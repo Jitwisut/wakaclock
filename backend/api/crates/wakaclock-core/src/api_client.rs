@@ -1046,6 +1046,22 @@ impl ApiClient {
             .flatten()
     }
 
+    /// A refusal migrated from the pre-scope file, if one was ever recorded.
+    ///
+    /// Diagnostics only (`wakaclock doctor ai`): it cannot say which server or
+    /// account it was about, so it must never drive user-facing state.
+    pub fn legacy_unscoped_delivery_failure(&self) -> Option<DeliveryFailureRecord> {
+        let queue = Queue::open().ok()?;
+        Self::migrate_legacy_delivery_failure(&queue);
+        queue
+            .delivery_failure_for(&QueueScope {
+                destination: LEGACY_UNSCOPED_DESTINATION.to_string(),
+                owner: LEGACY_UNSCOPED_OWNER.to_string(),
+            })
+            .ok()
+            .flatten()
+    }
+
     /// Move a pre-scope refusal file into the queue database once, under a scope that
     /// is explicitly not any real origin/account, then delete the file. Nothing reads
     /// `LEGACY_UNSCOPED_*` for status; it exists so the record is not silently lost.

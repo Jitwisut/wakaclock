@@ -192,6 +192,21 @@ async fn hold_connection(mut stream: TcpStream) {
     }
 }
 
+/// (kind, http_status) of the single recorded delivery failure, if any.
+fn read_delivery_state(db: &Path) -> Option<(String, Option<i64>)> {
+    if !db.exists() {
+        return None;
+    }
+    let connection = Connection::open(db).ok()?;
+    connection
+        .query_row(
+            "SELECT kind, http_status FROM delivery_state LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+}
+
 fn expire_lease(db: &Path) {
     let connection = Connection::open(db).unwrap();
     connection
@@ -562,13 +577,15 @@ async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
     let input = event("codex-402");
     post_event_lenient(&discovery, &input, &home).await;
 
-    let failure_file = home.join(".wakaclock/last-delivery-failure.json");
-    timeout(Duration::from_secs(8), async {
+    // The refusal is recorded per origin + credential in the queue database
+    // (before offline-reliability Phase 03 it was a single unscoped JSON file).
+    let queue_db = home.join(".wakaclock/queue.db");
+    let recorded = timeout(Duration::from_secs(8), async {
         loop {
             // The broker claimed and processed the event, and the client recorded
             // the 402 rather than dropping the work.
-            if failure_file.exists() {
-                return;
+            if let Some(state) = read_delivery_state(&queue_db) {
+                return state;
             }
             sleep(Duration::from_millis(50)).await;
         }
@@ -576,11 +593,8 @@ async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
     .await
     .expect("402 was not recorded as a delivery failure");
 
-    let recorded = fs::read_to_string(&failure_file).unwrap();
-    assert!(
-        recorded.contains("402"),
-        "recorded failure should name the 402"
-    );
+    assert_eq!(recorded.0, "payment_402");
+    assert_eq!(recorded.1, Some(402));
     let sidecar_path = home.join(".wakaclock/ai-events.jsonl");
     assert!(
         sidecar_path.exists(),
