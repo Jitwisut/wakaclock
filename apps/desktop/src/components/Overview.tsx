@@ -8,6 +8,15 @@ interface OverviewProps {
   onRefresh: () => void;
 }
 
+/** Rough age of the cached confirmed total, for the stale label. */
+function formatAgo(timestamp: number | null | undefined): string {
+  if (!timestamp) return 'never';
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
 const categoryOrder = [
   'coding',
   'meeting',
@@ -17,6 +26,27 @@ const categoryOrder = [
   'building',
   'debugging',
 ] as const;
+
+/** How the cloud card reads for each typed state. A transport outage and a
+ *  rejected key are different problems and must not share one label. */
+function cloudLabel(state: DashboardSnapshot['connection_state'] | undefined): string {
+  switch (state) {
+    case 'online':
+      return 'Connected';
+    case 'offline':
+      return 'Offline';
+    case 'auth_rejected':
+      return 'Key rejected';
+    case 'subscription_required':
+      return 'Subscription required';
+    case 'retryable_server_error':
+      return 'Degraded';
+    case 'needs_api_key':
+      return 'Not connected';
+    default:
+      return 'Unknown';
+  }
+}
 
 export function Overview({ snapshot, loading, onRefresh }: OverviewProps) {
   const runtime = snapshot?.runtime;
@@ -37,14 +67,33 @@ export function Overview({ snapshot, loading, onRefresh }: OverviewProps) {
       </header>
 
       <div className="stats-grid">
-        <StatCard icon={<Clock3 />} label="Today" value={snapshot?.today_text ?? '0m'} subtext={`${snapshot?.heartbeat_count ?? 0} heartbeats`} />
+        <StatCard
+          icon={<Clock3 />}
+          label="Today"
+          // An unknown total is shown as unknown: reporting 0m while the server is
+          // unreachable is what made an outage look like a quiet day.
+          value={snapshot?.display_total_seconds == null ? 'Unknown' : (snapshot?.today_text ?? '0m')}
+          subtext={
+            snapshot?.display_total_seconds == null
+              ? 'no server total read yet'
+              : snapshot?.server_snapshot_stale
+                ? `${snapshot.heartbeat_count} heartbeats · last confirmed ${formatAgo(snapshot.last_confirmed_at)}`
+                : `${snapshot?.heartbeat_count ?? 0} heartbeats`
+          }
+        />
         <StatCard icon={<Activity />} label="This session" value={formatDuration(snapshot?.session_seconds ?? 0)} subtext="desktop tracker only" />
         <StatCard icon={<Monitor />} label="Foreground" value={runtime?.app_name ?? '—'} subtext={runtime?.category ? categoryLabel(runtime.category) : 'waiting for activity'} compact />
         <StatCard
-          icon={snapshot?.api_connected ? <Radio /> : <CloudOff />}
+          icon={snapshot?.connection_state === 'online' ? <Radio /> : <CloudOff />}
           label="Cloud"
-          value={snapshot?.api_connected ? 'Connected' : 'Offline'}
-          subtext={snapshot?.queued_seconds ? `${formatDuration(snapshot.queued_seconds)} queued` : 'offline queue protected'}
+          value={cloudLabel(snapshot?.connection_state)}
+          // Always the real count from the durable queue. "Queue protected" with
+          // no number said nothing about whether anything was actually held.
+          subtext={
+            snapshot?.queued_heartbeats
+              ? `${snapshot.queued_heartbeats} queued · ${formatDuration(snapshot.queued_seconds)}`
+              : 'nothing queued locally'
+          }
           compact
         />
       </div>

@@ -1,6 +1,6 @@
 # Phase 04 — Desktop Offline-Safe Tracking and Local Snapshot
 
-สถานะ: Planned  
+สถานะ: Implemented (cached snapshot เป็น in-memory ตามที่อนุมัติ)  
 ครอบคลุม: OFF-05, OFF-06  
 ขึ้นกับ: Phase 01–03
 
@@ -184,3 +184,68 @@ cargo test -p wakaclock-core --lib
 python3 scripts/duration-audit/golden.py
 ```
 
+
+## Implementation notes (2026-09-21)
+
+### Sampling แยกจาก delivery (OFF-06)
+
+- `engine.rs`: sampling loop ไม่ await network อีกแล้ว สร้าง `DeliveryIntent`
+  (immutable: activity + `captured_at` + `app_changed`) แล้วส่งเข้า bounded channel
+  (256) ผ่าน `DeliverySink`; delivery worker แยกอยู่บน thread ของตัวเองพร้อม
+  current-thread runtime — จำเป็นเพราะ `Queue` ถือ `rusqlite::Connection` ที่ไม่ใช่
+  `Send`/`Sync` จึง `tokio::spawn` ไม่ได้ (ปัญหาเดียวกับที่ broker ของ CLI เจอ).
+- เมื่อ channel เต็ม: sampler ไม่ block และไม่ทิ้ง boundary — เก็บ `pending_app_boundary`
+  ไว้ใช้ tick ถัดไป และนับ `coalesced_intents` เป็น counter.
+- `heartbeat.time` **และ** `heartbeat.date` มาจาก `captured_at` ทั้งคู่ retry ข้ามเที่ยงคืน
+  จึงไม่ย้ายกิจกรรมไปวันใหม่.
+- network/delivery error ไม่เปลี่ยน `TrackerStatus` เป็น `Unavailable` อีก มีเฉพาะ
+  OS tracker error เท่านั้นที่ทำได้.
+- `RuntimeSnapshot` แยก `last_captured_at` / `last_queued_at` / `last_delivered_at`
+  (`last_heartbeat_at` เดิมยังอยู่ = delivered).
+- Quit: tray เรียก `request_shutdown()` แล้วรอ (นอก UI thread, bounded 6 วินาที) ให้
+  worker flush intent ที่ค้างลง durable queue ก่อน `exit(0)`.
+- Seam ที่ใส่: `Environment` (idle/foreground/now) และ `Deliverer`. เทสต์ใช้ fake ทั้งคู่
+  จึงไม่อ่าน `~/.wakaclock/config.toml` จริงและไม่ยิง request ออกเครือข่าย
+  (จุดนี้พบตอนรันเทสต์รอบแรก: เทสต์เดิมเรียก delivery จริง).
+
+### Local snapshot (OFF-05)
+
+- `dashboard_snapshot` อ่าน durable queue ตาม scope: `queued_heartbeats`,
+  `queued_seconds` (interval union เดียวกับ CLI) และ `orphaned_heartbeats`.
+- cached confirmed snapshot เก็บใน `DesktopState` (in-memory ตามที่อนุมัติ) พร้อม
+  `scope_key` + `fetched_at`; เปลี่ยน account/origin แล้ว cache ถูกทิ้งโดยไม่แตะ queue.
+- `display_total_seconds` union confirmed intervals กับ queued intervals; ถ้าไม่มี
+  interval ทั้งสองฝั่งจึงบวกกัน; ถ้าไม่มี cache เลยเป็น `None` = unknown ไม่ใช่ 0.
+- UI: การ์ด Cloud ใช้ state ตาม Phase 01 (Connected/Offline/Key rejected/Subscription
+  required/Degraded) และแสดงจำนวน queue จริงแทนข้อความ `offline queue protected`
+  การ์ด Today แสดง `Unknown` พร้อมป้าย `last confirmed …` เมื่อ snapshot เก่า.
+
+### Tests
+
+Rust (`cargo test --manifest-path src-tauri/Cargo.toml --locked`): 17 passed —
+`sampling_ticks_continue_during_a_hanging_delivery`,
+`app_switch_during_outage_keeps_both_boundaries`,
+`network_failure_does_not_mark_native_tracker_unavailable`,
+`an_os_tracker_error_still_reports_unavailable`,
+`idle_and_private_transitions_do_not_create_offline_time`,
+`shutdown_persists_every_in_memory_intent_before_exit` และเทสต์ accounting เดิม.
+
+React (`npm test`): 7 passed + 1 expected fail — `offline_card_shows_queue_count_and_duration`,
+`unknown_confirmed_total_is_not_rendered_as_zero`, `stale_confirmed_total_is_labelled`,
+`tracker_error_and_cloud_offline_are_presented_separately`,
+`a_rejected_key_is_not_reported_as_an_outage`. ตัวที่ยัง fail คือ
+`desktop_refresh_is_single_flight` ของ Phase 05.
+
+Gates อื่น: `cargo clippy --all-targets -- -D warnings` สะอาด, `cargo fmt` สะอาด,
+`npm run typecheck`/`build` ผ่าน, workspace tests 858 passed,
+`python3 scripts/duration-audit/golden.py` → `total_error: 0.0`.
+
+### ที่ยังไม่ได้ทำใน Phase นี้
+
+- cached confirmed snapshot ไม่ persist ลงดิสก์ (ตามที่อนุมัติ) เปิดแอปใหม่ตอน server
+  ดับจะแสดง unknown จนต่อ server ได้ครั้งแรก.
+- ไม่มี feature flag `desktop_async_delivery_v1`: เส้นทางเดิม (await ใน loop) คือตัวบั๊ก
+  เอง การเก็บไว้เป็นทางเลือกจึงไม่ได้ลดความเสี่ยง rollback ใช้การ revert commit.
+- `Cargo.lock` ของ Desktop เปลี่ยน: ส่วนหนึ่งมาจาก dev-dependency `tokio`
+  (`macros`/`test-util`) ที่เทสต์ต้องใช้ และอีกส่วนเป็น drift ที่ค้างอยู่ก่อนแล้ว
+  (`notify`, `inotify`, `kqueue` จาก `wakaclock-core`). `cargo test --locked` ผ่าน.
