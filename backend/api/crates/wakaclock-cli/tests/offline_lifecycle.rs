@@ -12,6 +12,7 @@
 //! -- --include-ignored`.
 //! The phase that fixes a bug removes its attribute; never weaken the assertion.
 
+use fs2::FileExt;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::{
@@ -108,6 +109,8 @@ struct MockState {
     /// bearer → opaque account id. An unknown bearer receives 401.
     accounts: HashMap<String, String>,
     received: Vec<ReceivedHeartbeat>,
+    heartbeat_requests: usize,
+    bulk_heartbeat_requests: usize,
 }
 
 struct MockApi {
@@ -129,6 +132,8 @@ impl MockApi {
                 .map(|(key, account)| (key.to_string(), account.to_string()))
                 .collect(),
             received: Vec::new(),
+            heartbeat_requests: 0,
+            bulk_heartbeat_requests: 0,
         }));
         let shared = state.clone();
         let task = tokio::spawn(async move {
@@ -167,6 +172,11 @@ impl MockApi {
             .collect();
         ids.sort();
         ids
+    }
+
+    async fn heartbeat_request_counts(&self) -> (usize, usize) {
+        let state = self.state.lock().await;
+        (state.heartbeat_requests, state.bulk_heartbeat_requests)
     }
 }
 
@@ -257,6 +267,10 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
                 reply => error_reply(reply),
             },
             ("POST", "/api/v1/heartbeats" | "/api/v1/heartbeats.bulk", Some(_)) => {
+                state.heartbeat_requests += 1;
+                if path == "/api/v1/heartbeats.bulk" {
+                    state.bulk_heartbeat_requests += 1;
+                }
                 match state.heartbeats {
                     Reply::Ok => {
                         let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -790,6 +804,76 @@ async fn reconnect_with_the_same_key_drains_each_row_exactly_once() {
         Some((((t - 3.0) * 1000.0).round()) / 1000.0)
     );
     assert!(queue_rows(&home).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovered_offline_rows_flush_in_one_bounded_bulk_request() {
+    let home = TempHome::new("bulk-recovery");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let t = now();
+
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-bulk-1", t - 2.0).await,
+        1,
+    );
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-bulk-2", t - 1.0).await,
+        1,
+    );
+
+    let before = api.heartbeat_request_counts().await;
+    api.set_online(true).await;
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    let after = api.heartbeat_request_counts().await;
+
+    assert_eq!(after.0 - before.0, 1, "flush should make one HTTP request");
+    assert_eq!(after.1 - before.1, 1, "flush should use the bulk endpoint");
+    assert_eq!(
+        api.received_ids().await,
+        sorted(&["hb-bulk-1", "hb-bulk-2"])
+    );
+    assert!(queue_rows(&home).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sync_lock_contention_is_deferred_and_does_not_drain_the_queue() {
+    let home = TempHome::new("sync-already-running");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-sync-contended", now() - 1.0).await,
+        1,
+    );
+    api.set_online(true).await;
+
+    let lock_path = home.path().join(".wakaclock/ai-sync.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    let sync = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["sync", "--agent", "codex", "--automatic", "--json"],
+    )
+    .await;
+    assert!(sync.success, "{}", sync.describe());
+    let json = sync.json();
+    assert_eq!(json["status"], "deferred", "{}", sync.describe());
+    assert_eq!(json["deferred"], true, "{}", sync.describe());
+    assert_eq!(json["last_error"], "already_running", "{}", sync.describe());
+    assert!(api.received_ids().await.is_empty());
+    assert_eq!(queue_rows(&home).len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

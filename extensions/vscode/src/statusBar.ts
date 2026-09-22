@@ -12,6 +12,7 @@ import type { ActivitySegment } from "./types";
 import { unionSeconds } from "./activity";
 import { SingleFlight } from "./singleFlight";
 import { localTimezone } from "./utils";
+import type { AiDiagnosticsSnapshot } from "./aiDetectionSelfTest";
 
 const STATUS_REFRESH_MS = 15_000;
 
@@ -87,6 +88,31 @@ function uiStateFor(server: ServerConnectionState | undefined, queued: boolean):
   }
 }
 
+function availableNumber(
+  measurement?: { availability: string; value: number | null },
+): number | undefined {
+  return measurement?.availability === "available" && typeof measurement.value === "number"
+    ? measurement.value
+    : undefined;
+}
+
+function epochSecondsToIso(value?: number | null): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return new Date(value * 1000).toISOString();
+}
+
+function summarizeAdapterCoverage(snapshot: AiDiagnosticsSnapshot): string {
+  const detected = snapshot.adapters.filter(
+    (adapter) => adapter.detected.availability === "available" && adapter.detected.value === true,
+  );
+  const enabled = detected.filter(
+    (adapter) => adapter.enabled.availability === "available" && adapter.enabled.value === true,
+  );
+  const verified = enabled.filter((adapter) => adapter.verification === "verified");
+  const verification = verified.length > 0 ? ` · ${verified.length} verified` : "";
+  return `${enabled.length}/${detected.length} detected adapters enabled${verification}`;
+}
+
 export class StatusBarController implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
   private interval?: NodeJS.Timeout;
@@ -95,6 +121,7 @@ export class StatusBarController implements vscode.Disposable {
   private legacyCliReported = false;
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
   private lastBrokerStatus?: BrokerStatusSnapshot;
+  private lastAiDiagnostics?: AiDiagnosticsSnapshot;
   private getBufferedSeconds: () => number = () => 0;
   private getBufferedSegments: () => ActivitySegment[] = () => [];
   private connectionState: ConnectionState = "connecting";
@@ -104,7 +131,7 @@ export class StatusBarController implements vscode.Disposable {
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
     private readonly cli: Pick<WakaclockCliService, "getToday"> &
-      Partial<Pick<WakaclockCliService, "getBrokerStatus">>,
+      Partial<Pick<WakaclockCliService, "getBrokerStatus" | "getAiDiagnosticsSnapshot">>,
     private readonly logger: Logger,
     private readonly getApiKey?: () => Thenable<string | undefined>,
   ) {
@@ -193,7 +220,7 @@ export class StatusBarController implements vscode.Disposable {
 
     // On-demand sync status is local and remains useful while the hosted API is
     // offline. Older embedded CLI adapters may not expose it, so this is additive.
-    await this.refreshBrokerStatus();
+    await this.refreshAiStatus();
 
     try {
       const snapshot = await this.cli.getToday(localTimezone());
@@ -298,8 +325,20 @@ export class StatusBarController implements vscode.Disposable {
       "state" in snapshot.agentHealth
         ? String((snapshot.agentHealth as { state?: unknown }).state)
         : undefined;
-    const brokerState = this.lastBrokerStatus
-      ? `on-demand · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+    const brokerState = this.lastAiDiagnostics
+      ? `on-demand · pending ${availableNumber(this.lastAiDiagnostics.broker.pending) ?? "unknown"} · retry ${availableNumber(this.lastAiDiagnostics.broker.retry) ?? "unknown"} · dead-letter ${availableNumber(this.lastAiDiagnostics.broker.dead_letter) ?? "unknown"}`
+      : this.lastBrokerStatus
+        ? `on-demand · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+        : undefined;
+    const lastSyncAt =
+      this.lastAiDiagnostics?.broker.last_delivery_at ??
+      epochSecondsToIso(
+        this.lastBrokerStatus?.last_delivery_at ??
+          this.lastBrokerStatus?.last_processed_at ??
+          this.lastBrokerStatus?.last_received_at,
+      );
+    const adapterCoverage = this.lastAiDiagnostics
+      ? summarizeAdapterCoverage(this.lastAiDiagnostics)
       : undefined;
     const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
     if (this.connectionState === "needs-api-key") {
@@ -348,13 +387,25 @@ export class StatusBarController implements vscode.Disposable {
       (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
       (agentState ? `\nAgent: ${agentState}` : "") +
       (brokerState ? `\nAI sync: ${brokerState}` : "") +
+      (brokerState ? `\nAI last sync: ${lastSyncAt ?? "never"}` : "") +
+      (adapterCoverage ? `\nAI adapter coverage: ${adapterCoverage}` : "") +
       (brokerError ? `\nAI sync last error: ${brokerError}` : "");
   }
 
-  private async refreshBrokerStatus(): Promise<void> {
-    if (!this.cli.getBrokerStatus) {
-      return;
+  private async refreshAiStatus(): Promise<void> {
+    if (this.cli.getAiDiagnosticsSnapshot) {
+      try {
+        this.lastAiDiagnostics = await this.cli.getAiDiagnosticsSnapshot();
+        this.lastBrokerStatus = undefined;
+        return;
+      } catch (error) {
+        this.lastAiDiagnostics = undefined;
+        this.logger.debug("failed to read AI diagnostics status", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
+    if (!this.cli.getBrokerStatus) return;
     try {
       this.lastBrokerStatus = await this.cli.getBrokerStatus();
     } catch (error) {

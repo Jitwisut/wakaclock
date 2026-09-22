@@ -20,6 +20,7 @@ export interface AiDiagnosticsSnapshot {
     pending: { availability: string; value: number | null };
     retry: { availability: string; value: number | null };
     dead_letter: { availability: string; value: number | null };
+    last_delivery_at?: string | null;
     last_error_code?: string | null;
   };
   adapters: Array<{
@@ -28,6 +29,8 @@ export interface AiDiagnosticsSnapshot {
     detected: { availability: string; value: boolean | null };
     enabled: { availability: string; value: boolean | null };
     runtime_health: string;
+    verification?: string;
+    last_evidence_at?: string | null;
     diagnostic_code?: string | null;
   }>;
 }

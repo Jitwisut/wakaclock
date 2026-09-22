@@ -670,18 +670,7 @@ fn uninstall_adapter(
     home: &Path,
 ) -> (String, Option<String>) {
     match runtime {
-        AdapterRuntime::Codex => {
-            let path = home.join(".codex/config.toml");
-            let existing = fs::read_to_string(&path).unwrap_or_default();
-            let updated = remove_codex_managed_hooks(&existing);
-            if updated == existing {
-                ("not_installed".into(), Some("no AtoAxis Codex hook block found".into()))
-            } else if let Err(error) = write_text_atomically(&path, &updated) {
-                ("failed".into(), Some(error.to_string()))
-            } else {
-                ("uninstalled".into(), Some(format!("updated {}", path.display())))
-            }
-        }
+        AdapterRuntime::Codex => uninstall_codex(home),
         AdapterRuntime::ClaudeCode => run_plugin_uninstall(
             manifest
                 .executable
@@ -716,6 +705,53 @@ fn run_plugin_uninstall(program: &str, args: &[&str], home: &Path) -> (String, O
     match run_external(&path, args, home) {
         Ok(()) => ("uninstalled".into(), None),
         Err(error) => ("failed".into(), Some(error)),
+    }
+}
+
+fn uninstall_codex(home: &Path) -> (String, Option<String>) {
+    let config_path = home.join(".codex/config.toml");
+    let existing = fs::read_to_string(&config_path).unwrap_or_default();
+    let updated = remove_codex_managed_hooks(&existing);
+    let config_result = if updated != existing {
+        write_text_atomically(&config_path, &updated)
+            .map(|_| Some(format!("updated {}", config_path.display())))
+            .map_err(|error| error.to_string())
+    } else {
+        Ok(None)
+    };
+
+    let executable = resolve_and_probe_executable(&["codex".to_string()], Some("--version"));
+    let plugin_result = executable
+        .filter(|_| codex_supports_plugins(home))
+        .map(|path| {
+            let removed = run_external(
+                &path,
+                &["plugin", "remove", "atoaxis-heartbeat@atoaxis-local"],
+                home,
+            );
+            let _ = run_external(
+                &path,
+                &["plugin", "marketplace", "remove", "atoaxis-local"],
+                home,
+            );
+            removed
+        });
+
+    match (config_result, plugin_result) {
+        (Err(error), _) => ("failed".into(), Some(error)),
+        // Codex reports a missing plugin as a non-zero command. Uninstall is
+        // intentionally idempotent, so a missing registration is not a setup
+        // failure; a managed config write error above remains a real failure.
+        (Ok(detail), Some(Err(_error))) if detail.is_none() => (
+            "not_installed".into(),
+            Some("no AtoAxis Codex plugin registration found".into()),
+        ),
+        (Ok(detail), _) if detail.is_some() => ("uninstalled".into(), detail),
+        (Ok(_), Some(Ok(()))) => ("uninstalled".into(), Some("Codex plugin removed".into())),
+        (Ok(_), _) => (
+            "not_installed".into(),
+            Some("no AtoAxis Codex hook or plugin found".into()),
+        ),
     }
 }
 
@@ -1243,6 +1279,9 @@ fn verify_runtime_resources(root: &Path, runtime: AdapterRuntime) -> Result<(), 
             "plugins/atoaxis-heartbeat/hooks/hooks.json",
         ],
         AdapterRuntime::Codex => &[
+            "codex/.codex-plugin/plugin.json",
+            "codex/hooks/hooks.json",
+            "codex/.agents/plugins/marketplace.json",
             "codex/heartbeat-hook.sh",
             "codex/git-sweep-before.sh",
             "codex/git-sweep-after.sh",
@@ -1345,20 +1384,32 @@ fn configure_gemini(
     home: &Path,
 ) -> Result<Option<String>, String> {
     let extension = bundle.join("gemini-cli");
-    // `--consent` skips Gemini's interactive "do you trust this folder? [y/N]" prompt.
-    // Safe to pass here and nowhere earlier: `run` only reaches an adapter's configure
-    // step after AtoAxis's own per-agent consent gate has recorded `HookConsent::Enabled`
-    // (an explicit `--yes`, or a prior stored opt-in). Without it the child blocks on a
+    // `--consent` skips Gemini's extension security confirmation. Safe to pass here and
+    // nowhere earlier: `run` only reaches an adapter's configure step after AtoAxis's
+    // own per-agent consent gate has recorded `HookConsent::Enabled` (an explicit
+    // `--yes`, or a prior stored opt-in). The separate workspace-trust check is handled
+    // by the documented headless environment below; without it the child blocks on a
     // prompt that a null stdin can never answer — see `EXTERNAL_INSTALL_TIMEOUT`.
-    run_external(
+    // Gemini's extension installer checks the source directory as a workspace
+    // before it will create the managed extension.  The setup command is a
+    // non-interactive, explicitly consented operation, so use Gemini's
+    // documented headless trust switch for this child process only.  This does
+    // not weaken trust for the user's later Gemini sessions.
+    run_external_with_timeout_env(
         executable,
         &[
             "extensions",
             "install",
             &extension.display().to_string(),
             "--consent",
+            // The extension's settings wizard is interactive even when the
+            // security prompt is consented. AtoAxis has no settings to inject;
+            // skip that wizard so setup remains a bounded one-shot operation.
+            "--skip-settings",
         ],
         home,
+        GEMINI_INSTALL_TIMEOUT,
+        &[("GEMINI_CLI_TRUST_WORKSPACE", "true")],
     )?;
     Ok(None)
 }
@@ -1383,11 +1434,32 @@ fn configure_script(bundle: &Path, adapter: &str, home: &Path) -> Result<Option<
 /// it simply waits. Without a deadline `wakaclock ai setup` hangs forever, and
 /// `--all` hangs on the first such agent and never reaches the rest.
 const EXTERNAL_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+const GEMINI_INSTALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String> {
+    run_external_with_timeout(program, args, home, EXTERNAL_INSTALL_TIMEOUT)
+}
+
+fn run_external_with_timeout(
+    program: &Path,
+    args: &[&str],
+    home: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    run_external_with_timeout_env(program, args, home, timeout, &[])
+}
+
+fn run_external_with_timeout_env(
+    program: &Path,
+    args: &[&str],
+    home: &Path,
+    timeout: Duration,
+    environment: &[(&str, &str)],
+) -> Result<(), String> {
     let mut child = Command::new(program)
         .args(args)
         .env("HOME", home)
+        .envs(environment.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1413,7 +1485,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
         buffer
     });
 
-    let deadline = Instant::now() + EXTERNAL_INSTALL_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1424,7 +1496,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
                     return Err(format!(
                         "{} did not finish within {}s",
                         program.display(),
-                        EXTERNAL_INSTALL_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     ));
                 }
                 thread::sleep(Duration::from_millis(100));
@@ -1483,6 +1555,41 @@ fn configure_codex(bundle: &Path, home: &Path) -> Result<Option<String>, String>
         ));
     }
 
+    // Current Codex releases can install a local plugin marketplace. Prefer that
+    // durable, versioned registration when the binary exposes the command, while
+    // retaining the marker-bounded TOML hooks for older CLI/Desktop builds.
+    let plugin_manifest = hook_dir.join(".codex-plugin/plugin.json");
+    let plugin_hooks = hook_dir.join("hooks/hooks.json");
+    let marketplace = hook_dir.join(".agents/plugins/marketplace.json");
+    if plugin_manifest.is_file()
+        && plugin_hooks.is_file()
+        && marketplace.is_file()
+        && codex_supports_plugins(home)
+    {
+        let executable = resolve_and_probe_executable(&["codex".to_string()], Some("--version"))
+            .ok_or("Codex executable disappeared before plugin setup")?;
+        run_external(
+            &executable,
+            &[
+                "plugin",
+                "marketplace",
+                "add",
+                // The descriptor is under the Codex-specific bundle root;
+                // passing the parent would resolve Claude's marketplace first.
+                &hook_dir.display().to_string(),
+            ],
+            home,
+        )?;
+        run_external(
+            &executable,
+            &["plugin", "add", "atoaxis-heartbeat@atoaxis-local", "--json"],
+            home,
+        )?;
+        return Ok(Some(
+            "installed Codex plugin from the local marketplace".into(),
+        ));
+    }
+
     let config_path = home.join(".codex/config.toml");
     let existing = fs::read_to_string(&config_path).unwrap_or_default();
     let updated = ensure_codex_features(existing);
@@ -1493,6 +1600,22 @@ fn configure_codex(bundle: &Path, home: &Path) -> Result<Option<String>, String>
     } else {
         Ok(Some("Codex managed hooks already configured".into()))
     }
+}
+
+fn codex_supports_plugins(home: &Path) -> bool {
+    let Some(executable) = resolve_and_probe_executable(&["codex".to_string()], Some("--version"))
+    else {
+        return false;
+    };
+    Command::new(executable)
+        .args(["plugin", "--help"])
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn ensure_codex_features(mut config: String) -> String {

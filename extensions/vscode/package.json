@@ -2,7 +2,7 @@
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis — Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "atoaxis",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/Jitwisut/wakaclock#readme",

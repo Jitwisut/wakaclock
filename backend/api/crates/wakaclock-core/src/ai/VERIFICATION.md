@@ -1,5 +1,46 @@
 # Phase 8 end-to-end verification (2026-08-14)
 
+## Current on-demand migration checkpoint (2026-09-22)
+
+The installed macOS client is now `wakaclock 0.2.0` and the VS Code extension is
+`atoaxis.atoaxis-vscode@0.2.0`. Runtime mode is `on_demand`: adapter hooks invoke a
+bounded CLI pass, SQLite uses WAL, and no LaunchAgent, local collector process or
+collector socket is registered. `launchctl` does not find
+`com.atoaxis.wakaclock.agent` after setup, sync, extension reinstall, or the final
+lifecycle check.
+
+The five implementation-backed adapters are installed/configured on this machine:
+Claude Code 2.1.266, Codex CLI 0.155.0-alpha.9.2 (local marketplace plugin
+`atoaxis-heartbeat@atoaxis-local` 0.2.0), Gemini CLI 0.58.0, Kilo Code 7.5.13, and
+Kimi Code CLI 2.0.2. Their registry/diagnostic state remains `scaffold` or
+`unverified` until a fresh exact-runtime mutation campaign is run; installing a hook
+is not treated as a live certification. Cursor and generic MCP remain compatibility
+scaffolds, and the other registry entries remain unverified/unsupported as declared.
+
+The pre-existing heartbeat backlog was drained with bounded manual sync passes. Final
+local reconciliation was: heartbeat queue 0, inbox 0, AI-usage pending/retry 0,
+heartbeat/AI dead-letter 0. There are 111 metadata-only usage conflict records in the
+separate local quarantine: each is a stable provider ID whose later sanitized payload
+disagreed with an already delivered payload. The original delivery is preserved, the
+later record is not replayed or overwritten, and the conflict count is exposed by
+`wakaclock sync --json` for review.
+
+Checks completed for this checkpoint:
+
+- `wakaclock-core` unit tests: 338 passed; CLI offline lifecycle tests: 35 passed.
+- VS Code lint/tests: 15 files and 165 tests passed; VSIX checksum matches its
+  embedded CLI manifest (`darwin-arm64`, CLI 0.2.0).
+- Ten concurrent bounded sync processes produced one owner and nine
+  `deferred_reason=already_running` results without a SQLite lock or lost queue row.
+- Privacy scan of local logs/artifacts found no prompt, response, patch body or raw
+  hook payload keys (allowlisted `source` fields are enum metadata only).
+
+The remaining acceptance gate is live certification, not collector architecture:
+login/consent and deterministic create/edit/delete/rename scenarios must be run for
+each installed agent, then backend readback and the WakaTime comparison campaign can
+promote exact tuples to `verified`. No credentials or raw transcript content was
+stored by this checkpoint.
+
 This documents an actual run, not a description of intended behavior. `wakaclock ai
 sync` was pointed at a real, live Claude Code session (the one that wrote this
 codebase) against a local `wakaclock-server` + ClickHouse (docker-compose).

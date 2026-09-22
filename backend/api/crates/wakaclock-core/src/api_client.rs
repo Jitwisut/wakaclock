@@ -881,34 +881,76 @@ impl ApiClient {
         let mut flushed = 0;
         let mut stopped_because = None;
 
-        for (id, payload) in pending {
-            // Queue entries may have been written by a pre-policy client. Reapply the
-            // boundary at the broker flush so an upgrade cannot publish a stale inferred
-            // name simply because it was already offline when the client was upgraded.
-            let payload = sanitize_queued_heartbeat_payload(payload);
-            match self.post_json("/api/v1/heartbeats", &payload).await {
-                Ok(()) => {
-                    queue.remove(id)?;
-                    flushed += 1;
+        // Queue entries may have been written by a pre-policy client. Reapply the
+        // boundary at the broker flush so an upgrade cannot publish a stale inferred
+        // name simply because it was already offline when the client was upgraded.
+        let pending: Vec<_> = pending
+            .into_iter()
+            .map(|(id, payload)| (id, sanitize_queued_heartbeat_payload(payload)))
+            .collect();
+        let payloads: Vec<_> = pending.iter().map(|(_, payload)| payload.clone()).collect();
+
+        let delivery = match payloads.as_slice() {
+            [] => Ok(()),
+            [payload] => self.post_json("/api/v1/heartbeats", payload).await,
+            payloads => self.post_json("/api/v1/heartbeats.bulk", payloads).await,
+        };
+
+        match delivery {
+            Ok(()) => {
+                for (id, _) in &pending {
+                    queue.remove(*id)?;
                 }
-                Err(error) => {
-                    stopped_because = Some(error.to_string());
-                    // A queue flush is also a delivery attempt. Persist the latest
-                    // failure so status-bar clients do not keep showing an old
-                    // outage after the queue has recovered, or hide a new one
-                    // behind a previous success.
-                    self.record_delivery_failure(queue, &error);
+                flushed = pending.len();
+            }
+            Err(error)
+                if is_credential_delivery_error(&error)
+                    || is_retryable_heartbeat_delivery_error(&error) =>
+            {
+                stopped_because = Some(error.to_string());
+                self.record_delivery_failure(queue, &error);
+                for (id, _) in &pending {
                     if is_credential_delivery_error(&error) {
                         // Credentials may be repaired. Keep the only durable copy and
                         // pause this owner-bound queue rather than deleting activity.
-                        queue.mark_retry_after(id, Some(300))?;
-                    } else if is_retryable_heartbeat_delivery_error(&error) {
-                        queue.mark_retry_after(id, retry_after_seconds(&error))?;
+                        queue.mark_retry_after(*id, Some(300))?;
                     } else {
-                        queue.dead_letter(id, &error.to_string())?;
+                        queue.mark_retry_after(*id, retry_after_seconds(&error))?;
                     }
-                    queue.release_claim(&lease_owner)?;
-                    break;
+                }
+            }
+            Err(error) if pending.len() > 1 => {
+                // Bulk validation is atomic, but one malformed legacy row must not
+                // dead-letter valid siblings. Isolate permanent failures only; normal
+                // recovery stays one bounded bulk request.
+                self.record_delivery_failure(queue, &error);
+                for (id, payload) in &pending {
+                    match self.post_json("/api/v1/heartbeats", payload).await {
+                        Ok(()) => {
+                            queue.remove(*id)?;
+                            flushed += 1;
+                        }
+                        Err(item_error) => {
+                            stopped_because.get_or_insert_with(|| item_error.to_string());
+                            self.record_delivery_failure(queue, &item_error);
+                            if is_credential_delivery_error(&item_error) {
+                                queue.mark_retry_after(*id, Some(300))?;
+                                break;
+                            } else if is_retryable_heartbeat_delivery_error(&item_error) {
+                                queue.mark_retry_after(*id, retry_after_seconds(&item_error))?;
+                                break;
+                            } else {
+                                queue.dead_letter(*id, &item_error.to_string())?;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                stopped_because = Some(error.to_string());
+                self.record_delivery_failure(queue, &error);
+                if let Some((id, _)) = pending.first() {
+                    queue.dead_letter(*id, &error.to_string())?;
                 }
             }
         }

@@ -18,6 +18,7 @@ import type {
 import { Logger } from "./logging";
 import type { CliPathResolver } from "./managedCli";
 import type { AiDiagnosticsSnapshot } from "./aiDetectionSelfTest";
+import { CliScheduler } from "./cliScheduler";
 
 const SERVER_CONNECTION_STATES: ReadonlySet<string> = new Set<ServerConnectionState>([
     "online",
@@ -81,6 +82,8 @@ export class WakaclockCliService {
     private clipboardCapability: boolean | undefined;
     /** Set once a CLI rejects `today --json`, so later refreshes spawn it once. */
     private todayJsonUnsupported = false;
+    /** All CLI processes spawned by this extension activation share one lane. */
+    private readonly scheduler = new CliScheduler();
     public constructor(
         private readonly getConfig: () => WakaclockConfigSnapshot,
         private readonly logger: Logger,
@@ -631,6 +634,17 @@ export class WakaclockCliService {
         stdinPayload?: string,
         apiKeyOverride?: string,
     ): Promise<CliResult> {
+        return this.scheduler.schedule(
+            () => this.executeCli(args, stdinPayload, apiKeyOverride),
+            this.coalesceKey(args, stdinPayload, apiKeyOverride),
+        );
+    }
+
+    private async executeCli(
+        args: string[],
+        stdinPayload?: string,
+        apiKeyOverride?: string,
+    ): Promise<CliResult> {
         const config = this.getConfig();
         const cliPath = this.managedCli
             ? await this.managedCli.ensureReady()
@@ -715,6 +729,26 @@ export class WakaclockCliService {
             }
             child.stdin.end();
         });
+    }
+
+    /** Only idempotent reads and bounded automatic reconciliation may coalesce. */
+    private coalesceKey(
+        args: string[],
+        stdinPayload?: string,
+        apiKeyOverride?: string,
+    ): string | undefined {
+        if (stdinPayload || apiKeyOverride) return undefined;
+        if (
+            args[0] === "today" ||
+            args[0] === "status" ||
+            (args[0] === "broker" && args[1] === "status") ||
+            (args[0] === "ai" && args[1] === "doctor") ||
+            (args[0] === "sync" && args.includes("--automatic")) ||
+            (args[0] === "editor-observation" && args[1] === "status")
+        ) {
+            return args.join("\u0000");
+        }
+        return undefined;
     }
 
     private topologyEnvironment(): Record<string, string> {

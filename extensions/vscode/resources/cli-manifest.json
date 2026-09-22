@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "cliVersion": "0.2.0",
+  "protocolVersion": 1,
+  "target": "darwin-arm64",
+  "binary": "wakaclock",
+  "sha256": "5b33485d09cb156e18ab6b803c9967820c27f0b09fe3fff6df8bfc6935e0ec5d"
+}

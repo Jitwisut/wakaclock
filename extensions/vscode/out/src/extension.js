@@ -66,6 +66,9 @@ function activate(context) {
     const bufferManager = new buffer_1.HeartbeatBufferManager(() => configService.getSnapshot(), cliService, logger, () => {
         statusBar.handleHeartbeatSent();
         presenceHeartbeat();
+        void cliService.syncAiActivity().catch((error) => logger.debug("on-demand AI sync after heartbeat was deferred", {
+            error: error instanceof Error ? error.message : String(error),
+        }));
     }, undefined, () => statusBar.handleActivity());
     activeBufferManager = bufferManager;
     statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
@@ -95,10 +98,8 @@ function activate(context) {
             error: error instanceof Error ? error.message : String(error),
         }));
     }));
-    // The broker is a separate process and may start before VS Code emits its
-    // first configuration-change event. Persist the initial setting as well so a
-    // user who has disabled automatic hook installation is protected immediately
-    // on activation, including after an extension update or broker restart.
+    // Persist the hook policy on activation so a user who has disabled automatic
+    // hook installation is protected immediately after an extension update.
     void (0, agentSetup_1.writeHookAutoInstallPolicy)(os.homedir(), configService.getSnapshot().autoInstallAgentHooks ?? true).catch((error) => logger.debug("agentSetup: could not persist initial automatic hook policy", {
         error: error instanceof Error ? error.message : String(error),
     }));
@@ -166,16 +167,10 @@ async function initializeConnection(context, cliService, aiIntegrations, logger)
                     await (0, secrets_1.setStoredApiKey)(context.secrets, verifiedKey);
                 }
                 await (0, secrets_1.clearPendingApiKey)(context.secrets);
-                // Existing consent survives extension updates. Re-installing the per-user
-                // manifest points it at the newly managed binary before an old version can be
-                // removed, without adding a new integration or prompting again.
-                const statuses = await aiIntegrations.getStatus();
-                if (statuses.some((status) => status.enabled)) {
-                    void cliService.installAgent().catch((error) => logger.warn("could not refresh the existing AtoAxis agent service", {
-                        error: error instanceof Error ? error.message : String(error)
-                    }));
-                }
                 void cliService.getStatus().catch(() => undefined);
+                void cliService.syncAiActivity().catch((error) => logger.debug("on-demand AI sync at extension activation was deferred", {
+                    error: error instanceof Error ? error.message : String(error),
+                }));
                 await maybeOfferAiSetup(context, aiIntegrations, logger);
                 return;
             }

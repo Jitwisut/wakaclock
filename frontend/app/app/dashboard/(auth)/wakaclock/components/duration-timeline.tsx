@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { getDurations } from '@/lib/wakaclock/endpoints';
 import { formatEpochRange, todayDateString } from '@/lib/wakaclock/format';
@@ -30,8 +30,11 @@ import {
   timelineProjectTotals,
 } from '@/lib/wakaclock/project-timeline-colors';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
-import type { DurationBlock } from '@/lib/wakaclock/types';
+import { buildTimelineSessions } from '@/lib/wakaclock/timeline-sessions';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import { SessionTimelineTooltip } from './session-timeline-tooltip';
+import sessionStyles from './session-timeline-tooltip.module.css';
 
 function secondsSinceMidnight(epochSeconds: number) {
   const d = new Date(epochSeconds * 1000);
@@ -54,6 +57,7 @@ const PROJECT_ROW_HEIGHT = 48;
 export function DurationTimeline() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
+  const [activeSession, setActiveSession] = React.useState<null | string>(null);
   const [timezone, setTimezone] = React.useState<null | string>(null);
 
   React.useEffect(() => {
@@ -76,9 +80,10 @@ export function DurationTimeline() {
       .filter((block) => isUnassignedTimelineProject(block.project))
       .reduce((total, block) => total + block.duration_seconds, 0)
   );
-  const projects = orderedTimelineProjects(visibleBlocks.map((block) => block.project));
+  const sessions = buildTimelineSessions(visibleBlocks);
+  const projects = orderedTimelineProjects(sessions.map((session) => session.project));
   const projectTotals = timelineProjectTotals(
-    visibleBlocks.map((block) => ({
+    sessions.map((block) => ({
       durationSeconds: block.duration_seconds,
       project: block.project,
     }))
@@ -154,6 +159,10 @@ export function DurationTimeline() {
                 </div>
               </dl>
             )}
+            <p className="text-muted-foreground text-xs">
+              Each block groups a project’s activity within 5 minutes. Recorded time excludes the
+              gaps.
+            </p>
             <TooltipProvider>
               <div className="overflow-x-auto pb-1">
                 <div className="min-w-[900px]">
@@ -170,7 +179,7 @@ export function DurationTimeline() {
 
                   <div className="overflow-hidden rounded-md border">
                     {projects.map((project) => {
-                      const projectBlocks = visibleBlocks.filter(
+                      const projectSessions = sessions.filter(
                         (block) => timelineProjectLabel(block.project) === project
                       );
                       const projectTotal = projectTotals.get(project) ?? 0;
@@ -205,43 +214,46 @@ export function DurationTimeline() {
                               <span />
                             </div>
 
-                            {projectBlocks.map((block: DurationBlock) => {
-                              const startPct =
-                                (timelineOffset(block.start) / rangeSeconds) * 100;
+                            {projectSessions.map((block) => {
+                              const sessionKey = `${block.project}-${block.start}-${block.end}`;
+                              const startPct = (timelineOffset(block.start) / rangeSeconds) * 100;
                               const widthPct = Math.max(
-                                (block.duration_seconds / rangeSeconds) * 100,
-                                0.35
+                                ((block.end - block.start) / rangeSeconds) * 100,
+                                0
                               );
 
                               return (
-                                <Tooltip key={`${block.entity}-${block.start}-${block.end}`}>
+                                <Tooltip
+                                  key={sessionKey}
+                                  open={activeSession === sessionKey}
+                                  onOpenChange={(open) =>
+                                    setActiveSession((current) =>
+                                      open ? sessionKey : current === sessionKey ? null : current
+                                    )
+                                  }
+                                >
                                   <TooltipTrigger asChild>
                                     <div
-                                      aria-label={`${project}, ${formatEpochRange(block.start, block.end)}`}
-                                      className="absolute top-2 bottom-2 rounded-sm opacity-90 transition-opacity hover:opacity-100"
+                                      aria-label={`${project}, ${formatEpochRange(block.start, block.end)}, ${formatProjectDuration(block.duration_seconds)}`}
+                                      className={sessionStyles.sessionBar}
+                                      tabIndex={0}
                                       role="img"
-                                      style={{
-                                        backgroundColor: projectColor,
-                                        left: `${startPct}%`,
-                                        width: `${widthPct}%`,
-                                      }}
+                                      style={
+                                        {
+                                          '--session-color': projectColor,
+                                          left: `${startPct}%`,
+                                          width: `${widthPct}%`,
+                                          minWidth: '2px',
+                                        } as React.CSSProperties
+                                      }
                                     />
                                   </TooltipTrigger>
-                                  <TooltipContent>
-                                    <div className="text-xs">
-                                      <div className="flex items-center gap-1.5 font-medium">
-                                        <span
-                                          className="size-2 rounded-sm"
-                                          style={{ backgroundColor: projectColor }}
-                                        />
-                                        {project}
-                                      </div>
-                                      <div>
-                                        {formatEpochRange(block.start, block.end)} ·{' '}
-                                        {block.category}
-                                      </div>
-                                    </div>
-                                  </TooltipContent>
+                                  <SessionTimelineTooltip
+                                    session={block}
+                                    color={projectColor}
+                                    duration={formatProjectDuration(block.duration_seconds)}
+                                    projectTotal={projectTotal}
+                                  />
                                 </Tooltip>
                               );
                             })}
@@ -273,14 +285,14 @@ export function DurationTimeline() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleBlocks.map((block) => {
+                  {sessions.map((block) => {
                     const project = timelineProjectLabel(block.project);
                     return (
-                      <TableRow key={`${block.entity}-${block.start}-${block.end}`}>
+                      <TableRow key={`${block.project}-${block.start}-${block.end}`}>
                         <TableCell className="font-mono text-xs">
                           {formatEpochRange(block.start, block.end)}
                         </TableCell>
-                        <TableCell>{Math.round(block.duration_seconds / 60)}m</TableCell>
+                        <TableCell>{formatProjectDuration(block.duration_seconds)}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <span
@@ -290,8 +302,10 @@ export function DurationTimeline() {
                             <span>{project}</span>
                           </div>
                         </TableCell>
-                        <TableCell>{block.language ?? '—'}</TableCell>
-                        <TableCell className="text-muted-foreground">{block.category}</TableCell>
+                        <TableCell>{block.languages.join(', ') || '—'}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {block.categories.join(', ')}
+                        </TableCell>
                         <TableCell className="text-right">{block.heartbeat_count}</TableCell>
                       </TableRow>
                     );

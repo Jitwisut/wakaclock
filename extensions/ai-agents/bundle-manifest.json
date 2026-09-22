@@ -1,13 +1,16 @@
 {
   "schema_version": 1,
-  "bundle_version": "0.1.0",
+  "bundle_version": "0.2.0",
   "files": {
     ".claude-plugin/marketplace.json": "fdeca352ffc64974268730e201e751ff7b046e103467b4f04f63c7d51006ba83",
-    "README.md": "a9139f5b0339cfa074a3dd7a13afda4c0d1a9e94fefa76f6172d34945c8974f5",
+    "README.md": "f18fb8c9a5b66341cdcf9d72cde9f6b365f1e9b273ad2363d7fc92743c722f59",
+    "codex/.agents/plugins/marketplace.json": "a7b14b3206d64c679b0b8713da5fffefe16a9ecb76bd8cc8d39856e466d483af",
+    "codex/.codex-plugin/plugin.json": "49681e15106cb6262ffb57f17ff5c06b4f7b3835969b0967b4de1da3b3d67baf",
     "codex/README.md": "6ce7be871c8c81b6e926f02ec106750f498fcc2ee40097e3c73954e25cc850a1",
     "codex/git-sweep-after.sh": "b4ea18a74f1c7f9811a8b7c35b0edc360c9162940589026bb7559247da0349a6",
     "codex/git-sweep-before.sh": "7e9f3d83a0c6e81c94bf4a5b6637651cb70eefd359fe6686ef69366df9d90b73",
     "codex/heartbeat-hook.sh": "58f9ac42ef21be734c119a4f3525ea80f53e1be84ea77af4bcda04bcf4c09ec8",
+    "codex/hooks/hooks.json": "8498fd77fbd01267f0889adfdf068115b5fc5254831d88be49d84e2092398792",
     "codex/tests/heartbeat-hook.test.sh": "1e0490aed67365435fce11459a02a18a4c8a0bf3914f877d39b10ace0f51c4cb",
     "codex/tool-abort.sh": "acb84d136a95da3f590d20c8d2ff7ac078a91d5c3125374dac4c5259c0a6da24",
     "common/README.md": "9ad47f3a18faca9cea41d6f41ddfdc3378f65f7415017cfdccb6044bb8433f35",
@@ -61,5 +64,5 @@
     "plugins/atoaxis-heartbeat/scripts/tool-abort.sh": "015e64a0b657e4cab3a023aca87f84da84f4511c6745dbf86db57f976a1249df",
     "plugins/atoaxis-heartbeat/tests/heartbeat.test.sh": "3e10227a9eda0c5009d84bf96765def4ffde0147e21ce4e560656e07f0876c06"
   },
-  "digest": "40de555fe27cd06ee08f79fc4b78c0eb8f925497eec0de99a16e977e65eb01a9"
+  "digest": "0b7e37fdb9a3dd2549acb9fcbf32a399868dca9764f67eb4b5c7daba384cc2a0"
 }

@@ -1,0 +1,265 @@
+.panel[data-slot='tooltip-content'] {
+  width: 324px;
+  max-width: min(calc(100vw - 32px), var(--radix-tooltip-content-available-width));
+  padding: 0;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid color-mix(in oklch, var(--session-color) 24%, var(--border));
+  /* This detail surface intentionally keeps its shape in the retro theme. */
+  border-radius: 20px !important;
+  box-shadow:
+    0 24px 64px -16px rgb(15 23 42 / 28%),
+    0 4px 12px -4px rgb(15 23 42 / 12%),
+    inset 0 1px 0 rgb(255 255 255 / 18%);
+  text-align: left;
+  text-wrap: wrap;
+  transform-origin: var(--radix-tooltip-content-transform-origin);
+  animation: reveal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.panel[data-state='closed'] {
+  display: none;
+  animation: none;
+}
+
+.panel > span > svg {
+  background: var(--card);
+  fill: var(--card);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.content {
+  padding: 21px 22px 18px;
+  border-radius: 20px 20px 0 0 !important;
+  background: radial-gradient(
+    ellipse at 100% 0%,
+    color-mix(in oklch, var(--session-color) 13%, transparent),
+    transparent 66%
+  );
+}
+
+.eyebrow,
+.eyebrow > span,
+.durationRow,
+.durationCaption,
+.footer,
+.share > div:first-child {
+  display: flex;
+  align-items: center;
+}
+
+.eyebrow {
+  justify-content: space-between;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+}
+
+.eyebrow > span {
+  gap: 7px;
+}
+.status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50% !important;
+  background: var(--session-color);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--session-color) 12%, transparent);
+}
+
+.project {
+  margin-top: 12px;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.durationRow {
+  margin-top: 19px;
+  gap: 12px;
+  justify-content: space-between;
+}
+.duration {
+  font-size: 38px;
+  font-weight: 550;
+  letter-spacing: -0.055em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.category {
+  max-width: 110px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px !important;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-transform: capitalize;
+  overflow-wrap: anywhere;
+}
+.durationCaption {
+  margin-top: 7px;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.timeRange {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-top: 22px;
+}
+.timeRange > div:not(.connector) {
+  display: grid;
+  gap: 5px;
+}
+.timeRange > div:last-child {
+  text-align: right;
+}
+.timeRange strong {
+  font-size: 14px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.timeRange > div > span {
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.connector {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  padding-top: 15px;
+}
+.connector i {
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--session-color);
+  border-radius: 50% !important;
+}
+.connector i:last-child {
+  background: var(--session-color);
+}
+.connector span {
+  flex: 1;
+  height: 1px;
+  background: color-mix(in oklch, var(--session-color) 40%, transparent);
+}
+
+.languages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 16px;
+}
+.languages span {
+  padding: 4px 7px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-radius: 5px !important;
+}
+.share {
+  margin-top: 21px;
+}
+.share > div:first-child {
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.share strong {
+  color: var(--foreground);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.shareTrack {
+  height: 3px;
+  margin-top: 8px;
+  background: var(--muted);
+  overflow: hidden;
+  border-radius: 3px !important;
+}
+.shareTrack > span {
+  display: block;
+  height: 100%;
+  background: var(--session-color);
+  transform-origin: left;
+  animation: fill 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.footer {
+  gap: 6px;
+  padding: 12px 22px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border);
+}
+.footerNote {
+  margin-left: auto;
+  font-size: 9px;
+}
+
+.sessionBar {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  min-width: 2px;
+  border-radius: 4px !important;
+  background: var(--session-color);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 22%);
+  transition:
+    box-shadow 180ms ease,
+    filter 180ms ease,
+    transform 180ms ease;
+}
+.sessionBar:hover,
+.sessionBar:focus-visible,
+.sessionBar[data-state='delayed-open'],
+.sessionBar[data-state='instant-open'] {
+  filter: brightness(1.08);
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--session-color) 18%, transparent),
+    0 4px 12px -3px color-mix(in oklch, var(--session-color) 45%, transparent);
+  transform: scaleY(1.1);
+}
+.sessionBar:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel[data-slot='tooltip-content'],
+  .shareTrack > span {
+    animation: none;
+  }
+  .sessionBar {
+    transition: none;
+  }
+  .sessionBar:hover,
+  .sessionBar:focus-visible,
+  .sessionBar[data-state] {
+    transform: none;
+  }
+}
