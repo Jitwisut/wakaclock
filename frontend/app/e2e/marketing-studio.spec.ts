@@ -93,3 +93,63 @@ test('landscape menu scrolls internally and select shows keyboard focus', async 
   await expect(page.getByLabel('What are you interested in?')).toBeFocused();
   await expect(page.getByLabel('What are you interested in?')).toHaveCSS('outline-style', 'solid');
 });
+
+test('compact editor strip exposes every editor and scrolls without moving the page sideways', async ({
+  page,
+}) => {
+  for (const path of ['/', '/th']) {
+    await page.setViewportSize({ width: 320, height: 740 });
+    await page.goto(path);
+    const wall = page.locator('.axis-editor-wall');
+    const browser = wall.getByRole('region');
+    await browser.scrollIntoViewIfNeeded();
+    await expect(wall.getByRole('list')).toHaveCount(1);
+    await expect(wall.getByRole('button')).toHaveCount(0);
+    await expect(browser).toHaveCSS('overflow-x', 'auto');
+    await expect(browser.getByText('Terminal', { exact: true })).toBeAttached();
+    await browser.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => browser.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    // The last item must be reachable, not permanently clipped behind a stopped marquee.
+    await browser.getByText('Terminal', { exact: true }).scrollIntoViewIfNeeded();
+    const last = await browser.getByText('Terminal', { exact: true }).boundingBox();
+    const region = await browser.boundingBox();
+    expect(last!.x).toBeGreaterThanOrEqual(region!.x);
+    expect(last!.x + last!.width).toBeLessThanOrEqual(region!.x + region!.width + 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  }
+});
+
+test('desktop editor playback resumes while its control retains keyboard focus', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  const wall = page.locator('.axis-editor-wall');
+  const track = wall.locator('.wakaclock-marquee-track').first();
+  await wall.getByRole('button', { name: 'Pause editor strip' }).click();
+  await expect(track).toHaveCSS('animation-play-state', 'paused');
+  const play = wall.getByRole('button', { name: 'Play editor strip' });
+  await play.focus();
+  await play.press('Enter');
+  await expect(track).toHaveCSS('animation-play-state', 'running');
+  await expect(wall.getByRole('button', { name: 'Pause editor strip' })).toBeFocused();
+});
+
+test('hero calls to action survive hydration and feature navigation advances the rail', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(
+    page.locator('.axis-opening').getByRole('link', { name: 'Join early access' })
+  ).toBeVisible();
+  const rail = page.getByRole('region', { name: 'Explore AtoAxis features' });
+  await page.getByRole('button', { name: 'Next features' }).click();
+  await expect.poll(() => rail.evaluate((el) => el.scrollLeft)).toBeGreaterThan(100);
+  await expect(page.getByRole('button', { name: 'Previous features' })).toBeEnabled();
+  expect(errors).toEqual([]);
+});

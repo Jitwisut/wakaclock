@@ -119,7 +119,8 @@ export const PRODUCT_STATUS = {
   billing: 'not-open',
   en: {
     label: 'Invite-only Early Access',
-    signup: 'Joining the list records interest; it does not create an account or charge a payment method.',
+    signup:
+      'Joining the list records interest; it does not create an account or charge a payment method.',
   },
   th: {
     label: 'Early Access แบบเชิญ',
@@ -128,8 +129,8 @@ export const PRODUCT_STATUS = {
 } as const;
 
 /**
- * The 40-80 word definitional answer. Reused verbatim by the homepage's
- * "What is AtoAxis?" section and by the site-level meta description so search
+ * The concise product definition. Reused verbatim by the homepage's
+ * "What is AtoAxis?" section, software schema and discovery documents so search
  * engines and answer engines extract one consistent definition.
  *
  * Note for future edits: this product is a hosted service. Earlier drafts described it
@@ -138,11 +139,11 @@ export const PRODUCT_STATUS = {
  * can query the database.
  */
 export const PRODUCT_ANSWER =
-  `${SITE_NAME} is a developer time tracking service. It receives coding activity from ` +
-  'your editor as heartbeats and turns them into dashboards for coding time, projects, ' +
-  'programming languages, branches and editors. It implements the WakaTime API, so an ' +
-  'editor that already has a WakaTime plugin can send data to it, and every account ' +
-  'includes your complete coding history rather than a limited recent window.';
+  `${SITE_NAME} is a hosted developer time tracking and AI coding analytics service. ` +
+  'It turns editor heartbeats into coding-time reports by project, language, branch and editor, ' +
+  'keeps your complete coding history, and supports the WakaTime API. Connected integrations ' +
+  'report AI, human and Unattributed changes with attribution coverage. Heartbeats contain ' +
+  'activity metadata and counts, not source code. Access is currently invite-only Early Access.';
 
 /**
  * Capabilities that are designed but NOT built. Anything listed here must be described
@@ -206,7 +207,7 @@ const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
 const NEW_GUIDES_DATE = '2026-09-20';
 const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/': AUDIT_REVIEW_DATE,
+  '/': '2026-09-22',
   '/teams': AUDIT_REVIEW_DATE,
   '/developer-analytics': AUDIT_REVIEW_DATE,
   '/ai-coding-tracker': AUDIT_REVIEW_DATE,
@@ -241,7 +242,7 @@ export function contentModified(path: string, locale: SiteLocale): string | unde
   // The September 11 audit updated English copy only; round 3 (September 12) added
   // Thai-specific fixes to these two paths without touching their English copy.
   if (locale === 'th') {
-    if (path === '/') return AUDIT_REVIEW_DATE;
+    if (path === '/') return '2026-09-22';
     if (path === '/ai-cost-tracking') return '2026-08-23';
     return TH_ROUTE_CONTENT_DATES[path];
   }

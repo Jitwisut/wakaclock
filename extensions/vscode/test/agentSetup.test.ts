@@ -443,9 +443,11 @@ describe("AI shell snapshot adapters", () => {
     await runHook(beforeScript, hookInput, env);
     await runHook(afterScript, hookInput, env);
 
-    const calls = (await fs.readFile(callsLog, "utf8"))
+    const rawCalls = (await fs.readFile(callsLog, "utf8"))
       .trim()
-      .split("\n")
+      .split("\n");
+    const calls = rawCalls
+      .filter((line) => line.startsWith("ai tool-"))
       .map((line) => {
         const [args, payload] = line.split("\t", 2);
         return { args, payload: JSON.parse(payload) as Record<string, unknown> };
@@ -506,14 +508,17 @@ describe("Codex heartbeat hook", () => {
       }
     );
 
-    const calls = (await fs.readFile(callsLog, "utf8"))
+    const rawCalls = (await fs.readFile(callsLog, "utf8"))
       .trim()
-      .split("\n")
+      .split("\n");
+    const calls = rawCalls
+      .filter((line) => line.startsWith("ai emit --json\t"))
       .map((line) => {
         const [args, payload] = line.split("\t", 2);
         return { args, payload: JSON.parse(payload) as Record<string, unknown> };
       });
     expect(calls).toHaveLength(2);
+    expect(rawCalls.some((line) => line.startsWith("sync --agent codex --automatic --json\t"))).toBe(true);
     expect(calls.map((call) => call.args)).toEqual(["ai emit --json", "ai emit --json"]);
     expect(calls.map((call) => call.payload)).toMatchObject([
       {

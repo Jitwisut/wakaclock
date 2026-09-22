@@ -64,6 +64,11 @@ export function activate(context: vscode.ExtensionContext): void {
     () => {
       statusBar.handleHeartbeatSent();
       presenceHeartbeat();
+      void cliService.syncAiActivity().catch((error) =>
+        logger.debug("on-demand AI sync after heartbeat was deferred", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     },
     undefined,
     () => statusBar.handleActivity()
@@ -105,10 +110,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // The broker is a separate process and may start before VS Code emits its
-  // first configuration-change event. Persist the initial setting as well so a
-  // user who has disabled automatic hook installation is protected immediately
-  // on activation, including after an extension update or broker restart.
+  // Persist the hook policy on activation so a user who has disabled automatic
+  // hook installation is protected immediately after an extension update.
   void writeHookAutoInstallPolicy(
     os.homedir(),
     configService.getSnapshot().autoInstallAgentHooks ?? true,
@@ -177,7 +180,7 @@ const connectionBootstrap = new SingleFlight();
 
 function startConnectionBootstrap(
   context: vscode.ExtensionContext,
-  cliService: Pick<WakaclockCliService, "verifyApiKey" | "installAgent" | "getStatus">,
+  cliService: Pick<WakaclockCliService, "verifyApiKey" | "getStatus" | "syncAiActivity">,
   aiIntegrations: AiIntegrationController,
   logger: Logger,
 ): void {
@@ -188,7 +191,7 @@ function startConnectionBootstrap(
 
 async function initializeConnection(
   context: vscode.ExtensionContext,
-  cliService: Pick<WakaclockCliService, "verifyApiKey" | "installAgent" | "getStatus">,
+  cliService: Pick<WakaclockCliService, "verifyApiKey" | "getStatus" | "syncAiActivity">,
   aiIntegrations: AiIntegrationController,
   logger: Logger
 ): Promise<void> {
@@ -217,18 +220,12 @@ async function initializeConnection(
           await setStoredApiKey(context.secrets, verifiedKey);
         }
         await clearPendingApiKey(context.secrets);
-        // Existing consent survives extension updates. Re-installing the per-user
-        // manifest points it at the newly managed binary before an old version can be
-        // removed, without adding a new integration or prompting again.
-        const statuses = await aiIntegrations.getStatus();
-        if (statuses.some((status) => status.enabled)) {
-          void cliService.installAgent().catch((error) =>
-            logger.warn("could not refresh the existing AtoAxis agent service", {
-              error: error instanceof Error ? error.message : String(error)
-            })
-          );
-        }
         void cliService.getStatus().catch(() => undefined);
+        void cliService.syncAiActivity().catch((error) =>
+          logger.debug("on-demand AI sync at extension activation was deferred", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
         await maybeOfferAiSetup(context, aiIntegrations, logger);
         return;
       }

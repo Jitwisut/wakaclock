@@ -34,14 +34,14 @@ describe('runAiDetectionSelfTest', () => {
     expect(report.checks.every((c) => c.severity === 'ok')).toBe(true);
   });
 
-  it('fails when the broker is not running', async () => {
+  it('does not fail when no background process is running in on-demand mode', async () => {
     const report = await runAiDetectionSelfTest(
       deps({
         getBrokerStatus: vi.fn().mockResolvedValue({ running: false, inbox: { dead_letter: 0 } }),
       })
     );
-    expect(report.verdict).toBe('failing');
-    expect(report.checks.find((c) => c.id === 'broker-running')?.severity).toBe('fail');
+    expect(report.verdict).toBe('degraded');
+    expect(report.checks.find((c) => c.id === 'on-demand-sync')?.severity).toBe('ok');
   });
 
   it('fails with a broker-reachable check when the status call throws', async () => {
@@ -118,7 +118,7 @@ describe('formatAiDetectionReport', () => {
     const report = await runAiDetectionSelfTest(deps());
     const text = formatAiDetectionReport(report);
     expect(text.split('\n')[0]).toBe('AI detection looks healthy.');
-    expect(text).toContain('✓ Local AI broker running');
+    expect(text).toContain('✓ On-demand AI sync available');
   });
 
   it('never leaks source content', async () => {

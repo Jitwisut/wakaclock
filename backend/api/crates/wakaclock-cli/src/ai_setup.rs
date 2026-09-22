@@ -9,6 +9,7 @@
 //! performs only the adapter-owned configuration change. User config outside the
 //! AtoAxis marker is left byte-for-byte unchanged.
 
+use crate::agent_service;
 use fs2::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -81,6 +82,8 @@ struct SetupAgentReport {
 struct SetupBrokerReport {
     installed: bool,
     running: bool,
+    cleanup_ok: bool,
+    runtime_mode: &'static str,
     detail: Option<String>,
 }
 
@@ -125,6 +128,11 @@ pub(crate) fn run(
     if all && requested_agent.is_some() {
         return Err("choose exactly one of an adapter id or --all".into());
     }
+
+    // Setup is also the migration boundary for upgrades from the retired
+    // LaunchAgent/systemd/task path. Always remove that registration before
+    // writing hooks, even when the caller has not yet granted adapter consent.
+    let legacy_service_cleanup = agent_service::uninstall();
 
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
@@ -260,41 +268,23 @@ pub(crate) fn run(
         agents.push(report);
     }
 
-    // Broker installation is deliberately best-effort here.  A service manager
-    // may be unavailable in a container/SSH session, while the local adapters can
-    // still spool events and the report should tell the user how to repair it.
-    let broker = if setup_consented {
-        match crate::broker::ensure_token()
-            .map_err(|error| error.to_string())
-            .and_then(|_| crate::agent_service::install())
-        {
-            Ok(_) => {
-                let status = crate::agent_service::status();
-                SetupBrokerReport {
-                    installed: status.installed,
-                    running: status.running,
-                    detail: if status.running {
-                        None
-                    } else {
-                        Some(
-                            "service installed but is not running; run `wakaclock broker start`"
-                                .into(),
-                        )
-                    },
-                }
+    // Adapter setup is intentionally on-demand.  Hooks and the transcript sync
+    // command invoke the CLI for one bounded pass; setup must never create a
+    // LaunchAgent/systemd task or a long-lived local broker.
+    let broker = SetupBrokerReport {
+        installed: false,
+        running: false,
+        cleanup_ok: legacy_service_cleanup.is_ok(),
+        runtime_mode: "on_demand",
+        detail: match legacy_service_cleanup {
+            Ok(_) if setup_consented => {
+                Some("on-demand CLI sync; no background service installed".into())
             }
-            Err(error) => SetupBrokerReport {
-                installed: false,
-                running: false,
-                detail: Some(format!("broker setup unavailable: {error}")),
-            },
-        }
-    } else {
-        SetupBrokerReport {
-            installed: false,
-            running: false,
-            detail: Some("consent_required".into()),
-        }
+            Ok(_) => Some("consent_required; no background service installed".into()),
+            Err(error) => Some(format!(
+                "legacy service cleanup failed ({error}); no replacement service was created"
+            )),
+        },
     };
 
     let observer_detail = if has_enabled_consent_at(&home) {
@@ -354,11 +344,8 @@ fn setup_overall(
     broker: &SetupBrokerReport,
 ) -> (&'static str, Option<String>) {
     let failed = agents.iter().any(|agent| agent.status == "failed")
-        || (broker.installed && !broker.running)
-        || broker
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail != "consent_required");
+        || !broker.cleanup_ok
+        || (broker.installed && !broker.running);
     let configured = agents
         .iter()
         .any(|agent| matches!(agent.status.as_str(), "configured" | "already_configured"));
@@ -982,8 +969,8 @@ fn print_text_report(report: &SetupReport) {
         println!("Bundle note: {detail}");
     }
     println!(
-        "Broker: installed={} running={}",
-        report.broker.installed, report.broker.running
+        "Runtime: {} (legacy service installed={} running={})",
+        report.broker.runtime_mode, report.broker.installed, report.broker.running
     );
     if let Some(detail) = &report.broker.detail {
         println!("Broker note: {detail}");

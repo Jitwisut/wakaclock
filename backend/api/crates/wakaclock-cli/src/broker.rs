@@ -1,8 +1,10 @@
 //! Local AI Activity Broker runtime.
 //!
 //! The shared event contract and inbox live in `wakaclock-core::broker`.  This
-//! module owns the CLI-facing HTTP server, service loop, producer fallback and the
-//! adapter that turns a broker event into the existing normalized heartbeat path.
+//! module owns the legacy HTTP server (kept only for migration compatibility),
+//! the durable inbox, and the adapter that turns a broker event into the existing
+//! normalized heartbeat path. Producers always use the on-demand SQLite path;
+//! no producer discovers or contacts a local broker process.
 
 use axum::{
     body::Bytes,
@@ -29,12 +31,12 @@ use wakaclock_core::{
     ai::{AiAttributionState, AiEditEvent},
     api_client::ApiClient,
     broker::{
-        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck, BrokerClient,
+        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
         BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
         BrokerStore, BrokerStoreStats, EditorObservationAck, EditorObservationIngestOutcome,
         EditorObservationV1, QuarantineDiagnostic, TransportKind, AI_SIDECAR_SCHEMA_VERSION,
-        BROKER_SCHEMA_VERSION, EDITOR_WAIT_SECONDS, MAX_BATCH_BYTES, MAX_BATCH_EVENTS,
-        MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
+        BROKER_SCHEMA_VERSION, EDITOR_WAIT_SECONDS, MAX_BATCH_BYTES,
+        MAX_BATCH_EVENTS as CORE_MAX_BATCH_EVENTS, MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
     },
     config::Config,
     error::AppError,
@@ -43,6 +45,11 @@ use wakaclock_core::{
     },
     queue::Queue,
 };
+
+/// Maximum number of durable inbox rows a one-shot invocation claims per pass.
+/// Re-export the core limit to the CLI so `sync` and the legacy compatibility
+/// worker cannot accidentally drift to different batch sizes.
+pub(crate) const MAX_BATCH_EVENTS: usize = CORE_MAX_BATCH_EVENTS;
 
 use crate::agent_service;
 
@@ -114,10 +121,11 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
     }
 }
 
-/// Try the running service first.  If the service is absent or a transport-level
-/// failure occurs, write the normalized event directly to the same SQLite inbox and
-/// make one best-effort processing pass.  Validation/conflict responses are returned
-/// to the producer and are never silently converted into a successful fallback.
+/// Write the normalized event directly to the durable SQLite inbox and make one
+/// best-effort processing pass. This is intentionally a one-shot operation: the
+/// producer never discovers, opens a socket to, or starts a local broker process.
+/// Validation/conflict responses are returned to the producer and are never silently
+/// converted into a successful delivery.
 pub(crate) async fn submit_events(
     config: &Config,
     api_client: &ApiClient,
@@ -135,23 +143,6 @@ pub(crate) async fn submit_events(
         .cloned()
         .map(BrokerEventV1::normalize)
         .collect::<Result<Vec<_>, _>>()?;
-
-    let mode = std::env::var("WAKACLOCK_BROKER_MODE")
-        .unwrap_or_else(|_| "auto".to_string())
-        .to_ascii_lowercase();
-    if mode != "direct" {
-        if let Ok(Some(client)) = BrokerClient::discover() {
-            match client.ingest_batch(&normalized).await {
-                Ok(ack) => return Ok(ack),
-                Err(error) if can_fallback(&error) && mode == "auto" => {}
-                Err(error) => return Err(error),
-            }
-        } else if mode == "service" {
-            return Err(AppError::NotFound(
-                "broker service is not running or discovery metadata is unavailable".to_string(),
-            ));
-        }
-    }
 
     let mut store = BrokerStore::open()?;
     let outcomes = store.ingest_normalized_batch(&normalized)?;
@@ -191,22 +182,6 @@ pub(crate) async fn submit_editor_observation_from_stdin(
         AppError::Validation("editor observation failed metadata validation".to_string())
     })?;
     let observation = observation.normalize()?;
-    let mode = std::env::var("WAKACLOCK_BROKER_MODE")
-        .unwrap_or_else(|_| "auto".to_string())
-        .to_ascii_lowercase();
-    if mode != "direct" {
-        if let Ok(Some(client)) = BrokerClient::discover() {
-            match client.submit_editor_observation(&observation).await {
-                Ok(status) => return Ok(status),
-                Err(error) if can_fallback(&error) && mode == "auto" => {}
-                Err(error) => return Err(error),
-            }
-        } else if mode == "service" {
-            return Err(AppError::NotFound(
-                "broker service is not running or discovery metadata is unavailable".to_string(),
-            ));
-        }
-    }
     let (outcome, status) = BrokerStore::open()?.ingest_editor_observation(&observation)?;
     if matches!(
         outcome,
@@ -226,22 +201,6 @@ pub(crate) async fn editor_observation_status_for_cli(
         return Err(AppError::NotFound(
             "editor observation was not found".to_string(),
         ));
-    }
-    let mode = std::env::var("WAKACLOCK_BROKER_MODE")
-        .unwrap_or_else(|_| "auto".to_string())
-        .to_ascii_lowercase();
-    if mode != "direct" {
-        if let Ok(Some(client)) = BrokerClient::discover() {
-            match client.editor_observation_status(observation_id).await {
-                Ok(status) => return Ok(status),
-                Err(error) if can_fallback(&error) && mode == "auto" => {}
-                Err(error) => return Err(error),
-            }
-        } else if mode == "service" {
-            return Err(AppError::NotFound(
-                "broker service is not running or discovery metadata is unavailable".to_string(),
-            ));
-        }
     }
     BrokerStore::open()?
         .editor_observation_status(observation_id)?
@@ -265,14 +224,6 @@ pub(crate) async fn submit_events_chunked(
         combined.results.extend(ack.results);
     }
     Ok(combined)
-}
-
-fn can_fallback(error: &AppError) -> bool {
-    match error {
-        AppError::Http(_) | AppError::Io(_) => true,
-        AppError::HttpStatus { status, .. } => *status >= 500,
-        _ => false,
-    }
 }
 
 fn batch_ack(events: &[BrokerEventV1], outcomes: &[BrokerIngestOutcome]) -> BrokerBatchAck {
@@ -753,20 +704,27 @@ pub(crate) fn status_for_cli() -> Result<serde_json::Value, AppError> {
     let queue_count = Queue::open()
         .and_then(|queue| queue.len())
         .unwrap_or_default();
-    let service_running = agent_service::status().running;
-    let discovery = if service_running {
-        read_discovery()
-    } else {
-        cleanup_discovery();
-        None
-    };
-    // launchd can report a job as `running` while the executable is still stuck
-    // inside dyld (or before the broker has written its authenticated discovery
-    // record). Treat only an actual broker discovery record as ready; this lets the
-    // VS Code host start its owned fallback instead of trusting a false-positive OS
-    // service state.
-    let broker_ready = service_running && discovery.is_some();
-    Ok(status_json(stats, queue_count, discovery, broker_ready))
+    // Status is intentionally about the supported runtime, not whether a legacy
+    // LaunchAgent happens to still exist. A migration can expose the old service
+    // for cleanup without making the extension believe that a collector is active.
+    let legacy_service = agent_service::status();
+    cleanup_discovery();
+    let mut status = status_json(stats, queue_count, None, false);
+    if let Some(object) = status.as_object_mut() {
+        object.insert(
+            "service_installed".to_string(),
+            serde_json::Value::Bool(legacy_service.installed),
+        );
+        object.insert(
+            "service_running".to_string(),
+            serde_json::Value::Bool(legacy_service.running),
+        );
+        object.insert(
+            "legacy_service_present".to_string(),
+            serde_json::Value::Bool(legacy_service.installed || legacy_service.running),
+        );
+    }
+    Ok(status)
 }
 
 async fn worker_loop(
@@ -798,13 +756,10 @@ async fn worker_loop(
                         agent_service::append_log("broker reloaded API identity");
                     }
                 }
-                // The broker is the always-on runtime.  Keep transcript recovery in
-                // this same bounded worker so a user never has to remember a manual
-                // `wakaclock ai sync` after an agent's native hook is missed or an
-                // event arrives while the machine was offline. The parser performs
-                // blocking work, so run it on Tokio's blocking pool. The sync owns
-                // its cross-process lock and timeout; a slow/failed parser cannot
-                // stop inbox delivery or ordinary heartbeat processing.
+                // Legacy service loop retained only for old test fixtures and
+                // explicit migration diagnostics. Supported producers never enter
+                // this path: hooks invoke the one-shot CLI directly. The parser
+                // performs blocking work, so run it on Tokio's blocking pool.
                 let sync_finished = ai_sync_task
                     .as_ref()
                     .map(|task| task.is_finished())
@@ -913,6 +868,7 @@ fn status_json(
         .unwrap_or(0);
     let last_delivery_at = stats.last_delivery_at;
     serde_json::json!({
+        "runtime_mode": "on_demand",
         "running": running,
         "pid": discovery.as_ref().map(|value| value.pid),
         "endpoint": discovery.as_ref().map(|value| value.endpoint.clone()),
@@ -1414,19 +1370,6 @@ mod tests {
         assert_eq!(ack.accepted, 1);
         assert_eq!(ack.duplicate, 1);
         assert_eq!(ack.results[0].actor_type, ActorType::AiVerified);
-    }
-
-    #[test]
-    fn fallback_errors_are_limited_to_transport_or_server_failures() {
-        assert!(can_fallback(&AppError::HttpStatus {
-            status: 503,
-            message: "down".to_string(),
-        }));
-        assert!(!can_fallback(&AppError::HttpStatus {
-            status: 422,
-            message: "invalid".to_string(),
-        }));
-        assert!(!can_fallback(&AppError::Conflict("same id".to_string())));
     }
 
     #[test]

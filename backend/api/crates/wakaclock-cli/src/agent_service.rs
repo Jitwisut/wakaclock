@@ -240,75 +240,12 @@ fn service_executable() -> Result<PathBuf, String> {
 }
 
 pub fn install() -> Result<AgentServiceReport, String> {
-    let executable = service_executable()?;
-    let manifest = manifest_path();
-    if let Some(parent) = manifest.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let content = manifest_content(&executable.to_string_lossy(), &log_path().to_string_lossy());
-
-    #[cfg(target_os = "macos")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        let domain = format!("gui/{}", uid());
-        // Idempotent reinstall: an absent prior service is normal. Capture bootout's
-        // stderr so macOS does not print the misleading "Boot-out failed: 5" warning
-        // even though the subsequent bootstrap succeeds.
-        let _ = Command::new("launchctl")
-            .args(["bootout", &domain, manifest.to_string_lossy().as_ref()])
-            .output();
-        let status = Command::new("launchctl")
-            .args(["bootstrap", &domain, manifest.to_string_lossy().as_ref()])
-            .status()
-            .map_err(|error| error.to_string())?;
-        if !status.success() {
-            return Err(format!("launchctl bootstrap failed with {status}"));
-        }
-        let _ = Command::new("launchctl")
-            .args(["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")])
-            .status();
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("macOS", manifest, true, running, None));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        run_command("systemctl", &["--user", "daemon-reload"])?;
-        run_command(
-            "systemctl",
-            &[
-                "--user",
-                "enable",
-                "--now",
-                "atoaxis-wakaclock-agent.service",
-            ],
-        )?;
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("Linux", manifest, true, running, None));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        let command = format!("\"{}\" broker run", executable.display());
-        run_command(
-            "schtasks",
-            &[
-                "/Create", "/SC", "ONLOGON", "/TN", TASK_NAME, "/TR", &command, "/F",
-            ],
-        )?;
-        let _ = Command::new("schtasks")
-            .args(["/Run", "/TN", TASK_NAME])
-            .status();
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("Windows", manifest, true, running, None));
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    let _ = (&content, &manifest);
-    #[allow(unreachable_code)]
-    Err("unsupported operating system".to_string())
+    // Service registration is retired. Keep this API as a compatibility shim so
+    // older callers clean up an existing manifest instead of recreating it.
+    let mut retired = uninstall()?;
+    retired.message =
+        Some("background service installation is disabled; use on-demand CLI sync".to_string());
+    Ok(retired)
 }
 
 /// planai2.md Phase 0.1: an older CLI wrote this service manifest to invoke the
@@ -417,7 +354,7 @@ pub fn uninstall() -> Result<AgentServiceReport, String> {
         let domain = format!("gui/{}", uid());
         let _ = Command::new("launchctl")
             .args(["bootout", &domain, manifest.to_string_lossy().as_ref()])
-            .status();
+            .output();
     }
     #[cfg(target_os = "linux")]
     {
@@ -428,53 +365,30 @@ pub fn uninstall() -> Result<AgentServiceReport, String> {
                 "--now",
                 "atoaxis-wakaclock-agent.service",
             ])
-            .status();
+            .output();
     }
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("schtasks")
             .args(["/Delete", "/TN", TASK_NAME, "/F"])
-            .status();
+            .output();
     }
     let _ = fs::remove_file(&manifest);
     Ok(report(platform_name(), manifest, false, false, None))
 }
 
 pub fn start() -> Result<AgentServiceReport, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let domain = format!("gui/{}", uid());
-        run_command(
-            "launchctl",
-            &["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")],
-        )?;
-    }
-    #[cfg(target_os = "linux")]
-    run_command(
-        "systemctl",
-        &["--user", "start", "atoaxis-wakaclock-agent.service"],
-    )?;
-    #[cfg(target_os = "windows")]
-    run_command("schtasks", &["/Run", "/TN", TASK_NAME])?;
-    Ok(report(platform_name(), manifest_path(), true, true, None))
+    let mut retired = uninstall()?;
+    retired.message = Some(
+        "background service start is disabled; use an event-triggered CLI invocation".to_string(),
+    );
+    Ok(retired)
 }
 
 pub fn stop() -> Result<AgentServiceReport, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let domain = format!("gui/{}", uid());
-        let _ = Command::new("launchctl")
-            .args(["kill", "SIGTERM", &format!("{domain}/{SERVICE_LABEL}")])
-            .status();
-    }
-    #[cfg(target_os = "linux")]
-    run_command(
-        "systemctl",
-        &["--user", "stop", "atoaxis-wakaclock-agent.service"],
-    )?;
-    #[cfg(target_os = "windows")]
-    run_command("schtasks", &["/End", "/TN", TASK_NAME])?;
-    Ok(report(platform_name(), manifest_path(), true, false, None))
+    let mut retired = uninstall()?;
+    retired.message = Some("legacy background service removed".to_string());
+    Ok(retired)
 }
 
 pub fn status() -> AgentServiceReport {
@@ -668,18 +582,6 @@ fn uid() -> String {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "0".to_string())
     })
-}
-
-fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .map_err(|error| format!("failed to run {program}: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{program} exited with {status}"))
-    }
 }
 
 #[cfg(target_os = "macos")]

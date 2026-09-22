@@ -1,7 +1,9 @@
 import {
+  EN_HOME,
   MARKETING_PAGE_KEYS,
   type MarketingBlock,
   PAGE_COPY,
+  TH_HOME,
 } from '@/components/marketing/marketing-copy';
 import {
   absoluteUrl,
@@ -80,6 +82,21 @@ function renderPage(path: string, locale: SiteLocale): string {
   return `## ${copy.title}\n\nURL: ${absoluteUrl(localizedPath(locale, path))}\nLanguage: ${locale}\nTranslation: ${translatedUrl}\n\n${copy.lead}\n\n${sections}${faq}`;
 }
 
+function renderHome(locale: SiteLocale): string {
+  const copy = locale === 'th' ? TH_HOME : EN_HOME;
+  return [
+    `## ${copy.title}`,
+    `URL: ${absoluteUrl(localizedPath(locale, '/'))}\nLanguage: ${locale}`,
+    copy.heroLead,
+    ...copy.whatIs,
+    copy.keyTakeaways.map((item) => `- ${item}`).join('\n'),
+    ...copy.howItWorks,
+    copy.limitationsIntro,
+    copy.limitations.map((item) => `- ${item}`).join('\n'),
+    ...copy.faq.map((entry) => `### ${entry.question}\n\n${entry.answer}`),
+  ].join('\n\n');
+}
+
 const BODY = `# ${SITE_NAME} — full text
 
 > ${PRODUCT_ANSWER}
@@ -93,6 +110,14 @@ what the shipped code does: planned work is labelled as in development and is ne
 as a current capability. Figures that cannot be derived — AI token totals and estimated
 cost without provider-reported usage and a known price — are reported as unknown with a
 coverage percentage rather than as zero.
+
+${renderHome('en')}
+
+---
+
+${renderHome('th')}
+
+---
 
 ${MARKETING_PAGE_KEYS.flatMap((path) => [renderPage(path, 'en'), renderPage(path, 'th')])
   .filter(Boolean)
