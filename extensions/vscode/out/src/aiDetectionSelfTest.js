@@ -1,7 +1,7 @@
 "use strict";
 // planai2.md Phase 7 (p7.2) — the "AtoAxis: Test AI Detection" diagnostic.
 //
-// A pure, dependency-injected self-test that composes the local broker status
+// A pure, dependency-injected self-test that composes on-demand CLI status
 // and the AI-adapter status into a single pass/degraded/failing report. The
 // VS Code command is a thin wrapper around `runAiDetectionSelfTest`; the logic
 // lives here so it can be tested without the extension host.
@@ -41,18 +41,20 @@ async function runAiDetectionSelfTest(deps) {
             });
             const brokerRunning = snapshot.broker.running;
             checks.push({
-                id: 'broker-running',
-                label: 'Local AI broker running',
+                id: 'on-demand-sync',
+                label: 'On-demand AI sync available',
                 severity: brokerRunning.availability !== 'available'
                     ? 'warn'
                     : brokerRunning.value === true
                         ? 'ok'
-                        : 'fail',
+                        : snapshot.runtime_health === 'healthy' || snapshot.runtime_health === 'idle'
+                            ? 'ok'
+                            : 'warn',
                 detail: brokerRunning.availability !== 'available'
-                    ? 'broker running probe unavailable'
+                    ? 'on-demand queue probe unavailable'
                     : brokerRunning.value === true
                         ? undefined
-                        : 'run "AtoAxis: Repair AI Integrations"',
+                        : 'no background process; hooks invoke wakaclock for bounded syncs',
             });
             const deadLetter = snapshot.broker.dead_letter;
             checks.push({
@@ -105,17 +107,17 @@ async function runAiDetectionSelfTest(deps) {
     catch (error) {
         checks.push({
             id: 'broker-reachable',
-            label: 'Local AI broker reachable',
+            label: 'On-demand CLI status readable',
             severity: 'fail',
             detail: error instanceof Error ? error.message : 'broker status unavailable',
         });
     }
     if (broker) {
         checks.push({
-            id: 'broker-running',
-            label: 'Local AI broker running',
-            severity: broker.running === true ? 'ok' : 'fail',
-            detail: broker.running === true ? undefined : 'run "AtoAxis: Repair AI Integrations"',
+            id: 'on-demand-sync',
+            label: 'On-demand AI sync available',
+            severity: broker.running === true || (broker.inbox !== undefined) ? 'ok' : 'warn',
+            detail: broker.running === true ? undefined : 'no background process; hooks invoke wakaclock for bounded syncs',
         });
         const deadLetter = broker.inbox?.dead_letter ?? 0;
         checks.push({

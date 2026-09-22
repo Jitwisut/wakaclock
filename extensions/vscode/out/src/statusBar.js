@@ -107,6 +107,23 @@ function uiStateFor(server, queued) {
             return queued ? "offline-queued" : "verified";
     }
 }
+function availableNumber(measurement) {
+    return measurement?.availability === "available" && typeof measurement.value === "number"
+        ? measurement.value
+        : undefined;
+}
+function epochSecondsToIso(value) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+        return undefined;
+    return new Date(value * 1000).toISOString();
+}
+function summarizeAdapterCoverage(snapshot) {
+    const detected = snapshot.adapters.filter((adapter) => adapter.detected.availability === "available" && adapter.detected.value === true);
+    const enabled = detected.filter((adapter) => adapter.enabled.availability === "available" && adapter.enabled.value === true);
+    const verified = enabled.filter((adapter) => adapter.verification === "verified");
+    const verification = verified.length > 0 ? ` · ${verified.length} verified` : "";
+    return `${enabled.length}/${detected.length} detected adapters enabled${verification}`;
+}
 class StatusBarController {
     getConfig;
     cli;
@@ -119,6 +136,7 @@ class StatusBarController {
     legacyCliReported = false;
     lastSnapshot;
     lastBrokerStatus;
+    lastAiDiagnostics;
     getBufferedSeconds = () => 0;
     getBufferedSegments = () => [];
     connectionState = "connecting";
@@ -201,10 +219,9 @@ class StatusBarController {
                 return;
             }
         }
-        // Broker status is local and remains useful while the hosted API is offline.
-        // Older test/embedded CLI adapters may not expose it, so this is deliberately
-        // additive and never blocks the regular total refresh.
-        await this.refreshBrokerStatus();
+        // On-demand sync status is local and remains useful while the hosted API is
+        // offline. Older embedded CLI adapters may not expose it, so this is additive.
+        await this.refreshAiStatus();
         try {
             const snapshot = await this.cli.getToday((0, utils_1.localTimezone)());
             if (!this.inFlight.isCurrent(generation)) {
@@ -298,10 +315,17 @@ class StatusBarController {
             "state" in snapshot.agentHealth
             ? String(snapshot.agentHealth.state)
             : undefined;
-        const brokerState = this.lastBrokerStatus
-            ? this.lastBrokerStatus.running
-                ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
-                : "stopped"
+        const brokerState = this.lastAiDiagnostics
+            ? `on-demand · pending ${availableNumber(this.lastAiDiagnostics.broker.pending) ?? "unknown"} · retry ${availableNumber(this.lastAiDiagnostics.broker.retry) ?? "unknown"} · dead-letter ${availableNumber(this.lastAiDiagnostics.broker.dead_letter) ?? "unknown"}`
+            : this.lastBrokerStatus
+                ? `on-demand · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
+                : undefined;
+        const lastSyncAt = this.lastAiDiagnostics?.broker.last_delivery_at ??
+            epochSecondsToIso(this.lastBrokerStatus?.last_delivery_at ??
+                this.lastBrokerStatus?.last_processed_at ??
+                this.lastBrokerStatus?.last_received_at);
+        const adapterCoverage = this.lastAiDiagnostics
+            ? summarizeAdapterCoverage(this.lastAiDiagnostics)
             : undefined;
         const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
         if (this.connectionState === "needs-api-key") {
@@ -350,13 +374,27 @@ class StatusBarController {
                     : "") +
                 (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
                 (agentState ? `\nAgent: ${agentState}` : "") +
-                (brokerState ? `\nBroker: ${brokerState}` : "") +
-                (brokerError ? `\nBroker last error: ${brokerError}` : "");
+                (brokerState ? `\nAI sync: ${brokerState}` : "") +
+                (brokerState ? `\nAI last sync: ${lastSyncAt ?? "never"}` : "") +
+                (adapterCoverage ? `\nAI adapter coverage: ${adapterCoverage}` : "") +
+                (brokerError ? `\nAI sync last error: ${brokerError}` : "");
     }
-    async refreshBrokerStatus() {
-        if (!this.cli.getBrokerStatus) {
-            return;
+    async refreshAiStatus() {
+        if (this.cli.getAiDiagnosticsSnapshot) {
+            try {
+                this.lastAiDiagnostics = await this.cli.getAiDiagnosticsSnapshot();
+                this.lastBrokerStatus = undefined;
+                return;
+            }
+            catch (error) {
+                this.lastAiDiagnostics = undefined;
+                this.logger.debug("failed to read AI diagnostics status", {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
         }
+        if (!this.cli.getBrokerStatus)
+            return;
         try {
             this.lastBrokerStatus = await this.cli.getBrokerStatus();
         }

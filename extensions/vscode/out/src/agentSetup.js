@@ -390,7 +390,10 @@ async function setupDetectedAiAgents(options) {
             const report = await runCliSetup(options.cliPath, status.id, options.stableDir, homeDir);
             if (report) {
                 outcomes.push(...report.agents);
-                if (report.broker?.detail && report.overall !== "success") {
+                if (report.broker?.detail &&
+                    (report.broker.cleanup_ok === false ||
+                        (report.broker.installed && !report.broker.running)) &&
+                    report.overall !== "success") {
                     failed.push({ id: "wakaclock-broker", error: report.broker.detail });
                 }
                 for (const outcome of report.agents) {
@@ -472,9 +475,9 @@ async function setupLegacyAdapter(status, options, homeDir, registry) {
 }
 async function setupClaudeCode(stableDir, logger, manifest) {
     if (process.platform === "win32") {
-        // Windows uses the transcript watcher baseline; shell hooks are an optional
+        // Windows uses the transcript-sync baseline; shell hooks are an optional
         // fast path and must not turn a successful consent into a failed setup.
-        logger.debug("agentSetup: Claude Code configured in transcript-only mode on Windows");
+        logger.debug("agentSetup: Claude Code configured in on-demand transcript mode on Windows");
         return;
     }
     await runCommandAllowAlreadyConfigured("claude", ["plugin", "marketplace", "add", stableDir], logger);
@@ -836,9 +839,8 @@ async function writeHookConsentState(homeDir, ids, state) {
     await fs.chmod(target, 0o600).catch(() => undefined);
 }
 /**
- * Persist the extension-level automatic hook policy for the standalone broker.
- * The broker is a separate process, so an in-memory VS Code setting would not
- * stop its ten-minute repair pass. This file carries one boolean only; it never
+ * Persist the extension-level automatic hook policy for event-triggered setup.
+ * An in-memory VS Code setting would not reach native agent hooks. This file carries one boolean only; it never
  * contains an agent path, command, prompt, or hook payload.
  */
 async function writeHookAutoInstallPolicy(homeDir, enabled) {

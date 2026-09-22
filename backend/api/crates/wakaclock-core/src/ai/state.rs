@@ -7,6 +7,7 @@ use crate::ai::revision::{
 use crate::ai::usage::AiUsageRecord;
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,16 @@ pub struct PendingUsage {
     pub next_retry_at: i64,
 }
 
+/// Metadata-only counters for the durable AI token-usage queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageQueueStatus {
+    pub pending: usize,
+    pub eligible: usize,
+    pub retry: usize,
+    pub dead_letter: usize,
+    pub conflicts: usize,
+}
+
 impl AiAttributionState {
     /// Opens `~/.wakaclock/ai-attribution.sqlite3`, creating it and its parent
     /// directory if needed.
@@ -50,6 +61,7 @@ impl AiAttributionState {
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         conn.execute_batch(
             "
+            PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS parser_state (
                 parser_id   TEXT PRIMARY KEY,
                 cursor_json TEXT NOT NULL,
@@ -96,6 +108,18 @@ impl AiAttributionState {
                 attempt        INTEGER NOT NULL,
                 error_code     TEXT NOT NULL,
                 failed_at      INTEGER NOT NULL
+            );
+
+            -- A provider occasionally reuses an event ID while changing its
+            -- token/model metadata. Never replace the delivered row and never
+            -- retry the same collision forever: retain the sanitised later
+            -- record for inspection while allowing the parser cursor to advance.
+            CREATE TABLE IF NOT EXISTS usage_conflicts (
+                conflict_id    TEXT PRIMARY KEY,
+                usage_event_id TEXT NOT NULL,
+                record_json    TEXT NOT NULL,
+                conflict_kind  TEXT NOT NULL,
+                detected_at    INTEGER NOT NULL
             );
 
             -- A single cursor for activity observed outside the editor (Claude/Codex
@@ -426,13 +450,15 @@ impl AiAttributionState {
     }
 
     /// Persist usage before attempting delivery. A repeated identical record is
-    /// a no-op; a local ID collision with different sanitised payload is rejected
-    /// before it can turn into an ambiguous retry.
+    /// a no-op; a local ID collision with different sanitised payload is retained
+    /// in the conflict quarantine before the parser advances, so it cannot turn
+    /// into an ambiguous retry or block unrelated sessions.
     pub fn enqueue_pending_usage(&self, records: &[AiUsageRecord]) -> Result<usize, AppError> {
         let now = chrono::Utc::now().timestamp();
-        // Validate and insert the complete batch under one SQLite transaction. A
-        // conflict in a later record must not leave an earlier sibling queued when
-        // the caller receives the batch-level error.
+        // Validate and insert the complete batch under one SQLite transaction.
+        // Conflicting records are quarantined in the same transaction, so an
+        // earlier valid sibling is durable even when a later transcript row is
+        // inconsistent with an existing stable ID.
         let tx = self.conn.unchecked_transaction()?;
         let mut inserted = 0;
         for record in records {
@@ -447,9 +473,13 @@ impl AiAttributionState {
                 .optional()?
             {
                 if existing != record_json {
-                    return Err(AppError::Conflict(
-                        "pending usage id has conflicting payload".to_string(),
-                    ));
+                    Self::record_usage_conflict_tx(
+                        &tx,
+                        record,
+                        &record_json,
+                        "pending_payload_conflict",
+                        now,
+                    )?;
                 }
                 continue;
             }
@@ -463,9 +493,13 @@ impl AiAttributionState {
             if let Some(stored_record) = delivered_record {
                 if let Some(stored_record) = stored_record {
                     if stored_record != record_json {
-                        return Err(AppError::Conflict(
-                            "delivered usage id has conflicting payload".to_string(),
-                        ));
+                        Self::record_usage_conflict_tx(
+                            &tx,
+                            record,
+                            &record_json,
+                            "delivered_payload_conflict",
+                            now,
+                        )?;
                     }
                 }
                 continue;
@@ -483,9 +517,13 @@ impl AiAttributionState {
                 .optional()?;
             if let Some(dead_letter_record) = dead_letter_record {
                 if dead_letter_record != record_json {
-                    return Err(AppError::Conflict(
-                        "dead-lettered usage id has conflicting payload".to_string(),
-                    ));
+                    Self::record_usage_conflict_tx(
+                        &tx,
+                        record,
+                        &record_json,
+                        "dead_letter_payload_conflict",
+                        now,
+                    )?;
                 }
                 continue;
             }
@@ -498,6 +536,30 @@ impl AiAttributionState {
         }
         tx.commit()?;
         Ok(inserted)
+    }
+
+    fn record_usage_conflict_tx(
+        tx: &rusqlite::Transaction<'_>,
+        record: &AiUsageRecord,
+        record_json: &str,
+        conflict_kind: &str,
+        detected_at: i64,
+    ) -> Result<(), AppError> {
+        let digest = Sha256::digest(record_json.as_bytes());
+        let conflict_id = format!("{}:{digest:x}", record.usage_event_id);
+        tx.execute(
+            "INSERT OR IGNORE INTO usage_conflicts
+             (conflict_id, usage_event_id, record_json, conflict_kind, detected_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                conflict_id,
+                record.usage_event_id,
+                record_json,
+                conflict_kind,
+                detected_at
+            ],
+        )?;
+        Ok(())
     }
 
     /// Return only records whose retry timer has elapsed. Ordering by creation
@@ -525,6 +587,32 @@ impl AiAttributionState {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    /// Read the usage queue counters in one SQLite statement for the on-demand
+    /// status contract. The records themselves remain local and are never exposed
+    /// through this method.
+    pub fn usage_queue_status(&self, now: i64) -> Result<UsageQueueStatus, AppError> {
+        self.conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM pending_usage),
+                    (SELECT COUNT(*) FROM pending_usage WHERE next_retry_at <= ?1),
+                    (SELECT COUNT(*) FROM pending_usage WHERE attempt > 0),
+                    (SELECT COUNT(*) FROM usage_dead_letters),
+                    (SELECT COUNT(*) FROM usage_conflicts)",
+                params![now],
+                |row| {
+                    Ok(UsageQueueStatus {
+                        pending: row.get(0)?,
+                        eligible: row.get(1)?,
+                        retry: row.get(2)?,
+                        dead_letter: row.get(3)?,
+                        conflicts: row.get(4)?,
+                    })
+                },
+            )
+            .map_err(AppError::from)
     }
 
     /// Keep a transient failure queued with a bounded, sanitized error code.
@@ -1022,6 +1110,25 @@ mod tests {
     }
 
     #[test]
+    fn attribution_state_uses_wal_and_waits_for_concurrent_writers() {
+        let path = temp_db_path("pragmas");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let journal_mode: String = state
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        let busy_timeout_ms: i64 = state
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(busy_timeout_ms, 2_000);
+        drop(state);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn load_cursor_is_none_before_anything_is_saved() {
         let path = temp_db_path("empty-cursor");
         let _ = std::fs::remove_file(&path);
@@ -1193,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_usage_batch_rolls_back_all_pending_siblings() {
+    fn a_conflicting_usage_batch_quarantines_only_the_conflicting_record() {
         let path = temp_db_path("pending-usage-atomic-conflict");
         let _ = std::fs::remove_file(&path);
         let first = sample_usage("batch-first");
@@ -1202,17 +1309,30 @@ mod tests {
         conflicting.output_tokens = Some(999);
         let state = AiAttributionState::open_at(&path).unwrap();
 
-        assert!(state
-            .enqueue_pending_usage(&[sibling, first, conflicting])
-            .is_err());
-        assert!(state
-            .pending_usage_due(chrono::Utc::now().timestamp())
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            state
+                .enqueue_pending_usage(&[sibling, first, conflicting])
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            state
+                .pending_usage_due(chrono::Utc::now().timestamp())
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            state
+                .usage_queue_status(chrono::Utc::now().timestamp())
+                .unwrap()
+                .conflicts,
+            1
+        );
     }
 
     #[test]
-    fn delivered_usage_rejects_a_later_payload_collision() {
+    fn delivered_usage_quarantines_a_later_payload_collision() {
         let path = temp_db_path("delivered-usage-collision");
         let _ = std::fs::remove_file(&path);
         let first = sample_usage("delivered-collision");
@@ -1230,16 +1350,18 @@ mod tests {
         let mut conflicting = first;
         conflicting.output_tokens = Some(999);
         let state = AiAttributionState::open_at(&path).unwrap();
-        let error = state
-            .enqueue_pending_usage(&[conflicting])
-            .expect_err("a delivered ID must not silently absorb a changed payload");
-        assert!(
-            matches!(error, AppError::Conflict(message) if message.contains("delivered usage"))
+        assert_eq!(state.enqueue_pending_usage(&[conflicting]).unwrap(), 0);
+        assert_eq!(
+            state
+                .usage_queue_status(chrono::Utc::now().timestamp())
+                .unwrap()
+                .conflicts,
+            1
         );
     }
 
     #[test]
-    fn dead_lettered_usage_rejects_a_later_payload_collision() {
+    fn dead_lettered_usage_quarantines_a_later_payload_collision() {
         let path = temp_db_path("dead-letter-usage-collision");
         let _ = std::fs::remove_file(&path);
         let first = sample_usage("dead-letter-collision");
@@ -1257,11 +1379,13 @@ mod tests {
         let mut conflicting = first;
         conflicting.output_tokens = Some(999);
         let state = AiAttributionState::open_at(&path).unwrap();
-        let error = state
-            .enqueue_pending_usage(&[conflicting])
-            .expect_err("a dead-lettered ID must not silently absorb a changed payload");
-        assert!(
-            matches!(error, AppError::Conflict(message) if message.contains("dead-lettered usage"))
+        assert_eq!(state.enqueue_pending_usage(&[conflicting]).unwrap(), 0);
+        assert_eq!(
+            state
+                .usage_queue_status(chrono::Utc::now().timestamp())
+                .unwrap()
+                .conflicts,
+            1
         );
     }
 

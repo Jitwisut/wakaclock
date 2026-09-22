@@ -75,6 +75,12 @@ Full list and known-broken targets: [.context/commands.md](.context/commands.md)
    load-bearing. See [.context/data/migrations.md](.context/data/migrations.md).
 8. **No secrets in committed files.** Env vars by name only:
    [.context/environment.md](.context/environment.md).
+9. **Heartbeat and time-counting code is protected.** Never edit heartbeat,
+   ingest, queue, activity-timeline or duration logic without first reading
+   [.context/heartbeat-safety.md](.context/heartbeat-safety.md), describing the
+   exact files/change/expected result to the user, and receiving explicit approval.
+   The approval gate also covers related client producers, migrations, tests and
+   readback semantics; do not infer permission from a plan or a bug report.
 
 ## Context Routing — MANDATORY
 
@@ -89,6 +95,10 @@ from verified repository state.
   [.context/dead-code.md](.context/dead-code.md) first. Roughly a fifth of that
   tree does not compile. Do not use a directory as a reference implementation
   until you have confirmed it is live.
+- A task mentioning **heartbeat, duration, timing, activity, ingest, queue,
+  timeline, active time, or WakaTime-compatible counting** → read
+  [.context/heartbeat-safety.md](.context/heartbeat-safety.md) first. Its
+  approval gate is mandatory even when the requested change sounds small.
 
 ### Backend triggers
 
@@ -118,6 +128,7 @@ from verified repository state.
 | Naming, style, error handling, or "what is the convention here" | [.context/conventions.md](.context/conventions.md) — never present a Recommended Convention as an existing rule |
 | The VS Code / browser / desktop / AI-agent clients | [.context/extensions/overview.md](.context/extensions/overview.md) |
 | A bug, failure, or "why is this not working" | [.context/workflows/debugging.md](.context/workflows/debugging.md) |
+| Heartbeat producers, timing, duration, activity timeline, ingest or queues | [.context/heartbeat-safety.md](.context/heartbeat-safety.md) |
 | Explaining the system, or a change spanning ≥2 layers | [.context/architecture.md](.context/architecture.md) |
 | Product behaviour, domain terms, WakaTime compatibility | [.context/project-overview.md](.context/project-overview.md) |
 

@@ -450,6 +450,27 @@ function mockChild(result = {}) {
         await service.clearApiKey();
         (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["config", "clear-key"]);
     });
+    (0, vitest_1.it)("coalesces concurrent broker status probes into one CLI process", async () => {
+        spawnMock.mockImplementation(() => mockChild({
+            stdout: JSON.stringify({ runtime_mode: "on_demand", inbox: { pending: 2 } }),
+            exitCode: 0
+        }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        const [first, second] = await Promise.all([
+            service.getBrokerStatus(),
+            service.getBrokerStatus()
+        ]);
+        (0, vitest_1.expect)(spawnMock).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(first).toEqual(second);
+        (0, vitest_1.expect)(first.inbox?.pending).toBe(2);
+    });
+    (0, vitest_1.it)("coalesces concurrent automatic AI sync passes", async () => {
+        spawnMock.mockImplementation(() => mockChild({ stdout: "{}", exitCode: 0 }));
+        const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));
+        await Promise.all([service.syncAiActivity(), service.syncAiActivity()]);
+        (0, vitest_1.expect)(spawnMock).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(spawnMock.mock.calls[0][1]).toEqual(["sync", "--automatic", "--json"]);
+    });
     (0, vitest_1.it)("rejects setApiKey when wakaclock-cli exits non-zero", async () => {
         spawnMock.mockImplementation(() => mockChild({ stderr: "Error: could not write config\n", exitCode: 1 }));
         const service = new cli_1.WakaclockCliService(createConfig, new logging_1.Logger(() => false));

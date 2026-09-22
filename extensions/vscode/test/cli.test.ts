@@ -590,6 +590,35 @@ describe("WakaclockCliService", () => {
     expect(spawnMock.mock.calls[0][1]).toEqual(["config", "clear-key"]);
   });
 
+  it("coalesces concurrent broker status probes into one CLI process", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({ runtime_mode: "on_demand", inbox: { pending: 2 } }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const [first, second] = await Promise.all([
+      service.getBrokerStatus(),
+      service.getBrokerStatus()
+    ]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(second);
+    expect(first.inbox?.pending).toBe(2);
+  });
+
+  it("coalesces concurrent automatic AI sync passes", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "{}", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await Promise.all([service.syncAiActivity(), service.syncAiActivity()]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0][1]).toEqual(["sync", "--automatic", "--json"]);
+  });
+
   it("rejects setApiKey when wakaclock-cli exits non-zero", async () => {
     spawnMock.mockImplementation(() =>
       mockChild({ stderr: "Error: could not write config\n", exitCode: 1 })

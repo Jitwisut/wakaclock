@@ -18,7 +18,7 @@ const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z
 
 const target = process.argv[2];
 const binary = process.argv[3] || (process.platform === "win32" ? "wakaclock.exe" : "wakaclock");
-const version = process.argv[4] || process.env.CLI_VERSION || "0.1.0";
+const version = process.argv[4] || process.env.CLI_VERSION || "0.2.0";
 if (!target) {
   throw new Error("usage: generate-cli-manifest.js <target> [binary] [version]");
 }

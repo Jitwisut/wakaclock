@@ -62,6 +62,18 @@ pub struct QueueScope {
     pub owner: String,
 }
 
+/// Bounded, scope-aware queue counters used by the on-demand CLI status contract.
+/// These are intentionally counts only; payloads and event identifiers never leave
+/// the local queue database through this view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueueStatus {
+    pub pending: usize,
+    pub eligible: usize,
+    pub leased: usize,
+    pub retry: usize,
+    pub dead_letter: usize,
+}
+
 const FLUSH_BATCH_SIZE: usize = 100;
 const FLUSH_LEASE_SECONDS: i64 = 60;
 
@@ -86,6 +98,7 @@ impl Queue {
         // สร้าง table ถ้ายังไม่มี
         conn.execute_batch(
             "
+            PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS heartbeat_queue (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 heartbeat_id TEXT,
@@ -652,6 +665,41 @@ impl Queue {
             .map_err(AppError::Queue)
     }
 
+    /// Return all queue counters in one read transaction so `sync --json` does
+    /// not report a mixture of states while another short-lived CLI is writing.
+    pub fn status_scoped(&self, scope: &QueueScope) -> Result<QueueStatus, AppError> {
+        self.conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2),
+                    (SELECT COUNT(*) FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2
+                       AND next_retry_at <= strftime('%s', 'now')
+                       AND (lease_owner IS NULL OR lease_until <= strftime('%s', 'now'))),
+                    (SELECT COUNT(*) FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2
+                       AND lease_owner IS NOT NULL
+                       AND lease_until > strftime('%s', 'now')),
+                    (SELECT COUNT(*) FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2
+                       AND retry_count > 0),
+                    (SELECT COUNT(*) FROM heartbeat_dead_letter
+                     WHERE destination = ?1 AND owner_scope = ?2)",
+                params![&scope.destination, &scope.owner],
+                |row| {
+                    Ok(QueueStatus {
+                        pending: row.get(0)?,
+                        eligible: row.get(1)?,
+                        leased: row.get(2)?,
+                        retry: row.get(3)?,
+                        dead_letter: row.get(4)?,
+                    })
+                },
+            )
+            .map_err(AppError::Queue)
+    }
+
     /// Record why delivery failed for exactly this origin + owner.
     ///
     /// `consecutive_failures` keeps counting while the same scope keeps failing and
@@ -1109,6 +1157,25 @@ mod tests {
     };
     use chrono::DateTime;
     use uuid::Uuid;
+
+    #[test]
+    fn queue_uses_wal_and_waits_for_concurrent_writers() {
+        let path =
+            std::env::temp_dir().join(format!("wakaclock-queue-pragmas-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let journal_mode: String = queue
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        let busy_timeout_ms: i64 = queue
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(busy_timeout_ms, 2_000);
+        drop(queue);
+        let _ = std::fs::remove_file(path);
+    }
 
     fn test_ledger() -> HandoffLedger {
         let topology = TopologyIdentityInput {

@@ -408,9 +408,11 @@ async function runHook(script, input, env) {
         };
         await runHook(beforeScript, hookInput, env);
         await runHook(afterScript, hookInput, env);
-        const calls = (await fs.readFile(callsLog, "utf8"))
+        const rawCalls = (await fs.readFile(callsLog, "utf8"))
             .trim()
-            .split("\n")
+            .split("\n");
+        const calls = rawCalls
+            .filter((line) => line.startsWith("ai tool-"))
             .map((line) => {
             const [args, payload] = line.split("\t", 2);
             return { args, payload: JSON.parse(payload) };
@@ -461,14 +463,17 @@ async function runHook(script, input, env) {
             HOME: homeDir,
             WAKACLOCK_TEST_CALLS: callsLog
         });
-        const calls = (await fs.readFile(callsLog, "utf8"))
+        const rawCalls = (await fs.readFile(callsLog, "utf8"))
             .trim()
-            .split("\n")
+            .split("\n");
+        const calls = rawCalls
+            .filter((line) => line.startsWith("ai emit --json\t"))
             .map((line) => {
             const [args, payload] = line.split("\t", 2);
             return { args, payload: JSON.parse(payload) };
         });
         (0, vitest_1.expect)(calls).toHaveLength(2);
+        (0, vitest_1.expect)(rawCalls.some((line) => line.startsWith("sync --agent codex --automatic --json\t"))).toBe(true);
         (0, vitest_1.expect)(calls.map((call) => call.args)).toEqual(["ai emit --json", "ai emit --json"]);
         (0, vitest_1.expect)(calls.map((call) => call.payload)).toMatchObject([
             {

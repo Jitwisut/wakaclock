@@ -1438,9 +1438,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     (Some("deadline_exceeded".to_string()), true)
                 }
             };
-            let outbound_pending = queue_count();
-            let inbox_pending = wakaclock_core::broker::BrokerStore::open()
+            let queue_scope = api_client.queue_scope();
+            let heartbeat_queue = Queue::open()
+                .and_then(|queue| queue.status_scoped(&queue_scope))
+                .unwrap_or_default();
+            let outbound_pending = heartbeat_queue.pending;
+            let broker_stats = wakaclock_core::broker::BrokerStore::open()
                 .and_then(|store| store.stats())
+                .ok();
+            let inbox_pending = broker_stats
+                .as_ref()
                 .map(|stats| {
                     stats
                         .pending
@@ -1448,26 +1455,70 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         .saturating_add(stats.retry)
                 })
                 .unwrap_or_default() as usize;
-            let pending = outbound_pending.saturating_add(inbox_pending);
+            let ai_usage_queue = AiAttributionState::open()
+                .and_then(|state| state.usage_queue_status(chrono::Utc::now().timestamp()))
+                .unwrap_or_default();
+            let pending = outbound_pending
+                .saturating_add(inbox_pending)
+                .saturating_add(ai_usage_queue.pending);
+            let deferred_reason = sync_deferred_reason(
+                sync_error.as_deref(),
+                timed_out,
+                pending,
+                ai_usage_queue.conflicts,
+            );
+            let deferred = deferred_reason.is_some();
+            let last_error = sync_error.clone().or_else(|| {
+                (ai_usage_queue.conflicts > 0).then(|| "usage_conflicts_quarantined".to_string())
+            });
             if json {
                 println!(
                     "{}",
                     serde_json::json!({
+                        "schema_version": 2,
                         "runtime_mode": "on_demand",
-                        "status": if timed_out || sync_error.is_some() || pending > 0 {
+                        "status": if deferred {
                             "deferred"
                         } else if dry_run {
                             "accepted"
                         } else {
                             "sent"
                         },
-                        "accepted": sync_error.is_none() || pending > 0,
-                        "sent": !dry_run && sync_error.is_none(),
+                        "accepted": dry_run || sync_error.is_none(),
+                        "sent": !dry_run
+                            && sync_error.is_none()
+                            && pending == 0
+                            && ai_usage_queue.conflicts == 0,
                         "pending": pending,
+                        "unresolved_conflicts": ai_usage_queue.conflicts,
                         "outbound_pending": outbound_pending,
                         "inbox_pending": inbox_pending,
-                        "deferred": timed_out || sync_error.is_some() || pending > 0,
-                        "last_error": sync_error,
+                        "heartbeat_queue": {
+                            "pending": heartbeat_queue.pending,
+                            "eligible": heartbeat_queue.eligible,
+                            "leased": heartbeat_queue.leased,
+                            "retry": heartbeat_queue.retry,
+                            "dead_letter": heartbeat_queue.dead_letter,
+                        },
+                        "ai_usage_queue": {
+                            "pending": ai_usage_queue.pending,
+                            "eligible": ai_usage_queue.eligible,
+                            "leased": 0,
+                            "retry": ai_usage_queue.retry,
+                            "dead_letter": ai_usage_queue.dead_letter,
+                            "conflicts": ai_usage_queue.conflicts,
+                        },
+                        "inbox": {
+                            "pending": broker_stats.as_ref().map(|stats| stats.pending).unwrap_or(0),
+                            "eligible": broker_stats.as_ref().map(|stats| stats.pending).unwrap_or(0),
+                            "leased": broker_stats.as_ref().map(|stats| stats.processing).unwrap_or(0),
+                            "retry": broker_stats.as_ref().map(|stats| stats.retry).unwrap_or(0),
+                            "dead_letter": broker_stats.as_ref().map(|stats| stats.dead_letter).unwrap_or(0),
+                        },
+                        "lease_active": sync_error.as_deref() == Some("already_running"),
+                        "deferred_reason": deferred_reason,
+                        "deferred": deferred,
+                        "last_error": last_error,
                     })
                 );
             } else {
@@ -1956,6 +2007,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     true,
                     from_start,
                     transcript.as_deref(),
+                    false,
                     Some(Instant::now() + Duration::from_secs(60)),
                 )
                 .await?
@@ -2294,6 +2346,65 @@ fn queue_count() -> usize {
     Queue::open().and_then(|queue| queue.len()).unwrap_or(0)
 }
 
+/// Keep machine-readable sync deferrals stable and bounded. The detailed error
+/// remains in `last_error` for local troubleshooting, while consumers can switch
+/// on this small enum without parsing transport text.
+fn sync_deferred_reason(
+    error: Option<&str>,
+    timed_out: bool,
+    pending: usize,
+    conflicts: usize,
+) -> Option<&'static str> {
+    if timed_out {
+        return Some("deadline_exceeded");
+    }
+    let Some(error) = error else {
+        return if pending > 0 {
+            Some("backoff")
+        } else if conflicts > 0 {
+            // Stable-ID payload conflicts are quarantined locally rather than
+            // retried. Keep the public reason enum backwards-compatible while
+            // exposing the precise disposition in `last_error` and the
+            // `unresolved_conflicts` counter.
+            Some("server")
+        } else {
+            None
+        };
+    };
+    if error == "already_running" {
+        return Some("already_running");
+    }
+    if error == "deadline_exceeded" {
+        return Some("deadline_exceeded");
+    }
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("sqlite") || lower.contains("database is locked") {
+        return Some("sqlite_busy");
+    }
+    if lower.contains("unsupported") {
+        return Some("unsupported_adapter");
+    }
+    if lower.contains("401")
+        || lower.contains("402")
+        || lower.contains("credential")
+        || lower.contains("api key")
+    {
+        return Some("auth");
+    }
+    if lower.contains("429")
+        || lower.contains("500")
+        || lower.contains("502")
+        || lower.contains("503")
+        || lower.contains("504")
+        || lower.contains("timeout")
+        || lower.contains("network")
+        || lower.contains("connect")
+    {
+        return Some("server");
+    }
+    Some("server")
+}
+
 const AI_SETUP_STATE_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2409,7 +2520,63 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
                 )
             }
         };
-        reports.push(serde_json::json!({"agent": id, "status": description}));
+        let freshness = diagnostics
+            .adapters
+            .iter()
+            .find(|adapter| adapter.agent == id);
+        reports.push(serde_json::json!({
+            "agent": id,
+            "status": description.clone(),
+            "detected": freshness.and_then(|adapter| adapter.detected.value),
+            "installed": freshness.and_then(|adapter| adapter.enabled.value),
+            "hook_state": serde_json::Value::Null,
+            "transcript_state": description,
+            "runtime_health": freshness.map(|adapter| adapter.runtime_health),
+            "verification": freshness.map(|adapter| adapter.verification),
+            "last_evidence_at": freshness.and_then(|adapter| adapter.last_evidence_at),
+            "exact_tuple": freshness.and_then(|adapter| adapter.certification.clone()),
+            "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
+        }));
+    }
+    // Kilo and Kimi are native-hook adapters rather than transcript parsers. Keep
+    // them on the same status surface so an installed hook is not mistaken for an
+    // unsupported adapter merely because there is no parser implementation.
+    for native in native_adapter_doctor_entries(&context.home_dir) {
+        let agent = native
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let installed = native
+            .get("installed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let detected = native
+            .get("native_executable")
+            .is_some_and(|value| !value.is_null());
+        let status = if installed {
+            "native hook installed"
+        } else if detected {
+            "native executable detected; adapter not installed"
+        } else {
+            "not installed"
+        };
+        let freshness = diagnostics
+            .adapters
+            .iter()
+            .find(|adapter| adapter.agent == agent);
+        reports.push(serde_json::json!({
+            "agent": agent,
+            "status": status,
+            "detected": freshness.and_then(|adapter| adapter.detected.value),
+            "installed": freshness.and_then(|adapter| adapter.enabled.value),
+            "hook_state": if installed { "installed" } else { "not_installed" },
+            "transcript_state": "not_applicable",
+            "runtime_health": freshness.map(|adapter| adapter.runtime_health),
+            "verification": freshness.map(|adapter| adapter.verification),
+            "last_evidence_at": freshness.and_then(|adapter| adapter.last_evidence_at),
+            "exact_tuple": freshness.and_then(|adapter| adapter.certification.clone()),
+            "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
+        }));
     }
     if json {
         println!(
@@ -3025,6 +3192,11 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     diagnostic_code,
                 });
             }
+            adapters.extend(native_adapter_freshness_entries(
+                &context.home_dir,
+                &observer,
+                measured_at,
+            ));
             (
                 ParserLagSummaryV2 {
                     availability: MeasurementAvailability::Available,
@@ -3043,7 +3215,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
             )
         }
         Err(_) => {
-            let adapters = supported_ai_parsers()
+            let mut adapters = supported_ai_parsers()
                 .into_iter()
                 .map(|(id, _)| AdapterFreshnessV2 {
                     agent: id.to_string(),
@@ -3058,7 +3230,17 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     last_evidence_at: None,
                     diagnostic_code: Some("discovery_unavailable".to_string()),
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            // Even if transcript discovery is unavailable, native adapter setup is
+            // still observable locally. Preserve those distinctions instead of
+            // collapsing Kilo/Kimi into the parser-level unavailable result.
+            if let Ok(context) = ai_discovery_context() {
+                adapters.extend(native_adapter_freshness_entries(
+                    &context.home_dir,
+                    &observer,
+                    measured_at,
+                ));
+            }
             (
                 ParserLagSummaryV2 {
                     availability: MeasurementAvailability::Unavailable,
@@ -4015,10 +4197,102 @@ fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Convert the metadata-only native adapter probe into the typed diagnostics
+/// contract. Kilo and Kimi currently have no transcript parser, so their
+/// evidence timestamp intentionally stays empty until a native hook records an
+/// event in the sidecar. Installation/detection state is still useful and must
+/// not be reported as a fake zero or as parser failure.
+fn native_adapter_freshness_entries(
+    home_dir: &Path,
+    observer: &ObserverConfig,
+    measured_at: chrono::DateTime<chrono::Utc>,
+) -> Vec<AdapterFreshnessV2> {
+    native_adapter_doctor_entries(home_dir)
+        .into_iter()
+        .filter_map(|value| {
+            let agent = value.get("agent")?.as_str()?.to_string();
+            let detected = value
+                .get("native_executable")
+                .is_some_and(|entry| !entry.is_null());
+            let installed = value
+                .get("installed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let verification = match value
+                .get("verification_status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("verified") => VerificationStatus::Verified,
+                // The diagnostics wire enum predates the registry's distinct
+                // `unverified` label; keep that distinction in `diagnostic_code`
+                // while mapping the lifecycle value to the conservative scaffold
+                // state for backwards-compatible consumers.
+                Some("unverified") => VerificationStatus::Scaffold,
+                _ => VerificationStatus::Scaffold,
+            };
+            let diagnostic_code = if !detected {
+                Some("native_executable_missing".to_string())
+            } else if !installed {
+                Some("not_installed".to_string())
+            } else {
+                Some("native_hook_only".to_string())
+            };
+            let runtime_health = if !observer.enabled {
+                RuntimeHealth::Disabled
+            } else if !detected {
+                RuntimeHealth::Unavailable
+            } else if !installed {
+                RuntimeHealth::Degraded
+            } else {
+                RuntimeHealth::Idle
+            };
+            Some(AdapterFreshnessV2 {
+                agent: agent.clone(),
+                availability: MeasurementAvailability::Available,
+                detected: DiagnosticMeasurement::available(detected, measured_at),
+                enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
+                runtime_health,
+                verification,
+                certification: certification_tuple_for_agent(&agent),
+                certificate_id: None,
+                certification_status: None,
+                last_evidence_at: None,
+                diagnostic_code,
+            })
+        })
+        .collect()
+}
+
 fn resolve_named_command(names: &[String]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    // Prefer PATH, but also recognize vendor-standard per-user install
+    // locations.  Kimi's official checksum-verifying installer intentionally
+    // keeps `kimi` under ~/.kimi-code/bin instead of modifying the caller's
+    // shell profile.  Doctor/setup run from VS Code or a hook therefore may
+    // not inherit that directory in PATH.  This is detection-only: we never
+    // execute an untrusted path or add it to PATH globally.
+    let path_candidates: Vec<PathBuf> = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .collect();
+    let home_candidates: Vec<PathBuf> = std::env::var_os("HOME")
+        .into_iter()
+        .flat_map(|home| {
+            let home = PathBuf::from(home);
+            names.iter().flat_map(move |name| {
+                let mut candidates = Vec::new();
+                if name == "kimi" {
+                    candidates.push(home.join(".kimi-code/bin/kimi"));
+                    candidates.push(home.join(".kimi/bin/kimi"));
+                    candidates.push(home.join(".local/bin/kimi"));
+                }
+                candidates
+            })
+        })
+        .collect();
+    path_candidates
+        .into_iter()
+        .chain(home_candidates)
         .find(|candidate| candidate.is_file())
 }
 
@@ -4428,6 +4702,7 @@ async fn run_ai_sync(
     verbose: bool,
     from_start: bool,
     transcript_override: Option<&Path>,
+    lease_already_held: bool,
     deadline: Option<Instant>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(agent) = agent_filter {
@@ -4440,14 +4715,13 @@ async fn run_ai_sync(
             );
         }
     }
-    let _sync_lock = if dry_run {
+    let _sync_lock = if dry_run || lease_already_held {
         None
     } else {
         match AiSyncLock::acquire()? {
             Some(lock) => Some(lock),
             None => {
-                eprintln!("AI sync already running (AlreadyRunning); skipping this invocation");
-                return Ok(());
+                return Err("already_running".into());
             }
         }
     };
@@ -4783,6 +5057,17 @@ async fn run_on_demand_sync(
         Ok(())
     };
     let mut deferred_error: Option<&'static str> = None;
+    // The lease covers the complete one-shot lifecycle. Previously the pre-scan
+    // drain ran before `run_ai_sync` acquired its lock, so two CLI processes could
+    // concurrently drain/parse/flush and the losing process still reported success.
+    let _sync_lock = if dry_run {
+        None
+    } else {
+        match AiSyncLock::acquire()? {
+            Some(lock) => Some(lock),
+            None => return Err("already_running".into()),
+        }
+    };
 
     if !dry_run {
         deferred_error = drain_on_demand_delivery(config, api_client, deadline, false).await?;
@@ -4797,6 +5082,7 @@ async fn run_on_demand_sync(
         verbose,
         from_start,
         transcript_override,
+        true,
         Some(deadline),
     )
     .await?;
@@ -6128,6 +6414,7 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
                 false,
                 false,
                 None,
+                false,
                 Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
             ),
         )
@@ -7020,6 +7307,13 @@ mod generic_ai_ingress_tests {
                 ..
             } if agent == "codex"
         ));
+    }
+
+    #[test]
+    fn sync_status_distinguishes_quarantined_conflicts_from_transport_pending() {
+        assert_eq!(sync_deferred_reason(None, false, 0, 0), None);
+        assert_eq!(sync_deferred_reason(None, false, 4, 0), Some("backoff"));
+        assert_eq!(sync_deferred_reason(None, false, 0, 3), Some("server"));
     }
 
     #[test]

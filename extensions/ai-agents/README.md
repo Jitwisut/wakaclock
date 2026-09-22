@@ -31,9 +31,11 @@ leave another tool pointing at a deleted extension directory. It never installs 
 per-user service. Native hooks invoke a bounded `wakaclock sync --automatic --json`
 pass at lifecycle boundaries; the SQLite cursor resumes the active transcript and
 old transcripts start at their tail (only the last 24 hours are replayed on first
-discovery). Use `wakaclock broker status --json` to inspect on-demand inbox,
-outbound queue and delivery error state. `wakaclock agent status --json` remains a
-compatibility alias.
+discovery). Use `wakaclock sync --json` to inspect accepted/sent/pending work,
+heartbeat and AI-usage queues, retry/dead-letter counts, and the current on-demand
+lease. `wakaclock ai doctor --json` reports adapter coverage and exact runtime
+metadata. `wakaclock broker status --json` and `wakaclock agent status --json` remain
+read-only compatibility aliases.
 
 The same setup is available without VS Code:
 
@@ -72,8 +74,17 @@ previously installed plugin versions.
 
 ## Codex CLI (`codex/`)
 
-Codex has no plugin-marketplace equivalent yet — hooks are behind a feature flag and
-registered by hand in `~/.codex/config.toml`:
+Current Codex CLI/Desktop builds install the versioned AtoAxis plugin through a local
+marketplace. The setup command performs the registration idempotently:
+
+```
+wakaclock ai setup codex --yes
+```
+
+The managed bundle contains `.codex-plugin/plugin.json`, `hooks/hooks.json`, and the
+local marketplace entry. For older builds that do not expose `codex plugin`, setup
+falls back to a marker-bounded block in `~/.codex/config.toml` and removes only that
+block on uninstall:
 
 ```toml
 [features]
@@ -120,11 +131,13 @@ infallible.
 
 ## Gemini CLI (`gemini-cli/`)
 
-Gemini CLI extensions do bundle hooks (closer to Claude Code's experience than
-Codex's):
+Gemini CLI extensions bundle hooks (closer to Claude Code's experience than
+Codex's). Setup uses a bounded, non-interactive install:
 
 ```
-gemini extensions install <path-or-git-url-to>/extensions/ai-agents/gemini-cli
+wakaclock ai setup gemini-cli --yes
+# equivalent underlying command:
+gemini extensions install <path> --consent --skip-settings
 ```
 
 Registers the verified `AfterTool` adapter on `write_file|replace`, plus Before/After
