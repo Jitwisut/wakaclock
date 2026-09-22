@@ -32,9 +32,9 @@ export interface CliPathResolver {
 
 /**
  * Owns the lifecycle of the native CLI shipped in the VSIX. The executable is
- * copied out of VS Code's versioned extension directory before it is used by an
- * agent service; updates therefore never leave LaunchAgent/systemd pointing at a
- * path that VS Code has just removed.
+ * copied out of VS Code's versioned extension directory before it is used by
+ * event-triggered hooks; updates therefore never depend on a service manifest
+ * pointing at a path that VS Code has just removed.
  */
 export class ManagedCliManager implements CliPathResolver {
   private ready?: Promise<string>;

@@ -47,15 +47,8 @@ export interface AiIntegrationController {
   setup(selectedIds?: AiAgentId[]): Promise<AiAgentSetupResult>;
 }
 
-/**
- * planai2.md Phase 0.2b: install the per-user OS service, then confirm it is
- * *actually* running before trusting it. `broker install` can exit 0 while
- * launchd / systemd / Task Scheduler silently declines to keep the process up
- * (sandboxed hosts, a disabled user manager, a denied Task Scheduler policy) —
- * previously only a thrown `installAgent()` triggered the Extension-Host-owned
- * fallback, and only on remote or Linux. This checks `broker status` on every
- * platform and falls back whenever the service is not up.
- */
+/** Legacy compatibility shape. New setup uses bounded CLI invocations and does
+ * not install a service or keep an Extension Host watcher alive. */
 export interface BrokerEnsureDeps {
   installAgent(): Promise<unknown>;
   getBrokerStatus(): Promise<{ running?: boolean }>;
@@ -63,49 +56,24 @@ export interface BrokerEnsureDeps {
 }
 
 export interface BrokerEnsureOutcome {
-  /** A watcher is up — either the OS service or the extension-owned child. */
+  /** Kept for compatibility; on-demand mode deliberately returns false. */
   running: boolean;
-  /** The extension-owned child is what is keeping it up. */
+  /** Kept for compatibility; no extension-owned collector is started. */
   viaFallback: boolean;
-  /** Present only when `viaFallback` — push onto `context.subscriptions`. */
+  /** Present only for legacy callers; on-demand mode leaves it unset. */
   disposable?: { dispose(): void };
-  /** Why the OS service was not usable, when a fallback was needed or failed. */
+  /** Why a legacy service was not used. */
   error?: string;
 }
 
 export async function ensureBrokerRunning(
-  deps: BrokerEnsureDeps,
+  _deps: BrokerEnsureDeps,
 ): Promise<BrokerEnsureOutcome> {
-  let installError: string | undefined;
-  try {
-    await deps.installAgent();
-  } catch (error) {
-    installError = error instanceof Error ? error.message : String(error);
-  }
-
-  if (!installError) {
-    try {
-      const status = await deps.getBrokerStatus();
-      if (status.running === true) {
-        return { running: true, viaFallback: false };
-      }
-    } catch {
-      // Status unreadable — treat exactly like "not running" and fall back.
-    }
-  }
-
-  try {
-    const disposable = await deps.startExtensionOwnedAgent();
-    return { running: true, viaFallback: true, disposable, error: installError };
-  } catch (fallbackError) {
-    const fallbackMessage =
-      fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-    return {
-      running: false,
-      viaFallback: false,
-      error: [installError, fallbackMessage].filter(Boolean).join("; "),
-    };
-  }
+  return {
+    running: false,
+    viaFallback: false,
+    error: "on-demand mode does not start a background watcher",
+  };
 }
 
 export function registerCommands(
@@ -118,8 +86,6 @@ export function registerCommands(
     | "persistApiKey"
     | "clearApiKey"
     | "syncAndVerifyApiKey"
-    | "installAgent"
-    | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
     | "getBrokerStatus"
@@ -228,7 +194,7 @@ export function registerCommands(
 
       if (result.status === "unreachable" || result.status === "server_error") {
         // A pending identity is useful for offline queueing. It is safe to retain in
-        // SecretStorage, but do not mirror it to the background agent until verified.
+        // SecretStorage, but do not mirror it to hooks until verified.
         const existing = await getStoredApiKey(context.secrets);
         await setPendingApiKey(context.secrets, trimmed);
         if (!existing) {
@@ -256,7 +222,7 @@ export function registerCommands(
       await statusBar.refresh();
       // The activation bootstrap may already have returned because no key was
       // available at startup. Re-run it after verification so an existing AI
-      // consent immediately refreshes the broker service, and a newly eligible
+      // consent immediately refreshes CLI-backed status, and a newly eligible
       // integration can receive the normal consent prompt.
       onVerifiedApiKey?.();
 
@@ -304,14 +270,14 @@ export function registerCommands(
         const inbox = status.inbox;
         const lastError = inbox?.last_error_message;
         await vscode.window.showInformationMessage(
-          `Broker ${status.running ? "running" : "stopped"}; ` +
+          `On-demand AI sync; ` +
             `pending ${inbox?.pending ?? 0}, retry ${inbox?.retry ?? 0}, ` +
             `dead-letter ${inbox?.dead_letter ?? 0}, outbound ${status.outbound_queue_count ?? 0}.` +
             (lastError ? ` Last error: ${lastError}` : "")
         );
       } catch (error) {
         await vscode.window.showErrorMessage(
-          error instanceof Error ? error.message : "Unable to inspect the local AI broker."
+          error instanceof Error ? error.message : "Unable to inspect on-demand AI sync."
         );
       }
     }),
@@ -347,9 +313,7 @@ async function setupAiTracking(
   aiIntegrations: AiIntegrationController,
   cliService: Pick<
     WakaclockCliService,
-    | "installAgent"
     | "persistApiKey"
-    | "startExtensionOwnedAgent"
     | "verifyApiKey"
     | "getStatus"
     | "getBrokerStatus"
@@ -386,35 +350,14 @@ async function setupAiTracking(
       if (key) {
         await cliService.persistApiKey(key).catch(() => undefined);
       }
-      const broker = await ensureBrokerRunning(cliService);
-      const serviceInstalled = broker.running;
-      if (broker.disposable) {
-        context.subscriptions.push(broker.disposable);
-      }
-      if (broker.running && broker.viaFallback) {
-        await vscode.window.showInformationMessage(
-          `${prefix}; the Extension Host will keep the transcript watcher running while this workspace is open.`,
-        );
-      }
-      if (!broker.running) {
-        await vscode.window.showWarningMessage(
-          `${prefix}, but the always-on transcript agent could not be started. Upgrade wakaclock-cli if this persists: ${
-            broker.error ?? "unknown error"
-          }`,
-        );
-      }
       if (failed > 0) {
-      await vscode.window.showWarningMessage(
-          `${prefix}: ${configured} configured, ${failed} failed.${
-            serviceInstalled ? "" : " The always-on agent also needs an upgrade or repair."
-          }${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`
+        await vscode.window.showWarningMessage(
+          `${prefix}: ${configured} configured, ${failed} failed.${suggestedAction ? ` ${suggestedAction}.` : ""} Hooks use on-demand CLI sync. Run “AtoAxis: Show AI Tracking Status” for details.`
         );
         return false;
       }
-      if (serviceInstalled) {
-        await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
-      }
-      return serviceInstalled;
+      await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled. Hooks use on-demand CLI sync.`);
+      return true;
     } else if (failed > 0) {
       await vscode.window.showWarningMessage(
         `AI setup did not complete.${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`
@@ -457,7 +400,7 @@ async function chooseAiAgents(
       label: status.label,
       description: status.id,
       detail:
-        "Adds an AtoAxis hook when supported and enables the background transcript watcher. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
+        "Adds an AtoAxis hook when supported and enables on-demand transcript sync. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
       id: status.id,
     })),
     {
@@ -479,7 +422,7 @@ async function chooseAiAgents(
     {
       title: repairing ? "Confirm AI integration repair" : "Confirm AI tracking setup",
       placeHolder: repairing
-        ? "Reinstall hooks, broker service and token permissions"
+        ? "Repair hooks and token permissions"
         : "Choose when to install the selected integrations",
       ignoreFocusOut: true,
     },

@@ -10,7 +10,7 @@ use std::{
     process::Command,
     str::FromStr,
     sync::OnceLock,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 mod agent_service;
@@ -272,6 +272,27 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Process queued metadata and newly written AI transcripts once, then exit.
+    /// This is the supported on-demand collector entry point.
+    Sync {
+        /// Only sync this agent (`claude-code`, `codex`, or `gemini-cli`).
+        #[arg(long)]
+        agent: Option<String>,
+        /// Use the short hook budget; intended for native lifecycle hooks.
+        #[arg(long, hide = true, default_value_t = false)]
+        automatic: bool,
+        /// Parse and report without contacting the server or advancing delivery state.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Replay transcript bytes from the beginning while retaining event deduplication.
+        #[arg(long, default_value_t = false)]
+        from_start: bool,
+        /// Parse one exact transcript file. Requires `--agent`.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     Config {
         #[command(subcommand)]
         action: Option<ConfigAction>,
@@ -358,12 +379,12 @@ enum DoctorTarget {
 
 #[derive(Subcommand)]
 enum BrokerAction {
-    /// Run the local AI Activity Broker in the foreground.
+    /// Deprecated compatibility command: remove any legacy service and run one bounded sync.
     Run {
         #[arg(long, default_value_t = 1)]
         interval_seconds: u64,
     },
-    /// Install or update the per-user broker service and start it immediately.
+    /// Deprecated compatibility command: remove the legacy service; never install one.
     Install {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -391,7 +412,7 @@ enum BrokerAction {
         #[arg(long, default_value_t = false)]
         all: bool,
     },
-    /// Rotate the local bearer token and restart the service.
+    /// Rotate the legacy local token; on-demand mode does not restart a service.
     RotateToken {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -433,12 +454,12 @@ enum RepairAction {
 
 #[derive(Subcommand)]
 enum AgentAction {
-    /// Run the transcript watcher in the foreground. Service managers invoke this.
+    /// Deprecated compatibility command: remove any legacy service and run one bounded sync.
     Run {
         #[arg(long, default_value_t = 5)]
         interval_seconds: u64,
     },
-    /// Install or update the per-user service and start it immediately.
+    /// Deprecated compatibility command: remove the legacy service; never install one.
     Install {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -499,9 +520,8 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Remove the CLI-owned adapter registration/consent records and, when no
-    /// adapters remain, the AtoAxis-owned watcher service. Agent configuration
-    /// files are preserved.
+    /// Remove the CLI-owned adapter registration/consent records and legacy service
+    /// registration. Agent configuration files are preserved.
     Uninstall {
         agent: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -624,7 +644,7 @@ enum ConfigAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Save the API origin used by the CLI and always-on agent.
+    /// Save the API origin used by the CLI and event-triggered hooks.
     SetServerUrl {
         url: String,
         #[arg(long, default_value_t = false)]
@@ -1156,8 +1176,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         } => {
             // Hook-originated AI heartbeats are already attributed. Running transcript
             // sync from inside them would create a second event for the same patch. A
-            // background transcript read is also consent-gated: installing the watcher
-            // alone must never open a production attribution path.
+            // transcript reads are also consent-gated: installing hooks alone must
+            // never open a production attribution path.
             let observer_enabled = load_observer_config().enabled;
             // New registry-driven setup persists per-adapter hook consent. Keep
             // the legacy state file as a compatibility fallback for installations
@@ -1366,6 +1386,104 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        Commands::Sync {
+            agent,
+            automatic,
+            dry_run,
+            from_start,
+            transcript,
+            json,
+        } => {
+            if transcript.is_some() && agent.is_none() {
+                return Err("--transcript requires --agent".into());
+            }
+            const AUTOMATIC_SYNC_DEADLINE: Duration = Duration::from_secs(10);
+            const MANUAL_SYNC_DEADLINE: Duration = Duration::from_secs(60);
+            let deadline = Instant::now()
+                + if automatic {
+                    AUTOMATIC_SYNC_DEADLINE
+                } else {
+                    MANUAL_SYNC_DEADLINE
+                };
+            let (sync_error, timed_out) = match tokio::time::timeout(
+                if automatic {
+                    AUTOMATIC_SYNC_DEADLINE
+                } else {
+                    MANUAL_SYNC_DEADLINE
+                },
+                run_on_demand_sync(
+                    &config,
+                    &api_client,
+                    agent.as_deref(),
+                    dry_run,
+                    !json,
+                    from_start,
+                    transcript.as_deref(),
+                    deadline,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => (None, false),
+                Ok(Err(error)) => {
+                    eprintln!("On-demand sync deferred: {error}");
+                    let timed_out = error.to_string() == "deadline_exceeded";
+                    (Some(error.to_string()), timed_out)
+                }
+                Err(_) => {
+                    eprintln!(
+                        "On-demand sync reached the {}-second deadline; remaining work stays queued",
+                        if automatic { 10 } else { 60 }
+                    );
+                    (Some("deadline_exceeded".to_string()), true)
+                }
+            };
+            let outbound_pending = queue_count();
+            let inbox_pending = wakaclock_core::broker::BrokerStore::open()
+                .and_then(|store| store.stats())
+                .map(|stats| {
+                    stats
+                        .pending
+                        .saturating_add(stats.processing)
+                        .saturating_add(stats.retry)
+                })
+                .unwrap_or_default() as usize;
+            let pending = outbound_pending.saturating_add(inbox_pending);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "runtime_mode": "on_demand",
+                        "status": if timed_out || sync_error.is_some() || pending > 0 {
+                            "deferred"
+                        } else if dry_run {
+                            "accepted"
+                        } else {
+                            "sent"
+                        },
+                        "accepted": sync_error.is_none() || pending > 0,
+                        "sent": !dry_run && sync_error.is_none(),
+                        "pending": pending,
+                        "outbound_pending": outbound_pending,
+                        "inbox_pending": inbox_pending,
+                        "deferred": timed_out || sync_error.is_some() || pending > 0,
+                        "last_error": sync_error,
+                    })
+                );
+            } else {
+                if timed_out {
+                    println!(
+                        "On-demand sync reached its {}-second deadline.",
+                        if automatic { 10 } else { 60 }
+                    );
+                } else if sync_error.is_some() {
+                    println!("On-demand sync completed with deferred work.");
+                } else {
+                    println!("On-demand sync completed.");
+                }
+                println!("Pending heartbeat(s): {pending}.");
+            }
+        }
         Commands::Config { action } => match action {
             None => {
                 println!("Config path: {}", Config::config_path().display());
@@ -1420,6 +1538,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let queued = queue.len()?;
             let identity = build_identity();
             let cli_paths = cli_path_report();
+            let legacy_service = agent_service::status();
             let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
             let stale_service_binary = agent_service::manifest_points_at_stale_binary();
 
@@ -1449,6 +1568,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "server_url": config.server_url,
                         "identity": identity_line(&config),
                         "queued_heartbeats": queued,
+                        "runtime_mode": "on_demand",
+                        "service_installed": legacy_service.installed,
+                        "service_running": legacy_service.running,
                         "orphaned_queued_heartbeats": orphaned,
                         "key_check": key_check,
                         "key_check_detail": key_check_detail,
@@ -1469,6 +1591,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     identity.version, identity.git_sha, identity.build_time
                 );
                 println!("{}", identity_line(&config));
+                println!("Runtime mode: on_demand (no background collector)");
+                if legacy_service.installed || legacy_service.running {
+                    println!(
+                        "Legacy service detected: installed={} running={} (run `wakaclock broker uninstall` to remove it)",
+                        legacy_service.installed, legacy_service.running
+                    );
+                }
                 println!("Queued heartbeats: {queued}");
                 if orphaned > 0 {
                     println!(
@@ -1499,12 +1628,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if legacy_service_alias {
                     println!(
-                        "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it to `broker run`"
+                        "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker uninstall` to remove it"
                     );
                 }
                 if stale_service_binary {
                     println!(
-                        "warning: the installed service manifest points at a different `wakaclock` binary than this one — run `wakaclock broker install` to repoint it"
+                        "warning: the installed service manifest points at a different `wakaclock` binary — run `wakaclock broker uninstall` to remove it"
                     );
                 }
             }
@@ -1827,6 +1956,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     true,
                     from_start,
                     transcript.as_deref(),
+                    Some(Instant::now() + Duration::from_secs(60)),
                 )
                 .await?
             }
@@ -1859,12 +1989,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         },
         Commands::Broker { action } => match action {
-            BrokerAction::Run { interval_seconds } => {
-                broker::run(config, interval_seconds.max(1)).await?;
+            BrokerAction::Run { .. } => {
+                // Keep the old command as a compatibility entry point for stale
+                // service manifests, but make it a bounded one-shot sync and remove
+                // the manifest first. This prevents an upgraded LaunchAgent from
+                // bringing the daemon back.
+                eprintln!(
+                    "Warning: `wakaclock broker run` is deprecated; using one-shot sync and removing the legacy service."
+                );
+                let _ = agent_service::uninstall();
+                run_bounded_ai_sync(&config, &api_client).await;
             }
             BrokerAction::Install { json } => {
-                broker::ensure_token()?;
-                let report = agent_service::install().map_err(io::Error::other)?;
+                // `install` is retained only as a migration command.  It removes
+                // a legacy service and never creates a replacement.
+                let report = agent_service::uninstall().map_err(io::Error::other)?;
+                broker::cleanup_discovery();
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Uninstall { json } => {
@@ -1873,12 +2013,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Start { json } => {
-                if agent_service::migrate_legacy_service_manifest().map_err(io::Error::other)? {
-                    eprintln!(
-                        "migrated service manifest from the legacy `agent run` alias to `broker run`"
-                    );
-                }
-                let report = agent_service::start().map_err(io::Error::other)?;
+                let report = agent_service::uninstall().map_err(io::Error::other)?;
+                broker::cleanup_discovery();
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Stop { json } => {
@@ -1898,33 +2034,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Requeued broker events: {changed}");
             }
             BrokerAction::RotateToken { json } => {
-                let before = agent_service::status();
-                if before.running && !before.installed {
-                    return Err(
-                        "cannot rotate a foreground broker token while it is running; stop the broker first"
-                            .into(),
-                    );
-                }
-                broker::rotate_token()?;
-                // A running broker keeps its bearer token in memory. Stop/start is
-                // intentionally explicit here so rotation takes effect immediately on
-                // every supported service manager, not only on the next login.
-                let service_restarted = if before.running {
-                    let _ = agent_service::stop();
-                    agent_service::start().map_err(io::Error::other)?.running
-                } else {
-                    false
-                };
+                // The local HTTP broker and bearer token are retired. Keep the
+                // command for old scripts, but do not create or rotate credentials.
                 if json {
                     println!(
                         "{}",
                         serde_json::json!({
-                            "rotated": true,
-                            "service_restarted": service_restarted,
+                            "rotated": false,
+                            "deprecated": true,
+                            "runtime_mode": "on_demand",
                         })
                     );
                 } else {
-                    println!("Broker token rotated; service restart requested.");
+                    println!("Local broker tokens are retired; on-demand CLI mode remains active.");
                 }
             }
             BrokerAction::EditorObserve { json } => {
@@ -1963,12 +2085,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
             match action {
-                AgentAction::Run { interval_seconds } => {
-                    broker::run(config, interval_seconds.max(1)).await?;
+                AgentAction::Run { .. } => {
+                    eprintln!(
+                        "Warning: `wakaclock agent run` is deprecated; using one-shot sync and removing the legacy service."
+                    );
+                    let _ = agent_service::uninstall();
+                    run_bounded_ai_sync(&config, &api_client).await;
                 }
                 AgentAction::Install { json } => {
-                    broker::ensure_token()?;
-                    let report = agent_service::install().map_err(io::Error::other)?;
+                    let report = agent_service::uninstall().map_err(io::Error::other)?;
+                    broker::cleanup_discovery();
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Uninstall { json } => {
@@ -1977,7 +2103,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Start { json } => {
-                    let report = agent_service::start().map_err(io::Error::other)?;
+                    let report = agent_service::uninstall().map_err(io::Error::other)?;
+                    broker::cleanup_discovery();
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Stop { json } => {
@@ -2079,6 +2206,7 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
             "{}",
             serde_json::json!({
                 "platform": report.platform,
+                "runtime_mode": "on_demand",
                 "installed": report.installed,
                 "running": report.running,
                 "queue_count": queue_count,
@@ -2090,6 +2218,7 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
         );
     } else {
         println!("Platform: {}", report.platform);
+        println!("Runtime mode: on_demand (no background collector)");
         println!("Installed: {}", report.installed);
         println!("Running: {}", report.running);
         println!("Queue count: {}", queue_count);
@@ -2127,14 +2256,20 @@ fn print_broker_report(
             "service_running".to_string(),
             serde_json::Value::Bool(report.running),
         );
+        status.insert(
+            "legacy_service_present".to_string(),
+            serde_json::Value::Bool(report.installed || report.running),
+        );
+        status.insert(
+            "runtime_mode".to_string(),
+            serde_json::Value::String("on_demand".to_string()),
+        );
         println!("{}", serde_json::Value::Object(status));
     } else {
         println!("Platform: {}", report.platform);
-        println!("Installed: {}", report.installed);
-        println!("Running: {}", report.running);
-        if let Some(running) = broker_status.get("running") {
-            println!("Broker running: {}", running);
-        }
+        println!("Runtime mode: on_demand (no background collector)");
+        println!("Legacy service installed: {}", report.installed);
+        println!("Legacy service running: {}", report.running);
         if let Some(inbox) = broker_status.get("inbox") {
             println!("Broker inbox: {inbox}");
         }
@@ -2871,7 +3006,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     RuntimeHealth::Unavailable
                 } else if diagnostic_code.is_some() {
                     RuntimeHealth::Degraded
-                } else if service_running == Some(true) {
+                } else if broker_available && queue_available {
                     RuntimeHealth::Healthy
                 } else {
                     RuntimeHealth::Degraded
@@ -2941,7 +3076,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
         RuntimeHealth::Disabled
     } else if !broker_available || !queue_available || parser_probe_failed {
         RuntimeHealth::Degraded
-    } else if service_running == Some(true) {
+    } else if broker_available && queue_available {
         RuntimeHealth::Healthy
     } else {
         RuntimeHealth::Degraded
@@ -3606,15 +3741,17 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     }
     if legacy_service_alias {
         println!(
-            "  MISMATCH: the installed service manifest runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it"
+            "  LEGACY SERVICE: the installed manifest runs the old `agent run` alias — run `wakaclock broker uninstall` to remove it"
         );
     }
     if stale_service_binary {
         println!(
-            "  MISMATCH: the installed service manifest points at a different `wakaclock` binary — run `wakaclock broker install` to repoint it"
+            "  LEGACY SERVICE: the installed manifest points at an old `wakaclock` binary — run `wakaclock broker uninstall` to remove it"
         );
     }
-    println!("== Broker ==");
+    println!("== Runtime ==");
+    println!("  mode=on_demand (no background collector)");
+    println!("== Legacy broker service ==");
     println!(
         "  installed={} running={}",
         service.installed, service.running
@@ -3644,6 +3781,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
 fn ai_doctor_report_keys() -> &'static [&'static str] {
     &[
         "cli_identity",
+        "runtime_mode",
         "legacy_service_alias",
         "stale_service_binary",
         "broker_installed",
@@ -3676,6 +3814,7 @@ struct AiDoctorReportParts {
 fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
     serde_json::json!({
         "cli_identity": parts.cli_identity,
+        "runtime_mode": "on_demand",
         "legacy_service_alias": parts.legacy_service_alias,
         "stale_service_binary": parts.stale_service_binary,
         "broker_installed": parts.broker_installed,
@@ -4289,7 +4428,18 @@ async fn run_ai_sync(
     verbose: bool,
     from_start: bool,
     transcript_override: Option<&Path>,
+    deadline: Option<Instant>,
 ) -> Result<(), Box<dyn Error>> {
+    if let Some(agent) = agent_filter {
+        let supported = supported_ai_parsers()
+            .iter()
+            .any(|(parser_id, _)| *parser_id == agent);
+        if !supported {
+            return Err(
+                format!("AI transcript sync is not supported for adapter `{agent}`").into(),
+            );
+        }
+    }
     let _sync_lock = if dry_run {
         None
     } else {
@@ -4304,6 +4454,13 @@ async fn run_ai_sync(
     let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
     let mut first_delivery_error: Option<AppError> = None;
+    let check_deadline = || -> Result<(), Box<dyn Error>> {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            return Err("deadline_exceeded".into());
+        }
+        Ok(())
+    };
+    check_deadline()?;
 
     // Flush durable usage before discovering new transcript bytes. This makes a
     // restarted watcher drain an outage backlog first while still allowing the
@@ -4312,9 +4469,11 @@ async fn run_ai_sync(
         if let Some(error) = flush_pending_usage(&mut state, api_client, verbose).await? {
             first_delivery_error = Some(error);
         }
+        check_deadline()?;
     }
 
     for (id, parser) in supported_ai_parsers() {
+        check_deadline()?;
         if agent_filter.is_some_and(|filter| filter != id) {
             continue;
         }
@@ -4370,6 +4529,7 @@ async fn run_ai_sync(
         sort_transcript_paths_newest_first(&mut transcript_paths);
 
         for transcript_path in transcript_paths {
+            check_deadline()?;
             // Resume from the saved cursor only if it still points at the same file — a
             // new session file (Claude Code starts one per session) means byte offset 0
             // against the file discover() just found, not a stale offset into a file we
@@ -4401,8 +4561,8 @@ async fn run_ai_sync(
             };
 
             // On first discovery, old transcripts are intentionally seeded at EOF. This
-            // keeps a newly-installed always-on agent from uploading an entire history;
-            // recent files (and explicit --from-start) still replay normally.
+            // keeps a newly-enabled adapter from uploading an entire history; recent
+            // files (and explicit --from-start) still replay normally.
             let is_first_cursor = state.load_cursor(&cursor_key)?.is_none();
             let is_old = fs::metadata(&transcript_path)
                 .and_then(|meta| meta.modified())
@@ -4433,6 +4593,7 @@ async fn run_ai_sync(
                     break;
                 }
             };
+            check_deadline()?;
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
@@ -4538,6 +4699,7 @@ async fn run_ai_sync(
                     submitted_events.push(*event);
                 }
                 if !broker_events.is_empty() {
+                    check_deadline()?;
                     let report =
                         submit_events_with_optional_handoff(config, api_client, &broker_events)
                             .await?;
@@ -4571,6 +4733,7 @@ async fn run_ai_sync(
                 // without creating another activity row.
                 state.save_cursor(&cursor_key, &batch.next_cursor)?;
             }
+            check_deadline()?;
         }
     }
 
@@ -4596,6 +4759,102 @@ async fn run_ai_sync(
     }
 
     Ok(())
+}
+
+/// Run the complete WakaTime-style one-shot pass.  Transcript reconciliation is
+/// only one part of a sync invocation: an offline hook may already have durable
+/// inbox rows or queued heartbeats that need delivery even when no transcript byte
+/// changed.  Drain both sides before and after parsing, while keeping the same
+/// absolute deadline for the whole invocation.
+async fn run_on_demand_sync(
+    config: &Config,
+    api_client: &ApiClient,
+    agent_filter: Option<&str>,
+    dry_run: bool,
+    verbose: bool,
+    from_start: bool,
+    transcript_override: Option<&Path>,
+    deadline: Instant,
+) -> Result<(), Box<dyn Error>> {
+    let check_deadline = || -> Result<(), Box<dyn Error>> {
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        Ok(())
+    };
+    let mut deferred_error: Option<&'static str> = None;
+
+    if !dry_run {
+        deferred_error = drain_on_demand_delivery(config, api_client, deadline, false).await?;
+    }
+
+    check_deadline()?;
+    run_ai_sync(
+        config,
+        api_client,
+        agent_filter,
+        dry_run,
+        verbose,
+        from_start,
+        transcript_override,
+        Some(deadline),
+    )
+    .await?;
+
+    if !dry_run {
+        if let Some(error) = drain_on_demand_delivery(config, api_client, deadline, true).await? {
+            deferred_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = deferred_error {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// Drain durable delivery in bounded batches. The pre-scan pass is intentionally
+/// one batch so a large offline backlog cannot starve the active transcript; the
+/// post-scan pass rotates inbox and heartbeat batches until they are empty, a retry
+/// backoff/deferred observation is encountered, or the caller's deadline expires.
+async fn drain_on_demand_delivery(
+    config: &Config,
+    api_client: &ApiClient,
+    deadline: Instant,
+    repeat_until_stable: bool,
+) -> Result<Option<&'static str>, Box<dyn Error>> {
+    let mut deferred_error: Option<&'static str> = None;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        let report = broker::process_pending(config, api_client, broker::MAX_BATCH_EVENTS).await?;
+        if report.dead_lettered > 0 {
+            deferred_error.get_or_insert("dead_lettered");
+        }
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        let flush = api_client.flush_queue().await?;
+        if flush.stopped_because.is_some() {
+            // The detailed server response stays in the local delivery state. Do
+            // not copy it into hook/debug output, where it could contain payload
+            // material; the machine-readable status only needs the stable reason.
+            deferred_error.get_or_insert("delivery_deferred");
+        }
+
+        let made_progress = report.processed > 0
+            || report.retried > 0
+            || report.dead_lettered > 0
+            || flush.flushed > 0;
+        if !repeat_until_stable
+            || flush.stopped_because.is_some()
+            || !made_progress
+            || report.claimed == 0
+        {
+            break;
+        }
+    }
+    Ok(deferred_error)
 }
 
 /// Drain the durable AI usage queue in deterministic, bounded batches. A successful
@@ -5847,11 +6106,11 @@ fn prepare_handoff(
 }
 
 /// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
-/// are not dependent on a user remembering to run `wakaclock ai sync`. Each agent gets
-/// its own bounded pass: a large or malformed Claude history must not consume the whole
+/// do not depend on a user remembering to run `wakaclock sync`. Each agent gets its
+/// own bounded pass: a large or malformed Claude history must not consume the whole
 /// budget before Codex gets a chance to scan its current session. A timeout/error leaves
 /// the ordinary heartbeat path untouched and the transcript cursor replayable on the
-/// next call.
+/// next event-triggered call.
 pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
     const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
 
@@ -5861,7 +6120,16 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
     for agent in ["codex", "claude-code", "gemini-cli"] {
         match tokio::time::timeout(
             AUTO_SYNC_AGENT_BUDGET,
-            run_ai_sync(config, api_client, Some(agent), false, false, false, None),
+            run_ai_sync(
+                config,
+                api_client,
+                Some(agent),
+                false,
+                false,
+                false,
+                None,
+                Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
+            ),
         )
         .await
         {
@@ -6729,6 +6997,28 @@ mod generic_ai_ingress_tests {
             Commands::Ai {
                 action: AiAction::SessionEnd { json: true }
             }
+        ));
+    }
+
+    #[test]
+    fn top_level_sync_supports_on_demand_json_and_hook_budget() {
+        let parsed = Cli::try_parse_from([
+            "wakaclock",
+            "sync",
+            "--agent",
+            "codex",
+            "--automatic",
+            "--json",
+        ])
+        .expect("sync should parse");
+        assert!(matches!(
+            parsed.command,
+            Commands::Sync {
+                agent: Some(agent),
+                automatic: true,
+                json: true,
+                ..
+            } if agent == "codex"
         ));
     }
 

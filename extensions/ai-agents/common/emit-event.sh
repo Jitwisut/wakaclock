@@ -46,7 +46,7 @@ PREVIOUS_ENTITY="$(read_field '.previous_entity // .old_path')"
 # Self-declaration, not detection: whichever editor spawned *this* hook's parent
 # process said so via its own env var (the VS Code extension sets WAKACLOCK_EDITOR;
 # an editor's integrated terminal sets TERM_PROGRAM). Captured here, at hook-fire
-# time, because it is gone by the time the daemon dequeues this event later.
+# time, because it is gone by the time a later on-demand CLI pass processes this event.
 EDITOR_ID="${WAKACLOCK_EDITOR:-${TERM_PROGRAM:-}}"
 OCCURRED_AT="$(read_field '.occurred_at // .timestamp')"
 OCCURRED_AT="${OCCURRED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
@@ -202,6 +202,22 @@ if [[ "$PROJECT_ROOT" == /* ]]; then
 else
   printf '%s' "$ENVELOPE" | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
 fi
+
+# WakaTime-style transcript reconciliation is event-triggered as well. Native hook
+# evidence above remains the primary proof; this bounded pass only catches a hook
+# that was missed or written after the file event. The parser cursor and event IDs
+# make a hook/transcript duplicate one canonical operation, and the automatic budget
+# prevents a large history from blocking the agent's own tool completion.
+case "$CLIENT_ID" in
+  claude-code|codex|gemini-cli)
+    if [[ "$PROJECT_ROOT" == /* ]]; then
+      WAKACLOCK_TOPOLOGY_AUTO="${WAKACLOCK_TOPOLOGY_AUTO:-1}" \
+        "$WAKACLOCK_BIN" sync --agent "$CLIENT_ID" --automatic --json >/dev/null 2>&1 || true
+    else
+      "$WAKACLOCK_BIN" sync --agent "$CLIENT_ID" --automatic --json >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
 
 # Hooks must always fail open so telemetry cannot block an agent's edit.
 exit 0

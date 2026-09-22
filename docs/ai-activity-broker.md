@@ -1,33 +1,29 @@
-# WakaClock AI Activity Broker
+# WakaClock on-demand AI activity pipeline
 
-Phase 2 adds a local, durable ingress for AI file-activity evidence. It runs inside
-the existing `wakaclock` binary; no second release artifact is required.
+The supported runtime is a short-lived `wakaclock` CLI process. Hooks and editor
+events write to the existing SQLite inbox, process a bounded batch, and exit. The
+old local HTTP broker remains only as migration/compatibility code and is never
+started or discovered by producers.
 
 ## Lifecycle
 
 ```text
-wakaclock broker run
-wakaclock broker install
-wakaclock broker start
-wakaclock broker stop
-wakaclock broker status --json
+wakaclock sync --json                 # one bounded transcript + queue pass
+wakaclock sync --agent codex --json   # one adapter, then exit
+wakaclock broker status --json        # local queue and legacy-service diagnostics
 wakaclock broker retry --event-id <id>
 wakaclock broker retry --all
-wakaclock broker rotate-token
 ```
 
-`wakaclock agent` remains a compatibility alias for the same service implementation.
-Interactive alias calls print a deprecation warning. The per-user service uses the
-platform's existing LaunchAgent, systemd user service, or Task Scheduler integration.
-Remote environments that cannot install a user service may keep `broker run` as an
-Extension Host child process.
+`wakaclock broker install`, `broker start`, `broker run`, and the `agent` aliases are
+deprecated cleanup shims. They remove a legacy registration and/or perform one bounded
+sync; they never create a LaunchAgent, systemd unit, scheduled task, socket, or token.
 
-## Local API v1
+## Legacy local API (migration only)
 
-The broker binds only to `127.0.0.1` on a dynamic port. Discovery metadata is written
-to `~/.wakaclock/broker.json`; the bearer token is kept separately in
-`~/.wakaclock/broker.token`. Both files are private to the current user on Unix, and
-the token is not printed in logs, status output, or errors.
+No supported command binds this API or writes discovery/token files. Existing files are
+removed by the migration shims. The HTTP handlers remain in the binary only so older
+test fixtures and cleanup paths can be retired without changing the event schema.
 
 ```text
 GET  /v1/health          # public liveness/version check
@@ -42,11 +38,10 @@ the same event ID and payload hash already exist, and `409` when an event ID is 
 with a different payload. Missing/invalid credentials return `401`; invalid schema or
 attribution returns `422`; an oversized request returns `413`.
 
-`accepted` means durable local acceptance, not successful backend delivery. The worker
-processes the inbox and hands failed backend delivery to the existing outbound
-heartbeat queue. Broker restart, backend outage, and process crash therefore leave the
-event recoverable. A deterministic `broker:<event_id>` heartbeat identity makes retries
-logically idempotent.
+`accepted` means durable local acceptance, not successful backend delivery. The same
+short-lived CLI invocation claims a leased batch and hands failed backend delivery to
+the existing outbound heartbeat queue. A crash leaves the lease recoverable; a
+deterministic `broker:<event_id>` heartbeat identity makes retries logically idempotent.
 
 ## Event contract
 
@@ -90,8 +85,9 @@ adapter and is never used to infer Human activity.
 
 ## Producer migration
 
-Claude Code, Codex CLI, and Gemini CLI native hooks emit the broker envelope through
-`wakaclock ai emit`. Shell/MCP tools use `wakaclock ai tool-before` and
+Claude Code, Codex CLI, and Gemini CLI native hooks emit the metadata envelope through
+`wakaclock ai emit` and trigger a bounded `wakaclock sync --automatic --json` pass.
+Shell/MCP tools use `wakaclock ai tool-before` and
 `wakaclock ai tool-after`; the latter emits one duration interval for a multi-file tool
 call and one metadata event per changed file. Transcript sync also submits through the
 broker. The old flat `wakaclock ai emit` JSON shape remains accepted and is normalized
@@ -105,11 +101,10 @@ separate producer rollout; it is not silently installed by the broker.
 
 ## Diagnostics and privacy
 
-Use `wakaclock broker status --json` to inspect running state, inbox counts, retry and
-dead-letter counts, `last_received_at`, `last_processed_at`, `last_delivery_at`, and
-the existing outbound queue depth.
-Use `broker retry` only for dead-letter rows. Rotate the token with
-`broker rotate-token`; a running service is restarted so the new token is active.
+Use `wakaclock broker status --json` to inspect `runtime_mode=on_demand`, inbox counts,
+retry/dead-letter counts, `last_received_at`, `last_processed_at`, `last_delivery_at`,
+legacy-service presence, and the existing outbound queue depth. Use `broker retry` only
+for dead-letter rows. There is no runtime token to rotate.
 
 The inbox stores normalized event metadata and a payload hash. Processed payloads are
 compacted after seven days while event IDs/hashes remain for thirty-day duplicate
@@ -119,10 +114,9 @@ source text, command arguments, or bearer tokens.
 
 ## Universal observer rollout
 
-The always-on broker can correlate native/transcript events with bounded filesystem
-and process/session evidence. It registers only Git roots discovered from a detected
-agent's current working directory; `$HOME`, `/`, `/tmp`, and non-Git directories are
-never watched. Observer leases expire after three minutes without a process refresh.
+The on-demand CLI can correlate native/transcript events with bounded filesystem and
+process/session evidence. It reads only the session/workspace needed for the triggering
+event; `$HOME`, `/`, `/tmp`, and non-Git directories are never watched continuously.
 
 The rollout is fail-closed by default. Create `~/.wakaclock/observer.toml` to enable
 shadow capture first:

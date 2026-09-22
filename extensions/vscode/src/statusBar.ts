@@ -191,9 +191,8 @@ export class StatusBarController implements vscode.Disposable {
       }
     }
 
-    // Broker status is local and remains useful while the hosted API is offline.
-    // Older test/embedded CLI adapters may not expose it, so this is deliberately
-    // additive and never blocks the regular total refresh.
+    // On-demand sync status is local and remains useful while the hosted API is
+    // offline. Older embedded CLI adapters may not expose it, so this is additive.
     await this.refreshBrokerStatus();
 
     try {
@@ -300,9 +299,7 @@ export class StatusBarController implements vscode.Disposable {
         ? String((snapshot.agentHealth as { state?: unknown }).state)
         : undefined;
     const brokerState = this.lastBrokerStatus
-      ? this.lastBrokerStatus.running
-        ? `running · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
-        : "stopped"
+      ? `on-demand · pending ${this.lastBrokerStatus.inbox?.pending ?? 0} · retry ${this.lastBrokerStatus.inbox?.retry ?? 0} · dead-letter ${this.lastBrokerStatus.inbox?.dead_letter ?? 0}`
       : undefined;
     const brokerError = this.lastBrokerStatus?.inbox?.last_error_message;
     if (this.connectionState === "needs-api-key") {
@@ -350,8 +347,8 @@ export class StatusBarController implements vscode.Disposable {
         : "") +
       (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
       (agentState ? `\nAgent: ${agentState}` : "") +
-      (brokerState ? `\nBroker: ${brokerState}` : "") +
-      (brokerError ? `\nBroker last error: ${brokerError}` : "");
+      (brokerState ? `\nAI sync: ${brokerState}` : "") +
+      (brokerError ? `\nAI sync last error: ${brokerError}` : "");
   }
 
   private async refreshBrokerStatus(): Promise<void> {

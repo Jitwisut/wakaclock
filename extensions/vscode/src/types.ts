@@ -280,6 +280,7 @@ export interface StatusSnapshot {
 }
 
 export interface BrokerStatusSnapshot {
+    runtime_mode?: "on_demand" | string;
     running?: boolean;
     pid?: number | null;
     endpoint?: string | null;

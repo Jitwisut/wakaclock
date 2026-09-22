@@ -43,4 +43,13 @@ jq -cn \
   --arg occurred_at "$OCCURRED_AT" \
   '{session_id:$session_id,agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),cwd:(if $cwd=="" then null else $cwd end),source:"agent_hook",occurred_at:(if $occurred_at=="" then null else $occurred_at end)}' \
   | "$CLI" "${COMMAND[@]}" >/dev/null 2>&1 || true
+
+# Reconcile the active transcript at lifecycle boundaries, matching the WakaTime
+# plugin model without starting a watcher. Only adapters with a real parser are
+# eligible; scaffold/manual adapters continue to rely on their native hooks.
+case "$AGENT" in
+  claude-code|codex|gemini-cli)
+    "$CLI" sync --agent "$AGENT" --automatic --json >/dev/null 2>&1 || true
+    ;;
+esac
 exit 0

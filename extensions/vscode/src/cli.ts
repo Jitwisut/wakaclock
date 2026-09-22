@@ -588,8 +588,18 @@ export class WakaclockCliService {
         }
     }
 
+    /** Legacy compatibility call; the CLI now uses it only to remove old service state. */
     public async installAgent(): Promise<CliResult> {
         return this.runCli(["broker", "install", "--json"]);
+    }
+
+    /** Run a bounded transcript reconciliation pass and exit. */
+    public async syncAiActivity(agent?: string): Promise<CliResult> {
+        const args = ["sync", "--automatic", "--json"];
+        if (agent) {
+            args.splice(2, 0, "--agent", agent);
+        }
+        return this.runCli(args);
     }
 
     public async getBrokerStatus(): Promise<BrokerStatusSnapshot> {
@@ -611,46 +621,9 @@ export class WakaclockCliService {
         return snapshot;
     }
 
-    /**
-     * Hosts without LaunchAgent/systemd/Task Scheduler (containers, Codespaces and
-     * some remote SSH sessions) keep the watcher alive with the Extension Host. It
-     * is intentionally a separate child from ordinary heartbeat requests.
-     */
+    /** Retained for API compatibility with older extension callers. */
     public async startExtensionOwnedAgent(): Promise<{ dispose(): void }> {
-        const config = this.getConfig();
-        const cliPath = this.managedCli
-            ? await this.managedCli.ensureReady()
-            : config.cliPath || "wakaclock";
-        const apiKey = await this.getApiKey();
-        const child = spawn(cliPath, ["broker", "run"], {
-            stdio: "ignore",
-            detached: false,
-            env: {
-                ...process.env,
-                WAKACLOCK_EDITOR: "vscode",
-                ...this.topologyEnvironment(),
-                // Enable the topology-aware handoff path for transcript and hook
-                // events launched by the extension host. Remote runtimes still
-                // require their explicit runtime/bridge ids before certification.
-                WAKACLOCK_TOPOLOGY_AUTO: process.env.WAKACLOCK_TOPOLOGY_AUTO ?? "1",
-                WAKACLOCK_SERVER_URL:
-                    config.serverUrl?.trim() || "https://api.atoaxis.com",
-                ...(apiKey ? { WAKACLOCK_API_KEY: apiKey } : {}),
-            },
-        });
-        child.on("error", (error) => {
-            this.logger.warn("extension-owned AtoAxis agent stopped unexpectedly", {
-                error: error.message,
-            });
-        });
-        this.logger.debug("started extension-owned AtoAxis agent", { cliPath });
-        return {
-            dispose: () => {
-                if (!child.killed) {
-                    child.kill();
-                }
-            },
-        };
+        throw new Error("on-demand mode does not start a background collector");
     }
 
     private async runCli(

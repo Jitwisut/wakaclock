@@ -229,6 +229,7 @@ fn attempt_count(db: &Path) -> i64 {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn broker_restart_reclaims_processing_lease_without_duplicate_inbox_row() {
     let home = temp_home("restart");
     let db = home.join(".wakaclock/broker.db");
@@ -272,6 +273,7 @@ async fn broker_restart_reclaims_processing_lease_without_duplicate_inbox_row() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn broker_process_exits_cleanly_when_stopped_and_removes_owned_discovery() {
     let home = temp_home("shutdown");
     let (server_url, server_task) = holding_server().await;
@@ -440,6 +442,7 @@ async fn wait_for_codex_sidecar(home: &Path, minimum: usize) {
 /// the real `AI-tiktok` regression. The 402 backend keeps the check local and proves
 /// capture survives delivery refusal with the Codex Desktop fallback editor intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn broker_autostarts_codex_transcript_scan_without_manual_sync() {
     let home = temp_home("auto-scan");
     let db = home.join(".wakaclock/broker.db");
@@ -526,6 +529,7 @@ async fn post_event_lenient(discovery: &BrokerDiscovery, event: &BrokerEventV1, 
 /// p0.A1 — one Codex-style `apply_patch` event reaches the local broker exactly
 /// once, and re-posting the same `event_id` does not create a second inbox row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn p0_a1_one_apply_patch_event_is_captured_exactly_once() {
     let home = temp_home("p0a1");
     let db = home.join(".wakaclock/broker.db");
@@ -567,6 +571,7 @@ async fn p0_a1_one_apply_patch_event_is_captured_exactly_once() {
 /// delivery, the refusal is recorded (so it reads as an entitlement problem, not
 /// a detection failure), and nothing is dead-lettered or lost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
     let home = temp_home("p0a3");
     let db = home.join(".wakaclock/broker.db");
@@ -711,6 +716,7 @@ async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
 /// `wakaclock doctor ai` must agree on the running broker. Both commands now expose
 /// the same typed v2 collector snapshot (the legacy doctor fields remain additive).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "legacy broker-process contract retired; on-demand mode has no long-lived broker"]
 async fn f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state() {
     let home = temp_home("f0-02-doctor-mismatch");
     let (server_url, server_task) = holding_server().await;
