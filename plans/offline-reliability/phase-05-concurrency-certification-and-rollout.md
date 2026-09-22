@@ -1,6 +1,6 @@
 # Phase 05 — Single-Flight Concurrency, End-to-End Certification and Rollout
 
-สถานะ: Planned  
+สถานะ: Implemented (C7 soak, Windows, feature flags และ metrics เลื่อนตามที่อนุมัติ)  
 ครอบคลุม: OFF-07 และ final validation ของ OFF-01 ถึง OFF-06  
 ขึ้นกับ: Phase 00–04
 
@@ -254,3 +254,56 @@ Duration result:
 Remaining risks:
 Rollback rehearsal:
 ```
+
+## Completion record (2026-09-21)
+
+```text
+Commit/PR:        branch feat/offline-phase05-single-flight (ยังไม่ merge ตอนบันทึก)
+Files changed:    extensions/vscode/src/{singleFlight.ts (ใหม่),statusBar.ts,extension.ts,commands.ts}
+                  extensions/vscode/test/{singleFlight.test.ts (ใหม่),offlineStatus.test.ts}
+                  apps/desktop/src/{App.tsx,App.test.tsx}
+                  backend/api/crates/wakaclock-cli/tests/offline_lifecycle.rs
+Behavior before:  ทุก trigger (timer, heartbeat sent, manual refresh, activity repaint)
+                  spawn CLI process ใหม่ แม้ตัวก่อนยังค้าง; Desktop ยิง
+                  dashboard_snapshot ทุก 5 วินาทีโดยไม่สน request ที่ค้างอยู่;
+                  initializeConnection และ retryPendingVerification สร้าง retry loop
+                  ใหม่ทุกครั้งที่ถูกเรียก; ผลลัพธ์ของ key/server เก่าที่มาช้าเขียนทับ
+                  state ปัจจุบันได้
+Behavior after:   หนึ่ง surface มี in-flight ได้ 1 งาน + queued rerun ได้ 1 ครั้ง;
+                  repaint จาก snapshot เดิมไม่เรียก CLI; generation ตัดผลลัพธ์ของ scope
+                  เก่าทิ้ง; dispose หยุด timer และทิ้งผลที่มาช้า; error ปลด lock เสมอ
+Tests added:      VS Code 8 ตัว (ten_refresh_triggers_spawn_one_cli_and_one_follow_up,
+                  single_flight_unlocks_after_error, key_change_invalidates_in_flight_old_scope_result,
+                  multiple_pending_verification_requests_share_one_retry_loop,
+                  dispose_ignores_late_results_and_clears_timers,
+                  activity_repaint_does_not_spawn_a_network_refresh_when_snapshot_exists,
+                  late_offline_response_cannot_replace_a_newer_online_snapshot,
+                  status_bar_refresh_is_single_flight);
+                  Desktop 1 ตัว (desktop_interval_and_manual_refresh_share_one_in_flight_request);
+                  certification C1–C6 6 ตัวใน offline_lifecycle.rs;
+                  เปิดใช้เทสต์ baseline OFF-07 ที่ค้างจาก Phase 00 ทั้ง 2 ตัว
+Gates run:        cargo fmt --check (สะอาด); cargo clippy --workspace --all-targets
+                  (สะอาด ยกเว้น 3 lint ที่แดงอยู่ก่อนแล้วบน main); cargo test --workspace;
+                  verify_port / golden / verify_actor_migration / verify_certification;
+                  VS Code lint+test(162)+compile; Desktop typecheck+test(9)+build+
+                  cargo test --locked(22)+clippy
+Certification:    backend/api/target/offline-certification/c{1..6}*.json (metadata-only:
+                  counts, states, hashed destinations — ไม่มี path ดิบ, key หรือ payload)
+Duration result:  total_error: 0.0 (golden), verify_certification ผ่าน
+Remaining risks:  C7 soak 30–60 นาที และการรันบน Windows ยังไม่ได้ทำ;
+                  feature flags/metrics ยังไม่มีระบบรองรับใน repo;
+                  broker_process (เทสต์เดิม) timeout ที่ 5 วินาทีจึง fail เมื่อเครื่อง
+                  โหลดหนัก — ผ่าน 7/7 เมื่อรันตอนว่าง ไม่เกี่ยวกับ Phase นี้
+Rollback:         revert commit; ไม่มี schema/queue change ใน Phase นี้ ผลคือกลับไปยิง
+                  request ซ้อนกันเหมือนเดิมเท่านั้น ข้อมูลไม่ได้รับผลกระทบ
+```
+
+## ส่วนที่ยังไม่ทำและเหตุผล
+
+| งานในแผน | สถานะ | เหตุผล |
+|---|---|---|
+| C7 soak 30–60 นาที | ยังไม่ทำ | ต้องมี latency injector และรันยาว ควรสั่งรันตอนเครื่องว่าง |
+| Certification บน Windows | ยังไม่ทำ | รันจากเครื่องนี้ไม่ได้ |
+| Feature flags 5 ตัว | ยังไม่ทำ | ยังไม่มีระบบ flag ใน repo; flag เปล่าเพิ่มเส้นทางโค้ดที่ไม่มีใครใช้ |
+| Metrics/alerts | ยังไม่ทำ | ต้องมี telemetry backend; ข้อกำหนดเก็บไว้ในเอกสารนี้แล้ว |
+| Rollback rehearsal บน production | ยังไม่ทำ | ทำได้เท่าที่ยืนยันว่า schema เป็น additive และ revert commit ได้ |

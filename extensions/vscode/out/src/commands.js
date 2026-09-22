@@ -41,6 +41,28 @@ const agentSetup_1 = require("./agentSetup");
 const aiDetectionSelfTest_1 = require("./aiDetectionSelfTest");
 const secrets_1 = require("./secrets");
 const utils_1 = require("./utils");
+const singleFlight_1 = require("./singleFlight");
+/**
+ * One pending-key retry loop for the whole extension. "Set API Key" while the
+ * server is down used to start a fresh loop every time it was run, each with
+ * its own growing retry delay and its own CLI calls.
+ */
+const pendingVerification = new singleFlight_1.SingleFlight();
+/** Same typed state the status bar uses, so the popup and the bar never disagree. */
+function connectionNote(state) {
+    switch (state) {
+        case "offline":
+            return " — offline: the server is unreachable; activity stays queued locally.";
+        case "retryable_server_error":
+            return " — the server asked to retry later; activity stays queued locally.";
+        case "auth_rejected":
+            return " — the server rejected this API key.";
+        case "subscription_required":
+            return " — this account needs an active AtoAxis subscription.";
+        default:
+            return "";
+    }
+}
 async function ensureBrokerRunning(deps) {
     let installError;
     try {
@@ -96,7 +118,8 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             // status bar describe two different 24-hour windows — which is how the
             // bar could read "0s" while this popup read "11m 46s".
             const today = await cliService.getToday((0, utils_1.localTimezone)());
-            await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`);
+            await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)` +
+                connectionNote(today.connection?.state));
         }
         catch (error) {
             await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to load today's total.");
@@ -150,7 +173,7 @@ function registerCommands(context, configService, cliService, bufferManager, sta
                 await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
             }
             await statusBar.refresh();
-            void retryPendingVerification(context, cliService, statusBar);
+            void pendingVerification.run(() => retryPendingVerification(context, cliService, statusBar));
             await vscode.window.showWarningMessage("AtoAxis is unreachable right now. The key is stored securely and editor activity will be queued offline; verification will retry automatically.");
             return;
         }

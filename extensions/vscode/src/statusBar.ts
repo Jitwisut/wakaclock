@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import type { ActivitySegment } from "./types";
 import { unionSeconds } from "./activity";
+import { SingleFlight } from "./singleFlight";
 import { localTimezone } from "./utils";
 
 const STATUS_REFRESH_MS = 15_000;
@@ -97,6 +98,8 @@ export class StatusBarController implements vscode.Disposable {
   private getBufferedSeconds: () => number = () => 0;
   private getBufferedSegments: () => ActivitySegment[] = () => [];
   private connectionState: ConnectionState = "connecting";
+  /** One refresh at a time, with at most one queued follow-up (OFF-07). */
+  private readonly inFlight = new SingleFlight();
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
@@ -122,8 +125,18 @@ export class StatusBarController implements vscode.Disposable {
     this.applyVisibility();
     void this.refresh();
     this.interval = setInterval(() => {
+      // A tick during a slow refresh queues one follow-up instead of spawning
+      // another CLI process.
       void this.refresh();
     }, STATUS_REFRESH_MS);
+  }
+
+  /**
+   * The API key, server URL or timezone changed: results still in flight
+   * describe the old scope and must not be applied.
+   */
+  public invalidateScope(): void {
+    this.inFlight.invalidate();
   }
 
   public handleHeartbeatSent(): void {
@@ -158,10 +171,17 @@ export class StatusBarController implements vscode.Disposable {
   }
 
   public async refresh(): Promise<void> {
+    await this.inFlight.run(() => this.refreshOnce());
+  }
+
+  private async refreshOnce(): Promise<void> {
     if (!this.getConfig().statusBarEnabled) {
       this.item.hide();
       return;
     }
+    // Everything read after this point belongs to this scope; a key change
+    // while the CLI runs makes the result stale.
+    const generation = this.inFlight.current();
 
     if (this.getApiKey) {
       const key = await this.getApiKey();
@@ -178,6 +198,10 @@ export class StatusBarController implements vscode.Disposable {
 
     try {
       const snapshot = await this.cli.getToday(localTimezone());
+      if (!this.inFlight.isCurrent(generation)) {
+        this.logger.debug("discarded a status result from a previous scope");
+        return;
+      }
       this.lastSnapshot = snapshot;
       // Reading today's total is a GET and keeps working while POST /heartbeats is
       // refused, so a refusal arrives on this success path. The CLI's typed
@@ -218,6 +242,10 @@ export class StatusBarController implements vscode.Disposable {
       }
       this.item.show();
     } catch (error) {
+      if (!this.inFlight.isCurrent(generation)) {
+        this.logger.debug("discarded a status failure from a previous scope");
+        return;
+      }
       this.logger.warn("failed to refresh status bar", error);
 
       // A rejected key and an unreachable server both surfaced as the same neutral
@@ -372,7 +400,11 @@ export class StatusBarController implements vscode.Disposable {
   public dispose(): void {
     if (this.interval) {
       clearInterval(this.interval);
+      this.interval = undefined;
     }
+    // Anything still running resolves into a disposed controller; its result is
+    // dropped rather than repainting an item that is going away.
+    this.inFlight.dispose();
     this.item.dispose();
   }
 }

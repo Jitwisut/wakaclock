@@ -16,6 +16,14 @@ import {
 } from "./secrets";
 import type { StatusBarController } from "./statusBar";
 import { localTimezone } from "./utils";
+import { SingleFlight } from "./singleFlight";
+
+/**
+ * One pending-key retry loop for the whole extension. "Set API Key" while the
+ * server is down used to start a fresh loop every time it was run, each with
+ * its own growing retry delay and its own CLI calls.
+ */
+const pendingVerification = new SingleFlight();
 import type { ServerConnectionState } from "./types";
 
 /** Same typed state the status bar uses, so the popup and the bar never disagree. */
@@ -227,7 +235,9 @@ export function registerCommands(
           await setStoredApiKey(context.secrets, trimmed);
         }
         await statusBar.refresh();
-        void retryPendingVerification(context, cliService, statusBar);
+        void pendingVerification.run(() =>
+          retryPendingVerification(context, cliService, statusBar),
+        );
         await vscode.window.showWarningMessage(
           "AtoAxis is unreachable right now. The key is stored securely and editor activity will be queued offline; verification will retry automatically."
         );

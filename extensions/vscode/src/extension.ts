@@ -22,6 +22,7 @@ import {
   setStoredApiKey,
 } from "./secrets";
 import { StatusBarController } from "./statusBar";
+import { SingleFlight } from "./singleFlight";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
@@ -131,7 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
     bufferManager,
     statusBar,
     aiIntegrations,
-    () => void initializeConnection(context, cliService, aiIntegrations, logger),
+    () => startConnectionBootstrap(context, cliService, aiIntegrations, logger),
   );
   registerEventSubscriptions(context, configService, bufferManager, logger);
   void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
@@ -139,7 +140,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // AI discovery/setup is deliberately detached from the editor heartbeat pipeline.
   // It starts only after an authenticated key is available and never blocks the
   // event listeners or their serialized buffer snapshots.
-  void initializeConnection(context, cliService, aiIntegrations, logger);
+  startConnectionBootstrap(context, cliService, aiIntegrations, logger);
 
   logger.debug("wakaclock extension activated");
 }
@@ -160,6 +161,28 @@ async function warnIgnoredWorkspaceOverrides(
   logger.warn("ignored workspace-level AtoAxis security settings", { keys: ignored });
   void vscode.window.showWarningMessage(
     "AtoAxis ignores workspace cliPath/serverUrl settings for security. Configure these values globally only.",
+  );
+}
+
+/**
+ * One verification retry loop per extension context.
+ *
+ * The loop below retries an unreachable server with a growing delay and never
+ * returns while the outage lasts. Activation starts one, and the "reconnect"
+ * command starts another — so each invocation used to add a loop that outlived
+ * it, each one spawning its own CLI. A second trigger now queues exactly one
+ * follow-up run instead.
+ */
+const connectionBootstrap = new SingleFlight();
+
+function startConnectionBootstrap(
+  context: vscode.ExtensionContext,
+  cliService: Pick<WakaclockCliService, "verifyApiKey" | "installAgent" | "getStatus">,
+  aiIntegrations: AiIntegrationController,
+  logger: Logger,
+): void {
+  void connectionBootstrap.run(() =>
+    initializeConnection(context, cliService, aiIntegrations, logger),
   );
 }
 

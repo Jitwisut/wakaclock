@@ -1392,3 +1392,328 @@ async fn today_json_reports_eligible_rows_separately_from_depth() {
         "a row waiting on Retry-After is queued but not eligible"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 05 — end-to-end certification campaigns (C1–C6)
+//
+// Each campaign drives the whole offline lifecycle through the real binary and
+// records a metadata-only artifact under `target/offline-certification/`:
+// counts, classified states and hashed entities — never a source path, a key or
+// a payload. C7 (the 30–60 minute latency soak) and the Windows run are not
+// automated here; see the phase document.
+// ---------------------------------------------------------------------------
+
+fn entity_hash(entity: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(entity.as_bytes());
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Ordered delivery identities, for before/after comparison.
+fn queue_identities(home: &TempHome) -> Vec<String> {
+    queue_rows(home)
+        .into_iter()
+        .map(|row| {
+            format!(
+                "{}|{}|{}",
+                row.heartbeat_id.unwrap_or_default(),
+                entity_hash(&row.destination),
+                row.owner_scope
+            )
+        })
+        .collect()
+}
+
+fn record_certification(name: &str, value: serde_json::Value) {
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/offline-certification");
+    if fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let _ = fs::write(
+        directory.join(format!("{name}.json")),
+        serde_json::to_string_pretty(&value).unwrap_or_default(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c1_cold_start_while_the_server_is_down() {
+    let home = TempHome::new("c1");
+    let origin = dead_origin().await;
+
+    let today = today_json(&home, &origin, KEY_A).await;
+    assert!(today.success, "{}", today.describe());
+    let json = today.json();
+
+    assert_eq!(json["connection"]["state"], "offline");
+    assert_eq!(json["queue"]["depth"], 0);
+    // No subscription or key warning for what is only an outage.
+    assert!(json["delivery_failure"].is_null());
+    assert_ne!(json["connection"]["state"], "subscription_required");
+    assert_ne!(json["connection"]["state"], "auth_rejected");
+
+    record_certification(
+        "c1-cold-start-offline",
+        serde_json::json!({
+            "campaign": "C1",
+            "connection_state": json["connection"]["state"],
+            "queue_depth": json["queue"]["depth"],
+            "delivery_failure": json["delivery_failure"],
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c2_capture_and_restart_while_offline() {
+    let home = TempHome::new("c2");
+    let origin = dead_origin().await;
+    let t = now();
+
+    for (index, id) in ["c2-a", "c2-b", "c2-c"].iter().enumerate() {
+        assert_queued(
+            &heartbeat(&home, &origin, KEY_A, id, t - 30.0 + index as f64).await,
+            1,
+        );
+    }
+    let before = queue_identities(&home);
+
+    // Every CLI invocation is a fresh process, so this *is* a restart: the rows
+    // must be identical afterwards, and the count must still be readable.
+    let after_restart = today_json(&home, &origin, KEY_A).await.json();
+    let after = queue_identities(&home);
+
+    assert_eq!(
+        before, after,
+        "queue identities survive a restart unchanged"
+    );
+    assert_eq!(after.len(), 3);
+    assert_eq!(after_restart["queue"]["depth"], 3);
+    assert_eq!(after_restart["queued_heartbeats"], 3);
+
+    record_certification(
+        "c2-restart-offline",
+        serde_json::json!({
+            "campaign": "C2",
+            "rows_before": before.len(),
+            "rows_after": after.len(),
+            "identities_unchanged": before == after,
+            "reported_depth": after_restart["queue"]["depth"],
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c3_recovery_while_idle() {
+    let home = TempHome::new("c3");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let t = now();
+
+    api.set_online(false).await;
+    for (index, id) in ["c3-a", "c3-b"].iter().enumerate() {
+        assert_queued(
+            &heartbeat(&home, &api.url, KEY_A, id, t - 20.0 + index as f64).await,
+            1,
+        );
+    }
+
+    // The user stops working. Recovery must not need a new heartbeat.
+    api.set_online(true).await;
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+
+    let accepted = api.received_ids().await;
+    assert_eq!(accepted, sorted(&["c3-a", "c3-b"]));
+    assert!(queue_rows(&home).is_empty());
+    let after = today_json(&home, &api.url, KEY_A).await.json();
+    assert_eq!(after["connection"]["state"], "online");
+    assert_eq!(after["queue"]["depth"], 0);
+
+    let mut unique = accepted.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), accepted.len(), "no duplicate acceptance");
+    record_certification(
+        "c3-recovery-while-idle",
+        serde_json::json!({
+            "campaign": "C3",
+            "accepted": accepted.len(),
+            "unique_accepted": unique.len(),
+            "queue_depth_after": 0,
+            "connection_state_after": after["connection"]["state"],
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c4_error_classification_matrix() {
+    let mut observed = Vec::new();
+
+    // Transport failure: no HTTP response at all.
+    let offline_home = TempHome::new("c4-offline");
+    let dead = dead_origin().await;
+    let offline = today_json(&offline_home, &dead, KEY_A).await.json();
+    assert_eq!(offline["connection"]["state"], "offline");
+    observed.push(("network", "offline", offline["queue"]["depth"].clone()));
+
+    for (status, expected_state, expect_queued) in [
+        (401, "auth_rejected", false),
+        (402, "subscription_required", true),
+        (429, "retryable_server_error", true),
+        (503, "retryable_server_error", true),
+    ] {
+        let home = TempHome::new(&format!("c4-{status}"));
+        // 401 is driven by an unknown key; the rest by a configured reply.
+        let api = if status == 401 {
+            MockApi::start(&[]).await
+        } else {
+            let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+            api.set_heartbeats(Reply::Status(status)).await;
+            api.set_today(Reply::Status(status)).await;
+            api
+        };
+        if expect_queued {
+            assert_queued(
+                &heartbeat(&home, &api.url, KEY_A, &format!("c4-{status}"), now() - 3.0).await,
+                1,
+            );
+        }
+        let json = today_json(&home, &api.url, KEY_A).await.json();
+        assert_eq!(
+            json["connection"]["state"], expected_state,
+            "status {status} must classify as {expected_state}"
+        );
+        let depth = json["queue"]["depth"].as_u64().unwrap_or(0);
+        assert_eq!(
+            depth > 0,
+            expect_queued,
+            "status {status}: queued={depth}, expected queued={expect_queued}"
+        );
+        observed.push((
+            "http",
+            expected_state,
+            serde_json::json!({ "status": status, "queue_depth": depth }),
+        ));
+    }
+
+    // Success clears the state again.
+    let ok_home = TempHome::new("c4-ok");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    let ok = today_json(&ok_home, &api.url, KEY_A).await.json();
+    assert_eq!(ok["connection"]["state"], "online");
+
+    record_certification(
+        "c4-error-classification",
+        serde_json::json!({
+            "campaign": "C4",
+            "cases": observed
+                .iter()
+                .map(|(kind, state, detail)| serde_json::json!({
+                    "kind": kind, "state": state, "detail": detail
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c5_same_account_key_rotation() {
+    let home = TempHome::new("c5");
+    let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_B, "account-1")]).await;
+    let t = now();
+
+    // KEY_A is connected once, so its ownership proof exists.
+    assert_eq!(
+        today_json(&home, &api.url, KEY_A).await.json()["connection"]["state"],
+        "online"
+    );
+
+    api.set_online(false).await;
+    for (index, id) in ["c5-a", "c5-b", "c5-c"].iter().enumerate() {
+        assert_queued(
+            &heartbeat(&home, &api.url, KEY_A, id, t - 30.0 + index as f64).await,
+            1,
+        );
+    }
+    let before = queue_identities(&home);
+
+    api.set_online(true).await;
+    assert!(
+        cli(&home, &api.url, KEY_B, &["verify", "--json"])
+            .await
+            .success
+    );
+    assert!(
+        cli(&home, &api.url, KEY_B, &["status", "--json"])
+            .await
+            .success
+    );
+
+    let accepted = api.received_ids().await;
+    let mut unique = accepted.clone();
+    unique.dedup();
+    assert_eq!(accepted, sorted(&["c5-a", "c5-b", "c5-c"]));
+    assert_eq!(unique.len(), accepted.len(), "no duplicate acceptance");
+    assert!(queue_rows(&home).is_empty());
+    for received in api.received().await {
+        assert_eq!(received.bearer, KEY_B);
+    }
+
+    record_certification(
+        "c5-key-rotation",
+        serde_json::json!({
+            "campaign": "C5",
+            "rows_before": before.len(),
+            "accepted": accepted.len(),
+            "duplicates": accepted.len() - unique.len(),
+            "queue_depth_after": 0,
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn certification_c6_cross_account_and_cross_origin_isolation() {
+    let home = TempHome::new("c6");
+    let old_origin = dead_origin().await;
+    let api = MockApi::start(&[(KEY_A, "account-1"), (KEY_C, "account-2")]).await;
+    let t = now();
+
+    // Rows belonging to one account on one origin.
+    assert_queued(
+        &heartbeat(&home, &old_origin, KEY_A, "c6-a", t - 20.0).await,
+        1,
+    );
+    assert_queued(
+        &heartbeat(&home, &old_origin, KEY_A, "c6-b", t - 19.0).await,
+        1,
+    );
+    let before = queue_identities(&home);
+
+    // A different account on a different origin: diagnostics only.
+    assert!(
+        cli(&home, &api.url, KEY_C, &["verify", "--json"])
+            .await
+            .success
+    );
+    let status = cli(&home, &api.url, KEY_C, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    let status_json = status.json();
+    assert_eq!(status_json["orphaned_queued_heartbeats"], 2);
+    let sent = heartbeat(&home, &api.url, KEY_C, "c6-own", t - 1.0).await;
+    assert!(sent.success, "{}", sent.describe());
+
+    assert_eq!(api.received_ids().await, sorted(&["c6-own"]));
+    assert_eq!(queue_identities(&home), before);
+
+    record_certification(
+        "c6-isolation",
+        serde_json::json!({
+            "campaign": "C6",
+            "foreign_rows_preserved": before.len(),
+            "foreign_rows_delivered": 0,
+            "orphaned_reported": status_json["orphaned_queued_heartbeats"],
+        }),
+    );
+}
