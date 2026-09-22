@@ -1,14 +1,14 @@
-/* AtoAxis product collection: quiet chrome, product-led scenes, green accents. */
+/* AtoAxis: warm ivory, forest green, and restrained product motion. */
 .wakaclock-marketing {
   --font-mkt-display: var(--font-mkt-pixel);
-  --mkt-bg: #fafbf9;
+  --mkt-bg: #faf9f6;
   --mkt-bg-elevated: #fff;
-  --mkt-bg-sunken: #f0f3ef;
-  --mkt-fg: #1d2420;
+  --mkt-bg-sunken: #eeefe9;
+  --mkt-fg: #172d24;
   --mkt-fg-muted: #616a63;
   --mkt-border: #d4dcd5;
   --mkt-border-soft: #e3e8e3;
-  --mkt-accent: #177044;
+  --mkt-accent: #176447;
   --mkt-accent-fg: #fff;
   --mkt-accent-soft: #e2f1e7;
   --mkt-highlight-soft: #e2f1e7;
@@ -142,7 +142,7 @@
     position: sticky;
     top: 0;
     z-index: 50;
-    background: #fafbf9ed;
+    background: #faf9f6ed;
     backdrop-filter: blur(18px);
     border-bottom: 1px solid #dde3dd80;
   }
@@ -270,10 +270,10 @@
     isolation: isolate;
     overflow: clip;
     text-align: center;
-    padding: 72px var(--axis-gutter) 40px;
+    padding: 88px var(--axis-gutter) 40px;
     background:
-      radial-gradient(ellipse at 15% 20%, #e2f5af80, transparent 55%),
-      radial-gradient(ellipse at 90% 65%, #93e8c050, transparent 55%), #fafbf9;
+      radial-gradient(ellipse at 10% 30%, #ede7d580, transparent 52%),
+      radial-gradient(ellipse at 90% 85%, #d7e8dc70, transparent 55%), #faf9f6;
   }
   & .axis-opening::before {
     content: '';
@@ -314,7 +314,7 @@
     box-shadow: 0 0 0 5px #26734312;
   }
   & .axis-hero-title {
-    font-size: clamp(46px, 6.3vw, 86px);
+    font-size: clamp(46px, 6.8vw, 94px);
     font-weight: 650;
     line-height: 1.06;
     letter-spacing: -0.06em;
@@ -335,6 +335,13 @@
     margin: 18px auto 0;
     font-size: 16px;
     line-height: 1.65;
+  }
+  & .axis-hero-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 14px;
   }
   & .mkt-hero-actions {
     justify-content: center;
@@ -357,8 +364,8 @@
     position: relative;
     view-timeline-name: --axis-opening;
     background:
-      radial-gradient(ellipse at 50% 35%, #c8ed9b, transparent 65%),
-      linear-gradient(#fafbf9, #eaf0e9);
+      radial-gradient(ellipse at 50% 50%, #d4e5d2, transparent 65%),
+      linear-gradient(#faf9f6, #eeefe9);
   }
   & .axis-hero-stage {
     padding: 28px var(--axis-gutter) 70px;
@@ -382,14 +389,15 @@
     background:
       radial-gradient(ellipse at 100% 0%, #36634680, transparent 65%),
       linear-gradient(125deg, #132c1e, #091810);
-    border: 8px solid #26372d;
-    border-radius: 22px;
-    padding: 32px 44px;
+    border: 1px solid #496252;
+    border-radius: 24px;
+    padding: 36px 44px;
     box-shadow:
-      0 30px 65px #213b2020,
-      0 1px 0 #e4efe680 inset;
+      0 32px 72px -24px #173a3655,
+      0 0 0 7px #ffffff80,
+      0 1px 0 #e4efe650 inset;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: 48px;
     align-items: start;
   }
@@ -548,36 +556,134 @@
     min-height: 44px;
     cursor: pointer;
   }
+  & .axis-hero-proof {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    margin-top: 26px;
+    color: var(--mkt-accent);
+    font-size: 11px;
+  }
+  & .axis-hero-proof li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  & .axis-hero-title > span {
+    font-weight: 450;
+  }
   & .axis-editor-wall {
-    padding: 36px var(--axis-gutter);
-    background: #eaf0e9;
-    overflow: hidden;
+    padding: 48px var(--axis-gutter) 56px;
+    background: #eeefe9;
+    border-block: 1px solid #d4dcd580;
+    min-width: 0;
   }
-  & .axis-editor-wall > p {
-    max-width: 64ch;
-    margin: 0 auto 14px;
-    font-size: 12px;
+  & .axis-editor-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 32px;
+    max-width: 1248px;
+    margin: 0 auto 28px;
   }
-  & .axis-editor-wall button {
-    border: 0;
+  & .axis-editor-eyebrow {
     font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--mkt-accent);
+  }
+  & .axis-editor-heading h2 {
+    font-size: clamp(25px, 3vw, 36px);
+    margin-top: 12px;
+  }
+  & .axis-editor-heading p {
+    max-width: 64ch;
     color: var(--mkt-fg-muted);
-    text-decoration: underline;
-    text-underline-offset: 4px;
+    font-size: 13px;
+    margin-top: 14px;
+  }
+  & .axis-editor-playback {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    border: 1px solid var(--mkt-border);
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-size: 11px;
+    cursor: pointer;
+    background: #ffffff80;
+  }
+  & .axis-editor-desktop {
+    display: grid;
+    gap: 12px;
+    max-width: 1440px;
+    margin: auto;
+  }
+  & .axis-editor-marquee {
+    min-width: 0;
+    overflow: hidden;
+    mask-image: linear-gradient(90deg, transparent, black 5%, black 95%, transparent);
   }
   & .wakaclock-marquee-track {
-    animation: axis-marquee 65s linear infinite;
+    display: flex;
+    width: max-content;
+    animation: axis-marquee 75s linear infinite;
   }
-  & .wakaclock-marquee-track li {
-    border: 0;
-    font-size: 18px;
-    letter-spacing: -0.02em;
-    padding: 8px 26px;
+  & .wakaclock-marquee-track[data-reverse='true'] {
+    animation-direction: reverse;
   }
-  & [data-marquee-paused='true'] .wakaclock-marquee-track,
-  & .axis-editor-wall:hover .wakaclock-marquee-track,
-  & .axis-editor-wall:focus-within .wakaclock-marquee-track {
+  /* Identical groups include their trailing gap, so -50% loops without a seam. */
+  & .axis-editor-group {
+    display: flex;
+    gap: 12px;
+    padding-right: 12px;
+    flex-shrink: 0;
+  }
+  & :is(.axis-editor-group, .axis-editor-list) li {
+    border: 1px solid #d2dcd1;
+    background: #fafbf8;
+    border-radius: 12px;
+    padding: 13px 24px;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 500;
+    color: #314a3a;
+    box-shadow: 0 2px 3px #243c2703;
+  }
+  & [data-marquee-paused='true'] .wakaclock-marquee-track {
     animation-play-state: paused;
+  }
+  & .axis-editor-browser {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  /* Keyboard users can inspect the real list even on a desktop. */
+  & .axis-editor-browser:focus-visible {
+    position: relative;
+    width: 100%;
+    height: auto;
+    clip-path: none;
+    overflow-x: auto;
+    padding: 8px;
+  }
+  & .axis-editor-list {
+    display: grid;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    gap: 10px;
+    width: max-content;
+  }
+  & .axis-editor-hint {
+    display: none;
+    color: var(--mkt-fg-muted);
+    font-size: 11px;
+    margin-top: 12px;
   }
   /* One image story followed by a browseable capability collection. */
   & .mkt-workspace-story {
@@ -629,7 +735,7 @@
   }
   & .axis-features {
     max-width: none;
-    background: #f0f3ef;
+    background: #eeefe9;
     overflow: hidden;
   }
   & .axis-features > .axis-section-heading {
@@ -652,7 +758,9 @@
     flex: 0 0 clamp(280px, 31vw, 390px);
     min-width: 0;
     scroll-snap-align: start;
-    background: white;
+    background: #fffefb;
+    border: 1px solid #dce2d7;
+    box-shadow: 0 4px 16px #152b2205;
     padding: 32px 30px 0;
     border-radius: 24px;
     overflow: hidden;
@@ -681,7 +789,7 @@
     color: #f4fff7;
   }
   & .axis-feature-row:nth-child(3n) {
-    background: linear-gradient(145deg, #e8f5bb, #cfecd8);
+    background: linear-gradient(145deg, #eee9d8, #d9e8d8);
   }
   & .axis-capability-visual {
     display: flex;
@@ -723,6 +831,20 @@
   & .axis-feature-row:nth-child(3n) .axis-capability-visual {
     rotate: -10deg;
     translate: 0 20px;
+  }
+  & .axis-gallery-progress {
+    height: 2px;
+    margin-top: 12px;
+    background: var(--mkt-border);
+    overflow: hidden;
+  }
+  & .axis-gallery-progress span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--mkt-accent);
+    transform-origin: left;
+    transform: scaleX(var(--gallery-progress, 0));
   }
   & .axis-gallery-controls {
     display: flex;
@@ -1370,6 +1492,16 @@
     transform: translateX(-50%);
   }
 }
+@keyframes axis-gallery-arrive {
+  from {
+    opacity: 0.65;
+    transform: translateX(24px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 @keyframes axis-enter {
   from {
     transform: translateY(10px);
@@ -1423,6 +1555,9 @@
     scroll-behavior: smooth;
   }
   .wakaclock-marketing {
+    & .axis-feature-row[data-in-view='true'] {
+      animation: axis-gallery-arrive 650ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    }
     & .mkt-studio-track > span {
       transition: width 650ms cubic-bezier(0.22, 1, 0.36, 1);
     }
@@ -1460,7 +1595,6 @@
           animation-timeline: view();
           animation-range: entry 0% cover 35%;
         }
-        & .axis-feature-row,
         & .axis-pricing-detail li {
           animation: axis-card-reveal linear both;
           animation-timeline: view();
@@ -1485,6 +1619,9 @@
   }
   @media (hover: hover) {
     .wakaclock-marketing {
+      & .axis-editor-marquee:hover .wakaclock-marquee-track {
+        animation-play-state: paused;
+      }
       & .axis-cta-link:hover {
         transform: translateY(-3px);
         box-shadow: 0 14px 32px #176b4433;
@@ -1499,11 +1636,41 @@
         color: var(--mkt-accent);
       }
       & .axis-feature-row {
-        transition: box-shadow 300ms;
+        transition:
+          box-shadow 300ms,
+          border-color 300ms;
       }
       & .axis-feature-row:hover {
-        box-shadow: 0 12px 30px #173c1710;
+        box-shadow: 0 18px 40px -12px #173c1728;
+        border-color: #9ab8a0;
       }
+    }
+  }
+}
+@media (max-width: 1023px), (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing {
+    & .axis-editor-desktop,
+    & .axis-editor-playback {
+      display: none;
+    }
+    & .axis-editor-browser {
+      position: relative;
+      width: 100%;
+      height: auto;
+      clip-path: none;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scroll-snap-type: x proximity;
+      scrollbar-width: thin;
+      scrollbar-color: #9ab8a0 transparent;
+      padding: 4px 2px 14px;
+    }
+    & .axis-editor-list li {
+      scroll-snap-align: start;
+    }
+    & .axis-editor-hint {
+      display: flex;
+      justify-content: space-between;
     }
   }
 }
@@ -1515,7 +1682,7 @@
 @media (max-width: 1023px) {
   .wakaclock-marketing {
     & .axis-nav {
-      background: #fafbf9fa;
+      background: #faf9f6fa;
       backdrop-filter: none;
     }
     & .axis-hero,
@@ -1611,8 +1778,8 @@
     }
     & .mkt-studio {
       display: block;
-      border-width: 5px;
-      border-radius: 16px;
+      border-width: 1px;
+      border-radius: 20px;
       padding: 22px;
     }
     & .mkt-studio-heading {
@@ -1887,6 +2054,11 @@
     & .axis-footer-grid {
       grid-template-columns: 1fr;
     }
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[lang='th'] .axis-hero-title {
+    font-size: clamp(29px, 8.5vw, 40px);
   }
 }
 .wakaclock-marketing[lang='th'] {

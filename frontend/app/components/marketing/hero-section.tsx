@@ -1,6 +1,6 @@
+import { ArrowUpRightIcon, CheckIcon } from 'lucide-react';
 import Link from 'next/link';
 
-import { Button } from '@/components/ui/button';
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { HeroPanel } from './hero-panel';
@@ -15,12 +15,12 @@ const CTA_COPY = {
   en: {
     cta: 'Join early access',
     compare: 'Compare with WakaTime',
-    note: 'Hosted service planned. Available in English and Thai.',
+    note: 'Invite-only Early Access. No payment required to join the list.',
   },
   th: {
     cta: 'เข้าร่วม Early Access',
     compare: 'เปรียบเทียบกับ WakaTime',
-    note: 'เตรียมเปิดให้ใช้งานแบบ hosted รองรับภาษาไทยและอังกฤษ',
+    note: 'Early Access แบบเชิญ ลงชื่อแสดงความสนใจได้โดยไม่มีค่าใช้จ่าย',
   },
 } as const;
 
@@ -42,9 +42,9 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
             <div className="mkt-hero-eyebrow">{copy.badge}</div>
 
             <h1 className="axis-hero-title">
-              {copy.title.split('\n')[0]}
+              {copy.headline[0]}
               <br />
-              <span style={{ color: 'var(--mkt-accent)' }}>{copy.title.split('\n')[1]}</span>
+              <span style={{ color: 'var(--mkt-accent)' }}>{copy.headline[1]}</span>
             </h1>
 
             <div className="axis-hero-bottom">
@@ -55,28 +55,41 @@ export function HeroSection({ locale = 'en' }: { locale?: SiteLocale }) {
                   className="mt-4 max-w-xl text-base text-pretty md:text-lg"
                   style={{ color: 'var(--mkt-fg-muted)' }}
                 >
-                  {locale === 'th'
-                    ? 'เห็นเวลาที่ใช้ โปรเจกต์ที่เดินหน้า และสัดส่วนโค้ดจาก AI ในไทม์ไลน์เดียว พร้อมประวัติครบถ้วนและข้อมูลที่ยังระบุผู้เขียนไม่ได้อย่างชัดเจน'
-                    : 'See your time, your projects, and AI contributions in one timeline. Keep your complete history, with missing attribution clearly marked.'}
+                  {copy.heroLead}
                 </p>
               </div>
 
               <div className="mkt-hero-actions mt-8 flex flex-wrap items-center gap-3">
-                <Button
-                  asChild
-                  className="px-6"
-                  size="lg"
+                <Link
+                  className="axis-hero-cta"
+                  data-slot="button"
+                  href={localizedPath(locale, '/early-access')}
                   style={{ background: 'var(--mkt-accent)', color: 'var(--mkt-accent-fg)' }}
                 >
-                  <Link href={localizedPath(locale, '/early-access')}>{ctaCopy.cta}</Link>
-                </Button>
-                <Button asChild className="px-6" size="lg" variant="outline">
-                  <Link href={localizedPath(locale, '/wakatime-alternative')}>
-                    {ctaCopy.compare}
-                  </Link>
-                </Button>
+                  {ctaCopy.cta}
+                  <ArrowUpRightIcon aria-hidden size={16} />
+                </Link>
+                <Link
+                  className="axis-hero-cta"
+                  data-slot="button"
+                  data-variant="outline"
+                  href={localizedPath(locale, '/wakatime-alternative')}
+                >
+                  {ctaCopy.compare}
+                </Link>
               </div>
 
+              <ul
+                aria-label={locale === 'th' ? 'จุดเด่นของ AtoAxis' : 'AtoAxis essentials'}
+                className="axis-hero-proof"
+              >
+                {copy.highlights.map((highlight) => (
+                  <li key={highlight}>
+                    <CheckIcon aria-hidden size={13} />
+                    {highlight}
+                  </li>
+                ))}
+              </ul>
               <p className="mt-4 text-xs" style={{ color: 'var(--mkt-fg-muted)' }}>
                 {ctaCopy.note}
               </p>

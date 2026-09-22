@@ -3,6 +3,7 @@
 import type { FaqEntry } from '@/lib/seo/schema';
 import {
   PRICING,
+  PRODUCT_ANSWER,
   PRODUCT_STATUS,
   PUBLIC_EVIDENCE_URL,
   SITE_NAME,
@@ -101,12 +102,14 @@ const local = (en: MarketingPageCopy, th: MarketingPageCopy): Localized<Marketin
 });
 
 export const EN_HOME = {
-  badge: 'Complete history, and it works with the WakaTime API',
+  badge: 'Developer time tracking · AI coding analytics',
   title: 'AtoAxis — Developer Time Tracking & AI Coding Analytics',
-  tagline: 'One timeline for everything you do.',
+  headline: ['Your coding time.', 'The whole picture.'],
+  highlights: ['Complete history', 'WakaTime compatible', 'No source code uploaded'],
+  tagline: 'Make every working session make sense.',
   // Kept under ~155 characters so search engines show it whole rather than truncating
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
-  description: `${SITE_NAME} records your coding time by project, language, branch and editor. It implements the WakaTime API and keeps your complete coding history.`,
+  description: `${SITE_NAME} tracks coding time, projects and AI contributions. Keep your complete history, connect WakaTime plugins and review attribution coverage.`,
   /**
    * The visible opening paragraph, deliberately separate from `description` above.
    *
@@ -115,7 +118,7 @@ export const EN_HOME = {
    * the first paragraph on the page is what an answer engine lifts as a snippet and is
    * useless when it is one line long. Keeping two fields lets each be the right length.
    */
-  heroLead: `${SITE_NAME} is a developer time tracking service for people who want the whole picture. It records how long you spend coding and breaks that down by project, programming language, branch and editor. It speaks the WakaTime API, so the plugin your editor already has can point at it, and every account keeps its full history instead of a rolling window.`,
+  heroLead: `${SITE_NAME} tracks your coding time by project, language and editor, with AI contributions shown alongside your work. Keep your complete history, connect your existing WakaTime plugin, and see where attribution is known or still missing.`,
   /**
    * The homepage's summary block. Every line restates a claim already made and verified
    * elsewhere on this page — nothing here introduces a capability the product does not
@@ -135,15 +138,15 @@ export const EN_HOME = {
    * anything above it — while each paragraph stays short enough to quote by itself.
    */
   /**
-   * The first entry is deliberately one 120-180 word block rather than split further: it
-   * needs to stand alone as a complete answer to "what is AtoAxis", opening with the
+   * The first entry shares the concise product definition used in structured data
+   * and discovery documents. It stands alone as a complete answer to "what is AtoAxis", opening with the
    * definition, for a reader or an answer engine that quotes only this one paragraph. The
    * second stays short — it is a boundary statement (what heartbeats do NOT contain), and
    * padding it would just be filler.
    */
   whatIs: [
-    `${SITE_NAME} is a developer time tracking service that turns editor activity into dashboards for coding time, projects, programming languages, branches and editors. Your editor sends it heartbeats — small metadata events describing what you are working on, such as which file, project and branch you touched and when, and nothing about the contents of the file itself. It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window, so a project you touched in your first week is still there to look back on however long you have been using it.`,
-    'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, never file contents.',
+    PRODUCT_ANSWER,
+    'AtoAxis heartbeat payloads contain activity metadata and counts, not source code, prompts or AI responses. Connected AI providers have their own data policies.',
   ],
   howItWorks: [
     'Your editor sends a heartbeat when you type, switch to or save a file. Each signal carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
@@ -260,7 +263,8 @@ export const EN_HOME = {
         label: 'Tree-sitter',
       },
       {
-        claim: 'Current product boundaries and availability are explained in the AtoAxis public guides.',
+        claim:
+          'Current product boundaries and availability are explained in the AtoAxis public guides.',
         href: PUBLIC_EVIDENCE_URL,
         label: 'AtoAxis public documentation',
       },
@@ -327,10 +331,12 @@ export const EN_HOME = {
 export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
   title: 'AtoAxis — ติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI',
-  tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
+  headline: ['ทุกเวลาที่เขียนโค้ด', 'เห็นภาพชัดกว่าเดิม'],
+  highlights: ['เก็บประวัติครบ', 'รองรับ WakaTime', 'ไม่อัปโหลดโค้ด'],
+  tagline: 'เข้าใจงานของคุณ ในไทม์ไลน์เดียว',
   // Same length budget as the English description above.
-  description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
-  heroLead: `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนาที่อยากเห็นภาพรวมทั้งหมด ระบบบันทึกว่าคุณใช้เวลาเขียนโค้ดไปเท่าไร แล้วแยกให้เห็นตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API จึงใช้ plugin ที่ editor ของคุณมีอยู่แล้วชี้มาที่นี่ได้ และทุกบัญชีเก็บประวัติไว้ครบถ้วน ไม่ใช่แค่ช่วงเวลาล่าสุด`,
+  description: `${SITE_NAME} ติดตามเวลาเขียนโค้ด วิเคราะห์โปรเจกต์และสัดส่วนงานจาก AI รองรับ WakaTime เก็บประวัติครบ พร้อมแสดงความครอบคลุมของข้อมูลผู้เขียน`,
+  heroLead: `${SITE_NAME} ช่วยติดตามเวลาเขียนโค้ด แยกตามโปรเจกต์ ภาษา และ editor พร้อมดูสัดส่วนงานจาก AI ในไทม์ไลน์เดียว เชื่อมต่อ WakaTime plugin เดิม เก็บประวัติครบถ้วน และเห็นชัดว่าข้อมูลส่วนใดยังระบุผู้เขียนไม่ได้`,
   keyTakeaways: [
     `${SITE_NAME} บันทึกเวลาเขียนโค้ดของคุณจาก editor heartbeat โดยเก็บเฉพาะ metadata ไม่เก็บ source code`,
     'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้ และนำเข้า WakaTime export ได้',
@@ -339,8 +345,8 @@ export const TH_HOME = {
     `Early Access: ราคาที่วางแผนไว้คือ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี และยังไม่เปิดให้ชำระเงิน`,
   ],
   whatIs: [
-    `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา เปลี่ยน activity ใน editor เป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor editor ของคุณจะส่ง heartbeat ซึ่งเป็น metadata ขนาดเล็ก เช่น ไฟล์ โปรเจกต์ และ branch ที่คุณแตะและเวลาที่แตะ ไม่มีเนื้อหาในไฟล์เลย รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้โดยไม่ต้องติดตั้งอะไรใหม่ และนำเข้า WakaTime export มาดูใน dashboard เดียวกันได้ ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงล่าสุด โปรเจกต์ที่คุณแตะตั้งแต่สัปดาห์แรกยังอยู่ให้ย้อนดูได้ ไม่ว่าจะใช้งานมานานแค่ไหน`,
-    'ส่วน source code, prompt และคำตอบของ AI จะไม่ออกจาก editor ของคุณเลย เพราะ heartbeat มีแค่ metadata ของไฟล์และตัวเลข ไม่มีเนื้อหาในไฟล์',
+    `${SITE_NAME} คือบริการติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI สำหรับนักพัฒนา เปลี่ยน heartbeat จาก editor เป็นรายงานแยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติการเขียนโค้ดครบถ้วน integration ที่เชื่อมต่อจะรายงานการแก้ไขจาก AI มนุษย์ และส่วนที่ยังระบุไม่ได้ พร้อมแสดงความครอบคลุมของข้อมูล ปัจจุบันเปิด Early Access แบบเชิญ`,
+    'Heartbeat ที่ส่งไปยัง AtoAxis มีเฉพาะ metadata และตัวเลข ไม่ส่ง source code, prompt หรือคำตอบของ AI ส่วนผู้ให้บริการ AI ที่คุณเชื่อมต่อมีนโยบายข้อมูลของตนเอง',
   ],
   howItWorks: [
     'editor ของคุณจะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยแต่ละครั้งมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ไม่มีเนื้อหาในไฟล์',
