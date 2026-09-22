@@ -3,7 +3,8 @@
 import * as React from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import { ArrowRightIcon, PencilIcon, PlusIcon, RegexIcon, Trash2Icon } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -18,7 +19,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -32,20 +32,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
+import { cn } from '@/lib/utils';
 import { deleteProjectRule, getProjectRules, upsertProjectRule } from '@/lib/wakaclock/endpoints';
 import { formatUnixSeconds } from '@/lib/wakaclock/format';
+import { timelineProjectColor } from '@/lib/wakaclock/project-timeline-colors';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { ProjectRuleItem } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import { Surface, SurfaceHeader } from './surface';
 
 function isValidRegex(pattern: string) {
   try {
@@ -168,60 +165,100 @@ export function ProjectRulesPanel() {
   });
 
   const rules = data?.data ?? [];
+  const activeCount = rules.filter((rule) => rule.is_active).length;
+  const reduced = useReducedMotion();
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <RuleFormDialog
-          trigger={
-            <Button className="gap-1.5" size="sm">
-              <PlusIcon className="size-3.5" />
-              New rule
-            </Button>
-          }
-          userId={userId}
-        />
-      </div>
-      <QueryState
-        emptyDescription="Regex rules override the client-supplied project on every ingested heartbeat."
-        emptyTitle="No project rules"
-        error={error}
-        isEmpty={!isLoading && !error && rules.length === 0}
-        isLoading={isLoading}
-      >
-        <div className="overflow-x-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Pattern</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rules.map((rule) => (
-                <TableRow key={rule.rule_id}>
-                  <TableCell className="max-w-56 truncate font-mono text-xs" title={rule.pattern}>
+    <Surface>
+      <SurfaceHeader
+        actions={
+          <RuleFormDialog
+            trigger={
+              <Button className="gap-1.5 rounded-full" size="sm">
+                <PlusIcon className="size-3.5" />
+                New rule
+              </Button>
+            }
+            userId={userId}
+          />
+        }
+        description="The first matching pattern (in list order) wins."
+        icon={RegexIcon}
+        title={rules.length > 0 ? `${activeCount} of ${rules.length} rules active` : 'Rules'}
+      />
+      <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+        <QueryState
+          emptyDescription="Regex rules override the client-supplied project on every ingested heartbeat."
+          emptyTitle="No project rules"
+          error={error}
+          isEmpty={!isLoading && !error && rules.length === 0}
+          isLoading={isLoading}
+        >
+          <ul className="flex flex-col gap-1.5">
+            <AnimatePresence initial={false}>
+              {rules.map((rule, index) => (
+                <motion.li
+                  animate={{ opacity: 1, y: 0 }}
+                  className="group bg-muted/25 hover:bg-muted/60 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 rounded-xl border p-3 transition-colors sm:grid-cols-[3rem_minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:p-3.5"
+                  exit={{ opacity: 0, x: -12 }}
+                  initial={reduced ? false : { opacity: 0, y: 8 }}
+                  key={rule.rule_id}
+                  layout={reduced ? false : 'position'}
+                  transition={{ delay: reduced ? 0 : Math.min(index, 8) * 0.04, duration: 0.35 }}
+                >
+                  <span
+                    className="bg-background text-muted-foreground hidden h-7 place-items-center rounded-lg border font-mono text-xs tabular-nums sm:grid"
+                    title="Priority"
+                  >
+                    {rule.priority}
+                  </span>
+                  <code
+                    className="bg-background/80 min-w-0 truncate rounded-lg border px-2.5 py-1.5 font-mono text-xs"
+                    title={rule.pattern}
+                  >
                     {rule.pattern}
-                  </TableCell>
-                  <TableCell>{rule.project_name}</TableCell>
-                  <TableCell>{rule.priority}</TableCell>
-                  <TableCell>
-                    <Badge variant={rule.is_active ? 'default' : 'secondary'}>
+                  </code>
+                  <span className="col-span-2 flex min-w-0 items-center gap-2 text-sm sm:col-span-1">
+                    <ArrowRightIcon
+                      aria-hidden="true"
+                      className="text-muted-foreground size-3.5 shrink-0 transition-transform group-hover:translate-x-0.5"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ background: timelineProjectColor(rule.project_name) }}
+                    />
+                    <span className="truncate font-medium">{rule.project_name}</span>
+                    <span
+                      className={cn(
+                        'ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium sm:ml-2',
+                        rule.is_active
+                          ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-muted text-muted-foreground'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'size-1.5 rounded-full',
+                          rule.is_active ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+                        )}
+                      />
                       {rule.is_active ? 'active' : 'inactive'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {formatUnixSeconds(rule.updated_at)}
-                  </TableCell>
-                  <TableCell className="flex justify-end gap-1 text-right">
+                    </span>
+                  </span>
+                  <span className="col-start-2 row-start-1 flex items-center justify-end gap-1 sm:col-start-auto sm:row-start-auto">
+                    <span className="text-muted-foreground mr-1 hidden text-xs xl:inline">
+                      {formatUnixSeconds(rule.updated_at)}
+                    </span>
                     <RuleFormDialog
                       rule={rule}
                       trigger={
-                        <Button className="size-8" size="icon" variant="ghost">
+                        <Button
+                          aria-label={`Edit rule for ${rule.project_name}`}
+                          className="size-8 rounded-lg"
+                          size="icon"
+                          variant="ghost"
+                        >
                           <PencilIcon className="size-3.5" />
                         </Button>
                       }
@@ -229,7 +266,12 @@ export function ProjectRulesPanel() {
                     />
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button className="size-8" size="icon" variant="ghost">
+                        <Button
+                          aria-label={`Delete rule for ${rule.project_name}`}
+                          className="hover:text-destructive size-8 rounded-lg"
+                          size="icon"
+                          variant="ghost"
+                        >
                           <Trash2Icon className="size-3.5" />
                         </Button>
                       </AlertDialogTrigger>
@@ -249,13 +291,13 @@ export function ProjectRulesPanel() {
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
-                  </TableCell>
-                </TableRow>
+                  </span>
+                </motion.li>
               ))}
-            </TableBody>
-          </Table>
-        </div>
-      </QueryState>
-    </div>
+            </AnimatePresence>
+          </ul>
+        </QueryState>
+      </div>
+    </Surface>
   );
 }

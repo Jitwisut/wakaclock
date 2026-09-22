@@ -3,7 +3,8 @@
 import * as React from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import { ArrowRightIcon, FolderSyncIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -30,24 +31,41 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
+import { cn } from '@/lib/utils';
 import {
   deleteProjectMerge,
   getProjectMerges,
   upsertProjectMerge,
 } from '@/lib/wakaclock/endpoints';
 import { formatUnixSeconds } from '@/lib/wakaclock/format';
+import { timelineProjectColor } from '@/lib/wakaclock/project-timeline-colors';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { ProjectMergeItem } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import styles from '../settings.module.css';
+
+import { Surface, SurfaceHeader } from './surface';
+
+function ProjectPill({ muted = false, name }: { muted?: boolean; name: string }) {
+  return (
+    <span
+      className={cn(
+        'bg-background inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium',
+        muted && 'text-muted-foreground'
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className="size-2 shrink-0 rounded-full"
+        style={{ background: timelineProjectColor(name) }}
+      />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
 
 function MergeFormDialog({
   userId,
@@ -132,54 +150,65 @@ export function ProjectMergesPanel() {
   });
 
   const merges = data?.data ?? [];
+  const reduced = useReducedMotion();
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <MergeFormDialog
-          trigger={
-            <Button className="gap-1.5" size="sm">
-              <PlusIcon className="size-3.5" />
-              New merge
-            </Button>
-          }
-          userId={userId}
-        />
-      </div>
-      <QueryState
-        emptyDescription="Merges fold one project's totals into another's, but only on the Projects page."
-        emptyTitle="No project merges"
-        error={error}
-        isEmpty={!isLoading && !error && merges.length === 0}
-        isLoading={isLoading}
-      >
-        <div className="overflow-x-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Source</TableHead>
-                <TableHead />
-                <TableHead>Target</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {merges.map((merge) => (
-                <TableRow key={merge.merge_id}>
-                  <TableCell className="font-medium">{merge.source_project}</TableCell>
-                  <TableCell>
-                    <ArrowRightIcon className="text-muted-foreground size-3.5" />
-                  </TableCell>
-                  <TableCell className="font-medium">{merge.target_project}</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {formatUnixSeconds(merge.updated_at)}
-                  </TableCell>
-                  <TableCell className="flex justify-end gap-1 text-right">
+    <Surface>
+      <SurfaceHeader
+        actions={
+          <MergeFormDialog
+            trigger={
+              <Button className="gap-1.5 rounded-full" size="sm">
+                <PlusIcon className="size-3.5" />
+                New merge
+              </Button>
+            }
+            userId={userId}
+          />
+        }
+        description="Summaries, stats and insights still show the source project separately."
+        icon={FolderSyncIcon}
+        title={merges.length === 1 ? '1 merge' : `${merges.length} merges`}
+      />
+      <div className="px-3 pb-3 sm:px-4 sm:pb-4">
+        <QueryState
+          emptyDescription="Merges fold one project's totals into another's, but only on the Projects page."
+          emptyTitle="No project merges"
+          error={error}
+          isEmpty={!isLoading && !error && merges.length === 0}
+          isLoading={isLoading}
+        >
+          <ul className="flex flex-col gap-1.5">
+            <AnimatePresence initial={false}>
+              {merges.map((merge, index) => (
+                <motion.li
+                  animate={{ opacity: 1, y: 0 }}
+                  className="group bg-muted/25 hover:bg-muted/60 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border p-3 transition-colors sm:flex-nowrap sm:p-3.5"
+                  exit={{ opacity: 0, x: -12 }}
+                  initial={reduced ? false : { opacity: 0, y: 8 }}
+                  key={merge.merge_id}
+                  layout={reduced ? false : 'position'}
+                  transition={{ delay: reduced ? 0 : Math.min(index, 8) * 0.04, duration: 0.35 }}
+                >
+                  <ProjectPill muted name={merge.source_project} />
+                  <span className={styles.mergeFlow}>
+                    <ArrowRightIcon aria-hidden="true" className="size-3.5" />
+                    <span className="sr-only">merges into</span>
+                  </span>
+                  <ProjectPill name={merge.target_project} />
+                  <span className="ml-auto flex items-center gap-1">
+                    <span className="text-muted-foreground mr-1 hidden text-xs lg:inline">
+                      {formatUnixSeconds(merge.updated_at)}
+                    </span>
                     <MergeFormDialog
                       merge={merge}
                       trigger={
-                        <Button className="size-8" size="icon" variant="ghost">
+                        <Button
+                          aria-label={`Edit merge of ${merge.source_project}`}
+                          className="size-8 rounded-lg"
+                          size="icon"
+                          variant="ghost"
+                        >
                           <PencilIcon className="size-3.5" />
                         </Button>
                       }
@@ -187,7 +216,12 @@ export function ProjectMergesPanel() {
                     />
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button className="size-8" size="icon" variant="ghost">
+                        <Button
+                          aria-label={`Delete merge of ${merge.source_project}`}
+                          className="hover:text-destructive size-8 rounded-lg"
+                          size="icon"
+                          variant="ghost"
+                        >
                           <Trash2Icon className="size-3.5" />
                         </Button>
                       </AlertDialogTrigger>
@@ -207,13 +241,13 @@ export function ProjectMergesPanel() {
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
-                  </TableCell>
-                </TableRow>
+                  </span>
+                </motion.li>
               ))}
-            </TableBody>
-          </Table>
-        </div>
-      </QueryState>
-    </div>
+            </AnimatePresence>
+          </ul>
+        </QueryState>
+      </div>
+    </Surface>
   );
 }
