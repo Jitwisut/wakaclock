@@ -157,7 +157,9 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
           ) : null}
           {hasAnswerGuide(copy.breadcrumbs.at(-1)?.path ?? '', locale) ? (
             <li>
-              <a href="#answer-guide">Key takeaways and sources</a>
+              <a href="#answer-guide">
+                {locale === 'th' ? 'สรุปและแหล่งอ้างอิง' : 'Key takeaways and sources'}
+              </a>
             </li>
           ) : null}
         </ol>

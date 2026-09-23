@@ -879,7 +879,7 @@ const developerAnalytics = local(
   {
     metadataTitle: 'AtoAxis Developer analytics และ coding metrics',
     description:
-      'ดู analytics ของเวลา โปรเจกต์ ภาษา branch keystrokes และ AI attribution พร้อมวิธีคำนวณที่อธิบายได้',
+      'ดูเวลาเขียนโค้ดแยกตามโปรเจกต์ ภาษา editor และ branch พร้อม AI attribution และ coverage เรียนรู้วิธีคำนวณจาก heartbeat และข้อจำกัดของข้อมูลก่อนเปรียบเทียบผลงาน',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Developer analytics', path: '/developer-analytics' },
@@ -1154,7 +1154,7 @@ page(
   {
     metadataTitle: 'ทางเลือก WakaTime สำหรับติดตามเวลานักพัฒนา',
     description:
-      'AtoAxis เป็นทางเลือก WakaTime ที่รองรับ API มีประวัติครบถ้วน และอธิบายขอบเขต AI อย่างตรงไปตรงมา',
+      'เปรียบเทียบ AtoAxis กับระบบติดตามเวลาเดิม: รองรับ WakaTime API นำเข้าประวัติได้ เก็บประวัติครบ และแสดง AI attribution พร้อมข้อจำกัดที่ควรตรวจสอบก่อนย้าย',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'ทางเลือก WakaTime', path: '/wakatime-alternative' },
@@ -1416,7 +1416,7 @@ dualPage(
   {
     metadataTitle: 'ติดตาม AI Coding Activity',
     description:
-      'ดูวิธีบันทึก AI-assisted coding ด้วยชื่อ agent และ line counts โดยไม่เก็บ prompt, response หรือ source code',
+      'ติดตาม AI coding ด้วยชื่อ agent จำนวนบรรทัด และ attribution coverage แยกงาน AI, human และ Unattributed พร้อมอธิบายข้อจำกัด โดยไม่เก็บ prompt หรือ source code',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'AI coding tracker', path: '/ai-coding-tracker' },
@@ -1697,7 +1697,7 @@ emptyPagePair(
   {
     metadataTitle: 'การเชื่อมต่อ Editor กับ AtoAxis',
     description:
-      'เชื่อม VS Code ด้วย AtoAxis extension หรือใช้ WakaTime-compatible plugin กับ hosted API',
+      'เชื่อม VS Code ผ่าน extension ของ AtoAxis หรือใช้ WakaTime-compatible plugin กับ editor อื่น ดูวิธีตั้งค่า API, ตรวจ heartbeat แรก และขอบเขตข้อมูลที่แต่ละ client ส่ง',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Integrations', path: '/integrations' },
@@ -2675,12 +2675,16 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
       {
         href: '/docs/how-coding-time-is-calculated',
         label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
-        description: en ? 'Heartbeats, idle gaps and duration blocks' : 'heartbeat, idle gap และ duration block',
+        description: en
+          ? 'Heartbeats, idle gaps and duration blocks'
+          : 'heartbeat, idle gap และ duration block',
       },
       {
         href: '/docs/ai-attribution-and-coverage',
         label: en ? 'AI attribution and coverage' : 'AI attribution และ coverage',
-        description: en ? 'Evidence behind AI and human totals' : 'หลักฐานเบื้องหลังยอด AI และ human',
+        description: en
+          ? 'Evidence behind AI and human totals'
+          : 'หลักฐานเบื้องหลังยอด AI และ human',
       },
       {
         href: '/docs/ai-cost-methodology',
@@ -2877,7 +2881,7 @@ generic(
   },
   {
     title: 'ราคา',
-    description: `ราคาแผนที่วางไว้ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี`,
+    description: `ตรวจราคาเป้าหมายของ AtoAxis: $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี พร้อมสิ่งที่รวมในแผนและสถานะ Early Access ซึ่งยังไม่เปิด checkout หรือเก็บเงิน`,
     lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
     faqEntries: [
@@ -2958,7 +2962,8 @@ generic(
       },
       {
         question: 'What happens if I revoke my API key?',
-        answer: 'New data stops immediately; revoking a key does not delete data that already exists.',
+        answer:
+          'New data stops immediately; revoking a key does not delete data that already exists.',
       },
     ],
   },
@@ -3063,9 +3068,14 @@ generic(
   },
   {
     title: 'เอกสาร AtoAxis',
-    description: 'เอกสาร setup, editor integration และ heartbeat privacy',
+    description:
+      'เริ่มใช้ AtoAxis จากคู่มือเชื่อม editor และตรวจ heartbeat แรก อ่านวิธีคำนวณเวลา AI attribution การตั้งค่า integration และข้อมูลที่ส่งเพื่อใช้งานอย่างเข้าใจ',
     lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
-    headings: ['เอกสารนี้มีอะไรบ้าง?', 'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?', 'ตรวจสอบ integration และ privacy ที่ไหน?'],
+    headings: [
+      'เอกสารนี้มีอะไรบ้าง?',
+      'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?',
+      'ตรวจสอบ integration และ privacy ที่ไหน?',
+    ],
     faqEntries: [
       {
         question: 'ผู้ใช้ AtoAxis ใหม่ควรเริ่มที่ไหน?',
@@ -3175,7 +3185,8 @@ generic(
       },
       {
         question: 'เชื่อม VS Code อย่างไร?',
-        answer: 'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน Wakaclock: Set API Key จาก Command Palette',
+        answer:
+          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน Wakaclock: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
@@ -3244,7 +3255,8 @@ generic(
       },
       {
         question: 'ส่วนไหนยังไม่พร้อม?',
-        answer: 'ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
+        answer:
+          'ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
       },
     ],
   }
@@ -3297,11 +3309,13 @@ generic(
       },
       {
         question: 'ถามเรื่อง field ใน heartbeat ได้ไหม?',
-        answer: 'ได้ แต่หน้า privacy มีรายการ field ทั้งหมดอยู่แล้ว และตอบคำถามส่วนใหญ่ได้เร็วกว่าการรอคำตอบ',
+        answer:
+          'ได้ แต่หน้า privacy มีรายการ field ทั้งหมดอยู่แล้ว และตอบคำถามส่วนใหญ่ได้เร็วกว่าการรอคำตอบ',
       },
       {
         question: 'มีช่องทาง support สำหรับบัญชีโดยเฉพาะหรือไม่?',
-        answer: 'ฟอร์มนี้ตอบคำถามเกี่ยวกับผลิตภัณฑ์ ช่วง Early Access ยังไม่มีช่องทาง support แยกสำหรับบัญชี',
+        answer:
+          'ฟอร์มนี้ตอบคำถามเกี่ยวกับผลิตภัณฑ์ ช่วง Early Access ยังไม่มีช่องทาง support แยกสำหรับบัญชี',
       },
     ],
   }
@@ -3324,7 +3338,8 @@ generic(
       },
       {
         question: 'Can I share one API key across a team?',
-        answer: 'No. One key identifies one account; sharing it is against the acceptable-use rules.',
+        answer:
+          'No. One key identifies one account; sharing it is against the acceptable-use rules.',
       },
       {
         question: 'Will these terms change before launch?',
@@ -3353,7 +3368,8 @@ generic(
       },
       {
         question: 'ข้อกำหนดนี้จะเปลี่ยนก่อนเปิดตัวหรือไม่?',
-        answer: 'จะเปลี่ยน นี่เป็นข้อกำหนดเบื้องต้นและจะถูกแทนที่ก่อนที่ผลิตภัณฑ์จะเริ่มมีค่าใช้จ่าย',
+        answer:
+          'จะเปลี่ยน นี่เป็นข้อกำหนดเบื้องต้นและจะถูกแทนที่ก่อนที่ผลิตภัณฑ์จะเริ่มมีค่าใช้จ่าย',
       },
     ],
   }
@@ -3373,7 +3389,8 @@ generic(
       },
       {
         question: 'When do I get an API key?',
-        answer: 'Keys are issued to people on the list as Early Access opens, not automatically at signup.',
+        answer:
+          'Keys are issued to people on the list as Early Access opens, not automatically at signup.',
       },
       {
         question: 'What is the planned price once checkout opens?',
@@ -3897,7 +3914,9 @@ dualPage(
           '09:00 ──(gap 10 นาที)── 09:10    เชื่อมกัน\n09:10 ──(gap 20 นาที)── 09:30    block ใหม่',
           'ตัวอย่าง'
         ),
-        p('ตัวเลขนี้อธิบายกติกา ไม่ใช่การรับประกันยอด dashboard ใด ๆ ให้ดู timeline และหลักฐานของ interval เมื่อยอดไม่ตรงกับความคาดหมาย'),
+        p(
+          'ตัวเลขนี้อธิบายกติกา ไม่ใช่การรับประกันยอด dashboard ใด ๆ ให้ดู timeline และหลักฐานของ interval เมื่อยอดไม่ตรงกับความคาดหมาย'
+        ),
       ]),
       section('อ่านผลลัพธ์อย่างไร', 'interpretation', [
         bullets([
@@ -3940,11 +3959,13 @@ dualPage(
       },
       {
         question: 'ค่า idle timeout เริ่มต้นเท่าไร?',
-        answer: 'ค่าเริ่มต้นของกิจกรรมจากคนคือ 15 นาที แต่ deployment ปรับได้ ให้ตรวจค่าของระบบจริง',
+        answer:
+          'ค่าเริ่มต้นของกิจกรรมจากคนคือ 15 นาที แต่ deployment ปรับได้ ให้ตรวจค่าของระบบจริง',
       },
       {
         question: 'Heartbeat ส่ง source code หรือไม่?',
-        answer: 'ไม่ ส่ง metadata และ counts ของกิจกรรม ส่วน source code, prompt และ response ไม่อยู่ใน payload',
+        answer:
+          'ไม่ ส่ง metadata และ counts ของกิจกรรม ส่วน source code, prompt และ response ไม่อยู่ใน payload',
       },
       {
         question: 'Coding time เป็น productivity score หรือไม่?',
@@ -4055,8 +4076,7 @@ dualPage(
       },
       {
         question: 'Are prompts stored for attribution?',
-        answer:
-          'No. Attribution uses labels, identifiers and counts, not prompt or response text.',
+        answer: 'No. Attribution uses labels, identifiers and counts, not prompt or response text.',
       },
     ]),
   },
@@ -4078,7 +4098,9 @@ dualPage(
           'Human: editor รายงาน keystroke หรือ character ที่พิมพ์เองและการเปลี่ยนแปลงที่วัดได้',
           'Unattributed: ระบบเห็นการเปลี่ยนแปลงแต่พิสูจน์ไม่ได้ว่าเกิดจากแหล่งใด',
         ]),
-        p('ยอด canonical ทำให้ทั้งสามกลุ่มไม่ทับกัน Unattributed คือหลักฐานที่ขาด ไม่ใช่คำพ้องกับ human และไม่ใช่เหตุผลให้ระบบเดา'),
+        p(
+          'ยอด canonical ทำให้ทั้งสามกลุ่มไม่ทับกัน Unattributed คือหลักฐานที่ขาด ไม่ใช่คำพ้องกับ human และไม่ใช่เหตุผลให้ระบบเดา'
+        ),
       ]),
       section('หลักฐานมาจากไหน', 'evidence', [
         p(
@@ -4097,7 +4119,9 @@ dualPage(
           'ตัวอย่างสมมติ: AI 40 + human 35 + Unattributed 25 = 100 บรรทัด\nline coverage: (40 + 35) / 100 = 75%',
           'ตัวอย่าง ไม่ใช่ข้อมูลลูกค้า'
         ),
-        p('AI share ในบรรทัดที่รู้ กับ coverage ของหลักฐานทั้งช่วงเวลาเป็นคนละเรื่อง จึงควรอ่านทั้งยอดและ status'),
+        p(
+          'AI share ในบรรทัดที่รู้ กับ coverage ของหลักฐานทั้งช่วงเวลาเป็นคนละเรื่อง จึงควรอ่านทั้งยอดและ status'
+        ),
       ]),
       section('เปรียบเทียบ agent อย่างไร', 'compare', [
         bullets([
@@ -4108,10 +4132,14 @@ dualPage(
         ]),
       ]),
       section('ขอบเขตความเป็นส่วนตัว', 'privacy', [
-        p('Attribution ส่ง label, identifier และจำนวน ไม่ต้องส่ง source code, prompt หรือข้อความตอบของ AI Provider usage อาจเพิ่ม token metadata แต่ไม่ส่งข้อความ transcript'),
+        p(
+          'Attribution ส่ง label, identifier และจำนวน ไม่ต้องส่ง source code, prompt หรือข้อความตอบของ AI Provider usage อาจเพิ่ม token metadata แต่ไม่ส่งข้อความ transcript'
+        ),
       ]),
       section('ทบทวนและตรวจสอบ', 'review', [
-        p('ดูหน้าติดตาม AI coding activity สำหรับ hook ที่รองรับ และดู denominator ใน dashboard analytics เมื่อต้องการตรวจยอด ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+        p(
+          'ดูหน้าติดตาม AI coding activity สำหรับ hook ที่รองรับ และดู denominator ใน dashboard analytics เมื่อต้องการตรวจยอด ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'
+        ),
       ]),
     ],
     related: [
@@ -4140,11 +4168,13 @@ dualPage(
       },
       {
         question: 'Line coverage คำนวณอย่างไร?',
-        answer: 'นำ line change ของ AI และ human ที่มีหลักฐานหารด้วยยอดดังกล่าวรวมกับ Unattributed จาก canonical totals',
+        answer:
+          'นำ line change ของ AI และ human ที่มีหลักฐานหารด้วยยอดดังกล่าวรวมกับ Unattributed จาก canonical totals',
       },
       {
         question: 'AtoAxis เดา AI จากจำนวนบรรทัดได้หรือไม่?',
-        answer: 'ไม่ได้ ต้องมี metadata จาก hook หรือ client ที่รองรับ หากไม่มีหลักฐานจะเป็น Unattributed',
+        answer:
+          'ไม่ได้ ต้องมี metadata จาก hook หรือ client ที่รองรับ หากไม่มีหลักฐานจะเป็น Unattributed',
       },
       {
         question: 'ต้องเก็บ prompt เพื่อทำ attribution หรือไม่?',
@@ -4271,21 +4301,27 @@ dualPage(
     lead: 'AtoAxis ประมาณค่าใช้จ่ายจาก token ที่ provider รายงานและราคาที่มีผลในเวลาที่ event เกิด หากหลักฐานราคาไม่ครบ ระบบจะรายงานว่าไม่ทราบ ไม่ใช่ศูนย์',
     sections: [
       section('ข้อมูลที่บันทึก', 'usage', [
-        p('Usage event มี identifier, ชื่อ provider และ model, เวลา event และจำนวน token แยก input, output, cache-read และ cache-write เพราะ provider อาจตั้งราคาแต่ละประเภทไม่เท่ากัน'),
+        p(
+          'Usage event มี identifier, ชื่อ provider และ model, เวลา event และจำนวน token แยก input, output, cache-read และ cache-write เพราะ provider อาจตั้งราคาแต่ละประเภทไม่เท่ากัน'
+        ),
         code(
           '{\n  "provider": "example-provider",\n  "model": "example-model",\n  "input_tokens": 1000000,\n  "output_tokens": 500000,\n  "token_source": "reported"\n}',
           'usage event ตัวอย่าง'
         ),
       ]),
       section('สูตรประมาณค่าใช้จ่าย', 'formula', [
-        p('ทุก token class ที่ provider รายงานจะคูณกับ rate ต่อหนึ่งล้าน token หารด้วย 1,000,000 แล้วรวมเป็นหน่วย micro-USD class ที่ไม่มีการรายงานจะไม่ขัดขวางการคำนวณ แต่ถ้ามี class ที่รายงานแล้วไม่มี rate ระบบจะทำให้ cost ของ event นั้นเป็นไม่ทราบ เพื่อไม่ให้ยอดบางส่วนดูเหมือนครบ'),
+        p(
+          'ทุก token class ที่ provider รายงานจะคูณกับ rate ต่อหนึ่งล้าน token หารด้วย 1,000,000 แล้วรวมเป็นหน่วย micro-USD class ที่ไม่มีการรายงานจะไม่ขัดขวางการคำนวณ แต่ถ้ามี class ที่รายงานแล้วไม่มี rate ระบบจะทำให้ cost ของ event นั้นเป็นไม่ทราบ เพื่อไม่ให้ยอดบางส่วนดูเหมือนครบ'
+        ),
         code(
           'ตัวอย่างราคา (สมมติ ไม่ใช่ราคาปัจจุบัน):\ninput 1,000,000 × $3.00 / 1M = $3.00\noutput 500,000 × $15.00 / 1M = $7.50\nยอดประมาณ = $10.50 = 10,500,000 micro-USD',
           'ตัวอย่างการคำนวณ'
         ),
       ]),
       section('Provider, model และวันที่มีผล', 'price-window', [
-        p('ระบบจับคู่ทั้ง provider และ model แล้วเลือก price window ที่ effective-from และ effective-to ครอบคลุมเวลา event การเปลี่ยนราคาในภายหลังจึงไม่เขียนทับ event เก่า และผลลัพธ์ตรวจ pricing version ได้'),
+        p(
+          'ระบบจับคู่ทั้ง provider และ model แล้วเลือก price window ที่ effective-from และ effective-to ครอบคลุมเวลา event การเปลี่ยนราคาในภายหลังจึงไม่เขียนทับ event เก่า และผลลัพธ์ตรวจ pricing version ได้'
+        ),
         bullets([
           'model ชื่อเหมือนกันแต่คนละ provider ถือเป็นราคาอีกชุดหนึ่ง',
           'provider หรือ model ที่ไม่มีราคา matching จะยังเป็น unpriced',
@@ -4294,7 +4330,9 @@ dualPage(
         ]),
       ]),
       section('ทำไมไม่ทราบจึงไม่ใช่ศูนย์', 'unknown', [
-        p('เลขศูนย์อาจหมายถึงใช้ฟรี ไม่มีข้อมูล provider ไม่มีราคา หรือจำนวนเป็นศูนย์ ซึ่งไม่ใช่ความหมายเดียวกัน AtoAxis จึงแสดง token เมื่อมีข้อมูลและเว้น estimated cost เมื่อหลักฐานราคาไม่ครบ พร้อม coverage ว่าช่วงใดคิดราคาได้'),
+        p(
+          'เลขศูนย์อาจหมายถึงใช้ฟรี ไม่มีข้อมูล provider ไม่มีราคา หรือจำนวนเป็นศูนย์ ซึ่งไม่ใช่ความหมายเดียวกัน AtoAxis จึงแสดง token เมื่อมีข้อมูลและเว้น estimated cost เมื่อหลักฐานราคาไม่ครบ พร้อม coverage ว่าช่วงใดคิดราคาได้'
+        ),
       ]),
       section('ยอดต่อโปรเจกต์และข้อจำกัด', 'limits', [
         bullets([
@@ -4305,7 +4343,9 @@ dualPage(
         ]),
       ]),
       section('ทบทวนและตรวจสอบ', 'review', [
-        p('ดูหน้าติดตามค่าใช้จ่าย AI สำหรับ agent ที่รองรับ แล้วเทียบ token total, priced-token coverage และ pricing version ในช่วงเวลาเดียวกัน ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+        p(
+          'ดูหน้าติดตามค่าใช้จ่าย AI สำหรับ agent ที่รองรับ แล้วเทียบ token total, priced-token coverage และ pricing version ในช่วงเวลาเดียวกัน ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'
+        ),
       ]),
     ],
     related: [
@@ -4330,7 +4370,8 @@ dualPage(
     faq: faq('คำถามเรื่องวิธีคำนวณค่าใช้จ่าย AI', [
       {
         question: 'ยอดประมาณตรงกับใบแจ้งหนี้ provider หรือไม่?',
-        answer: 'ไม่ คำนวณจาก usage ที่รายงานและ price row ที่มองเห็น ราคา negotiated, subscription และการปรับฝั่ง provider อาจไม่มีในข้อมูล',
+        answer:
+          'ไม่ คำนวณจาก usage ที่รายงานและ price row ที่มองเห็น ราคา negotiated, subscription และการปรับฝั่ง provider อาจไม่มีในข้อมูล',
       },
       {
         question: 'ถ้าไม่รู้ราคา model จะเกิดอะไรขึ้น?',
@@ -4338,7 +4379,8 @@ dualPage(
       },
       {
         question: 'ทำไม cache token ต้องแยก field?',
-        answer: 'เพราะ provider อาจตั้งราคา cache read และ cache write ต่างจาก input และ output การรวมทันทีจะซ่อนที่มาของสูตร',
+        answer:
+          'เพราะ provider อาจตั้งราคา cache read และ cache write ต่างจาก input และ output การรวมทันทีจะซ่อนที่มาของสูตร',
       },
       {
         question: 'ต้องเก็บ prompt เพื่อคำนวณหรือไม่?',
