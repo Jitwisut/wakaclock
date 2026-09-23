@@ -51,6 +51,10 @@ const ACCOUNT_DELETION_MIGRATION: &str =
     include_str!("../../migrations/postgres/020_account_deletion.sql");
 const ACCOUNT_DELETION_CONSTRAINTS_MIGRATION: &str =
     include_str!("../../migrations/postgres/021_account_deletion_constraints.sql");
+const ORG_ANALYTICS_CONSENT_MIGRATION: &str =
+    include_str!("../../migrations/postgres/022_org_analytics_consent.sql");
+const WAKATIME_IMPORT_JOBS_MIGRATION: &str =
+    include_str!("../../migrations/postgres/023_wakatime_import_jobs.sql");
 // PostgreSQL's hashtextextended seed and advisory-lock key are bigint values.
 // Keep this as i64 so tokio-postgres serializes the parameter as int8 instead
 // of sending int4, which PostgreSQL rejects for the prepared expression.
@@ -258,6 +262,11 @@ impl PostgresClient {
                 "account deletion constraints",
                 ACCOUNT_DELETION_CONSTRAINTS_MIGRATION,
             ),
+            (
+                "organization analytics consent",
+                ORG_ANALYTICS_CONSENT_MIGRATION,
+            ),
+            ("WakaTime import jobs", WAKATIME_IMPORT_JOBS_MIGRATION),
         ] {
             client
                 .batch_execute(sql)

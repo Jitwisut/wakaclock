@@ -11,8 +11,11 @@ use axum::{
     Json, Router,
 };
 use chrono::{Duration, NaiveDate, Utc};
+use clickhouse::Row;
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -33,8 +36,8 @@ use crate::model::leaderboard::{
 };
 use crate::model::organization::{
     AddOrganizationMemberRequest, CreateOrganizationRequest, CreateOrganizationTeamRequest,
-    Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
-    UpdateOrganizationRequest,
+    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
+    OrganizationTeam, UpdateOrganizationRequest,
 };
 use crate::model::profile::{
     CreateShareLinkRequest, PublicProfile, ShareLink, UpdateProfileRequest,
@@ -179,11 +182,153 @@ pub struct AnalyticsData {
     pub summary: Value,
 }
 
+#[derive(Debug, Serialize)]
+pub struct MeasurementQualityDay {
+    pub date: String,
+    pub status: &'static str,
+    pub total_seconds: f64,
+    pub proven_seconds: f64,
+    pub inferred_seconds: f64,
+    pub active_seconds: Option<f64>,
+    pub active_coverage: Option<&'static str>,
+    pub heartbeat_count: u64,
+    pub reason: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MeasurementQualityData {
+    pub start: String,
+    pub end: String,
+    pub timezone: String,
+    pub calculation_version: &'static str,
+    pub timeout_seconds: f64,
+    pub total_seconds: f64,
+    pub proven_seconds: f64,
+    pub inferred_seconds: f64,
+    pub attribution_coverage: crate::model::ai_stats::AiStatsCoverage,
+    pub attribution_date_basis: &'static str,
+    pub delivery_status: &'static str,
+    pub days: Vec<MeasurementQualityDay>,
+}
+
+#[derive(Debug, Deserialize, Row)]
+struct OperationEvidenceRow {
+    time: f64,
+    entity: String,
+    session_id: Option<String>,
+    ai_event_id: Option<String>,
+    ai_change_id: Option<String>,
+    heartbeat_id: Option<String>,
+    ai_agent: Option<String>,
+    ai_provider: Option<String>,
+    ai_model: Option<String>,
+    identity_reason: Option<String>,
+    identity_source: Option<String>,
+    effective_actor_type: String,
+    ai_lines_added: Option<u32>,
+    ai_lines_deleted: Option<u32>,
+    revision: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OperationEvidence {
+    pub event_id: String,
+    pub occurred_at: f64,
+    pub actor: String,
+    pub agent: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub identity_reason: Option<&'static str>,
+    pub identity_source: Option<&'static str>,
+    pub lines_added: Option<u32>,
+    pub lines_deleted: Option<u32>,
+    pub revision: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OperationEvidencePage {
+    pub date_basis: &'static str,
+    pub has_more: bool,
+    pub operations: Vec<OperationEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrganizationMeasurement {
+    pub start: String,
+    pub end: String,
+    pub timezone: String,
+    pub status: &'static str,
+    pub consenting_members: usize,
+    pub total_seconds: Option<f64>,
+    pub proven_seconds: Option<f64>,
+    pub inferred_seconds: Option<f64>,
+    pub attributed_line_changes: u64,
+    pub line_change_denominator: u64,
+    pub individual: Vec<IndividualMeasurement>,
+    pub small_team_inference_warning: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IndividualMeasurement {
+    pub user_id: Uuid,
+    pub total_seconds: f64,
+    pub attributed_line_changes: u64,
+    pub line_change_denominator: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrganizationAnalyticsData {
+    #[serde(flatten)]
+    pub membership: OrganizationAnalytics,
+    pub measurement: OrganizationMeasurement,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartWakaTimeImport {
+    pub import_id: Uuid,
+    pub total_chunks: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WakaTimeImportChunk {
+    pub dump_json: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WakaTimeImportJob {
+    pub id: Uuid,
+    pub total_chunks: i32,
+    pub received_chunks: Vec<i32>,
+    pub imported_heartbeats: i64,
+    pub skipped_heartbeats: i64,
+    pub issue_counts: std::collections::BTreeMap<String, i64>,
+    pub before_total_seconds: f64,
+    pub before_calculation_version: String,
+    pub after_total_seconds: Option<f64>,
+    pub after_calculation_version: Option<String>,
+    pub net_change_seconds: Option<f64>,
+    pub completed: bool,
+}
+
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/capabilities", get(capabilities))
         .route("/me", get(me).delete(account_delete))
         .route("/me/analytics", get(analytics))
+        .route("/me/measurement-quality", get(measurement_quality))
+        .route("/me/ai/operation-evidence", get(operation_evidence))
+        .route("/imports/wakatime", post(wakatime_import_start))
+        .route("/imports/wakatime/:import_id", get(wakatime_import_status))
+        .route(
+            "/imports/wakatime/:import_id/chunks/:chunk_index",
+            put(wakatime_import_chunk),
+        )
+        .route(
+            "/imports/wakatime/:import_id/complete",
+            post(wakatime_import_complete),
+        )
         .route(
             "/me/presence/rooms",
             get(crate::handlers::presence_v2::list_rooms),
@@ -313,6 +458,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             get(organization_analytics),
         )
         .route(
+            "/organizations/:organization_id/me/sharing",
+            get(organization_analytics_sharing).put(organization_analytics_sharing_update),
+        )
+        .route(
             "/organizations/:organization_id/presence/summary",
             get(crate::handlers::presence_v2::organization_summary),
         )
@@ -419,7 +568,8 @@ fn feature_available(
         | "goals_crud"
         | "oauth_pkce_and_device_flow"
         | "git_commit_pr_analytics"
-        | "organization_analytics" => postgres,
+        | "organization_analytics"
+        | "resumable_wakatime_import" => postgres,
         "complete_history"
         | "heartbeat_ingestion"
         | "wakatime_protocol"
@@ -429,6 +579,8 @@ fn feature_available(
         | "ai_tokens_and_cost"
         | "ai_prompt_length"
         | "ai_human_follow_up"
+        | "measurement_trust_center"
+        | "ai_operation_evidence"
         | "oauth_scope_enforcement"
         | "desktop_tracker"
         | "browser_extensions"
@@ -623,6 +775,177 @@ pub async fn analytics(
         query.timezone.as_deref().unwrap_or("UTC"),
         None,
     )))
+}
+
+/// Reuses the canonical summary calculation; this endpoint does not reconstruct
+/// duration from raw heartbeats or silently treat a day without events as idle.
+pub async fn measurement_quality(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<RangeQuery>,
+) -> Result<Json<V2Envelope<MeasurementQualityData>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_stats").await?;
+    require_scope(&state, &headers, "read_ai_analytics").await?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
+    let summary = state
+        .summary_service
+        .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
+        .await
+        .map_err(ApiError::internal)?;
+    let stats = state
+        .ai_stats_service
+        .get_range(user_id, &start, &end)
+        .await
+        .map_err(ApiError::internal)?;
+    let timezone = summary.calculation.timezone.clone();
+    let data = build_measurement_quality(summary, stats.data.coverage);
+    Ok(Json(envelope(data, &timezone, None)))
+}
+
+fn build_measurement_quality(
+    summary: crate::model::summary::SummariesResponse,
+    attribution_coverage: crate::model::ai_stats::AiStatsCoverage,
+) -> MeasurementQualityData {
+    let mut total_seconds = 0.0;
+    let mut proven_seconds = 0.0;
+    let mut inferred_seconds = 0.0;
+    let days = summary
+        .days
+        .into_iter()
+        .map(|day| {
+            let total = day.grand_total;
+            total_seconds += total.total_seconds;
+            proven_seconds += total.evidence.proven_seconds;
+            inferred_seconds += total.evidence.inferred_seconds;
+            MeasurementQualityDay {
+                date: day.date,
+                status: if total.heartbeats == 0 {
+                    "no_observation"
+                } else {
+                    "observed"
+                },
+                total_seconds: total.total_seconds,
+                proven_seconds: total.evidence.proven_seconds,
+                inferred_seconds: total.evidence.inferred_seconds,
+                active_seconds: total.active_seconds,
+                active_coverage: total.active_coverage,
+                heartbeat_count: total.heartbeats,
+                reason: (total.heartbeats == 0).then_some("no_heartbeat_is_not_proof_of_idle"),
+            }
+        })
+        .collect();
+    MeasurementQualityData {
+        start: summary.start,
+        end: summary.end,
+        timezone: summary.calculation.timezone,
+        calculation_version: summary.calculation.calculation_version,
+        timeout_seconds: summary.calculation.timeout_seconds,
+        total_seconds,
+        proven_seconds,
+        inferred_seconds,
+        attribution_coverage,
+        // AI stats currently bucket by the stored heartbeat date, not by the
+        // requested display timezone. Keep this limitation visible to clients.
+        attribution_date_basis: "stored_heartbeat_date",
+        // A server read cannot inspect an offline queue on the user's machine.
+        delivery_status: "client_status_unavailable",
+        days,
+    }
+}
+
+pub async fn operation_evidence(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<RangeQuery>,
+) -> Result<Json<V2Envelope<OperationEvidencePage>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
+    crate::model::date_range::ResolvedRange::parse(&start, &end, query.timezone.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let relation = crate::repository::canonical::canonical_winner_relation(
+        "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
+        "h",
+    );
+    let effective_actor = crate::services::ai_stats::effective_actor_type_expr();
+    let sql = format!(
+        "SELECT h.time, h.entity, h.session_id, h.ai_event_id, h.ai_change_id, \
+         h.heartbeat_id, h.ai_agent, h.ai_provider, h.ai_model, h.identity_reason, \
+         h.identity_source, h.effective_actor_type, h.ai_lines_added, \
+         h.ai_lines_deleted, h.revision FROM ( \
+         SELECT h.*, {effective_actor} AS effective_actor_type FROM {relation} \
+         ) AS h WHERE length(ifNull(h.ai_event_id, '')) > 0 \
+         OR length(ifNull(h.ai_change_id, '')) > 0 \
+         ORDER BY h.time DESC, h.entity ASC LIMIT 101"
+    );
+    let mut rows = state
+        .clickhouse
+        .get_client()
+        .query(&sql)
+        .bind(user_id)
+        .bind(&start)
+        .bind(&end)
+        .fetch_all::<OperationEvidenceRow>()
+        .await
+        .map_err(ApiError::internal)?;
+    let has_more = rows.len() > 100;
+    rows.truncate(100);
+    let operations = rows
+        .into_iter()
+        .map(|row| operation_evidence_from_row(user_id, row))
+        .collect();
+    Ok(Json(envelope(
+        OperationEvidencePage {
+            date_basis: "stored_heartbeat_date",
+            has_more,
+            operations,
+        },
+        query.timezone.as_deref().unwrap_or("UTC"),
+        None,
+    )))
+}
+
+fn operation_evidence_from_row(user_id: Uuid, row: OperationEvidenceRow) -> OperationEvidence {
+    let mut hasher = Sha256::new();
+    for part in [
+        user_id.to_string().as_str(),
+        row.session_id.as_deref().unwrap_or_default(),
+        row.ai_event_id
+            .as_deref()
+            .or(row.ai_change_id.as_deref())
+            .or(row.heartbeat_id.as_deref())
+            .unwrap_or_default(),
+        &row.entity,
+    ] {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    let verified = row.effective_actor_type == "ai_verified";
+    OperationEvidence {
+        event_id: format!("{:x}", hasher.finalize()),
+        occurred_at: row.time,
+        actor: row.effective_actor_type,
+        agent: verified.then_some(row.ai_agent).flatten(),
+        provider: verified.then_some(row.ai_provider).flatten(),
+        model: verified.then_some(row.ai_model).flatten(),
+        identity_reason: match row.identity_reason.as_deref() {
+            Some("missing_agent") => Some("missing_agent"),
+            Some("missing_provider") => Some("missing_provider"),
+            Some("missing_model") => Some("missing_model"),
+            Some("context_unavailable") => Some("context_unavailable"),
+            Some("conflicting_evidence") => Some("conflicting_evidence"),
+            _ => None,
+        },
+        identity_source: match row.identity_source.as_deref() {
+            Some("agent_hook") => Some("agent_hook"),
+            Some("mcp") => Some("mcp"),
+            Some("structured_mcp") => Some("structured_mcp"),
+            Some("transcript") => Some("transcript"),
+            _ => None,
+        },
+        lines_added: verified.then_some(row.ai_lines_added).flatten(),
+        lines_deleted: verified.then_some(row.ai_lines_deleted).flatten(),
+        revision: row.revision,
+    }
 }
 
 pub async fn ai_effectiveness(
@@ -1433,18 +1756,431 @@ pub async fn organization_analytics(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(organization_id): Path<Uuid>,
-) -> Result<Json<V2Envelope<OrganizationAnalytics>>, ApiError> {
+    Query(query): Query<RangeQuery>,
+) -> Result<Json<V2Envelope<OrganizationAnalyticsData>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_org_dashboards").await?;
+    let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
+    crate::model::date_range::ResolvedRange::parse(&start, &end, query.timezone.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let analytics = state
         .organizations_service
         .analytics(user_id, organization_id)
         .await
         .map_err(ApiError::service_unavailable)?;
+    let members = state
+        .organizations_service
+        .consenting_analytics_members(user_id, organization_id)
+        .await
+        .map_err(ApiError::service_unavailable)?;
+    let consenting_members = members.len();
+    let results = stream::iter(members.into_iter().map(|(member_id, share_individual)| {
+        let state = state.clone();
+        let start = start.clone();
+        let end = end.clone();
+        let timezone = query.timezone.clone();
+        async move {
+            let summary = state
+                .summary_service
+                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
+                .await?;
+            let stats = state
+                .ai_stats_service
+                .get_range(member_id, &start, &end)
+                .await?;
+            let seconds = summary
+                .days
+                .iter()
+                .map(|day| day.grand_total.total_seconds)
+                .sum::<f64>();
+            let proven = summary
+                .days
+                .iter()
+                .map(|day| day.grand_total.evidence.proven_seconds)
+                .sum::<f64>();
+            let inferred = summary
+                .days
+                .iter()
+                .map(|day| day.grand_total.evidence.inferred_seconds)
+                .sum::<f64>();
+            Ok::<_, anyhow::Error>((
+                member_id,
+                share_individual,
+                seconds,
+                proven,
+                inferred,
+                stats.data.coverage.attributed_line_changes,
+                stats.data.coverage.line_change_denominator,
+            ))
+        }
+    }))
+    .buffer_unordered(8)
+    .collect::<Vec<_>>()
+    .await;
+    let mut total_seconds = 0.0;
+    let mut proven_seconds = 0.0;
+    let mut inferred_seconds = 0.0;
+    let mut attributed_line_changes = 0;
+    let mut line_change_denominator = 0;
+    let mut individual = Vec::new();
+    for result in results {
+        let (member_id, share_individual, seconds, proven, inferred, attributed, denominator) =
+            result.map_err(ApiError::internal)?;
+        total_seconds += seconds;
+        proven_seconds += proven;
+        inferred_seconds += inferred;
+        attributed_line_changes += attributed;
+        line_change_denominator += denominator;
+        if share_individual {
+            individual.push(IndividualMeasurement {
+                user_id: member_id,
+                total_seconds: seconds,
+                attributed_line_changes: attributed,
+                line_change_denominator: denominator,
+            });
+        }
+    }
+    individual.sort_by_key(|entry| entry.user_id);
+    let status = if consenting_members == 0 {
+        "no_consented_members"
+    } else if total_seconds == 0.0 && line_change_denominator == 0 {
+        "no_observed_activity"
+    } else {
+        "observed"
+    };
+    let measurement = OrganizationMeasurement {
+        start,
+        end,
+        timezone: query.timezone.clone().unwrap_or_else(|| "UTC".to_string()),
+        status,
+        consenting_members,
+        total_seconds: (consenting_members > 0).then_some(total_seconds),
+        proven_seconds: (consenting_members > 0).then_some(proven_seconds),
+        inferred_seconds: (consenting_members > 0).then_some(inferred_seconds),
+        attributed_line_changes,
+        line_change_denominator,
+        individual,
+        small_team_inference_warning: consenting_members < 3 && consenting_members > 0,
+    };
     Ok(Json(envelope(
-        analytics,
-        "UTC",
-        Some(json!({ "analytics": "membership_and_seats_only" })),
+        OrganizationAnalyticsData {
+            membership: analytics,
+            measurement,
+        },
+        query.timezone.as_deref().unwrap_or("UTC"),
+        Some(
+            json!({ "analytics": "consented_members_only", "attribution_date_basis": "stored_heartbeat_date" }),
+        ),
     )))
+}
+
+pub async fn organization_analytics_sharing(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<OrganizationAnalyticsSharing>>, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let sharing = state
+        .organizations_service
+        .analytics_sharing(user_id, organization_id)
+        .await
+        .map_err(ApiError::service_unavailable)?;
+    Ok(Json(envelope(sharing, "UTC", None)))
+}
+
+pub async fn organization_analytics_sharing_update(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+    Json(sharing): Json<OrganizationAnalyticsSharing>,
+) -> Result<Json<V2Envelope<OrganizationAnalyticsSharing>>, ApiError> {
+    let user_id = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if sharing.share_individual && !sharing.share_aggregate {
+        return Err(ApiError::bad_request(
+            "individual sharing requires aggregate sharing",
+        ));
+    }
+    let sharing = state
+        .organizations_service
+        .set_analytics_sharing(user_id, organization_id, sharing)
+        .await
+        .map_err(ApiError::service_unavailable)?;
+    Ok(Json(envelope(sharing, "UTC", None)))
+}
+
+pub async fn wakatime_import_start(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<StartWakaTimeImport>,
+) -> Result<(StatusCode, Json<V2Envelope<WakaTimeImportJob>>), ApiError> {
+    let user_id = require_scope(&state, &headers, "write_heartbeats").await?;
+    if !(1..=10_000).contains(&input.total_chunks) {
+        return Err(ApiError::bad_request(
+            "total_chunks must be between 1 and 10000",
+        ));
+    }
+    let postgres = state.postgres.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("PostgreSQL is required for resumable imports")
+    })?;
+    ensure_pg_identity(&state, user_id).await?;
+    let baseline = state
+        .all_time_service
+        .get_in_timezone(user_id, Some("UTC"))
+        .await
+        .map_err(ApiError::internal)?;
+    let baseline_version = baseline
+        .data
+        .calculation_version
+        .as_deref()
+        .unwrap_or("unknown");
+    postgres
+        .client()
+        .execute(
+            "INSERT INTO wakatime_import_jobs
+                (id, user_id, total_chunks, before_total_seconds, before_calculation_version)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+            &[
+                &input.import_id,
+                &user_id,
+                &input.total_chunks,
+                &baseline.data.total_seconds,
+                &baseline_version,
+            ],
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    let job = load_wakatime_import_job(postgres, user_id, input.import_id).await?;
+    if job.total_chunks != input.total_chunks || job.completed {
+        return Err(ApiError::conflict(
+            "import id already exists with different parameters or is complete",
+        ));
+    }
+    Ok((StatusCode::CREATED, Json(envelope(job, "UTC", None))))
+}
+
+pub async fn wakatime_import_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(import_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<WakaTimeImportJob>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "write_heartbeats").await?;
+    let postgres = state.postgres.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("PostgreSQL is required for resumable imports")
+    })?;
+    let job = load_wakatime_import_job(postgres, user_id, import_id).await?;
+    Ok(Json(envelope(job, "UTC", None)))
+}
+
+pub async fn wakatime_import_chunk(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((import_id, chunk_index)): Path<(Uuid, i32)>,
+    Json(input): Json<WakaTimeImportChunk>,
+) -> Result<Json<V2Envelope<WakaTimeImportJob>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "write_heartbeats").await?;
+    if input.dump_json.len() > 1024 * 1024 || chunk_index < 0 {
+        return Err(ApiError::bad_request(
+            "chunk exceeds 1 MiB or index is invalid",
+        ));
+    }
+    let postgres = state.postgres.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("PostgreSQL is required for resumable imports")
+    })?;
+    let digest = format!("{:x}", Sha256::digest(input.dump_json.as_bytes()));
+    // Hold the account-scoped lock through ClickHouse ingestion and the progress
+    // commit. A retry after a failed PostgreSQL commit is safe because v2
+    // derives heartbeat IDs from each heartbeat, independent of chunk boundaries.
+    let _account_lock = postgres
+        .account_activity_lock(user_id)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut connection = postgres
+        .transaction_client()
+        .await
+        .map_err(ApiError::internal)?;
+    let tx = connection.transaction().await.map_err(ApiError::internal)?;
+    let row = tx
+        .query_opt(
+            "SELECT total_chunks, completed_at IS NOT NULL AS completed
+         FROM wakatime_import_jobs WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            &[&import_id, &user_id],
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("import job not found"))?;
+    let total_chunks: i32 = row.get("total_chunks");
+    if row.get::<_, bool>("completed") || chunk_index >= total_chunks {
+        return Err(ApiError::conflict(
+            "import is complete or chunk index is outside the job",
+        ));
+    }
+    let existing = tx
+        .query_opt(
+            "SELECT digest FROM wakatime_import_chunks WHERE job_id = $1 AND chunk_index = $2",
+            &[&import_id, &chunk_index],
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    if let Some(row) = existing {
+        if row.get::<_, String>("digest") != digest {
+            return Err(ApiError::conflict(
+                "chunk index was already uploaded with different content",
+            ));
+        }
+    } else {
+        let result = state
+            .wakatime_import_service
+            .run_stable(user_id, &input.dump_json)
+            .await
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        tx.execute(
+            "INSERT INTO wakatime_import_chunks
+                 (job_id, chunk_index, digest, imported_heartbeats, skipped_heartbeats, issue_counts)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                &import_id,
+                &chunk_index,
+                &digest,
+                &(result.imported_heartbeats as i32),
+                &(result.skipped_heartbeats as i32),
+                &serde_json::to_value(&result.issue_counts).map_err(ApiError::internal)?,
+            ],
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    }
+    tx.commit().await.map_err(ApiError::internal)?;
+    let job = load_wakatime_import_job(postgres, user_id, import_id).await?;
+    Ok(Json(envelope(job, "UTC", None)))
+}
+
+pub async fn wakatime_import_complete(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(import_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<WakaTimeImportJob>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "write_heartbeats").await?;
+    let postgres = state.postgres.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("PostgreSQL is required for resumable imports")
+    })?;
+    let mut connection = postgres
+        .transaction_client()
+        .await
+        .map_err(ApiError::internal)?;
+    let tx = connection.transaction().await.map_err(ApiError::internal)?;
+    let row = tx
+        .query_opt(
+            "SELECT total_chunks, completed_at IS NOT NULL AS completed FROM wakatime_import_jobs
+         WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            &[&import_id, &user_id],
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("import job not found"))?;
+    let expected: i32 = row.get("total_chunks");
+    let uploaded: i64 = tx
+        .query_one(
+            "SELECT count(*) AS n FROM wakatime_import_chunks WHERE job_id = $1",
+            &[&import_id],
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .get("n");
+    if uploaded != i64::from(expected) {
+        return Err(ApiError::conflict("import still has missing chunks"));
+    }
+    if !row.get::<_, bool>("completed") {
+        let final_total = state
+            .all_time_service
+            .get_in_timezone(user_id, Some("UTC"))
+            .await
+            .map_err(ApiError::internal)?;
+        let final_version = final_total
+            .data
+            .calculation_version
+            .as_deref()
+            .unwrap_or("unknown");
+        tx.execute(
+            "UPDATE wakatime_import_jobs
+             SET completed_at = now(), after_total_seconds = $3, after_calculation_version = $4
+             WHERE id = $1 AND user_id = $2",
+            &[
+                &import_id,
+                &user_id,
+                &final_total.data.total_seconds,
+                &final_version,
+            ],
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    }
+    tx.commit().await.map_err(ApiError::internal)?;
+    let job = load_wakatime_import_job(postgres, user_id, import_id).await?;
+    Ok(Json(envelope(job, "UTC", None)))
+}
+
+async fn load_wakatime_import_job(
+    postgres: &crate::infrastructure::postgres::PostgresClient,
+    user_id: Uuid,
+    import_id: Uuid,
+) -> Result<WakaTimeImportJob, ApiError> {
+    let row = postgres
+        .client()
+        .query_opt(
+            "SELECT id, total_chunks, completed_at IS NOT NULL AS completed,
+                before_total_seconds, before_calculation_version,
+                after_total_seconds, after_calculation_version
+         FROM wakatime_import_jobs WHERE id = $1 AND user_id = $2",
+            &[&import_id, &user_id],
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("import job not found"))?;
+    let chunks = postgres
+        .client()
+        .query(
+            "SELECT chunk_index, imported_heartbeats, skipped_heartbeats, issue_counts
+         FROM wakatime_import_chunks WHERE job_id = $1 ORDER BY chunk_index",
+            &[&import_id],
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    let mut received_chunks = Vec::new();
+    let mut imported_heartbeats = 0_i64;
+    let mut skipped_heartbeats = 0_i64;
+    let mut issue_counts = std::collections::BTreeMap::new();
+    for chunk in chunks {
+        received_chunks.push(chunk.get("chunk_index"));
+        imported_heartbeats += i64::from(chunk.get::<_, i32>("imported_heartbeats"));
+        skipped_heartbeats += i64::from(chunk.get::<_, i32>("skipped_heartbeats"));
+        let issues: serde_json::Value = chunk.get("issue_counts");
+        if let Ok(issues) =
+            serde_json::from_value::<std::collections::BTreeMap<String, i64>>(issues)
+        {
+            for (reason, count) in issues {
+                *issue_counts.entry(reason).or_default() += count;
+            }
+        }
+    }
+    Ok(WakaTimeImportJob {
+        id: row.get("id"),
+        total_chunks: row.get("total_chunks"),
+        received_chunks,
+        imported_heartbeats,
+        skipped_heartbeats,
+        issue_counts,
+        before_total_seconds: row.get("before_total_seconds"),
+        before_calculation_version: row.get("before_calculation_version"),
+        after_total_seconds: row.get("after_total_seconds"),
+        after_calculation_version: row.get("after_calculation_version"),
+        net_change_seconds: row
+            .get::<_, Option<f64>>("after_total_seconds")
+            .map(|after| after - row.get::<_, f64>("before_total_seconds")),
+        completed: row.get("completed"),
+    })
 }
 
 pub async fn organization_audit_logs(
@@ -1688,6 +2424,12 @@ mod capability_tests {
     #[test]
     fn postgres_backed_feature_is_unavailable_without_postgres() {
         assert!(!feature_available("goals_crud", false, false, false));
+        assert!(!feature_available(
+            "resumable_wakatime_import",
+            false,
+            false,
+            false
+        ));
         assert_eq!(
             feature_runtime_status("goals_crud", "beta", false, false, false),
             "unavailable"
@@ -1745,6 +2487,112 @@ mod capability_tests {
             error.message,
             "feature private_leaderboards is unavailable in this deployment"
         );
+    }
+}
+
+#[cfg(test)]
+mod measurement_quality_tests {
+    use super::{build_measurement_quality, operation_evidence_from_row, OperationEvidenceRow};
+    use crate::model::ai_stats::{AiCoverageStatus, AiStatsCoverage};
+    use crate::model::summary::{
+        SummariesResponse, SummaryCalculation, SummaryDay, SummaryGrandTotal,
+    };
+    use crate::services::activity_timeline::EvidenceSplit;
+
+    #[test]
+    fn day_evidence_reconciles_and_no_observation_is_not_called_idle() {
+        let day = |date: &str, observed: bool| SummaryDay {
+            date: date.to_string(),
+            grand_total: SummaryGrandTotal {
+                total_seconds: if observed { 90.0 } else { 0.0 },
+                hours: 0.0,
+                text: String::new(),
+                heartbeats: u64::from(observed),
+                comparable_seconds: None,
+                ai_measured_seconds: None,
+                ai_additional_seconds: None,
+                calculation_version: Some("legacy"),
+                active_seconds: None,
+                active_human_seconds: None,
+                active_human_only_seconds: None,
+                active_ai_only_seconds: None,
+                active_ai_seconds: None,
+                active_overlap_seconds: None,
+                active_coverage: None,
+                evidence: EvidenceSplit {
+                    proven_seconds: if observed { 60.0 } else { 0.0 },
+                    inferred_seconds: if observed { 30.0 } else { 0.0 },
+                    ..EvidenceSplit::default()
+                },
+            },
+            languages: Vec::new(),
+            projects: Vec::new(),
+            editors: Vec::new(),
+            operating_systems: Vec::new(),
+            categories: Vec::new(),
+        };
+        let summary = SummariesResponse {
+            start: "2026-09-21".to_string(),
+            end: "2026-09-22".to_string(),
+            calculation: SummaryCalculation {
+                timezone: "UTC".to_string(),
+                timeout_seconds: 900.0,
+                writes_only: false,
+                scope: "all_projects_all_categories",
+                comparable_metric: "editor_ranges",
+                calculation_version: "legacy",
+            },
+            days: vec![day("2026-09-21", true), day("2026-09-22", false)],
+        };
+        let coverage = AiStatsCoverage {
+            attributed_line_changes: 0,
+            ai_inferred_heartbeats: 0,
+            ai_verified_heartbeats: 0,
+            heartbeat_denominator: 1,
+            human_heartbeats: 0,
+            line_change_denominator: 0,
+            line_coverage_percent: None,
+            status: AiCoverageStatus::Partial,
+            unknown_heartbeats: 1,
+            unknown_line_changes: 0,
+        };
+        let report = build_measurement_quality(summary, coverage);
+        assert_eq!(report.total_seconds, 90.0);
+        assert_eq!(report.proven_seconds + report.inferred_seconds, 90.0);
+        assert_eq!(report.days[1].status, "no_observation");
+        assert_eq!(
+            report.days[1].reason,
+            Some("no_heartbeat_is_not_proof_of_idle")
+        );
+    }
+
+    #[test]
+    fn operation_receipt_uses_opaque_id_and_hides_unverified_identity() {
+        let raw = OperationEvidenceRow {
+            time: 1_700_000_000.0,
+            entity: "/private/source/secret.rs".to_string(),
+            session_id: Some("private-session".to_string()),
+            ai_event_id: Some("raw-event".to_string()),
+            ai_change_id: None,
+            heartbeat_id: None,
+            ai_agent: Some("unverified-agent".to_string()),
+            ai_provider: Some("unverified-provider".to_string()),
+            ai_model: Some("unverified-model".to_string()),
+            identity_reason: Some("conflicting_evidence".to_string()),
+            identity_source: Some("transcript".to_string()),
+            effective_actor_type: "ai_inferred".to_string(),
+            ai_lines_added: Some(10),
+            ai_lines_deleted: Some(2),
+            revision: 1,
+        };
+        let receipt = operation_evidence_from_row(uuid::Uuid::nil(), raw);
+        let serialized = serde_json::to_string(&receipt).unwrap();
+        assert!(!serialized.contains("secret.rs"));
+        assert!(!serialized.contains("private-session"));
+        assert!(!serialized.contains("raw-event"));
+        assert!(!serialized.contains("unverified-model"));
+        assert!(receipt.agent.is_none());
+        assert!(receipt.lines_added.is_none());
     }
 }
 

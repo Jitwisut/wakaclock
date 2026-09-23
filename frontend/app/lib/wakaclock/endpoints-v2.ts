@@ -1,6 +1,14 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
 import type {
+  MeasurementQuality,
+  OperationEvidencePage,
+  Organization,
+  OrganizationAnalytics,
+  OrganizationAnalyticsSharing,
+  WakaTimeImportJob,
+} from './measurement-types';
+import type {
   CreateGoalPayload,
   CreateLeaderboardPayload,
   Goal,
@@ -20,13 +28,111 @@ import type {
 
 /**
  * API v2 endpoints, kept separate from `endpoints.ts` because they answer on a different
- * base path and in a different response shape. Everything here is Postgres-backed and is
- * unavailable when the server runs in ClickHouse-only mode — see `useCapabilities`.
+ * base path and in a different response shape. Endpoints declare their own runtime
+ * dependencies through `/capabilities`; import jobs and organization state need PostgreSQL.
  */
 
 // GET /capabilities
 export async function getCapabilities() {
   return unwrapV2(await wakaclockV2Client.get<V2Envelope<V2Capabilities>>('/capabilities'));
+}
+
+export async function getMeasurementQuality(start: string, end: string, timezone: string) {
+  const params = new URLSearchParams({ start, end, timezone });
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<MeasurementQuality>>(
+      `/me/measurement-quality?${params.toString()}`
+    )
+  );
+}
+
+export async function getOperationEvidence(start: string, end: string, timezone: string) {
+  const params = new URLSearchParams({ start, end, timezone });
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OperationEvidencePage>>(
+      `/me/ai/operation-evidence?${params.toString()}`
+    )
+  );
+}
+
+export async function listOrganizations() {
+  return unwrapV2(await wakaclockV2Client.get<V2Envelope<Organization[]>>('/organizations'));
+}
+
+export async function createOrganization(name: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<Organization>>('/organizations', { name })
+  );
+}
+
+export async function getOrganizationAnalytics(
+  organizationId: string,
+  start: string,
+  end: string,
+  timezone: string
+) {
+  const params = new URLSearchParams({ start, end, timezone });
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationAnalytics>>(
+      `/organizations/${organizationId}/analytics?${params.toString()}`
+    )
+  );
+}
+
+export async function getOrganizationSharing(organizationId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationAnalyticsSharing>>(
+      `/organizations/${organizationId}/me/sharing`
+    )
+  );
+}
+
+export async function updateOrganizationSharing(
+  organizationId: string,
+  sharing: OrganizationAnalyticsSharing
+) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<OrganizationAnalyticsSharing>>(
+      `/organizations/${organizationId}/me/sharing`,
+      sharing
+    )
+  );
+}
+
+export async function startWakaTimeImport(importId: string, totalChunks: number) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<WakaTimeImportJob>>(
+      '/imports/wakatime',
+      { import_id: importId, total_chunks: totalChunks },
+      { timeout: 60_000 }
+    )
+  );
+}
+
+export async function getWakaTimeImport(importId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<WakaTimeImportJob>>(`/imports/wakatime/${importId}`)
+  );
+}
+
+export async function uploadWakaTimeImportChunk(importId: string, index: number, dumpJson: string) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<WakaTimeImportJob>>(
+      `/imports/wakatime/${importId}/chunks/${index}`,
+      { dump_json: dumpJson },
+      { timeout: 60_000 }
+    )
+  );
+}
+
+export async function completeWakaTimeImport(importId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<WakaTimeImportJob>>(
+      `/imports/wakatime/${importId}/complete`,
+      undefined,
+      { timeout: 60_000 }
+    )
+  );
 }
 
 // GET /me/goals
@@ -91,9 +197,7 @@ export async function removeLeaderboardMember(leaderboardId: string, memberUserI
 // ---------------------------------------------------------------------------
 
 export async function listPresenceRooms() {
-  return unwrapV2(
-    await wakaclockV2Client.get<V2Envelope<PresenceV2Room[]>>('/me/presence/rooms')
-  );
+  return unwrapV2(await wakaclockV2Client.get<V2Envelope<PresenceV2Room[]>>('/me/presence/rooms'));
 }
 
 export async function createPresenceRoomV2(name: string, expiresInSeconds = 86_400) {
@@ -125,13 +229,10 @@ export async function joinPresenceRoomV2(
   clientId?: null | string
 ) {
   return unwrapV2(
-    await wakaclockV2Client.post<V2Envelope<PresenceV2Snapshot>>(
-      `/presence/rooms/${roomId}/join`,
-      {
-        ...(inviteToken ? { invite_token: inviteToken } : {}),
-        ...(clientId ? { client_id: clientId } : {}),
-      }
-    )
+    await wakaclockV2Client.post<V2Envelope<PresenceV2Snapshot>>(`/presence/rooms/${roomId}/join`, {
+      ...(inviteToken ? { invite_token: inviteToken } : {}),
+      ...(clientId ? { client_id: clientId } : {}),
+    })
   );
 }
 
@@ -183,9 +284,7 @@ export async function createPresenceInviteV2(roomId: string, expiresInSeconds = 
 
 export async function listPresenceInvitesV2(roomId: string) {
   return unwrapV2(
-    await wakaclockV2Client.get<V2Envelope<PresenceV2Invite[]>>(
-      `/presence/rooms/${roomId}/invites`
-    )
+    await wakaclockV2Client.get<V2Envelope<PresenceV2Invite[]>>(`/presence/rooms/${roomId}/invites`)
   );
 }
 
@@ -208,9 +307,7 @@ export async function listCoworkingHistoryV2(params?: {
   if (params?.timezone) search.set('timezone', params.timezone);
   const suffix = search.toString() ? `?${search.toString()}` : '';
   return unwrapV2(
-    await wakaclockV2Client.get<V2Envelope<PresenceHistoryData>>(
-      `/me/coworking-sessions${suffix}`
-    )
+    await wakaclockV2Client.get<V2Envelope<PresenceHistoryData>>(`/me/coworking-sessions${suffix}`)
   );
 }
 

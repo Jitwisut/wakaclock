@@ -15,6 +15,7 @@ import {
   UploadIcon,
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -184,6 +185,13 @@ function ImportCard() {
             Uploading the same file again will not duplicate its canonical activity.
           </AlertDescription>
         </Alert>
+        <p className="text-muted-foreground text-sm">
+          For larger exports or interrupted uploads, use the{' '}
+          <Link className="text-foreground underline" href="/dashboard/wakaclock/import">
+            resumable import
+          </Link>
+          .
+        </p>
         <div className="space-y-1.5">
           <Label htmlFor="wakatime-import-file">JSON file</Label>
           {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- drag-and-drop is a pointer shortcut; the file input inside stays keyboard reachable */}

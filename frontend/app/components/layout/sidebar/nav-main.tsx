@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import {
   ChevronRight,
+  DownloadIcon,
   FolderGit2Icon,
   HeartPulseIcon,
   KeyboardIcon,
@@ -15,6 +16,7 @@ import {
   TargetIcon,
   TrendingUpIcon,
   TrophyIcon,
+  UsersIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -130,10 +132,17 @@ export const navItems: NavGroup[] = [
             icon: FolderGit2Icon,
           },
           { title: 'Activity Heatmap', href: '/dashboard/wakaclock/analytics/heatmap' },
+          { title: 'Measurement Trust', href: '/dashboard/wakaclock/analytics/trust' },
         ],
       },
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
+      {
+        title: 'Teams',
+        href: '/dashboard/wakaclock/teams',
+        icon: UsersIcon,
+        requiresPostgres: true,
+      },
       { title: 'Input Activity', href: '/dashboard/wakaclock/keystrokes', icon: KeyboardIcon },
       {
         title: 'Goals',
@@ -149,6 +158,12 @@ export const navItems: NavGroup[] = [
         requiresFeature: 'private_leaderboards',
       },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
+      {
+        title: 'Import WakaTime',
+        href: '/dashboard/wakaclock/import',
+        icon: DownloadIcon,
+        requiresPostgres: true,
+      },
       { title: 'Presence (prototype)', href: '/dashboard/wakaclock/presence', icon: RadioIcon },
       { title: 'Settings', href: '/dashboard/wakaclock/settings', icon: SlidersHorizontalIcon },
     ],

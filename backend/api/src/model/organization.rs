@@ -64,3 +64,10 @@ pub struct OrganizationAnalytics {
     pub team_count: i64,
     pub data_freshness: &'static str,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrganizationAnalyticsSharing {
+    pub share_aggregate: bool,
+    pub share_individual: bool,
+}
