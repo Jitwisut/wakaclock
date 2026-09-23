@@ -206,6 +206,7 @@ const AUDIT_REVIEW_DATE = '2026-09-11';
 const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
 const NEW_GUIDES_DATE = '2026-09-20';
 const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
+const THAI_SEO_UPDATE_DATE = '2026-09-23';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': '2026-09-22',
   '/teams': AUDIT_REVIEW_DATE,
@@ -231,8 +232,13 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
 /** Thai route-specific content dates, including guides authored in both languages. */
 const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/about': ATTRIBUTION_UPDATE_DATE,
-  '/wakatime-alternative': AUDIT_REVIEW_DATE_ROUND_3,
-  '/ai-coding-tracker': AUDIT_REVIEW_DATE_ROUND_3,
+  '/wakatime-alternative': THAI_SEO_UPDATE_DATE,
+  '/ai-coding-tracker': THAI_SEO_UPDATE_DATE,
+  '/developer-analytics': THAI_SEO_UPDATE_DATE,
+  '/teams': THAI_SEO_UPDATE_DATE,
+  '/pricing': THAI_SEO_UPDATE_DATE,
+  '/integrations': THAI_SEO_UPDATE_DATE,
+  '/docs': THAI_SEO_UPDATE_DATE,
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
@@ -256,7 +262,12 @@ export function contentModified(path: string, locale: SiteLocale): string | unde
  * to forget. Answer engines read `dateModified` as the freshness signal for the entity,
  * not for one URL, so the most recent editorial change on the site is the honest value.
  */
-export const SITE_MODIFIED = Object.values(ROUTE_CONTENT_DATES).sort().at(-1) as string;
+export const SITE_MODIFIED = [
+  ...Object.values(ROUTE_CONTENT_DATES),
+  ...Object.values(TH_ROUTE_CONTENT_DATES),
+]
+  .sort()
+  .at(-1) as string;
 
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
 export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [

@@ -335,9 +335,15 @@ const EN_GUIDES: Record<string, Guide> = {
       'AtoAxis is developed by team Atoaxis. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.',
     facts: [
       ['Team', 'Team Atoaxis designs, develops and operates the hosted service.'],
-      ['Status', 'Early Access: heartbeat ingestion and analytics run; billing and team seats do not.'],
+      [
+        'Status',
+        'Early Access: heartbeat ingestion and analytics run; billing and team seats do not.',
+      ],
       ['Working today', 'Heartbeat ingestion, project and language analytics, and AI attribution.'],
-      ['Verification', 'Product claims can be checked against the public documentation and support channel.'],
+      [
+        'Verification',
+        'Product claims can be checked against the public documentation and support channel.',
+      ],
     ],
     question: 'How should you verify a claim made on this site?',
     example:
@@ -377,7 +383,10 @@ const EN_GUIDES: Record<string, Guide> = {
       'A real person reads the contact inbox, so a specific question about Early Access, editors, AI tracking, privacy or migration gets a specific answer rather than an automated reply.',
     facts: [
       ['Channel', 'Email, read by the team building the product, not a support queue.'],
-      ['Answerable today', 'Early Access timing, editor compatibility, AI hook coverage, privacy fields.'],
+      [
+        'Answerable today',
+        'Early Access timing, editor compatibility, AI hook coverage, privacy fields.',
+      ],
       ['Response scope', 'Product questions; account-specific support requires an active account.'],
       ['Alternative first stop', 'Check the documentation and privacy pages before writing in.'],
     ],
@@ -442,12 +451,22 @@ const EN_GUIDES: Record<string, Guide> = {
     answer:
       'A heartbeat carries file, project, branch, language and editor metadata plus counts. It never carries source code, diffs, AI prompts, responses, passwords or screenshots.',
     facts: [
-      ['Collected', 'File path, project, branch, language, editor, OS and keystroke/character counts.'],
-      ['Never collected', 'Source code, diffs, AI prompt or response text, passwords, screenshots.'],
-      ['Transport', 'The editor hands activity to the local CLI; only the CLI sends HTTPS requests.'],
+      [
+        'Collected',
+        'File path, project, branch, language, editor, OS and keystroke/character counts.',
+      ],
+      [
+        'Never collected',
+        'Source code, diffs, AI prompt or response text, passwords, screenshots.',
+      ],
+      [
+        'Transport',
+        'The editor hands activity to the local CLI; only the CLI sends HTTPS requests.',
+      ],
       ['Retention', 'Kept while the account is active; deletion can be requested by email.'],
     ],
-    question: 'How can you verify the privacy boundary yourself, rather than take the claim on faith?',
+    question:
+      'How can you verify the privacy boundary yourself, rather than take the claim on faith?',
     example:
       'For example, run the CLI with logging enabled and inspect what it actually sends over the network, then compare the fields with the privacy guide. The documented boundary is metadata and counts, with no field for file contents or AI transcript text.',
     recommendation:
@@ -487,7 +506,10 @@ const EN_GUIDES: Record<string, Guide> = {
       ['What joining does', 'Adds you to the Early Access list and launch-update emails.'],
       ['What it does not do', 'Collect payment details or start a trial or subscription.'],
       ['Key issuance', 'Keys are issued to people on the list, not automatically at signup.'],
-      ['Planned pricing', `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year once checkout opens.`],
+      [
+        'Planned pricing',
+        `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year once checkout opens.`,
+      ],
     ],
     question: 'How is joining Early Access different from a normal product signup?',
     example:
@@ -522,10 +544,16 @@ const EN_GUIDES: Record<string, Guide> = {
     answer:
       'Three things: an editor AtoAxis can hear from, wakaclock-cli to deliver heartbeats, and an API key that identifies your account.',
     facts: [
-      ['Editor', 'VS Code 1.90+ with the first-party extension, or any WakaTime-compatible editor.'],
+      [
+        'Editor',
+        'VS Code 1.90+ with the first-party extension, or any WakaTime-compatible editor.',
+      ],
       ['CLI', 'wakaclock-cli on PATH, or an absolute path in the wakaclock.cliPath setting.'],
       ['API key', 'Generated from the dashboard once Early Access issues your account access.'],
-      ['Offline handling', 'Undelivered heartbeats queue in ~/.wakaclock/queue.db and resend later.'],
+      [
+        'Offline handling',
+        'Undelivered heartbeats queue in ~/.wakaclock/queue.db and resend later.',
+      ],
     ],
     question: 'How do you confirm the first heartbeat actually arrived, rather than assume it did?',
     example:
@@ -566,7 +594,10 @@ const EN_GUIDES: Record<string, Guide> = {
       ['Requirement', 'VS Code 1.90 or newer, plus wakaclock-cli on PATH or a configured path.'],
       ['Key storage', 'Stored in VS Code secret storage via a command, never in settings.json.'],
       ['Data sent', 'File, project, branch, language and editor metadata, plus activity counts.'],
-      ['Limitation', 'File activity only — no app, domain or URL heartbeats, unlike a browser tracker.'],
+      [
+        'Limitation',
+        'File activity only — no app, domain or URL heartbeats, unlike a browser tracker.',
+      ],
     ],
     question: 'How do you confirm the extension is reporting correctly after installing it?',
     example:
@@ -660,6 +691,202 @@ const THAI_HOME_GUIDE: Guide = {
  */
 const TH_GUIDES: Record<string, Guide> = {
   '/': THAI_HOME_GUIDE,
+  '/developer-analytics': {
+    heading: 'ข้อมูล Developer analytics ช่วยตอบอะไรได้บ้าง?',
+    answer:
+      'AtoAxis แสดงเวลาเขียนโค้ดที่บันทึกได้แยกตามโปรเจกต์ ภาษา editor และ branch พร้อมบริบทของ AI attribution แต่กิจกรรมใน editor ไม่ใช่คะแนนประสิทธิภาพของคน',
+    facts: [
+      ['เวลาเขียนโค้ด', 'คำนวณจาก heartbeat ที่ต่อเนื่องกัน โดยไม่นับช่วงว่างที่ไม่มี activity'],
+      ['การแยกข้อมูล', 'กรองตามโปรเจกต์ ภาษา editor และ branch ในช่วงเวลาเดียวกัน'],
+      ['AI attribution', 'ดูที่มาของการเปลี่ยนแปลงพร้อม coverage ของหลักฐาน'],
+      ['ข้อจำกัด', 'เวลาที่บันทึกได้ไม่ครอบคลุมการประชุม การรีวิว และงานนอก editor'],
+    ],
+    question: 'จะเทียบข้อมูลสองสัปดาห์อย่างเป็นธรรมได้อย่างไร?',
+    example:
+      'ตัวอย่างสมมติ: สัปดาห์ที่ปล่อยเวอร์ชันอาจมีเวลาเขียนโค้ดน้อยลง เพราะใช้เวลารีวิว ทดสอบ และประสานงานมากขึ้น ก่อนเปรียบเทียบ ให้เลือกช่วงวันที่เท่ากันและตรวจว่า editor ชุดเดียวกันส่งข้อมูลครบ ตัวเลขที่เพิ่มขึ้นอาจสะท้อนการเชื่อมต่อที่ครอบคลุมขึ้น ไม่ใช่ผลงานที่ดีขึ้น',
+    recommendation:
+      'ใช้รายงานเพื่อหาคำถามเกี่ยวกับรูปแบบการทำงานของตนเอง แล้วตรวจร่วมกับผลการส่งมอบและบริบทของงาน อย่านำชั่วโมงหรือจำนวนบรรทัดไปจัดอันดับคนในทีม อ่านวิธีคำนวณเวลาและ coverage ก่อนสรุปผลจากกราฟ',
+    sources: [
+      {
+        href: '/docs/how-coding-time-is-calculated',
+        label: 'วิธีคำนวณเวลาของ AtoAxis',
+        note: 'นิยาม heartbeat และ idle gap',
+      },
+      {
+        href: '/docs/ai-attribution-and-coverage',
+        label: 'วิธีอ่าน AI attribution',
+        note: 'หลักฐานและ coverage ของข้อมูล',
+      },
+      {
+        href: 'https://dora.dev/guides/dora-metrics/',
+        label: 'DORA software delivery metrics',
+        note: 'ตัวชี้วัดผลการส่งมอบที่ต่างจากกิจกรรมใน editor',
+      },
+    ],
+    table: {
+      caption: 'การอ่าน Developer analytics อย่างระมัดระวัง',
+      columns: ['ข้อมูล', 'ใช้ดู', 'ไม่ควรสรุปว่า'],
+      rows: [
+        ['Coding time', 'กิจกรรมใน editor ที่บันทึกได้', 'เวลาทำงานทั้งหมด'],
+        [
+          'AI-attributed lines',
+          'การเปลี่ยนแปลงที่มีหลักฐานจาก agent',
+          'คุณภาพโค้ดหรือเวลาที่ประหยัดได้',
+        ],
+      ],
+    },
+  },
+  '/teams': {
+    heading: 'AtoAxis สำหรับทีมพร้อมใช้งานระดับใด?',
+    answer:
+      'ห้องแสดงสถานะและการทำงานร่วมกันยังเป็น prototype ในช่วง Early Access ส่วนการจัดการองค์กร สมาชิก และการเรียกเก็บเงินยังอยู่ระหว่างพัฒนา',
+    facts: [
+      ['สถานะ', 'ห้องและการแสดง presence ใช้ได้เฉพาะสภาพแวดล้อมที่เปิด prototype'],
+      ['การเข้าร่วม', 'ผู้ใช้เลือกเข้าร่วมเอง และผู้เข้าร่วมเห็นสถานะในห้อง'],
+      ['สัญญาณ', 'working และ idle อิง activity จาก editor ไม่ใช่ความพร้อมให้ติดต่อ'],
+      ['ข้อจำกัด', 'ยังไม่ควรวางระบบการจัดการทีมจริงบนฟีเจอร์องค์กรที่อยู่ระหว่างพัฒนา'],
+    ],
+    question: 'ควรทดลองห้องทำงานร่วมกันอย่างไร?',
+    example:
+      'ตัวอย่างเช่น ให้เพื่อนร่วมงานสองคนที่สมัครใจทดลองห้อง prototype เพื่อประสานช่วงเขียนโค้ดด้วยกัน สถานะ working บอกเพียงว่ามี activity ใน editor ส่วน idle อาจหมายถึงกำลังอ่านเอกสารหรือคุยเรื่องงาน จึงควรถามผ่านช่องทางสื่อสารปกติก่อนขัดจังหวะ',
+    recommendation:
+      'ทดลองกับผู้เข้าร่วมที่ยินยอมและกำหนดความหมายของสถานะร่วมกันก่อน ทีมที่ต้องการสิทธิ์องค์กร ที่นั่ง และ billing ที่พร้อมใช้งานควรรอการพัฒนา ห้ามใช้ presence หรือชั่วโมงที่บันทึกได้เป็นหลักฐานประเมินผลงานรายบุคคล',
+    sources: [
+      {
+        href: '/privacy',
+        label: 'นโยบายข้อมูลของ AtoAxis',
+        note: 'ขอบเขต heartbeat และข้อมูลที่ส่ง',
+      },
+      {
+        href: '/developer-analytics',
+        label: 'คู่มือ Developer analytics',
+        note: 'ข้อจำกัดของการวัด activity',
+      },
+      {
+        href: 'https://dora.dev/guides/dora-metrics/',
+        label: 'DORA software delivery metrics',
+        note: 'มุมมองผลการส่งมอบที่ต่างจากสถานะใน editor',
+      },
+    ],
+    table: {
+      caption: 'สถานะฟีเจอร์สำหรับทีม',
+      columns: ['ส่วนงาน', 'สถานะปัจจุบัน', 'สิ่งที่ควรทำ'],
+      rows: [
+        ['Presence room', 'Prototype แบบเลือกเข้าร่วม', 'ทดสอบกับผู้สมัครใจ'],
+        ['Organisation seats และ billing', 'อยู่ระหว่างพัฒนา', 'รอประกาศก่อนวางแผนใช้งานจริง'],
+      ],
+    },
+  },
+  '/pricing': {
+    heading: 'ราคา AtoAxis ที่วางแผนไว้เท่าไร?',
+    answer: `ราคาเป้าหมายคือ $${PRICING.monthlyUsd} ต่อเดือนหรือ $${PRICING.annualUsd} ต่อปี แต่ช่วง Early Access ยังไม่เปิด checkout และการลงชื่อไม่ทำให้เกิดค่าใช้จ่าย`,
+    facts: [
+      ['รายเดือน', `$${PRICING.monthlyUsd} ต่อเดือนเมื่อเปิด checkout`],
+      ['รายปี', `$${PRICING.annualUsd} ต่อปีเมื่อเปิด checkout`],
+      ['สถานะปัจจุบัน', 'ยังไม่มีการซื้อหรือสมัครสมาชิกแบบชำระเงิน'],
+      ['ประวัติ', 'แผนที่วางไว้รวมประวัติการเขียนโค้ดครบถ้วน'],
+    ],
+    question: 'รายปีต่างจากจ่ายรายเดือนสิบสองครั้งอย่างไร?',
+    example: `คำนวณจากราคาเป้าหมาย: จ่ายรายเดือนสิบสองครั้งรวม $${PRICING.monthlyUsd * 12} ส่วนรายปีคือ $${PRICING.annualUsd} ต่างกัน $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} ตัวเลขนี้เป็นเพียงการคำนวณจากราคาที่ประกาศไว้ ยังไม่ใช่ข้อเสนอที่ซื้อได้หรือการรับประกันว่าราคาจะไม่เปลี่ยน`,
+    recommendation:
+      'รอเงื่อนไขสุดท้ายก่อนเลือกแผน หากต้องการความยืดหยุ่นให้พิจารณารายเดือน ส่วนรายปีเหมาะเมื่อคาดว่าจะใช้งานครบปี การเข้าร่วม Early Access เป็นการรับข่าว ไม่ใช่การสมัครแผนชำระเงิน',
+    sources: [
+      {
+        href: '/early-access',
+        label: 'สถานะ Early Access',
+        note: 'เงื่อนไขการลงชื่อและสถานะ checkout',
+      },
+      { href: '/docs', label: 'เอกสารผลิตภัณฑ์ AtoAxis', note: 'ขอบเขตฟีเจอร์ที่มีเอกสารรองรับ' },
+    ],
+    table: {
+      caption: 'ราคาเป้าหมายของ AtoAxis',
+      columns: ['แผน', 'ราคาเป้าหมาย', 'สถานะ'],
+      rows: [
+        ['รายเดือน', `$${PRICING.monthlyUsd} ต่อเดือน`, 'ยังไม่เปิด checkout'],
+        ['รายปี', `$${PRICING.annualUsd} ต่อปี`, 'ยังไม่เปิด checkout'],
+      ],
+    },
+  },
+  '/integrations': {
+    heading: 'เครื่องมือใดเชื่อมกับ AtoAxis ได้?',
+    answer:
+      'เชื่อมผ่าน extension ของ AtoAxis สำหรับ VS Code, plugin ที่รองรับ WakaTime API หรือ hook ของ AI agent ที่รองรับ โดยแต่ละวิธีส่งข้อมูลและมีข้อจำกัดต่างกัน',
+    facts: [
+      ['VS Code', 'ใช้ extension ของ AtoAxis ร่วมกับ wakaclock-cli'],
+      ['Editor อื่น', 'ใช้ WakaTime-compatible plugin และตั้งค่า API URL กับ key'],
+      ['AI agent', 'ใช้ hook ที่รองรับเพื่อเก็บ attribution และตรวจ coverage'],
+      ['ขอบเขตข้อมูล', 'ส่ง metadata และจำนวนกิจกรรม ไม่ส่งเนื้อหา source code'],
+    ],
+    question: 'ควรเลือกวิธีเชื่อมต่อแบบใด?',
+    example:
+      'ถ้าใช้ VS Code ให้เริ่มจาก extension ที่ทีมดูแลเอง ถ้าใช้ JetBrains, Neovim หรือ Vim ที่มี WakaTime plugin อยู่แล้ว ให้เปลี่ยน API URL และ key ใน plugin เดิม หากต้องการแยกงานของ AI ให้ติดตั้ง hook ของ agent ที่รองรับ แล้วตรวจ coverage ก่อนเปรียบเทียบยอดกับกิจกรรมของคน',
+    recommendation:
+      'เริ่มทีละเครื่องมือและตรวจว่าโปรเจกต์ที่รู้จักปรากฏใน dashboard ก่อนเพิ่ม client อื่น Plugin แต่ละตัวเลือก field ที่ส่งเอง จึงอาจไม่มี metadata บางชนิด Cursor และ Copilot ยังต้องการ adapter เฉพาะ และไม่ควรนับเป็นแหล่ง attribution ที่รองรับแล้ว',
+    sources: [
+      {
+        href: '/integrations/vscode',
+        label: 'คู่มือ VS Code ของ AtoAxis',
+        note: 'การตั้งค่าและข้อจำกัดของ extension',
+      },
+      {
+        href: WAKATIME_DEVELOPER_URL,
+        label: 'เอกสาร WakaTime API',
+        note: 'รูปแบบ heartbeat ที่ plugin ใช้',
+      },
+      {
+        href: '/docs/getting-started',
+        label: 'คู่มือเริ่มต้นใช้งาน',
+        note: 'วิธีตรวจ heartbeat แรก',
+      },
+    ],
+    table: {
+      caption: 'เส้นทางการเชื่อมต่อกับ AtoAxis',
+      columns: ['เครื่องมือ', 'วิธีเชื่อม', 'ข้อจำกัดสำคัญ'],
+      rows: [
+        ['VS Code', 'Extension และ CLI ของ AtoAxis', 'บันทึกกิจกรรมไฟล์'],
+        ['Editor ที่รองรับ WakaTime', 'Plugin เดิมและ API URL', 'Field ขึ้นอยู่กับ plugin'],
+        ['AI agent ที่รองรับ', 'Hook ของ agent', 'Coverage ขึ้นอยู่กับ event ที่เก็บได้'],
+      ],
+    },
+  },
+  '/docs': {
+    heading: 'เอกสาร AtoAxis ช่วยเริ่มต้นอย่างไร?',
+    answer:
+      'เอกสารอธิบายการเชื่อม editor การตรวจ heartbeat แรก วิธีอ่าน AI attribution และขอบเขตข้อมูลที่ส่งไปยังบริการ',
+    facts: [
+      ['เริ่มต้น', 'สร้าง API key เมื่อได้รับสิทธิ์ เชื่อม editor และตรวจ activity'],
+      ['การเชื่อมต่อ', 'เลือก extension ของ VS Code หรือ plugin ที่รองรับ WakaTime'],
+      ['การวัด', 'อ่านวิธีคำนวณเวลาและ coverage ก่อนตีความยอดรวม'],
+      ['ความเป็นส่วนตัว', 'ตรวจ field ของ heartbeat และข้อมูลที่ client ไม่ส่ง'],
+    ],
+    question: 'ผู้ใช้ใหม่ควรอ่านหน้าใดก่อน?',
+    example:
+      'เริ่มจากคู่มือเริ่มต้นใช้งานและเชื่อม editor เพียงตัวเดียว เมื่อได้รับสิทธิ์ Early Access ให้สร้าง API key แล้วตรวจ heartbeat ใน dashboard ก่อนเพิ่ม client จากนั้นอ่านคู่มือ integration สำหรับ editor ของคุณ และอ่านหน้า privacy เพื่อดูขอบเขตข้อมูล หากต้องการ AI attribution ค่อยอ่านคู่มือ coverage ต่อ',
+    recommendation:
+      'ทำตามขั้นตอนทีละหน้าและเก็บ API key ออกจาก source control หาก heartbeat ไม่ปรากฏ ให้ตรวจ server URL, key และ CLI path ก่อนเปลี่ยนหลายค่าในครั้งเดียว ใช้เอกสาร WakaTime API เมื่อจำเป็นต้องตรวจรูปแบบ protocol ของ plugin ที่รองรับ',
+    sources: [
+      {
+        href: '/docs/getting-started',
+        label: 'คู่มือเริ่มต้นใช้งาน AtoAxis',
+        note: 'ลำดับการเชื่อมต่อและตรวจ heartbeat',
+      },
+      {
+        href: WAKATIME_DEVELOPER_URL,
+        label: 'เอกสาร WakaTime API',
+        note: 'รูปแบบ protocol ที่รองรับ',
+      },
+      { href: '/privacy', label: 'เอกสารความเป็นส่วนตัว', note: 'ข้อมูลที่ heartbeat อาจส่ง' },
+    ],
+    table: {
+      caption: 'เลือกคู่มือตามสิ่งที่ต้องการทำ',
+      columns: ['เป้าหมาย', 'อ่านต่อ', 'ผลที่คาดหวัง'],
+      rows: [
+        ['เริ่มบันทึก activity', 'คู่มือเริ่มต้นใช้งาน', 'เห็น heartbeat แรก'],
+        ['เชื่อมเครื่องมือ', 'คู่มือ integrations', 'เลือก client ที่เหมาะ'],
+        ['ตรวจข้อมูลที่ส่ง', 'คู่มือ privacy', 'เข้าใจขอบเขต heartbeat'],
+      ],
+    },
+  },
   '/wakatime-alternative': {
     heading: 'ควรพิจารณาอะไรก่อนย้ายจากระบบติดตามเวลาเดิม?',
     answer:
@@ -686,7 +913,10 @@ const TH_GUIDES: Record<string, Guide> = {
       ['AI attribution', 'Hook หรือ client ระบุ agent ที่เกี่ยวข้องกับการเปลี่ยนแปลงแต่ละครั้ง'],
       ['กิจกรรมของคน', 'Keystroke และ character ที่ editor สังเกตได้ เป็นสัญญาณกิจกรรมของคน'],
       ['ยังไม่ทราบที่มา', 'การเปลี่ยนแปลงที่ไม่มีหลักฐานเพียงพอจะถูกแยกไว้เป็นหมวดต่างหาก'],
-      ['การอ่านผล', 'ควรดู coverage ควบคู่กับยอดรวม เพราะหลักฐานที่ขาดหายไม่ใช่ข้อพิสูจน์ว่าเป็นคนเขียน'],
+      [
+        'การอ่านผล',
+        'ควรดู coverage ควบคู่กับยอดรวม เพราะหลักฐานที่ขาดหายไม่ใช่ข้อพิสูจน์ว่าเป็นคนเขียน',
+      ],
     ],
     question: 'ควรตีความรายงาน AI contribution อย่างไร?',
     example:
