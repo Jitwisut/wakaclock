@@ -40,7 +40,7 @@ fn known_provider_ids_sql() -> String {
         .join(", ")
 }
 
-fn effective_actor_type_expr() -> String {
+pub(crate) fn effective_actor_type_expr() -> String {
     let known_agents = known_agent_ids_sql();
     let known_providers = known_provider_ids_sql();
     format!(

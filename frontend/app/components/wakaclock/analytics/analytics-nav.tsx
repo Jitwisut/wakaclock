@@ -8,6 +8,7 @@ const ITEMS = [
   { href: '/dashboard/wakaclock/analytics/human-ai', label: 'Human vs AI' },
   { href: '/dashboard/wakaclock/analytics/projects', label: 'Projects' },
   { href: '/dashboard/wakaclock/analytics/heatmap', label: 'Activity Heatmap' },
+  { href: '/dashboard/wakaclock/analytics/trust', label: 'Measurement Trust' },
 ] as const;
 
 export function AnalyticsNav({ href }: { href: (path: string) => string }) {
@@ -25,7 +26,7 @@ export function AnalyticsNav({ href }: { href: (path: string) => string }) {
               aria-current={active ? 'page' : undefined}
               className={
                 active
-                  ? 'bg-background text-foreground shadow-sm rounded-md px-3 py-2 text-sm font-medium'
+                  ? 'bg-background text-foreground rounded-md px-3 py-2 text-sm font-medium shadow-sm'
                   : 'text-muted-foreground hover:text-foreground rounded-md px-3 py-2 text-sm font-medium'
               }
               href={href(item.href)}

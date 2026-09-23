@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -11,6 +13,7 @@ pub struct WakaTimeImportResult {
     pub import_id: String,
     pub imported_heartbeats: usize,
     pub skipped_heartbeats: usize,
+    pub issue_counts: BTreeMap<String, usize>,
 }
 
 pub struct WakaTimeImportService {
@@ -23,6 +26,21 @@ impl WakaTimeImportService {
     }
 
     pub async fn run(&self, user_id: Uuid, raw: &str) -> Result<WakaTimeImportResult> {
+        self.run_inner(user_id, raw, false).await
+    }
+
+    /// Import chunks with content-derived heartbeat IDs so reuploading the same
+    /// export with different chunk boundaries cannot multiply recorded time.
+    pub async fn run_stable(&self, user_id: Uuid, raw: &str) -> Result<WakaTimeImportResult> {
+        self.run_inner(user_id, raw, true).await
+    }
+
+    async fn run_inner(
+        &self,
+        user_id: Uuid,
+        raw: &str,
+        stable_ids: bool,
+    ) -> Result<WakaTimeImportResult> {
         if raw.len() > 1024 * 1024 {
             anyhow::bail!(
                 "dump exceeds the 1 MiB upload limit; split the export into smaller files"
@@ -45,7 +63,9 @@ impl WakaTimeImportService {
 
         let mut rows = Vec::new();
         let mut skipped = 0usize;
+        let mut issue_counts = BTreeMap::new();
         let mut record_index = 0usize;
+        let mut seen_ids = HashSet::new();
 
         for day in dump.days {
             let Some(heartbeats) = day.heartbeats else {
@@ -53,12 +73,37 @@ impl WakaTimeImportService {
             };
 
             for heartbeat in heartbeats {
+                if stable_ids {
+                    if let Some(reason) = invalid_heartbeat_reason(&heartbeat) {
+                        skipped += 1;
+                        *issue_counts.entry(reason.to_string()).or_default() += 1;
+                        record_index += 1;
+                        continue;
+                    }
+                }
+                let heartbeat_id = if stable_ids {
+                    stable_heartbeat_id(&heartbeat)?
+                } else {
+                    format!("import:{import_id}:{record_index}")
+                };
                 match map_heartbeat(user_id, heartbeat, &editor, &operating_system, &user_agent) {
                     Some(mut row) => {
-                        row.heartbeat_id = Some(format!("import:{import_id}:{record_index}"));
-                        rows.push(row);
+                        row.heartbeat_id = Some(heartbeat_id.clone());
+                        if !stable_ids || seen_ids.insert(heartbeat_id) {
+                            rows.push(row);
+                        } else {
+                            skipped += 1;
+                            *issue_counts.entry("duplicate".to_string()).or_default() += 1;
+                        }
                     }
-                    None => skipped += 1,
+                    None => {
+                        skipped += 1;
+                        if stable_ids {
+                            *issue_counts
+                                .entry("invalid_heartbeat".to_string())
+                                .or_default() += 1;
+                        }
+                    }
                 }
                 record_index += 1;
             }
@@ -72,7 +117,15 @@ impl WakaTimeImportService {
             .heartbeat_repo
             .existing_heartbeat_revisions(user_id, &ids)
             .await?;
+        let before_dedup = rows.len();
         rows.retain(|row| !existing.contains_key(row.heartbeat_id.as_deref().unwrap_or_default()));
+        if stable_ids {
+            let previously_imported = before_dedup - rows.len();
+            skipped += previously_imported;
+            *issue_counts
+                .entry("already_imported".to_string())
+                .or_default() += previously_imported;
+        }
         let imported = rows.len();
         self.heartbeat_repo.insert_batch(rows).await?;
 
@@ -80,8 +133,31 @@ impl WakaTimeImportService {
             import_id,
             imported_heartbeats: imported,
             skipped_heartbeats: skipped,
+            issue_counts,
         })
     }
+}
+
+fn invalid_heartbeat_reason(heartbeat: &WakaTimeHeartbeat) -> Option<&'static str> {
+    if heartbeat.entity.trim().is_empty() {
+        Some("missing_entity")
+    } else if heartbeat.entity.len() > 4096 {
+        Some("entity_too_long")
+    } else if !heartbeat.time.is_finite()
+        || heartbeat.time <= 0.0
+        || heartbeat.time > u32::MAX as f64
+    {
+        Some("invalid_time")
+    } else if normalize_entity_type(&heartbeat.entity_type).is_none() {
+        Some("unsupported_type")
+    } else {
+        None
+    }
+}
+
+fn stable_heartbeat_id(heartbeat: &WakaTimeHeartbeat) -> Result<String> {
+    let canonical = serde_json::to_vec(heartbeat)?;
+    Ok(format!("import-v2:{:x}", Sha256::digest(canonical)))
 }
 
 fn validate_dump(dump: &WakaTimeDump) -> Result<()> {
@@ -414,5 +490,59 @@ mod tests {
         assert_eq!(row.actor_type, "ai_inferred");
         assert_eq!(row.ai_lines_added, Some(3));
         assert_eq!(row.human_lines_added, Some(4));
+    }
+
+    #[test]
+    fn stable_import_id_does_not_depend_on_chunk_or_record_position() {
+        let heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_000.0,
+            "project": "example"
+        }))
+        .unwrap();
+        let same_heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "project": "example",
+            "time": 1_700_000_000.0,
+            "type": "file",
+            "entity": "src/main.rs"
+        }))
+        .unwrap();
+        let different_heartbeat: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_001.0,
+            "project": "example"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            stable_heartbeat_id(&heartbeat).unwrap(),
+            stable_heartbeat_id(&same_heartbeat).unwrap()
+        );
+        assert_ne!(
+            stable_heartbeat_id(&heartbeat).unwrap(),
+            stable_heartbeat_id(&different_heartbeat).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_import_rows_keep_specific_reasons() {
+        let missing_entity: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": " ", "type": "file", "time": 1_700_000_000.0
+        }))
+        .unwrap();
+        let invalid_type: WakaTimeHeartbeat = serde_json::from_value(serde_json::json!({
+            "entity": "src/main.rs", "type": "unknown", "time": 1_700_000_000.0
+        }))
+        .unwrap();
+        assert_eq!(
+            invalid_heartbeat_reason(&missing_entity),
+            Some("missing_entity")
+        );
+        assert_eq!(
+            invalid_heartbeat_reason(&invalid_type),
+            Some("unsupported_type")
+        );
     }
 }

@@ -7,11 +7,11 @@ use uuid::Uuid;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::organization::{
     AddOrganizationMemberRequest, CreateOrganizationRequest, CreateOrganizationTeamRequest,
-    Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
-    UpdateOrganizationRequest,
+    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
+    OrganizationTeam, UpdateOrganizationRequest,
 };
 use crate::repository::presence::PresenceRepository;
-use crate::services::authorization::{AuthorizationService, Entitlement, OrganizationAction};
+use crate::services::authorization::{AuthorizationService, OrganizationAction};
 
 // Keep the role validation in one place. PostgreSQL also has a CHECK constraint,
 // but validating before the query gives clients a stable 400 instead of a driver error.
@@ -388,7 +388,7 @@ impl OrganizationsService {
                 actor,
                 organization_id,
                 OrganizationAction::ReadOrganization,
-                Some(Entitlement::OrganizationDashboards),
+                None,
             )
             .await?;
         let postgres = self.required()?;
@@ -413,6 +413,125 @@ impl OrganizationsService {
             team_count: row.get("team_count"),
             data_freshness: "transactional_membership",
         })
+    }
+
+    pub async fn analytics_sharing(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<OrganizationAnalyticsSharing> {
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadSelf, None)
+            .await?;
+        let row = self
+            .required()?
+            .client()
+            .query_opt(
+                "SELECT share_aggregate, share_individual
+             FROM organization_analytics_consents
+             WHERE organization_id = $1 AND user_id = $2",
+                &[&organization_id, &actor],
+            )
+            .await?;
+        Ok(row
+            .map(|row| OrganizationAnalyticsSharing {
+                share_aggregate: row.get("share_aggregate"),
+                share_individual: row.get("share_individual"),
+            })
+            .unwrap_or(OrganizationAnalyticsSharing {
+                share_aggregate: false,
+                share_individual: false,
+            }))
+    }
+
+    pub async fn set_analytics_sharing(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        sharing: OrganizationAnalyticsSharing,
+    ) -> Result<OrganizationAnalyticsSharing> {
+        if sharing.share_individual && !sharing.share_aggregate {
+            return Err(anyhow!("individual sharing requires aggregate sharing"));
+        }
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadSelf, None)
+            .await?;
+        let mut client = self.required()?.transaction_client().await?;
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_opt(
+                "INSERT INTO organization_analytics_consents
+                 (organization_id, user_id, share_aggregate, share_individual)
+             SELECT $1, $2, $3, $4 FROM organization_members
+             WHERE organization_id = $1 AND user_id = $2 AND deactivated_at IS NULL
+             ON CONFLICT (organization_id, user_id) DO UPDATE SET
+                 share_aggregate = EXCLUDED.share_aggregate,
+                 share_individual = EXCLUDED.share_individual,
+                 updated_at = now()
+             RETURNING share_aggregate, share_individual",
+                &[
+                    &organization_id,
+                    &actor,
+                    &sharing.share_aggregate,
+                    &sharing.share_individual,
+                ],
+            )
+            .await?;
+        let row = row.ok_or_else(|| anyhow!("active organization membership required"))?;
+        let saved = OrganizationAnalyticsSharing {
+            share_aggregate: row.get("share_aggregate"),
+            share_individual: row.get("share_individual"),
+        };
+        tx.execute(
+            "INSERT INTO audit_logs
+                (id, organization_id, actor_user_id, action, resource_type, resource_id, metadata)
+             VALUES ($1, $2, $3, 'organization.analytics_sharing.updated', 'user', $3, $4)",
+            &[
+                &Uuid::now_v7(),
+                &organization_id,
+                &actor,
+                &serde_json::json!({
+                    "share_aggregate": saved.share_aggregate,
+                    "share_individual": saved.share_individual,
+                }),
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(saved)
+    }
+
+    pub async fn consenting_analytics_members(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<(Uuid, bool)>> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
+            .await?;
+        let rows = self
+            .required()?
+            .client()
+            .query(
+                "SELECT m.user_id, c.share_individual
+             FROM organization_members m
+             JOIN organization_analytics_consents c
+               ON c.organization_id = m.organization_id AND c.user_id = m.user_id
+             WHERE m.organization_id = $1 AND m.deactivated_at IS NULL
+               AND c.share_aggregate = TRUE
+             ORDER BY m.user_id",
+                &[&organization_id],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("user_id"), row.get("share_individual")))
+            .collect())
     }
 
     pub async fn audit_logs(
