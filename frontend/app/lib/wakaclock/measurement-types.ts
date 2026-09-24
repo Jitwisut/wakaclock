@@ -24,6 +24,22 @@ export interface MeasurementQuality {
   delivery_status: string;
   end: string;
   inferred_seconds: number;
+  line_metric_coverage: Array<{
+    ai_inferred_heartbeats: number;
+    ai_line_changes: number;
+    ai_verified_heartbeats: number;
+    heartbeats: number;
+    human_heartbeats: number;
+    human_line_changes: number;
+    line_change_denominator: number;
+    line_coverage_percent: null | number;
+    reason: null | string;
+    status: string;
+    unknown_heartbeats: number;
+    unknown_line_changes: number;
+    version: string;
+  }>;
+  project_id: null | string;
   proven_seconds: number;
   start: string;
   timeout_seconds: number;
@@ -34,6 +50,7 @@ export interface MeasurementQuality {
 export interface OperationEvidencePage {
   date_basis: string;
   has_more: boolean;
+  next_cursor: null | string;
   operations: Array<{
     actor: string;
     agent: null | string;
@@ -45,8 +62,77 @@ export interface OperationEvidencePage {
     model: null | string;
     occurred_at: number;
     provider: null | string;
+    repair_reference: string;
     revision: number;
   }>;
+}
+
+export interface DeliveryStatusResponse {
+  devices: Array<{
+    age_seconds: number;
+    captured_at: string;
+    dead_letter: null | number;
+    device_id: string;
+    last_successful_delivery_at: null | string;
+    oldest_pending_at: null | string;
+    pending: null | number;
+    queue_id: string;
+    received_at: string;
+    retry: null | number;
+    sequence: number;
+    status: 'fresh' | 'stale' | 'unavailable';
+  }>;
+  storage: 'ephemeral' | 'postgres';
+}
+
+export type MeasurementRepairOutcome = 'failed' | 'partial' | 'success' | 'unknown';
+
+export interface MeasurementRepairCandidate {
+  lines_added: null | number;
+  lines_deleted: null | number;
+  outcome: MeasurementRepairOutcome;
+  repair_reference: string;
+}
+
+export interface MeasurementRepairJob {
+  after_added_total: null | number;
+  after_deleted_total: null | number;
+  applied: number;
+  before_added_total: null | number;
+  before_deleted_total: null | number;
+  conflict_count: number;
+  created_at: string;
+  end: string;
+  items: Array<{
+    after: MeasurementRepairValues | null;
+    applied_revision: null | number;
+    base_revision: null | number;
+    before: MeasurementRepairValues | null;
+    outcome: MeasurementRepairOutcome;
+    reason: null | string;
+    repair_reference: string;
+    rolled_back_revision: null | number;
+    status: string;
+  }>;
+  ready: number;
+  repair_id: string;
+  requested: number;
+  rolled_back: number;
+  start: string;
+  status: string;
+  timezone: string;
+  unchanged: number;
+  unresolved: number;
+  updated_at: string;
+}
+
+export interface MeasurementRepairValues {
+  ai_lines_added: null | number;
+  ai_lines_deleted: null | number;
+  line_measurement_reason: null | string;
+  line_measurement_status: null | string;
+  line_metric_version: null | string;
+  measurement_window_id: null | string;
 }
 
 export interface Organization {
@@ -92,11 +178,24 @@ export interface WakaTimeImportJob {
   before_calculation_version: string;
   before_total_seconds: number;
   completed: boolean;
+  confirmed_legacy_ambiguity_chunks: number;
   id: string;
   imported_heartbeats: number;
   issue_counts: Record<string, number>;
+  legacy_scan_limited_chunks: number;
   net_change_seconds: null | number;
+  possible_legacy_duplicates: number;
   received_chunks: number[];
   skipped_heartbeats: number;
   total_chunks: number;
+}
+
+export interface WakaTimeImportChunkPreview {
+  chunk_index: number;
+  digest: string;
+  invalid_heartbeats: number;
+  legacy_scan_limited: boolean;
+  possible_legacy_duplicates: number;
+  requires_confirmation: boolean;
+  valid_heartbeats: number;
 }

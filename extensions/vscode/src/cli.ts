@@ -182,6 +182,10 @@ export class WakaclockCliService {
             "--unattributed-lines-deleted",
             primaryExtra.unattributed_lines_deleted,
         );
+        this.pushOptionalString(args, "--line-metric-version", primaryExtra.line_metric_version);
+        this.pushOptionalString(args, "--line-measurement-status", primaryExtra.line_measurement_status);
+        this.pushOptionalString(args, "--line-measurement-reason", primaryExtra.line_measurement_reason);
+        this.pushOptionalString(args, "--measurement-window-id", primaryExtra.measurement_window_id);
         if (this.clipboardCapability !== false) {
             this.pushOptionalNumber(
                 args,

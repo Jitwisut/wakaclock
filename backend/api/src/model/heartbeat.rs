@@ -103,6 +103,12 @@ pub struct HeartbeatRow {
     /// Stable agent session scope. Added at the end so existing ClickHouse rows keep
     /// their positional layout while the additive migration catches up.
     pub session_id: Option<String>,
+    /// Version and state for any line counters measured by a producer with a known
+    /// definition. Null means legacy/unversioned or unavailable data.
+    pub line_metric_version: Option<String>,
+    pub line_measurement_status: Option<String>,
+    pub line_measurement_reason: Option<String>,
+    pub measurement_window_id: Option<String>,
 }
 
 /// Normalized interval projection used for fast canonical timeline reads. Raw heartbeat

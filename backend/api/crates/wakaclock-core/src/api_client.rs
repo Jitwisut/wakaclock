@@ -15,7 +15,8 @@ use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +464,7 @@ impl SendReport {
 pub struct ApiClient {
     config: Config,
     client: Client,
+    line_metric_capability: Arc<Mutex<Option<(Instant, bool)>>>,
 }
 
 impl ApiClient {
@@ -480,7 +482,11 @@ impl ApiClient {
             .timeout(Duration::from_secs(30))
             .default_headers(headers)
             .build()?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            line_metric_capability: Arc::new(Mutex::new(None)),
+        })
     }
 
     pub fn queue_scope(&self) -> QueueScope {
@@ -494,6 +500,56 @@ impl ApiClient {
             destination: self.config.server_url.trim_end_matches('/').to_string(),
             owner,
         }
+    }
+
+    /// Capability probes are cached briefly to avoid adding a round trip to every
+    /// editor heartbeat. An unavailable or older server is treated as unsupported;
+    /// versioned line data is retained locally while the time heartbeat still ships.
+    async fn supports_editor_line_metrics(&self) -> bool {
+        if let Ok(cache) = self.line_metric_capability.lock() {
+            if let Some((checked_at, supported)) = *cache {
+                // Recheck negative results more often: they can mean a rolling
+                // deployment or a temporary capability endpoint failure.
+                let ttl = if supported { 300 } else { 30 };
+                if checked_at.elapsed() < Duration::from_secs(ttl) {
+                    return supported;
+                }
+            }
+        }
+
+        let url = format!(
+            "{}/api/v2/capabilities",
+            self.config.server_url.trim_end_matches('/')
+        );
+        let probe = async {
+            let response = self
+                .client
+                .get(url)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?;
+            let data = response.json::<Value>().await.ok()?;
+            data.get("data")?
+                .get("line_metric_versions")?
+                .as_array()?
+                .iter()
+                .any(|version| {
+                    version.get("version").and_then(Value::as_str) == Some("editor-before-after-v1")
+                        && version.get("status").and_then(Value::as_str) == Some("supported")
+                })
+                .then_some(())
+        };
+        let supported = tokio::time::timeout(Duration::from_secs(3), probe)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if let Ok(mut cache) = self.line_metric_capability.lock() {
+            *cache = Some((Instant::now(), supported));
+        }
+        supported
     }
 
     pub async fn send_heartbeat(&self, heartbeat: Heartbeat) -> AppResult<SendReport> {
@@ -522,7 +578,7 @@ impl ApiClient {
             // the server was unreachable. The local cache can call the retry a
             // duplicate, but that must not prevent the durable queue from being
             // drained (otherwise it waits for an unrelated heartbeat).
-            let flush = match self.flush_queue_inner(&queue).await {
+            let flush = match self.flush_queue_inner(&queue, false).await {
                 Ok(flush) => flush,
                 Err(error) => FlushReport {
                     flushed: 0,
@@ -544,10 +600,35 @@ impl ApiClient {
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()?;
 
-        let send_result = if payloads.len() == 1 {
-            self.post_json("/api/v1/heartbeats", &payloads[0]).await
+        let has_versioned_metrics = payloads.iter().any(has_editor_line_metrics);
+        let mut deferred_line_metrics = 0usize;
+        let wire_payloads = if has_versioned_metrics && !self.supports_editor_line_metrics().await {
+            let scope = self.queue_scope();
+            let mut wire_payloads = payloads.clone();
+            for (source, wire) in payloads.iter().zip(&mut wire_payloads) {
+                if !has_editor_line_metrics(source) {
+                    continue;
+                }
+                queue.retain_line_measurement_scoped(&scope, source)?;
+                strip_editor_line_metrics(wire);
+                deferred_line_metrics += 1;
+            }
+            wire_payloads
         } else {
-            self.post_json("/api/v1/heartbeats.bulk", &payloads).await
+            payloads.clone()
+        };
+        let compatibility_warning = (deferred_line_metrics > 0).then(|| {
+            format!(
+                "server does not advertise editor-before-after-v1; retained {deferred_line_metrics} line measurement correction(s) locally"
+            )
+        });
+
+        let send_result = if wire_payloads.len() == 1 {
+            self.post_json("/api/v1/heartbeats", &wire_payloads[0])
+                .await
+        } else {
+            self.post_json("/api/v1/heartbeats.bulk", &wire_payloads)
+                .await
         };
 
         match send_result {
@@ -563,26 +644,45 @@ impl ApiClient {
                     .store_last_heartbeats(&last_by_entity)
                     .err()
                     .map(|error| format!("could not persist local dedup cache: {error}"));
-                let flush = match self.flush_queue_inner(&queue).await {
+                let retained_error = payloads
+                    .iter()
+                    .filter_map(|payload| {
+                        payload
+                            .get("heartbeat_id")
+                            .and_then(Value::as_str)
+                            .map(|heartbeat_id| {
+                                queue.mark_line_measurement_base_accepted(
+                                    &self.queue_scope(),
+                                    heartbeat_id,
+                                )
+                            })
+                    })
+                    .find_map(Result::err)
+                    .map(|error| {
+                        format!("could not mark retained line metric base as accepted: {error}")
+                    });
+                let flush = match self.flush_queue_inner(&queue, true).await {
                     Ok(flush) => flush,
                     Err(error) => FlushReport {
                         flushed: 0,
                         stopped_because: Some(format!("could not flush offline queue: {error}")),
                     },
                 };
-                let error = match (cache_error, flush.stopped_because) {
-                    (Some(cache_error), Some(flush_error)) => {
-                        Some(format!("{cache_error}; {flush_error}"))
-                    }
-                    (Some(cache_error), None) => Some(cache_error),
-                    (None, flush_error) => flush_error,
-                };
+                let error = [
+                    cache_error,
+                    retained_error,
+                    flush.stopped_because,
+                    compatibility_warning,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
                 Ok(SendReport {
-                    sent: payloads.len(),
+                    sent: wire_payloads.len(),
                     deduped,
                     queued: 0,
                     flushed: flush.flushed,
-                    error,
+                    error: (!error.is_empty()).then(|| error.join("; ")),
                 })
             }
             Err(error) => {
@@ -592,9 +692,10 @@ impl ApiClient {
                     // row is eligible again immediately and the next flush ignores what
                     // the server just asked for.
                     let retry_after = retry_after_seconds(&error);
-                    for payload in &payloads {
+                    for payload in &wire_payloads {
                         queue.push_scoped_after(payload, &self.queue_scope(), retry_after)?;
                     }
+                    self.schedule_delivery_snapshot(false);
                     // Do not persist a failed payload in the local last-heartbeat
                     // cache: the stable ID must remain retryable, and the durable
                     // queue already provides the deduplication needed while the
@@ -602,8 +703,14 @@ impl ApiClient {
                     Ok(SendReport::queued(
                         0,
                         deduped,
-                        payloads.len(),
-                        Some(error.to_string()),
+                        wire_payloads.len(),
+                        Some(
+                            [Some(error.to_string()), compatibility_warning]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join("; "),
+                        ),
                     ))
                 } else {
                     // Permanent validation/auth/conflict responses are reported to
@@ -616,7 +723,7 @@ impl ApiClient {
 
     pub async fn flush_queue(&self) -> AppResult<FlushReport> {
         let queue = Queue::open()?;
-        self.flush_queue_inner(&queue).await
+        self.flush_queue_inner(&queue, false).await
     }
 
     pub async fn today(&self) -> AppResult<StatusBarSnapshot> {
@@ -844,6 +951,42 @@ impl ApiClient {
             .await?)
     }
 
+    /// Submit locally reparsed, metadata-only line candidates for an owner-scoped
+    /// server preview. Applying or rolling back the returned job remains a
+    /// first-party session action in Trust Center.
+    pub async fn preview_measurement_repair(
+        &self,
+        repair_id: &str,
+        start: &str,
+        end: &str,
+        timezone: &str,
+        candidates: &[Value],
+    ) -> AppResult<Value> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/v2/me/measurement-repairs",
+                self.config.server_url.trim_end_matches('/')
+            ))
+            .json(&serde_json::json!({
+                "repair_id": repair_id,
+                "start": start,
+                "end": end,
+                "timezone": timezone,
+                "candidates": candidates,
+            }))
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        Self::error_for_status_with_body(response)
+            .await?
+            .json::<Value>()
+            .await
+            .map_err(|_| {
+                AppError::Protocol("measurement repair preview could not be decoded".to_string())
+            })
+    }
+
     /// Turns a 401 into a message that actually says what to do about it, instead of
     /// letting it fall through to `error_for_status()` and print as an opaque
     /// `Http(reqwest::Error { kind: Status(401, None), .. })` — which was indistinguishable
@@ -875,9 +1018,14 @@ impl ApiClient {
         })
     }
 
-    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
+    async fn flush_queue_inner(
+        &self,
+        queue: &Queue,
+        accepted_direct: bool,
+    ) -> AppResult<FlushReport> {
+        let scope = self.queue_scope();
         let lease_owner = uuid::Uuid::new_v4().to_string();
-        let pending = queue.claim_batch_scoped(&self.queue_scope(), &lease_owner)?;
+        let pending = queue.claim_batch_scoped(&scope, &lease_owner)?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
@@ -888,7 +1036,25 @@ impl ApiClient {
             .into_iter()
             .map(|(id, payload)| (id, sanitize_queued_heartbeat_payload(payload)))
             .collect();
-        let payloads: Vec<_> = pending.iter().map(|(_, payload)| payload.clone()).collect();
+        let sidecar_count = queue.status_scoped(&scope)?.line_metrics_pending;
+        let has_versioned_metrics = pending
+            .iter()
+            .any(|(_, payload)| has_editor_line_metrics(payload));
+        let supports_line_metrics = (has_versioned_metrics || sidecar_count > 0)
+            && self.supports_editor_line_metrics().await;
+        let mut wire_pending = pending.clone();
+        if !supports_line_metrics {
+            for ((_, source), (_, wire)) in pending.iter().zip(wire_pending.iter_mut()) {
+                if has_editor_line_metrics(source) {
+                    queue.retain_line_measurement_scoped(&scope, source)?;
+                    strip_editor_line_metrics(wire);
+                }
+            }
+        }
+        let payloads: Vec<_> = wire_pending
+            .iter()
+            .map(|(_, payload)| payload.clone())
+            .collect();
 
         let delivery = match payloads.as_slice() {
             [] => Ok(()),
@@ -896,10 +1062,20 @@ impl ApiClient {
             payloads => self.post_json("/api/v1/heartbeats.bulk", payloads).await,
         };
 
+        let main_delivery_accepted = delivery.is_ok();
         match delivery {
             Ok(()) => {
                 for (id, _) in &pending {
                     queue.remove(*id)?;
+                }
+                for (_, payload) in &pending {
+                    if let Some(heartbeat_id) = payload
+                        .get("heartbeat_id")
+                        .and_then(Value::as_str)
+                        .filter(|_| has_editor_line_metrics(payload))
+                    {
+                        queue.mark_line_measurement_base_accepted(&scope, heartbeat_id)?;
+                    }
                 }
                 flushed = pending.len();
             }
@@ -957,17 +1133,82 @@ impl ApiClient {
 
         queue.release_claim(&lease_owner)?;
 
+        // Corrections are separate higher revisions. Send them only after the base
+        // heartbeat is known to exist and the live server advertises this exact
+        // version. Keep failures in the outbox; a retry must never create a second
+        // line-count set or erase the original time heartbeat.
+        if supports_line_metrics {
+            for (id, correction) in queue.pending_line_measurements_scoped(&scope, 500)? {
+                match self.post_json("/api/v1/heartbeats", &correction).await {
+                    Ok(()) => queue.remove_pending_line_measurement(id)?,
+                    Err(error) => {
+                        self.record_delivery_failure(queue, &error);
+                        stopped_because.get_or_insert_with(|| {
+                            format!("retained line metric correction is still pending: {error}")
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
         // `wakaclock status` may be the only command that drains a backlog. Clear
         // the persisted refusal only after every currently eligible row was
         // accepted; a partial flush must continue to show its latest failure.
-        if flushed > 0 && stopped_because.is_none() {
+        let accepted_queued = main_delivery_accepted && flushed > 0;
+        if accepted_queued {
             self.clear_delivery_failure(queue);
         }
+
+        self.schedule_delivery_snapshot(accepted_direct || accepted_queued);
 
         Ok(FlushReport {
             flushed,
             stopped_because,
         })
+    }
+
+    /// Queue status is ancillary telemetry. Read it synchronously from the local
+    /// queue, reserve at most one upload per minute, and send in the background so
+    /// diagnostics never delays heartbeat collection or delivery.
+    fn schedule_delivery_snapshot(&self, delivery_succeeded: bool) {
+        let scope = self.queue_scope();
+        let client = self.client.clone();
+        let url = format!(
+            "{}/api/v2/me/delivery-status",
+            self.config.server_url.trim_end_matches('/')
+        );
+        tokio::spawn(async move {
+            let snapshot = tokio::task::spawn_blocking(move || {
+                let queue = Queue::open()?;
+                if delivery_succeeded {
+                    queue.record_scope_delivery_success(&scope)?;
+                }
+                queue.capture_delivery_snapshot_scoped(&scope)
+            })
+            .await;
+            let snapshot = match snapshot {
+                Ok(Ok(Some(snapshot))) => snapshot,
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, "could not read local delivery queue for status snapshot");
+                    return;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "delivery status queue probe task failed");
+                    return;
+                }
+            };
+            let result = client
+                .post(url)
+                .json(&snapshot)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status);
+            if let Err(error) = result {
+                tracing::debug!(%error, "delivery status snapshot upload failed");
+            }
+        });
     }
 
     async fn post_json<T: Serialize + ?Sized>(&self, path: &str, payload: &T) -> AppResult<()> {
@@ -1161,6 +1402,34 @@ impl ApiClient {
 /// current client binary. The normal path works with the typed [`Heartbeat`] value; a
 /// queue flush intentionally works with JSON because old queue rows may omit fields that
 /// were added after they were written. Only identity/provenance labels are changed.
+fn has_editor_line_metrics(payload: &Value) -> bool {
+    payload.get("line_metric_version").and_then(Value::as_str) == Some("editor-before-after-v1")
+}
+
+/// Old servers may accept the time heartbeat while silently ignoring fields they do
+/// not know. Strip the entire line-measurement contract from that wire copy; the full
+/// payload is separately held in SQLite until a compatible server is available.
+fn strip_editor_line_metrics(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "line_metric_version",
+        "line_measurement_status",
+        "line_measurement_reason",
+        "measurement_window_id",
+        "ai_lines_added",
+        "ai_lines_deleted",
+        "human_lines_added",
+        "human_lines_deleted",
+        "unattributed_lines_added",
+        "unattributed_lines_deleted",
+        "revision",
+    ] {
+        object.remove(key);
+    }
+}
+
 fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     let Some(object) = payload.as_object_mut() else {
         return payload;
@@ -1451,6 +1720,32 @@ mod tests {
         );
         hb.time = time;
         hb
+    }
+
+    #[test]
+    fn unsupported_line_contract_is_removed_from_wire_copy_but_time_is_preserved() {
+        let mut payload = serde_json::json!({
+            "heartbeat_id": "window-1",
+            "time": 1_000.0,
+            "active_seconds": 42.0,
+            "line_metric_version": "editor-before-after-v1",
+            "line_measurement_status": "measured",
+            "line_measurement_reason": null,
+            "measurement_window_id": "window-1",
+            "ai_lines_added": 0,
+            "human_lines_deleted": 2,
+            "revision": 0
+        });
+        assert!(has_editor_line_metrics(&payload));
+
+        strip_editor_line_metrics(&mut payload);
+
+        assert!(!has_editor_line_metrics(&payload));
+        assert_eq!(payload["heartbeat_id"], "window-1");
+        assert_eq!(payload["time"], 1_000.0);
+        assert_eq!(payload["active_seconds"], 42.0);
+        assert!(payload.get("ai_lines_added").is_none());
+        assert!(payload.get("line_metric_version").is_none());
     }
 
     /// The bug this per-entity cache exists to fix: with a single shared "last

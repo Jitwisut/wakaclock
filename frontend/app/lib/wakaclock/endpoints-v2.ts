@@ -1,11 +1,15 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
 import type {
+  DeliveryStatusResponse,
   MeasurementQuality,
+  MeasurementRepairCandidate,
+  MeasurementRepairJob,
   OperationEvidencePage,
   Organization,
   OrganizationAnalytics,
   OrganizationAnalyticsSharing,
+  WakaTimeImportChunkPreview,
   WakaTimeImportJob,
 } from './measurement-types';
 import type {
@@ -37,8 +41,14 @@ export async function getCapabilities() {
   return unwrapV2(await wakaclockV2Client.get<V2Envelope<V2Capabilities>>('/capabilities'));
 }
 
-export async function getMeasurementQuality(start: string, end: string, timezone: string) {
+export async function getMeasurementQuality(
+  start: string,
+  end: string,
+  timezone: string,
+  projectId?: string
+) {
   const params = new URLSearchParams({ start, end, timezone });
+  if (projectId) params.set('project_id', projectId);
   return unwrapV2(
     await wakaclockV2Client.get<V2Envelope<MeasurementQuality>>(
       `/me/measurement-quality?${params.toString()}`
@@ -46,11 +56,65 @@ export async function getMeasurementQuality(start: string, end: string, timezone
   );
 }
 
-export async function getOperationEvidence(start: string, end: string, timezone: string) {
+export async function getOperationEvidence(
+  start: string,
+  end: string,
+  timezone: string,
+  options: { cursor?: string; limit?: number; projectId?: string; } = {}
+) {
   const params = new URLSearchParams({ start, end, timezone });
+  if (options.projectId) params.set('project_id', options.projectId);
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.limit) params.set('limit', String(options.limit));
   return unwrapV2(
     await wakaclockV2Client.get<V2Envelope<OperationEvidencePage>>(
       `/me/ai/operation-evidence?${params.toString()}`
+    )
+  );
+}
+
+export async function getDeliveryStatus() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<DeliveryStatusResponse>>('/me/delivery-status')
+  );
+}
+
+export async function startMeasurementRepair(input: {
+  candidates: MeasurementRepairCandidate[];
+  end: string;
+  repairId: string;
+  start: string;
+  timezone: string;
+}) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<MeasurementRepairJob>>('/me/measurement-repairs', {
+      repair_id: input.repairId,
+      start: input.start,
+      end: input.end,
+      timezone: input.timezone,
+      candidates: input.candidates,
+    })
+  );
+}
+
+export async function listMeasurementRepairs() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<MeasurementRepairJob[]>>('/me/measurement-repairs')
+  );
+}
+
+export async function applyMeasurementRepair(repairId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<MeasurementRepairJob>>(
+      `/me/measurement-repairs/${repairId}/apply`
+    )
+  );
+}
+
+export async function rollbackMeasurementRepair(repairId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<MeasurementRepairJob>>(
+      `/me/measurement-repairs/${repairId}/rollback`
     )
   );
 }
@@ -115,11 +179,30 @@ export async function getWakaTimeImport(importId: string) {
   );
 }
 
-export async function uploadWakaTimeImportChunk(importId: string, index: number, dumpJson: string) {
+export async function previewWakaTimeImportChunk(
+  importId: string,
+  index: number,
+  dumpJson: string
+) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<WakaTimeImportChunkPreview>>(
+      `/imports/wakatime/${importId}/chunks/${index}/preview`,
+      { dump_json: dumpJson },
+      { timeout: 60_000 }
+    )
+  );
+}
+
+export async function uploadWakaTimeImportChunk(
+  importId: string,
+  index: number,
+  dumpJson: string,
+  confirmLegacyAmbiguity = false
+) {
   return unwrapV2(
     await wakaclockV2Client.put<V2Envelope<WakaTimeImportJob>>(
       `/imports/wakatime/${importId}/chunks/${index}`,
-      { dump_json: dumpJson },
+      { dump_json: dumpJson, confirm_legacy_ambiguity: confirmLegacyAmbiguity },
       { timeout: 60_000 }
     )
   );

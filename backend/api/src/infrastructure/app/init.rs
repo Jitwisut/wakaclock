@@ -103,6 +103,9 @@ pub struct AppState {
     pub coworking_session_repo: Arc<CoworkingSessionRepository>,
     pub ai_stats_service: Arc<AiStatsService>,
     pub ai_diagnostics_service: Arc<AiDiagnosticsService>,
+    pub delivery_status_service: Arc<crate::services::delivery_status::DeliveryStatusService>,
+    pub measurement_repair_service:
+        Arc<crate::services::measurement_repair::MeasurementRepairService>,
     pub ai_certification_service: Arc<AiCertificationService>,
     pub account_analytics_service: Arc<AccountAnalyticsService>,
     pub billing_service: Arc<BillingService>,
@@ -298,6 +301,15 @@ pub async fn create_app_state() -> Result<AppState> {
     // Initialise Services
     let ai_stats_service = Arc::new(AiStatsService::new(clickhouse.clone()));
     let ai_diagnostics_service = Arc::new(AiDiagnosticsService::with_postgres(postgres.clone()));
+    let delivery_status_service = Arc::new(
+        crate::services::delivery_status::DeliveryStatusService::with_postgres(postgres.clone()),
+    );
+    let measurement_repair_service = Arc::new(
+        crate::services::measurement_repair::MeasurementRepairService::new(
+            postgres.clone(),
+            heartbeat_repo.clone(),
+        ),
+    );
     let ai_certification_service =
         Arc::new(AiCertificationService::builtin().map_err(|error| {
             anyhow::anyhow!("failed to load AI certification catalog: {error}")
@@ -481,6 +493,8 @@ pub async fn create_app_state() -> Result<AppState> {
         coworking_session_repo,
         ai_stats_service,
         ai_diagnostics_service,
+        delivery_status_service,
+        measurement_repair_service,
         ai_certification_service,
         account_analytics_service,
         billing_service,

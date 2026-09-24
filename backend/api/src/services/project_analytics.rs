@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{cmp::Ordering, sync::Arc};
 use uuid::Uuid;
 
@@ -45,6 +45,24 @@ pub struct ProjectAnalyticsService {
     timeline: ActivityTimelineService,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProjectMeasurementDay {
+    pub date: String,
+    pub total_seconds: f64,
+    pub proven_seconds: f64,
+    pub inferred_seconds: f64,
+    pub active_seconds: Option<f64>,
+    pub active_coverage: &'static str,
+    pub heartbeat_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectMeasurementTimeline {
+    pub calculation_version: &'static str,
+    pub timeout_seconds: f64,
+    pub days: Vec<ProjectMeasurementDay>,
+}
+
 impl ProjectAnalyticsService {
     pub fn new(
         repo: Arc<ProjectAnalyticsRepository>,
@@ -59,6 +77,95 @@ impl ProjectAnalyticsService {
             repo,
             timeline: ActivityTimelineService::new(clickhouse, bridge),
         }
+    }
+
+    /// Trust Center view of a project, derived from the same canonical timeline and
+    /// ownership sweep used by dashboard analytics. Project filtering happens after the
+    /// sweep so it cannot create a new idle bridge across activity in another project.
+    pub async fn measurement_timeline(
+        &self,
+        user_id: Uuid,
+        project_id: Uuid,
+        range: &ResolvedRange,
+    ) -> Result<ProjectMeasurementTimeline> {
+        let identity = self
+            .identity_service
+            .owned_identity(user_id, project_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("project not found"))?;
+        let (start_epoch, end_epoch) = range.unix_bounds();
+        let timeline = self
+            .timeline
+            .build_timeline(user_id, start_epoch, end_epoch)
+            .await?;
+        let mut days = Vec::with_capacity(range.days_included() as usize);
+        for offset in 0..range.days_included() {
+            let day = range.start + Duration::days(offset);
+            let day_range = ResolvedRange {
+                start: day,
+                end: day,
+                timezone: range.timezone,
+            };
+            let (day_start, day_end) = day_range.unix_bounds();
+            let matches = |interval: &&crate::services::activity_timeline::CanonicalInterval| {
+                interval_matches_project(interval, project_id, Some(&identity.display_name), None)
+            };
+            let bridged = timeline
+                .bridged
+                .iter()
+                .filter(|interval| matches(interval))
+                .filter_map(|interval| {
+                    let start = interval.start.max(day_start);
+                    let end = interval.end.min(day_end);
+                    (end > start).then_some((start, end))
+                })
+                .collect::<Vec<_>>();
+            let measured = timeline
+                .measured
+                .iter()
+                .filter(|interval| matches(interval))
+                .filter_map(|interval| {
+                    let start = interval.start.max(day_start);
+                    let end = interval.end.min(day_end);
+                    (end > start).then_some((interval.heartbeat_id.clone(), start, end))
+                })
+                .collect::<Vec<_>>();
+            let total = bridged
+                .iter()
+                .map(|(start, end)| (end - start).max(0.0))
+                .sum::<f64>();
+            let proven = union_ranges(
+                &measured
+                    .iter()
+                    .map(|(_, start, end)| (*start, *end))
+                    .collect::<Vec<_>>(),
+            );
+            let (active, _, _, _, active_coverage) = timeline.active_metrics_for_project_in_range(
+                day_start,
+                day_end,
+                project_id,
+                &identity.display_name,
+            );
+            let heartbeat_count = measured
+                .into_iter()
+                .map(|(heartbeat_id, _, _)| heartbeat_id)
+                .collect::<HashSet<_>>()
+                .len() as u64;
+            days.push(ProjectMeasurementDay {
+                date: day.to_string(),
+                total_seconds: total,
+                proven_seconds: proven,
+                inferred_seconds: (total - proven).max(0.0),
+                active_seconds: (active_coverage != "unavailable").then_some(active),
+                active_coverage,
+                heartbeat_count,
+            });
+        }
+        Ok(ProjectMeasurementTimeline {
+            calculation_version: timeline.calculation_version,
+            timeout_seconds: self.timeline.bridge_config().idle_timeout_seconds,
+            days,
+        })
     }
 
     /// Canonical seconds for a range, keyed by project id *and* by display name.

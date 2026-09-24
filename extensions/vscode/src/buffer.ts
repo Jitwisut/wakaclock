@@ -533,9 +533,9 @@ export class HeartbeatBufferManager {
         } : undefined);
         if (measurement) this.lastLineMeasurements.set(entity, measurement);
         this.clearMeasurements(state);
-        await this.classifyPendingAttribution(captured, now, measurement);
+        const matchedAiOperation = await this.classifyPendingAttribution(captured, now, measurement);
         if (this.hasPendingActivity(captured)) {
-          snapshots.push(this.captureSnapshot(captured, category, write));
+          snapshots.push(this.captureSnapshot(captured, category, write, measurement, matchedAiOperation));
         }
       }
       if (snapshots.length === 0) {
@@ -638,7 +638,9 @@ export class HeartbeatBufferManager {
   private buildPayload(
     state: BufferedFileState,
     category: HeartbeatCategory,
-    write: boolean
+    write: boolean,
+    measurement?: LineMeasurement,
+    matchedAiOperation = false
   ): ExtraHeartbeatPayload {
     const clipboardEnabled = this.getConfig().trackClipboardActions;
     const hasAmbiguousLines =
@@ -683,12 +685,19 @@ export class HeartbeatBufferManager {
       keystrokes: undefined,
       chars_added: state.charsAdded || undefined,
       chars_deleted: state.charsDeleted || undefined,
-      // No metric-version field exists in the legacy CLI. Publishing this new
-      // definition in unversioned fields would silently mix incompatible totals.
+      // Unknown/mixed editor observations stay unknown. When the observation is
+      // already represented by a verified AI operation, omit its line counters so
+      // the editor cannot create a second total for the same edit.
       human_lines_added: undefined,
       human_lines_deleted: undefined,
-      unattributed_lines_added: undefined,
-      unattributed_lines_deleted: undefined,
+      unattributed_lines_added:
+        !matchedAiOperation && measurement?.status === "measured"
+          ? measurement.linesAdded
+          : undefined,
+      unattributed_lines_deleted:
+        !matchedAiOperation && measurement?.status === "measured"
+          ? measurement.linesDeleted
+          : undefined,
       clipboard_tracking_version: clipboardEnabled ? 1 : undefined,
       copy_actions: clipboardEnabled ? state.copyActions || undefined : undefined,
       paste_actions: clipboardEnabled ? state.pasteActions || undefined : undefined,
@@ -707,6 +716,11 @@ export class HeartbeatBufferManager {
         : undefined,
       active_seconds: unionSeconds(state.activitySegments),
       heartbeat_id: state.heartbeatId,
+      line_metric_version: measurement?.metricVersion,
+      line_measurement_status: measurement?.status,
+      line_measurement_reason:
+        measurement?.status === "unavailable" ? measurement.reason : undefined,
+      measurement_window_id: measurement ? state.heartbeatId : undefined,
       activity_segments: state.activitySegments.length > 0 ? state.activitySegments : undefined,
       ...aiAttribution
     };
@@ -716,13 +730,13 @@ export class HeartbeatBufferManager {
     state: BufferedFileState,
     now: number,
     measurement?: LineMeasurement
-  ): Promise<void> {
+  ): Promise<boolean> {
     // A final fingerprint cannot prove who made earlier edits in a mixed window.
     // Until native operation boundaries exist, only one non-replay change event
     // with a known before-version can be reconciled with a producer-owned edit.
     if (measurement?.status !== "measured" || measurement.containsReplay ||
         measurement.changeEvents !== 1 || state.pendingEditorChanges.length !== 1 ||
-        (measurement.linesAdded === 0 && measurement.linesDeleted === 0)) return;
+        (measurement.linesAdded === 0 && measurement.linesDeleted === 0)) return false;
     const observation = state.pendingEditorChanges[0];
     let result;
     try {
@@ -732,10 +746,10 @@ export class HeartbeatBufferManager {
       );
     } catch {
       // Sidecar availability must not drop already-observed activity or characters.
-      return;
+      return false;
     }
     if (result.attribution !== "ai" || !result.event ||
-        result.unattributed_lines_added || result.unattributed_lines_deleted) return;
+        result.unattributed_lines_added || result.unattributed_lines_deleted) return false;
     // The producer already owns these line totals. The editor sends only supporting
     // identity, never a second AI line count.
     state.charsAdded = 0;
@@ -758,6 +772,7 @@ export class HeartbeatBufferManager {
       state.aiActorType = result.event.actor_type as BufferedFileState["aiActorType"];
       state.aiActorConfidence = result.event.actor_confidence;
     }
+    return true;
   }
 
   private observeActivity(state: BufferedFileState, now: number): void {
@@ -840,11 +855,13 @@ export class HeartbeatBufferManager {
   private captureSnapshot(
     state: BufferedFileState,
     category: HeartbeatCategory,
-    write: boolean
+    write: boolean,
+    measurement?: LineMeasurement,
+    matchedAiOperation = false
   ): FlushSnapshot {
     state.heartbeatId ||= randomUUID();
     const snapshot: FlushSnapshot = {
-      payload: this.buildPayload(state, category, write),
+      payload: this.buildPayload(state, category, write, measurement, matchedAiOperation),
       category,
       write,
       activitySegments: state.activitySegments.map((segment) => ({ ...segment })),

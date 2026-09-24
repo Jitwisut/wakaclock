@@ -7,13 +7,22 @@ use uuid::Uuid;
 
 use crate::model::heartbeat::HeartbeatRow;
 use crate::model::wakatime_import::{WakaTimeDump, WakaTimeHeartbeat};
-use crate::repository::heartbeat::HeartbeatRepository;
+use crate::repository::heartbeat::{HeartbeatRepository, LegacyImportHeartbeatKey};
 
 pub struct WakaTimeImportResult {
     pub import_id: String,
     pub imported_heartbeats: usize,
     pub skipped_heartbeats: usize,
     pub issue_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WakaTimeImportPreview {
+    pub valid_heartbeats: usize,
+    pub invalid_heartbeats: usize,
+    pub possible_legacy_duplicates: usize,
+    pub legacy_scan_limited: bool,
+    pub requires_confirmation: bool,
 }
 
 pub struct WakaTimeImportService {
@@ -33,6 +42,71 @@ impl WakaTimeImportService {
     /// export with different chunk boundaries cannot multiply recorded time.
     pub async fn run_stable(&self, user_id: Uuid, raw: &str) -> Result<WakaTimeImportResult> {
         self.run_inner(user_id, raw, true).await
+    }
+
+    /// Inspect possible overlap with imports created by the old v1 importer.
+    /// This only reads bounded identity metadata and never retains the dump.
+    pub async fn preview_stable(&self, user_id: Uuid, raw: &str) -> Result<WakaTimeImportPreview> {
+        if raw.len() > 1024 * 1024 {
+            anyhow::bail!("dump exceeds the 1 MiB upload limit");
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(raw).context("invalid WakaTime dump JSON")?;
+        let dump: WakaTimeDump =
+            serde_json::from_value(json).context("invalid WakaTime dump format")?;
+        validate_dump(&dump)?;
+
+        let mut incoming = Vec::new();
+        let mut invalid_heartbeats = 0usize;
+        for day in &dump.days {
+            for heartbeat in day.heartbeats.as_deref().unwrap_or_default() {
+                if invalid_heartbeat_reason(heartbeat).is_some() {
+                    invalid_heartbeats += 1;
+                    continue;
+                }
+                let Some(entity_type) = normalize_entity_type(&heartbeat.entity_type) else {
+                    invalid_heartbeats += 1;
+                    continue;
+                };
+                incoming.push(LegacyImportHeartbeatKey {
+                    time: heartbeat.time,
+                    entity: heartbeat.entity.clone(),
+                    entity_type,
+                });
+            }
+        }
+
+        if incoming.is_empty() {
+            return Ok(WakaTimeImportPreview {
+                valid_heartbeats: 0,
+                invalid_heartbeats,
+                possible_legacy_duplicates: 0,
+                legacy_scan_limited: false,
+                requires_confirmation: false,
+            });
+        }
+        let start_time = incoming
+            .iter()
+            .map(|heartbeat| heartbeat.time)
+            .fold(f64::INFINITY, f64::min);
+        let end_time = incoming
+            .iter()
+            .map(|heartbeat| heartbeat.time)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let (legacy, legacy_scan_limited) = self
+            .heartbeat_repo
+            .legacy_import_heartbeat_keys(user_id, start_time, end_time)
+            .await?;
+        let possible_legacy_duplicates = count_legacy_import_overlaps(&incoming, &legacy);
+        let requires_confirmation = possible_legacy_duplicates > 0 || legacy_scan_limited;
+
+        Ok(WakaTimeImportPreview {
+            valid_heartbeats: incoming.len(),
+            invalid_heartbeats,
+            possible_legacy_duplicates,
+            legacy_scan_limited,
+            requires_confirmation,
+        })
     }
 
     async fn run_inner(
@@ -136,6 +210,32 @@ impl WakaTimeImportService {
             issue_counts,
         })
     }
+}
+
+fn count_legacy_import_overlaps(
+    incoming: &[LegacyImportHeartbeatKey],
+    legacy: &[LegacyImportHeartbeatKey],
+) -> usize {
+    let legacy_keys = legacy
+        .iter()
+        .map(|heartbeat| {
+            (
+                heartbeat.time.to_bits(),
+                heartbeat.entity.as_str(),
+                heartbeat.entity_type.as_str(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    incoming
+        .iter()
+        .filter(|heartbeat| {
+            legacy_keys.contains(&(
+                heartbeat.time.to_bits(),
+                heartbeat.entity.as_str(),
+                heartbeat.entity_type.as_str(),
+            ))
+        })
+        .count()
 }
 
 fn invalid_heartbeat_reason(heartbeat: &WakaTimeHeartbeat) -> Option<&'static str> {
@@ -314,6 +414,10 @@ fn map_heartbeat(
         paste_same_workspace_actions: None,
         paste_external_or_unknown_actions: None,
         revision: 0,
+        line_metric_version: None,
+        line_measurement_status: None,
+        line_measurement_reason: None,
+        measurement_window_id: None,
     })
 }
 
@@ -426,6 +530,52 @@ fn to_negative_u32(value: Option<i32>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v1_import_overlap_is_counted_without_exposing_paths() {
+        let incoming = vec![
+            LegacyImportHeartbeatKey {
+                time: 1_700_000_000.0,
+                entity: "src/main.rs".to_string(),
+                entity_type: "file".to_string(),
+            },
+            LegacyImportHeartbeatKey {
+                time: 1_700_000_001.0,
+                entity: "src/other.rs".to_string(),
+                entity_type: "file".to_string(),
+            },
+        ];
+        let legacy = vec![LegacyImportHeartbeatKey {
+            time: 1_700_000_000.0,
+            entity: "src/main.rs".to_string(),
+            entity_type: "file".to_string(),
+        }];
+
+        assert_eq!(count_legacy_import_overlaps(&incoming, &legacy), 1);
+    }
+
+    #[test]
+    fn v1_import_overlap_requires_the_same_time_entity_and_type() {
+        let incoming = vec![LegacyImportHeartbeatKey {
+            time: 1_700_000_000.0,
+            entity: "src/main.rs".to_string(),
+            entity_type: "file".to_string(),
+        }];
+        let legacy = vec![
+            LegacyImportHeartbeatKey {
+                time: 1_700_000_000.0,
+                entity: "src/main.rs".to_string(),
+                entity_type: "url".to_string(),
+            },
+            LegacyImportHeartbeatKey {
+                time: 1_700_000_001.0,
+                entity: "src/main.rs".to_string(),
+                entity_type: "file".to_string(),
+            },
+        ];
+
+        assert_eq!(count_legacy_import_overlaps(&incoming, &legacy), 0);
+    }
 
     #[test]
     fn imported_ai_activity_is_unattributed() {

@@ -15,6 +15,7 @@ import { getProjects, getStatusBar } from '@/lib/wakaclock/endpoints';
 import {
   completeWakaTimeImport,
   getWakaTimeImport,
+  previewWakaTimeImportChunk,
   startWakaTimeImport,
   uploadWakaTimeImportChunk,
 } from '@/lib/wakaclock/endpoints-v2';
@@ -29,12 +30,72 @@ async function digestText(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+async function getOrStartImport(userId: string, digest: string, totalChunks: number) {
+  const storageKey = `atoaxis:wakatime-import:${userId}:${digest}`;
+  let importId = window.localStorage.getItem(storageKey);
+  let job: null | WakaTimeImportJob = null;
+  if (importId) {
+    try {
+      job = await getWakaTimeImport(importId);
+    } catch (error_) {
+      if (!(error_ instanceof WakaclockError) || !error_.isNotFound) throw error_;
+    }
+  }
+  if (!job || job.total_chunks !== totalChunks) {
+    importId = crypto.randomUUID();
+    job = await startWakaTimeImport(importId, totalChunks);
+    window.localStorage.setItem(storageKey, importId);
+  }
+  return job;
+}
+
+async function previewPendingChunks(
+  importId: string,
+  chunks: string[],
+  received: Set<number>
+) {
+  let possibleDuplicates = 0;
+  let scanLimited = false;
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (received.has(index)) continue;
+    const preview = await previewWakaTimeImportChunk(importId, index, chunks[index]);
+    possibleDuplicates += preview.possible_legacy_duplicates;
+    scanLimited ||= preview.legacy_scan_limited;
+  }
+  return { possibleDuplicates, scanLimited };
+}
+
+async function uploadPendingChunks(
+  importId: string,
+  chunks: string[],
+  received: Set<number>,
+  confirmLegacyAmbiguity: boolean,
+  onProgress: (job: WakaTimeImportJob) => void
+) {
+  let job: null | WakaTimeImportJob = null;
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (received.has(index)) continue;
+    job = await uploadWakaTimeImportChunk(
+      importId,
+      index,
+      chunks[index],
+      confirmLegacyAmbiguity
+    );
+    onProgress(job);
+  }
+  return job;
+}
+
 export default function WakaTimeImportPage() {
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
   const [file, setFile] = React.useState<File | null>(null);
   const [job, setJob] = React.useState<null | WakaTimeImportJob>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<null | string>(null);
+  const [legacyPreviewWarning, setLegacyPreviewWarning] = React.useState<{
+    possibleDuplicates: number;
+    scanLimited: boolean;
+  } | null>(null);
   const [checking, setChecking] = React.useState(false);
   const [connection, setConnection] = React.useState<{
     checkedAt: number;
@@ -61,7 +122,7 @@ export default function WakaTimeImportPage() {
     }
   };
 
-  const importFile = async () => {
+  const importFile = async (confirmLegacyAmbiguity = false) => {
     if (!file || !userId) return;
     setBusy(true);
     setError(null);
@@ -69,33 +130,32 @@ export default function WakaTimeImportPage() {
       const raw = await file.text();
       const chunks = splitWakaTimeExport(raw);
       const digest = await digestText(raw);
-      const storageKey = `atoaxis:wakatime-import:${userId}:${digest}`;
-      let importId = window.localStorage.getItem(storageKey);
-      let current: null | WakaTimeImportJob = null;
-      if (importId) {
-        try {
-          current = await getWakaTimeImport(importId);
-        } catch (error_) {
-          if (!(error_ instanceof WakaclockError) || !error_.isNotFound) throw error_;
-        }
-      }
-      if (!current || current.total_chunks !== chunks.length) {
-        importId = crypto.randomUUID();
-        current = await startWakaTimeImport(importId, chunks.length);
-        window.localStorage.setItem(storageKey, importId);
-      }
+      let current = await getOrStartImport(userId, digest, chunks.length);
       setJob(current);
       if (!current.completed) {
         const activeImportId = current.id;
         const received = new Set(current.received_chunks);
-        for (let index = 0; index < chunks.length; index += 1) {
-          if (received.has(index)) continue;
-          current = await uploadWakaTimeImportChunk(activeImportId, index, chunks[index]);
-          setJob(current);
+        const { possibleDuplicates, scanLimited } = await previewPendingChunks(
+          activeImportId,
+          chunks,
+          received
+        );
+        if ((possibleDuplicates > 0 || scanLimited) && !confirmLegacyAmbiguity) {
+          setLegacyPreviewWarning({ possibleDuplicates, scanLimited });
+          return;
         }
+        current =
+          (await uploadPendingChunks(
+            activeImportId,
+            chunks,
+            received,
+            confirmLegacyAmbiguity,
+            setJob
+          )) ?? current;
         current = await completeWakaTimeImport(activeImportId);
         setJob(current);
       }
+      setLegacyPreviewWarning(null);
     } catch (error_) {
       setError(
         error_ instanceof Error ? error_.message : 'Import failed. Select the same file to resume.'
@@ -172,14 +232,44 @@ export default function WakaTimeImportPage() {
               <input
                 accept=".json,application/json"
                 aria-label="WakaTime JSON export"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  setFile(event.target.files?.[0] ?? null);
+                  setLegacyPreviewWarning(null);
+                }}
                 type="file"
               />
               <div>
-                <Button disabled={!file || busy} onClick={importFile}>
-                  {busy ? 'Importing…' : 'Import history'}
+                <Button disabled={!file || busy || legacyPreviewWarning != null} onClick={() => importFile()}>
+                  {busy ? 'Checking and importing…' : 'Review and import history'}
                 </Button>
               </div>
+              {legacyPreviewWarning && (
+                <div aria-live="polite" className="rounded-md border border-amber-500/50 p-3" role="alert">
+                  <p>
+                    {legacyPreviewWarning.possibleDuplicates} records may overlap with history
+                    imported through the older v1 endpoint. Those records cannot be matched with
+                    certainty, so continuing may count activity twice.
+                  </p>
+                  {legacyPreviewWarning.scanLimited && (
+                    <p>
+                      The legacy history lookup reached its safety limit; additional overlap may
+                      exist.
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button disabled={busy} onClick={() => importFile(true)}>
+                      {busy ? 'Importing…' : 'Continue with possible duplicates'}
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() => setLegacyPreviewWarning(null)}
+                      variant="outline"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
               {error && <p role="alert">{error} You can retry with the same file.</p>}
               {job && (
                 <div aria-live="polite" className="rounded-md border p-3">
@@ -189,6 +279,20 @@ export default function WakaTimeImportPage() {
                   </p>
                   <p>Imported heartbeats: {job.imported_heartbeats}</p>
                   <p>Skipped or invalid heartbeats: {job.skipped_heartbeats}</p>
+                  {job.possible_legacy_duplicates > 0 && (
+                    <p role="alert">
+                      {job.possible_legacy_duplicates} records may overlap with legacy v1 imports.
+                      {job.confirmed_legacy_ambiguity_chunks > 0
+                        ? ' You confirmed the possible duplicate risk.'
+                        : ' Review this import before relying on the total.'}
+                    </p>
+                  )}
+                  {job.legacy_scan_limited_chunks > 0 && (
+                    <p role="alert">
+                      The legacy lookup reached its safety limit for {job.legacy_scan_limited_chunks}{' '}
+                      chunk(s), so additional overlap may exist.
+                    </p>
+                  )}
                   <p>All-time reported total before: {formatDurationShort(job.before_total_seconds)}</p>
                   <p>
                     All-time reported total after:{' '}

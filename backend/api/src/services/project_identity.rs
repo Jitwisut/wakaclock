@@ -145,6 +145,35 @@ impl ProjectIdentityService {
         self.repo.find_by_project_id(user_id, project_id).await
     }
 
+    /// Historical names whose null-ID heartbeat rows resolve to this owned identity.
+    /// Keeping aliases beside the identity lets project-scoped read paths include
+    /// pre-backfill data after a rename or merge without accepting caller-supplied names.
+    pub async fn owned_project_names(
+        &self,
+        user_id: Uuid,
+        project_id: Uuid,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(identity) = self.owned_identity(user_id, project_id).await? else {
+            return Ok(None);
+        };
+        let merges = self.merge_repo.list_by_user(user_id).await?;
+        let mut names = vec![
+            identity.canonical_name.clone(),
+            identity.display_name.clone(),
+        ];
+        for merge in &merges {
+            if canonical_name(&merge.source_project, &merges) == identity.canonical_name
+                || canonical_name(&merge.target_project, &merges) == identity.canonical_name
+            {
+                names.push(merge.source_project.clone());
+                names.push(merge.target_project.clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        Ok(Some(names))
+    }
+
     /// Reports what a historical backfill would do, without writing anything.
     ///
     /// PR 9.9 owns the actual backfill. This exists so that migration can be inspected

@@ -6438,6 +6438,7 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
+ "chrono-tz",
  "clap",
  "dirs",
  "fs2",
@@ -6475,6 +6476,7 @@ dependencies = [
  "sha2 0.10.9",
  "sysinfo",
  "thiserror 1.0.69",
+ "tokio",
  "toml",
  "tracing",
  "uuid",

@@ -173,7 +173,7 @@ describe('Analytics Explorer frontend foundation', () => {
     expect(href).toContain('project_id=project-123');
   });
 
-  it('exposes the four Analytics submenu destinations in the sidebar', () => {
+  it('exposes the Analytics submenu destinations in the sidebar', () => {
     const group = navItems.find((item) => item.title === 'Wakaclock');
     const analytics = group?.items.find((item) => item.title === 'Analytics');
     expect(analytics?.items?.map((item) => item.title)).toEqual([
@@ -181,6 +181,7 @@ describe('Analytics Explorer frontend foundation', () => {
       'Human vs AI',
       'Projects',
       'Activity Heatmap',
+      'Measurement Trust',
     ]);
   });
 

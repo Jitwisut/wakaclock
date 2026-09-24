@@ -131,6 +131,14 @@ pub struct HeartbeatPayload {
     pub human_lines_deleted: Option<u32>,
     pub unattributed_lines_added: Option<u32>,
     pub unattributed_lines_deleted: Option<u32>,
+    #[serde(default)]
+    pub line_metric_version: Option<String>,
+    #[serde(default)]
+    pub line_measurement_status: Option<String>,
+    #[serde(default)]
+    pub line_measurement_reason: Option<String>,
+    #[serde(default)]
+    pub measurement_window_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +253,12 @@ pub async fn create(
     require_active_access(&state, user_id)
         .await
         .map_err(with_headers)?;
+    if payload.line_metric_version.is_some() && !state.config.editor_line_metrics_enabled {
+        return Err(with_headers(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "versioned editor line metrics are not enabled on this server",
+        )));
+    }
     let mut heartbeat = payload_to_heartbeat(payload, user_id)
         .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
     state
@@ -310,6 +324,16 @@ pub async fn create_bulk(
         return Err(with_headers(app_error(
             StatusCode::BAD_REQUEST,
             "at most 1000 heartbeats per request",
+        )));
+    }
+    if payloads
+        .iter()
+        .any(|payload| payload.line_metric_version.is_some())
+        && !state.config.editor_line_metrics_enabled
+    {
+        return Err(with_headers(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "versioned editor line metrics are not enabled on this server",
         )));
     }
     let mut heartbeats: Vec<Heartbeat> = payloads
@@ -894,6 +918,10 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         human_lines_deleted: p.human_lines_deleted,
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
+        line_metric_version: p.line_metric_version,
+        line_measurement_status: p.line_measurement_status,
+        line_measurement_reason: p.line_measurement_reason,
+        measurement_window_id: p.measurement_window_id,
         revision: p.revision.unwrap_or(0),
         created_at,
     };

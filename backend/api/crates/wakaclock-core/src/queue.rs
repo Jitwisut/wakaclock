@@ -8,7 +8,9 @@ use crate::{
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -72,10 +74,66 @@ pub struct QueueStatus {
     pub leased: usize,
     pub retry: usize,
     pub dead_letter: usize,
+    pub line_metrics_pending: usize,
+    pub oldest_pending_at: Option<i64>,
+    pub last_successful_delivery_at: Option<i64>,
+}
+
+/// Privacy-safe snapshot of one authenticated local delivery queue. Queue and device
+/// identities are opaque; this type never carries queued payloads or event IDs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryQueueSnapshot {
+    pub schema_version: u8,
+    pub device_id: String,
+    pub queue_id: String,
+    pub sequence: u64,
+    pub captured_at: DateTime<Utc>,
+    pub read_status: QueueReadStatus,
+    pub pending: Option<u32>,
+    pub retry: Option<u32>,
+    pub dead_letter: Option<u32>,
+    pub oldest_pending_at: Option<DateTime<Utc>>,
+    pub last_successful_delivery_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueReadStatus {
+    Available,
+    Unavailable,
+}
+
+impl DeliveryQueueSnapshot {
+    /// A failed local queue probe is represented explicitly. It is never converted to
+    /// empty counts, which would falsely claim that no activity is waiting to upload.
+    pub fn unavailable(device_id: String, queue_id: String, sequence: u64) -> Self {
+        Self {
+            schema_version: 1,
+            device_id,
+            queue_id,
+            sequence,
+            captured_at: Utc::now(),
+            read_status: QueueReadStatus::Unavailable,
+            pending: None,
+            retry: None,
+            dead_letter: None,
+            oldest_pending_at: None,
+            last_successful_delivery_at: None,
+        }
+    }
 }
 
 const FLUSH_BATCH_SIZE: usize = 100;
 const FLUSH_LEASE_SECONDS: i64 = 60;
+
+fn opaque_queue_id(scope: &QueueScope) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(scope.destination.as_bytes());
+    hasher.update([0]);
+    hasher.update(scope.owner.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 impl Queue {
     /// เปิด SQLite database ที่ ~/.wakaclock/queue.db
@@ -132,6 +190,35 @@ impl Queue {
                 state_key   TEXT PRIMARY KEY,
                 snapshot    BLOB NOT NULL,
                 updated_at  INTEGER NOT NULL
+            );
+
+            -- Queue-delivery status is metadata only. A per-device ID survives
+            -- process restarts; each opaque queue scope has its own ordered sequence
+            -- and one-minute upload throttle shared by concurrent CLI/editor processes.
+            CREATE TABLE IF NOT EXISTS delivery_device_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                device_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS delivery_queue_state (
+                queue_id TEXT PRIMARY KEY,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                last_successful_delivery_at INTEGER
+            );
+
+            -- Full versioned measurement corrections retained when the configured
+            -- server accepts time heartbeats but does not advertise the metric version.
+            -- These rows contain the same local heartbeat metadata as the retry queue;
+            -- they are posted as a higher revision after a compatible server is found.
+            CREATE TABLE IF NOT EXISTS line_measurement_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                destination TEXT NOT NULL,
+                owner_scope TEXT NOT NULL,
+                heartbeat_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                base_accepted INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(destination, owner_scope, heartbeat_id)
             );
 
             -- Unsent activity is never expired implicitly. Delivery, explicit
@@ -672,7 +759,9 @@ impl Queue {
             .query_row(
                 "SELECT
                     (SELECT COUNT(*) FROM heartbeat_queue
-                     WHERE destination = ?1 AND owner_scope = ?2),
+                     WHERE destination = ?1 AND owner_scope = ?2)
+                      + (SELECT COUNT(*) FROM line_measurement_outbox
+                         WHERE destination = ?1 AND owner_scope = ?2),
                     (SELECT COUNT(*) FROM heartbeat_queue
                      WHERE destination = ?1 AND owner_scope = ?2
                        AND next_retry_at <= strftime('%s', 'now')
@@ -685,8 +774,19 @@ impl Queue {
                      WHERE destination = ?1 AND owner_scope = ?2
                        AND retry_count > 0),
                     (SELECT COUNT(*) FROM heartbeat_dead_letter
-                     WHERE destination = ?1 AND owner_scope = ?2)",
-                params![&scope.destination, &scope.owner],
+                     WHERE destination = ?1 AND owner_scope = ?2),
+                    (SELECT MIN(created_at) FROM (
+                        SELECT created_at FROM heartbeat_queue
+                         WHERE destination = ?1 AND owner_scope = ?2
+                        UNION ALL
+                        SELECT created_at FROM line_measurement_outbox
+                         WHERE destination = ?1 AND owner_scope = ?2
+                    )),
+                    (SELECT COUNT(*) FROM line_measurement_outbox
+                     WHERE destination = ?1 AND owner_scope = ?2),
+                    (SELECT last_successful_delivery_at FROM delivery_queue_state
+                     WHERE queue_id = ?3)",
+                params![&scope.destination, &scope.owner, opaque_queue_id(scope)],
                 |row| {
                     Ok(QueueStatus {
                         pending: row.get(0)?,
@@ -694,10 +794,261 @@ impl Queue {
                         leased: row.get(2)?,
                         retry: row.get(3)?,
                         dead_letter: row.get(4)?,
+                        line_metrics_pending: row.get(6)?,
+                        oldest_pending_at: row.get(5)?,
+                        last_successful_delivery_at: row.get(7)?,
                     })
                 },
             )
             .map_err(AppError::Queue)
+    }
+
+    /// Retain a full heartbeat revision locally when a server has not advertised
+    /// support for its versioned line metric contract. The retry is idempotent by
+    /// heartbeat identity and never overwrites a different correction for that ID.
+    pub fn retain_line_measurement_scoped(
+        &self,
+        scope: &QueueScope,
+        payload: &serde_json::Value,
+    ) -> Result<bool, AppError> {
+        let Some(object) = payload.as_object() else {
+            return Err(AppError::Validation(
+                "line measurement payload must be a JSON object".to_string(),
+            ));
+        };
+        if object
+            .get("line_metric_version")
+            .and_then(serde_json::Value::as_str)
+            != Some("editor-before-after-v1")
+        {
+            return Ok(false);
+        }
+        let heartbeat_id = object
+            .get("heartbeat_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "versioned line metrics require a stable heartbeat_id".to_string(),
+                )
+            })?;
+        let revision = object
+            .get("revision")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let next_revision = revision
+            .checked_add(1)
+            .filter(|revision| *revision <= 1_000_000)
+            .ok_or_else(|| {
+                AppError::Validation("line measurement revision limit reached".to_string())
+            })?;
+        let mut correction = payload.clone();
+        correction
+            .as_object_mut()
+            .expect("payload was checked as object")
+            .insert(
+                "revision".to_string(),
+                serde_json::Value::Number(next_revision.into()),
+            );
+        let encoded = serde_json::to_string(&correction)?;
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT payload FROM line_measurement_outbox
+                 WHERE destination = ?1 AND owner_scope = ?2 AND heartbeat_id = ?3",
+                params![&scope.destination, &scope.owner, heartbeat_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::Queue)?;
+        if let Some(existing) = existing {
+            if existing != encoded {
+                return Err(AppError::Conflict(
+                    "stable heartbeat ID has different retained line metrics".to_string(),
+                ));
+            }
+            return Ok(false);
+        }
+        self.conn
+            .execute(
+                "INSERT INTO line_measurement_outbox
+                    (destination, owner_scope, heartbeat_id, payload, created_at)
+                 VALUES (?1, ?2, ?3, ?4, strftime('%s', 'now'))",
+                params![&scope.destination, &scope.owner, heartbeat_id, encoded],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(true)
+    }
+
+    pub fn pending_line_measurements_scoped(
+        &self,
+        scope: &QueueScope,
+        limit: usize,
+    ) -> Result<Vec<(i64, serde_json::Value)>, AppError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, payload FROM line_measurement_outbox
+                 WHERE destination = ?1 AND owner_scope = ?2 AND base_accepted = 1
+                 ORDER BY created_at ASC, heartbeat_id ASC LIMIT ?3",
+            )
+            .map_err(AppError::Queue)?;
+        let rows = statement
+            .query_map(
+                params![&scope.destination, &scope.owner, limit.min(500) as i64],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(AppError::Queue)?
+            .map(|row| {
+                let (id, payload) = row.map_err(AppError::Queue)?;
+                Ok((id, serde_json::from_str(&payload)?))
+            })
+            .collect();
+        rows
+    }
+
+    /// Mark the time-bearing base heartbeat as accepted. A retained higher revision
+    /// must not be sent before its base exists on the server.
+    pub fn mark_line_measurement_base_accepted(
+        &self,
+        scope: &QueueScope,
+        heartbeat_id: &str,
+    ) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "UPDATE line_measurement_outbox SET base_accepted = 1
+                 WHERE destination = ?1 AND owner_scope = ?2 AND heartbeat_id = ?3",
+                params![&scope.destination, &scope.owner, heartbeat_id],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    pub fn remove_pending_line_measurement(&self, id: i64) -> Result<(), AppError> {
+        self.conn
+            .execute("DELETE FROM line_measurement_outbox WHERE id = ?1", [id])
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Capture and reserve an ordered, throttled queue snapshot for the authenticated
+    /// delivery scope. Returning `None` means another process uploaded (or attempted)
+    /// this queue within the last minute. The counters and timestamps are read from
+    /// SQLite; callers must not substitute zero when this method fails.
+    pub fn capture_delivery_snapshot_scoped(
+        &self,
+        scope: &QueueScope,
+    ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
+        let queue_id = opaque_queue_id(scope);
+        let status = self.status_scoped(scope)?;
+        let now = Utc::now();
+        let oldest_pending: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT MIN(created_at) FROM (
+                    SELECT created_at FROM heartbeat_queue
+                     WHERE destination = ?1 AND owner_scope = ?2
+                    UNION ALL
+                    SELECT created_at FROM line_measurement_outbox
+                     WHERE destination = ?1 AND owner_scope = ?2
+                )",
+                params![&scope.destination, &scope.owner],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)?;
+        let last_successful: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT last_successful_delivery_at FROM delivery_queue_state
+                 WHERE queue_id = ?1",
+                [&queue_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::Queue)?
+            .flatten();
+
+        let candidate_device_id = Uuid::new_v4().to_string();
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO delivery_device_state(singleton, device_id)
+                 VALUES (1, ?1)",
+                [&candidate_device_id],
+            )
+            .map_err(AppError::Queue)?;
+        let device_id: String = self
+            .conn
+            .query_row(
+                "SELECT device_id FROM delivery_device_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)?;
+        let now_seconds = now.timestamp();
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO delivery_queue_state(queue_id, sequence, last_attempt_at)
+                 VALUES (?1, 0, 0)",
+                [&queue_id],
+            )
+            .map_err(AppError::Queue)?;
+        let reserved = self
+            .conn
+            .execute(
+                "UPDATE delivery_queue_state
+                 SET sequence = sequence + 1, last_attempt_at = ?2
+                 WHERE queue_id = ?1 AND last_attempt_at <= ?3",
+                params![&queue_id, now_seconds, now_seconds.saturating_sub(60)],
+            )
+            .map_err(AppError::Queue)?;
+        if reserved == 0 {
+            return Ok(None);
+        }
+        let sequence: i64 = self
+            .conn
+            .query_row(
+                "SELECT sequence FROM delivery_queue_state WHERE queue_id = ?1",
+                [&queue_id],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)?;
+
+        Ok(Some(DeliveryQueueSnapshot {
+            schema_version: 1,
+            device_id,
+            queue_id,
+            sequence: sequence.max(0) as u64,
+            captured_at: now,
+            read_status: QueueReadStatus::Available,
+            pending: Some(status.pending.min(u32::MAX as usize) as u32),
+            retry: Some(status.retry.min(u32::MAX as usize) as u32),
+            dead_letter: Some(status.dead_letter.min(u32::MAX as usize) as u32),
+            oldest_pending_at: oldest_pending
+                .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
+            last_successful_delivery_at: last_successful
+                .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
+        }))
+    }
+
+    /// Persist the local confirmation time after a server accepts all rows in the
+    /// scope. This timestamp is included in the next queue snapshot.
+    pub fn record_scope_delivery_success(&self, scope: &QueueScope) -> Result<(), AppError> {
+        let queue_id = opaque_queue_id(scope);
+        let now = Utc::now().timestamp();
+        self.conn
+            .execute(
+                "INSERT INTO delivery_queue_state
+                    (queue_id, sequence, last_attempt_at, last_successful_delivery_at)
+                 VALUES (?1, 0, 0, ?2)
+                 ON CONFLICT(queue_id) DO UPDATE SET
+                    last_successful_delivery_at = MAX(
+                        COALESCE(delivery_queue_state.last_successful_delivery_at, 0),
+                        excluded.last_successful_delivery_at
+                    )",
+                params![queue_id, now],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
     }
 
     /// Record why delivery failed for exactly this origin + owner.
@@ -822,8 +1173,11 @@ impl Queue {
     pub fn orphaned_len(&self, current: &QueueScope) -> Result<usize, AppError> {
         self.conn
             .query_row(
-                "SELECT COUNT(*) FROM heartbeat_queue
-                 WHERE NOT (destination = ?1 AND owner_scope = ?2)",
+                "SELECT
+                    (SELECT COUNT(*) FROM heartbeat_queue
+                     WHERE NOT (destination = ?1 AND owner_scope = ?2))
+                  + (SELECT COUNT(*) FROM line_measurement_outbox
+                     WHERE NOT (destination = ?1 AND owner_scope = ?2))",
                 params![&current.destination, &current.owner],
                 |row| row.get(0),
             )
@@ -853,10 +1207,11 @@ impl Queue {
     ///
     /// Only credentials whose recorded server proof (`credential_owner`) names the
     /// same `owner_id` on the same origin qualify, and `current` itself must carry
-    /// that proof. A row whose exact delivery identity (heartbeat id, session,
-    /// entity, revision) is already queued under `current` is dropped instead of
-    /// moved; every other row keeps its payload bytes, timestamp and retry state.
-    /// Any failure rolls the whole rebind back.
+    /// that proof. Heartbeat and retained line-measurement rows are moved together.
+    /// Exact duplicate heartbeat deliveries or identical retained corrections are
+    /// dropped; conflicting corrections abort the transaction and preserve both.
+    /// Every moved row keeps its payload bytes and delivery state. Any failure rolls
+    /// the whole rebind back.
     pub fn rebind_same_owner(
         &self,
         current: &QueueScope,
@@ -921,7 +1276,30 @@ impl Queue {
                     params![&current.destination, &from_scope, &current.owner],
                 )
                 .map_err(AppError::Queue)?;
-            if moved + duplicates > 0 {
+            let duplicate_line_measurements = transaction
+                .execute(
+                    "DELETE FROM line_measurement_outbox
+                     WHERE destination = ?1 AND owner_scope = ?2
+                       AND EXISTS (
+                         SELECT 1 FROM line_measurement_outbox AS kept
+                         WHERE kept.destination = line_measurement_outbox.destination
+                           AND kept.owner_scope = ?3
+                           AND kept.heartbeat_id = line_measurement_outbox.heartbeat_id
+                           AND kept.payload = line_measurement_outbox.payload
+                       )",
+                    params![&current.destination, &from_scope, &current.owner],
+                )
+                .map_err(AppError::Queue)?;
+            let moved_line_measurements = transaction
+                .execute(
+                    "UPDATE line_measurement_outbox SET owner_scope = ?3
+                     WHERE destination = ?1 AND owner_scope = ?2",
+                    params![&current.destination, &from_scope, &current.owner],
+                )
+                .map_err(AppError::Queue)?;
+            let moved_total = moved + moved_line_measurements;
+            let duplicates_total = duplicates + duplicate_line_measurements;
+            if moved_total + duplicates_total > 0 {
                 transaction
                     .execute(
                         "INSERT INTO queue_rebind_audit
@@ -933,14 +1311,14 @@ impl Queue {
                             &from_scope,
                             &current.owner,
                             owner_id,
-                            moved as i64,
-                            duplicates as i64
+                            moved_total as i64,
+                            duplicates_total as i64
                         ],
                     )
                     .map_err(AppError::Queue)?;
             }
-            report.rows_moved += moved;
-            report.duplicates_dropped += duplicates;
+            report.rows_moved += moved_total;
+            report.duplicates_dropped += duplicates_total;
         }
         transaction.commit().map_err(AppError::Queue)?;
         Ok(report)
@@ -1492,6 +1870,81 @@ mod tests {
     }
 
     #[test]
+    fn same_owner_rebind_moves_retained_line_measurements_with_the_credential() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        let retained = serde_json::json!({
+            "heartbeat_id": "hb-metric",
+            "revision": 0,
+            "line_metric_version": "editor-before-after-v1",
+            "measurement_window_id": "window-1",
+            "ai_lines_added": 3
+        });
+        temp.queue
+            .retain_line_measurement_scoped(&old, &retained)
+            .unwrap();
+        temp.queue
+            .mark_line_measurement_base_accepted(&old, "hb-metric")
+            .unwrap();
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+
+        let report = temp.queue.rebind_same_owner(&new, OWNER_1).unwrap();
+
+        assert_eq!(report.rows_moved, 1);
+        assert_eq!(
+            temp.queue.status_scoped(&old).unwrap().line_metrics_pending,
+            0
+        );
+        assert_eq!(
+            temp.queue.status_scoped(&new).unwrap().line_metrics_pending,
+            1
+        );
+        assert_eq!(
+            temp.queue
+                .pending_line_measurements_scoped(&new, 10)
+                .unwrap()[0]
+                .1["revision"],
+            1
+        );
+        assert_eq!(temp.queue.orphaned_len(&new).unwrap(), 0);
+    }
+
+    #[test]
+    fn rebind_drops_identical_retained_line_measurement_duplicates() {
+        let temp = TempQueue::new();
+        let (old, new) = (scope(ORIGIN, "old"), scope(ORIGIN, "new"));
+        let retained = serde_json::json!({
+            "heartbeat_id": "hb-metric",
+            "revision": 0,
+            "line_metric_version": "editor-before-after-v1",
+            "measurement_window_id": "window-1",
+            "ai_lines_added": 3
+        });
+        temp.queue
+            .retain_line_measurement_scoped(&old, &retained)
+            .unwrap();
+        temp.queue
+            .retain_line_measurement_scoped(&new, &retained)
+            .unwrap();
+        temp.queue.record_credential_owner(&old, OWNER_1).unwrap();
+        temp.queue.record_credential_owner(&new, OWNER_1).unwrap();
+
+        let report = temp.queue.rebind_same_owner(&new, OWNER_1).unwrap();
+
+        assert_eq!(report.rows_moved, 0);
+        assert_eq!(report.duplicates_dropped, 1);
+        assert_eq!(
+            temp.queue.status_scoped(&old).unwrap().line_metrics_pending,
+            0
+        );
+        assert_eq!(
+            temp.queue.status_scoped(&new).unwrap().line_metrics_pending,
+            1
+        );
+    }
+
+    #[test]
     fn different_owner_proof_is_rejected_without_mutation() {
         let temp = TempQueue::new();
         let (account_1, account_2) = (scope(ORIGIN, "acct1"), scope(ORIGIN, "acct2"));
@@ -1796,5 +2249,119 @@ mod tests {
             .claim_batch_scoped(&target, "worker")
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn delivery_snapshots_are_opaque_scoped_ordered_and_throttled() {
+        let temp = TempQueue::new();
+        let owner = scope(ORIGIN, "mine");
+        let other = scope(ORIGIN, "other");
+        temp.queue
+            .push_scoped(&row("hb-queued", 1_000.0, 0), &owner)
+            .unwrap();
+
+        let first = temp
+            .queue
+            .capture_delivery_snapshot_scoped(&owner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.pending, Some(1));
+        assert_eq!(first.retry, Some(0));
+        assert_eq!(first.dead_letter, Some(0));
+        assert!(first.oldest_pending_at.is_some());
+        assert_eq!(first.queue_id.len(), 64);
+        assert!(!first.queue_id.contains("mine"));
+        assert_eq!(
+            temp.queue.capture_delivery_snapshot_scoped(&owner).unwrap(),
+            None,
+            "concurrent processes share the one-minute upload reservation"
+        );
+
+        let separate = temp
+            .queue
+            .capture_delivery_snapshot_scoped(&other)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.device_id, separate.device_id);
+        assert_ne!(first.queue_id, separate.queue_id);
+    }
+
+    #[test]
+    fn unsupported_line_metrics_are_retained_until_the_base_is_accepted() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        let other = scope(ORIGIN, "other");
+        let payload = serde_json::json!({
+            "heartbeat_id": "stable-window-id",
+            "revision": 0,
+            "line_metric_version": "editor-before-after-v1",
+            "line_measurement_status": "measured",
+            "measurement_window_id": "stable-window-id",
+            "ai_lines_added": 0,
+            "ai_lines_deleted": 4
+        });
+
+        assert!(temp
+            .queue
+            .retain_line_measurement_scoped(&target, &payload)
+            .unwrap());
+        assert!(!temp
+            .queue
+            .retain_line_measurement_scoped(&target, &payload)
+            .unwrap());
+        assert!(temp
+            .queue
+            .pending_line_measurements_scoped(&target, 100)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            temp.queue
+                .status_scoped(&target)
+                .unwrap()
+                .line_metrics_pending,
+            1
+        );
+        assert!(temp
+            .queue
+            .pending_line_measurements_scoped(&other, 100)
+            .unwrap()
+            .is_empty());
+
+        temp.queue
+            .mark_line_measurement_base_accepted(&target, "stable-window-id")
+            .unwrap();
+        let pending = temp
+            .queue
+            .pending_line_measurements_scoped(&target, 100)
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1["revision"], 1);
+        assert_eq!(pending[0].1["ai_lines_added"], 0);
+
+        temp.queue
+            .remove_pending_line_measurement(pending[0].0)
+            .unwrap();
+        assert_eq!(
+            temp.queue
+                .status_scoped(&target)
+                .unwrap()
+                .line_metrics_pending,
+            0
+        );
+    }
+
+    #[test]
+    fn delivery_success_is_recorded_for_the_same_opaque_queue() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        temp.queue.record_scope_delivery_success(&target).unwrap();
+        let snapshot = temp
+            .queue
+            .capture_delivery_snapshot_scoped(&target)
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.last_successful_delivery_at.is_some());
+        assert_eq!(snapshot.pending, Some(0));
+        assert_eq!(snapshot.oldest_pending_at, None);
     }
 }
