@@ -510,13 +510,13 @@
     overflow: hidden;
     border-radius: 3px;
   }
-  & [data-kind='human'] {
+  & .mkt-studio [data-kind='human'] {
     background: #a4e8b9;
   }
-  & [data-kind='ai'] {
+  & .mkt-studio [data-kind='ai'] {
     background: #52987a;
   }
-  & [data-kind='unknown'] {
+  & .mkt-studio [data-kind='unknown'] {
     background: #ebf2dd;
   }
   & .mkt-studio-legend {
@@ -867,30 +867,6 @@
   }
   & .axis-product-walkthrough {
     background: #fff;
-  }
-  & #worked-example {
-    max-width: 1080px;
-    padding: 100px var(--axis-gutter);
-  }
-  & #worked-example h2 {
-    font-size: clamp(34px, 4vw, 54px);
-    max-width: 22ch;
-    margin: auto;
-  }
-  & #worked-example > div:nth-child(2) {
-    border: 1px solid #d9e2da;
-    border-radius: 18px;
-    box-shadow: 0 20px 50px #1c402010;
-    margin-top: 44px;
-  }
-  & #worked-example .grid > div {
-    border: 0;
-    background: #edf4ee;
-    border-radius: 10px;
-  }
-  & #worked-example > div:last-child {
-    max-width: 76ch;
-    font-size: 14px;
   }
   & .axis-setup-steps {
     display: grid;
@@ -1837,15 +1813,6 @@
     & .axis-feature-row h3 {
       font-size: 27px;
     }
-    & #worked-example {
-      padding-block: 64px;
-    }
-    & #worked-example .grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    & #worked-example > div:nth-child(2) > div {
-      padding-inline: 14px;
-    }
     & .axis-setup-steps {
       grid-template-columns: 1fr;
       gap: 28px;
@@ -2041,9 +2008,6 @@
     & .axis-feature-row {
       flex-basis: calc(100vw - 48px);
       min-height: 390px;
-    }
-    & #worked-example .grid {
-      grid-template-columns: 1fr;
     }
     & .axis-pricing-offer {
       padding: 22px 18px;

@@ -18,16 +18,12 @@ import {
 import { AnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { CtaSection } from './cta-section';
-import { DashboardPreviewSection } from './dashboard-preview-section';
-import { EditorWallSection } from './editor-wall';
+import { CinematicHome } from './experience/cinematic-home';
 import { FaqSection } from './faq-section';
-import { FeatureGridSection } from './feature-grid-section';
-import { HeroSection } from './hero-section';
 import { EN_HOME, TH_HOME } from './marketing-copy';
 import { PricingSection } from './pricing-section';
 import { Bullets, MUTED_TEXT, Section } from './prose';
 import { QuickStartSection } from './quick-start-section';
-import { WorkspaceIllustrationSection } from './workspace-illustration-section';
 
 const HOME_COPY = { en: EN_HOME, th: TH_HOME } as const;
 
@@ -87,13 +83,14 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
   const accountability = ACCOUNTABILITY_COPY[locale];
   return (
     <>
-      <HeroSection locale={locale} />
-      <EditorWallSection locale={locale} />
-      <WorkspaceIllustrationSection locale={locale} />
-      <FeatureGridSection locale={locale} />
-      <div className="axis-product-walkthrough">
-        <DashboardPreviewSection locale={locale} />
-      </div>
+      {/*
+        The six-chapter experience replaces the previous hero, editor wall, workspace
+        illustration, feature list and worked example. Their indexable content moved with
+        them: the category eyebrow and answer paragraph (hero), the compatible-editor list
+        (chapter 2), the worked example's id and interpretation (chapter 4) and the feature
+        list with its #features anchor (chapter 5). Everything below is unchanged.
+      */}
+      <CinematicHome locale={locale} />
       <QuickStartSection locale={locale} />
       <div className="axis-briefing mkt-story-grid">
         {/*

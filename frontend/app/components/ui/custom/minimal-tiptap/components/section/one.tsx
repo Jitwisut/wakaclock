@@ -23,7 +23,9 @@ interface TextStyle extends Omit<
   FormatAction,
   'value' | 'icon' | 'action' | 'isActive' | 'canExecute'
 > {
-  element: keyof React.JSX.IntrinsicElements;
+  // Narrowed from `keyof React.JSX.IntrinsicElements`: @react-three/fiber adds three.js
+  // elements to that namespace, which made the dynamic tag's children type `never`.
+  element: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'span';
   level?: Level;
   className: string;
 }
