@@ -103,7 +103,7 @@ const EN = {
         pattern: 'All marks',
       },
     },
-    shareLabel: 'Share of demo blocks',
+    shareLabel: 'Share of demo coding time (not line changes)',
     minutesLabel: 'demo minutes',
   },
   insight: {
@@ -286,7 +286,7 @@ const TH: Widen<ExperienceCopy> = {
         pattern: 'ทุกเส้น',
       },
     },
-    shareLabel: 'สัดส่วนของ block ตัวอย่าง',
+    shareLabel: 'สัดส่วนเวลาเขียนโค้ดตัวอย่าง (ไม่ใช่จำนวนบรรทัด)',
     minutesLabel: 'นาที (ตัวอย่าง)',
   },
   insight: {

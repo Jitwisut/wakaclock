@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 
-import type { SiteLocale } from '@/lib/seo/site';
+import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { ChapterRail } from './chapter-rail';
 import { EXPERIENCE_COPY } from './experience-copy';
@@ -152,6 +153,15 @@ export function ExperienceStage({ locale, rootId }: { locale: SiteLocale; rootId
           {status === 'fallback' ? <span className="sr-only">{copy.loader.skipped}</span> : null}
         </div>
         <ChapterRail copy={copy} />
+        {/* Persistent conversion path while the story plays; leaves with the experience. */}
+        <Link
+          className="axx-persistent-cta"
+          data-magnetic
+          href={localizedPath(locale, '/early-access')}
+        >
+          {copy.hero.join}
+          <span aria-hidden="true">↗</span>
+        </Link>
       </div>
       <ExperienceCursor />
     </>

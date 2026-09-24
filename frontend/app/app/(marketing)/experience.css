@@ -1359,6 +1359,23 @@
   color: #f1efe7;
 }
 
+.wakaclock-marketing .axx-persistent-cta {
+  position: absolute;
+  right: 22px;
+  bottom: 84px;
+  display: inline-flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1.5px solid var(--axx-forest);
+  background: var(--axx-lime);
+  color: var(--axx-forest);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 4px 4px 0 var(--axx-forest);
+  pointer-events: auto;
+  transition: transform 0.35s var(--axx-ease);
+}
+
 /* ─── Fallback, responsive, reduced motion ─────────────────────────────────────────── */
 
 /* Without a canvas, chapters paint their own light so dusk text is never on ivory. */
@@ -1368,6 +1385,7 @@
 
 @media (max-width: 1023px) {
   .wakaclock-marketing .axx-rail,
+  .wakaclock-marketing .axx-persistent-cta,
   .wakaclock-marketing .axx-scene-caption {
     display: none;
   }
