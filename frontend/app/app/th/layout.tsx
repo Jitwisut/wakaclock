@@ -5,6 +5,8 @@ import '../globals.css';
 // Next.js requires global marketing styles to be imported by this route layout too.
 // eslint-disable-next-line boundaries/element-types
 import '../(marketing)/marketing.css';
+// eslint-disable-next-line boundaries/element-types
+import '../(marketing)/experience.css';
 
 export const dynamic = 'force-static';
 export { SITE_METADATA as metadata, SITE_VIEWPORT as viewport } from '@/lib/seo/root-document';

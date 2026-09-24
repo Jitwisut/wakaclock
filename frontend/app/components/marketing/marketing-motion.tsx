@@ -148,6 +148,8 @@ export function MarketingMotion() {
           return;
         }
         if (element.matches('.axis-setup-step')) return;
+        // The homepage experience choreographs its own chapters.
+        if (element.closest('[data-motion-owner="experience"]')) return;
         // Scroll-scrubbed surfaces have their own timeline; avoid two transforms.
         if (
           window.CSS?.supports?.('animation-timeline: view()') &&
