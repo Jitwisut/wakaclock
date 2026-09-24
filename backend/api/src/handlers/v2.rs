@@ -10,6 +10,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, NaiveDate, Utc};
 use clickhouse::Row;
 use futures::{stream, StreamExt};
@@ -18,6 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
+use wakaclock_core::queue::{DeliveryQueueSnapshot, QueueReadStatus};
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
@@ -70,6 +72,9 @@ pub struct RangeQuery {
     pub start: Option<String>,
     pub end: Option<String>,
     pub timezone: Option<String>,
+    pub project_id: Option<Uuid>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,7 +94,14 @@ pub struct CapabilityData {
     pub privacy: PrivacyCapabilities,
     pub clients: ClientCapabilities,
     pub features: Vec<FeatureCapability>,
+    pub line_metric_versions: Vec<LineMetricVersionCapability>,
     pub wakatime_routes: Vec<WakaTimeRouteCapability>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LineMetricVersionCapability {
+    pub version: &'static str,
+    pub status: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,7 +220,26 @@ pub struct MeasurementQualityData {
     pub attribution_coverage: crate::model::ai_stats::AiStatsCoverage,
     pub attribution_date_basis: &'static str,
     pub delivery_status: &'static str,
+    pub project_id: Option<Uuid>,
+    pub line_metric_coverage: Vec<LineMetricCoverage>,
     pub days: Vec<MeasurementQualityDay>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LineMetricCoverage {
+    pub version: String,
+    pub status: String,
+    pub reason: Option<&'static str>,
+    pub heartbeats: u64,
+    pub ai_line_changes: u64,
+    pub human_line_changes: u64,
+    pub unknown_line_changes: u64,
+    pub line_change_denominator: u64,
+    pub line_coverage_percent: Option<f64>,
+    pub ai_verified_heartbeats: u64,
+    pub ai_inferred_heartbeats: u64,
+    pub human_heartbeats: u64,
+    pub unknown_heartbeats: u64,
 }
 
 #[derive(Debug, Deserialize, Row)]
@@ -228,11 +259,15 @@ struct OperationEvidenceRow {
     ai_lines_added: Option<u32>,
     ai_lines_deleted: Option<u32>,
     revision: u32,
+    row_key: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OperationEvidence {
     pub event_id: String,
+    /// Stable opaque key for a metadata-only repair candidate. Unlike the signed
+    /// pagination cursor it contains no source data and does not change by revision.
+    pub repair_reference: String,
     pub occurred_at: f64,
     pub actor: String,
     pub agent: Option<String>,
@@ -249,6 +284,7 @@ pub struct OperationEvidence {
 pub struct OperationEvidencePage {
     pub date_basis: &'static str,
     pub has_more: bool,
+    pub next_cursor: Option<String>,
     pub operations: Vec<OperationEvidence>,
 }
 
@@ -294,6 +330,19 @@ pub struct StartWakaTimeImport {
 #[serde(deny_unknown_fields)]
 pub struct WakaTimeImportChunk {
     pub dump_json: String,
+    #[serde(default)]
+    pub confirm_legacy_ambiguity: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WakaTimeImportChunkPreview {
+    pub chunk_index: i32,
+    pub digest: String,
+    pub valid_heartbeats: usize,
+    pub invalid_heartbeats: usize,
+    pub possible_legacy_duplicates: usize,
+    pub legacy_scan_limited: bool,
+    pub requires_confirmation: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,6 +352,9 @@ pub struct WakaTimeImportJob {
     pub received_chunks: Vec<i32>,
     pub imported_heartbeats: i64,
     pub skipped_heartbeats: i64,
+    pub possible_legacy_duplicates: i64,
+    pub legacy_scan_limited_chunks: i64,
+    pub confirmed_legacy_ambiguity_chunks: i64,
     pub issue_counts: std::collections::BTreeMap<String, i64>,
     pub before_total_seconds: f64,
     pub before_calculation_version: String,
@@ -319,11 +371,32 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/me/analytics", get(analytics))
         .route("/me/measurement-quality", get(measurement_quality))
         .route("/me/ai/operation-evidence", get(operation_evidence))
+        .route(
+            "/me/measurement-repairs",
+            get(list_measurement_repairs).post(start_measurement_repair),
+        )
+        .route("/me/measurement-repairs/:repair_id", get(get_measurement_repair))
+        .route(
+            "/me/measurement-repairs/:repair_id/apply",
+            post(apply_measurement_repair),
+        )
+        .route(
+            "/me/measurement-repairs/:repair_id/rollback",
+            post(rollback_measurement_repair),
+        )
+        .route(
+            "/me/delivery-status",
+            get(delivery_status).post(ingest_delivery_status),
+        )
         .route("/imports/wakatime", post(wakatime_import_start))
         .route("/imports/wakatime/:import_id", get(wakatime_import_status))
         .route(
             "/imports/wakatime/:import_id/chunks/:chunk_index",
             put(wakatime_import_chunk),
+        )
+        .route(
+            "/imports/wakatime/:import_id/chunks/:chunk_index/preview",
+            post(wakatime_import_chunk_preview),
         )
         .route(
             "/imports/wakatime/:import_id/complete",
@@ -569,7 +642,9 @@ fn feature_available(
         | "oauth_pkce_and_device_flow"
         | "git_commit_pr_analytics"
         | "organization_analytics"
-        | "resumable_wakatime_import" => postgres,
+        | "resumable_wakatime_import"
+        | "delivery_queue_status"
+        | "measurement_repair" => postgres,
         "complete_history"
         | "heartbeat_ingestion"
         | "wakatime_protocol"
@@ -666,24 +741,51 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             features: features
                 .features
                 .into_iter()
-                .map(|feature| FeatureCapability {
-                    available: feature_available(
-                        &feature.key,
-                        state.postgres.is_some(),
-                        state.export_service.capability_available(),
-                        account_deletion_available,
-                    ),
-                    status: feature_runtime_status(
-                        &feature.key,
-                        &feature.status,
-                        state.postgres.is_some(),
-                        state.export_service.capability_available(),
-                        account_deletion_available,
-                    ),
-                    key: feature.key,
-                    api: feature.api,
+                .map(|feature| {
+                    let feature_enabled = feature.key != "measurement_repair"
+                        || state.config.measurement_repair_enabled;
+                    FeatureCapability {
+                        available: feature_enabled
+                            && feature_available(
+                                &feature.key,
+                                state.postgres.is_some(),
+                                state.export_service.capability_available(),
+                                account_deletion_available,
+                            ),
+                        status: if !feature_enabled {
+                            "disabled".to_string()
+                        } else {
+                            feature_runtime_status(
+                                &feature.key,
+                                &feature.status,
+                                state.postgres.is_some(),
+                                state.export_service.capability_available(),
+                                account_deletion_available,
+                            )
+                        },
+                        key: feature.key,
+                        api: feature.api,
+                    }
                 })
                 .collect(),
+            line_metric_versions: vec![
+                LineMetricVersionCapability {
+                    version: "editor-before-after-v1",
+                    status: if state.config.editor_line_metrics_enabled {
+                        "supported"
+                    } else {
+                        "disabled"
+                    },
+                },
+                LineMetricVersionCapability {
+                    version: "manual-repair-v1",
+                    status: if state.config.measurement_repair_enabled {
+                        "owner_supplied_correction"
+                    } else {
+                        "disabled"
+                    },
+                },
+            ],
             wakatime_routes: routes,
         },
         "UTC",
@@ -787,19 +889,325 @@ pub async fn measurement_quality(
     let user_id = require_scope(&state, &headers, "read_stats").await?;
     require_scope(&state, &headers, "read_ai_analytics").await?;
     let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
-    let summary = state
-        .summary_service
-        .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
-        .await
-        .map_err(ApiError::internal)?;
-    let stats = state
-        .ai_stats_service
-        .get_range(user_id, &start, &end)
-        .await
-        .map_err(ApiError::internal)?;
-    let timezone = summary.calculation.timezone.clone();
-    let data = build_measurement_quality(summary, stats.data.coverage);
+    let range = ResolvedRange::parse(&start, &end, query.timezone.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let project = resolve_project_filter(&state, user_id, query.project_id).await?;
+    let line_metric_coverage =
+        fetch_line_metric_coverage(&state, user_id, &range, project.as_ref())
+            .await
+            .map_err(ApiError::internal)?;
+    let mut data = if let Some(project) = project.as_ref() {
+        let timeline = state
+            .project_analytics_service
+            .measurement_timeline(user_id, project.id, &range)
+            .await
+            .map_err(|error| {
+                if error.to_string().contains("project not found") {
+                    ApiError::not_found("project not found")
+                } else {
+                    ApiError::internal(error)
+                }
+            })?;
+        let summary = state
+            .summary_service
+            .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
+            .await
+            .map_err(ApiError::internal)?;
+        let coverage = coverage_from_metric_groups(&line_metric_coverage, "editor-before-after-v1")
+            .or_else(|| coverage_from_metric_groups(&line_metric_coverage, "legacy_unversioned"))
+            .unwrap_or_else(|| empty_project_coverage());
+        let mut data = build_measurement_quality(summary, coverage);
+        data.days = timeline
+            .days
+            .into_iter()
+            .map(|day| MeasurementQualityDay {
+                date: day.date,
+                status: if day.heartbeat_count == 0 {
+                    "no_observation"
+                } else {
+                    "observed"
+                },
+                total_seconds: day.total_seconds,
+                proven_seconds: day.proven_seconds,
+                inferred_seconds: day.inferred_seconds,
+                active_seconds: day.active_seconds,
+                active_coverage: Some(day.active_coverage),
+                heartbeat_count: day.heartbeat_count,
+                reason: (day.heartbeat_count == 0).then_some("no_heartbeat_is_not_proof_of_idle"),
+            })
+            .collect();
+        data.total_seconds = data.days.iter().map(|day| day.total_seconds).sum();
+        data.proven_seconds = data.days.iter().map(|day| day.proven_seconds).sum();
+        data.inferred_seconds = data.days.iter().map(|day| day.inferred_seconds).sum();
+        data.calculation_version = timeline.calculation_version;
+        data.timeout_seconds = timeline.timeout_seconds;
+        data.attribution_date_basis = "heartbeat_timestamp_in_requested_timezone";
+        data.project_id = Some(project.id);
+        data
+    } else {
+        let summary = state
+            .summary_service
+            .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
+            .await
+            .map_err(ApiError::internal)?;
+        let stats = state
+            .ai_stats_service
+            .get_range(user_id, &start, &end)
+            .await
+            .map_err(ApiError::internal)?;
+        let measured_coverage =
+            coverage_from_metric_groups(&line_metric_coverage, "editor-before-after-v1").or_else(
+                || coverage_from_metric_groups(&line_metric_coverage, "legacy_unversioned"),
+            );
+        let attribution_date_basis = if measured_coverage.is_some() {
+            "heartbeat_timestamp_in_requested_timezone"
+        } else {
+            "stored_heartbeat_date"
+        };
+        let coverage = measured_coverage.unwrap_or(stats.data.coverage);
+        let mut data = build_measurement_quality(summary, coverage);
+        data.attribution_date_basis = attribution_date_basis;
+        data.project_id = None;
+        data
+    };
+    data.line_metric_coverage = line_metric_coverage;
+    let timezone = range.timezone.to_string();
     Ok(Json(envelope(data, &timezone, None)))
+}
+
+/// Receive a metadata-only queue snapshot from one CLI/editor installation.
+/// Authentication determines the account; client payloads cannot select another owner.
+pub async fn ingest_delivery_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(snapshot): Json<DeliveryQueueSnapshot>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = require_scope(&state, &headers, "write_logged_time").await?;
+    validate_delivery_snapshot(&snapshot)?;
+    state
+        .delivery_status_service
+        .record(user_id, snapshot)
+        .await
+        .map_err(ApiError::service_unavailable)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Read only the caller's latest per-device/per-queue delivery snapshots.
+pub async fn delivery_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<V2Envelope<crate::model::delivery_status::DeliveryStatusResponse>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_stats").await?;
+    let now = Utc::now();
+    let entries = state
+        .delivery_status_service
+        .latest(user_id)
+        .await
+        .map_err(ApiError::service_unavailable)?;
+    let devices = entries
+        .into_iter()
+        .map(|entry| crate::model::delivery_status::DeliveryStatusDevice::from_received(entry, now))
+        .collect();
+    Ok(Json(envelope(
+        crate::model::delivery_status::DeliveryStatusResponse {
+            devices,
+            storage: state.delivery_status_service.storage_mode(),
+        },
+        "UTC",
+        None,
+    )))
+}
+
+/// Create an owner-scoped metadata preview for historical AI line corrections.
+pub async fn start_measurement_repair(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<crate::model::measurement_repair::StartMeasurementRepair>,
+) -> Result<Json<V2Envelope<crate::model::measurement_repair::MeasurementRepairJobView>>, ApiError>
+{
+    let user_id = require_scope(&state, &headers, "write_logged_time").await?;
+    require_measurement_repair_enabled(&state)?;
+    let view = state
+        .measurement_repair_service
+        .create_preview(user_id, request)
+        .await
+        .map_err(measurement_repair_error)?;
+    let timezone = view.timezone.clone();
+    Ok(Json(envelope(view, &timezone, None)))
+}
+
+/// List the caller's most recent measurement repair previews and audit history.
+pub async fn list_measurement_repairs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<
+    Json<V2Envelope<Vec<crate::model::measurement_repair::MeasurementRepairJobView>>>,
+    ApiError,
+> {
+    let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
+    require_measurement_repair_enabled(&state)?;
+    let jobs = state
+        .measurement_repair_service
+        .list(user_id)
+        .await
+        .map_err(measurement_repair_error)?;
+    Ok(Json(envelope(jobs, "UTC", None)))
+}
+
+/// Read one repair job. The service always includes the authenticated owner in lookup.
+pub async fn get_measurement_repair(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(repair_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<crate::model::measurement_repair::MeasurementRepairJobView>>, ApiError>
+{
+    let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
+    require_measurement_repair_enabled(&state)?;
+    let view = state
+        .measurement_repair_service
+        .get(user_id, repair_id)
+        .await
+        .map_err(measurement_repair_error)?;
+    let timezone = view.timezone.clone();
+    Ok(Json(envelope(view, &timezone, None)))
+}
+
+/// Applying a correction is a first-party, session-only action.
+pub async fn apply_measurement_repair(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(repair_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<crate::model::measurement_repair::MeasurementRepairJobView>>, ApiError>
+{
+    let user_id = require_session_scope(&state, &headers, "write_logged_time").await?;
+    require_measurement_repair_enabled(&state)?;
+    let view = state
+        .measurement_repair_service
+        .apply(user_id, repair_id)
+        .await
+        .map_err(measurement_repair_error)?;
+    let timezone = view.timezone.clone();
+    Ok(Json(envelope(view, &timezone, None)))
+}
+
+/// Rollback appends a new correction revision and also requires the owner's session.
+pub async fn rollback_measurement_repair(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(repair_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<crate::model::measurement_repair::MeasurementRepairJobView>>, ApiError>
+{
+    let user_id = require_session_scope(&state, &headers, "write_logged_time").await?;
+    require_measurement_repair_enabled(&state)?;
+    let view = state
+        .measurement_repair_service
+        .rollback(user_id, repair_id)
+        .await
+        .map_err(measurement_repair_error)?;
+    let timezone = view.timezone.clone();
+    Ok(Json(envelope(view, &timezone, None)))
+}
+
+async fn require_session_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &'static str,
+) -> Result<Uuid, ApiError> {
+    let context = auth::resolve_context(state, headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if context.kind != auth::CredentialKind::Session {
+        return Err(ApiError::forbidden_scope("session"));
+    }
+    if !context.allows(scope) {
+        return Err(ApiError::forbidden_scope(scope));
+    }
+    Ok(context.user_id)
+}
+
+fn measurement_repair_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    if message.contains("not found") {
+        ApiError::not_found(message)
+    } else if message.contains("conflict") {
+        ApiError::conflict(message)
+    } else if message.contains("requires PostgreSQL") {
+        ApiError::service_unavailable(message)
+    } else if message.contains("invalid")
+        || message.contains("requires 1 to")
+        || message.contains("cannot exceed")
+        || message.contains("must be")
+        || message.contains("must have")
+    {
+        ApiError::bad_request(message)
+    } else {
+        ApiError::service_unavailable(message)
+    }
+}
+
+fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), ApiError> {
+    const MAX_COUNTER: u32 = 1_000_000;
+    const MAX_SEQUENCE: u64 = 9_000_000_000_000_000_000;
+    let now = Utc::now();
+    if snapshot.schema_version != 1
+        || snapshot.device_id.trim().is_empty()
+        || snapshot.device_id.len() > 128
+        || !snapshot.device_id.is_ascii()
+        || snapshot.device_id.chars().any(char::is_whitespace)
+        || snapshot.queue_id.len() != 64
+        || !snapshot
+            .queue_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || snapshot.sequence > MAX_SEQUENCE
+        || snapshot.captured_at > now + Duration::minutes(5)
+    {
+        return Err(ApiError::bad_request("invalid delivery status snapshot"));
+    }
+    match snapshot.read_status {
+        QueueReadStatus::Unavailable => {
+            if snapshot.pending.is_some()
+                || snapshot.retry.is_some()
+                || snapshot.dead_letter.is_some()
+                || snapshot.oldest_pending_at.is_some()
+            {
+                return Err(ApiError::bad_request(
+                    "unavailable queue snapshots must not contain counts",
+                ));
+            }
+        }
+        QueueReadStatus::Available => {
+            let (Some(pending), Some(retry), Some(dead_letter)) =
+                (snapshot.pending, snapshot.retry, snapshot.dead_letter)
+            else {
+                return Err(ApiError::bad_request(
+                    "available queue snapshots require all counters",
+                ));
+            };
+            if pending > MAX_COUNTER
+                || retry > MAX_COUNTER
+                || dead_letter > MAX_COUNTER
+                || (pending == 0 && snapshot.oldest_pending_at.is_some())
+                || (pending > 0 && snapshot.oldest_pending_at.is_none())
+            {
+                return Err(ApiError::bad_request(
+                    "delivery status counters are invalid",
+                ));
+            }
+        }
+    }
+    if snapshot
+        .oldest_pending_at
+        .is_some_and(|value| value > snapshot.captured_at)
+        || snapshot
+            .last_successful_delivery_at
+            .is_some_and(|value| value > snapshot.captured_at)
+    {
+        return Err(ApiError::bad_request(
+            "delivery timestamps cannot be later than captured_at",
+        ));
+    }
+    Ok(())
 }
 
 fn build_measurement_quality(
@@ -849,7 +1257,225 @@ fn build_measurement_quality(
         attribution_date_basis: "stored_heartbeat_date",
         // A server read cannot inspect an offline queue on the user's machine.
         delivery_status: "client_status_unavailable",
+        project_id: None,
+        line_metric_coverage: Vec::new(),
         days,
+    }
+}
+
+struct TrustProjectFilter {
+    id: Uuid,
+    names: Vec<String>,
+}
+
+async fn resolve_project_filter(
+    state: &AppState,
+    user_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<Option<TrustProjectFilter>, ApiError> {
+    let Some(project_id) = project_id else {
+        return Ok(None);
+    };
+    let names = state
+        .project_identity_service
+        .owned_project_names(user_id, project_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
+    Ok(Some(TrustProjectFilter {
+        id: project_id,
+        names,
+    }))
+}
+
+#[derive(Debug, Deserialize, Row)]
+struct LineMetricCoverageRow {
+    version: String,
+    status: String,
+    reason: Option<String>,
+    heartbeats: u64,
+    ai_line_changes: u64,
+    human_line_changes: u64,
+    unknown_line_changes: u64,
+    ai_verified_heartbeats: u64,
+    ai_inferred_heartbeats: u64,
+    human_heartbeats: u64,
+    unknown_heartbeats: u64,
+}
+
+async fn fetch_line_metric_coverage(
+    state: &AppState,
+    user_id: Uuid,
+    range: &ResolvedRange,
+    project: Option<&TrustProjectFilter>,
+) -> anyhow::Result<Vec<LineMetricCoverage>> {
+    let (start, end) = range.unix_bounds();
+    let filter = if project.is_some() {
+        "h.user_id = ? AND h.time >= ? AND h.time < ? AND \
+         (h.project_id = ? OR (h.project_id IS NULL AND h.project IN ?))"
+    } else {
+        "h.user_id = ? AND h.time >= ? AND h.time < ?"
+    };
+    let relation = crate::repository::canonical::canonical_winner_relation(filter, "h");
+    let effective_actor = crate::services::ai_stats::effective_actor_type_expr();
+    let sql = format!(
+        "SELECT
+            coalesce(nullIf(h.line_metric_version, ''), 'legacy_unversioned') AS version,
+            ifNull(nullIf(h.line_measurement_status, ''),
+                ifNull(nullIf(h.line_metric_version, ''), 'unversioned')) AS status,
+            nullIf(h.line_measurement_reason, '') AS reason,
+            count() AS heartbeats,
+            sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.ai_lines_deleted, 0)),
+                h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_line_changes,
+            sumIf(toUInt64(ifNull(h.human_lines_added, 0) + ifNull(h.human_lines_deleted, 0)),
+                h.effective_actor_type = 'human') AS human_line_changes,
+            sum(toUInt64(ifNull(h.unattributed_lines_added, 0) + ifNull(h.unattributed_lines_deleted, 0)))
+                + sumIf(toUInt64(ifNull(h.ai_lines_added, 0) + ifNull(h.ai_lines_deleted, 0)
+                    + ifNull(h.human_lines_added, 0) + ifNull(h.human_lines_deleted, 0)),
+                    h.effective_actor_type = 'unknown')
+                + sumIf(toUInt64(ifNull(h.human_lines_added, 0) + ifNull(h.human_lines_deleted, 0)),
+                    h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS unknown_line_changes,
+            countIf(h.effective_actor_type = 'ai_verified') AS ai_verified_heartbeats,
+            countIf(h.effective_actor_type = 'ai_inferred') AS ai_inferred_heartbeats,
+            countIf(h.effective_actor_type = 'human') AS human_heartbeats,
+            countIf(h.effective_actor_type = 'unknown') AS unknown_heartbeats
+         FROM (
+            SELECT h.*, {effective_actor} AS effective_actor_type FROM {relation}
+         ) AS h
+         GROUP BY version, status, reason
+         ORDER BY version ASC, status ASC, reason ASC"
+    );
+    let mut query = state
+        .clickhouse
+        .get_client()
+        .query(&sql)
+        .bind(user_id)
+        .bind(start)
+        .bind(end);
+    if let Some(project) = project {
+        query = query.bind(project.id).bind(&project.names);
+    }
+    let rows = query.fetch_all::<LineMetricCoverageRow>().await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let version = match row.version.as_str() {
+                "editor-before-after-v1" | "legacy_unversioned" | "manual-repair-v1" => row.version,
+                _ => "unknown_version".to_string(),
+            };
+            let status = match row.status.as_str() {
+                "measured" | "unavailable" | "unversioned" | "user_repaired" => row.status,
+                _ => "unknown".to_string(),
+            };
+            let attributed = row.ai_line_changes.saturating_add(row.human_line_changes);
+            let denominator = attributed.saturating_add(row.unknown_line_changes);
+            LineMetricCoverage {
+                version,
+                status,
+                reason: row.reason.as_deref().and_then(line_measurement_reason),
+                heartbeats: row.heartbeats,
+                ai_line_changes: row.ai_line_changes,
+                human_line_changes: row.human_line_changes,
+                unknown_line_changes: row.unknown_line_changes,
+                line_change_denominator: denominator,
+                line_coverage_percent: (denominator > 0)
+                    .then(|| attributed as f64 * 100.0 / denominator as f64),
+                ai_verified_heartbeats: row.ai_verified_heartbeats,
+                ai_inferred_heartbeats: row.ai_inferred_heartbeats,
+                human_heartbeats: row.human_heartbeats,
+                unknown_heartbeats: row.unknown_heartbeats,
+            }
+        })
+        .collect())
+}
+
+fn line_measurement_reason(reason: &str) -> Option<&'static str> {
+    match reason {
+        "baseline_missing" => Some("baseline_missing"),
+        "document_unavailable" => Some("document_unavailable"),
+        "document_too_large" => Some("document_too_large"),
+        "version_discontinuity" => Some("version_discontinuity"),
+        "diff_budget_exceeded" => Some("diff_budget_exceeded"),
+        "user_supplied_correction" => Some("user_supplied_correction"),
+        _ => None,
+    }
+}
+
+fn coverage_from_metric_groups(
+    groups: &[LineMetricCoverage],
+    version: &str,
+) -> Option<crate::model::ai_stats::AiStatsCoverage> {
+    use crate::model::ai_stats::AiCoverageStatus;
+    let matching = groups.iter().filter(|group| group.version == version);
+    let mut coverage = crate::model::ai_stats::AiStatsCoverage {
+        attributed_line_changes: 0,
+        ai_inferred_heartbeats: 0,
+        ai_verified_heartbeats: 0,
+        heartbeat_denominator: 0,
+        human_heartbeats: 0,
+        line_change_denominator: 0,
+        line_coverage_percent: None,
+        status: AiCoverageStatus::NoActivity,
+        unknown_heartbeats: 0,
+        unknown_line_changes: 0,
+    };
+    let mut found = false;
+    for group in matching {
+        found = true;
+        coverage.attributed_line_changes = coverage
+            .attributed_line_changes
+            .saturating_add(group.ai_line_changes)
+            .saturating_add(group.human_line_changes);
+        coverage.ai_verified_heartbeats = coverage
+            .ai_verified_heartbeats
+            .saturating_add(group.ai_verified_heartbeats);
+        coverage.ai_inferred_heartbeats = coverage
+            .ai_inferred_heartbeats
+            .saturating_add(group.ai_inferred_heartbeats);
+        coverage.human_heartbeats = coverage
+            .human_heartbeats
+            .saturating_add(group.human_heartbeats);
+        coverage.unknown_heartbeats = coverage
+            .unknown_heartbeats
+            .saturating_add(group.unknown_heartbeats);
+        coverage.heartbeat_denominator = coverage
+            .heartbeat_denominator
+            .saturating_add(group.heartbeats);
+        coverage.unknown_line_changes = coverage
+            .unknown_line_changes
+            .saturating_add(group.unknown_line_changes);
+    }
+    if !found {
+        return None;
+    }
+    coverage.line_change_denominator = coverage
+        .attributed_line_changes
+        .saturating_add(coverage.unknown_line_changes);
+    coverage.line_coverage_percent = (coverage.line_change_denominator > 0).then(|| {
+        coverage.attributed_line_changes as f64 * 100.0 / coverage.line_change_denominator as f64
+    });
+    coverage.status = if coverage.heartbeat_denominator == 0 {
+        AiCoverageStatus::NoActivity
+    } else if coverage.unknown_heartbeats > 0 || coverage.unknown_line_changes > 0 {
+        AiCoverageStatus::Partial
+    } else {
+        AiCoverageStatus::Complete
+    };
+    Some(coverage)
+}
+
+fn empty_project_coverage() -> crate::model::ai_stats::AiStatsCoverage {
+    crate::model::ai_stats::AiStatsCoverage {
+        attributed_line_changes: 0,
+        ai_inferred_heartbeats: 0,
+        ai_verified_heartbeats: 0,
+        heartbeat_denominator: 0,
+        human_heartbeats: 0,
+        line_change_denominator: 0,
+        line_coverage_percent: None,
+        status: crate::model::ai_stats::AiCoverageStatus::NoActivity,
+        unknown_heartbeats: 0,
+        unknown_line_changes: 0,
     }
 }
 
@@ -860,48 +1486,179 @@ pub async fn operation_evidence(
 ) -> Result<Json<V2Envelope<OperationEvidencePage>>, ApiError> {
     let user_id = require_scope(&state, &headers, "read_ai_analytics").await?;
     let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
-    crate::model::date_range::ResolvedRange::parse(&start, &end, query.timezone.as_deref())
+    let range = ResolvedRange::parse(&start, &end, query.timezone.as_deref())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let relation = crate::repository::canonical::canonical_winner_relation(
-        "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
-        "h",
-    );
+    let project = resolve_project_filter(&state, user_id, query.project_id).await?;
+    let (start_epoch, end_epoch) = range.unix_bounds();
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|token| {
+            decode_operation_evidence_cursor(
+                token,
+                &state.config.jwt_secret,
+                user_id,
+                &start,
+                &end,
+                &range.timezone.to_string(),
+                query.project_id,
+            )
+        })
+        .transpose()?;
+    let filter = if project.is_some() {
+        "h.user_id = ? AND h.time >= ? AND h.time < ? AND \
+         (h.project_id = ? OR (h.project_id IS NULL AND h.project IN ?))"
+    } else {
+        "h.user_id = ? AND h.time >= ? AND h.time < ?"
+    };
+    let relation = crate::repository::canonical::canonical_winner_relation(filter, "h");
     let effective_actor = crate::services::ai_stats::effective_actor_type_expr();
+    // The key is a one-way digest of internal operation metadata. It gives rows with
+    // equal timestamps a deterministic keyset order without putting file paths in the
+    // signed page cursor.
+    let row_key_expr = "lower(hex(SHA256(concat(
+        toString(length(ifNull(h.session_id, ''))), ':', ifNull(h.session_id, ''),
+        toString(length(coalesce(nullIf(h.ai_event_id, ''), nullIf(h.ai_change_id, ''), nullIf(h.heartbeat_id, ''), ''))), ':',
+            coalesce(nullIf(h.ai_event_id, ''), nullIf(h.ai_change_id, ''), nullIf(h.heartbeat_id, ''), ''),
+        toString(length(h.entity)), ':', h.entity
+    ))))";
+    let cursor_filter = cursor
+        .as_ref()
+        .map(|_| " AND (h.time < ? OR (h.time = ? AND h.row_key > ?))")
+        .unwrap_or("");
     let sql = format!(
         "SELECT h.time, h.entity, h.session_id, h.ai_event_id, h.ai_change_id, \
          h.heartbeat_id, h.ai_agent, h.ai_provider, h.ai_model, h.identity_reason, \
          h.identity_source, h.effective_actor_type, h.ai_lines_added, \
-         h.ai_lines_deleted, h.revision FROM ( \
-         SELECT h.*, {effective_actor} AS effective_actor_type FROM {relation} \
-         ) AS h WHERE length(ifNull(h.ai_event_id, '')) > 0 \
-         OR length(ifNull(h.ai_change_id, '')) > 0 \
-         ORDER BY h.time DESC, h.entity ASC LIMIT 101"
+         h.ai_lines_deleted, h.revision, h.row_key FROM ( \
+         SELECT h.*, {effective_actor} AS effective_actor_type, {row_key_expr} AS row_key FROM {relation} \
+         ) AS h WHERE (length(ifNull(h.ai_event_id, '')) > 0 \
+         OR length(ifNull(h.ai_change_id, '')) > 0) \
+         {cursor_filter} ORDER BY h.time DESC, h.row_key ASC LIMIT {}",
+        limit + 1
     );
-    let mut rows = state
+    let mut request = state
         .clickhouse
         .get_client()
         .query(&sql)
         .bind(user_id)
-        .bind(&start)
-        .bind(&end)
+        .bind(start_epoch)
+        .bind(end_epoch);
+    if let Some(project) = project.as_ref() {
+        request = request.bind(project.id).bind(&project.names);
+    }
+    if let Some(cursor) = cursor.as_ref() {
+        request = request
+            .bind(cursor.last_time)
+            .bind(cursor.last_time)
+            .bind(&cursor.last_row_key);
+    }
+    let mut rows = request
         .fetch_all::<OperationEvidenceRow>()
         .await
         .map_err(ApiError::internal)?;
-    let has_more = rows.len() > 100;
-    rows.truncate(100);
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|row| {
+                encode_operation_evidence_cursor(
+                    &state.config.jwt_secret,
+                    OperationEvidenceCursor {
+                        user_id,
+                        start: start.clone(),
+                        end: end.clone(),
+                        timezone: range.timezone.to_string(),
+                        project_id: query.project_id,
+                        last_time: row.time,
+                        last_row_key: row.row_key.clone(),
+                        expires_at: Utc::now().timestamp() + 30 * 60,
+                    },
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let operations = rows
         .into_iter()
         .map(|row| operation_evidence_from_row(user_id, row))
         .collect();
     Ok(Json(envelope(
         OperationEvidencePage {
-            date_basis: "stored_heartbeat_date",
+            date_basis: "heartbeat_timestamp_in_requested_timezone",
             has_more,
+            next_cursor,
             operations,
         },
-        query.timezone.as_deref().unwrap_or("UTC"),
+        range.timezone.to_string().as_str(),
         None,
     )))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OperationEvidenceCursor {
+    user_id: Uuid,
+    start: String,
+    end: String,
+    timezone: String,
+    project_id: Option<Uuid>,
+    last_time: f64,
+    last_row_key: String,
+    expires_at: i64,
+}
+
+fn encode_operation_evidence_cursor(
+    secret: &str,
+    cursor: OperationEvidenceCursor,
+) -> Result<String, ApiError> {
+    let payload = serde_json::to_vec(&cursor).map_err(ApiError::internal)?;
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
+    let signature = ring::hmac::sign(&key, &payload);
+    let token = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(payload),
+        URL_SAFE_NO_PAD.encode(signature.as_ref())
+    );
+    Ok(URL_SAFE_NO_PAD.encode(token))
+}
+
+fn decode_operation_evidence_cursor(
+    token: &str,
+    secret: &str,
+    user_id: Uuid,
+    start: &str,
+    end: &str,
+    timezone: &str,
+    project_id: Option<Uuid>,
+) -> Result<OperationEvidenceCursor, ApiError> {
+    let invalid = || ApiError::bad_request("operation evidence cursor is invalid; reload the list");
+    let raw = URL_SAFE_NO_PAD.decode(token).map_err(|_| invalid())?;
+    let raw = String::from_utf8(raw).map_err(|_| invalid())?;
+    let (payload, signature) = raw.split_once('.').ok_or_else(invalid)?;
+    let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
+    let signature = URL_SAFE_NO_PAD.decode(signature).map_err(|_| invalid())?;
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
+    ring::hmac::verify(&key, &payload, &signature).map_err(|_| invalid())?;
+    let cursor: OperationEvidenceCursor =
+        serde_json::from_slice(&payload).map_err(|_| invalid())?;
+    if cursor.expires_at <= Utc::now().timestamp() {
+        return Err(ApiError::conflict(
+            "operation evidence cursor expired; reload the list",
+        ));
+    }
+    if cursor.user_id != user_id
+        || cursor.start != start
+        || cursor.end != end
+        || cursor.timezone != timezone
+        || cursor.project_id != project_id
+        || !cursor.last_time.is_finite()
+        || cursor.last_row_key.len() != 64
+    {
+        return Err(invalid());
+    }
+    Ok(cursor)
 }
 
 fn operation_evidence_from_row(user_id: Uuid, row: OperationEvidenceRow) -> OperationEvidence {
@@ -922,6 +1679,7 @@ fn operation_evidence_from_row(user_id: Uuid, row: OperationEvidenceRow) -> Oper
     let verified = row.effective_actor_type == "ai_verified";
     OperationEvidence {
         event_id: format!("{:x}", hasher.finalize()),
+        repair_reference: row.row_key,
         occurred_at: row.time,
         actor: row.effective_actor_type,
         agent: verified.then_some(row.ai_agent).flatten(),
@@ -1974,6 +2732,95 @@ pub async fn wakatime_import_status(
     Ok(Json(envelope(job, "UTC", None)))
 }
 
+pub async fn wakatime_import_chunk_preview(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((import_id, chunk_index)): Path<(Uuid, i32)>,
+    Json(input): Json<WakaTimeImportChunk>,
+) -> Result<Json<V2Envelope<WakaTimeImportChunkPreview>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "write_heartbeats").await?;
+    if input.dump_json.len() > 1024 * 1024 || chunk_index < 0 {
+        return Err(ApiError::bad_request(
+            "chunk exceeds 1 MiB or index is invalid",
+        ));
+    }
+    let postgres = state.postgres.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("PostgreSQL is required for resumable imports")
+    })?;
+    let _account_lock = postgres
+        .account_activity_lock(user_id)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut connection = postgres
+        .transaction_client()
+        .await
+        .map_err(ApiError::internal)?;
+    let tx = connection.transaction().await.map_err(ApiError::internal)?;
+    let job = tx
+        .query_opt(
+            "SELECT total_chunks, completed_at IS NOT NULL AS completed
+             FROM wakatime_import_jobs WHERE id = $1 AND user_id = $2 FOR UPDATE",
+            &[&import_id, &user_id],
+        )
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("import job not found"))?;
+    let total_chunks: i32 = job.get("total_chunks");
+    if job.get::<_, bool>("completed") || chunk_index >= total_chunks {
+        return Err(ApiError::conflict(
+            "import is complete or chunk index is outside the job",
+        ));
+    }
+
+    let preview = state
+        .wakatime_import_service
+        .preview_stable(user_id, &input.dump_json)
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let digest = format!("{:x}", Sha256::digest(input.dump_json.as_bytes()));
+    tx.execute(
+        "INSERT INTO wakatime_import_chunk_previews
+             (job_id, chunk_index, digest, valid_heartbeats, invalid_heartbeats,
+              possible_legacy_duplicates, legacy_scan_limited, requires_confirmation, previewed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         ON CONFLICT (job_id, chunk_index) DO UPDATE SET
+             digest = EXCLUDED.digest,
+             valid_heartbeats = EXCLUDED.valid_heartbeats,
+             invalid_heartbeats = EXCLUDED.invalid_heartbeats,
+             possible_legacy_duplicates = EXCLUDED.possible_legacy_duplicates,
+             legacy_scan_limited = EXCLUDED.legacy_scan_limited,
+             requires_confirmation = EXCLUDED.requires_confirmation,
+             previewed_at = now()",
+        &[
+            &import_id,
+            &chunk_index,
+            &digest,
+            &(preview.valid_heartbeats as i32),
+            &(preview.invalid_heartbeats as i32),
+            &(preview.possible_legacy_duplicates as i32),
+            &preview.legacy_scan_limited,
+            &preview.requires_confirmation,
+        ],
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    tx.commit().await.map_err(ApiError::internal)?;
+
+    Ok(Json(envelope(
+        WakaTimeImportChunkPreview {
+            chunk_index,
+            digest,
+            valid_heartbeats: preview.valid_heartbeats,
+            invalid_heartbeats: preview.invalid_heartbeats,
+            possible_legacy_duplicates: preview.possible_legacy_duplicates,
+            legacy_scan_limited: preview.legacy_scan_limited,
+            requires_confirmation: preview.requires_confirmation,
+        },
+        "UTC",
+        None,
+    )))
+}
+
 pub async fn wakatime_import_chunk(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2031,6 +2878,43 @@ pub async fn wakatime_import_chunk(
             ));
         }
     } else {
+        let preview = tx
+            .query_opt(
+                "SELECT digest, requires_confirmation, possible_legacy_duplicates,
+                        legacy_scan_limited
+                 FROM wakatime_import_chunk_previews
+                 WHERE job_id = $1 AND chunk_index = $2",
+                &[&import_id, &chunk_index],
+            )
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::conflict("preview this chunk before importing it"))?;
+        if preview.get::<_, String>("digest") != digest {
+            return Err(ApiError::conflict(
+                "chunk changed after preview; preview the current file chunk again",
+            ));
+        }
+
+        let latest_preview = state
+            .wakatime_import_service
+            .preview_stable(user_id, &input.dump_json)
+            .await
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        let confirmation_required =
+            preview.get::<_, bool>("requires_confirmation") || latest_preview.requires_confirmation;
+        if confirmation_required && !input.confirm_legacy_ambiguity {
+            return Err(ApiError::conflict(
+                "possible v1-import duplicates need explicit confirmation before importing",
+            ));
+        }
+        let previewed_legacy_duplicates: i32 = preview.get("possible_legacy_duplicates");
+        let possible_legacy_duplicates = std::cmp::max(
+            previewed_legacy_duplicates,
+            latest_preview.possible_legacy_duplicates as i32,
+        );
+        let legacy_scan_limited: bool =
+            preview.get::<_, bool>("legacy_scan_limited") || latest_preview.legacy_scan_limited;
+
         let result = state
             .wakatime_import_service
             .run_stable(user_id, &input.dump_json)
@@ -2038,8 +2922,10 @@ pub async fn wakatime_import_chunk(
             .map_err(|error| ApiError::bad_request(error.to_string()))?;
         tx.execute(
             "INSERT INTO wakatime_import_chunks
-                 (job_id, chunk_index, digest, imported_heartbeats, skipped_heartbeats, issue_counts)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+                 (job_id, chunk_index, digest, imported_heartbeats, skipped_heartbeats,
+                  issue_counts, possible_legacy_duplicates, legacy_scan_limited,
+                  confirmed_legacy_ambiguity)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &import_id,
                 &chunk_index,
@@ -2047,6 +2933,9 @@ pub async fn wakatime_import_chunk(
                 &(result.imported_heartbeats as i32),
                 &(result.skipped_heartbeats as i32),
                 &serde_json::to_value(&result.issue_counts).map_err(ApiError::internal)?,
+                &possible_legacy_duplicates,
+                &legacy_scan_limited,
+                &(input.confirm_legacy_ambiguity && confirmation_required),
             ],
         )
         .await
@@ -2142,7 +3031,9 @@ async fn load_wakatime_import_job(
     let chunks = postgres
         .client()
         .query(
-            "SELECT chunk_index, imported_heartbeats, skipped_heartbeats, issue_counts
+            "SELECT chunk_index, imported_heartbeats, skipped_heartbeats, issue_counts,
+                    possible_legacy_duplicates, legacy_scan_limited,
+                    confirmed_legacy_ambiguity
          FROM wakatime_import_chunks WHERE job_id = $1 ORDER BY chunk_index",
             &[&import_id],
         )
@@ -2151,11 +3042,21 @@ async fn load_wakatime_import_job(
     let mut received_chunks = Vec::new();
     let mut imported_heartbeats = 0_i64;
     let mut skipped_heartbeats = 0_i64;
+    let mut possible_legacy_duplicates = 0_i64;
+    let mut legacy_scan_limited_chunks = 0_i64;
+    let mut confirmed_legacy_ambiguity_chunks = 0_i64;
     let mut issue_counts = std::collections::BTreeMap::new();
     for chunk in chunks {
         received_chunks.push(chunk.get("chunk_index"));
         imported_heartbeats += i64::from(chunk.get::<_, i32>("imported_heartbeats"));
         skipped_heartbeats += i64::from(chunk.get::<_, i32>("skipped_heartbeats"));
+        possible_legacy_duplicates += i64::from(chunk.get::<_, i32>("possible_legacy_duplicates"));
+        if chunk.get::<_, bool>("legacy_scan_limited") {
+            legacy_scan_limited_chunks += 1;
+        }
+        if chunk.get::<_, bool>("confirmed_legacy_ambiguity") {
+            confirmed_legacy_ambiguity_chunks += 1;
+        }
         let issues: serde_json::Value = chunk.get("issue_counts");
         if let Ok(issues) =
             serde_json::from_value::<std::collections::BTreeMap<String, i64>>(issues)
@@ -2171,6 +3072,9 @@ async fn load_wakatime_import_job(
         received_chunks,
         imported_heartbeats,
         skipped_heartbeats,
+        possible_legacy_duplicates,
+        legacy_scan_limited_chunks,
+        confirmed_legacy_ambiguity_chunks,
         issue_counts,
         before_total_seconds: row.get("before_total_seconds"),
         before_calculation_version: row.get("before_calculation_version"),
@@ -2430,6 +3334,19 @@ mod capability_tests {
             false,
             false
         ));
+        assert!(!feature_available(
+            "delivery_queue_status",
+            false,
+            false,
+            false
+        ));
+        assert!(!feature_available(
+            "measurement_repair",
+            false,
+            false,
+            false
+        ));
+        assert!(feature_available("measurement_repair", true, false, false));
         assert_eq!(
             feature_runtime_status("goals_crud", "beta", false, false, false),
             "unavailable"
@@ -2492,7 +3409,10 @@ mod capability_tests {
 
 #[cfg(test)]
 mod measurement_quality_tests {
-    use super::{build_measurement_quality, operation_evidence_from_row, OperationEvidenceRow};
+    use super::{
+        build_measurement_quality, coverage_from_metric_groups, operation_evidence_from_row,
+        LineMetricCoverage, OperationEvidenceRow,
+    };
     use crate::model::ai_stats::{AiCoverageStatus, AiStatsCoverage};
     use crate::model::summary::{
         SummariesResponse, SummaryCalculation, SummaryDay, SummaryGrandTotal,
@@ -2584,6 +3504,7 @@ mod measurement_quality_tests {
             ai_lines_added: Some(10),
             ai_lines_deleted: Some(2),
             revision: 1,
+            row_key: "a".repeat(64),
         };
         let receipt = operation_evidence_from_row(uuid::Uuid::nil(), raw);
         let serialized = serde_json::to_string(&receipt).unwrap();
@@ -2593,6 +3514,139 @@ mod measurement_quality_tests {
         assert!(!serialized.contains("unverified-model"));
         assert!(receipt.agent.is_none());
         assert!(receipt.lines_added.is_none());
+    }
+
+    #[test]
+    fn line_coverage_selects_one_metric_definition_at_a_time() {
+        let group = |version: &str, heartbeats, ai_lines, unknown_lines| LineMetricCoverage {
+            version: version.to_string(),
+            status: "measured".to_string(),
+            reason: None,
+            heartbeats,
+            ai_line_changes: ai_lines,
+            human_line_changes: 0,
+            unknown_line_changes: unknown_lines,
+            line_change_denominator: ai_lines + unknown_lines,
+            line_coverage_percent: None,
+            ai_verified_heartbeats: heartbeats,
+            ai_inferred_heartbeats: 0,
+            human_heartbeats: 0,
+            unknown_heartbeats: 0,
+        };
+        let groups = vec![
+            group("editor-before-after-v1", 1, 12, 3),
+            group("legacy_unversioned", 8, 100, 0),
+        ];
+        let coverage = coverage_from_metric_groups(&groups, "editor-before-after-v1").unwrap();
+        assert_eq!(coverage.heartbeat_denominator, 1);
+        assert_eq!(coverage.line_change_denominator, 15);
+        assert_eq!(coverage.attributed_line_changes, 12);
+    }
+}
+
+#[cfg(test)]
+mod operation_evidence_cursor_tests {
+    use super::{
+        decode_operation_evidence_cursor, encode_operation_evidence_cursor, OperationEvidenceCursor,
+    };
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn signed_cursor_is_bound_to_user_range_timezone_and_project() {
+        let user_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let token = encode_operation_evidence_cursor(
+            "test-secret",
+            OperationEvidenceCursor {
+                user_id,
+                start: "2026-09-01".to_string(),
+                end: "2026-09-07".to_string(),
+                timezone: "Asia/Bangkok".to_string(),
+                project_id: Some(project_id),
+                last_time: 1_790_000_000.0,
+                last_row_key: "a".repeat(64),
+                expires_at: Utc::now().timestamp() + 60,
+            },
+        )
+        .unwrap();
+
+        assert!(decode_operation_evidence_cursor(
+            &token,
+            "test-secret",
+            user_id,
+            "2026-09-01",
+            "2026-09-07",
+            "Asia/Bangkok",
+            Some(project_id),
+        )
+        .is_ok());
+        assert!(decode_operation_evidence_cursor(
+            &token,
+            "test-secret",
+            Uuid::now_v7(),
+            "2026-09-01",
+            "2026-09-07",
+            "Asia/Bangkok",
+            Some(project_id),
+        )
+        .is_err());
+        assert!(decode_operation_evidence_cursor(
+            &token,
+            "test-secret",
+            user_id,
+            "2026-09-01",
+            "2026-09-07",
+            "UTC",
+            Some(project_id),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cursor_rejects_tampering_and_expiry() {
+        let user_id = Uuid::now_v7();
+        let now = Utc::now().timestamp();
+        let token = encode_operation_evidence_cursor(
+            "test-secret",
+            OperationEvidenceCursor {
+                user_id,
+                start: "2026-09-01".to_string(),
+                end: "2026-09-07".to_string(),
+                timezone: "UTC".to_string(),
+                project_id: None,
+                last_time: 1_790_000_000.0,
+                last_row_key: "b".repeat(64),
+                expires_at: now - 1,
+            },
+        )
+        .unwrap();
+        let expired = decode_operation_evidence_cursor(
+            &token,
+            "test-secret",
+            user_id,
+            "2026-09-01",
+            "2026-09-07",
+            "UTC",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(expired.status, axum::http::StatusCode::CONFLICT);
+
+        let mut altered = token.into_bytes();
+        let index = altered.len() / 2;
+        altered[index] = if altered[index] == b'a' { b'b' } else { b'a' };
+        let altered = String::from_utf8(altered).unwrap();
+        assert!(decode_operation_evidence_cursor(
+            &altered,
+            "test-secret",
+            user_id,
+            "2026-09-01",
+            "2026-09-07",
+            "UTC",
+            None,
+        )
+        .is_err());
     }
 }
 
@@ -2617,6 +3671,16 @@ async fn ensure_pg_identity(state: &AppState, user_id: Uuid) -> Result<(), ApiEr
 /// for non-HTTP callers.
 fn require_runtime_feature(feature: crate::services::RuntimeFeature) -> Result<(), ApiError> {
     crate::services::require_runtime_feature(feature).map_err(ApiError::service_unavailable)
+}
+
+fn require_measurement_repair_enabled(state: &AppState) -> Result<(), ApiError> {
+    if state.config.measurement_repair_enabled {
+        Ok(())
+    } else {
+        Err(ApiError::service_unavailable(
+            "historical measurement repair is disabled in this deployment",
+        ))
+    }
 }
 
 async fn require_scope(

@@ -605,6 +605,10 @@ mod tests {
             paste_same_workspace_actions: None,
             paste_external_or_unknown_actions: None,
             revision: 0,
+            line_metric_version: None,
+            line_measurement_status: None,
+            line_measurement_reason: None,
+            measurement_window_id: None,
         };
         let mut unknown_row = human_row.clone();
         unknown_row.time = (event_base + 240) as f64;

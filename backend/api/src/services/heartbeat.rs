@@ -485,6 +485,10 @@ impl HeartbeatService {
                 paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
                 revision: hb.revision,
                 session_id: hb.session_id,
+                line_metric_version: hb.line_metric_version,
+                line_measurement_status: hb.line_measurement_status,
+                line_measurement_reason: hb.line_measurement_reason,
+                measurement_window_id: hb.measurement_window_id,
             };
 
             if !duplicate_raw {

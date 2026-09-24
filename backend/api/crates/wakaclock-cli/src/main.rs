@@ -1,6 +1,9 @@
+use chrono::{Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -264,6 +267,18 @@ enum Commands {
 
         #[arg(long)]
         unattributed_lines_deleted: Option<u32>,
+
+        #[arg(long)]
+        line_metric_version: Option<String>,
+
+        #[arg(long)]
+        line_measurement_status: Option<String>,
+
+        #[arg(long)]
+        line_measurement_reason: Option<String>,
+
+        #[arg(long)]
+        measurement_window_id: Option<String>,
 
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
@@ -630,6 +645,28 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Reparse local agent transcripts and create a metadata-only historical line
+    /// measurement preview. Applying corrections requires confirmation in Trust Center.
+    #[command(name = "repair-measurements")]
+    RepairMeasurements {
+        /// First inclusive calendar date (YYYY-MM-DD).
+        #[arg(long)]
+        from: String,
+        /// Last inclusive calendar date (YYYY-MM-DD).
+        #[arg(long)]
+        to: String,
+        /// IANA timezone used to resolve the selected calendar dates.
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        /// Restrict the scan to one supported transcript adapter.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Reparse one exact transcript instead of discovered sources. Requires `--agent`.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -732,6 +769,14 @@ struct ExtraHeartbeatInput {
     unattributed_lines_added: Option<u32>,
     #[serde(default)]
     unattributed_lines_deleted: Option<u32>,
+    #[serde(default)]
+    line_metric_version: Option<String>,
+    #[serde(default)]
+    line_measurement_status: Option<String>,
+    #[serde(default)]
+    line_measurement_reason: Option<String>,
+    #[serde(default)]
+    measurement_window_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1171,6 +1216,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
             human_lines_deleted,
             unattributed_lines_added,
             unattributed_lines_deleted,
+            line_metric_version,
+            line_measurement_status,
+            line_measurement_reason,
+            measurement_window_id,
             extra_heartbeats,
             json,
         } => {
@@ -1252,6 +1301,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 human_lines_deleted,
                 unattributed_lines_added,
                 unattributed_lines_deleted,
+                line_metric_version,
+                line_measurement_status,
+                line_measurement_reason,
+                measurement_window_id,
             };
             let mut primary = build_heartbeat(
                 &config,
@@ -1585,8 +1638,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         },
         Commands::Status { json } => {
-            let queue = Queue::open()?;
-            let queued = queue.len()?;
+            let queue_scope = api_client.queue_scope();
+            let (queue, queue_status, queue_error) = match Queue::open() {
+                Ok(queue) => match queue.status_scoped(&queue_scope) {
+                    Ok(status) => (Some(queue), Some(status), None),
+                    Err(error) => (None, None, Some(error.to_string())),
+                },
+                Err(error) => (None, None, Some(error.to_string())),
+            };
+            let queued = queue_status.map(|status| status.pending);
             let identity = build_identity();
             let cli_paths = cli_path_report();
             let legacy_service = agent_service::status();
@@ -1603,10 +1663,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 Err(error) => ("unreachable", Some(error.to_string())),
             };
 
-            let flush = api_client.flush_queue().await?;
+            let flush = match api_client.flush_queue().await {
+                Ok(flush) => flush,
+                Err(error) => wakaclock_core::api_client::FlushReport {
+                    flushed: 0,
+                    stopped_because: Some(format!("queue unavailable: {error}")),
+                },
+            };
             // After the key check: a verified same-account key has already rebound
             // its older rows, so only rows that still lack proof are counted.
-            let orphaned = queue.orphaned_len(&api_client.queue_scope()).unwrap_or(0);
+            let orphaned = queue
+                .as_ref()
+                .and_then(|queue| queue.orphaned_len(&api_client.queue_scope()).ok());
 
             if json {
                 println!(
@@ -1618,7 +1686,25 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "config_path": Config::config_path().display().to_string(),
                         "server_url": config.server_url,
                         "identity": identity_line(&config),
+                        "queue_status": if queued.is_some() { "available" } else { "unavailable" },
+                        "queue_status_detail": queue_error,
                         "queued_heartbeats": queued,
+                        "queue_eligible": queue_status.map(|status| status.eligible),
+                        "queue_leased": queue_status.map(|status| status.leased),
+                        "queue_retry": queue_status.map(|status| status.retry),
+                        "queue_dead_letter": queue_status.map(|status| status.dead_letter),
+                        "queue_line_metrics_pending":
+                            queue_status.map(|status| status.line_metrics_pending),
+                        "queue_oldest_pending_at": queue_status.and_then(|status| {
+                            status
+                                .oldest_pending_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                        }),
+                        "queue_last_successful_delivery_at": queue_status.and_then(|status| {
+                            status.last_successful_delivery_at.and_then(|seconds| {
+                                chrono::DateTime::from_timestamp(seconds, 0)
+                            })
+                        }),
                         "runtime_mode": "on_demand",
                         "service_installed": legacy_service.installed,
                         "service_running": legacy_service.running,
@@ -1649,8 +1735,44 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         legacy_service.installed, legacy_service.running
                     );
                 }
-                println!("Queued heartbeats: {queued}");
-                if orphaned > 0 {
+                match queued {
+                    Some(queued) => {
+                        println!("Queued heartbeats: {queued}");
+                        if let Some(status) = queue_status {
+                            println!(
+                                "Queue detail: eligible={} leased={} retry={} dead_letter={} line_metrics_pending={}",
+                                status.eligible,
+                                status.leased,
+                                status.retry,
+                                status.dead_letter,
+                                status.line_metrics_pending
+                            );
+                            if let Some(oldest) = status
+                                .oldest_pending_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                            {
+                                println!("Oldest pending heartbeat: {}", oldest.to_rfc3339());
+                            }
+                            if let Some(last_successful) = status
+                                .last_successful_delivery_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                            {
+                                println!(
+                                    "Last successful delivery: {}",
+                                    last_successful.to_rfc3339()
+                                );
+                            }
+                        }
+                    }
+                    None => println!(
+                        "Queued heartbeats: unavailable{}",
+                        queue_error
+                            .as_deref()
+                            .map(|error| format!(" ({error})"))
+                            .unwrap_or_default()
+                    ),
+                }
+                if let Some(orphaned) = orphaned.filter(|count| *count > 0) {
                     println!(
                         "Orphaned heartbeats: {orphaned} (queued under another API key or server; kept until the same account is verified)"
                     );
@@ -2035,6 +2157,29 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     from.as_deref(),
                     to.as_deref(),
                     apply,
+                    json,
+                )
+                .await?
+            }
+            AiAction::RepairMeasurements {
+                from,
+                to,
+                timezone,
+                agent,
+                transcript,
+                json,
+            } => {
+                if transcript.is_some() && agent.is_none() {
+                    return Err("--transcript requires --agent".into());
+                }
+                run_ai_measurement_repair_preview(
+                    &config,
+                    &api_client,
+                    &from,
+                    &to,
+                    &timezone,
+                    agent.as_deref(),
+                    transcript.as_deref(),
                     json,
                 )
                 .await?
@@ -4694,6 +4839,300 @@ async fn run_ai_identity_repair(
     Ok(())
 }
 
+/// Reparse transcript edits on this machine and send only line counts, outcomes and
+/// opaque references. No transcript path, prompt, response, diff or source text is
+/// included in the preview request. The server matches references to rows owned by
+/// the authenticated account; the resulting job still requires a session confirmation.
+async fn run_ai_measurement_repair_preview(
+    _config: &Config,
+    api_client: &ApiClient,
+    from: &str,
+    to: &str,
+    timezone: &str,
+    agent_filter: Option<&str>,
+    transcript_override: Option<&Path>,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (start_date, end_date, start_epoch, end_epoch, timezone) =
+        measurement_repair_range(from, to, timezone)?;
+    let normalized_agent = agent_filter.map(normalize_agent_id);
+    if let Some(agent) = normalized_agent.as_deref() {
+        if !supported_ai_parsers()
+            .iter()
+            .any(|(parser_id, _)| *parser_id == agent)
+        {
+            return Err(format!("unsupported measurement repair agent: {agent}").into());
+        }
+    }
+
+    let context = ai_discovery_context()?;
+    let mut events_by_id = BTreeMap::<(String, String, String), AiEditEvent>::new();
+    let mut parser_versions = Vec::new();
+    let mut transcripts_scanned = 0usize;
+    let mut warning_count = 0usize;
+    for (id, parser) in supported_ai_parsers() {
+        if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
+        let paths = if let Some(path) = transcript_override {
+            let canonical = path.canonicalize()?;
+            if !canonical.is_file() {
+                return Err(format!("transcript is not a file: {}", canonical.display()).into());
+            }
+            vec![canonical]
+        } else {
+            parser
+                .discover_sources(&context)
+                .into_iter()
+                .filter_map(|result| match result.state {
+                    DiscoveryState::TranscriptFound { path } => Some(path),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for path in paths {
+            transcripts_scanned += 1;
+            let path = path.canonicalize().unwrap_or(path);
+            let mut cursor = ParserCursor {
+                source_path: path.to_string_lossy().into_owned(),
+                file_identity: transcript_identity(&path),
+                byte_offset: 0,
+                last_record_id: None,
+                last_record_time: None,
+                context: None,
+            };
+            let file_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            let mut iterations = 0usize;
+            loop {
+                iterations += 1;
+                if iterations > 10_000 {
+                    warning_count += 1;
+                    break;
+                }
+                let previous_offset = cursor.byte_offset;
+                let batch = parser
+                    .parse_since(&ParseContext::default(), Some(&cursor))
+                    .map_err(|error| format!("{id}: {}: {error}", path.display()))?;
+                warning_count += batch.warnings.len();
+                for event in batch.events {
+                    let occurred_at = event.occurred_at.timestamp_millis() as f64 / 1000.0;
+                    if occurred_at < start_epoch || occurred_at >= end_epoch {
+                        continue;
+                    }
+                    let key = (
+                        event.agent.clone(),
+                        event.session_id.clone().unwrap_or_default(),
+                        event.event_id.clone(),
+                    );
+                    events_by_id.entry(key).or_insert(event);
+                }
+                let next_cursor = batch.next_cursor;
+                let pending = next_cursor
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| !context.pending_calls.is_empty());
+                let progressed = next_cursor.byte_offset > previous_offset
+                    || next_cursor.context != cursor.context;
+                cursor = next_cursor;
+                if cursor.byte_offset >= file_len && !pending {
+                    break;
+                }
+                if !progressed {
+                    break;
+                }
+            }
+        }
+    }
+
+    if events_by_id.is_empty() {
+        let report = serde_json::json!({
+            "status": "no_local_operations",
+            "from": start_date,
+            "to": end_date,
+            "timezone": timezone.to_string(),
+            "transcripts_scanned": transcripts_scanned,
+            "warnings": warning_count,
+            "preview": null
+        });
+        if json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("No local AI edit operations were found in the selected date range.");
+            println!(
+                "Transcripts scanned: {transcripts_scanned}; parser warnings: {warning_count}"
+            );
+        }
+        return Ok(());
+    }
+
+    const MAX_REPAIR_CANDIDATES: usize = 1_000;
+    if events_by_id.len() > MAX_REPAIR_CANDIDATES {
+        return Err(format!(
+            "{} local operations exceed the server preview limit of {MAX_REPAIR_CANDIDATES}; narrow the date range or select one --agent",
+            events_by_id.len()
+        )
+        .into());
+    }
+    let candidates = events_by_id
+        .values()
+        .map(|event| {
+            let (outcome, lines_added, lines_deleted) =
+                match (event.lines_added, event.lines_deleted) {
+                    (Some(added), Some(deleted)) => ("success", Some(added), Some(deleted)),
+                    _ => ("unknown", None, None),
+                };
+            serde_json::json!({
+                "repair_reference": measurement_repair_reference(event),
+                "outcome": outcome,
+                "lines_added": lines_added,
+                "lines_deleted": lines_deleted,
+            })
+        })
+        .collect::<Vec<_>>();
+    let repair_id = Uuid::new_v4().to_string();
+    let response = api_client
+        .preview_measurement_repair(
+            &repair_id,
+            &start_date.to_string(),
+            &end_date.to_string(),
+            &timezone.to_string(),
+            &candidates,
+        )
+        .await?;
+    let preview = response.get("data").cloned().unwrap_or(response);
+    let report = serde_json::json!({
+        "status": "preview_created",
+        "repair_id": repair_id,
+        "from": start_date,
+        "to": end_date,
+        "timezone": timezone.to_string(),
+        "transcripts_scanned": transcripts_scanned,
+        "local_operations": candidates.len(),
+        "parser_versions": parser_versions,
+        "warnings": warning_count,
+        "preview": preview,
+        "confirmation": "Review and apply this preview in Trust Center. This CLI command does not apply corrections."
+    });
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Measurement repair preview created: {}",
+            report["repair_id"]
+        );
+        println!("Local operations: {}", report["local_operations"]);
+        println!("Ready: {}", preview["ready"]);
+        println!("Unresolved: {}", preview["unresolved"]);
+        println!("Unchanged: {}", preview["unchanged"]);
+        println!("Parser warnings: {warning_count}");
+        println!("Review and apply the preview in the Trust Center.");
+    }
+    Ok(())
+}
+
+fn measurement_repair_range(
+    from: &str,
+    to: &str,
+    timezone: &str,
+) -> Result<(NaiveDate, NaiveDate, f64, f64, Tz), Box<dyn Error>> {
+    let start = NaiveDate::parse_from_str(from, "%Y-%m-%d")
+        .map_err(|_| "--from must be a calendar date in YYYY-MM-DD format")?;
+    let end = NaiveDate::parse_from_str(to, "%Y-%m-%d")
+        .map_err(|_| "--to must be a calendar date in YYYY-MM-DD format")?;
+    if start > end {
+        return Err("--from must not be after --to".into());
+    }
+    if (end - start).num_days() >= 90 {
+        return Err("measurement repair ranges may include at most 90 calendar days".into());
+    }
+    let timezone: Tz = timezone
+        .parse()
+        .map_err(|_| format!("unknown IANA timezone: {timezone}"))?;
+    let local_midnight = |date: NaiveDate| -> Result<chrono::DateTime<Utc>, Box<dyn Error>> {
+        let local = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or("calendar midnight is invalid")?;
+        let zoned = timezone
+            .from_local_datetime(&local)
+            .earliest()
+            .or_else(|| timezone.from_local_datetime(&local).latest())
+            .ok_or("timezone has no offset at local midnight")?;
+        Ok(zoned.with_timezone(&Utc))
+    };
+    let start_at = local_midnight(start)?;
+    let end_at = local_midnight(end + ChronoDuration::days(1))?;
+    Ok((
+        start,
+        end,
+        start_at.timestamp_millis() as f64 / 1000.0,
+        end_at.timestamp_millis() as f64 / 1000.0,
+        timezone,
+    ))
+}
+
+fn measurement_repair_reference(event: &AiEditEvent) -> String {
+    let session = event.session_id.as_deref().unwrap_or_default();
+    let operation = event.event_id.as_str();
+    let entity = event.entity.to_string_lossy();
+    let material = format!(
+        "{}:{session}{}:{operation}{}:{entity}",
+        session.len(),
+        operation.len(),
+        entity.len(),
+    );
+    format!("{:x}", Sha256::digest(material.as_bytes()))
+}
+
+#[cfg(test)]
+mod measurement_repair_cli_tests {
+    use super::*;
+
+    #[test]
+    fn repair_range_uses_inclusive_local_dates_and_dst_boundaries() {
+        let (start, end, start_epoch, end_epoch, zone) =
+            measurement_repair_range("2026-03-08", "2026-03-08", "America/New_York").unwrap();
+        assert_eq!(start.to_string(), "2026-03-08");
+        assert_eq!(end.to_string(), "2026-03-08");
+        assert_eq!(zone.to_string(), "America/New_York");
+        assert_eq!(end_epoch - start_epoch, 23.0 * 60.0 * 60.0);
+    }
+
+    #[test]
+    fn repair_reference_is_fixed_length_and_does_not_expose_entity_path() {
+        let event = AiEditEvent {
+            event_id: "ai-event-1".to_string(),
+            agent: "codex".to_string(),
+            provider: None,
+            model: None,
+            session_id: Some("session-1".to_string()),
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            tool_event_id: None,
+            producer_surface: None,
+            occurred_at: Utc::now(),
+            entity: PathBuf::from("/private/workspace/source.rs"),
+            project_root: None,
+            change_kind: wakaclock_core::broker::BrokerChangeKind::Modify,
+            previous_entity: None,
+            lines_added: Some(0),
+            lines_deleted: Some(0),
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        };
+        let reference = measurement_repair_reference(&event);
+        assert_eq!(reference.len(), 64);
+        assert!(!reference.contains("workspace"));
+        assert!(!reference.contains("source.rs"));
+    }
+}
+
 async fn run_ai_sync(
     config: &Config,
     api_client: &ApiClient,
@@ -6752,10 +7191,17 @@ fn build_heartbeat(
         heartbeat.human_lines_deleted = extra.human_lines_deleted;
         heartbeat.unattributed_lines_added = extra.unattributed_lines_added;
         heartbeat.unattributed_lines_deleted = extra.unattributed_lines_deleted;
+        heartbeat.line_metric_version = extra.line_metric_version;
+        heartbeat.line_measurement_status = extra.line_measurement_status;
+        heartbeat.line_measurement_reason = extra.line_measurement_reason;
+        heartbeat.measurement_window_id = extra.measurement_window_id;
     }
 
     if heartbeat.heartbeat_id.is_none() {
         heartbeat.heartbeat_id = Some(Uuid::new_v4().to_string());
+    }
+    if heartbeat.line_metric_version.is_some() && heartbeat.measurement_window_id.is_none() {
+        heartbeat.measurement_window_id = heartbeat.heartbeat_id.clone();
     }
 
     // Keep local dry-runs and offline queue entries subject to the same

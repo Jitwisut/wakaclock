@@ -89,6 +89,14 @@ it returns `202` only after the account tombstone and system job/outbox commit. 
 request writes an account tombstone before enqueueing cleanup;
 Kafka fact-sinks reject later records for that account into a metadata-only DLQ.
 
+Versioned editor line metrics and historical measurement repair are opt-in rollout
+features. Both default to disabled; capabilities report that state and clients keep
+unsupported line measurements in their local queue. Enable `ATOAXIS_EDITOR_LINE_METRICS_ENABLED=true`
+only after ClickHouse schema rollout and ingestion checks pass. Enable
+`ATOAXIS_MEASUREMENT_REPAIR_ENABLED=true` only after PostgreSQL migration 025 and
+the ClickHouse revision path pass staging checks. Turning either flag off stops new
+writes while preserving queued client corrections and already written revisions.
+
 The frontend uses `https://api.atoaxis.com` as its production API origin. Set
 `NEXT_PUBLIC_WAKACLOCK_API_URL` to a local API URL during development.
 
@@ -112,6 +120,10 @@ The frontend uses `https://api.atoaxis.com` as its production API origin. Set
 - `/api/v1/import/wakatime` accepts `{ "dump_json": "...JSON export contents..." }`.
   Server paths are rejected. The Settings UI uploads a local file (1 MiB / 10,000
   heartbeats maximum). Identical imports reuse stable record IDs.
+- Resumable v2 imports require a per-chunk metadata-only preview before upload. The
+  preview flags possible overlap with records created by the old v1 importer; the
+  user must explicitly continue when overlap is possible or the bounded lookup was
+  incomplete. Only a content digest and aggregate counts are retained for that preview.
 - Canonical time reads derive segments from the latest raw heartbeat revision,
   including delayed uploads. Durable tombstones exclude deleted IDs and prevent
   retransmission from restoring them. Legacy aggregate tables still need full

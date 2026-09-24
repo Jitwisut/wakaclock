@@ -25,6 +25,8 @@
     { "key": "ai_prompt_length", "status": "beta", "api": "/api/v2/me/ai/effectiveness" },
     { "key": "ai_human_follow_up", "status": "beta", "api": "/api/v2/ai/follow-up" },
     { "key": "measurement_trust_center", "status": "beta", "api": "/api/v2/me/measurement-quality" },
+    { "key": "delivery_queue_status", "status": "beta", "api": "/api/v2/me/delivery-status" },
+    { "key": "measurement_repair", "status": "beta", "api": "/api/v2/me/measurement-repairs" },
     { "key": "ai_operation_evidence", "status": "beta", "api": "/api/v2/me/ai/operation-evidence" },
     { "key": "oauth_pkce_and_device_flow", "status": "beta", "api": "/oauth/authorize" },
     { "key": "oauth_scope_enforcement", "status": "beta", "api": "/api/v2" },

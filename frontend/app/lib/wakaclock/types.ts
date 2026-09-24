@@ -49,6 +49,7 @@ export interface V2Capabilities {
     wakatime_protocol: string;
   };
   features: Array<{ api: string; available?: boolean; key: string; status: string }>;
+  line_metric_versions: Array<{ version: string; status: string }>;
   postgres_enabled: boolean;
   presence_v2_available: boolean;
   privacy: {

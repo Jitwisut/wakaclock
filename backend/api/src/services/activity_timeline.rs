@@ -1087,6 +1087,28 @@ impl Timeline {
         active_metrics(&clipped)
     }
 
+    /// Strict Active metrics for one stable project identity. Filtering is applied to
+    /// the already-resolved raw evidence and never changes bridge ownership.
+    pub fn active_metrics_for_project_in_range(
+        &self,
+        start: f64,
+        end: f64,
+        project_id: Uuid,
+        project_name: &str,
+    ) -> (f64, f64, f64, f64, &'static str) {
+        let clipped = self
+            .raw
+            .iter()
+            .filter(|interval| match interval.project_id {
+                Some(id) => id == project_id,
+                None => interval.project.as_deref().unwrap_or("Unknown") == project_name,
+            })
+            .cloned()
+            .filter_map(|interval| clip_activity_interval(interval, start, end))
+            .collect::<Vec<_>>();
+        active_metrics(&clipped)
+    }
+
     pub fn build(intervals: &[ActivityInterval], bridge: impl Into<BridgeConfig>) -> Self {
         let bridge = bridge.into();
         let raw = intervals.to_vec();

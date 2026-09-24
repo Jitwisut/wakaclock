@@ -164,6 +164,10 @@ export interface ExtraHeartbeatPayload {
     human_lines_deleted?: number;
     unattributed_lines_added?: number;
     unattributed_lines_deleted?: number;
+    line_metric_version?: string;
+    line_measurement_status?: "measured" | "unavailable";
+    line_measurement_reason?: string;
+    measurement_window_id?: string;
     clipboard_tracking_version?: number;
     copy_actions?: number;
     paste_actions?: number;

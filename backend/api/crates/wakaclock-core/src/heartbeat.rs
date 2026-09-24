@@ -615,6 +615,17 @@ pub struct Heartbeat {
     pub unattributed_lines_added: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattributed_lines_deleted: Option<u32>,
+    /// Versioned editor line delta contract. Legacy rows intentionally remain
+    /// `None` so analytics can keep them separate from measurements with a known
+    /// definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_metric_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_measurement_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_measurement_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_window_id: Option<String>,
     /// Append-only correction revision for this canonical operation.
     #[serde(default)]
     pub revision: u32,
@@ -704,6 +715,10 @@ impl Heartbeat {
             human_lines_deleted: None,
             unattributed_lines_added: None,
             unattributed_lines_deleted: None,
+            line_metric_version: None,
+            line_measurement_status: None,
+            line_measurement_reason: None,
+            measurement_window_id: None,
             revision: 0,
             created_at: now.to_rfc3339(),
         }
@@ -977,6 +992,7 @@ impl Heartbeat {
         if self.revision > MAX_HEARTBEAT_REVISION {
             return Err("revision exceeds the supported bound".to_string());
         }
+        self.validate_line_measurement()?;
         self.validate_clipboard_metrics()?;
         for segment in &self.activity_segments {
             if segment.segment_id.trim().is_empty()
@@ -999,6 +1015,56 @@ impl Heartbeat {
                     "activity segment is invalid or exceeds its evidence window".to_string()
                 );
             }
+        }
+        Ok(())
+    }
+
+    fn validate_line_measurement(&self) -> Result<(), String> {
+        let has_metadata = self.line_metric_version.is_some()
+            || self.line_measurement_status.is_some()
+            || self.line_measurement_reason.is_some()
+            || self.measurement_window_id.is_some();
+        if !has_metadata {
+            return Ok(());
+        }
+        if self.line_metric_version.as_deref() != Some("editor-before-after-v1") {
+            return Err("unsupported line_metric_version".to_string());
+        }
+        match self.line_measurement_status.as_deref() {
+            Some("measured") => {
+                if self.line_measurement_reason.is_some() {
+                    return Err(
+                        "measured line metrics cannot include an unavailable reason".to_string()
+                    );
+                }
+            }
+            Some("unavailable") => {
+                if !matches!(
+                    self.line_measurement_reason.as_deref(),
+                    Some(
+                        "baseline_missing"
+                            | "document_unavailable"
+                            | "document_too_large"
+                            | "version_discontinuity"
+                            | "diff_budget_exceeded"
+                    )
+                ) {
+                    return Err("unavailable line metrics require a reason".to_string());
+                }
+            }
+            _ => return Err("line_measurement_status must be measured or unavailable".to_string()),
+        }
+        if self
+            .measurement_window_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+            || self
+                .measurement_window_id
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_HEARTBEAT_ID_LEN)
+            || self.measurement_window_id != self.heartbeat_id
+        {
+            return Err("measurement_window_id must reuse the bounded heartbeat_id".to_string());
         }
         Ok(())
     }
@@ -1324,6 +1390,41 @@ mod tests {
         assert!(heartbeat.validate().is_err());
         heartbeat.is_ai_generated = true;
         assert!(heartbeat.validate().is_ok());
+    }
+
+    #[test]
+    fn versioned_line_measurements_preserve_measured_zero_and_unavailable() {
+        let mut measured = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-vscode/0.2.0".to_string(),
+        );
+        measured.heartbeat_id = Some("window-1".to_string());
+        measured.measurement_window_id = Some("window-1".to_string());
+        measured.line_metric_version = Some("editor-before-after-v1".to_string());
+        measured.line_measurement_status = Some("measured".to_string());
+        measured.unattributed_lines_added = Some(0);
+        measured.unattributed_lines_deleted = Some(0);
+        measured.validate().unwrap();
+        let round_trip: Heartbeat =
+            serde_json::from_slice(&serde_json::to_vec(&measured).unwrap()).unwrap();
+        assert_eq!(round_trip.unattributed_lines_added, Some(0));
+        assert_eq!(
+            round_trip.line_metric_version.as_deref(),
+            Some("editor-before-after-v1")
+        );
+        assert_eq!(round_trip.measurement_window_id, measured.heartbeat_id);
+
+        let mut unavailable = measured;
+        unavailable.unattributed_lines_added = None;
+        unavailable.unattributed_lines_deleted = None;
+        unavailable.line_measurement_status = Some("unavailable".to_string());
+        unavailable.line_measurement_reason = Some("baseline_missing".to_string());
+        unavailable.validate().unwrap();
+
+        unavailable.line_measurement_reason = Some("guess_from_filesystem".to_string());
+        assert!(unavailable.validate().is_err());
     }
 
     #[test]
