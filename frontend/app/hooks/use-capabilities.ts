@@ -37,6 +37,7 @@ export function useCapabilities() {
     : undefined;
 
   return {
+    capabilities: data,
     isLoading,
     /**
      * Undefined while loading — callers should treat that as "not yet known" and render

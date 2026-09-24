@@ -16,6 +16,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { useCapabilities } from '@/hooks/use-capabilities';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { getBrowserTimezone, getProjectAnalytics } from '@/lib/wakaclock/endpoints';
 import {
@@ -43,6 +44,15 @@ type RepairDraft = {
   selected: boolean;
 };
 
+const TRUST_FEATURE_KEYS: readonly string[] = [
+  'measurement_trust_center',
+  'delivery_queue_status',
+  'measurement_repair',
+  'ai_operation_evidence',
+  'resumable_wakatime_import',
+  'organization_analytics',
+];
+
 function parseLineCount(value: string): null | number {
   if (value.trim() === '') return null;
   const parsed = Number(value);
@@ -62,6 +72,7 @@ export default function MeasurementTrustPage() {
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
   const queryClient = useQueryClient();
   const { start, end, setRange } = useWakaclockRange(7);
+  const { capabilities, isLoading: capabilitiesLoading } = useCapabilities();
   const timezone = getBrowserTimezone() ?? 'UTC';
   const [projectId, setProjectId] = useState('all');
   const [evidenceGeneration, setEvidenceGeneration] = useState(0);
@@ -209,6 +220,73 @@ export default function MeasurementTrustPage() {
       />
       <RequireUser>
         <AnalyticsNav href={(path) => `${path}?start=${start}&end=${end}`} />
+        <Card>
+          <CardHeader>
+            <CardTitle>Runtime capability status</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {capabilitiesLoading ? (
+              <p>Loading deployment capabilities…</p>
+            ) : capabilities ? (
+              <>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <p>
+                    Transactional store:{' '}
+                    <span className="font-medium">{capabilities.transactional_store}</span>
+                  </p>
+                  <p>
+                    Analytics store: <span className="font-medium">{capabilities.analytics_store}</span>
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[34rem] text-sm">
+                    <thead>
+                      <tr className="border-b text-left">
+                        <th className="py-2">Capability</th>
+                        <th>Status</th>
+                        <th>Available</th>
+                        <th>Production-ready</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {TRUST_FEATURE_KEYS.map((featureKey) => {
+                        const feature = capabilities.features.find(({ key }) => key === featureKey);
+                        const productionReady =
+                          feature?.available === true && feature.status === 'production_ready';
+                        return (
+                          <tr className="border-b" key={featureKey}>
+                            <th className="py-2 text-left font-medium" scope="row">
+                              {featureKey}
+                            </th>
+                            <td>{feature?.status ?? 'unavailable'}</td>
+                            <td>{feature?.available === true ? 'yes' : 'no'}</td>
+                            <td>{productionReady ? 'yes' : 'no'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <p className="font-medium">Line metric versions</p>
+                  <ul className="mt-1 list-inside list-disc text-muted-foreground">
+                    {capabilities.line_metric_versions.map((metric) => (
+                      <li key={metric.version}>
+                        {metric.version}: {metric.status}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p className="text-muted-foreground">
+                  These states come from the server capability response. A beta, partial, disabled,
+                  or unavailable capability is not counted as production-ready by this report.
+                </p>
+              </>
+            ) : (
+              <p>Capability status is unavailable.</p>
+            )}
+          </CardContent>
+        </Card>
         <QueryState error={report.error} isLoading={report.isLoading}>
           {data && (
             <div className="space-y-4">
