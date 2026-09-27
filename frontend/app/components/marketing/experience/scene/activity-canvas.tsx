@@ -66,7 +66,9 @@ export default function ActivityCanvas({
       frameloop={active ? 'always' : 'never'}
       gl={{
         antialias: true,
-        alpha: false,
+        // Transparent: the backdrop (light pool, vignette, veil) is CSS behind the canvas.
+        alpha: true,
+        premultipliedAlpha: true,
         powerPreference: 'high-performance',
         stencil: false,
         outputColorSpace: SRGBColorSpace,

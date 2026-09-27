@@ -130,6 +130,9 @@ export function ExperienceStage({ locale, rootId }: { locale: SiteLocale; rootId
             <ActivityCanvas active={visible} copy={copy} locale={locale} quality={quality} />
           </div>
         ) : null}
+        {/* Reading veil: the backdrop softens behind whichever text column is active. */}
+        <div className="axx-veil" data-veil="side" />
+        <div className="axx-veil" data-veil="center" />
         <div className="axx-grain" />
       </div>
       {/* Sticky like the stage, so the rail and loader leave with the experience. */}

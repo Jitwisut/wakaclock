@@ -7,7 +7,13 @@ import { motion } from '../experience-store';
  * follows it with critically-damped easing, which is what gives the camera weight — a
  * flick of the wheel carries on for a moment and settles instead of snapping.
  */
-export const story = { current: 0, pointerX: 0, pointerY: 0 };
+export const story = {
+  current: 0,
+  /** Camera-to-subject distance this frame; the shader's depth-of-field focus. */
+  focusDistance: 9,
+  pointerX: 0,
+  pointerY: 0,
+};
 
 export function advanceStory(delta: number) {
   // Clamp delta so a backgrounded tab does not jump the whole story on return.

@@ -8,10 +8,17 @@
  * chapter reads as ordinary document flow.
  */
 
+@property --axx-pool-x {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 66%;
+}
+
 .wakaclock-marketing .axx {
+  transition: --axx-pool-x 1.2s cubic-bezier(0.22, 1, 0.36, 1);
   --axx-g: 0;
   --axx-dusk: min(
-    clamp(0, (var(--axx-g) - 2.05) / 0.35, 1),
+    clamp(0, (var(--axx-g) - 1.62) / 0.28, 1),
     clamp(0, (3.3 - var(--axx-g)) / 0.35, 1)
   );
   --axx-mix: calc(var(--axx-dusk) * 100%);
@@ -23,6 +30,9 @@
   --axx-human: color-mix(in srgb, #9be5b5 var(--axx-mix), #176447);
   --axx-ai: color-mix(in srgb, #f2b25c var(--axx-mix), #b4601c);
   --axx-unknown: color-mix(in srgb, #6d8176 var(--axx-mix), #a7ada5);
+  /* The light pool behind the structure, and the shade at the frame's edges. */
+  --axx-glow: color-mix(in srgb, #1f4a36 var(--axx-mix), #ffffff);
+  --axx-shade: color-mix(in srgb, #050c09 var(--axx-mix), #b9c2b6);
   --axx-lime: #c3ee8a;
   --axx-forest: #142b25;
   --axx-display: var(--font-mkt-pixel), 'Geist', system-ui, sans-serif;
@@ -50,6 +60,71 @@
   z-index: 0;
   overflow: hidden;
   contain: strict;
+  /* A lit room rather than a flat colour: a soft pool of light where the structure
+     stands, falling off to a quiet shade at the edges. */
+  background:
+    radial-gradient(
+      ellipse 52% 60% at var(--axx-pool-x, 66%) 46%,
+      color-mix(in srgb, var(--axx-glow) 85%, transparent) 0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      ellipse 130% 100% at 50% 45%,
+      transparent 52%,
+      color-mix(in srgb, var(--axx-shade) 55%, transparent) 100%
+    ),
+    var(--axx-bg);
+}
+/* A faint measurement grid — the instrument the work is plotted on — only where the
+   light falls, never behind the text. */
+.wakaclock-marketing .axx-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--axx-ink) 22%, transparent) 1px,
+    transparent 1.4px
+  );
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 42% 50% at var(--axx-pool-x, 66%) 50%, #000, transparent 75%);
+  opacity: 0.55;
+}
+.wakaclock-marketing .axx-veil {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.9s var(--axx-ease);
+  pointer-events: none;
+}
+.wakaclock-marketing .axx-veil[data-veil='side'] {
+  background: linear-gradient(
+    90deg,
+    var(--axx-bg) 0%,
+    color-mix(in srgb, var(--axx-bg) 88%, transparent) 30%,
+    color-mix(in srgb, var(--axx-bg) 40%, transparent) 46%,
+    transparent 60%
+  );
+}
+.wakaclock-marketing .axx-veil[data-veil='center'] {
+  background: radial-gradient(
+    ellipse 46% 52% at 50% 50%,
+    color-mix(in srgb, var(--axx-bg) 90%, transparent) 0%,
+    color-mix(in srgb, var(--axx-bg) 55%, transparent) 55%,
+    transparent 85%
+  );
+}
+/* Which side gives way to text, chapter by chapter. */
+.wakaclock-marketing
+  .axx:is([data-active='0'], [data-active='1'], [data-active='2'])
+  .axx-veil[data-veil='side'] {
+  opacity: 1;
+}
+.wakaclock-marketing .axx:is([data-active='4'], [data-active='5']) .axx-veil[data-veil='center'] {
+  opacity: 1;
+}
+.wakaclock-marketing .axx:is([data-active='4'], [data-active='5']) {
+  --axx-pool-x: 50%;
 }
 .wakaclock-marketing .axx-overlay {
   z-index: 3;
@@ -85,7 +160,7 @@
 .wakaclock-marketing .axx-grain {
   position: absolute;
   inset: 0;
-  opacity: 0.07;
+  opacity: 0.04;
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
