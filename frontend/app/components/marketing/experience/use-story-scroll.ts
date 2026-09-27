@@ -32,6 +32,9 @@ export function useStoryScroll(root: RefObject<HTMLElement | null>) {
     const publish = () => {
       let g = 0;
       for (const value of progress) g += value;
+      // Wheel and touch scrolling arrive as many small steps; a single step this large is
+      // a jump (restoration, anchor, keyboard Home/End), not motion to animate through.
+      if (Math.abs(g - motion.target) > 0.6) motion.teleport = true;
       motion.target = g;
       element.style.setProperty('--axx-g', g.toFixed(4));
       setUi({ chapter: chapterAt(g) });

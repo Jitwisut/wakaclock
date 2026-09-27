@@ -21,6 +21,12 @@ import type { AttributionKind } from './experience-copy';
 export const motion = {
   /** Scroll position through the story, 0 → 6 (one unit per chapter). */
   target: 0,
+  /**
+   * Set when `target` moved discontinuously — scroll restoration on reload, an anchor
+   * link, a jump to the top. The scene snaps instead of easing, so it never sweeps through
+   * every chapter's geometry on the way to where the visitor actually is.
+   */
+  teleport: false,
   /** Pointer position in [-1, 1], used for camera parallax. */
   pointerX: 0,
   pointerY: 0,

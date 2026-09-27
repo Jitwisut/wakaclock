@@ -12,7 +12,12 @@ export const story = { current: 0, pointerX: 0, pointerY: 0 };
 export function advanceStory(delta: number) {
   // Clamp delta so a backgrounded tab does not jump the whole story on return.
   const dt = Math.min(delta, 1 / 20);
-  story.current = MathUtils.damp(story.current, motion.target, 3.2, dt);
+  if (motion.teleport) {
+    motion.teleport = false;
+    story.current = motion.target;
+  } else {
+    story.current = MathUtils.damp(story.current, motion.target, 3.2, dt);
+  }
   story.pointerX = MathUtils.damp(story.pointerX, motion.pointerX, 2.4, dt);
   story.pointerY = MathUtils.damp(story.pointerY, motion.pointerY, 2.4, dt);
 }
