@@ -66,6 +66,7 @@ const EN = {
     toolsHeading: 'Works from the editor you already use',
     toolsBody:
       'Connect your existing WakaTime plugin to track coding time. AI attribution depends on your integration.',
+    toolsCount: 'editors through the WakaTime plugin protocol',
     toolsLabel: 'Editors compatible through the WakaTime plugin protocol',
     toolsRegion: 'Browse compatible editors',
   },
@@ -249,6 +250,7 @@ const TH: Widen<ExperienceCopy> = {
     toolsHeading: 'ใช้งานจาก editor ที่คุณใช้อยู่แล้ว',
     toolsBody:
       'เชื่อมต่อผ่าน WakaTime plugin เดิมเพื่อบันทึกเวลาเขียนโค้ด ส่วนข้อมูล AI ขึ้นอยู่กับ integration ที่ใช้',
+    toolsCount: 'editor ผ่าน WakaTime plugin protocol',
     toolsLabel: 'Editor ที่เข้ากันได้ผ่าน WakaTime protocol',
     toolsRegion: 'รายชื่อ editor เลื่อนดูได้',
   },

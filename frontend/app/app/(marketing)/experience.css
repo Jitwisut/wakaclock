@@ -439,35 +439,130 @@
   background: color-mix(in srgb, var(--axx-lime) 45%, transparent);
 }
 .wakaclock-marketing .axx-tools {
-  max-width: 44rem;
+  position: relative;
+  max-width: 64rem;
+  padding: clamp(22px, 3vw, 36px);
+  border: 1.5px solid var(--axx-forest);
+  background: var(--axx-panel);
+  box-shadow: 8px 8px 0 var(--axx-forest);
+}
+.wakaclock-marketing .axx-tools-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px 40px;
 }
 .wakaclock-marketing .axx .axx-tools h3 {
-  font-size: clamp(1.4rem, 2.2vw, 2rem);
+  font-size: clamp(1.5rem, 2.4vw, 2.2rem);
   color: var(--axx-ink);
 }
-.wakaclock-marketing .axx-tools p {
+.wakaclock-marketing .axx-tools-head p {
   margin-top: 10px;
+  max-width: 34rem;
   font-size: 14px;
   color: var(--axx-muted);
 }
-.wakaclock-marketing .axx-tools-list {
-  margin-top: 20px;
-  max-height: 11.5rem;
-  overflow: auto;
-  overscroll-behavior: contain;
+.wakaclock-marketing .axx .axx-tools-count {
+  display: grid;
+  margin: 0;
+  text-align: right;
+  font-family: var(--axx-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.wakaclock-marketing .axx-tools-count strong {
+  font-family: var(--axx-display);
+  font-size: clamp(2.2rem, 4vw, 3.4rem);
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--axx-human);
+}
+.wakaclock-marketing .axx-tools-signal {
+  position: relative;
+  height: 1px;
+  margin: 24px 0 22px;
+  overflow: hidden;
+  background: var(--axx-line);
+}
+.wakaclock-marketing .axx-tools-signal i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 18%;
+  background: linear-gradient(90deg, transparent, var(--axx-human), transparent);
+  animation: axx-signal 3.6s var(--axx-ease) infinite;
+}
+@keyframes axx-signal {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(560%);
+  }
 }
 .wakaclock-marketing .axx-tools-list ul {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 .wakaclock-marketing .axx-tools-list li {
-  padding: 4px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 10px;
   border: 1px solid var(--axx-line);
   font-family: var(--axx-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--axx-ink);
-  background: color-mix(in srgb, var(--axx-panel) 80%, transparent);
+  background: var(--axx-bg);
+  transition:
+    opacity 0.7s var(--axx-ease),
+    transform 0.7s var(--axx-ease),
+    filter 0.7s var(--axx-ease),
+    border-color 0.2s,
+    box-shadow 0.25s var(--axx-ease);
+  transition-delay: min(calc(var(--i, 0) * 16ms), 0.9s);
+}
+.wakaclock-marketing .axx-tools-list li:hover {
+  transform: translate(-2px, -2px);
+  border-color: var(--axx-forest);
+  box-shadow: 3px 3px 0 var(--axx-forest);
+  transition-delay: 0s;
+}
+/* The heartbeat dot: each editor flashes on its own offset, like signals arriving. */
+.wakaclock-marketing .axx-tools-list li i {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  background: var(--axx-line);
+  animation: axx-beat 10s steps(1, end) infinite;
+  animation-delay: var(--beat, 0s);
+}
+.wakaclock-marketing .axx-tools-list li:hover i {
+  background: var(--axx-lime);
+  box-shadow: 0 0 0 2px var(--axx-forest);
+  animation: none;
+}
+@keyframes axx-beat {
+  0% {
+    background: var(--axx-human);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--axx-lime) 70%, transparent);
+  }
+  3% {
+    background: var(--axx-line);
+    box-shadow: none;
+  }
+}
+/* Chips arrive in a quick wave once the panel is on screen. */
+.wakaclock-marketing .axx[data-scroll='ready'] .axx-tools:not([data-inview]) .axx-tools-list li {
+  opacity: 0;
+  transform: translateY(10px);
+  filter: blur(4px);
+}
+.wakaclock-marketing .axx[data-scroll='ready'] .axx-tools:not([data-inview]) .axx-tools-signal i {
+  animation-play-state: paused;
 }
 
 /* Hover probe (rendered by drei <Html> inside the canvas) */
@@ -1419,6 +1514,19 @@
     gap: 16svh;
     padding-top: 14svh;
     padding-bottom: 14svh;
+  }
+  .wakaclock-marketing .axx-tools {
+    box-shadow: 5px 5px 0 var(--axx-forest);
+  }
+  .wakaclock-marketing .axx-tools-count {
+    text-align: left;
+  }
+  .wakaclock-marketing .axx-tools-list {
+    max-height: 15rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    mask-image: linear-gradient(#000 82%, transparent);
+    padding-bottom: 24px;
   }
   .wakaclock-marketing .axx-copy-detail,
   .wakaclock-marketing .axx-attribution {
