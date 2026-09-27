@@ -45,8 +45,10 @@ const STAGE: readonly Key[] = [
 /** 0 = ivory daylight, 1 = forest dusk. The Human + AI chapter happens at dusk. */
 const DUSK: readonly Key[] = [
   [0, 0],
-  [2.05, 0],
-  [2.4, 1],
+  // Finished before chapter 3's heading is in reading position, so text never sits on
+  // the half-way tone where neither the light nor the dark ink has contrast.
+  [1.62, 0],
+  [1.9, 1],
   [2.95, 1],
   [3.3, 0],
 ];
@@ -90,7 +92,7 @@ export const CAMERA_KEYS: readonly {
   { g: 0, pos: [1.6, 0.2, 8.8], look: [-1.55, 0.35, 0] },
   // 02 — the spiral opens; the camera steps inside it so the timeline forms around you.
   { g: 1.15, pos: [3.4, 1.6, 6.4], look: [-0.9, 0.1, 0] },
-  { g: 1.85, pos: [1.3, 0.8, 3.4], look: [-2.6, 0.25, -2.2] },
+  { g: 1.85, pos: [2.9, 1.3, 6.4], look: [-1.9, 0.2, -0.4] },
   // 03 — pulled back at dusk to see both systems side by side.
   { g: 2.6, pos: [0.4, 4.8, 12.2], look: [-1.9, -0.2, 0] },
   { g: 3, pos: [0.2, 5.6, 11.2], look: [-1.7, -0.3, 0] },

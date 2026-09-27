@@ -37,7 +37,10 @@ export function useStoryScroll(root: RefObject<HTMLElement | null>) {
       if (Math.abs(g - motion.target) > 0.6) motion.teleport = true;
       motion.target = g;
       element.style.setProperty('--axx-g', g.toFixed(4));
-      setUi({ chapter: chapterAt(g) });
+      const chapter = chapterAt(g);
+      // Drives the reading veil: which side of the backdrop gives way to text.
+      if (element.dataset.active !== String(chapter)) element.dataset.active = String(chapter);
+      setUi({ chapter });
     };
 
     const triggers = chapters.map((chapter, index) =>

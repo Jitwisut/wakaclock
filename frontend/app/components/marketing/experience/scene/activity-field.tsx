@@ -88,6 +88,7 @@ export function ActivityField({ blocks, days }: { blocks: readonly DemoBlock[]; 
   const material = useMemo(
     () =>
       new ShaderMaterial({
+        transparent: true,
         vertexShader: activityVertexShader,
         fragmentShader: activityFragmentShader,
         uniforms: {
@@ -104,8 +105,7 @@ export function ActivityField({ blocks, days }: { blocks: readonly DemoBlock[]; 
           uAi: { value: new Color() },
           uUnknown: { value: new Color() },
           uHighlight: { value: new Color() },
-          uFogNear: { value: 9 },
-          uFogFar: { value: 30 },
+          uFocusDist: { value: 9 },
           uPresence: { value: 1 },
         },
       }),
@@ -136,6 +136,7 @@ export function ActivityField({ blocks, days }: { blocks: readonly DemoBlock[]; 
     u.uTime.value = state.clock.elapsedTime;
     u.uKindMix.value = kindMix;
     u.uPresence.value = presence;
+    u.uFocusDist.value = story.focusDistance;
     u.uHoverBlock.value = ui.hoverBlock;
     u.uHoverProject.value = ui.hoverProject;
     const focus = FOCUS[ui.hoverKind ?? ui.focus];

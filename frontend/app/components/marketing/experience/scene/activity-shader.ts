@@ -149,8 +149,7 @@ export const activityFragmentShader = /* glsl */ `
   uniform vec3 uUnknown;
   uniform vec3 uHighlight;
   uniform float uKindMix;
-  uniform float uFogNear;
-  uniform float uFogFar;
+  uniform float uFocusDist;
   uniform float uPresence;
 
   varying vec3 vNormal;
@@ -182,13 +181,17 @@ export const activityFragmentShader = /* glsl */ `
 
     color = mix(color, uHighlight, vHover * 0.85);
 
-    float fogDepth = distance(cameraPosition, vWorld);
-    float fog = smoothstep(uFogNear, uFogFar, fogDepth);
+    // Depth of field: marks in front of the focus point stay crisp, marks behind it recede
+    // into the light. This is what keeps the far side of a spiral from reading as noise.
+    float depth = distance(cameraPosition, vWorld);
+    float behind = smoothstep(uFocusDist - 0.6, uFocusDist + 3.4, depth);
+    // Marks the camera passes close to dissolve instead of filling the frame.
+    float near = smoothstep(0.9, 2.6, depth);
     float fade = 1.0 - clamp(vEmphasis, 0.0, 1.0);
-    color = mix(color, uBg, clamp(fog * 0.85 + fade * 0.82, 0.0, 0.94));
-    color = mix(uBg, color, uPresence);
+    color = mix(color, uBg, behind * 0.4);
+    float alpha = (1.0 - behind * 0.85) * (1.0 - fade * 0.88) * near * uPresence;
 
-    gl_FragColor = vec4(color, 1.0);
+    gl_FragColor = vec4(color, alpha);
     #include <colorspace_fragment>
   }
 `;

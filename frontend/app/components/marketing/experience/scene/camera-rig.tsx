@@ -3,23 +3,21 @@
 import { useMemo } from 'react';
 
 import { useFrame, useThree } from '@react-three/fiber';
-import { CatmullRomCurve3, Color, Vector3 } from 'three';
+import { CatmullRomCurve3, Vector3 } from 'three';
 
-import { CAMERA_KEYS, cameraParameterAt, sceneStateAt } from './keyframes';
-import { blendSwatch } from './palette';
+import { CAMERA_KEYS, cameraParameterAt } from './keyframes';
 import { advanceStory, story } from './story-clock';
 
 const look = new Vector3();
 const position = new Vector3();
-const background = new Color();
 
 /**
  * Drives the camera along a spline through the chapter compositions, adds a restrained
- * pointer parallax, and owns the frame's background colour. Runs first each frame
+ * pointer parallax. The canvas is transparent; the lit backdrop behind it is CSS. Runs first each frame
  * (priority -1) so every other component reads this frame's story position.
  */
 export function CameraRig({ parallax }: { parallax: boolean }) {
-  const { camera, scene, size } = useThree();
+  const { camera, size } = useThree();
   const { path, target } = useMemo(
     () => ({
       path: new CatmullRomCurve3(
@@ -53,11 +51,7 @@ export function CameraRig({ parallax }: { parallax: boolean }) {
     }
     camera.position.copy(position);
     camera.lookAt(look);
-
-    const { dusk } = sceneStateAt(g);
-    blendSwatch(background, 'bg', dusk);
-    if (scene.background instanceof Color) scene.background.copy(background);
-    else scene.background = background.clone();
+    story.focusDistance = position.distanceTo(look);
   }, -1);
 
   return null;
