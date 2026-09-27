@@ -129,8 +129,20 @@ export function CinematicHome({ locale }: { locale: SiteLocale }) {
           <ProjectLegend label={copy.second.projectsLabel} locale={locale} />
         </div>
         <div className="axx-tools axx-reveal">
-          <h3>{copy.second.toolsHeading}</h3>
-          <p>{copy.second.toolsBody}</p>
+          <div className="axx-tools-head">
+            <div>
+              <h3>{copy.second.toolsHeading}</h3>
+              <p>{copy.second.toolsBody}</p>
+            </div>
+            <p className="axx-tools-count">
+              <strong>{COMPATIBLE_EDITORS.length}</strong>
+              <span>{copy.second.toolsCount}</span>
+            </p>
+          </div>
+          {/* A heartbeat travelling the wire: the same signal every editor below sends. */}
+          <div aria-hidden="true" className="axx-tools-signal">
+            <i />
+          </div>
           <div
             aria-label={copy.second.toolsRegion}
             className="axx-tools-list"
@@ -138,8 +150,20 @@ export function CinematicHome({ locale }: { locale: SiteLocale }) {
             tabIndex={0}
           >
             <ul aria-label={copy.second.toolsLabel}>
-              {COMPATIBLE_EDITORS.map((name) => (
-                <li key={name}>{name}</li>
+              {COMPATIBLE_EDITORS.map((name, index) => (
+                <li
+                  key={name}
+                  style={
+                    {
+                      '--i': index,
+                      // Scattered, repeatable beat offsets so editors "report" out of step.
+                      '--beat': `${((index * 7) % 23) * 0.43}s`,
+                    } as React.CSSProperties
+                  }
+                >
+                  <i aria-hidden="true" />
+                  {name}
+                </li>
               ))}
             </ul>
           </div>
