@@ -287,6 +287,46 @@
 .coding {
   --dot: var(--pc-coding);
 }
+.focus {
+  --dot: var(--pc-accent);
+  border-color: rgb(139 155 255 / 0.45);
+  background: rgb(139 155 255 / 0.14);
+  color: #d4daff;
+}
+.pillAction {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -5px;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+}
+.pillAction:hover {
+  background: rgb(255 255 255 / 0.12);
+}
+.pillAction:focus-visible {
+  outline: 2px solid var(--pc-accent);
+}
+.menuAnchor {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(300px, 80vw);
+  padding: 14px;
+  border: 1px solid var(--pc-line-strong);
+  border-radius: 14px;
+  background: #15163c;
+  box-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.7);
+}
 .idle {
   --dot: var(--pc-idle);
 }
@@ -624,6 +664,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.memberStatus {
+  overflow: hidden;
+  color: var(--pc-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .memberMeta {
   overflow: hidden;
   color: var(--pc-faint);
@@ -800,6 +847,48 @@
   border: 1px solid var(--pc-line);
   border-radius: 12px;
   background: var(--pc-surface);
+}
+
+/* ---------- Team rhythm heatmap ---------- */
+.heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.heatmapRow {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  align-items: center;
+  gap: 2px;
+}
+.heatmapDay,
+.heatmapHour {
+  color: var(--pc-faint);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+}
+.heatmapHour {
+  text-align: left;
+}
+.heatmapCell {
+  display: block;
+  aspect-ratio: 1;
+  min-width: 8px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.05);
+}
+.heatmapCell[data-level='1'] {
+  background: rgb(61 220 132 / 0.25);
+}
+.heatmapCell[data-level='2'] {
+  background: rgb(61 220 132 / 0.45);
+}
+.heatmapCell[data-level='3'] {
+  background: rgb(61 220 132 / 0.7);
+}
+.heatmapCell[data-level='4'] {
+  background: var(--pc-coding);
+  box-shadow: 0 0 8px rgb(61 220 132 / 0.5);
 }
 
 /* ---------- Dock ---------- */

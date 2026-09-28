@@ -310,7 +310,9 @@ describe('HistoryList', () => {
     rerender(<HistoryList items={[]} />);
     expect(screen.getByText(/No co-working sessions today/)).toBeInTheDocument();
 
-    rerender(<HistoryList items={[item, { ...item, session_id: 's2', your_projects: [] }]} />);
+    rerender(
+      <HistoryList items={[item, { ...item, session_id: 's2', your_projects: ['', ' '] }]} />
+    );
     expect(screen.getAllByText('Pairing')).toHaveLength(2);
     expect(screen.getAllByText('1h 5m')).toHaveLength(2);
     expect(screen.getAllByText(/alice, bob/)).toHaveLength(2);

@@ -1,3 +1,5 @@
+import type { PresenceHeatmapData } from '@/lib/presence/presence-heatmap';
+
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
 import type {
@@ -20,6 +22,7 @@ import type {
   Leaderboard,
   LeaderboardMember,
   PresenceHistoryData,
+  PresenceStatusMessage,
   PresenceSummaryData,
   PresenceV2Invite,
   PresenceV2Room,
@@ -60,7 +63,7 @@ export async function getOperationEvidence(
   start: string,
   end: string,
   timezone: string,
-  options: { cursor?: string; limit?: number; projectId?: string; } = {}
+  options: { cursor?: string; limit?: number; projectId?: string } = {}
 ) {
   const params = new URLSearchParams({ start, end, timezone });
   if (options.projectId) params.set('project_id', options.projectId);
@@ -373,6 +376,67 @@ export async function listPresenceInvitesV2(roomId: string) {
 
 export async function revokePresenceInviteV2(roomId: string, inviteId: string) {
   await wakaclockV2Client.delete(`/presence/rooms/${roomId}/invites/${inviteId}`);
+}
+
+// GET /me/presence/status — your own status message, or null.
+export async function getMyPresenceStatusV2() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<null | PresenceStatusMessage>>('/me/presence/status')
+  );
+}
+
+// PUT /me/presence/status — shown only in rooms you are in; always expires.
+export async function setMyPresenceStatusV2(
+  text: string,
+  emoji: null | string,
+  expiresInSeconds: number
+) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<null | PresenceStatusMessage>>('/me/presence/status', {
+      emoji,
+      expires_in_seconds: expiresInSeconds,
+      text,
+    })
+  );
+}
+
+// DELETE /me/presence/status
+export async function clearMyPresenceStatusV2() {
+  await wakaclockV2Client.delete('/me/presence/status');
+}
+
+// GET /organizations/:id/presence/heatmap?from=&to=&timezone= — aggregate only.
+export async function getOrganizationPresenceHeatmapV2(
+  organizationId: string,
+  params: { from: string; timezone: string; to: string }
+) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<PresenceHeatmapData>>(
+      `/organizations/${organizationId}/presence/heatmap`,
+      { params }
+    )
+  );
+}
+
+// GET /me/presence/focus — your focus block, or null.
+export async function getMyPresenceFocusV2() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<{ until: number } | null>>('/me/presence/focus')
+  );
+}
+
+// PUT /me/presence/focus — roommates see "focusing until …"; ends by itself.
+export async function startMyPresenceFocusV2(durationSeconds: number) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<{ until: number } | null>>('/me/presence/focus', {
+      duration_seconds: durationSeconds,
+    })
+  );
+}
+
+// DELETE /me/presence/focus
+export async function endMyPresenceFocusV2() {
+  await wakaclockV2Client.delete('/me/presence/focus');
 }
 
 export async function listCoworkingHistoryV2(params?: {

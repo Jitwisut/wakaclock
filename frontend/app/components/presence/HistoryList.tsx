@@ -10,6 +10,11 @@ interface HistoryListProps {
   loading?: boolean;
 }
 
+/** Heartbeats outside any project arrive as an empty name; they are not a project. */
+function projectNames(item: PresenceHistoryItem): string[] {
+  return item.your_projects.filter((name) => name.trim().length > 0);
+}
+
 export function HistoryList({ items, loading = false }: HistoryListProps) {
   if (loading) {
     return (
@@ -44,9 +49,9 @@ export function HistoryList({ items, loading = false }: HistoryListProps) {
             })}{' '}
             · {item.participants.map((participant) => participant.username).join(', ')}
           </p>
-          {item.your_projects.length > 0 ? (
+          {projectNames(item).length > 0 ? (
             <p className={`${styles.muted} text-xs`}>
-              <span className="font-semibold">Your projects:</span> {item.your_projects.join(', ')}
+              <span className="font-semibold">Your projects:</span> {projectNames(item).join(', ')}
             </p>
           ) : null}
         </article>

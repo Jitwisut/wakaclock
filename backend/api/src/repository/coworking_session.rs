@@ -477,8 +477,12 @@ impl CoworkingSessionRepository {
             .get_client()
             .query(
                 "SELECT count() AS session_count,
-                        sum(duration_seconds) AS total_seconds,
-                        avg(group_size) AS average_group_size,
+                        -- `ended_at` is Nullable, so the raw sum is Nullable(Int64); the
+                        -- row reads a plain u64.
+                        toUInt64(greatest(ifNull(sum(duration_seconds), 0), 0)) AS total_seconds,
+                        -- avgOrNull, not avg: the row decodes into Option<f64>, which
+                        -- needs a Nullable column (avg is a plain Float64, NaN when empty).
+                        avgOrNull(group_size) AS average_group_size,
                         uniqExact(active_date) AS active_days
                  FROM (
                      SELECT s.session_id AS session_id,
@@ -526,6 +530,88 @@ impl CoworkingSessionRepository {
             active_days: session_totals.active_days,
             distinct_participants,
         })
+    }
+}
+
+/// Upper bound on sessions read for one heatmap. A 92-day window for an organization
+/// stays far below this; the cap only protects the API from a pathological range.
+pub const HEATMAP_SESSION_LIMIT: u64 = 20_000;
+
+#[derive(Debug, Clone, Copy, Deserialize, Row, PartialEq, Eq)]
+pub struct SessionWindowRow {
+    pub started_at: u32,
+    pub ended_at: Option<u32>,
+}
+
+impl CoworkingSessionRepository {
+    /// Distinct people across the *shared* sessions (two or more people) in the teams
+    /// that overlap `[from, to)` — the population the heatmap actually describes, so
+    /// its privacy floor is not satisfied by someone who only ever sat alone.
+    pub async fn shared_session_participants(
+        &self,
+        team_ids: &[Uuid],
+        from: u32,
+        to: u32,
+    ) -> Result<u64> {
+        if team_ids.is_empty() {
+            return Ok(0);
+        }
+        self.client
+            .get_client()
+            .query(
+                "SELECT uniqExact(user_id)
+                 FROM coworking_session_participants FINAL
+                 WHERE session_id IN (
+                     SELECT s.session_id
+                     FROM coworking_sessions AS s FINAL
+                     INNER JOIN coworking_session_participants AS p FINAL
+                         ON p.session_id = s.session_id
+                     WHERE s.team_id IN ? AND s.started_at < ?
+                       AND (s.ended_at IS NULL OR s.ended_at >= ?)
+                     GROUP BY s.session_id
+                     HAVING uniqExact(p.user_id) >= 2
+                 )",
+            )
+            .bind(team_ids.to_vec())
+            .bind(to)
+            .bind(from)
+            .fetch_one::<u64>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
+    }
+
+    /// Start/end of every *shared* session (two or more distinct people) in the teams
+    /// that overlaps `[from, to)`. Only timestamps leave the database — no identities.
+    pub async fn shared_session_windows(
+        &self,
+        team_ids: &[Uuid],
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<SessionWindowRow>> {
+        if team_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.client
+            .get_client()
+            .query(
+                "SELECT s.started_at AS started_at, s.ended_at AS ended_at
+                 FROM coworking_sessions AS s FINAL
+                 INNER JOIN coworking_session_participants AS p FINAL
+                     ON p.session_id = s.session_id
+                 WHERE s.team_id IN ? AND s.started_at < ?
+                   AND (s.ended_at IS NULL OR s.ended_at >= ?)
+                 GROUP BY s.session_id, s.started_at, s.ended_at
+                 HAVING uniqExact(p.user_id) >= 2
+                 ORDER BY s.started_at
+                 LIMIT ?",
+            )
+            .bind(team_ids.to_vec())
+            .bind(to)
+            .bind(from)
+            .bind(HEATMAP_SESSION_LIMIT)
+            .fetch_all::<SessionWindowRow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
     }
 }
 

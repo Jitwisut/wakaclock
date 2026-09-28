@@ -2,10 +2,11 @@
 
 import * as React from 'react';
 
-import { MessageSquareIcon, SearchIcon, XIcon } from 'lucide-react';
+import { HeadphonesIcon, MessageSquareIcon, SearchIcon, XIcon } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 
 import { appearanceFor } from '@/components/presence/appearance';
+import { formatFocusClock } from '@/components/presence/FocusControl';
 import { PresenceSprite } from '@/components/presence/PresenceSprite';
 import {
   countStates,
@@ -111,6 +112,11 @@ export function buildGroups(
     });
   }
   return groups;
+}
+
+/** When a member's focus block ends, or null once it is over on the snapshot's clock. */
+export function focusingUntil(user: PresenceUser, now: number): null | number {
+  return user.focusUntil !== undefined && user.focusUntil > now ? user.focusUntil : null;
 }
 
 function memberMeta(user: PresenceUser, sessions: PresenceV2Session[], now: number): string {
@@ -235,6 +241,7 @@ export function PixelOfficeDirectory({
                 {group.occupants.map((user) => {
                   const appearance = user.appearance ?? appearanceFor(user.id);
                   const meta = PRESENCE_STATUS[user.status];
+                  const focusEnd = focusingUntil(user, now);
                   return (
                     <motion.li
                       animate={{ opacity: 1, y: 0 }}
@@ -264,13 +271,36 @@ export function PixelOfficeDirectory({
                           {user.username}
                           {user.isCurrentUser ? <span className={styles.faint}> · you</span> : null}
                         </span>
+                        {user.statusMessage ? (
+                          <span
+                            className={`${styles.memberStatus} block`}
+                            title={user.statusMessage.text}
+                          >
+                            {user.statusMessage.emoji ? (
+                              <span aria-hidden>{user.statusMessage.emoji} </span>
+                            ) : null}
+                            {user.statusMessage.text}
+                          </span>
+                        ) : null}
                         <span className={`${styles.memberMeta} block`}>
                           {memberMeta(user, sessions, now)}
                         </span>
                       </span>
-                      <span className={`${styles.status} ${styles[user.status]}`}>
-                        <span aria-hidden>{meta.glyph}</span>
-                        {meta.label}
+                      <span className="flex shrink-0 flex-col items-end gap-1">
+                        <span className={`${styles.status} ${styles[user.status]}`}>
+                          <span aria-hidden>{meta.glyph}</span>
+                          {meta.label}
+                        </span>
+                        {focusEnd === null ? null : (
+                          <span
+                            aria-label={`Focusing until ${formatFocusClock(focusEnd)}`}
+                            className={`${styles.status} ${styles.focus}`}
+                            title="Focusing — try not to interrupt"
+                          >
+                            <HeadphonesIcon aria-hidden className="size-3" />
+                            {formatFocusClock(focusEnd)}
+                          </span>
+                        )}
                       </span>
                     </motion.li>
                   );

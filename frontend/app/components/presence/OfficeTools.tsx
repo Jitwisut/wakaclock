@@ -26,11 +26,14 @@ export function OfficeTools({
   users,
   onSpace,
   onRenamed,
+  onSprintStarted,
 }: {
   office: OfficeController;
   onClose: () => void;
   onRenamed: (name: string) => void;
   onSpace: (id: string) => Promise<void>;
+  /** Called after you start a sprint with "Focus during this sprint" ticked. */
+  onSprintStarted?: (minutes: number) => void;
   panel: string;
   roomId: string;
   userId: string;
@@ -38,6 +41,7 @@ export function OfficeTools({
 }) {
   const [name, setName] = React.useState('');
   const [minutes, setMinutes] = React.useState(25);
+  const [focusDuringSprint, setFocusDuringSprint] = React.useState(true);
   const [appearance, setAppearance] = React.useState<SpriteAppearance>(
     () => office.data?.profiles[userId] ?? appearanceFor(userId)
   );
@@ -163,6 +167,7 @@ export function OfficeTools({
               e.preventDefault();
               void run({ kind: 'sprint', title: name, minutes }).then((r) => {
                 if (r) setName('');
+                if (r && focusDuringSprint) onSprintStarted?.(minutes);
                 return r;
               });
             }}
@@ -189,6 +194,16 @@ export function OfficeTools({
                 value={minutes}
               />
             </label>
+            {onSprintStarted ? (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  checked={focusDuringSprint}
+                  onChange={(e) => setFocusDuringSprint(e.target.checked)}
+                  type="checkbox"
+                />
+                Focus during this sprint
+              </label>
+            ) : null}
             <button className={button} disabled={office.pending} type="submit">
               Start sprint
             </button>

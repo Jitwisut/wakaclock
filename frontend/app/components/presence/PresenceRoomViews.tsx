@@ -640,8 +640,9 @@ export function PresenceGuide() {
       </div>
       <p className={`${styles.faint} flex gap-2 text-xs leading-relaxed`}>
         <InfoIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-        Only people inside a room see each other, and only as a live status — never projects or
-        files. Presence is for coordinating, not for evaluating anyone.
+        Only people inside a room see each other: a live status, plus a message if you choose to set
+        one. Projects and files are never shared automatically. Presence is for coordinating, not
+        for evaluating anyone.
       </p>
     </section>
   );
