@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import '@/components/presence/presence-theme.css';
 
+import { FocusControl } from '@/components/presence/FocusControl';
 import { OfficeMediaPanel } from '@/components/presence/OfficeMedia';
 import { OfficeTools } from '@/components/presence/OfficeTools';
 import { PixelOfficeDirectory } from '@/components/presence/PixelOfficeDirectory';
@@ -28,10 +29,11 @@ import { RequireUser } from '@/components/wakaclock/require-user';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useCoworkingHistory } from '@/hooks/use-coworking-history';
 import { useOffice } from '@/hooks/use-office';
-import { useOfficeChrome } from '@/hooks/use-office-chrome';
+import { type OfficeReaction, useOfficeChrome } from '@/hooks/use-office-chrome';
 import { useOfficeMedia } from '@/hooks/use-office-media';
 import { usePresenceActivity } from '@/hooks/use-presence-activity';
-import { usePresenceStatus } from '@/hooks/use-presence-status';
+import { usePresenceFocus } from '@/hooks/use-presence-focus';
+import { type PresenceStatusController, usePresenceStatus } from '@/hooks/use-presence-status';
 import { usePresenceStream } from '@/hooks/use-presence-stream';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useRoomMovement } from '@/hooks/use-room-movement';
@@ -63,6 +65,47 @@ function readInviteContext(): { inviteToken: null | string; roomId: null | strin
   return { inviteToken, roomId };
 }
 
+function MyStatusEditor({
+  controller,
+  onClose,
+  open,
+}: {
+  controller: PresenceStatusController;
+  onClose: () => void;
+  open: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <StatusComposer
+      error={controller.error}
+      onClear={controller.clear}
+      onClose={onClose}
+      onSave={controller.save}
+      saving={controller.saving}
+      status={controller.status}
+    />
+  );
+}
+
+/** Floating reactions above the dock. Focus mode mutes them for you; others still see them. */
+function ReactionFloats({ muted, reactions }: { muted: boolean; reactions: OfficeReaction[] }) {
+  return (
+    <div
+      aria-hidden
+      className="wakaclock-presence-theme pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2"
+      style={{ background: 'transparent' }}
+    >
+      {muted
+        ? null
+        : reactions.map((reaction) => (
+            <span className="office-reaction-float text-2xl" key={reaction.id}>
+              {reaction.emoji}
+            </span>
+          ))}
+    </div>
+  );
+}
+
 /** The header's connection pill; the stream's own 'offline' reads as still connecting. */
 function streamConnection(status: string): 'connecting' | 'live' | 'stale' {
   if (status === 'live' || status === 'stale') return status;
@@ -89,9 +132,16 @@ function PresenceApp() {
   const [working, setWorking] = React.useState(false);
   const [error, setError] = React.useState<null | string>(null);
   const history = useCoworkingHistory(true);
-  const myStatus = usePresenceStatus(presenceV2Available === true && Boolean(currentUserId));
+  const presenceReady = presenceV2Available === true && Boolean(currentUserId);
+  const myStatus = usePresenceStatus(presenceReady);
+  const focus = usePresenceFocus(presenceReady);
   const [statusOpen, setStatusOpen] = React.useState(false);
   const toggleStatusEditor = React.useCallback(() => setStatusOpen((open) => !open), []);
+  // Focus and status need Presence v2 and a signed-in user; without them the header
+  // simply omits both controls.
+  const selfControls = presenceReady
+    ? { focusControl: <FocusControl focus={focus} />, onEditStatus: toggleStatusEditor }
+    : {};
   const presenceStream = usePresenceStream(activeRoom?.id ?? null, inviteToken);
   const {
     applySnapshot,
@@ -451,7 +501,7 @@ function PresenceApp() {
         <PresenceHeader
           connection={inRoom ? connection : null}
           myStatus={myStatus.status}
-          onEditStatus={presenceV2Available === true ? toggleStatusEditor : undefined}
+          {...selfControls}
           onReconnect={reconnect}
           partyCount={partyCount}
           presenceState={inRoom ? myPresenceState : null}
@@ -460,16 +510,11 @@ function PresenceApp() {
           username={currentUsername || null}
         />
 
-        {statusOpen ? (
-          <StatusComposer
-            error={myStatus.error}
-            onClear={myStatus.clear}
-            onClose={() => setStatusOpen(false)}
-            onSave={myStatus.save}
-            saving={myStatus.saving}
-            status={myStatus.status}
-          />
-        ) : null}
+        <MyStatusEditor
+          controller={myStatus}
+          onClose={() => setStatusOpen(false)}
+          open={statusOpen}
+        />
         {inRoom ? <PixelOfficeToolRail active={panel} onSelect={setPanel} /> : null}
         {activeRoom && panel && (
           <div className={`${styles.panel} ${styles.toolsPanel}`}>
@@ -479,6 +524,7 @@ function PresenceApp() {
               onClose={() => setPanel(null)}
               onRenamed={(name) => setActiveRoom((r) => (r ? { ...r, name } : r))}
               onSpace={enterSpace}
+              onSprintStarted={(minutes) => void focus.start(minutes * 60)}
               panel={panel}
               roomId={activeRoom.id}
               userId={currentUserId}
@@ -501,17 +547,7 @@ function PresenceApp() {
 
         {inRoom ? (
           <div className="relative">
-            <div
-              aria-hidden
-              className="wakaclock-presence-theme pointer-events-none absolute inset-x-0 bottom-full flex justify-center gap-2 pb-2"
-              style={{ background: 'transparent' }}
-            >
-              {chrome.reactions.map((reaction) => (
-                <span className="office-reaction-float text-2xl" key={reaction.id}>
-                  {reaction.emoji}
-                </span>
-              ))}
-            </div>
+            <ReactionFloats muted={focus.active} reactions={chrome.reactions} />
             <PixelOfficeDock
               canReturnToDesk={Boolean(activeSession)}
               chrome={chrome}

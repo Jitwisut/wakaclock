@@ -1,3 +1,5 @@
+import type * as React from 'react';
+
 import { MessageCircleIcon, RefreshCwIcon } from 'lucide-react';
 
 import { statusExpiryLabel } from '@/components/presence/StatusComposer';
@@ -10,6 +12,8 @@ export type PresenceConnection = 'connecting' | 'live' | 'stale';
 
 interface PresenceHeaderProps {
   connection?: null | PresenceConnection;
+  /** Slot for the focus-mode control, rendered beside your status. */
+  focusControl?: React.ReactNode;
   /** Your own status message; shown in the "You" chip, which opens the editor. */
   myStatus?: null | PresenceStatusMessage;
   onEditStatus?: () => void;
@@ -73,6 +77,7 @@ function StatusButton({
  */
 export function PresenceHeader({
   connection,
+  focusControl,
   myStatus = null,
   onEditStatus,
   onReconnect,
@@ -138,6 +143,7 @@ export function PresenceHeader({
             ) : null}
           </span>
         ) : null}
+        {focusControl}
         {onEditStatus ? <StatusButton myStatus={myStatus} onEdit={onEditStatus} /> : null}
       </div>
     </header>

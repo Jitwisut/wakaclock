@@ -417,6 +417,12 @@ pub fn router(app_state: Arc<AppState>) -> Router {
                 .delete(crate::handlers::presence_v2::clear_status),
         )
         .route(
+            "/me/presence/focus",
+            get(crate::handlers::presence_v2::get_focus)
+                .put(crate::handlers::presence_v2::set_focus)
+                .delete(crate::handlers::presence_v2::clear_focus),
+        )
+        .route(
             "/me/coworking-sessions",
             get(crate::handlers::presence_v2::history),
         )

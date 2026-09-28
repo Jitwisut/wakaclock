@@ -403,6 +403,27 @@ export async function clearMyPresenceStatusV2() {
   await wakaclockV2Client.delete('/me/presence/status');
 }
 
+// GET /me/presence/focus — your focus block, or null.
+export async function getMyPresenceFocusV2() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<{ until: number } | null>>('/me/presence/focus')
+  );
+}
+
+// PUT /me/presence/focus — roommates see "focusing until …"; ends by itself.
+export async function startMyPresenceFocusV2(durationSeconds: number) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<{ until: number } | null>>('/me/presence/focus', {
+      duration_seconds: durationSeconds,
+    })
+  );
+}
+
+// DELETE /me/presence/focus
+export async function endMyPresenceFocusV2() {
+  await wakaclockV2Client.delete('/me/presence/focus');
+}
+
 export async function listCoworkingHistoryV2(params?: {
   cursor?: string;
   from?: string;

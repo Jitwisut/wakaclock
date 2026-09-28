@@ -1315,6 +1315,8 @@ export interface PresenceStatusMessage {
 export interface PresenceRosterEntry {
   position: null | PresencePoint;
   state: PresenceState;
+  /** Unix seconds until which the member asked not to be disturbed (v2 only). */
+  focus_until?: number;
   /** Present only when the member has set a status message (v2 only). */
   status?: PresenceStatusMessage;
   user_id: string;

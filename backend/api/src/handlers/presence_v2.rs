@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::infrastructure::redis_presence::{
-    normalize_status, LivePosition, LivePresenceState, LiveSession, LiveSnapshot, PresenceStatus,
-    RedisPresenceStore, UpdateMemberResult,
+    focus_until, normalize_status, LivePosition, LivePresenceState, LiveSession, LiveSnapshot,
+    PresenceStatus, RedisPresenceStore, UpdateMemberResult,
 };
 use crate::middleware::auth;
 use crate::model::presence::{PresenceInvite, PresenceRoom, PresenceRoomKind, PresenceZone};
@@ -150,6 +150,19 @@ pub struct RosterItem {
     /// The member's own status message, if they set one. Omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<PresenceStatus>,
+    /// Unix seconds until which the member asked not to be disturbed. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_until: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetFocusInput {
+    pub duration_seconds: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FocusData {
+    pub until: i64,
 }
 
 /// Default lifetime of a status when the client does not pick one: half a working day.
@@ -520,6 +533,51 @@ pub async fn set_status(
         .await
         .map_err(PresenceApiError::unavailable)?;
     Ok(Json(envelope(Some(status))))
+}
+
+/// `GET /api/v2/me/presence/focus` — the caller's current focus block, or `null`.
+pub async fn get_focus(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<RoomEnvelope<Option<FocusData>>>, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    let until = redis(&state)?
+        .focus(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+    Ok(Json(envelope(until.map(|until| FocusData { until }))))
+}
+
+/// `PUT /api/v2/me/presence/focus` — starts (or replaces) a focus block. Roommates see
+/// "focusing until …"; it ends by itself.
+pub async fn set_focus(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<SetFocusInput>,
+) -> Result<Json<RoomEnvelope<Option<FocusData>>>, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    let redis = redis(&state)?;
+    let until = focus_until(input.duration_seconds, Utc::now().timestamp()).ok_or_else(|| {
+        PresenceApiError::bad_request("focus must last between 5 minutes and 8 hours")
+    })?;
+    redis
+        .set_focus(user_id, until)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+    Ok(Json(envelope(Some(FocusData { until }))))
+}
+
+/// `DELETE /api/v2/me/presence/focus` — ends the caller's focus block early.
+pub async fn clear_focus(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    redis(&state)?
+        .clear_focus(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `DELETE /api/v2/me/presence/status` — clears the caller's status.
@@ -1369,6 +1427,7 @@ fn snapshot_data_with_zones(
                 position: entry.position,
                 zone_id: entry.zone_id,
                 status: entry.status,
+                focus_until: entry.focus_until,
             })
             .collect(),
         sessions: live

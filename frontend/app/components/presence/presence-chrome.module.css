@@ -287,6 +287,46 @@
 .coding {
   --dot: var(--pc-coding);
 }
+.focus {
+  --dot: var(--pc-accent);
+  border-color: rgb(139 155 255 / 0.45);
+  background: rgb(139 155 255 / 0.14);
+  color: #d4daff;
+}
+.pillAction {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -5px;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+}
+.pillAction:hover {
+  background: rgb(255 255 255 / 0.12);
+}
+.pillAction:focus-visible {
+  outline: 2px solid var(--pc-accent);
+}
+.menuAnchor {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(300px, 80vw);
+  padding: 14px;
+  border: 1px solid var(--pc-line-strong);
+  border-radius: 14px;
+  background: #15163c;
+  box-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.7);
+}
 .idle {
   --dot: var(--pc-idle);
 }
