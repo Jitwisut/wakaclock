@@ -289,6 +289,39 @@ pub struct SummaryQuery {
     pub timezone: Option<String>,
 }
 
+/// Longest window a heatmap may cover. Enough for a quarter; bounded so one request
+/// never scans an organization's whole history.
+const HEATMAP_MAX_DAYS: u32 = 92;
+/// Same privacy floor as the organization summary, applied to the people who actually
+/// shared sessions: below this many, aggregate co-working times could point at people.
+const PRESENCE_AGGREGATE_MIN_PEOPLE: u64 = 3;
+/// A weekday/hour slot built from a single session describes that one session, so it
+/// is hidden until at least this many sessions fall into it.
+const HEATMAP_MIN_SESSIONS_PER_SLOT: u64 = 2;
+
+#[derive(Debug, Serialize)]
+pub struct HeatmapPeak {
+    pub weekday: usize,
+    pub hour: usize,
+    pub seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PresenceHeatmapData {
+    pub suppressed: bool,
+    pub timezone: String,
+    /// Seven rows (Monday first) of 24 hourly co-working totals in seconds.
+    pub cells: Option<Vec<Vec<u64>>>,
+    pub peak: Option<HeatmapPeak>,
+    pub total_seconds: Option<u64>,
+    pub session_count: Option<u64>,
+    /// True when the session cap was reached and the grid is a lower bound.
+    pub truncated: bool,
+    /// Slots left blank because fewer than `HEATMAP_MIN_SESSIONS_PER_SLOT` sessions
+    /// fell into them. Totals and the peak cover visible slots only.
+    pub hidden_slots: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PresenceSummaryData {
     pub suppressed: bool,
@@ -1241,6 +1274,113 @@ pub async fn organization_summary(
     })))
 }
 
+/// `GET /api/v2/organizations/:id/presence/heatmap` — when the caller's teams co-work,
+/// as total shared-session time per local weekday and hour. Aggregate only: no names,
+/// and suppressed entirely below `PRESENCE_AGGREGATE_MIN_PEOPLE` distinct people.
+pub async fn organization_heatmap(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+    Query(query): Query<SummaryQuery>,
+) -> Result<Json<RoomEnvelope<PresenceHeatmapData>>, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    let timezone_name = query.timezone.clone().unwrap_or_else(|| "UTC".to_string());
+    let (from, to) = history_bounds(
+        query.from.as_deref(),
+        query.to.as_deref(),
+        query.timezone.as_deref(),
+    )?;
+    if to.saturating_sub(from) > HEATMAP_MAX_DAYS * 86_400 {
+        return Err(PresenceApiError::bad_request(
+            "heatmap range cannot exceed 92 days",
+        ));
+    }
+    let timezone: Tz = timezone_name
+        .parse()
+        .map_err(|_| PresenceApiError::bad_request("timezone must be a valid IANA timezone"))?;
+    let repo = repo(&state)?;
+    let Some(team_ids) = repo
+        .organization_team_ids(organization_id, user_id, query.team_id)
+        .await
+        .map_err(PresenceApiError::internal)?
+    else {
+        return Err(PresenceApiError::forbidden(
+            "you must be an active developer member of a team",
+        ));
+    };
+    let sharers = state
+        .coworking_session_repo
+        .shared_session_participants(&team_ids, from, to)
+        .await
+        .map_err(PresenceApiError::internal)?;
+    if sharers < PRESENCE_AGGREGATE_MIN_PEOPLE {
+        return Ok(Json(envelope(PresenceHeatmapData {
+            suppressed: true,
+            timezone: timezone_name,
+            cells: None,
+            peak: None,
+            total_seconds: None,
+            session_count: None,
+            truncated: false,
+            hidden_slots: 0,
+        })));
+    }
+    let windows = state
+        .coworking_session_repo
+        .shared_session_windows(&team_ids, from, to)
+        .await
+        .map_err(PresenceApiError::internal)?;
+    let now = Utc::now().timestamp().max(0) as u32;
+    let heatmap =
+        crate::services::coworking_session::coworking_heatmap(&windows, from, to, now, timezone);
+    Ok(Json(envelope(heatmap_data(
+        heatmap,
+        windows.len() as u64,
+        timezone_name,
+        windows.len() as u64 >= crate::repository::coworking_session::HEATMAP_SESSION_LIMIT,
+    ))))
+}
+
+fn heatmap_data(
+    heatmap: crate::services::coworking_session::CoworkingHeatmap,
+    session_count: u64,
+    timezone: String,
+    truncated: bool,
+) -> PresenceHeatmapData {
+    let mut grid = heatmap.seconds;
+    let mut hidden_slots = 0;
+    for (row, counts) in grid.iter_mut().zip(heatmap.sessions) {
+        for (seconds, count) in row.iter_mut().zip(counts) {
+            if *seconds > 0 && count < HEATMAP_MIN_SESSIONS_PER_SLOT {
+                *seconds = 0;
+                hidden_slots += 1;
+            }
+        }
+    }
+    let mut peak: Option<HeatmapPeak> = None;
+    for (weekday, row) in grid.iter().enumerate() {
+        for (hour, seconds) in row.iter().copied().enumerate() {
+            if seconds > 0 && peak.as_ref().is_none_or(|best| seconds > best.seconds) {
+                peak = Some(HeatmapPeak {
+                    weekday,
+                    hour,
+                    seconds,
+                });
+            }
+        }
+    }
+    PresenceHeatmapData {
+        suppressed: false,
+        timezone,
+        total_seconds: Some(grid.iter().flatten().sum()),
+        cells: Some(grid.iter().map(|row| row.to_vec()).collect()),
+        peak,
+        session_count: Some(session_count),
+        truncated,
+        hidden_slots,
+    }
+}
+
 fn history_bounds(
     from: Option<&str>,
     to: Option<&str>,
@@ -1514,5 +1654,48 @@ mod tests {
             Some("Not/A-Timezone"),
         )
         .is_err());
+    }
+
+    #[test]
+    fn heatmap_reports_the_busiest_hour_and_totals() {
+        let mut seconds = [[0u64; 24]; 7];
+        let mut sessions = [[0u64; 24]; 7];
+        seconds[1][14] = 5_400;
+        sessions[1][14] = 3;
+        seconds[3][10] = 7_200;
+        sessions[3][10] = 2;
+        seconds[3][11] = 7_200;
+        sessions[3][11] = 2;
+        // A single late-night session: hidden by the per-slot floor.
+        seconds[5][23] = 9_000;
+        sessions[5][23] = 1;
+        let data = heatmap_data(
+            crate::services::coworking_session::CoworkingHeatmap { seconds, sessions },
+            4,
+            "Asia/Bangkok".to_string(),
+            false,
+        );
+        assert!(!data.suppressed);
+        let peak = data.peak.expect("peak");
+        assert_eq!((peak.weekday, peak.hour, peak.seconds), (3, 10, 7_200));
+        assert_eq!(data.total_seconds, Some(19_800));
+        assert_eq!(data.hidden_slots, 1);
+        let cells = data.cells.expect("cells");
+        assert_eq!(cells.len(), 7);
+        assert!(cells.iter().all(|row| row.len() == 24));
+        assert_eq!(cells[5][23], 0);
+
+        let empty = heatmap_data(
+            crate::services::coworking_session::CoworkingHeatmap {
+                seconds: [[0u64; 24]; 7],
+                sessions: [[0u64; 24]; 7],
+            },
+            0,
+            "UTC".to_string(),
+            true,
+        );
+        assert!(empty.peak.is_none());
+        assert!(empty.truncated);
+        assert_eq!(empty.hidden_slots, 0);
     }
 }

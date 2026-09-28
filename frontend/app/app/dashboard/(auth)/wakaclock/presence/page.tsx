@@ -25,6 +25,7 @@ import {
   PresenceGuide,
 } from '@/components/presence/PresenceRoomViews';
 import { StatusComposer } from '@/components/presence/StatusComposer';
+import { TeamRhythm } from '@/components/presence/TeamRhythm';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useCoworkingHistory } from '@/hooks/use-coworking-history';
@@ -541,7 +542,12 @@ function PresenceApp() {
           <aside aria-label="Room sidebar" className={styles.column}>
             {/* One grid: at xl this is the right rail, below it stacks under the floor. */}
             {inRoom ? inRoomAside : <PresenceGuide />}
-            {presenceV2Available !== false ? <CoworkingHistoryPanel history={history} /> : null}
+            {presenceV2Available !== false ? (
+              <>
+                <CoworkingHistoryPanel history={history} />
+                <TeamRhythm />
+              </>
+            ) : null}
           </aside>
         </div>
 

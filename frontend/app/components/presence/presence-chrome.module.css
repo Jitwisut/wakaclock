@@ -849,6 +849,48 @@
   background: var(--pc-surface);
 }
 
+/* ---------- Team rhythm heatmap ---------- */
+.heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.heatmapRow {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  align-items: center;
+  gap: 2px;
+}
+.heatmapDay,
+.heatmapHour {
+  color: var(--pc-faint);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+}
+.heatmapHour {
+  text-align: left;
+}
+.heatmapCell {
+  display: block;
+  aspect-ratio: 1;
+  min-width: 8px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.05);
+}
+.heatmapCell[data-level='1'] {
+  background: rgb(61 220 132 / 0.25);
+}
+.heatmapCell[data-level='2'] {
+  background: rgb(61 220 132 / 0.45);
+}
+.heatmapCell[data-level='3'] {
+  background: rgb(61 220 132 / 0.7);
+}
+.heatmapCell[data-level='4'] {
+  background: var(--pc-coding);
+  box-shadow: 0 0 8px rgb(61 220 132 / 0.5);
+}
+
 /* ---------- Dock ---------- */
 .dock {
   display: flex;

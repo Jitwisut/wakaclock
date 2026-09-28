@@ -550,6 +550,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             "/organizations/:organization_id/presence/summary",
             get(crate::handlers::presence_v2::organization_summary),
         )
+        .route(
+            "/organizations/:organization_id/presence/heatmap",
+            get(crate::handlers::presence_v2::organization_heatmap),
+        )
         .route("/organizations/:organization_id/ai", get(organization_analytics))
         .route(
             "/organizations/:organization_id/sso",

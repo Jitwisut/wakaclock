@@ -1,3 +1,5 @@
+import type { PresenceHeatmapData } from '@/lib/presence/presence-heatmap';
+
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
 import type {
@@ -401,6 +403,19 @@ export async function setMyPresenceStatusV2(
 // DELETE /me/presence/status
 export async function clearMyPresenceStatusV2() {
   await wakaclockV2Client.delete('/me/presence/status');
+}
+
+// GET /organizations/:id/presence/heatmap?from=&to=&timezone= — aggregate only.
+export async function getOrganizationPresenceHeatmapV2(
+  organizationId: string,
+  params: { from: string; timezone: string; to: string }
+) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<PresenceHeatmapData>>(
+      `/organizations/${organizationId}/presence/heatmap`,
+      { params }
+    )
+  );
 }
 
 // GET /me/presence/focus — your focus block, or null.

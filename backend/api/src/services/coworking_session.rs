@@ -1,11 +1,69 @@
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Datelike, Timelike};
+use chrono_tz::Tz;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::redis_presence::LiveSession;
 use crate::model::coworking_session::{CoworkingParticipantRow, CoworkingSessionRow};
-use crate::repository::coworking_session::CoworkingSessionRepository;
+use crate::repository::coworking_session::{CoworkingSessionRepository, SessionWindowRow};
 use crate::services::org::now_secs;
+
+/// One value per local weekday (Monday = 0) and hour of day.
+pub type WeekHourGrid = [[u64; 24]; 7];
+
+/// Co-working seconds per weekday/hour, plus how many distinct sessions touched each
+/// slot — the second grid drives the per-slot privacy floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoworkingHeatmap {
+    pub seconds: WeekHourGrid,
+    pub sessions: WeekHourGrid,
+}
+
+/// Spreads shared sessions over the local week: each session is clipped to
+/// `[from, to)` (an open session runs until `now`) and its seconds are added to every
+/// local weekday/hour it overlaps. Hour boundaries are taken from the local clock, so
+/// half-hour offset zones and DST days still bucket on the hour people actually see.
+pub fn coworking_heatmap(
+    sessions: &[SessionWindowRow],
+    from: u32,
+    to: u32,
+    now: u32,
+    timezone: Tz,
+) -> CoworkingHeatmap {
+    let mut grid = [[0u64; 24]; 7];
+    let mut counts = [[0u64; 24]; 7];
+    for session in sessions {
+        let start = session.started_at.max(from);
+        let end = session.ended_at.unwrap_or(now).min(to);
+        // A session is counted once per slot even when it spans that hour on
+        // several days (a multi-day open session is still one session).
+        let mut touched = [[false; 24]; 7];
+        let mut cursor = start;
+        while cursor < end {
+            let Some(utc) = DateTime::from_timestamp(i64::from(cursor), 0) else {
+                break;
+            };
+            let local = utc.with_timezone(&timezone);
+            let into_hour = local.minute() * 60 + local.second();
+            let next = cursor.saturating_add(3600 - into_hour).min(end);
+            let weekday = local.weekday().num_days_from_monday() as usize;
+            let hour = local.hour() as usize;
+            grid[weekday][hour] += u64::from(next - cursor);
+            touched[weekday][hour] = true;
+            cursor = next;
+        }
+        for (row, touched_row) in counts.iter_mut().zip(touched) {
+            for (count, hit) in row.iter_mut().zip(touched_row) {
+                *count += u64::from(hit);
+            }
+        }
+    }
+    CoworkingHeatmap {
+        seconds: grid,
+        sessions: counts,
+    }
+}
 
 pub struct CoworkingSessionService {
     repo: Arc<CoworkingSessionRepository>,
@@ -198,5 +256,108 @@ impl CoworkingSessionService {
         session.updated_at = now;
         session.last_observed_at = now;
         self.repo.insert_session(&session).await
+    }
+}
+
+#[cfg(test)]
+mod heatmap_tests {
+    use super::*;
+
+    fn window(started_at: u32, ended_at: Option<u32>) -> SessionWindowRow {
+        SessionWindowRow {
+            started_at,
+            ended_at,
+        }
+    }
+
+    // 2026-09-28 is a Monday; 00:00 UTC.
+    const MONDAY: u32 = 1_790_553_600;
+
+    #[test]
+    fn splits_a_session_across_local_hours() {
+        // Monday 09:30–11:15 UTC.
+        let heatmap = coworking_heatmap(
+            &[window(
+                MONDAY + 9 * 3600 + 1800,
+                Some(MONDAY + 11 * 3600 + 900),
+            )],
+            0,
+            u32::MAX,
+            u32::MAX,
+            chrono_tz::UTC,
+        );
+        assert_eq!(heatmap.seconds[0][9], 1800);
+        assert_eq!(heatmap.seconds[0][10], 3600);
+        assert_eq!(heatmap.seconds[0][11], 900);
+        assert_eq!(heatmap.seconds.iter().flatten().sum::<u64>(), 6300);
+        assert_eq!(heatmap.sessions[0][9], 1);
+        assert_eq!(heatmap.sessions[0][12], 0);
+    }
+
+    #[test]
+    fn counts_each_session_once_per_slot() {
+        // Two sessions in Monday 10:00, one of them split across 10:00 and 11:00.
+        let heatmap = coworking_heatmap(
+            &[
+                window(MONDAY + 10 * 3600, Some(MONDAY + 10 * 3600 + 600)),
+                window(MONDAY + 10 * 3600 + 1800, Some(MONDAY + 11 * 3600 + 600)),
+            ],
+            0,
+            u32::MAX,
+            u32::MAX,
+            chrono_tz::UTC,
+        );
+        assert_eq!(heatmap.sessions[0][10], 2);
+        assert_eq!(heatmap.sessions[0][11], 1);
+        assert_eq!(heatmap.seconds[0][10], 600 + 1800);
+    }
+
+    #[test]
+    fn uses_the_local_weekday_and_hour() {
+        // Monday 23:00–23:30 UTC is Tuesday 06:00–06:30 in Bangkok (UTC+7).
+        let heatmap = coworking_heatmap(
+            &[window(MONDAY + 23 * 3600, Some(MONDAY + 23 * 3600 + 1800))],
+            0,
+            u32::MAX,
+            u32::MAX,
+            chrono_tz::Asia::Bangkok,
+        );
+        assert_eq!(heatmap.seconds[1][6], 1800);
+        assert_eq!(heatmap.seconds[0][23], 0);
+    }
+
+    #[test]
+    fn buckets_on_local_hours_in_half_hour_zones() {
+        // 09:00 UTC is 14:30 in Kolkata (UTC+5:30): 30 minutes land in 14:00, 30 in 15:00.
+        let heatmap = coworking_heatmap(
+            &[window(MONDAY + 9 * 3600, Some(MONDAY + 10 * 3600))],
+            0,
+            u32::MAX,
+            u32::MAX,
+            chrono_tz::Asia::Kolkata,
+        );
+        assert_eq!(heatmap.seconds[0][14], 1800);
+        assert_eq!(heatmap.seconds[0][15], 1800);
+    }
+
+    #[test]
+    fn clips_to_the_range_and_runs_open_sessions_until_now() {
+        let from = MONDAY + 10 * 3600;
+        let to = MONDAY + 12 * 3600;
+        let heatmap = coworking_heatmap(
+            &[
+                window(MONDAY + 9 * 3600, Some(MONDAY + 13 * 3600)),
+                window(MONDAY + 11 * 3600, None),
+                window(MONDAY, Some(MONDAY + 60)),
+            ],
+            from,
+            to,
+            MONDAY + 11 * 3600 + 600,
+            chrono_tz::UTC,
+        );
+        assert_eq!(heatmap.seconds[0][10], 3600);
+        assert_eq!(heatmap.seconds[0][11], 3600 + 600);
+        assert_eq!(heatmap.seconds[0][9], 0);
+        assert_eq!(heatmap.seconds[0][0], 0);
     }
 }
