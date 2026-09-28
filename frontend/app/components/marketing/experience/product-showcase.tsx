@@ -188,9 +188,12 @@ export function ProductShowcase({ locale }: { locale: SiteLocale }) {
                     src={shot.src}
                     width={shot.width}
                   />
-                ) : (
+                ) : view === id ? (
+                  // Only the visible panel draws its illustration. The three hidden replicas
+                  // were ~600 DOM nodes of demo markup; each panel's heading, body and notes
+                  // stay in the HTML regardless, so nothing indexable is lost.
                   <Replica locale={locale} />
-                )}
+                ) : null}
                 {spots.map((hotspot, index) => (
                   <button
                     aria-controls={`axx-note-${id}-${index}`}

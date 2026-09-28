@@ -48,7 +48,7 @@ const ACCOUNTABILITY_COPY = {
   th: {
     heading: 'ใครเป็นผู้เผยแพร่และตรวจทานหน้านี้?',
     intro:
-      'ทีมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับพฤติกรรมที่เผยแพร่ในเอกสารและแหล่งข้อมูลทางการที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ',
+      'ทีมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับพฤติกรรมที่เผยแพร่ในเอกสารและแหล่งข้อมูลทางการที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ หากคุณพบข้อมูลที่ไม่ตรงกับการทำงานจริงของผลิตภัณฑ์ แจ้งเราได้ผ่านหน้าติดต่อ วันที่ตรวจทานล่าสุดแสดงไว้ด้านล่าง เพื่อให้คุณรู้ว่าข้อมูลนี้ใหม่แค่ไหน',
     publisher: 'ผู้เผยแพร่',
     reviewer: 'ผู้ตรวจทาน',
     reviewerValue: 'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis',
@@ -137,7 +137,9 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
           >
             {copy.atAGlance.entries.map((entry) => (
               <Fragment key={entry.label}>
-                <dt className="font-semibold">{entry.label}:</dt>
+                <dt>
+                  <strong>{entry.label}:</strong>
+                </dt>
                 <dd style={MUTED_TEXT}>{entry.value}</dd>
               </Fragment>
             ))}
@@ -230,11 +232,15 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
             style={{ borderColor: 'var(--mkt-border)' }}
           >
             <div>
-              <dt className="font-semibold">{accountability.publisher}:</dt>
+              <dt>
+                <strong>{accountability.publisher}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>{ORGANIZATION.legalName}</dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.reviewer}:</dt>
+              <dt>
+                <strong>{accountability.reviewer}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <Link
                   className="underline underline-offset-4"
@@ -246,13 +252,17 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.reviewed}:</dt>
+              <dt>
+                <strong>{accountability.reviewed}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <time dateTime={SITE_MODIFIED}>{SITE_MODIFIED}</time>
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.evidence}:</dt>
+              <dt>
+                <strong>{accountability.evidence}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <a
                   className="underline underline-offset-4"
@@ -263,7 +273,9 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.policies}:</dt>
+              <dt>
+                <strong>{accountability.policies}:</strong>
+              </dt>
               <dd className="flex flex-wrap gap-x-3" style={MUTED_TEXT}>
                 <Link href={localizedPath(locale, '/about')}>{accountability.about}</Link>
                 <Link href={localizedPath(locale, '/privacy')}>{accountability.privacy}</Link>

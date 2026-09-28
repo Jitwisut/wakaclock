@@ -7,7 +7,7 @@ export function CtaSection({ locale = 'en' }: { locale?: SiteLocale }) {
     locale === 'th'
       ? {
           heading: 'เข้าร่วม AtoAxis Early Access',
-          body: 'เป็นกลุ่มแรกที่ได้ลอง hosted developer analytics รับข่าวการเปิดตัว และช่วยกำหนด integration รุ่นถัดไป',
+          body: 'เป็นกลุ่มแรกที่ได้ลอง hosted developer analytics รับข่าวการเปิดตัว และช่วยกำหนด integration รุ่นถัดไป ลงชื่อได้โดยไม่มีค่าใช้จ่าย แล้วเราจะส่ง API key ให้คุณทางอีเมล',
           cta: 'เข้าร่วม Early Access',
         }
       : {
