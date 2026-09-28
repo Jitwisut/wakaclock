@@ -29,6 +29,10 @@ const FOOTER_SECTIONS = [
     links: [
       { href: '/docs/getting-started', label: { en: 'Getting started', th: 'เริ่มต้นใช้งาน' } },
       {
+        href: '/docs/migrate-from-wakatime',
+        label: { en: 'Migrate from WakaTime', th: 'ย้ายจาก WakaTime' },
+      },
+      {
         href: '/integrations/vscode',
         label: { en: 'VS Code integration', th: 'การเชื่อมต่อ VS Code' },
       },

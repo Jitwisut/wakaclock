@@ -175,6 +175,7 @@ export const EN_PUBLIC_ROUTES = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/migrate-from-wakatime',
   '/docs/how-coding-time-is-calculated',
   '/docs/ai-attribution-and-coverage',
   '/docs/ai-cost-methodology',
@@ -207,6 +208,7 @@ const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
 const NEW_GUIDES_DATE = '2026-09-20';
 const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
 const THAI_SEO_UPDATE_DATE = '2026-09-23';
+const MIGRATION_GUIDE_DATE = '2026-09-28';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': '2026-09-22',
   '/teams': AUDIT_REVIEW_DATE,
@@ -226,6 +228,7 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/privacy': AUDIT_REVIEW_DATE_ROUND_3,
   '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
+  '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
   '/integrations/vscode': AUDIT_REVIEW_DATE_ROUND_3,
   '/join': AUDIT_REVIEW_DATE_ROUND_3,
 };
@@ -242,6 +245,7 @@ const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
+  '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {

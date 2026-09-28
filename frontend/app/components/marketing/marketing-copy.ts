@@ -70,6 +70,7 @@ export const MARKETING_PAGE_KEYS = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/migrate-from-wakatime',
   '/docs/how-coding-time-is-calculated',
   '/docs/ai-attribution-and-coverage',
   '/docs/ai-cost-methodology',
@@ -1836,6 +1837,7 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
   Record<MarketingPageKey, { en: string; path: MarketingPageKey; th: string }>
 > = {
   '/docs/getting-started': { en: 'Docs', path: '/docs', th: 'เอกสาร' },
+  '/docs/migrate-from-wakatime': { en: 'Docs', path: '/docs', th: 'เอกสาร' },
   '/integrations/vscode': { en: 'Integrations', path: '/integrations', th: 'การเชื่อมต่อ' },
 };
 
@@ -1891,7 +1893,7 @@ const generic = (
     ),
     form: value.form,
     howTo:
-      path === '/docs/getting-started'
+      path === '/docs/getting-started' || path === '/docs/migrate-from-wakatime'
         ? { name: value.title, description: value.description }
         : undefined,
     component: path === '/pricing' ? { kind: 'pricing', afterSectionId: null } : undefined,
@@ -1926,6 +1928,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'Getting started: requirements, API key, editor setup, verification',
+              'Migrate from WakaTime: keep your plugin, change two settings, import your history',
               'How coding time is calculated: heartbeat intervals, idle timeout and duration examples',
               'AI attribution and coverage: evidence for AI, human and Unattributed changes',
               'AI cost methodology: token classes, effective prices and unknown estimates',
@@ -1935,6 +1938,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
             ]
           : [
               'เริ่มต้นใช้งาน: สิ่งที่ต้องเตรียม, API key, การตั้งค่า editor และการตรวจสอบ',
+              'ย้ายจาก WakaTime: ใช้ plugin เดิม แก้สองค่า แล้ว import ประวัติ',
               'วิธีคำนวณเวลาการเขียนโค้ด: heartbeat, idle timeout และตัวอย่าง duration',
               'AI attribution และ coverage: หลักฐานของ AI, human และ Unattributed',
               'วิธีคำนวณค่าใช้จ่าย AI: ประเภท token ราคา effective และยอดที่ไม่ทราบ',
@@ -2147,6 +2151,180 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     ],
   ],
 
+  // Migration guide. Facts are taken from the shipped import path, not from memory:
+  // `backend/api/src/services/wakatime_import.rs` (raw heartbeats only, 1 MiB and 10,000
+  // records per upload, content-derived IDs so a re-upload is skipped, WakaTime AI flags kept
+  // without an agent name) and `app/dashboard/(auth)/wakaclock/import/page.tsx` (connection
+  // check, chunked resumable upload, before/after totals). The WakaTime side — an export of
+  // type `heartbeats` rather than `daily`, created at wakatime.com/settings — is from
+  // wakatime.com/developers, checked 2026-09-28.
+  [
+    '/docs/migrate-from-wakatime#0',
+    (en) => [
+      p(
+        en
+          ? 'Moving has two independent parts. Live tracking takes two lines in the settings file of the WakaTime plugin you already use. Your history moves separately, as a WakaTime data export you import into the dashboard. You can do either one first, and nothing in your WakaTime account is deleted by either.'
+          : 'การย้ายมีสองส่วนที่แยกจากกัน ส่วนแรกคือการติดตามเวลาต่อจากนี้ ซึ่งแก้แค่สองบรรทัดในไฟล์ตั้งค่าของ WakaTime plugin ที่คุณใช้อยู่ ส่วนที่สองคือประวัติเดิม ซึ่งย้ายมาด้วยไฟล์ export ของ WakaTime แล้ว import เข้า dashboard คุณจะทำส่วนไหนก่อนก็ได้ และทั้งสองส่วนไม่ลบข้อมูลใดในบัญชี WakaTime ของคุณ'
+      ),
+      bullets(
+        en
+          ? [
+              'Your editor with its WakaTime plugin, left installed exactly as it is',
+              'An AtoAxis account and API key. During Early Access, keys are issued to people on the list',
+              'Optional: your WakaTime history as a data export that contains raw heartbeats',
+            ]
+          : [
+              'editor ของคุณพร้อม WakaTime plugin เดิม ไม่ต้องถอนหรือติดตั้งอะไรใหม่',
+              'บัญชี AtoAxis และ API key ช่วง Early Access เราออก key ให้เฉพาะผู้ที่อยู่ในรายชื่อ',
+              'ถ้าต้องการย้ายประวัติด้วย: ไฟล์ export ของ WakaTime แบบที่มี heartbeat ดิบ',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#1',
+    (en) => [
+      p(
+        en
+          ? 'One AtoAxis key replaces your WakaTime key in the plugin. The same key also covers every other editor and AI hook on your account.'
+          : 'key ของ AtoAxis หนึ่งตัวจะใช้แทน key ของ WakaTime ใน plugin และ key เดียวกันนี้ใช้ได้กับ editor และ AI hook ทุกตัวในบัญชีของคุณ'
+      ),
+      bullets(
+        en
+          ? [
+              'Open Settings in the dashboard and find the API key panel',
+              'Choose Generate key and copy it',
+              'Regenerating later replaces the old key at once, so update every machine when you do',
+            ]
+          : [
+              'เปิดหน้า Settings ใน dashboard แล้วไปที่แผง API key',
+              'กด Generate key แล้วคัดลอกไว้',
+              'ถ้า regenerate ภายหลัง key เก่าจะใช้ไม่ได้ทันที คุณต้องอัปเดตทุกเครื่องที่ใช้อยู่',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#2',
+    (en) => [
+      p(
+        en
+          ? 'Every WakaTime plugin reads the same settings file in your home folder: ~/.wakatime.cfg on macOS and Linux, %USERPROFILE%\\.wakatime.cfg on Windows. Set two values and save it.'
+          : 'WakaTime plugin ทุกตัวอ่านไฟล์ตั้งค่าเดียวกันใน home folder ของคุณ คือ ~/.wakatime.cfg บน macOS และ Linux หรือ %USERPROFILE%\\.wakatime.cfg บน Windows ให้แก้สองค่านี้แล้ว save'
+      ),
+      code(
+        '[settings]\napi_url = https://api.atoaxis.com/api/v1\napi_key = your_atoaxis_api_key',
+        '~/.wakatime.cfg'
+      ),
+      bullets(
+        en
+          ? [
+              'No AtoAxis extension is needed for this editor. AtoAxis implements the WakaTime heartbeat API, so the plugin keeps working as before',
+              'A plugin sends to one server, so from now on new activity goes to AtoAxis instead of WakaTime',
+              'Some plugins cache their settings until the editor restarts. If nothing arrives, restart the editor once',
+              'VS Code users can also switch to the first-party AtoAxis extension, which adds AI hook setup',
+            ]
+          : [
+              'editor นี้ไม่ต้องติดตั้ง extension ของ AtoAxis เพราะ AtoAxis รองรับ WakaTime heartbeat API plugin จึงทำงานได้เหมือนเดิม',
+              'plugin ส่งข้อมูลไปได้ทีละ server ดังนั้นกิจกรรมใหม่จะไปที่ AtoAxis แทน WakaTime ตั้งแต่ตอนนี้',
+              'plugin บางตัวจำค่าตั้งค่าไว้จนกว่าจะปิดเปิด editor ใหม่ ถ้าข้อมูลยังไม่เข้า ให้ restart editor หนึ่งครั้ง',
+              'ถ้าใช้ VS Code คุณเปลี่ยนไปใช้ extension ของ AtoAxis ได้ด้วย ซึ่งช่วยตั้งค่า AI hook ให้',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#3',
+    (en) => [
+      p(
+        en
+          ? 'Edit and save a file in any project, then open Import WakaTime history in the dashboard and choose Check heartbeat and project. It shows today’s heartbeat count, the time of the latest heartbeat and the projects seen today.'
+          : 'แก้ไขและ save ไฟล์ในโปรเจกต์ใดก็ได้ แล้วเปิดหน้า Import WakaTime history ใน dashboard และกด Check heartbeat and project ระบบจะแสดงจำนวน heartbeat ของวันนี้ เวลาของ heartbeat ล่าสุด และโปรเจกต์ที่เห็นในวันนี้'
+      ),
+      bullets(
+        en
+          ? [
+              'If the latest heartbeat is older than your test edit, check the plugin log and restart the editor',
+              'Reading code without editing, saving or switching files produces no heartbeat by design',
+              'The Overview page shows the same total once the first heartbeat has landed',
+            ]
+          : [
+              'ถ้า heartbeat ล่าสุดเก่ากว่าการแก้ไขที่คุณเพิ่งทำ ให้ดู log ของ plugin แล้ว restart editor',
+              'การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์ จะไม่สร้าง heartbeat ตามการออกแบบ',
+              'หน้า Overview จะแสดงยอดเดียวกันทันทีที่ heartbeat แรกเข้าระบบ',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#4',
+    (en) => [
+      p(
+        en
+          ? 'Create the export at wakatime.com/settings, or through the WakaTime API. Choose the export of heartbeats, not daily summaries: a summary cannot be turned back into a timeline, so the importer rejects it.'
+          : 'สร้างไฟล์ export ที่ wakatime.com/settings หรือผ่าน WakaTime API โดยเลือกแบบ heartbeats ไม่ใช่ daily summaries เพราะข้อมูลสรุปรายวันสร้าง timeline กลับคืนไม่ได้ ระบบ import จึงไม่รับไฟล์แบบนั้น'
+      ),
+      code(
+        'POST https://wakatime.com/api/v1/users/current/data_dumps\n{ "type": "heartbeats" }',
+        en ? 'WakaTime API' : 'WakaTime API'
+      ),
+      p(
+        en
+          ? 'WakaTime prepares the file in the background and gives each export an expiry date, so download it once it is ready. Keep the JSON file as it is; there is no need to edit or split it yourself.'
+          : 'WakaTime จะเตรียมไฟล์ให้เบื้องหลัง และลิงก์ดาวน์โหลดแต่ละไฟล์มีวันหมดอายุ จึงควรดาวน์โหลดทันทีที่พร้อม เก็บไฟล์ JSON ไว้ตามเดิม ไม่ต้องแก้ไขหรือแบ่งไฟล์เอง'
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#5',
+    (en) => [
+      p(
+        en
+          ? 'Open Import WakaTime history in the dashboard, choose the JSON file and select Review and import history. The browser splits a large export into chunks, strips fields the import does not use, and uploads the chunks in order.'
+          : 'เปิดหน้า Import WakaTime history ใน dashboard เลือกไฟล์ JSON แล้วกด Review and import history browser จะแบ่งไฟล์ใหญ่เป็นชิ้น ตัด field ที่การ import ไม่ได้ใช้ออก แล้วอัปโหลดทีละชิ้นตามลำดับ'
+      ),
+      bullets(
+        en
+          ? [
+              'Interrupted? Select the same file again and the import resumes from the chunks already received',
+              'Importing the same file twice does not count its time twice: already imported heartbeats are skipped',
+              'When it finishes, the page shows your all-time total before and after, plus how many records were skipped and why',
+              'A small export, up to 1 MiB and 10,000 heartbeats, can also go through Settings → Maintenance',
+            ]
+          : [
+              'ถ้าการ import ขาดกลางทาง ให้เลือกไฟล์เดิมอีกครั้ง ระบบจะทำต่อจากชิ้นที่ได้รับแล้ว',
+              'import ไฟล์เดิมซ้ำจะไม่ทำให้เวลาถูกนับซ้ำ เพราะ heartbeat ที่ import แล้วจะถูกข้าม',
+              'เมื่อเสร็จ หน้าเว็บจะแสดงยอดเวลารวมทั้งหมดก่อนและหลัง import พร้อมจำนวนรายการที่ถูกข้ามและเหตุผล',
+              'ไฟล์ขนาดเล็กไม่เกิน 1 MiB และไม่เกิน 10,000 heartbeat จะ import ผ่าน Settings → Maintenance ก็ได้',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#6',
+    (en) => [
+      p(
+        en
+          ? 'Your old and new activity now sit on one timeline, and every account keeps its complete history rather than a recent window. A few things behave differently from WakaTime, and it is better to know them before you compare totals.'
+          : 'ตอนนี้กิจกรรมเก่าและใหม่ของคุณอยู่บน timeline เดียวกัน และทุกบัญชีเก็บประวัติครบถ้วน ไม่ใช่แค่ช่วงล่าสุด มีบางอย่างที่ทำงานต่างจาก WakaTime ซึ่งควรรู้ไว้ก่อนเทียบยอดเวลา'
+      ),
+      bullets(
+        en
+          ? [
+              'Imported AI work stays AI but has no agent name: a WakaTime export shows that AI was involved, not which tool, so AtoAxis does not guess one',
+              'Two checkouts of one repository may appear as two projects; join them under Settings with project rules or a manual merge',
+              'AI hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI are set up separately from the WakaTime plugin',
+              'To go back, delete the api_url line and put your WakaTime key back in api_key. Nothing in either account is lost',
+            ]
+          : [
+              'งาน AI ที่ import มายังนับเป็น AI แต่ไม่มีชื่อ agent เพราะ export ของ WakaTime บอกได้แค่ว่ามี AI เกี่ยวข้อง ไม่ได้บอกว่าเป็นเครื่องมือตัวไหน AtoAxis จึงไม่เดาให้',
+              'checkout สองที่ของ repository เดียวกันอาจแสดงเป็นสองโปรเจกต์ ให้รวมกันที่หน้า Settings ด้วย project rules หรือการ merge เอง',
+              'AI hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ตั้งค่าแยกจาก WakaTime plugin',
+              'ถ้าต้องการย้ายกลับ ให้ลบบรรทัด api_url แล้วใส่ key ของ WakaTime กลับใน api_key ข้อมูลในทั้งสองบัญชีไม่หายไปไหน',
+            ]
+      ),
+    ],
+  ],
   [
     '/pricing#1',
     (en) => [
@@ -2688,6 +2866,13 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         description: en ? 'Connect an editor' : 'เชื่อม editor',
       },
       {
+        href: '/docs/migrate-from-wakatime',
+        label: en ? 'Migrate from WakaTime' : 'ย้ายจาก WakaTime',
+        description: en
+          ? 'Keep your plugin and import your history'
+          : 'ใช้ plugin เดิมและ import ประวัติ',
+      },
+      {
         href: '/docs/how-coding-time-is-calculated',
         label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
         description: en
@@ -2736,6 +2921,41 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         href: '/integrations/vscode',
         label: en ? 'VS Code integration' : 'VS Code integration',
         description: en ? 'Extension settings' : 'settings ของ extension',
+      },
+      {
+        href: '/docs/migrate-from-wakatime',
+        label: en ? 'Migrate from WakaTime' : 'ย้ายจาก WakaTime',
+        description: en
+          ? 'Keep your plugin and import your history'
+          : 'ใช้ plugin เดิมและ import ประวัติ',
+      },
+    ],
+    '/docs/migrate-from-wakatime': [
+      {
+        href: '/wakatime-alternative',
+        label: en ? 'AtoAxis vs WakaTime' : 'เทียบ AtoAxis กับ WakaTime',
+        description: en
+          ? 'What differs before you decide to move'
+          : 'สิ่งที่ต่างกันก่อนตัดสินใจย้าย',
+      },
+      {
+        href: '/docs/getting-started',
+        label: en ? 'Getting started' : 'เริ่มต้นใช้งาน',
+        description: en ? 'API key, CLI and first heartbeat' : 'API key, CLI และ heartbeat แรก',
+      },
+      {
+        href: '/docs/how-coding-time-is-calculated',
+        label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
+        description: en
+          ? 'Why totals can differ between tools'
+          : 'ทำไมยอดเวลาของแต่ละเครื่องมืออาจต่างกัน',
+      },
+      {
+        href: '/integrations',
+        label: en ? 'Editor integrations' : 'การเชื่อมต่อ editor',
+        description: en
+          ? 'Editors that work through the WakaTime protocol'
+          : 'editor ที่ใช้งานผ่าน WakaTime protocol',
       },
     ],
     '/about': [
@@ -3217,6 +3437,103 @@ generic(
         question: 'ยอดไม่เพิ่มขึ้น ควรตรวจอะไรก่อน?',
         answer:
           'ตรวจว่า wakaclock-cli อยู่ใน PATH หรือกำหนด wakaclock.cliPath แล้ว จากนั้นรัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
+      },
+    ],
+  }
+);
+generic(
+  '/docs/migrate-from-wakatime',
+  {
+    title: 'Migrate from WakaTime to AtoAxis',
+    description:
+      'Move from WakaTime to AtoAxis: keep your WakaTime plugin, change two settings, then import your WakaTime heartbeat export without double-counting time.',
+    lead: 'To move from WakaTime to AtoAxis, keep the WakaTime plugin you already use and change two lines in ~/.wakatime.cfg: api_url and api_key. New coding time then goes to AtoAxis. To bring your history, export your heartbeats from WakaTime and import the JSON file in the dashboard; the import resumes after interruptions and never counts the same heartbeat twice.',
+    headings: [
+      'Before you start',
+      'Get an AtoAxis API key',
+      'Point your WakaTime plugin at AtoAxis',
+      'Check that the first heartbeat arrived',
+      'Export your WakaTime history',
+      'Import the export into AtoAxis',
+      'What changes after you move',
+    ],
+    faqEntries: [
+      {
+        question: 'Do I need to uninstall the WakaTime plugin?',
+        answer:
+          'No. Keep it installed and change api_url and api_key in ~/.wakatime.cfg. AtoAxis implements the WakaTime heartbeat API, so the plugin works as before.',
+      },
+      {
+        question: 'Can I import my full WakaTime history?',
+        answer:
+          'Yes, from a WakaTime data export of type heartbeats. Large exports are split into chunks in the browser and imported in order, and the import can be resumed with the same file.',
+      },
+      {
+        question: 'Why was my WakaTime export rejected?',
+        answer:
+          'It most likely contains daily summaries instead of raw heartbeats. Summaries cannot be rebuilt into a timeline, so create a new export and choose heartbeats.',
+      },
+      {
+        question: 'Will importing the same file twice double my time?',
+        answer:
+          'No. Each imported heartbeat gets an ID derived from its content, so heartbeats that were already imported are skipped and reported as skipped.',
+      },
+      {
+        question: 'Does the imported history keep AI information?',
+        answer:
+          'Heartbeats that WakaTime marked as AI stay AI, but without an agent name, because the export does not say which tool made the change.',
+      },
+      {
+        question: 'Can I switch back to WakaTime later?',
+        answer:
+          'Yes. Delete the api_url line and put your WakaTime key back in api_key. Data already in either account is not deleted.',
+      },
+    ],
+  },
+  {
+    title: 'ย้ายจาก WakaTime มาใช้ AtoAxis',
+    description:
+      'วิธีย้ายจาก WakaTime มา AtoAxis ใช้ WakaTime plugin เดิม แก้ค่าตั้งค่าสองบรรทัด แล้ว import ประวัติ heartbeat จาก WakaTime โดยเวลาไม่ถูกนับซ้ำ',
+    lead: 'การย้ายจาก WakaTime มา AtoAxis ไม่ต้องถอน plugin เดิม คุณแค่แก้สองบรรทัดใน ~/.wakatime.cfg คือ api_url และ api_key แล้วเวลาเขียนโค้ดใหม่จะเข้ามาที่ AtoAxis ส่วนประวัติเดิม ให้ export heartbeat จาก WakaTime แล้ว import ไฟล์ JSON ใน dashboard ระบบทำต่อได้ถ้าขาดกลางทาง และไม่นับ heartbeat เดิมซ้ำ',
+    headings: [
+      'ก่อนเริ่ม',
+      'สร้าง API key ของ AtoAxis',
+      'ชี้ WakaTime plugin มาที่ AtoAxis',
+      'ตรวจว่า heartbeat แรกเข้าแล้ว',
+      'export ประวัติจาก WakaTime',
+      'import ไฟล์ export เข้า AtoAxis',
+      'อะไรเปลี่ยนไปหลังย้าย',
+    ],
+    faqEntries: [
+      {
+        question: 'ต้องถอน WakaTime plugin ออกไหม?',
+        answer:
+          'ไม่ต้อง เก็บ plugin ไว้ตามเดิม แล้วแก้ api_url และ api_key ใน ~/.wakatime.cfg เพราะ AtoAxis รองรับ WakaTime heartbeat API plugin จึงทำงานได้เหมือนเดิม',
+      },
+      {
+        question: 'import ประวัติ WakaTime ทั้งหมดได้ไหม?',
+        answer:
+          'ได้ ใช้ไฟล์ export ของ WakaTime แบบ heartbeats ไฟล์ใหญ่จะถูกแบ่งเป็นชิ้นใน browser แล้ว import ตามลำดับ และทำต่อได้ด้วยการเลือกไฟล์เดิมอีกครั้ง',
+      },
+      {
+        question: 'ทำไมไฟล์ export ของ WakaTime ถึงถูกปฏิเสธ?',
+        answer:
+          'ส่วนใหญ่เป็นเพราะไฟล์มีแต่สรุปรายวัน (daily) ไม่มี heartbeat ดิบ ข้อมูลสรุปสร้าง timeline กลับคืนไม่ได้ ให้สร้าง export ใหม่แล้วเลือกแบบ heartbeats',
+      },
+      {
+        question: 'import ไฟล์เดิมสองครั้ง เวลาจะเพิ่มเป็นสองเท่าไหม?',
+        answer:
+          'ไม่ heartbeat ที่ import แต่ละรายการมี ID ที่คำนวณจากเนื้อหาของมันเอง รายการที่ import ไปแล้วจึงถูกข้าม และแสดงเป็นจำนวนที่ถูกข้าม',
+      },
+      {
+        question: 'ประวัติที่ import มายังมีข้อมูล AI อยู่ไหม?',
+        answer:
+          'heartbeat ที่ WakaTime ระบุว่าเป็นงาน AI จะยังนับเป็น AI แต่ไม่มีชื่อ agent เพราะไฟล์ export ไม่ได้บอกว่าเครื่องมือตัวไหนเป็นผู้แก้ไข',
+      },
+      {
+        question: 'ย้ายกลับไป WakaTime ภายหลังได้ไหม?',
+        answer:
+          'ได้ ลบบรรทัด api_url แล้วใส่ key ของ WakaTime กลับใน api_key ข้อมูลที่อยู่ในทั้งสองบัญชีแล้วจะไม่ถูกลบ',
       },
     ],
   }
