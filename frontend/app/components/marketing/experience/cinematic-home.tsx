@@ -185,6 +185,15 @@ export function CinematicHome({ locale }: { locale: SiteLocale }) {
           </h2>
           <p className="axx-subhead axx-reveal">{copy.humanAi.subheading}</p>
           <p className="axx-body">{copy.humanAi.body}</p>
+          {/* The one external statistic in the story, cited inline where it is used. */}
+          <p className="axx-body axx-evidence">
+            {copy.humanAi.evidence.text} {copy.humanAi.evidence.sourceLabel}:{' '}
+            <cite>
+              <a href={copy.humanAi.evidence.href} rel="noopener noreferrer" target="_blank">
+                {copy.humanAi.evidence.sourceTitle}
+              </a>
+            </cite>
+          </p>
         </div>
         <div className="axx-reveal">
           <AttributionExplorer locale={locale} />
@@ -218,7 +227,10 @@ export function CinematicHome({ locale }: { locale: SiteLocale }) {
           </div>
         </div>
         <div className="axx-insight-notes axx-reveal">
-          <p>{copy.insight.interpretation}</p>
+          {/* Blank lines in the copy mark paragraph breaks; short paragraphs read (and quote) better. */}
+          {copy.insight.interpretation.split('\n\n').map((paragraph) => (
+            <p key={paragraph}>{paragraph}</p>
+          ))}
           <p className="axx-source">{copy.insight.source}</p>
         </div>
       </section>

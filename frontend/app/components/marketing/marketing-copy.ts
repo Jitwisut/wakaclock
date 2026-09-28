@@ -237,6 +237,12 @@ export const EN_HOME = {
     intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up: 9 languages are verified by parsing rather than guessed from a file extension, and 5 AI agents ship with a bundled hook or adapter rather than being claimed without one. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
     items: [
       {
+        claim:
+          '84% of developers use or plan to use AI tools in their development process, yet more distrust the accuracy of AI output (46%) than trust it (33%).',
+        href: 'https://survey.stackoverflow.co/2025/ai',
+        label: 'Stack Overflow Developer Survey 2025: AI',
+      },
+      {
         claim: `${SITE_NAME} implements the WakaTime API, so an editor with an existing WakaTime plugin can send to it.`,
         href: 'https://wakatime.com/developers',
         label: 'WakaTime API documentation',
@@ -330,7 +336,7 @@ export const EN_HOME = {
 
 export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
-  title: 'AtoAxis — ติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI',
+  title: 'AtoAxis — ติดตามเวลาเขียนโค้ด และวิเคราะห์การใช้ AI',
   headline: ['ทุกเวลาที่เขียนโค้ด', 'เห็นภาพชัดกว่าเดิม'],
   highlights: ['เก็บประวัติครบ', 'รองรับ WakaTime', 'ไม่อัปโหลดโค้ด'],
   tagline: 'เข้าใจงานของคุณ ในไทม์ไลน์เดียว',
@@ -345,21 +351,24 @@ export const TH_HOME = {
     `Early Access: ราคาที่วางแผนไว้คือ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี และยังไม่เปิดให้ชำระเงิน`,
   ],
   whatIs: [
-    `${SITE_NAME} คือบริการติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI สำหรับนักพัฒนา เปลี่ยน heartbeat จาก editor เป็นรายงานแยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติการเขียนโค้ดครบถ้วน integration ที่เชื่อมต่อจะรายงานการแก้ไขจาก AI มนุษย์ และส่วนที่ยังระบุไม่ได้ พร้อมแสดงความครอบคลุมของข้อมูล ปัจจุบันเปิด Early Access แบบเชิญ`,
+    `${SITE_NAME} คือบริการติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI สำหรับนักพัฒนา เราเปลี่ยน heartbeat จาก editor ของคุณ เป็นรายงานแยกตามโปรเจกต์ ภาษา branch และ editor`,
+    'ระบบรองรับ WakaTime API และเก็บประวัติการเขียนโค้ดของคุณครบถ้วน integration ที่เชื่อมต่อจะรายงานการแก้ไขจาก AI มนุษย์ และส่วนที่ยังระบุไม่ได้ พร้อมบอกความครอบคลุมของข้อมูล ตอนนี้เราเปิด Early Access แบบเชิญ',
+    'ถ้าคุณเคยใช้ WakaTime มาก่อน คุณชี้ plugin เดิมมาที่ AtoAxis ได้เลย ไม่ต้องติดตั้ง editor ใหม่ และนำเข้า WakaTime export เพื่อดูประวัติเดิมต่อใน dashboard เดียวกันได้',
     'Heartbeat ที่ส่งไปยัง AtoAxis มีเฉพาะ metadata และตัวเลข ไม่ส่ง source code, prompt หรือคำตอบของ AI ส่วนผู้ให้บริการ AI ที่คุณเชื่อมต่อมีนโยบายข้อมูลของตนเอง',
   ],
   howItWorks: [
     'editor ของคุณจะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยแต่ละครั้งมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ไม่มีเนื้อหาในไฟล์',
     'ระบบจะรวม heartbeat ที่เกิดต่อเนื่องกันเป็น duration block และเมื่อเว้นช่วงนานพอ block นั้นจะถูกปิดแทนที่จะนับต่อ เวลาที่ไม่ได้ทำงานจึงไม่ถูกนับเป็นเวลาเขียนโค้ด',
     'ส่วนบรรทัดที่เปลี่ยนจะถูกแยกเป็นสามทาง คือ AI, มนุษย์ และ Unattributed งานที่เราพิสูจน์ไม่ได้ว่ามาจากทางไหนจะคงสถานะ Unattributed แทนที่จะยกให้คุณ และทุกยอดรวมจะรายงาน coverage เป็นเปอร์เซ็นต์แทนการเดา',
+    'ตัวอย่างเช่น ถ้าคุณเขียนโค้ดต่อเนื่อง 50 นาที แล้วลุกไปประชุม 40 นาที โดยเปิด editor ค้างไว้ ช่วงประชุมจะไม่มี heartbeat ใหม่ block จึงถูกปิด และเวลาประชุมไม่ถูกนับ คุณจึงเห็นเวลาเขียนโค้ดจริง ไม่ใช่เวลาที่หน้าต่างเปิดอยู่',
   ],
   useCases: [
-    'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง',
-    'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch',
+    'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง เพื่อรู้ว่าเวลาของคุณหมดไปกับอะไร',
+    'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch เมื่อคุณต้องสรุปงานหรือประเมินเวลาให้ลูกค้า',
     'กรองเฉพาะโปรเจกต์หรือภาษาเดียว แล้ว drill timeline, heatmap และรายชื่อไฟล์จากลิงก์เดียว',
-    'เปรียบเทียบ AI-attributed lines กับ human keystrokes และ characters',
+    'เปรียบเทียบ AI-attributed lines กับ human keystrokes และ characters เพื่อดูว่า AI ช่วยงานคุณมากแค่ไหน',
     'ตั้งเป้าเวลาเขียนโค้ดรายวันหรือรายสัปดาห์ แล้ววัดเทียบกับ timeline เดียวกัน',
-    'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge',
+    'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge เมื่อคุณ clone repo เดียวกันไว้หลายที่ ยอดเวลาจึงไม่กระจายหลายโปรเจกต์',
     'นำเข้า WakaTime export เพื่อดู history เดิมใน dashboard เดียวกัน',
   ],
   limitationsIntro: `นั่นคือข้อดีของ ${SITE_NAME} ในทางกลับกัน นี่คือสิ่งที่เรายังไม่ได้ทำ บอกไว้ตรง ๆ เพราะเราอยากให้คุณตัดสินใจไม่เลือกเราตั้งแต่ตอนนี้ ดีกว่ามาเจอทีหลังตอนย้ายมาแล้ว:`,
@@ -411,6 +420,12 @@ export const TH_HOME = {
     intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่อธิบายไว้ในคู่มือ integration โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
     items: [
       {
+        claim:
+          'นักพัฒนา 84% ใช้หรือวางแผนจะใช้เครื่องมือ AI ในการพัฒนา แต่ 46% ไม่เชื่อถือความถูกต้องของผลลัพธ์จาก AI และมีเพียง 33% ที่เชื่อถือ',
+        href: 'https://survey.stackoverflow.co/2025/ai',
+        label: 'Stack Overflow Developer Survey 2025: AI',
+      },
+      {
         claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
         href: 'https://wakatime.com/developers',
         label: 'เอกสาร WakaTime API',
@@ -445,10 +460,10 @@ export const TH_HOME = {
   },
   verdict: {
     heading: `สรุปแล้ว ${SITE_NAME} เหมาะกับคุณไหม?`,
-    fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร`,
+    fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร โดยเฉพาะถ้าคุณทำหลายโปรเจกต์พร้อมกัน และใช้ Claude Code, Codex CLI หรือ Gemini CLI เป็นประจำ`,
     doesNotFit:
       'แต่ยังไม่เหมาะถ้าคุณต้องการ desktop หรือ browser client ถ้าทีมต้องการ organisation dashboard ร่วมกัน หรือถ้าคุณทำงานกับ Cursor หรือ Copilot เป็นหลัก เพราะสองตัวนี้ยังต้องมี adapter',
-    closing: `เราวางแผนคิดราคา $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แต่ยังไม่เปิดให้ชำระเงินในช่วง Early Access การเข้าร่วมรายชื่อตอนนี้จึงไม่มีค่าใช้จ่ายกับคุณ`,
+    closing: `เราวางแผนคิดราคา $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แต่ยังไม่เปิดให้ชำระเงินในช่วง Early Access การเข้าร่วมรายชื่อตอนนี้จึงไม่มีค่าใช้จ่ายกับคุณ ถ้ายังไม่แน่ใจ ลองอ่านหน้าเปรียบเทียบกับ WakaTime ก่อนตัดสินใจ`,
   },
   faq: [
     {

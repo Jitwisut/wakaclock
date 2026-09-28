@@ -37,7 +37,7 @@ const COPY = {
   th: {
     heading: 'แผนเดียว รวมทุกอย่าง',
     description:
-      `ราคาเปิดตัวที่วางแผนไว้สำหรับ hosted plan เดียว ${PRODUCT_STATUS.th.label} และยังไม่เปิด checkout`,
+      `ราคาเปิดตัวที่วางแผนไว้สำหรับ hosted plan เดียว ${PRODUCT_STATUS.th.label} และยังไม่เปิด checkout ทุกฟีเจอร์ด้านล่างรวมอยู่ในแผนเดียว คุณไม่ต้องเลือก tier และประวัติเก่าของคุณจะไม่ถูกซ่อนไว้หลังการอัปเกรด`,
     billing: 'รอบการเรียกเก็บเงิน',
     monthly: 'รายเดือน',
     annual: 'รายปี',

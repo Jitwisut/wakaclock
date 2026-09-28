@@ -343,6 +343,12 @@
   letter-spacing: -0.065em;
   color: var(--axx-ink);
 }
+/* Thai stacks vowels and tone marks above and below the line; 0.88 makes them collide. */
+.wakaclock-marketing .axx:lang(th) .axx-display {
+  font-size: clamp(2.8rem, 7vw, 7rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
 .wakaclock-marketing .axx-display .axx-line:last-child {
   color: var(--axx-human);
 }
@@ -865,6 +871,21 @@
   font-size: 14px;
   line-height: 1.7;
   color: var(--axx-muted);
+}
+.wakaclock-marketing .axx-insight-notes p + p {
+  margin-top: 12px;
+}
+/* Supporting statistic under a chapter body: quieter than the body, link visibly a link. */
+.wakaclock-marketing .axx-evidence {
+  margin-top: 16px;
+  font-size: 0.9rem;
+}
+.wakaclock-marketing .axx-evidence cite {
+  font-style: normal;
+}
+.wakaclock-marketing .axx-evidence a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 .wakaclock-marketing .axx-source {
   margin-top: 12px;

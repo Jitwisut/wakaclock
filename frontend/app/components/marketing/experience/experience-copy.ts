@@ -75,6 +75,12 @@ const EN = {
     heading: 'Development Has Changed.',
     subheading: 'Understand the Human + AI Workflow.',
     body: 'Explore how human development and AI-assisted activity contribute to your projects.',
+    evidence: {
+      text: 'In the Stack Overflow 2025 Developer Survey, 84% of respondents use or plan to use AI tools in development, yet more distrust the accuracy of AI output (46%) than trust it (33%). That gap is why we attribute AI work with evidence instead of guessing.',
+      sourceLabel: 'Source',
+      sourceTitle: 'Stack Overflow Developer Survey 2025: AI',
+      href: 'https://survey.stackoverflow.co/2025/ai',
+    },
     controlsLabel: 'Choose which activity to focus on',
     caution:
       'Attribution is code-change attribution, not a measure of time or quality. It is only as complete as the evidence your tools report.',
@@ -224,9 +230,9 @@ const TH: Widen<ExperienceCopy> = {
   demoBadge: 'ข้อมูลตัวอย่างเพื่ออธิบาย',
   hero: {
     eyebrow: TH_HOME.badge,
-    headline: ['ทำให้งานของคุณ', 'มองเห็นได้'],
-    statement:
-      'เข้าใจว่าเวลาพัฒนาของคุณไปอยู่ที่ไหน โปรเจกต์เติบโตอย่างไร และคนกับ AI มีส่วนร่วมในงานที่คุณสร้างอย่างไร',
+    headline: ['ติดตามเวลาเขียนโค้ด', 'ให้งานของคุณมองเห็นได้'],
+    // The first <p> on the page, so it answers "what is this" rather than setting a mood.
+    statement: `${SITE_NAME} ติดตามเวลาเขียนโค้ดจาก editor ที่คุณใช้อยู่แล้ว แล้วบอกว่าเวลาของคุณไปอยู่ที่โปรเจกต์ไหน ภาษาอะไร และการเปลี่ยนแปลงโค้ดส่วนใดมาจากคนหรือ AI โดยไม่อัปโหลด source code`,
     lead: TH_HOME.heroLead,
     explore: `สำรวจ ${SITE_NAME}`,
     product: 'ดูผลิตภัณฑ์',
@@ -259,6 +265,12 @@ const TH: Widen<ExperienceCopy> = {
     heading: 'การพัฒนาซอฟต์แวร์เปลี่ยนไปแล้ว',
     subheading: 'เข้าใจ workflow ระหว่างคนกับ AI',
     body: 'สำรวจว่างานที่คนเขียนและกิจกรรมที่ AI ช่วย มีส่วนร่วมในโปรเจกต์ของคุณอย่างไร',
+    evidence: {
+      text: 'จากผลสำรวจ Stack Overflow Developer Survey 2025 นักพัฒนา 84% ใช้หรือวางแผนจะใช้เครื่องมือ AI ในการพัฒนา แต่ 46% ไม่เชื่อถือความถูกต้องของผลลัพธ์จาก AI และมีเพียง 33% ที่เชื่อถือ ช่องว่างนี้คือเหตุผลที่เราแยกงานของ AI ออกจากงานของคุณด้วยหลักฐาน แทนการเดา',
+      sourceLabel: 'ที่มา',
+      sourceTitle: 'Stack Overflow Developer Survey 2025: AI',
+      href: 'https://survey.stackoverflow.co/2025/ai',
+    },
     controlsLabel: 'เลือกกิจกรรมที่ต้องการโฟกัส',
     caution:
       'Attribution คือการระบุที่มาของการเปลี่ยนแปลงโค้ด ไม่ใช่การวัดเวลาหรือคุณภาพ และครบถ้วนได้เท่าที่หลักฐานจากเครื่องมือของคุณรายงาน',
@@ -296,7 +308,7 @@ const TH: Widen<ExperienceCopy> = {
     heading: 'จากกิจกรรม สู่ความเข้าใจ',
     body: 'เปลี่ยนกิจกรรมการพัฒนาให้เป็น insight ที่มีความหมายเกี่ยวกับเวลา โปรเจกต์ และ workflow ของคุณ',
     interpretation:
-      'ตัวอย่างนี้แสดงวิธีอ่านหนึ่งสัปดาห์ของนักพัฒนาโดยไม่ต้องเปิดรายงานหลายหน้า บัญชีตัวอย่างมีเวลา 28 ชั่วโมง 10 นาทีในเจ็ดวัน วันนี้ทำไป 5 ชั่วโมง 42 นาที และ 34% ของการเปลี่ยนแปลงบรรทัดที่วัดได้มาจาก AI แท่งกราฟบอกว่ากิจกรรมเกิดวันใด ส่วนการ์ดสรุประยะเวลา attribution และโปรเจกต์ปัจจุบัน ตัวเลขทั้งหมดเป็นข้อมูลตัวอย่างที่ AtoAxis สร้างขึ้นเพื่ออธิบายหน้าจอ ไม่ใช่ผลลัพธ์ของลูกค้าหรือ benchmark ในบัญชีจริง ระบบคำนวณระยะเวลาจาก editor heartbeat ที่เกิดใกล้กัน แบ่งการเปลี่ยนแปลงบรรทัดเป็น AI, human หรือ Unattributed และรายงาน coverage เพื่อไม่เปลี่ยนข้อมูลที่ขาดเป็นศูนย์โดยไม่บอก คุณสามารถเริ่มจากวันที่ผิดปกติใน timeline แล้วกรองตามโปรเจกต์ ภาษา editor หรือ branch ก่อนเปิดดูรายชื่อไฟล์ที่เกี่ยวข้อง',
+      'ตัวอย่างนี้แสดงวิธีอ่านหนึ่งสัปดาห์ของนักพัฒนาโดยไม่ต้องเปิดรายงานหลายหน้า\n\nบัญชีตัวอย่างมีเวลา 28 ชั่วโมง 10 นาทีในเจ็ดวัน วันนี้ทำไป 5 ชั่วโมง 42 นาที และ 34% ของการเปลี่ยนแปลงบรรทัดที่วัดได้มาจาก AI แท่งกราฟบอกว่ากิจกรรมเกิดวันใด ส่วนการ์ดสรุประยะเวลา attribution และโปรเจกต์ปัจจุบัน ตัวเลขทั้งหมดเป็นข้อมูลตัวอย่างที่ AtoAxis สร้างขึ้นเพื่ออธิบายหน้าจอ ไม่ใช่ผลลัพธ์ของลูกค้าหรือ benchmark\n\nในบัญชีจริง ระบบคำนวณระยะเวลาจาก editor heartbeat ที่เกิดใกล้กัน แบ่งการเปลี่ยนแปลงบรรทัดเป็น AI, human หรือ Unattributed และรายงาน coverage เพื่อไม่เปลี่ยนข้อมูลที่ขาดเป็นศูนย์โดยไม่บอก คุณสามารถเริ่มจากวันที่ผิดปกติใน timeline แล้วกรองตามโปรเจกต์ ภาษา editor หรือ branch ก่อนเปิดดูรายชื่อไฟล์ที่เกี่ยวข้อง',
     source: 'แหล่งข้อมูล: ข้อมูลจำลองโดย AtoAxis ไม่ใช่ข้อมูลลูกค้า',
     timelineTitle: 'Activity ย้อนหลัง 7 วัน',
     frameLabel: 'ภาพประกอบ activity timeline ของ AtoAxis',
@@ -367,7 +379,7 @@ const TH: Widen<ExperienceCopy> = {
   invitation: {
     kicker: '06 — เริ่มต้น',
     heading: 'เห็นภาพใหญ่ของงานคุณ',
-    body: 'เข้าใจกิจกรรมการพัฒนาของคุณ ค้นพบรูปแบบที่มีความหมาย และสำรวจว่าคนกับ AI ทำงานร่วมกันอย่างไร',
+    body: 'เข้าใจกิจกรรมการพัฒนาของคุณ ค้นพบรูปแบบที่มีความหมาย และสำรวจว่าคนกับ AI ทำงานร่วมกันอย่างไร เริ่มจากเชื่อม WakaTime plugin ที่คุณใช้อยู่ ส่ง heartbeat แรก แล้วดูเวลาเขียนโค้ดของวันนี้ แยกตามโปรเจกต์ ภาษา และ editor ประวัติทั้งหมดของคุณถูกเก็บไว้ครบ ไม่ถูกตัดทิ้งหลังผ่านไปไม่กี่สัปดาห์ และคุณนำเข้าข้อมูลเดิมจาก WakaTime มาต่อได้ในที่เดียว ทั้งหมดนี้มีเพียงสามขั้นตอน ตามคู่มือเริ่มต้นด้านล่าง',
     primary: `เริ่มต้นกับ ${SITE_NAME}`,
     secondary: 'สำรวจฟีเจอร์',
     note: 'Early Access แบบเชิญ เข้าร่วมรายชื่อแล้วเราจะส่ง API key ให้ทางอีเมล',
