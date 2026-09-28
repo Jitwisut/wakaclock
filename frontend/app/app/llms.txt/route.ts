@@ -39,6 +39,7 @@ The WakaTime comparison was checked against the official pricing and plugins pag
 ## Documentation
 
 - [Getting started](${absoluteUrl('/docs/getting-started')}): Requirements, installation, connecting an editor, verifying tracking, troubleshooting.
+- [Migrate from WakaTime](${absoluteUrl('/docs/migrate-from-wakatime')}): Keep the WakaTime plugin, change api_url and api_key, then import a WakaTime heartbeat export without double-counting.
 - [How coding time is calculated](${absoluteUrl('/docs/how-coding-time-is-calculated')}): Heartbeats, duration blocks, the default idle timeout and a worked example.
 - [AI attribution and coverage](${absoluteUrl('/docs/ai-attribution-and-coverage')}): AI, human and Unattributed line changes, evidence sources and coverage denominators.
 - [AI cost methodology](${absoluteUrl('/docs/ai-cost-methodology')}): Token classes, effective-dated prices, micro-USD arithmetic and unknown-cost handling.
@@ -99,6 +100,7 @@ The Thai pages mirror the English ones one-for-one. AtoAxis เป็นเค�
 - [ติดต่อ](${absoluteUrl('/th/contact')}): ช่องทางติดต่อ Early Access และซัพพอร์ต.
 - [เงื่อนไข](${absoluteUrl('/th/terms')}): เงื่อนไขสำหรับผลิตภัณฑ์แบบ hosted และ Early Access.
 - [เริ่มต้นใช้งาน](${absoluteUrl('/th/docs/getting-started')}): ความต้องการของระบบ การติดตั้ง การเชื่อม editor การตรวจสอบการติดตาม และการแก้ปัญหา.
+- [ย้ายจาก WakaTime](${absoluteUrl('/th/docs/migrate-from-wakatime')}): ใช้ WakaTime plugin เดิม แก้ api_url และ api_key แล้ว import ประวัติ heartbeat จาก WakaTime โดยเวลาไม่ถูกนับซ้ำ.
 - [วิธีคำนวณเวลาการเขียนโค้ด](${absoluteUrl('/th/docs/how-coding-time-is-calculated')}): heartbeat, duration block, idle timeout และตัวอย่างคำนวณ.
 - [AI attribution และ coverage](${absoluteUrl('/th/docs/ai-attribution-and-coverage')}): การแยก AI, human, Unattributed และ denominator ของหลักฐาน.
 - [วิธีคำนวณค่าใช้จ่าย AI](${absoluteUrl('/th/docs/ai-cost-methodology')}): ประเภท token ราคา effective-dated หน่วย micro-USD และกรณีไม่ทราบราคา.
