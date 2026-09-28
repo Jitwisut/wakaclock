@@ -27,6 +27,7 @@ export function dateKey(date: Date, timezone: string): string {
 export function useCoworkingHistory(enabled = true) {
   const [items, setItems] = React.useState<PresenceHistoryItem[]>([]);
   const [weeklySummary, setWeeklySummary] = React.useState<null | PresenceWeeklySummary>(null);
+  const [previousSummary, setPreviousSummary] = React.useState<null | PresenceWeeklySummary>(null);
   const [loading, setLoading] = React.useState(enabled);
   const [error, setError] = React.useState<null | string>(null);
 
@@ -37,17 +38,27 @@ export function useCoworkingHistory(enabled = true) {
       const timezone = getBrowserTimezone();
       const today = new Date();
       const todayKey = dateKey(today, timezone);
-      const weekStart = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
-      const [todayHistory, weekHistory] = await Promise.all([
+      const day = 24 * 60 * 60 * 1000;
+      const weekStart = new Date(today.getTime() - 6 * day);
+      // The seven days before this week, for a like-for-like comparison.
+      const previousEnd = new Date(today.getTime() - 7 * day);
+      const previousStart = new Date(today.getTime() - 13 * day);
+      const [todayHistory, weekHistory, previousHistory] = await Promise.all([
         listCoworkingHistoryV2({ from: todayKey, limit: 20, timezone, to: todayKey }),
         personalPresenceSummary({
           from: dateKey(weekStart, timezone),
           timezone,
           to: todayKey,
         }),
+        personalPresenceSummary({
+          from: dateKey(previousStart, timezone),
+          timezone,
+          to: dateKey(previousEnd, timezone),
+        }),
       ]);
       setItems(todayHistory.items);
       setWeeklySummary(weekHistory);
+      setPreviousSummary(previousHistory);
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'History is unavailable');
@@ -60,5 +71,5 @@ export function useCoworkingHistory(enabled = true) {
     void reload();
   }, [reload]);
 
-  return { error, items, loading, reload, weeklySummary };
+  return { error, items, loading, previousSummary, reload, weeklySummary };
 }
