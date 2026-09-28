@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
 import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
@@ -54,6 +54,7 @@ export function RangeStats() {
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Stats</CardTitle>
+            <CardDescription>Preset ranges, independent of the toolbar</CardDescription>
           </div>
           {/*
             `min-w-0` is what actually lets the rail scroll. A flex item defaults to
@@ -84,11 +85,13 @@ export function RangeStats() {
         >
           {stats && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4">
                 <StatTile
                   label={activeAvailable ? 'Active coding' : 'Total'}
                   subtext={activeAvailable ? `WakaTime-compatible: ${stats.text}` : undefined}
-                  value={activeAvailable ? formatDurationShort(stats.active_seconds ?? 0) : stats.text}
+                  value={
+                    activeAvailable ? formatDurationShort(stats.active_seconds ?? 0) : stats.text
+                  }
                 />
                 <StatTile label="Daily average" value={stats.daily_average_text} />
                 <StatTile

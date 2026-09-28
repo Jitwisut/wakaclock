@@ -3,6 +3,8 @@
 import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
+import { BarChart3Icon } from 'lucide-react';
+import { motion } from 'motion/react';
 import { Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 
 import { DashboardPanel } from '@/components/dashboard-panels';
@@ -16,17 +18,19 @@ import {
 } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import { QueryState } from '@/components/wakaclock/query-state';
-import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import {
   presentAttributionDataCoverage,
   presentCodeAttribution,
-  presentPeriodComparison,
 } from '@/lib/wakaclock/dashboard-analytics-presenters';
 import { getDashboardAnalytics } from '@/lib/wakaclock/endpoints';
-import { formatDurationShort, formatMagnitude, toDivergingNegative } from '@/lib/wakaclock/format';
+import { formatMagnitude, toDivergingNegative } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import styles from '../overview.module.css';
+
+import { OVERVIEW_RANGE_DAYS } from './overview-toolbar';
 
 /**
  * Colour means attribution class; position means direction.
@@ -58,15 +62,34 @@ function spend(value: null | number) {
   return value === null ? 'Unavailable' : `$${(value / 1_000_000).toFixed(2)}`;
 }
 
+const UNAVAILABLE = 'Unavailable';
+
+/** A compact metric well. "Unavailable" renders quieter than a measured value so the
+ *  eye lands on what the API could actually measure. */
 function MetricCard({ label, subtext, value }: { label: string; subtext?: string; value: string }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl">{value}</CardTitle>
-        {subtext && <p className="text-muted-foreground text-xs leading-relaxed">{subtext}</p>}
-      </CardHeader>
-    </Card>
+    <div className={styles.metric}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span
+        className={
+          value === UNAVAILABLE
+            ? `${styles.metricValue} ${styles.metricUnavailable}`
+            : styles.metricValue
+        }
+      >
+        {value}
+      </span>
+      {subtext && <p className={styles.metricSub}>{subtext}</p>}
+    </div>
+  );
+}
+
+function MetricGroup({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <section className={styles.metricGroup}>
+      <h3 className={styles.metricGroupTitle}>{title}</h3>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
+    </section>
   );
 }
 
@@ -78,23 +101,30 @@ function BreakdownList({
   title: string;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+    <Card className="gap-4 py-5">
+      <CardHeader className="px-5">
+        <CardTitle className="text-sm">{title}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {items.slice(0, 5).map((item) => (
+      <CardContent className="space-y-3 px-5">
+        {items.length === 0 && (
+          <p className="text-muted-foreground text-xs">Nothing recorded in this range.</p>
+        )}
+        {items.slice(0, 5).map((item, index) => (
           <div key={item.name}>
-            <div className="mb-1 flex justify-between gap-3 text-sm">
+            <div className="mb-1.5 flex justify-between gap-3 text-sm">
               <span className="truncate">{item.name}</span>
-              <span className="text-muted-foreground shrink-0">
+              <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
                 {item.text} · {item.percentage.toFixed(1)}%
               </span>
             </div>
-            <div className="bg-muted h-1.5 overflow-hidden rounded-full">
-              <div
-                className="bg-primary h-full rounded-full"
+            <div className={styles.bar}>
+              <motion.div
+                className={styles.barFill}
+                initial={{ scaleX: 0 }}
                 style={{ width: `${Math.min(item.percentage, 100)}%` }}
+                transition={{ delay: 0.05 * index, duration: 0.8 }}
+                viewport={{ once: true }}
+                whileInView={{ scaleX: 1 }}
               />
             </div>
           </div>
@@ -107,7 +137,7 @@ function BreakdownList({
 /** Phase 9 dashboard contract: all panels share one date range and one API response. */
 export function PhaseNineDashboard() {
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
-  const { start, end, setRange } = useWakaclockRange(30);
+  const { start, end } = useWakaclockRange(OVERVIEW_RANGE_DAYS);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const { data, error, isLoading } = useQuery({
     enabled: Boolean(userId),
@@ -133,10 +163,12 @@ export function PhaseNineDashboard() {
       })),
     [data]
   );
+  const hasAttribution = divergingSeries.some((row) =>
+    Object.entries(row).some(
+      ([key, value]) => key !== 'date' && typeof value === 'number' && value !== 0
+    )
+  );
 
-  const periodComparison = data
-    ? presentPeriodComparison(data.summary.previous_period, data.range.days_included)
-    : null;
   const codeAttribution = data ? presentCodeAttribution(data.coverage) : null;
   const attributionDataCoverage = data ? presentAttributionDataCoverage(data.coverage) : null;
 
@@ -150,7 +182,9 @@ export function PhaseNineDashboard() {
               AI attribution is code-change attribution, not a measure of time or quality.
             </CardDescription>
           </div>
-          <RangePicker onChange={setRange} value={{ start, end }} />
+          <span className="text-muted-foreground rounded-full border px-3 py-1 font-mono text-xs">
+            {start} → {end}
+          </span>
         </div>
       </CardHeader>
       <CardContent>
@@ -163,76 +197,47 @@ export function PhaseNineDashboard() {
         >
           {data && (
             <div className="space-y-6">
+              {/* Today, averages, best day, period change and the comparable/AI-time pair
+                  moved to the hero, Highlights, Stats and Daily summaries respectively, so
+                  this card now holds only what no other panel shows. */}
               <DashboardPanel id="overview.analytics-metrics">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <MetricCard
-                    label="Today"
-                    value={formatDurationShort(data.summary.today_seconds)}
-                  />
-                  <MetricCard
-                    label="Active-day average"
-                    value={formatDurationShort(data.summary.active_day_average_seconds)}
-                  />
-                  <MetricCard
-                    label="Best day"
-                    value={data.summary.most_active_day?.text ?? 'No activity'}
-                  />
-                  {periodComparison && (
+                <div className="space-y-5">
+                  <MetricGroup title="Code attribution">
+                    {codeAttribution && (
+                      <MetricCard
+                        label={codeAttribution.label}
+                        subtext={codeAttribution.subtext}
+                        value={codeAttribution.value}
+                      />
+                    )}
+                    {attributionDataCoverage && (
+                      <MetricCard
+                        label={attributionDataCoverage.label}
+                        subtext={attributionDataCoverage.subtext}
+                        value={attributionDataCoverage.value}
+                      />
+                    )}
                     <MetricCard
-                      label={periodComparison.label}
-                      subtext={periodComparison.subtext}
-                      value={periodComparison.value}
+                      label="Token coverage"
+                      value={percent(data.coverage.token_percent)}
                     />
-                  )}
-                </div>
+                    <MetricCard label="Cost coverage" value={percent(data.coverage.cost_percent)} />
+                  </MetricGroup>
 
-                {data.summary.comparable_seconds !== undefined && (
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <MetricGroup title="AI usage">
+                    <MetricCard label="Prompts" value={count(data.usage.prompts)} />
+                    <MetricCard label="AI sessions" value={count(data.usage.sessions)} />
+                    <MetricCard label="Reported tokens" value={count(data.usage.tokens.total)} />
                     <MetricCard
-                      label="WakaTime-comparable activity"
-                      subtext={`Calculation ${data.summary.calculation_version ?? 'legacy'}`}
-                      value={formatDurationShort(data.summary.comparable_seconds)}
+                      label="Estimated spend"
+                      value={spend(data.usage.estimated_spend.amount_microusd)}
                     />
-                    <MetricCard
-                      label="Additional measured AI time"
-                      subtext="Unioned with comparable activity in the main total"
-                      value={formatDurationShort(data.summary.ai_additional_seconds ?? 0)}
-                    />
-                  </div>
-                )}
-
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  {codeAttribution && (
-                    <MetricCard
-                      label={codeAttribution.label}
-                      subtext={codeAttribution.subtext}
-                      value={codeAttribution.value}
-                    />
-                  )}
-                  {attributionDataCoverage && (
-                    <MetricCard
-                      label={attributionDataCoverage.label}
-                      subtext={attributionDataCoverage.subtext}
-                      value={attributionDataCoverage.value}
-                    />
-                  )}
-                  <MetricCard label="Token coverage" value={percent(data.coverage.token_percent)} />
-                  <MetricCard label="Cost coverage" value={percent(data.coverage.cost_percent)} />
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <MetricCard label="Prompts" value={count(data.usage.prompts)} />
-                  <MetricCard label="AI sessions" value={count(data.usage.sessions)} />
-                  <MetricCard label="Reported tokens" value={count(data.usage.tokens.total)} />
-                  <MetricCard
-                    label="Estimated spend"
-                    value={spend(data.usage.estimated_spend.amount_microusd)}
-                  />
+                  </MetricGroup>
                 </div>
               </DashboardPanel>
 
               <DashboardPanel id="overview.analytics-attribution">
-                <Card>
+                <Card className="gap-4">
                   <CardHeader>
                     <CardTitle className="text-base">Daily code-change attribution</CardTitle>
                     <CardDescription>
@@ -241,78 +246,102 @@ export function PhaseNineDashboard() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ChartContainer className="h-72 w-full" config={chartConfig}>
-                      <BarChart
-                        data={divergingSeries}
-                        margin={{ left: 0, right: 12 }}
-                        stackOffset="sign"
-                      >
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="date" tickLine={false} tickMargin={8} />
-                        <YAxis tickFormatter={formatMagnitude} tickLine={false} tickMargin={8} />
-                        <ReferenceLine stroke="var(--border)" y={0} />
-                        <ChartTooltip
-                          content={
-                            <ChartTooltipContent formatter={(value) => formatMagnitude(value)} />
-                          }
-                        />
-                        <ChartLegend content={<ChartLegendContent />} />
-                        <Bar
-                          dataKey="ai_verified_added"
-                          fill="var(--color-ai_verified_added)"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="ai_inferred_added"
-                          fill="var(--color-ai_inferred_added)"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="human_added"
-                          fill="var(--color-human_added)"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="unknown_added"
-                          fill="var(--color-unknown_added)"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="ai_verified_deleted"
-                          fill="var(--color-ai_verified_deleted)"
-                          fillOpacity={0.55}
-                          legendType="none"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="ai_inferred_deleted"
-                          fill="var(--color-ai_inferred_deleted)"
-                          fillOpacity={0.55}
-                          legendType="none"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="human_deleted"
-                          fill="var(--color-human_deleted)"
-                          fillOpacity={0.55}
-                          legendType="none"
-                          stackId="churn"
-                        />
-                        <Bar
-                          dataKey="unknown_deleted"
-                          fill="var(--color-unknown_deleted)"
-                          fillOpacity={0.55}
-                          legendType="none"
-                          stackId="churn"
-                        />
-                      </BarChart>
-                    </ChartContainer>
+                    {!hasAttribution ? (
+                      <div className={styles.chartEmpty}>
+                        <BarChart3Icon aria-hidden className="size-6" />
+                        <strong>No code changes recorded in this range</strong>
+                        <p>
+                          Line additions and deletions appear here once an editor or AI agent
+                          reports code-change attribution.
+                        </p>
+                      </div>
+                    ) : (
+                      <ChartContainer className="h-72 w-full" config={chartConfig}>
+                        <BarChart
+                          data={divergingSeries}
+                          margin={{ left: 0, right: 12 }}
+                          maxBarSize={22}
+                          stackOffset="sign"
+                        >
+                          <CartesianGrid strokeOpacity={0.5} vertical={false} />
+                          <XAxis
+                            axisLine={false}
+                            dataKey="date"
+                            tickFormatter={(value: string) => value.slice(5)}
+                            tickLine={false}
+                            tickMargin={8}
+                          />
+                          <YAxis
+                            axisLine={false}
+                            tickFormatter={formatMagnitude}
+                            tickLine={false}
+                            tickMargin={8}
+                          />
+                          <ReferenceLine stroke="var(--border)" y={0} />
+                          <ChartTooltip
+                            content={
+                              <ChartTooltipContent formatter={(value) => formatMagnitude(value)} />
+                            }
+                            cursor={{ fill: 'var(--muted)', opacity: 0.5 }}
+                          />
+                          <ChartLegend content={<ChartLegendContent />} />
+                          <Bar
+                            dataKey="ai_verified_added"
+                            fill="var(--color-ai_verified_added)"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="ai_inferred_added"
+                            fill="var(--color-ai_inferred_added)"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="human_added"
+                            fill="var(--color-human_added)"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="unknown_added"
+                            fill="var(--color-unknown_added)"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="ai_verified_deleted"
+                            fill="var(--color-ai_verified_deleted)"
+                            fillOpacity={0.55}
+                            legendType="none"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="ai_inferred_deleted"
+                            fill="var(--color-ai_inferred_deleted)"
+                            fillOpacity={0.55}
+                            legendType="none"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="human_deleted"
+                            fill="var(--color-human_deleted)"
+                            fillOpacity={0.55}
+                            legendType="none"
+                            stackId="churn"
+                          />
+                          <Bar
+                            dataKey="unknown_deleted"
+                            fill="var(--color-unknown_deleted)"
+                            fillOpacity={0.55}
+                            legendType="none"
+                            stackId="churn"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    )}
                   </CardContent>
                 </Card>
               </DashboardPanel>
 
               <DashboardPanel id="overview.analytics-breakdowns">
-                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   <BreakdownList items={data.breakdowns.languages.items} title="Languages" />
                   <BreakdownList items={data.breakdowns.editors.items} title="Editors" />
                   <BreakdownList items={data.breakdowns.models.items} title="AI models" />

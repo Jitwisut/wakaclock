@@ -41,8 +41,8 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
   {
     id: 'overview.character-sheet',
     page: OVERVIEW,
-    label: 'Character sheet',
-    description: 'The headline summary of your current level and totals.',
+    label: 'Today hero',
+    description: 'Today’s running total, the daily quest goal and your level progress.',
   },
   {
     id: ANALYTICS_CARD,
@@ -55,14 +55,15 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     page: OVERVIEW,
     parent: ANALYTICS_CARD,
     label: 'Analytics metric tiles',
-    description: 'Today, averages, coverage percentages, tokens and estimated spend.',
+    description: 'Attribution coverage, prompts, AI sessions, tokens and estimated spend.',
   },
   {
     id: 'overview.analytics-attribution',
     page: OVERVIEW,
     parent: ANALYTICS_CARD,
     label: 'Daily attribution chart',
-    description: 'Stacked bars of AI verified, AI inferred, human and unknown line changes per day.',
+    description:
+      'Stacked bars of AI verified, AI inferred, human and unknown line changes per day.',
   },
   {
     id: 'overview.analytics-breakdowns',
@@ -74,8 +75,14 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
   {
     id: 'overview.status-tiles',
     page: OVERVIEW,
-    label: 'Status tiles',
-    description: 'Today’s running total and connection state.',
+    label: 'Lifetime tiles',
+    description: 'All-time total, days with activity and when you started coding.',
+  },
+  {
+    id: 'overview.insights',
+    page: OVERVIEW,
+    label: 'Highlights',
+    description: 'Change vs the previous period, active-day average, top language and top project.',
   },
   {
     id: 'overview.range-stats',
@@ -87,7 +94,8 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     id: 'overview.top-projects',
     page: OVERVIEW,
     label: 'Projects',
-    description: 'The projects with the most time in the selected range. Each name opens its charts.',
+    description:
+      'The projects with the most time in the selected range. Each name opens its charts.',
   },
   {
     id: 'overview.summaries',
