@@ -411,6 +411,12 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(crate::handlers::presence_v2::heartbeat),
         )
         .route(
+            "/me/presence/status",
+            get(crate::handlers::presence_v2::get_status)
+                .put(crate::handlers::presence_v2::set_status)
+                .delete(crate::handlers::presence_v2::clear_status),
+        )
+        .route(
             "/me/coworking-sessions",
             get(crate::handlers::presence_v2::history),
         )

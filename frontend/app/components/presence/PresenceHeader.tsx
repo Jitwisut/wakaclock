@@ -1,7 +1,8 @@
-import { RefreshCwIcon } from 'lucide-react';
+import { MessageCircleIcon, RefreshCwIcon } from 'lucide-react';
 
+import { statusExpiryLabel } from '@/components/presence/StatusComposer';
 import { PRESENCE_STATUS } from '@/lib/presence/presence-status';
-import type { PresenceState } from '@/lib/wakaclock/types';
+import type { PresenceState, PresenceStatusMessage } from '@/lib/wakaclock/types';
 
 import styles from './presence-chrome.module.css';
 
@@ -9,6 +10,9 @@ export type PresenceConnection = 'connecting' | 'live' | 'stale';
 
 interface PresenceHeaderProps {
   connection?: null | PresenceConnection;
+  /** Your own status message; shown in the "You" chip, which opens the editor. */
+  myStatus?: null | PresenceStatusMessage;
+  onEditStatus?: () => void;
   onReconnect?: () => void;
   partyCount?: null | number;
   presenceState?: null | PresenceState;
@@ -36,6 +40,32 @@ const CONNECTION: Record<PresenceConnection, { className: string; label: string;
     },
   };
 
+function StatusButton({
+  myStatus,
+  onEdit,
+}: {
+  myStatus: null | PresenceStatusMessage;
+  onEdit: () => void;
+}) {
+  const icon = myStatus?.emoji ? (
+    <span aria-hidden>{myStatus.emoji}</span>
+  ) : (
+    <MessageCircleIcon aria-hidden className="size-4" />
+  );
+  return (
+    <button
+      aria-label={myStatus ? `Edit your status: ${myStatus.text}` : 'Set a status'}
+      className={`${styles.btn} ${myStatus ? '' : styles.btnGhost}`}
+      onClick={onEdit}
+      title={myStatus ? `${myStatus.text} · ${statusExpiryLabel(myStatus.expires_at)}` : undefined}
+      type="button"
+    >
+      {icon}
+      <span className="max-w-[14rem] truncate">{myStatus?.text ?? 'Set a status'}</span>
+    </button>
+  );
+}
+
 /**
  * The control-room command bar: what this surface is, which room you are in, whether
  * the live stream is healthy, and your own state. Tool entry points live in the tool
@@ -43,6 +73,8 @@ const CONNECTION: Record<PresenceConnection, { className: string; label: string;
  */
 export function PresenceHeader({
   connection,
+  myStatus = null,
+  onEditStatus,
   onReconnect,
   partyCount,
   presenceState,
@@ -106,6 +138,7 @@ export function PresenceHeader({
             ) : null}
           </span>
         ) : null}
+        {onEditStatus ? <StatusButton myStatus={myStatus} onEdit={onEditStatus} /> : null}
       </div>
     </header>
   );

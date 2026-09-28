@@ -264,6 +264,17 @@ export function PixelOfficeDirectory({
                           {user.username}
                           {user.isCurrentUser ? <span className={styles.faint}> · you</span> : null}
                         </span>
+                        {user.statusMessage ? (
+                          <span
+                            className={`${styles.memberStatus} block`}
+                            title={user.statusMessage.text}
+                          >
+                            {user.statusMessage.emoji ? (
+                              <span aria-hidden>{user.statusMessage.emoji} </span>
+                            ) : null}
+                            {user.statusMessage.text}
+                          </span>
+                        ) : null}
                         <span className={`${styles.memberMeta} block`}>
                           {memberMeta(user, sessions, now)}
                         </span>

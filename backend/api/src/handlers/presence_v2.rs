@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::infrastructure::redis_presence::{
-    LivePosition, LivePresenceState, LiveSession, LiveSnapshot, RedisPresenceStore,
-    UpdateMemberResult,
+    normalize_status, LivePosition, LivePresenceState, LiveSession, LiveSnapshot, PresenceStatus,
+    RedisPresenceStore, UpdateMemberResult,
 };
 use crate::middleware::auth;
 use crate::model::presence::{PresenceInvite, PresenceRoom, PresenceRoomKind, PresenceZone};
@@ -147,6 +147,19 @@ pub struct RosterItem {
     pub state: LivePresenceState,
     pub position: Option<LivePosition>,
     pub zone_id: Option<Uuid>,
+    /// The member's own status message, if they set one. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<PresenceStatus>,
+}
+
+/// Default lifetime of a status when the client does not pick one: half a working day.
+const DEFAULT_STATUS_TTL_SECONDS: i64 = 4 * 3600;
+
+#[derive(Debug, Deserialize)]
+pub struct SetStatusInput {
+    pub text: String,
+    pub emoji: Option<String>,
+    pub expires_in_seconds: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -468,6 +481,57 @@ pub async fn leave_room(
             }
         }
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v2/me/presence/status` — the caller's own status, or `null`.
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<RoomEnvelope<Option<PresenceStatus>>>, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    let status = redis(&state)?
+        .status(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+    Ok(Json(envelope(status)))
+}
+
+/// `PUT /api/v2/me/presence/status` — sets the caller's status. It is shown only in the
+/// roster of rooms the caller is currently in, and always expires.
+pub async fn set_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<SetStatusInput>,
+) -> Result<Json<RoomEnvelope<Option<PresenceStatus>>>, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    let redis = redis(&state)?;
+    let status = normalize_status(
+        &input.text,
+        input.emoji.as_deref(),
+        input
+            .expires_in_seconds
+            .unwrap_or(DEFAULT_STATUS_TTL_SECONDS),
+        Utc::now().timestamp(),
+    )
+    .map_err(|error| PresenceApiError::bad_request(error.message()))?;
+    redis
+        .set_status(user_id, &status)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
+    Ok(Json(envelope(Some(status))))
+}
+
+/// `DELETE /api/v2/me/presence/status` — clears the caller's status.
+pub async fn clear_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, PresenceApiError> {
+    let user_id = user(&state, &headers).await?;
+    redis(&state)?
+        .clear_status(user_id)
+        .await
+        .map_err(PresenceApiError::unavailable)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1304,6 +1368,7 @@ fn snapshot_data_with_zones(
                 state: entry.state,
                 position: entry.position,
                 zone_id: entry.zone_id,
+                status: entry.status,
             })
             .collect(),
         sessions: live

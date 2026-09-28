@@ -624,6 +624,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.memberStatus {
+  overflow: hidden;
+  color: var(--pc-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .memberMeta {
   overflow: hidden;
   color: var(--pc-faint);

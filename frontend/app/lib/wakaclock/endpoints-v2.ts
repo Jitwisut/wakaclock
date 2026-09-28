@@ -20,6 +20,7 @@ import type {
   Leaderboard,
   LeaderboardMember,
   PresenceHistoryData,
+  PresenceStatusMessage,
   PresenceSummaryData,
   PresenceV2Invite,
   PresenceV2Room,
@@ -60,7 +61,7 @@ export async function getOperationEvidence(
   start: string,
   end: string,
   timezone: string,
-  options: { cursor?: string; limit?: number; projectId?: string; } = {}
+  options: { cursor?: string; limit?: number; projectId?: string } = {}
 ) {
   const params = new URLSearchParams({ start, end, timezone });
   if (options.projectId) params.set('project_id', options.projectId);
@@ -373,6 +374,33 @@ export async function listPresenceInvitesV2(roomId: string) {
 
 export async function revokePresenceInviteV2(roomId: string, inviteId: string) {
   await wakaclockV2Client.delete(`/presence/rooms/${roomId}/invites/${inviteId}`);
+}
+
+// GET /me/presence/status — your own status message, or null.
+export async function getMyPresenceStatusV2() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<null | PresenceStatusMessage>>('/me/presence/status')
+  );
+}
+
+// PUT /me/presence/status — shown only in rooms you are in; always expires.
+export async function setMyPresenceStatusV2(
+  text: string,
+  emoji: null | string,
+  expiresInSeconds: number
+) {
+  return unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<null | PresenceStatusMessage>>('/me/presence/status', {
+      emoji,
+      expires_in_seconds: expiresInSeconds,
+      text,
+    })
+  );
+}
+
+// DELETE /me/presence/status
+export async function clearMyPresenceStatusV2() {
+  await wakaclockV2Client.delete('/me/presence/status');
 }
 
 export async function listCoworkingHistoryV2(params?: {

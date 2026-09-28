@@ -1302,11 +1302,21 @@ export interface PresencePoint {
   y: number;
 }
 
+/** PresenceStatus in infrastructure/redis_presence.rs — a status message the user typed
+ * themselves (never inferred from activity). `expires_at` is unix seconds. */
+export interface PresenceStatusMessage {
+  emoji: null | string;
+  expires_at: number;
+  text: string;
+}
+
 /** Also doubles as presence v2's roster entry shape (RosterItem in
  * handlers/presence_v2.rs) — the two happen to be identical. */
 export interface PresenceRosterEntry {
   position: null | PresencePoint;
   state: PresenceState;
+  /** Present only when the member has set a status message (v2 only). */
+  status?: PresenceStatusMessage;
   user_id: string;
   username: string;
   zone_id: null | string;

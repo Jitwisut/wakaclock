@@ -23,6 +23,7 @@ import {
   LobbyView,
   PresenceGuide,
 } from '@/components/presence/PresenceRoomViews';
+import { StatusComposer } from '@/components/presence/StatusComposer';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useCoworkingHistory } from '@/hooks/use-coworking-history';
@@ -30,6 +31,7 @@ import { useOffice } from '@/hooks/use-office';
 import { useOfficeChrome } from '@/hooks/use-office-chrome';
 import { useOfficeMedia } from '@/hooks/use-office-media';
 import { usePresenceActivity } from '@/hooks/use-presence-activity';
+import { usePresenceStatus } from '@/hooks/use-presence-status';
 import { usePresenceStream } from '@/hooks/use-presence-stream';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useRoomMovement } from '@/hooks/use-room-movement';
@@ -61,6 +63,12 @@ function readInviteContext(): { inviteToken: null | string; roomId: null | strin
   return { inviteToken, roomId };
 }
 
+/** The header's connection pill; the stream's own 'offline' reads as still connecting. */
+function streamConnection(status: string): 'connecting' | 'live' | 'stale' {
+  if (status === 'live' || status === 'stale') return status;
+  return 'connecting';
+}
+
 function PresenceApp() {
   const currentUserId = useWakaclockUserStore((state) => state.userId) ?? '';
   const currentUsername = useWakaclockUserStore((state) => state.username) ?? '';
@@ -81,6 +89,9 @@ function PresenceApp() {
   const [working, setWorking] = React.useState(false);
   const [error, setError] = React.useState<null | string>(null);
   const history = useCoworkingHistory(true);
+  const myStatus = usePresenceStatus(presenceV2Available === true && Boolean(currentUserId));
+  const [statusOpen, setStatusOpen] = React.useState(false);
+  const toggleStatusEditor = React.useCallback(() => setStatusOpen((open) => !open), []);
   const presenceStream = usePresenceStream(activeRoom?.id ?? null, inviteToken);
   const {
     applySnapshot,
@@ -114,8 +125,6 @@ function PresenceApp() {
     },
     reactions: office.data?.reactions ?? [],
   };
-  const connected = streamStatus === 'live';
-  const stale = streamStatus === 'stale';
 
   const refreshRooms = React.useCallback(async () => {
     if (presenceV2Available === false) {
@@ -343,9 +352,7 @@ function PresenceApp() {
   const myPresenceState = users.find((user) => user.isCurrentUser)?.status ?? null;
   const partyCount = inRoom && snapshot ? snapshot.roster.length : null;
 
-  let connection: 'connecting' | 'live' | 'stale' = 'connecting';
-  if (connected) connection = 'live';
-  else if (stale) connection = 'stale';
+  const connection = streamConnection(streamStatus);
 
   const enterSpace = async (id: string) => {
     if (!activeRoom || id === activeRoom.id) return;
@@ -443,6 +450,8 @@ function PresenceApp() {
       >
         <PresenceHeader
           connection={inRoom ? connection : null}
+          myStatus={myStatus.status}
+          onEditStatus={presenceV2Available === true ? toggleStatusEditor : undefined}
           onReconnect={reconnect}
           partyCount={partyCount}
           presenceState={inRoom ? myPresenceState : null}
@@ -451,6 +460,16 @@ function PresenceApp() {
           username={currentUsername || null}
         />
 
+        {statusOpen ? (
+          <StatusComposer
+            error={myStatus.error}
+            onClear={myStatus.clear}
+            onClose={() => setStatusOpen(false)}
+            onSave={myStatus.save}
+            saving={myStatus.saving}
+            status={myStatus.status}
+          />
+        ) : null}
         {inRoom ? <PixelOfficeToolRail active={panel} onSelect={setPanel} /> : null}
         {activeRoom && panel && (
           <div className={`${styles.panel} ${styles.toolsPanel}`}>
