@@ -163,6 +163,29 @@ export interface OrganizationMember {
 
 export type TeamRole = 'lead' | 'member' | 'viewer';
 
+export type OrganizationInviteRole = 'admin' | 'member' | 'viewer';
+export type OrganizationSeatType = 'developer' | 'viewer';
+
+/** OrganizationUserInvite in backend/api/src/model/organization.rs. */
+export interface OrganizationUserInvite {
+  created_at: string;
+  expires_at: string;
+  id: string;
+  invited_by: null | string;
+  organization_id: string;
+  organization_name: string;
+  role: OrganizationInviteRole;
+  seat_type: OrganizationSeatType;
+  username: string;
+}
+
+/** AcceptedOrganizationInvite in backend/api/src/model/organization.rs. */
+export interface AcceptedOrganizationInvite {
+  organization_id: string;
+  role: string;
+  seat_type: string;
+}
+
 /** OrganizationTeamMember in backend/api/src/model/organization.rs. */
 export interface OrganizationTeamMember {
   joined_at: string;

@@ -24,6 +24,11 @@ import {
 import { formatDurationShort, formatPercent } from '@/lib/wakaclock/format';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 
+import {
+  MyOrganizationInvites,
+  OrganizationInvitesPanel,
+  ORGANIZATIONS_QUERY_KEY,
+} from './components/organization-invites';
 import { OrganizationTeamsPanel } from './components/organization-teams-panel';
 
 function OrganizationCard({
@@ -70,6 +75,7 @@ function OrganizationCard({
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <OrganizationTeamsPanel organizationId={organization.id} />
+        <OrganizationInvitesPanel organizationId={organization.id} />
         <div className="rounded-md border p-3">
           <p className="font-medium">Your sharing choices</p>
           <p className="text-muted-foreground mt-1">
@@ -165,12 +171,12 @@ export default function TeamsPage() {
   const [name, setName] = React.useState('');
   const { start, end, setRange } = useWakaclockRange(7);
   const timezone = getBrowserTimezone() ?? 'UTC';
-  const organizations = useQuery({ queryKey: ['organizations'], queryFn: listOrganizations });
+  const organizations = useQuery({ queryKey: ORGANIZATIONS_QUERY_KEY, queryFn: listOrganizations });
   const create = useMutation({
     mutationFn: () => createOrganization(name),
     onSuccess: async () => {
       setName('');
-      await client.invalidateQueries({ queryKey: ['organizations'] });
+      await client.invalidateQueries({ queryKey: ORGANIZATIONS_QUERY_KEY });
     },
   });
   return (
@@ -182,6 +188,7 @@ export default function TeamsPage() {
       />
       <RequireUser>
         <RequiresPostgres feature="Teams">
+          <MyOrganizationInvites />
           <Card>
             <CardHeader>
               <CardTitle>Create an organization</CardTitle>

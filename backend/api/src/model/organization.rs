@@ -65,6 +65,35 @@ pub struct OrganizationTeamMember {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct InviteOrganizationMemberRequest {
+    pub username: String,
+    pub role: Option<String>,
+    pub seat_type: Option<String>,
+}
+
+/// A pending username invite, as the organization's admins or the invitee see it.
+#[derive(Debug, Clone, Serialize)]
+pub struct OrganizationUserInvite {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub organization_name: String,
+    pub username: String,
+    pub invited_by: Option<String>,
+    pub role: String,
+    pub seat_type: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// What accepting an invite produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct AcceptedOrganizationInvite {
+    pub organization_id: Uuid,
+    pub role: String,
+    pub seat_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AddOrganizationTeamMemberRequest {
     pub user_id: Uuid,
     /// `lead`, `member` (default) or `viewer`.

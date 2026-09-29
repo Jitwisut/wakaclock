@@ -61,6 +61,8 @@ const MEASUREMENT_REPAIRS_MIGRATION: &str =
     include_str!("../../migrations/postgres/025_measurement_repairs.sql");
 const WAKATIME_IMPORT_PREVIEWS_MIGRATION: &str =
     include_str!("../../migrations/postgres/026_wakatime_import_previews.sql");
+const ORGANIZATION_USER_INVITES_MIGRATION: &str =
+    include_str!("../../migrations/postgres/028_organization_user_invites.sql");
 // PostgreSQL's hashtextextended seed and advisory-lock key are bigint values.
 // Keep this as i64 so tokio-postgres serializes the parameter as int8 instead
 // of sending int4, which PostgreSQL rejects for the prepared expression.
@@ -279,6 +281,10 @@ impl PostgresClient {
                 "WakaTime import previews",
                 WAKATIME_IMPORT_PREVIEWS_MIGRATION,
             ),
+            (
+                "organization user invites",
+                ORGANIZATION_USER_INVITES_MIGRATION,
+            ),
         ] {
             client
                 .batch_execute(sql)
@@ -393,6 +399,9 @@ mod tests {
         assert!(DELIVERY_STATUS_MIGRATION.contains("ON DELETE CASCADE"));
         assert!(MEASUREMENT_REPAIRS_MIGRATION.contains("measurement_repair_jobs"));
         assert!(MEASUREMENT_REPAIRS_MIGRATION.contains("ON DELETE CASCADE"));
+        assert!(ORGANIZATION_USER_INVITES_MIGRATION
+            .contains("CREATE TABLE IF NOT EXISTS organization_user_invites"));
+        assert!(ORGANIZATION_USER_INVITES_MIGRATION.contains("WHERE status = 'pending'"));
         assert!(ASYNC_JOBS_MIGRATION.contains("CREATE TABLE IF NOT EXISTS async_jobs"));
         assert!(
             ASYNC_JOBS_MIGRATION.contains("async_jobs_idempotency_idx"),
