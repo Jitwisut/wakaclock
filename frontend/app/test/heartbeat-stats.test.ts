@@ -43,6 +43,27 @@ function hb(overrides: Partial<HeartbeatItem> = {}): HeartbeatItem {
 }
 
 describe('summarizeHeartbeats', () => {
+  it('keeps Codex attribution distinct from VS Code and never infers it from an editor', () => {
+    const codex = hb({ actor_type: 'ai_verified', ai_agent: 'codex', editor: 'vscode' });
+    const unknown = hb({ actor_type: 'unknown', ai_agent: 'codex', editor: 'codex-desktop' });
+    const inferred = hb({ actor_type: 'ai_inferred', ai_agent: 'codex', editor: 'vscode' });
+    const summary = summarizeHeartbeats([codex, unknown, inferred]);
+    expect(summary.agents).toEqual([
+      { count: 1, label: 'codex' },
+      { count: 1, label: 'Unattributed AI' },
+    ]);
+    expect(summary.editors).toContainEqual({ count: 2, label: 'VS Code' });
+    const filter = { ...EMPTY_HEARTBEAT_FILTER, agent: 'codex' };
+    expect(matchesHeartbeatFilter(codex, filter)).toBe(true);
+    expect(matchesHeartbeatFilter(unknown, filter)).toBe(false);
+    expect(matchesHeartbeatFilter(inferred, filter)).toBe(false);
+    expect(matchesHeartbeatFilter(codex, { ...EMPTY_HEARTBEAT_FILTER, query: 'codex' })).toBe(true);
+    expect(matchesHeartbeatFilter(codex, { ...EMPTY_HEARTBEAT_FILTER, query: 'VS Code' })).toBe(
+      true
+    );
+    expect(isFilterActive(filter)).toBe(true);
+  });
+
   it('returns an empty summary for no rows', () => {
     const summary = summarizeHeartbeats([]);
     expect(summary.total).toBe(0);

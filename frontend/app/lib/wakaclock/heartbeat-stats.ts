@@ -1,3 +1,4 @@
+import { formatAiAgentName } from './ai-display';
 import { timelineProjectLabel } from './project-timeline-colors';
 
 import type { ActorType, HeartbeatItem } from './types';
@@ -20,6 +21,7 @@ interface LineTotals {
 }
 
 export interface HeartbeatSummary {
+  agents: CountEntry[];
   aiEvents: number;
   aiLines: LineTotals;
   branches: number;
@@ -55,6 +57,14 @@ export function isAiHeartbeat(hb: Pick<HeartbeatItem, 'actor_type'>): boolean {
   return AI_ACTORS.has((hb.actor_type ?? 'unknown') as ActorType);
 }
 
+/** Agent evidence is independent of the editor that observed the same file. */
+export function heartbeatAgentLabel(hb: Pick<HeartbeatItem, 'actor_type' | 'ai_agent'>): string {
+  return formatAiAgentName({
+    actor_type: (hb.actor_type ?? 'unknown') as ActorType,
+    agent: hb.ai_agent ?? '',
+  });
+}
+
 function sortedCounts(counts: Map<string, number>): CountEntry[] {
   return [...counts]
     .map(([label, count]) => ({ count, label }))
@@ -73,6 +83,7 @@ export function summarizeHeartbeats(rows: readonly HeartbeatItem[]): HeartbeatSu
   const projects = new Map<string, number>();
   const languages = new Map<string, number>();
   const editors = new Map<string, number>();
+  const agents = new Map<string, number>();
   const categories = new Map<string, number>();
   const files = new Set<string>();
   const branches = new Set<string>();
@@ -90,7 +101,8 @@ export function summarizeHeartbeats(rows: readonly HeartbeatItem[]): HeartbeatSu
     bump(editors, displayEditor(hb.editor));
     bump(categories, facetLabel(hb.category));
     files.add(hb.entity);
-    if (hb.branch?.trim()) branches.add(`${timelineProjectLabel(hb.project)}\u0000${hb.branch.trim()}`);
+    if (hb.branch?.trim())
+      {branches.add(`${timelineProjectLabel(hb.project)}\u0000${hb.branch.trim()}`);}
     if (hb.is_write) writes += 1;
     if (firstTime === null || hb.time < firstTime) firstTime = hb.time;
     if (lastTime === null || hb.time > lastTime) lastTime = hb.time;
@@ -99,6 +111,7 @@ export function summarizeHeartbeats(rows: readonly HeartbeatItem[]): HeartbeatSu
     unattributedLines.added += n(hb.unattributed_lines_added);
     unattributedLines.deleted += n(hb.unattributed_lines_deleted);
     if (isAiHeartbeat(hb)) {
+      bump(agents, heartbeatAgentLabel(hb));
       aiEvents += 1;
       aiLines.added += n(hb.ai_lines_added);
       aiLines.deleted += n(hb.ai_lines_deleted);
@@ -112,6 +125,7 @@ export function summarizeHeartbeats(rows: readonly HeartbeatItem[]): HeartbeatSu
   }
 
   return {
+    agents: sortedCounts(agents),
     aiEvents,
     aiLines,
     branches: branches.size,
@@ -148,6 +162,7 @@ export function heartbeatHour(hb: Pick<HeartbeatItem, 'time'>): number {
 }
 
 export interface HeartbeatFilter {
+  agent: null | string;
   aiOnly: boolean;
   editor: null | string;
   hour: null | number;
@@ -158,6 +173,7 @@ export interface HeartbeatFilter {
 }
 
 export const EMPTY_HEARTBEAT_FILTER: HeartbeatFilter = {
+  agent: null,
   aiOnly: false,
   editor: null,
   hour: null,
@@ -169,6 +185,7 @@ export const EMPTY_HEARTBEAT_FILTER: HeartbeatFilter = {
 
 export function isFilterActive(filter: HeartbeatFilter): boolean {
   return (
+    filter.agent !== null ||
     filter.aiOnly ||
     filter.writesOnly ||
     filter.editor !== null ||
@@ -180,6 +197,8 @@ export function isFilterActive(filter: HeartbeatFilter): boolean {
 }
 
 export function matchesHeartbeatFilter(hb: HeartbeatItem, filter: HeartbeatFilter): boolean {
+  if (filter.agent !== null && (!isAiHeartbeat(hb) || heartbeatAgentLabel(hb) !== filter.agent))
+    {return false;}
   if (filter.writesOnly && !hb.is_write) return false;
   if (filter.aiOnly && !isAiHeartbeat(hb)) return false;
   if (filter.project !== null && timelineProjectLabel(hb.project) !== filter.project) return false;
@@ -188,7 +207,14 @@ export function matchesHeartbeatFilter(hb: HeartbeatItem, filter: HeartbeatFilte
   if (filter.hour !== null && heartbeatHour(hb) !== filter.hour) return false;
   const query = filter.query.trim().toLowerCase();
   if (query) {
-    const haystack = [hb.entity, hb.project, hb.branch, hb.language]
+    const haystack = [
+      hb.entity,
+      hb.project,
+      hb.branch,
+      hb.language,
+      displayEditor(hb.editor),
+      isAiHeartbeat(hb) ? heartbeatAgentLabel(hb) : null,
+    ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
