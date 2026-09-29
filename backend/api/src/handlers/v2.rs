@@ -37,9 +37,10 @@ use crate::model::leaderboard::{
     CreateLeaderboardRequest, Leaderboard, LeaderboardMember, LeaderboardMemberRequest,
 };
 use crate::model::organization::{
-    AddOrganizationMemberRequest, CreateOrganizationRequest, CreateOrganizationTeamRequest,
-    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
-    OrganizationTeam, UpdateOrganizationRequest,
+    AddOrganizationMemberRequest, AddOrganizationTeamMemberRequest, CreateOrganizationRequest,
+    CreateOrganizationTeamRequest, Organization, OrganizationAnalytics,
+    OrganizationAnalyticsSharing, OrganizationMember, OrganizationTeam, OrganizationTeamMember,
+    UpdateOrganizationRequest,
 };
 use crate::model::profile::{
     CreateShareLinkRequest, PublicProfile, ShareLink, UpdateProfileRequest,
@@ -537,6 +538,14 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route(
             "/organizations/:organization_id/teams",
             get(organization_teams).post(organization_create_team),
+        )
+        .route(
+            "/organizations/:organization_id/teams/:team_id/members",
+            get(organization_team_members).post(organization_add_team_member),
+        )
+        .route(
+            "/organizations/:organization_id/teams/:team_id/members/:member_user_id",
+            delete(organization_remove_team_member),
         )
         .route(
             "/organizations/:organization_id/analytics",
@@ -2526,6 +2535,72 @@ pub async fn organization_create_team(
     Ok((StatusCode::CREATED, Json(envelope(team, "UTC", None))))
 }
 
+/// Maps organization service errors to HTTP: a denied action is 403, a fixable request
+/// is 404/400, anything else (PostgreSQL down or unconfigured) is 503.
+fn organization_error(error: anyhow::Error) -> ApiError {
+    use crate::services::authorization::AuthorizationDenied;
+    use crate::services::organizations::OrganizationRequestError;
+    if let Some(denied) = error.downcast_ref::<AuthorizationDenied>() {
+        return ApiError::forbidden(denied.to_string());
+    }
+    match error.downcast_ref::<OrganizationRequestError>() {
+        Some(OrganizationRequestError::NotFound(message)) => ApiError::not_found(*message),
+        Some(OrganizationRequestError::Invalid(message)) => ApiError::bad_request(*message),
+        None => ApiError::service_unavailable(error),
+    }
+}
+
+pub async fn organization_team_members(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((organization_id, team_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<V2Envelope<Vec<OrganizationTeamMember>>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
+    let members = state
+        .organizations_service
+        .team_members(user_id, organization_id, team_id)
+        .await
+        .map_err(organization_error)?;
+    Ok(Json(envelope(members, "UTC", None)))
+}
+
+pub async fn organization_add_team_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((organization_id, team_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<AddOrganizationTeamMemberRequest>,
+) -> Result<(StatusCode, Json<V2Envelope<OrganizationTeamMember>>), ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let member = state
+        .organizations_service
+        .add_team_member(user_id, organization_id, team_id, input)
+        .await
+        .map_err(organization_error)?;
+    Ok((StatusCode::CREATED, Json(envelope(member, "UTC", None))))
+}
+
+pub async fn organization_remove_team_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((organization_id, team_id, member_user_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if state
+        .organizations_service
+        .remove_team_member(user_id, organization_id, team_id, member_user_id)
+        .await
+        .map_err(organization_error)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("team member not found"))
+    }
+}
+
 pub async fn organization_analytics(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3741,6 +3816,13 @@ impl ApiError {
         }
     }
 
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+
     fn forbidden_scope(scope: &str) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
@@ -3786,3 +3868,31 @@ impl IntoResponse for ApiError {
 }
 
 use axum::response::IntoResponse;
+
+#[cfg(test)]
+mod organization_error_tests {
+    use super::organization_error;
+    use crate::services::authorization::AuthorizationDenied;
+    use crate::services::organizations::OrganizationRequestError;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn maps_organization_errors_to_http_statuses() {
+        let denied =
+            organization_error(AuthorizationDenied("role does not permit this action").into());
+        assert_eq!(denied.status, StatusCode::FORBIDDEN);
+        assert_eq!(denied.message, "role does not permit this action");
+        assert_eq!(
+            organization_error(OrganizationRequestError::NotFound("team not found").into()).status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            organization_error(OrganizationRequestError::Invalid("bad role").into()).status,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            organization_error(anyhow::anyhow!("PostgreSQL is not configured")).status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+}

@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::organization::{
-    AddOrganizationMemberRequest, CreateOrganizationRequest, CreateOrganizationTeamRequest,
-    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
-    OrganizationTeam, UpdateOrganizationRequest,
+    AddOrganizationMemberRequest, AddOrganizationTeamMemberRequest, CreateOrganizationRequest,
+    CreateOrganizationTeamRequest, Organization, OrganizationAnalytics,
+    OrganizationAnalyticsSharing, OrganizationMember, OrganizationTeam, OrganizationTeamMember,
+    UpdateOrganizationRequest,
 };
 use crate::repository::presence::PresenceRepository;
 use crate::services::authorization::{AuthorizationService, OrganizationAction};
@@ -17,6 +18,29 @@ use crate::services::authorization::{AuthorizationService, OrganizationAction};
 // but validating before the query gives clients a stable 400 instead of a driver error.
 const ROLES: &[&str] = &["admin", "member", "viewer"];
 const SEAT_TYPES: &[&str] = &["developer", "viewer"];
+const TEAM_ROLES: &[&str] = &["lead", "member", "viewer"];
+
+/// A request the caller can fix — mapped to 404 / 400 by the handler rather than being
+/// string-matched out of a generic error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OrganizationRequestError {
+    #[error("{0}")]
+    NotFound(&'static str),
+    #[error("{0}")]
+    Invalid(&'static str),
+}
+
+/// The team role to store, defaulting to `member`.
+pub fn team_member_role(role: Option<&str>) -> Result<&'static str, OrganizationRequestError> {
+    let role = role.map(str::trim).unwrap_or("member");
+    TEAM_ROLES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == role)
+        .ok_or(OrganizationRequestError::Invalid(
+            "team role must be lead, member or viewer",
+        ))
+}
 
 pub struct OrganizationsService {
     postgres: Option<Arc<PostgresClient>>,
@@ -378,6 +402,161 @@ impl OrganizationsService {
         team_from_row(row)
     }
 
+    /// Members of one team. Any organization member may read it (`ReadTeam`).
+    pub async fn team_members(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<Vec<OrganizationTeamMember>> {
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadTeam, None)
+            .await?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        let rows = postgres
+            .client()
+            .query(
+                "SELECT tm.user_id, u.username, tm.role, tm.joined_at
+                 FROM team_members tm
+                 JOIN users u ON u.id = tm.user_id
+                 WHERE tm.team_id = $1
+                 ORDER BY tm.joined_at ASC",
+                &[&team_id],
+            )
+            .await
+            .context("failed to list team members")?;
+        rows.into_iter().map(team_member_from_row).collect()
+    }
+
+    /// Adds (or re-roles) a team member. The person must already be an active member of
+    /// the organization — a team is a subset of the organization, never a side door in.
+    pub async fn add_team_member(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+        request: AddOrganizationTeamMemberRequest,
+    ) -> Result<OrganizationTeamMember> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
+            .await?;
+        let role = team_member_role(request.role.as_deref())?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        if postgres
+            .client()
+            .query_opt(
+                "SELECT 1 FROM organization_members m
+                 JOIN users u ON u.id = m.user_id AND u.is_active AND u.deleted_at IS NULL
+                 WHERE m.organization_id = $1 AND m.user_id = $2 AND m.deactivated_at IS NULL",
+                &[&organization_id, &request.user_id],
+            )
+            .await
+            .context("failed to resolve organization membership for team member")?
+            .is_none()
+        {
+            return Err(OrganizationRequestError::Invalid(
+                "add this person to the organization before adding them to a team",
+            )
+            .into());
+        }
+        let row = postgres
+            .client()
+            .query_one(
+                "WITH upserted AS (
+                     INSERT INTO team_members (team_id, user_id, role)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role
+                     RETURNING user_id, role, joined_at
+                 )
+                 SELECT upserted.user_id, u.username, upserted.role, upserted.joined_at
+                 FROM upserted JOIN users u ON u.id = upserted.user_id",
+                &[&team_id, &request.user_id, &role],
+            )
+            .await
+            .context("failed to upsert team member")?;
+        let member = team_member_from_row(row)?;
+        self.audit(
+            organization_id,
+            actor,
+            "organization.team_member_upserted",
+            "team",
+            Some(team_id),
+            serde_json::json!({ "user_id": member.user_id, "role": member.role.clone() }),
+        )
+        .await?;
+        Ok(member)
+    }
+
+    /// Removes someone from a team. Returns false when they were not on it.
+    pub async fn remove_team_member(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+        member_user_id: Uuid,
+    ) -> Result<bool> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
+            .await?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        let changed = postgres
+            .client()
+            .execute(
+                "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+                &[&team_id, &member_user_id],
+            )
+            .await
+            .context("failed to remove team member")?;
+        if changed == 1 {
+            self.audit(
+                organization_id,
+                actor,
+                "organization.team_member_removed",
+                "team",
+                Some(team_id),
+                serde_json::json!({ "user_id": member_user_id }),
+            )
+            .await?;
+        }
+        Ok(changed == 1)
+    }
+
+    /// A team id from the URL must belong to the organization in the same URL; otherwise
+    /// an admin of one organization could reach another organization's team.
+    async fn ensure_team_in_organization(
+        &self,
+        postgres: &PostgresClient,
+        organization_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<()> {
+        postgres
+            .client()
+            .query_opt(
+                "SELECT 1 FROM teams WHERE id = $1 AND organization_id = $2",
+                &[&team_id, &organization_id],
+            )
+            .await
+            .context("failed to resolve team")?
+            .map(|_| ())
+            .ok_or_else(|| OrganizationRequestError::NotFound("team not found").into())
+    }
+
     pub async fn analytics(
         &self,
         actor: Uuid,
@@ -656,6 +835,15 @@ fn member_from_row(row: Row) -> Result<OrganizationMember> {
     })
 }
 
+fn team_member_from_row(row: Row) -> Result<OrganizationTeamMember> {
+    Ok(OrganizationTeamMember {
+        user_id: row.try_get("user_id")?,
+        username: row.try_get("username")?,
+        role: row.try_get("role")?,
+        joined_at: row.try_get("joined_at")?,
+    })
+}
+
 fn team_from_row(row: Row) -> Result<OrganizationTeam> {
     Ok(OrganizationTeam {
         id: row.try_get("id")?,
@@ -669,6 +857,21 @@ fn team_from_row(row: Row) -> Result<OrganizationTeam> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_roles_default_to_member_and_reject_others() {
+        assert_eq!(team_member_role(None), Ok("member"));
+        assert_eq!(team_member_role(Some(" lead ")), Ok("lead"));
+        assert_eq!(team_member_role(Some("viewer")), Ok("viewer"));
+        assert!(matches!(
+            team_member_role(Some("owner")),
+            Err(OrganizationRequestError::Invalid(_))
+        ));
+        assert!(matches!(
+            team_member_role(Some("")),
+            Err(OrganizationRequestError::Invalid(_))
+        ));
+    }
 
     #[test]
     fn slug_normalization_is_stable_and_safe() {
