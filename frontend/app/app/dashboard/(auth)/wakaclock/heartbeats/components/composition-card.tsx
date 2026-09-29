@@ -9,17 +9,19 @@ import { cn } from '@/lib/utils';
 import type { CountEntry, HeartbeatSummary } from '@/lib/wakaclock/heartbeat-stats';
 import { timelineProjectColor } from '@/lib/wakaclock/project-timeline-colors';
 
-export type CompositionFacet = 'editor' | 'language' | 'project';
+export type CompositionFacet = 'agent' | 'editor' | 'language' | 'project';
 
 const FACETS: Array<{ key: CompositionFacet; label: string }> = [
   { key: 'project', label: 'Projects' },
   { key: 'language', label: 'Languages' },
   { key: 'editor', label: 'Editors' },
+  { key: 'agent', label: 'AI agents' },
 ];
 
 const VISIBLE = 6;
 
 function entriesFor(summary: HeartbeatSummary, facet: CompositionFacet): CountEntry[] {
+  if (facet === 'agent') return summary.agents;
   if (facet === 'project') return summary.projects;
   if (facet === 'language') return summary.languages;
   return summary.editors;
@@ -39,25 +41,29 @@ export function CompositionCard({
   const entries = entriesFor(summary, facet);
   const visible = entries.slice(0, VISIBLE);
   const rest = entries.slice(VISIBLE).reduce((sum, e) => sum + e.count, 0);
-  const total = Math.max(1, summary.total);
+  const total = Math.max(1, facet === 'agent' ? summary.aiEvents : summary.total);
 
   return (
     <section className="bg-card text-card-foreground flex min-w-0 flex-col gap-4 rounded-2xl border p-5 shadow-xs sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold tracking-tight">Composition</h2>
-          <p className="text-muted-foreground mt-1 text-xs">Share of heartbeats</p>
+          <p className="text-muted-foreground mt-1 text-xs">
+            {facet === 'agent'
+              ? 'Share of AI heartbeats · independent of editor'
+              : 'Share of heartbeats'}
+          </p>
         </div>
         <div
           aria-label="Group heartbeats by"
-          className="bg-muted relative flex rounded-lg p-0.5"
+          className="bg-muted relative flex flex-wrap rounded-lg p-0.5"
           role="tablist"
         >
           {FACETS.map((f) => (
             <button
               aria-selected={facet === f.key}
               className={cn(
-                'relative cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                'focus-visible:ring-ring relative cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
                 facet === f.key ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
               )}
               key={f.key}
@@ -77,6 +83,9 @@ export function CompositionCard({
           ))}
         </div>
       </header>
+      {facet === 'agent' && entries.length === 0 && (
+        <p className="text-muted-foreground text-sm">No AI evidence received for this day.</p>
+      )}
 
       <div aria-hidden="true" className="flex h-2.5 gap-0.5 overflow-hidden rounded-full">
         {visible.map((e) => (
@@ -106,7 +115,7 @@ export function CompositionCard({
               <button
                 aria-pressed={isActive}
                 className={cn(
-                  'group hover:bg-muted/70 flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                  'group hover:bg-muted/70 focus-visible:ring-ring flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none',
                   isActive && 'bg-muted'
                 )}
                 onClick={() => onToggle(facet, e.label)}

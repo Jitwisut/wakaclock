@@ -17,10 +17,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { cn } from '@/lib/utils';
-import { formatAiAgentName } from '@/lib/wakaclock/ai-display';
 import {
   displayEditor,
   EMPTY_HEARTBEAT_FILTER,
+  heartbeatAgentLabel,
   type HeartbeatFilter,
   heartbeatHour,
   isAiHeartbeat,
@@ -28,8 +28,11 @@ import {
   matchesHeartbeatFilter,
   splitEntityPath,
 } from '@/lib/wakaclock/heartbeat-stats';
-import { timelineProjectColor, timelineProjectLabel } from '@/lib/wakaclock/project-timeline-colors';
-import type { ActorType, HeartbeatItem } from '@/lib/wakaclock/types';
+import {
+  timelineProjectColor,
+  timelineProjectLabel,
+} from '@/lib/wakaclock/project-timeline-colors';
+import type { HeartbeatItem } from '@/lib/wakaclock/types';
 
 import styles from '../heartbeats.module.css';
 
@@ -54,7 +57,7 @@ function Toggle({
     <button
       aria-pressed={active}
       className={cn(
-        'inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+        'focus-visible:ring-ring inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none',
         active
           ? 'border-foreground bg-foreground text-background'
           : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -71,7 +74,7 @@ function ActiveChip({ label, onClear }: { label: string; onClear: () => void }) 
   return (
     <motion.button
       animate={{ opacity: 1, scale: 1 }}
-      className="bg-muted hover:bg-muted/70 inline-flex h-7 cursor-pointer items-center gap-1 rounded-full pr-1.5 pl-2.5 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="bg-muted hover:bg-muted/70 focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center gap-1 rounded-full pr-1.5 pl-2.5 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
       exit={{ opacity: 0, scale: 0.9 }}
       initial={{ opacity: 0, scale: 0.9 }}
       layout
@@ -108,7 +111,7 @@ function StreamRow({
     >
       <button
         className={cn(
-          'group hover:bg-muted/60 grid w-full cursor-pointer grid-cols-[4.25rem_3px_minmax(0,1fr)_auto] items-center gap-x-3 rounded-xl px-2 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:px-3',
+          'group hover:bg-muted/60 focus-visible:ring-ring grid w-full cursor-pointer grid-cols-[4.25rem_3px_minmax(0,1fr)_auto] items-center gap-x-3 rounded-xl px-2 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none sm:px-3',
           fresh && styles.freshRow
         )}
         onClick={onOpen}
@@ -143,7 +146,7 @@ function StreamRow({
             )}
             {hb.language && <span>{hb.language}</span>}
             <span className="hidden lg:inline">{hb.category}</span>
-            <span className="hidden lg:inline">{displayEditor(hb.editor)}</span>
+            <span className="hidden lg:inline">Editor: {displayEditor(hb.editor)}</span>
           </span>
         </span>
         <span className="flex items-center gap-1.5">
@@ -157,8 +160,7 @@ function StreamRow({
           {ai && (
             <span className="inline-flex h-6 items-center gap-1 rounded-full bg-violet-500/12 px-2 text-[11px] font-medium text-violet-700 dark:text-violet-300">
               <SparklesIcon aria-hidden="true" className="size-3" />
-              <span className="hidden max-w-24 truncate sm:inline">{formatAiAgentName({ actor_type: (hb.actor_type ?? 'unknown') as ActorType, agent: hb.ai_agent ?? '' })}</span>
-              <span className="sr-only sm:hidden">AI</span>
+              <span className="max-w-32 truncate">{heartbeatAgentLabel(hb)}</span>
             </span>
           )}
           <ChevronRightIcon
@@ -219,18 +221,24 @@ export function HeartbeatStream({
 
   const set = (patch: Partial<HeartbeatFilter>) => onFilterChange({ ...filter, ...patch });
   const chips: Array<{ clear: () => void; key: string; label: string }> = [];
-  if (filter.project !== null)
-    {chips.push({ clear: () => set({ project: null }), key: 'p', label: filter.project });}
-  if (filter.language !== null)
-    {chips.push({ clear: () => set({ language: null }), key: 'l', label: filter.language });}
-  if (filter.editor !== null)
-    {chips.push({ clear: () => set({ editor: null }), key: 'e', label: filter.editor });}
-  if (filter.hour !== null)
-    {chips.push({
+  if (filter.agent !== null)
+    {chips.push({ clear: () => set({ agent: null }), key: 'a', label: `Agent: ${filter.agent}` });}
+  if (filter.project !== null) {
+    chips.push({ clear: () => set({ project: null }), key: 'p', label: filter.project });
+  }
+  if (filter.language !== null) {
+    chips.push({ clear: () => set({ language: null }), key: 'l', label: filter.language });
+  }
+  if (filter.editor !== null) {
+    chips.push({ clear: () => set({ editor: null }), key: 'e', label: filter.editor });
+  }
+  if (filter.hour !== null) {
+    chips.push({
       clear: () => set({ hour: null }),
       key: 'h',
       label: `${hourLabel(filter.hour)}–${hourLabel((filter.hour + 1) % 24)}`,
-    });}
+    });
+  }
 
   return (
     <section className="bg-card text-card-foreground flex min-w-0 flex-col rounded-2xl border shadow-xs">
@@ -252,15 +260,18 @@ export function HeartbeatStream({
               className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
             />
             <Input
-              aria-label="Search file, project, branch or language"
+              aria-label="Search file, project, branch, language, editor or agent"
               className="h-9 rounded-full pl-9"
               onChange={(event) => set({ query: event.target.value })}
-              placeholder="Search file, project, branch…"
+              placeholder="Search file, project, agent…"
               type="search"
               value={filter.query}
             />
           </div>
-          <Toggle active={filter.writesOnly} onClick={() => set({ writesOnly: !filter.writesOnly })}>
+          <Toggle
+            active={filter.writesOnly}
+            onClick={() => set({ writesOnly: !filter.writesOnly })}
+          >
             <PencilLineIcon aria-hidden="true" className="size-3.5" />
             Writes
           </Toggle>
@@ -277,7 +288,7 @@ export function HeartbeatStream({
               ))}
             </AnimatePresence>
             <button
-              className="text-muted-foreground hover:text-foreground ml-1 cursor-pointer rounded text-xs underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring ml-1 cursor-pointer rounded text-xs underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
               onClick={() => onFilterChange(EMPTY_HEARTBEAT_FILTER)}
               type="button"
             >

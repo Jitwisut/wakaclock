@@ -10,6 +10,10 @@ export const wakaclockKeys = {
     [...wakaclockKeys.all, 'organization-teams', userId, organizationId] as const,
   organizationMembers: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'organization-members', userId, organizationId] as const,
+  organizationInvites: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'organization-invites', userId, organizationId] as const,
+  myOrganizationInvites: (userId: string) =>
+    [...wakaclockKeys.all, 'my-organization-invites', userId] as const,
   teamMembers: (userId: string, organizationId: string, teamId: string) =>
     [...wakaclockKeys.all, 'team-members', userId, organizationId, teamId] as const,
   statusBar: (userId: string, timezone?: string) =>

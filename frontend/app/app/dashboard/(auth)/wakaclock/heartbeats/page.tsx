@@ -101,6 +101,7 @@ function HeartbeatsWorkspace() {
   const live = useArrivals(`${userId}|${date}|${timezone}`, data, keys);
 
   const facets: Record<CompositionFacet, null | string> = {
+    agent: filter.agent,
     editor: filter.editor,
     language: filter.language,
     project: filter.project,

@@ -37,10 +37,10 @@ use crate::model::leaderboard::{
     CreateLeaderboardRequest, Leaderboard, LeaderboardMember, LeaderboardMemberRequest,
 };
 use crate::model::organization::{
-    AddOrganizationMemberRequest, AddOrganizationTeamMemberRequest, CreateOrganizationRequest,
-    CreateOrganizationTeamRequest, Organization, OrganizationAnalytics,
-    OrganizationAnalyticsSharing, OrganizationMember, OrganizationTeam, OrganizationTeamMember,
-    UpdateOrganizationRequest,
+    AcceptedOrganizationInvite, AddOrganizationMemberRequest, AddOrganizationTeamMemberRequest,
+    CreateOrganizationRequest, CreateOrganizationTeamRequest, InviteOrganizationMemberRequest,
+    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
+    OrganizationTeam, OrganizationTeamMember, OrganizationUserInvite, UpdateOrganizationRequest,
 };
 use crate::model::profile::{
     CreateShareLinkRequest, PublicProfile, ShareLink, UpdateProfileRequest,
@@ -534,6 +534,23 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route(
             "/organizations/:organization_id/members/:member_user_id",
             delete(organization_remove_member),
+        )
+        .route(
+            "/organizations/:organization_id/invites",
+            get(organization_invites).post(organization_invite_member),
+        )
+        .route(
+            "/organizations/:organization_id/invites/:invite_id",
+            delete(organization_revoke_invite),
+        )
+        .route("/me/organization-invites", get(my_organization_invites))
+        .route(
+            "/me/organization-invites/:invite_id/accept",
+            post(accept_organization_invite),
+        )
+        .route(
+            "/me/organization-invites/:invite_id/decline",
+            post(decline_organization_invite),
         )
         .route(
             "/organizations/:organization_id/teams",
@@ -2547,6 +2564,106 @@ fn organization_error(error: anyhow::Error) -> ApiError {
         Some(OrganizationRequestError::NotFound(message)) => ApiError::not_found(*message),
         Some(OrganizationRequestError::Invalid(message)) => ApiError::bad_request(*message),
         None => ApiError::service_unavailable(error),
+    }
+}
+
+pub async fn organization_invite_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+    Json(input): Json<InviteOrganizationMemberRequest>,
+) -> Result<(StatusCode, Json<V2Envelope<OrganizationUserInvite>>), ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let invite = state
+        .organizations_service
+        .invite_member(user_id, organization_id, input)
+        .await
+        .map_err(organization_error)?;
+    Ok((StatusCode::CREATED, Json(envelope(invite, "UTC", None))))
+}
+
+pub async fn organization_invites(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<Vec<OrganizationUserInvite>>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
+    let invites = state
+        .organizations_service
+        .pending_invites(user_id, organization_id)
+        .await
+        .map_err(organization_error)?;
+    Ok(Json(envelope(invites, "UTC", None)))
+}
+
+pub async fn organization_revoke_invite(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((organization_id, invite_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if state
+        .organizations_service
+        .revoke_invite(user_id, organization_id, invite_id)
+        .await
+        .map_err(organization_error)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("invite not found"))
+    }
+}
+
+pub async fn my_organization_invites(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<V2Envelope<Vec<OrganizationUserInvite>>>, ApiError> {
+    let user_id = require_scope(&state, &headers, "read_orgs").await?;
+    let invites = state
+        .organizations_service
+        .my_invites(user_id)
+        .await
+        .map_err(organization_error)?;
+    Ok(Json(envelope(invites, "UTC", None)))
+}
+
+pub async fn accept_organization_invite(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(invite_id): Path<Uuid>,
+) -> Result<Json<V2Envelope<AcceptedOrganizationInvite>>, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let accepted = state
+        .organizations_service
+        .accept_invite(user_id, invite_id)
+        .await
+        .map_err(organization_error)?;
+    Ok(Json(envelope(accepted, "UTC", None)))
+}
+
+pub async fn decline_organization_invite(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(invite_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = auth::require_account_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if state
+        .organizations_service
+        .decline_invite(user_id, invite_id)
+        .await
+        .map_err(organization_error)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("invite not found"))
     }
 }
 

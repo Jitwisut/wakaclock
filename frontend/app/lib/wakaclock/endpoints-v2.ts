@@ -3,6 +3,7 @@ import type { PresenceHeatmapData } from '@/lib/presence/presence-heatmap';
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
 import type {
+  AcceptedOrganizationInvite,
   DeliveryStatusResponse,
   MeasurementQuality,
   MeasurementRepairCandidate,
@@ -11,9 +12,12 @@ import type {
   Organization,
   OrganizationAnalytics,
   OrganizationAnalyticsSharing,
+  OrganizationInviteRole,
   OrganizationMember,
+  OrganizationSeatType,
   OrganizationTeam,
   OrganizationTeamMember,
+  OrganizationUserInvite,
   TeamRole,
   WakaTimeImportChunkPreview,
   WakaTimeImportJob,
@@ -196,6 +200,56 @@ export async function listOrganizationMembers(organizationId: string) {
       `/organizations/${organizationId}/members`
     )
   );
+}
+
+// POST /organizations/:id/invites — admins invite an existing account by username.
+export async function inviteOrganizationMember(
+  organizationId: string,
+  username: string,
+  role: OrganizationInviteRole,
+  seatType: OrganizationSeatType
+) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<OrganizationUserInvite>>(
+      `/organizations/${organizationId}/invites`,
+      { role, seat_type: seatType, username }
+    )
+  );
+}
+
+// GET /organizations/:id/invites — open invites; admins only.
+export async function listOrganizationInvites(organizationId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationUserInvite[]>>(
+      `/organizations/${organizationId}/invites`
+    )
+  );
+}
+
+// DELETE /organizations/:id/invites/:inviteId
+export async function revokeOrganizationInvite(organizationId: string, inviteId: string) {
+  await wakaclockV2Client.delete(`/organizations/${organizationId}/invites/${inviteId}`);
+}
+
+// GET /me/organization-invites — invites waiting for you.
+export async function listMyOrganizationInvites() {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationUserInvite[]>>('/me/organization-invites')
+  );
+}
+
+// POST /me/organization-invites/:inviteId/accept — joins the organization.
+export async function acceptOrganizationInvite(inviteId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<AcceptedOrganizationInvite>>(
+      `/me/organization-invites/${inviteId}/accept`
+    )
+  );
+}
+
+// POST /me/organization-invites/:inviteId/decline
+export async function declineOrganizationInvite(inviteId: string) {
+  await wakaclockV2Client.post(`/me/organization-invites/${inviteId}/decline`);
 }
 
 // GET /organizations/:id/teams/:teamId/members
