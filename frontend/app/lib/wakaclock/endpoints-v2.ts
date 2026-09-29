@@ -11,6 +11,10 @@ import type {
   Organization,
   OrganizationAnalytics,
   OrganizationAnalyticsSharing,
+  OrganizationMember,
+  OrganizationTeam,
+  OrganizationTeamMember,
+  TeamRole,
   WakaTimeImportChunkPreview,
   WakaTimeImportJob,
 } from './measurement-types';
@@ -163,6 +167,65 @@ export async function updateOrganizationSharing(
       `/organizations/${organizationId}/me/sharing`,
       sharing
     )
+  );
+}
+
+// GET /organizations/:id/teams
+export async function listOrganizationTeams(organizationId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationTeam[]>>(
+      `/organizations/${organizationId}/teams`
+    )
+  );
+}
+
+// POST /organizations/:id/teams — admins only; the creator becomes the team lead.
+export async function createOrganizationTeam(organizationId: string, name: string) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<OrganizationTeam>>(
+      `/organizations/${organizationId}/teams`,
+      { name }
+    )
+  );
+}
+
+// GET /organizations/:id/members — admins only.
+export async function listOrganizationMembers(organizationId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationMember[]>>(
+      `/organizations/${organizationId}/members`
+    )
+  );
+}
+
+// GET /organizations/:id/teams/:teamId/members
+export async function listTeamMembers(organizationId: string, teamId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<OrganizationTeamMember[]>>(
+      `/organizations/${organizationId}/teams/${teamId}/members`
+    )
+  );
+}
+
+// POST /organizations/:id/teams/:teamId/members — also changes an existing member's role.
+export async function addTeamMember(
+  organizationId: string,
+  teamId: string,
+  userId: string,
+  role: TeamRole
+) {
+  return unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<OrganizationTeamMember>>(
+      `/organizations/${organizationId}/teams/${teamId}/members`,
+      { role, user_id: userId }
+    )
+  );
+}
+
+// DELETE /organizations/:id/teams/:teamId/members/:userId
+export async function removeTeamMember(organizationId: string, teamId: string, userId: string) {
+  await wakaclockV2Client.delete(
+    `/organizations/${organizationId}/teams/${teamId}/members/${userId}`
   );
 }
 

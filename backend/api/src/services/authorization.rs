@@ -37,6 +37,13 @@ pub enum Entitlement {
     SsoScim,
 }
 
+/// Returned (inside `anyhow::Error`) when `require` denies an action. Its message is the
+/// decision's reason, unchanged, so callers that only format the error see the same text
+/// as before; callers that need a 403 can `downcast_ref::<AuthorizationDenied>()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct AuthorizationDenied(pub &'static str);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthorizationDecision {
     pub allowed: bool,
@@ -151,7 +158,7 @@ impl AuthorizationService {
         if decision.allowed {
             Ok(decision)
         } else {
-            Err(anyhow!(decision.reason))
+            Err(AuthorizationDenied(decision.reason).into())
         }
     }
 }

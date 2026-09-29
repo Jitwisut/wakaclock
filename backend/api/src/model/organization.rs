@@ -57,6 +57,21 @@ pub struct CreateOrganizationTeamRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrganizationTeamMember {
+    pub user_id: Uuid,
+    pub username: String,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddOrganizationTeamMemberRequest {
+    pub user_id: Uuid,
+    /// `lead`, `member` (default) or `viewer`.
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrganizationAnalytics {
     pub organization_id: Uuid,
     pub member_count: i64,

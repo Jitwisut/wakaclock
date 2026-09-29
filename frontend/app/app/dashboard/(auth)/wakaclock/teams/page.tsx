@@ -24,6 +24,8 @@ import {
 import { formatDurationShort, formatPercent } from '@/lib/wakaclock/format';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 
+import { OrganizationTeamsPanel } from './components/organization-teams-panel';
+
 function OrganizationCard({
   end,
   organization,
@@ -67,6 +69,7 @@ function OrganizationCard({
         <CardTitle>{organization.name}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
+        <OrganizationTeamsPanel organizationId={organization.id} />
         <div className="rounded-md border p-3">
           <p className="font-medium">Your sharing choices</p>
           <p className="text-muted-foreground mt-1">

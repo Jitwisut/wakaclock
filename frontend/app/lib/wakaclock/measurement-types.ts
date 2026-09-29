@@ -141,6 +141,36 @@ export interface Organization {
   slug: string;
 }
 
+/** OrganizationTeam in backend/api/src/model/organization.rs. */
+export interface OrganizationTeam {
+  created_at: string;
+  id: string;
+  name: string;
+  organization_id: string;
+  slug: string;
+}
+
+/** OrganizationMember in backend/api/src/model/organization.rs. */
+export interface OrganizationMember {
+  deactivated_at: null | string;
+  email: null | string;
+  joined_at: string;
+  role: string;
+  seat_type: string;
+  user_id: string;
+  username: string;
+}
+
+export type TeamRole = 'lead' | 'member' | 'viewer';
+
+/** OrganizationTeamMember in backend/api/src/model/organization.rs. */
+export interface OrganizationTeamMember {
+  joined_at: string;
+  role: TeamRole;
+  user_id: string;
+  username: string;
+}
+
 export interface OrganizationAnalyticsSharing {
   share_aggregate: boolean;
   share_individual: boolean;
