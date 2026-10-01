@@ -5380,7 +5380,10 @@ async fn run_ai_sync(
                 // Persist before the network call and before the next transcript
                 // rotation can hide the source bytes. INSERT is idempotent by the
                 // provider event id and stores only the sanitised record.
-                state.enqueue_pending_usage(&usage_records)?;
+                state.enqueue_pending_usage_with_collector(
+                    &usage_records,
+                    &wakaclock_core::queue::Queue::open()?.device_id()?,
+                )?;
             }
 
             if !new_events.is_empty() {

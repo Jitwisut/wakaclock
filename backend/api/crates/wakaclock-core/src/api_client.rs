@@ -570,6 +570,17 @@ impl ApiClient {
             }
         }
         let queue = Queue::open()?;
+        let collector_id = queue.device_id()?;
+        for heartbeat in &mut heartbeats {
+            if heartbeat.session_id.is_some() && heartbeat.ai_agent.is_some() {
+                heartbeat.session_id = Some(crate::ai::usage::scoped_session_id(
+                    &collector_id,
+                    heartbeat.ai_agent.as_deref().unwrap(),
+                    heartbeat.session_id.as_deref().unwrap(),
+                ));
+                heartbeat.machine = collector_id.clone();
+            }
+        }
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 

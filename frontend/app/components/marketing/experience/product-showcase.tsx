@@ -165,6 +165,20 @@ export function ProductShowcase({ locale }: { locale: SiteLocale }) {
         const Replica = PRODUCT_REPLICAS[id];
         const shot = PRODUCT_SHOTS[id];
         const spots = HOTSPOTS[id];
+        let illustration = null;
+        if (shot) {
+          illustration = (
+            <Image
+              alt={shot.alt[locale]}
+              height={shot.height}
+              sizes="(max-width: 1023px) 92vw, 880px"
+              src={shot.src}
+              width={shot.width}
+            />
+          );
+        } else if (view === id) {
+          illustration = <Replica locale={locale} />;
+        }
         return (
           <div
             aria-labelledby={`axx-tab-${id}`}
@@ -180,20 +194,7 @@ export function ProductShowcase({ locale }: { locale: SiteLocale }) {
             </div>
             <figure className="axx-frame">
               <div className="axx-frame-stage">
-                {shot ? (
-                  <Image
-                    alt={shot.alt[locale]}
-                    height={shot.height}
-                    sizes="(max-width: 1023px) 92vw, 880px"
-                    src={shot.src}
-                    width={shot.width}
-                  />
-                ) : view === id ? (
-                  // Only the visible panel draws its illustration. The three hidden replicas
-                  // were ~600 DOM nodes of demo markup; each panel's heading, body and notes
-                  // stay in the HTML regardless, so nothing indexable is lost.
-                  <Replica locale={locale} />
-                ) : null}
+                {illustration}
                 {spots.map((hotspot, index) => (
                   <button
                     aria-controls={`axx-note-${id}-${index}`}

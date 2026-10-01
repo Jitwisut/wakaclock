@@ -225,19 +225,19 @@ export function DurationTimeline() {
                               return (
                                 <Tooltip
                                   key={sessionKey}
-                                  open={activeSession === sessionKey}
                                   onOpenChange={(open) =>
-                                    setActiveSession((current) =>
-                                      open ? sessionKey : current === sessionKey ? null : current
-                                    )
+                                    setActiveSession((current) => {
+                                      if (open) return sessionKey;
+                                      return current === sessionKey ? null : current;
+                                    })
                                   }
+                                  open={activeSession === sessionKey}
                                 >
                                   <TooltipTrigger asChild>
-                                    <div
+                                    <button
                                       aria-label={`${project}, ${formatEpochRange(block.start, block.end)}, ${formatProjectDuration(block.duration_seconds)}`}
                                       className={sessionStyles.sessionBar}
-                                      tabIndex={0}
-                                      role="img"
+                                      onClick={() => setActiveSession(sessionKey)}
                                       style={
                                         {
                                           '--session-color': projectColor,
@@ -246,13 +246,14 @@ export function DurationTimeline() {
                                           minWidth: '2px',
                                         } as React.CSSProperties
                                       }
+                                      type="button"
                                     />
                                   </TooltipTrigger>
                                   <SessionTimelineTooltip
-                                    session={block}
                                     color={projectColor}
                                     duration={formatProjectDuration(block.duration_seconds)}
                                     projectTotal={projectTotal}
+                                    session={block}
                                   />
                                 </Tooltip>
                               );

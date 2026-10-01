@@ -45,7 +45,7 @@ describe('DurationTimeline sessions', () => {
       </QueryClientProvider>
     );
 
-    const bars = await screen.findAllByRole('img');
+    const bars = await screen.findAllByRole('button', { name: /^wakaclock,/ });
     expect(bars).toHaveLength(2);
     expect(bars[0]).toHaveAccessibleName(
       `wakaclock, ${formatEpochRange(start, start + 1800)}, 30m`
@@ -99,7 +99,7 @@ describe('DurationTimeline sessions', () => {
         <DurationTimeline />
       </QueryClientProvider>
     );
-    const bars = await screen.findAllByRole('img');
+    const bars = await screen.findAllByRole('button', { name: /^(wakaclock|atoaxis-parity-probe|another-project),/ });
     expect(bars).toHaveLength(3);
     const rows = within(screen.getByRole('table')).getAllByRole('row');
     expect(rows).toHaveLength(4);

@@ -869,6 +869,7 @@ def main() -> int:
     parser.add_argument("--clickhouse-password", default=os.environ.get("CLICKHOUSE_PASSWORD", ""))
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--scenario-id", action="append", dest="scenario_ids")
+    parser.add_argument("--receipt-output", type=Path, help="Run the isolated local receipt campaign and write its separate metadata artifact")
     parser.add_argument(
         "--campaign-api-key",
         default=os.environ.get("WAKACLOCK_CAMPAIGN_API_KEY"),
@@ -893,6 +894,23 @@ def main() -> int:
         unknown = sorted(set(args.scenario_ids) - set(SCENARIO_IDS))
         if unknown:
             raise ValueError("unsupported scenario id")
+        if args.receipt_output:
+            # Separate artifact contract: preserve the generic certification stdout schema.
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "work-sessions"))
+            from receipt_campaign import run as run_receipts, SCENARIOS as RECEIPT_SCENARIOS
+            from local_lab import private_json
+            selected = args.scenario_ids or list(RECEIPT_SCENARIOS)
+            if set(selected) - set(RECEIPT_SCENARIOS):
+                raise ValueError("unsupported receipt scenario")
+            report = run_receipts("codex", args.execute, selected, min(args.timeout, 300))
+            private_json(args.receipt_output, report)
+            summary = empty_summary()
+            summary["scenarios"] = {r["scenario"]: r["status"] for r in report["scenarios"]}
+            summary["blockers"] = report["blockers"] + ["receipt_artifact_requires_review"]
+            # Legacy stages stay not_run: a new receipt report is not old adapter certification.
+            print(json.dumps(summary, sort_keys=True))
+            return 0 if report["scenarios"] and all(r["status"] == "passed" for r in report["scenarios"]) and not report["blockers"] else 2
         sandbox_value = os.environ.get("WAKACLOCK_CERTIFICATION_SANDBOX")
         if not sandbox_value:
             raise ValueError("WAKACLOCK_CERTIFICATION_SANDBOX is required")
