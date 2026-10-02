@@ -1998,7 +1998,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/integrations/vscode#2',
     (en) => [
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: Wakaclock: Set API Key\nCommand Palette: Wakaclock: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -2072,7 +2072,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     (en) => [
       sub(en ? 'VS Code, the first-party extension' : 'VS Code กับ extension ของเราเอง'),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: Wakaclock: Set API Key\nCommand Palette: Wakaclock: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -2111,12 +2111,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'The VS Code status bar shows the same total and refreshes every 15 seconds',
-              'Wakaclock: Send Heartbeat Now flushes buffered activity immediately instead of waiting for the 120-second same-file cadence',
+              'AtoAxis: Send Heartbeat Now flushes buffered activity immediately instead of waiting for the 120-second same-file cadence',
               'The dashboard Overview page shows the total once the first heartbeat has landed',
             ]
           : [
               'status bar ของ VS Code แสดงยอดเดียวกันและรีเฟรชทุก 15 วินาที',
-              'คำสั่ง Wakaclock: Send Heartbeat Now จะ flush activity ที่ค้างอยู่ทันที ไม่ต้องรอรอบ 120 วินาทีของไฟล์เดิม',
+              'คำสั่ง AtoAxis: Send Heartbeat Now จะ flush activity ที่ค้างอยู่ทันที ไม่ต้องรอรอบ 120 วินาทีของไฟล์เดิม',
               'หน้า Overview ใน dashboard จะแสดงยอดรวมทันทีที่ heartbeat แรกเข้าระบบ',
             ]
       ),
@@ -2134,14 +2134,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       bullets(
         en
           ? [
-              'No total in the status bar: the CLI cannot be found. Run Wakaclock: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
+              'No total in the status bar: the CLI cannot be found. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
               'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
               'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
-              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
               'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
@@ -2589,12 +2589,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'VS Code 1.90 or newer',
               'wakaclock-cli on PATH, or an absolute path in wakaclock.cliPath',
-              'An API key, stored through Wakaclock: Set API Key rather than in settings.json',
+              'An API key, stored through AtoAxis: Set API Key rather than in settings.json',
             ]
           : [
               'VS Code 1.90 ขึ้นไป',
               'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ wakaclock.cliPath',
-              'API key ที่บันทึกผ่านคำสั่ง Wakaclock: Set API Key ไม่ใช่เก็บใน settings.json',
+              'API key ที่บันทึกผ่านคำสั่ง AtoAxis: Set API Key ไม่ใช่เก็บใน settings.json',
             ]
       ),
     ],
@@ -3011,12 +3011,12 @@ generic(
       {
         question: 'Where is my API key stored?',
         answer:
-          "In VS Code's secret storage after running Wakaclock: Set API Key — never in settings.json, so it is never synced or committed with your editor config.",
+          "In VS Code's secret storage after running AtoAxis: Set API Key — never in settings.json, so it is never synced or committed with your editor config.",
       },
       {
         question: 'Why does the status bar show zero?',
         answer:
-          'The extension cannot find wakaclock-cli. Run Wakaclock: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
+          'The extension cannot find wakaclock-cli. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
       },
       {
         question: 'Does it track other apps or browser tabs?',
@@ -3056,12 +3056,12 @@ generic(
       {
         question: 'API key เก็บไว้ที่ไหน?',
         answer:
-          'เก็บใน secret storage ของ VS Code หลังรันคำสั่ง Wakaclock: Set API Key ไม่เคยเก็บใน settings.json จึงไม่ถูก sync หรือ commit ไปกับ config อื่น',
+          'เก็บใน secret storage ของ VS Code หลังรันคำสั่ง AtoAxis: Set API Key ไม่เคยเก็บใน settings.json จึงไม่ถูก sync หรือ commit ไปกับ config อื่น',
       },
       {
         question: 'ทำไม status bar ถึงขึ้นศูนย์?',
         answer:
-          'extension หา wakaclock-cli ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+          'extension หา wakaclock-cli ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
       },
       {
         question: 'ติดตามแอปอื่นหรือ browser tab ด้วยหรือไม่?',
@@ -3377,7 +3377,7 @@ generic(
       {
         question: 'How do I connect VS Code?',
         answer:
-          'Install "AtoAxis — Developer Time Tracking", then run Wakaclock: Set API Key from the Command Palette.',
+          'Install "AtoAxis — Developer Time Tracking", then run AtoAxis: Set API Key from the Command Palette.',
       },
       {
         question: 'How do I connect an editor that already has a WakaTime plugin?',
@@ -3421,7 +3421,7 @@ generic(
       {
         question: 'เชื่อม VS Code อย่างไร?',
         answer:
-          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน Wakaclock: Set API Key จาก Command Palette',
+          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',

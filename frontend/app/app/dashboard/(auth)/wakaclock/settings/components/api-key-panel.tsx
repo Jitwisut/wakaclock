@@ -155,7 +155,7 @@ function QuickSetup() {
             <ol className="grid gap-2 sm:grid-cols-3">
               {[
                 ['Open the Command Palette', '⌘⇧P on macOS, Ctrl+Shift+P elsewhere'],
-                ['Run “Wakaclock: Set API Key”', 'Start typing “API key” to find it'],
+                ['Run “AtoAxis: Set API Key”', 'Start typing “API key” to find it'],
                 ['Paste your key', 'The extension stores it for you'],
               ].map(([title, detail], index) => (
                 <li className="bg-muted/40 flex gap-3 rounded-xl border p-3" key={title}>

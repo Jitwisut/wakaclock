@@ -601,9 +601,9 @@ const EN_GUIDES: Record<string, Guide> = {
     ],
     question: 'How do you confirm the extension is reporting correctly after installing it?',
     example:
-      "For example, type in a file, then check the VS Code status bar: it should show today's total and refresh roughly every 15 seconds. If it stays at zero, the extension cannot find wakaclock-cli, and the fix is Wakaclock: Configure CLI Path, not reinstalling the extension.",
+      "For example, type in a file, then check the VS Code status bar: it should show today's total and refresh roughly every 15 seconds. If it stays at zero, the extension cannot find wakaclock-cli, and the fix is AtoAxis: Configure CLI Path, not reinstalling the extension.",
     recommendation:
-      'Set wakaclock.cliPath explicitly if the binary is not on your PATH before assuming the extension itself is broken. Use Wakaclock: Send Heartbeat Now to flush buffered activity immediately when you need to verify a change without waiting for the normal save-triggered cadence.',
+      'Set wakaclock.cliPath explicitly if the binary is not on your PATH before assuming the extension itself is broken. Use AtoAxis: Send Heartbeat Now to flush buffered activity immediately when you need to verify a change without waiting for the normal save-triggered cadence.',
     sources: [
       {
         href: '/docs/getting-started',

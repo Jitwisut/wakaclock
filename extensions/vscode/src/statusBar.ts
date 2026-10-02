@@ -137,7 +137,7 @@ export class StatusBarController implements vscode.Disposable {
   ) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.item.command = "wakaclock.showToday";
-    this.item.name = "Wakaclock";
+    this.item.name = "AtoAxis";
   }
 
   public setBufferedSecondsProvider(provider: () => number): void {
@@ -275,14 +275,14 @@ export class StatusBarController implements vscode.Disposable {
       this.logger.warn("failed to refresh status bar", error);
 
       // A rejected key and an unreachable server both surfaced as the same neutral
-      // "Wakaclock" label, so a key revoked or regenerated after setup looked like a
+      // "AtoAxis" label, so a key revoked or regenerated after setup looked like a
       // transient blip while every heartbeat silently went unrecorded. This refresh
       // already makes an authenticated request every minute, so it is the one place
       // that notices — it just has to say what it found.
       if (isAuthFailure(error)) {
-        this.item.text = "$(warning) Wakaclock: key rejected";
+        this.item.text = "$(warning) AtoAxis: key rejected";
         this.item.tooltip =
-          "The server rejected this API key, so coding time is not being recorded.\nRun \"Wakaclock: Set API Key\" with a fresh key from Settings → API key.";
+          "The server rejected this API key, so coding time is not being recorded.\nRun \"AtoAxis: Set API Key\" with a fresh key from Settings → API key.";
         this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
         this.item.command = "wakaclock.setApiKey";
         this.connectionState = "key-rejected";
@@ -294,7 +294,7 @@ export class StatusBarController implements vscode.Disposable {
       const message = error instanceof Error ? error.message : String(error);
       const cliUnavailable = /bundled.*cli|cli.*unavailable|unsupported.*platform/i.test(message);
       this.connectionState = cliUnavailable ? "cli-unavailable" : "offline";
-      this.item.text = cliUnavailable ? "$(error) AtoAxis: CLI unavailable" : "$(clock) Wakaclock";
+      this.item.text = cliUnavailable ? "$(error) AtoAxis: CLI unavailable" : "$(clock) AtoAxis";
       this.item.tooltip = cliUnavailable
         ? `${message}\nReinstall the platform-specific AtoAxis Extension or use the advanced cliPath override.`
         : "Unable to read today's total from the AtoAxis server; activity remains queued locally.";
@@ -345,7 +345,7 @@ export class StatusBarController implements vscode.Disposable {
       this.item.text = "$(plug) AtoAxis: Connect";
       this.item.command = "wakaclock.setApiKey";
     } else if (this.connectionState === "key-rejected") {
-      this.item.text = "$(warning) Wakaclock: key rejected";
+      this.item.text = "$(warning) AtoAxis: key rejected";
       this.item.command = "wakaclock.setApiKey";
     } else if (this.connectionState === "subscription-required") {
       this.item.text = `$(warning) AtoAxis: ${humanReadable}`;
@@ -365,7 +365,7 @@ export class StatusBarController implements vscode.Disposable {
         : this.connectionState === "service-degraded"
           ? "Service degraded: the AtoAxis server asked to retry later; activity stays queued locally.\n"
           : this.connectionState === "key-rejected"
-            ? "The server rejected this API key, so coding time is not being recorded.\nRun \"Wakaclock: Set API Key\" with a fresh key from Settings → API key.\n"
+            ? "The server rejected this API key, so coding time is not being recorded.\nRun \"AtoAxis: Set API Key\" with a fresh key from Settings → API key.\n"
             : this.connectionState === "subscription-required"
               ? "Your API key is valid, but this account needs an active AtoAxis subscription.\n"
               : "";
@@ -427,7 +427,7 @@ export class StatusBarController implements vscode.Disposable {
 
     void vscode.window
       .showErrorMessage(
-        "Wakaclock is not recording coding time: the server rejected your API key. Regenerating a key on the dashboard invalidates the previous one.",
+        "AtoAxis is not recording coding time: the server rejected your API key. Regenerating a key on the dashboard invalidates the previous one.",
         "Set API Key"
       )
       .then((choice) => {

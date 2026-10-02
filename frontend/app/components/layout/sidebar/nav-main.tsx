@@ -116,7 +116,7 @@ export type NavMainProps = {
 export const navItems: NavGroup[] = [
   {
     testId: 'nav-main-group-wakaclock',
-    title: 'Wakaclock',
+    title: 'AtoAxis',
     items: [
       { title: 'Overview', href: '/dashboard/wakaclock', icon: LayoutDashboardIcon },
       {

@@ -256,7 +256,7 @@ describe('ApiKeyPanel quick setup', () => {
 
     await user.click(screen.getByRole('tab', { name: 'VS Code' }));
 
-    expect(await screen.findByText('Run “Wakaclock: Set API Key”')).toBeInTheDocument();
+    expect(await screen.findByText('Run “AtoAxis: Set API Key”')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'VS Code' })).toHaveAttribute('aria-selected', 'true');
   });
 });

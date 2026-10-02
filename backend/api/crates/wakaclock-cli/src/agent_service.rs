@@ -178,7 +178,7 @@ fn manifest_content(executable: &str, log_path: &str) -> String {
 #[cfg(target_os = "linux")]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!(
-        "[Unit]\nDescription=Wakaclock AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=AtoAxis AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
         shell_escape(executable)
     )
 }
