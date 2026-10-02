@@ -9,7 +9,7 @@ directly. (`src/helpers/auth/` is dead code — see [../dead-code.md](../dead-co
 
 | Credential | Shape | Lifetime | Holder |
 | --- | --- | --- | --- |
-| **API key** | `wcl_` + 64 hex chars | long-lived, revocable | CLI, editor/browser extensions |
+| **API key** | `waka_` + UUIDv4 (new keys); legacy `wcl_` + 64 hex still accepted | long-lived, revocable | CLI, editor/browser extensions, wakatime-cli |
 | **Session JWT** | HS256, claims `{sub: Uuid, exp}` | 24 h | dashboard |
 | **OAuth access token** | opaque, carries a scope set | per grant | third-party apps |
 
@@ -19,8 +19,11 @@ WakaTime-compatible form; a trailing `:` is tolerated).
 
 ## API keys — Existing Convention
 
-- Generated from two CSPRNG UUIDv4s, hex-encoded, prefixed `wcl_` so secret
-  scanners can recognise a leak (`generate_key`).
+- User API keys are `waka_` + one CSPRNG UUIDv4 (`generate_wakatime_api_key`).
+  wakatime-cli rejects any key not matching `^(waka_)?<uuid v4>$` before it
+  sends a request, so this shape is what lets WakaTime plugins talk to AtoAxis.
+  Keys issued earlier as `wcl_` + 64 hex (`generate_key`, still used for OAuth
+  tokens and codes) keep working: lookup hashes the whole string.
 - Hashed with **plain SHA-256**, not argon2/bcrypt — deliberate: the key is a
   256-bit random value, not a human password, so a slow KDF only taxes every
   request. Only the hash is persisted or held in memory (`hash_key`).

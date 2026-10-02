@@ -29,6 +29,17 @@ pub fn hash_key(key: &str) -> String {
     hex_encode(&hasher.finalize())
 }
 
+/// Prefix WakaTime itself uses; wakatime-cli refuses any key not shaped
+/// `^(waka_)?<uuid v4>$` before sending a request, so user API keys use it.
+pub const WAKATIME_API_KEY_PREFIX: &str = "waka_";
+
+/// A user API key that wakatime-cli and WakaTime plugins accept: `waka_` plus a
+/// CSPRNG UUIDv4 (122 random bits). Keys minted with [`generate_key`] keep
+/// working; lookup is by `hash_key` of the whole string, whatever its shape.
+pub fn generate_wakatime_api_key() -> String {
+    format!("{WAKATIME_API_KEY_PREFIX}{}", Uuid::new_v4())
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -348,6 +359,30 @@ pub fn payment_required() -> (axum::http::StatusCode, axum::Json<serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wakatime_api_keys_match_the_format_wakatime_cli_enforces() {
+        // pkg/params/params.go apiKeyRegex in wakatime-cli.
+        let is_valid_for_cli = |key: &str| {
+            let Some(uuid) = key.strip_prefix("waka_") else {
+                return false;
+            };
+            let bytes = uuid.as_bytes();
+            uuid.len() == 36
+                && [8, 13, 18, 23].iter().all(|&i| bytes[i] == b'-')
+                && bytes[14] == b'4'
+                && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+                && uuid
+                    .bytes()
+                    .all(|b| b == b'-' || b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let first = generate_wakatime_api_key();
+        let second = generate_wakatime_api_key();
+        assert!(is_valid_for_cli(&first), "{first}");
+        assert_ne!(first, second);
+        assert_ne!(hash_key(&first), hash_key(&second));
+        assert!(!is_valid_for_cli(&generate_key()));
+    }
 
     #[test]
     fn forwarding_headers_require_a_trusted_peer_and_ignore_forged_prefixes() {
