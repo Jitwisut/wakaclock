@@ -177,8 +177,13 @@ impl StatsService {
             .query(
                 "
                 SELECT
-                    toString(min(toDate(toDateTime(toUInt32(time), ?)))) AS start_day,
-                    toString(max(toDate(toDateTime(toUInt32(time), ?)))) AS end_day
+                    -- Nullable on purpose: `AllTimeRangeRow` reads `Option<String>`, and a
+                    -- plain `String` column made RowBinary decode its length byte as the
+                    -- nullable tag (`tag for enum is not valid`) for every user, with or without data.
+                    if(count() = 0, NULL,
+                        toString(min(toDate(toDateTime(toUInt32(time), ?))))) AS start_day,
+                    if(count() = 0, NULL,
+                        toString(max(toDate(toDateTime(toUInt32(time), ?))))) AS end_day
                 -- Read the span from the heartbeats themselves. A `SummingMergeTree`
                 -- rollup survives deletion of its source rows, so an aggregate that has
                 -- been repaired or partially cleaned can report an all-time range that
@@ -224,5 +229,55 @@ fn format_duration(secs: f64) -> String {
         format!("{}h {}m", hours, minutes)
     } else {
         format!("{}m", minutes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::heartbeat::HeartbeatRepository;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn all_time_range_decodes_for_users_with_and_without_activity() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        let service = StatsService::new(clickhouse.clone(), 900.0);
+
+        let empty_user = Uuid::new_v4();
+        let empty = service
+            .fetch_all_time_range(empty_user, "UTC")
+            .await
+            .expect("a user with no heartbeats decodes");
+        assert_eq!((empty.start, empty.end), (None, None));
+
+        let user_id = Uuid::new_v4();
+        // 2026-08-01 23:30 UTC and 2026-08-03 00:30 UTC; Bangkok puts both a day later.
+        for time in [1_785_627_000.0_f64, 1_785_717_000.0] {
+            clickhouse
+                .get_client()
+                .query(
+                    "INSERT INTO wakaclock.heartbeats (user_id, entity, entity_type, time, date, category)
+                     VALUES (?, 'src/main.rs', 'file', ?, toDate(toDateTime(toUInt32(?))), 'coding')",
+                )
+                .bind(user_id)
+                .bind(time)
+                .bind(time)
+                .execute()
+                .await
+                .unwrap();
+        }
+        let utc = service.fetch_all_time_range(user_id, "UTC").await.unwrap();
+        assert_eq!(utc.start.as_deref(), Some("2026-08-01"));
+        assert_eq!(utc.end.as_deref(), Some("2026-08-03"));
+        let bangkok = service
+            .fetch_all_time_range(user_id, "Asia/Bangkok")
+            .await
+            .unwrap();
+        assert_eq!(bangkok.start.as_deref(), Some("2026-08-02"));
+        assert_eq!(bangkok.end.as_deref(), Some("2026-08-03"));
     }
 }
