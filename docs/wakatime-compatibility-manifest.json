@@ -1176,7 +1176,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1194,7 +1194,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1212,7 +1212,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1230,7 +1230,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1536,7 +1536,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1554,7 +1554,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",

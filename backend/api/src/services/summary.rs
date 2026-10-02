@@ -5,7 +5,10 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
-use crate::model::summary::{SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem};
+use crate::model::summary::{
+    SummariesResponse, SummaryDay, SummaryGrandTotal, SummaryItem, WakaTimeDayTotals,
+    WakaTimeRange, WakaTimeSummariesResponse, WakaTimeSummaryDay,
+};
 use crate::services::activity_timeline::{
     heartbeat_count, measured_ai_seconds, totals_by, union_ranges, ActivityTimelineService,
     BridgeConfig, CanonicalInterval, Dimension, EvidenceSplit,
@@ -53,6 +56,29 @@ impl SummaryService {
         end: &str,
         timezone: Option<&str>,
     ) -> Result<SummariesResponse> {
+        Ok(self.build(user_id, start, end, timezone).await?.0)
+    }
+
+    /// The v1 `/summaries` route: the response above plus WakaTime's `data`,
+    /// `cumulative_total` and `daily_average`, built from the same day intervals.
+    pub async fn get_wakatime_compatible(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<WakaTimeSummariesResponse> {
+        let (summary, data) = self.build(user_id, start, end, timezone).await?;
+        Ok(WakaTimeSummariesResponse::new(summary, data))
+    }
+
+    async fn build(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<(SummariesResponse, Vec<WakaTimeSummaryDay>)> {
         let range = ResolvedRange::parse(start, end, timezone)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let timezone_name = range.timezone.to_string();
@@ -149,7 +175,20 @@ impl SummaryService {
                     day_start,
                     day_end,
                 );
-                SummaryDay {
+                let wakatime = WakaTimeSummaryDay::new(
+                    total,
+                    WakaTimeRange::new(day, day_start, day_end, &timezone_name),
+                    WakaTimeDayTotals {
+                        categories: seconds_by(&intervals, Dimension::Category),
+                        projects: seconds_by(&intervals, Dimension::Project),
+                        languages: seconds_by(&intervals, Dimension::Language),
+                        editors: seconds_by(&intervals, Dimension::Editor),
+                        operating_systems: seconds_by(&intervals, Dimension::OperatingSystem),
+                        machines: seconds_by(&intervals, Dimension::Machine),
+                        branches: seconds_by(&intervals, Dimension::Branch),
+                    },
+                );
+                let summary_day = SummaryDay {
                     grand_total: SummaryGrandTotal {
                         total_seconds: total,
                         hours: total / 3600.0,
@@ -178,11 +217,13 @@ impl SummaryService {
                     operating_systems: summary_items(&intervals, Dimension::OperatingSystem),
                     categories: summary_items(&intervals, Dimension::Category),
                     date,
-                }
+                };
+                (summary_day, wakatime)
             })
             .collect::<Vec<_>>();
+        let (days, wakatime_days): (Vec<_>, Vec<_>) = days.into_iter().unzip();
 
-        Ok(SummariesResponse {
+        let summary = SummariesResponse {
             calculation: crate::model::summary::SummaryCalculation {
                 timezone: timezone_name,
                 timeout_seconds: self.bridge.idle_timeout_seconds,
@@ -198,8 +239,16 @@ impl SummaryService {
             start: start.to_string(),
             end: end.to_string(),
             days,
-        })
+        };
+        Ok((summary, wakatime_days))
     }
+}
+
+fn seconds_by(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<(String, f64)> {
+    totals_by(intervals, dimension)
+        .into_iter()
+        .map(|(name, seconds, _)| (name, seconds))
+        .collect()
 }
 
 fn summary_items(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<SummaryItem> {
