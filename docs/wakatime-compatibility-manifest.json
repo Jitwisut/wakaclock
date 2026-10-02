@@ -1446,7 +1446,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",
@@ -1464,7 +1464,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",
@@ -1482,7 +1482,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",

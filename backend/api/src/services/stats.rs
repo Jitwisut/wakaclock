@@ -1,12 +1,15 @@
 use anyhow::Result;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, Months, NaiveDate};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
-use crate::model::stats::{AllTimeRangeRow, BestDay, StatsBreakdownItem, StatsData, StatsResponse};
+use crate::model::stats::{
+    AllTimeRangeRow, BestDay, StatsBreakdownItem, StatsData, StatsResponse, WakaTimeStatsFields,
+};
+use crate::model::summary::wakatime_text;
 use crate::services::activity_timeline::{
     totals_by, union_ranges, ActivityTimelineService, BridgeConfig, CanonicalInterval, Dimension,
 };
@@ -49,6 +52,8 @@ impl StatsService {
         }
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let (start_epoch, end_epoch) = resolved.unix_bounds();
+        let today = local_today(timezone)?;
+        let calculated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         let timeline_service = ActivityTimelineService::new(self.clickhouse.clone(), self.bridge);
         let ai_session_ranges = timeline_service
@@ -117,11 +122,11 @@ impl StatsService {
                 daily_average_seconds,
                 daily_average_text: format_duration(daily_average_seconds),
                 best_day,
-                languages: breakdown(&canonical, Dimension::Language),
-                projects: breakdown(&canonical, Dimension::Project),
-                editors: breakdown(&canonical, Dimension::Editor),
-                operating_systems: breakdown(&canonical, Dimension::OperatingSystem),
-                categories: breakdown(&canonical, Dimension::Category),
+                languages: breakdown(&canonical, Dimension::Language, total_seconds),
+                projects: breakdown(&canonical, Dimension::Project, total_seconds),
+                editors: breakdown(&canonical, Dimension::Editor, total_seconds),
+                operating_systems: breakdown(&canonical, Dimension::OperatingSystem, total_seconds),
+                categories: breakdown(&canonical, Dimension::Category, total_seconds),
                 comparable_seconds: Some(timeline.comparable_seconds),
                 ai_measured_seconds: Some(timeline.ai_measured_seconds),
                 ai_additional_seconds: Some(timeline.ai_additional_seconds),
@@ -138,6 +143,45 @@ impl StatsService {
                 active_overlap_seconds: Some(timeline.active_overlap_seconds),
                 active_coverage: Some(timeline.active_coverage),
                 evidence,
+                wakatime: WakaTimeStatsFields {
+                    total_seconds_including_other_language: total_seconds,
+                    human_readable_total: wakatime_text(total_seconds),
+                    human_readable_total_including_other_language: wakatime_text(total_seconds),
+                    daily_average: daily_average_seconds,
+                    daily_average_including_other_language: daily_average_seconds,
+                    human_readable_daily_average: wakatime_text(daily_average_seconds),
+                    human_readable_daily_average_including_other_language: wakatime_text(
+                        daily_average_seconds,
+                    ),
+                    machines: breakdown(&canonical, Dimension::Machine, total_seconds),
+                    dependencies: Vec::new(),
+                    range: range.to_string(),
+                    human_readable_range: human_readable_range(range, &resolved),
+                    holidays: days_included - days_with_activity,
+                    days_including_holidays: days_included,
+                    days_minus_holidays: days_with_activity,
+                    status: "ok",
+                    percent_calculated: 100,
+                    is_already_updating: false,
+                    is_cached: false,
+                    is_coding_activity_visible: true,
+                    is_language_usage_visible: true,
+                    is_editor_usage_visible: true,
+                    is_category_usage_visible: true,
+                    is_os_usage_visible: true,
+                    is_stuck: false,
+                    is_including_today: resolved.end >= today,
+                    is_up_to_date: true,
+                    start: rfc3339(start_epoch),
+                    end: rfc3339(end_epoch - 1.0),
+                    timezone: resolved.timezone.to_string(),
+                    timeout: (self.bridge.idle_timeout_seconds / 60.0).round() as u64,
+                    writes_only: false,
+                    user_id,
+                    username: None,
+                    created_at: calculated_at.clone(),
+                    modified_at: calculated_at,
+                },
             },
         })
     }
@@ -148,14 +192,22 @@ impl StatsService {
         range: &str,
         timezone: Option<&str>,
     ) -> Result<(String, String)> {
-        let today = ResolvedRange::today_date_string(timezone)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let today = NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
+        let today = local_today(timezone)?;
 
         match range {
             "today" => Ok((fmt_date(today), fmt_date(today))),
             "last_7_days" => Ok((fmt_date(today - Duration::days(6)), fmt_date(today))),
             "last_30_days" => Ok((fmt_date(today - Duration::days(29)), fmt_date(today))),
+            "last_6_months" => Ok((
+                fmt_date(
+                    today
+                        .checked_sub_months(Months::new(6))
+                        .ok_or_else(|| anyhow::anyhow!("date out of range"))?
+                        + Duration::days(1),
+                ),
+                fmt_date(today),
+            )),
+            "last_year" => Ok((fmt_date(today - Duration::days(364)), fmt_date(today))),
             "all_time" => {
                 let row = self
                     .fetch_all_time_range(user_id, timezone.unwrap_or("UTC"))
@@ -165,9 +217,12 @@ impl StatsService {
                     _ => (fmt_date(today), fmt_date(today)),
                 })
             }
-            _ => anyhow::bail!(
-                "Invalid stats range, expected one of: today, last_7_days, last_30_days, all_time"
-            ),
+            other => calendar_range(other, today).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{INVALID_RANGE}, expected one of: today, last_7_days, last_30_days, \
+                     last_6_months, last_year, all_time, YYYY or YYYY-MM"
+                )
+            }),
         }
     }
 
@@ -204,17 +259,75 @@ impl StatsService {
     }
 }
 
-fn breakdown(intervals: &[CanonicalInterval], dimension: Dimension) -> Vec<StatsBreakdownItem> {
+/// Prefix of the error the handler maps to 400 rather than 500.
+pub const INVALID_RANGE: &str = "Invalid stats range";
+
+fn breakdown(
+    intervals: &[CanonicalInterval],
+    dimension: Dimension,
+    range_total: f64,
+) -> Vec<StatsBreakdownItem> {
     totals_by(intervals, dimension)
         .into_iter()
-        .map(|(name, total_seconds, heartbeats)| StatsBreakdownItem {
-            name,
-            total_seconds,
-            hours: total_seconds / 3600.0,
-            text: format_duration(total_seconds),
-            heartbeats,
+        .map(|(name, total_seconds, heartbeats)| {
+            StatsBreakdownItem::new(
+                name,
+                total_seconds,
+                heartbeats,
+                range_total,
+                format_duration(total_seconds),
+            )
         })
         .collect()
+}
+
+fn local_today(timezone: Option<&str>) -> Result<NaiveDate> {
+    let today = ResolvedRange::today_date_string(timezone)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(NaiveDate::parse_from_str(&today, "%Y-%m-%d")?)
+}
+
+/// WakaTime's `YYYY` and `YYYY-MM` ranges. The end is clipped to today so days that
+/// have not happened yet are not counted as holidays; a range wholly in the future
+/// is invalid.
+fn calendar_range(range: &str, today: NaiveDate) -> Option<(String, String)> {
+    let (start, end) = match range.split_once('-') {
+        None if range.len() == 4 => {
+            let year = range.parse::<i32>().ok()?;
+            (
+                NaiveDate::from_ymd_opt(year, 1, 1)?,
+                NaiveDate::from_ymd_opt(year, 12, 31)?,
+            )
+        }
+        Some((year, month)) if range.len() == 7 && month.len() == 2 => {
+            let start = NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, 1)?;
+            (
+                start,
+                start.checked_add_months(Months::new(1))? - Duration::days(1),
+            )
+        }
+        _ => return None,
+    };
+    (start <= today).then(|| (fmt_date(start), fmt_date(end.min(today))))
+}
+
+fn human_readable_range(range: &str, resolved: &ResolvedRange) -> String {
+    match range {
+        "today" => "Today".to_string(),
+        "last_7_days" => "last 7 days".to_string(),
+        "last_30_days" => "last 30 days".to_string(),
+        "last_6_months" => "last 6 months".to_string(),
+        "last_year" => "last year".to_string(),
+        "all_time" => format!("since {}", resolved.start.format("%b %-d %Y")),
+        year if year.len() == 4 => year.to_string(),
+        _ => format!("{} {}", resolved.start.format("%B"), resolved.start.year()),
+    }
+}
+
+fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
 }
 
 fn fmt_date(date: NaiveDate) -> String {
@@ -235,6 +348,85 @@ fn format_duration(secs: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn date(value: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn calendar_ranges_cover_wakatime_year_and_month_and_clip_to_today() {
+        let today = date("2026-10-02");
+        let pair = |range: &str| calendar_range(range, today);
+        assert_eq!(
+            pair("2025"),
+            Some(("2025-01-01".into(), "2025-12-31".into()))
+        );
+        assert_eq!(
+            pair("2026"),
+            Some(("2026-01-01".into(), "2026-10-02".into()))
+        );
+        assert_eq!(
+            pair("2026-02"),
+            Some(("2026-02-01".into(), "2026-02-28".into()))
+        );
+        assert_eq!(
+            pair("2024-02"),
+            Some(("2024-02-01".into(), "2024-02-29".into()))
+        );
+        assert_eq!(
+            pair("2026-10"),
+            Some(("2026-10-01".into(), "2026-10-02".into()))
+        );
+        for invalid in [
+            "2027",
+            "2026-11",
+            "2026-13",
+            "2026-1",
+            "26",
+            "last_week",
+            "2026-10-01",
+        ] {
+            assert_eq!(pair(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn human_readable_ranges_name_the_period() {
+        let resolved = |start: &str, end: &str| ResolvedRange::parse(start, end, None).unwrap();
+        assert_eq!(
+            human_readable_range("all_time", &resolved("2025-09-01", "2026-08-31")),
+            "since Sep 1 2025"
+        );
+        assert_eq!(
+            human_readable_range("2025", &resolved("2025-01-01", "2025-12-31")),
+            "2025"
+        );
+        assert_eq!(
+            human_readable_range("2025-09", &resolved("2025-09-01", "2025-09-30")),
+            "September 2025"
+        );
+        assert_eq!(
+            human_readable_range("last_6_months", &resolved("2026-04-03", "2026-10-02")),
+            "last 6 months"
+        );
+    }
+
+    #[test]
+    fn breakdown_items_carry_wakatime_fields_next_to_the_atoaxis_ones() {
+        let item = StatsBreakdownItem::new("atlas".into(), 3725.0, 9, 14_900.0, "1h 2m".into());
+        assert_eq!(item.percent, 25.0);
+        assert_eq!(item.digital, "1:02:05");
+        assert_eq!(item.decimal, "1.03");
+        assert_eq!((item.minutes, item.seconds), (2, 5));
+        // AtoAxis fields are unchanged.
+        assert!((item.hours - 3725.0 / 3600.0).abs() < 1e-12);
+        assert_eq!(item.text, "1h 2m");
+        assert_eq!(item.heartbeats, 9);
+        assert_eq!(
+            StatsBreakdownItem::new("x".into(), 5.0, 1, 0.0, "0m".into()).percent,
+            0.0
+        );
+    }
     use crate::repository::heartbeat::HeartbeatRepository;
 
     #[tokio::test]
