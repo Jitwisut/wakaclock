@@ -174,7 +174,7 @@ describe('Analytics Explorer frontend foundation', () => {
   });
 
   it('exposes the Analytics submenu destinations in the sidebar', () => {
-    const group = navItems.find((item) => item.title === 'Wakaclock');
+    const group = navItems.find((item) => item.title === 'AtoAxis');
     const analytics = group?.items.find((item) => item.title === 'Analytics');
     expect(analytics?.items?.map((item) => item.title)).toEqual([
       'Activity Timeline',

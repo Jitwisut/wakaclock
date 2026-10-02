@@ -115,7 +115,7 @@ impl AiSyncLock {
 }
 
 #[derive(Parser)]
-#[command(name = "wakaclock", version, about = "Wakaclock CLI Hub")]
+#[command(name = "wakaclock", version, about = "AtoAxis CLI Hub")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -555,7 +555,7 @@ enum AiAction {
     },
     /// Ingest one privacy-safe AI file-mutation event from stdin as JSON. This is the
     /// universal adapter surface for MCP/tool bridges (for example ChatGPT -> Tan) and
-    /// agents that do not expose a transcript format WakaClock can parse itself.
+    /// agents that do not expose a transcript format AtoAxis can parse itself.
     Emit {
         /// Print a machine-readable delivery outcome.
         #[arg(long, default_value_t = false)]
@@ -671,7 +671,7 @@ enum AiAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Save an API key generated from the Wakaclock dashboard into ~/.wakaclock/config.toml
+    /// Save an API key generated from the AtoAxis dashboard into ~/.wakaclock/config.toml
     SetKey {
         /// Deprecated positional form. Prefer `--stdin` so the secret never appears
         /// in shell history or process listings.

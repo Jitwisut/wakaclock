@@ -271,7 +271,7 @@ describe("offline status contract", () => {
       ...base,
       connection: { state: "auth_rejected", reachable: true, authenticated: false, httpStatus: 401 },
     }).refresh();
-    expect(item.text).toBe("$(warning) Wakaclock: key rejected");
+    expect(item.text).toBe("$(warning) AtoAxis: key rejected");
     expect(item.command).toBe("wakaclock.setApiKey");
     expect(showErrorMessage).toHaveBeenCalledTimes(1);
 

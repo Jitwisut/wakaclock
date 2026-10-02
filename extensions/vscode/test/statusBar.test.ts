@@ -75,7 +75,7 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(warning) Wakaclock: key rejected");
+    expect(item.text).toBe("$(warning) AtoAxis: key rejected");
     expect(item.command).toBe("wakaclock.setApiKey");
     expect(item.backgroundColor).toBeDefined();
     expect(showErrorMessage).toHaveBeenCalledTimes(1);
@@ -292,7 +292,7 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(clock) Wakaclock");
+    expect(item.text).toBe("$(clock) AtoAxis");
     expect(item.tooltip).toContain("Unable to read today's total");
   });
 });

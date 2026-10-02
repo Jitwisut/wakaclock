@@ -115,7 +115,7 @@ export function registerCommands(
       }
 
       await configService.updateSetting("cliPath", value.trim());
-      await vscode.window.showInformationMessage("Wakaclock CLI path updated.");
+      await vscode.window.showInformationMessage("AtoAxis CLI path updated.");
     }),
     vscode.commands.registerCommand("wakaclock.showToday", async () => {
       try {
@@ -152,7 +152,7 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
       const value = await vscode.window.showInputBox({
-        prompt: "API key generated from the Wakaclock dashboard (Settings → API key)",
+        prompt: "API key generated from the AtoAxis dashboard (Settings → API key)",
         placeHolder: "wcl_...",
         password: true,
         ignoreFocusOut: true
@@ -233,7 +233,7 @@ export function registerCommands(
     vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
       const existing = await getStoredApiKey(context.secrets);
       if (!existing) {
-        await vscode.window.showInformationMessage("No Wakaclock API key is currently set.");
+        await vscode.window.showInformationMessage("No AtoAxis API key is currently set.");
         return;
       }
 
@@ -241,7 +241,7 @@ export function registerCommands(
       await clearPendingApiKey(context.secrets);
       await statusBar.refresh();
       await vscode.window.showInformationMessage(
-        "Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again."
+        "AtoAxis API key cleared — heartbeats will use the unauthenticated user_id again."
       );
 
       try {

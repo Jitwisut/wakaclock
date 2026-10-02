@@ -35,7 +35,7 @@ Install the platform-specific AtoAxis extension from the VS Code Marketplace, th
 set your API key from the command palette:
 
 ```
-> Wakaclock: Set API Key
+> AtoAxis: Set API Key
 ```
 The extension verifies the candidate key before replacing an existing one. If the
 server is temporarily offline, it keeps the key pending and queues activity locally.
@@ -127,15 +127,15 @@ ClickHouse database on infrastructure you control.
 
 | Command                          | Description                            |
 | -------------------------------- | -------------------------------------- |
-| `Wakaclock: Set API Key`         | Store your API key in secret storage   |
-| `Wakaclock: Clear API Key`       | Remove the stored key                  |
-| `Wakaclock: Configure CLI Path`  | Point the extension at the CLI binary  |
+| `AtoAxis: Set API Key`         | Store your API key in secret storage   |
+| `AtoAxis: Clear API Key`       | Remove the stored key                  |
+| `AtoAxis: Configure CLI Path`  | Point the extension at the CLI binary  |
 | `AtoAxis: Set Up AI Tracking`    | Install hooks for detected AI CLIs     |
 | `AtoAxis: Show AI Tracking Status` | Show detected/enabled AI integrations |
 | `AtoAxis: Repair AI Integrations` | Re-register managed AI hooks           |
-| `Wakaclock: Show Today's Total`  | Display today's tracked time           |
-| `Wakaclock: Send Heartbeat Now`  | Flush pending activity immediately     |
-| `Wakaclock: Toggle Status Bar`   | Show or hide the status bar item       |
+| `AtoAxis: Show Today's Total`  | Display today's tracked time           |
+| `AtoAxis: Send Heartbeat Now`  | Flush pending activity immediately     |
+| `AtoAxis: Toggle Status Bar`   | Show or hide the status bar item       |
 
 ## Limitations
 
