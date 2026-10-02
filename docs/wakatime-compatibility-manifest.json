@@ -42,7 +42,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime profile keys added next to the AtoAxis account fields: display_name, last_heartbeat_at/last_plugin/last_plugin_name/last_project/last_branch from the latest heartbeat, plan, has_premium_features, created_at/modified_at. Public-profile and social fields are null/false; timezone is UTC (no per-account zone is stored)."
     },
     {
       "method": "GET",
@@ -60,7 +60,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime profile keys added next to the AtoAxis account fields: display_name, last_heartbeat_at/last_plugin/last_plugin_name/last_project/last_branch from the latest heartbeat, plan, has_premium_features, created_at/modified_at. Public-profile and social fields are null/false; timezone is UTC (no per-account zone is stored)."
     },
     {
       "method": "GET",
@@ -78,7 +78,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime decimal/digital/daily_average/is_up_to_date/percent_calculated/range{...}/timeout added next to the AtoAxis fields (text keeps the AtoAxis format). The project filter is not supported."
     },
     {
       "method": "GET",
@@ -96,7 +96,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime decimal/digital/daily_average/is_up_to_date/percent_calculated/range{...}/timeout added next to the AtoAxis fields (text keeps the AtoAxis format). The project filter is not supported."
     },
     {
       "method": "GET",
@@ -1374,7 +1374,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Without start/end it answers WakaTime's project list (id, first/last heartbeat with human-readable ages, urlencoded_name, url to the AtoAxis project page, q name filter; sharing/badge/color fields empty). With start/end it keeps the dashboard's per-range totals."
     },
     {
       "method": "GET",
@@ -1392,7 +1392,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Without start/end it answers WakaTime's project list (id, first/last heartbeat with human-readable ages, urlencoded_name, url to the AtoAxis project page, q name filter; sharing/badge/color fields empty). With start/end it keeps the dashboard's per-range totals."
     },
     {
       "method": "GET",

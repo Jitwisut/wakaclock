@@ -300,19 +300,43 @@ pub struct WakaTimeDailyAverage {
     pub text_including_other_language: String,
 }
 
-fn hours_minutes(seconds: f64) -> (u64, u64) {
+pub(crate) fn hours_minutes(seconds: f64) -> (u64, u64) {
     let whole = seconds.max(0.0) as u64;
     (whole / 3600, (whole % 3600) / 60)
 }
 
+/// `Mon Sep 1st 2025`, WakaTime's day text.
+pub(crate) fn wakatime_day_text(date: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    let suffix = match (date.day() % 10, date.day() % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!(
+        "{} {}{suffix} {}",
+        date.format("%a %b"),
+        date.day(),
+        date.year()
+    )
+}
+
+pub(crate) fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
 /// WakaTime derives `decimal` from the truncated hours and minutes.
-fn wakatime_decimal(seconds: f64) -> String {
+pub(crate) fn wakatime_decimal(seconds: f64) -> String {
     let (hours, minutes) = hours_minutes(seconds);
     format!("{:.2}", hours as f64 + minutes as f64 / 60.0)
 }
 
 /// WakaTime's duration text: `2 hrs 17 mins`, `1 hr 1 min`, `7 secs`.
-fn wakatime_text(seconds: f64) -> String {
+pub(crate) fn wakatime_text(seconds: f64) -> String {
     let whole = seconds.max(0.0) as u64;
     let (hours, minutes) = hours_minutes(seconds);
     let plural = |count: u64, unit: &str| {
