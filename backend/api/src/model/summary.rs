@@ -300,19 +300,19 @@ pub struct WakaTimeDailyAverage {
     pub text_including_other_language: String,
 }
 
-fn hours_minutes(seconds: f64) -> (u64, u64) {
+pub(crate) fn hours_minutes(seconds: f64) -> (u64, u64) {
     let whole = seconds.max(0.0) as u64;
     (whole / 3600, (whole % 3600) / 60)
 }
 
 /// WakaTime derives `decimal` from the truncated hours and minutes.
-fn wakatime_decimal(seconds: f64) -> String {
+pub(crate) fn wakatime_decimal(seconds: f64) -> String {
     let (hours, minutes) = hours_minutes(seconds);
     format!("{:.2}", hours as f64 + minutes as f64 / 60.0)
 }
 
 /// WakaTime's duration text: `2 hrs 17 mins`, `1 hr 1 min`, `7 secs`.
-fn wakatime_text(seconds: f64) -> String {
+pub(crate) fn wakatime_text(seconds: f64) -> String {
     let whole = seconds.max(0.0) as u64;
     let (hours, minutes) = hours_minutes(seconds);
     let plural = |count: u64, unit: &str| {
