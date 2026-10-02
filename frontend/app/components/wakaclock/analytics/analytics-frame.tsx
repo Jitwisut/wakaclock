@@ -10,7 +10,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { useAnalyticsFilters } from '@/hooks/use-analytics-filters';
-import type { AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
+import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { getAnalyticsExplorer } from '@/lib/wakaclock/endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -19,8 +19,11 @@ export interface AnalyticsFrameContext {
   data: AnalyticsExplorerResponse;
   filters: ReturnType<typeof useAnalyticsFilters>['filters'];
   href: ReturnType<typeof useAnalyticsFilters>['href'];
+  /** The explorer request behind `data`, for views that issue related queries. */
+  request: AnalyticsExplorerParams;
   setFilter: ReturnType<typeof useAnalyticsFilters>['setFilter'];
   setRange: ReturnType<typeof useAnalyticsFilters>['setRange'];
+  userId: string;
 }
 
 type AnalyticsHrefOverrides = Parameters<ReturnType<typeof useAnalyticsFilters>['href']>[1];
@@ -104,8 +107,10 @@ export function AnalyticsFrame({
                   data: query.data,
                   filters,
                   href,
+                  request,
                   setFilter,
                   setRange,
+                  userId,
                 })}
               </>
             )}
