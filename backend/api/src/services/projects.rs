@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
-use crate::model::projects::{ProjectItem, ProjectRow, ProjectsResponse};
+use crate::model::projects::{ProjectItem, ProjectRow, ProjectSpanRow, ProjectsResponse};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
 pub struct ProjectsService {
@@ -104,6 +104,76 @@ impl ProjectsService {
         Ok(rows)
     }
 
+    /// Every named project with its first and last heartbeat, merges applied, most
+    /// recently active first. `query` filters names case-insensitively, like
+    /// WakaTime's `q`.
+    pub async fn list_spans(
+        &self,
+        user_id: Uuid,
+        query: Option<&str>,
+    ) -> Result<Vec<ProjectSpanRow>> {
+        let merges = self.merge_map(user_id).await?;
+        let rows = self
+            .clickhouse
+            .get_client()
+            .query(
+                "SELECT ifNull(project, '') AS name,
+                        min(time) AS first_heartbeat_at,
+                        max(time) AS last_heartbeat_at,
+                        ifNull(toString(any(project_id)), '') AS project_id
+                 FROM wakaclock.heartbeats_canonical
+                 WHERE user_id = ? AND ifNull(project, '') != ''
+                 GROUP BY name",
+            )
+            .bind(user_id)
+            .fetch_all::<ProjectSpanRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse project list query error: {error}"))?;
+
+        let mut merged: HashMap<String, ProjectSpanRow> = HashMap::new();
+        for row in rows {
+            let name = merges
+                .get(&row.name)
+                .cloned()
+                .unwrap_or_else(|| row.name.clone());
+            match merged.get_mut(&name) {
+                Some(existing) => {
+                    existing.first_heartbeat_at =
+                        existing.first_heartbeat_at.min(row.first_heartbeat_at);
+                    existing.last_heartbeat_at =
+                        existing.last_heartbeat_at.max(row.last_heartbeat_at);
+                    // The target's own identity wins over a merged source's.
+                    if row.name == name || existing.project_id.is_empty() {
+                        if !row.project_id.is_empty() {
+                            existing.project_id = row.project_id;
+                        }
+                    }
+                }
+                None => {
+                    merged.insert(name.clone(), ProjectSpanRow { name, ..row });
+                }
+            }
+        }
+        let needle = query
+            .map(str::to_lowercase)
+            .filter(|value| !value.is_empty());
+        let mut list: Vec<ProjectSpanRow> = merged
+            .into_values()
+            .filter(|row| {
+                needle
+                    .as_ref()
+                    .is_none_or(|needle| row.name.to_lowercase().contains(needle))
+            })
+            .collect();
+        list.sort_by(|left, right| {
+            right
+                .last_heartbeat_at
+                .total_cmp(&left.last_heartbeat_at)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        Ok(list)
+    }
+
     /// Latest merge target per source project name.
     async fn merge_map(&self, user_id: Uuid) -> Result<HashMap<String, String>> {
         #[derive(Debug, clickhouse::Row, serde::Deserialize)]
@@ -142,5 +212,62 @@ fn format_duration(secs: f64) -> String {
         format!("{}h {}m", hours, minutes)
     } else {
         format!("{}m", minutes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::heartbeat::HeartbeatRepository;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn project_list_decodes_nullable_projects_and_filters_by_name() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        crate::repository::project_merge::ProjectMergeRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        let service = ProjectsService::new(clickhouse.clone(), 900.0);
+        let user_id = Uuid::new_v4();
+        // A project-less heartbeat (NULL) must neither break decoding nor be listed.
+        for (project, time) in [
+            (Some("Atlas"), 1_785_600_000.0_f64),
+            (Some("Atlas"), 1_785_700_000.0),
+            (Some("beacon"), 1_785_650_000.0),
+            (None, 1_785_660_000.0),
+        ] {
+            clickhouse
+                .get_client()
+                .query(
+                    "INSERT INTO wakaclock.heartbeats (user_id, entity, entity_type, time, date, category, project)
+                     VALUES (?, 'src/main.rs', 'file', ?, toDate(toDateTime(toUInt32(?))), 'coding', ?)",
+                )
+                .bind(user_id)
+                .bind(time)
+                .bind(time)
+                .bind(project)
+                .execute()
+                .await
+                .unwrap();
+        }
+
+        let list = service.list_spans(user_id, None).await.unwrap();
+        let names: Vec<_> = list.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Atlas", "beacon"],
+            "most recently active first, no unnamed project"
+        );
+        assert_eq!(list[0].first_heartbeat_at, 1_785_600_000.0);
+        assert_eq!(list[0].last_heartbeat_at, 1_785_700_000.0);
+
+        let filtered = service.list_spans(user_id, Some("ATL")).await.unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Atlas");
     }
 }

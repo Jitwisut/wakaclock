@@ -19,7 +19,7 @@ pub async fn current(
 
     let response = state
         .user_service
-        .get_current(user_id)
+        .get_current_wakatime(user_id)
         .await
         .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
 

@@ -305,6 +305,30 @@ pub(crate) fn hours_minutes(seconds: f64) -> (u64, u64) {
     (whole / 3600, (whole % 3600) / 60)
 }
 
+/// `Mon Sep 1st 2025`, WakaTime's day text.
+pub(crate) fn wakatime_day_text(date: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    let suffix = match (date.day() % 10, date.day() % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!(
+        "{} {}{suffix} {}",
+        date.format("%a %b"),
+        date.day(),
+        date.year()
+    )
+}
+
+pub(crate) fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
 /// WakaTime derives `decimal` from the truncated hours and minutes.
 pub(crate) fn wakatime_decimal(seconds: f64) -> String {
     let (hours, minutes) = hours_minutes(seconds);
