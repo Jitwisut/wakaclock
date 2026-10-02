@@ -171,7 +171,35 @@ pub struct ListQuery {
 pub struct HeartbeatListResponse {
     pub date: String,
     pub total: usize,
-    pub data: Vec<HeartbeatItem>,
+    pub data: Vec<HeartbeatListEntry>,
+    /// WakaTime's envelope: the local day's UTC bounds (inclusive final second) and
+    /// the IANA zone used to resolve it.
+    pub start: String,
+    pub end: String,
+    pub timezone: String,
+}
+
+/// A heartbeat with WakaTime's field names (`type`, `lineno`, `cursorpos`) next to
+/// the AtoAxis ones, so WakaTime API clients and the dashboard read the same rows.
+#[derive(Debug, Serialize)]
+pub struct HeartbeatListEntry {
+    #[serde(flatten)]
+    pub item: HeartbeatItem,
+    #[serde(rename = "type")]
+    pub wakatime_type: String,
+    pub lineno: Option<u32>,
+    pub cursorpos: Option<u32>,
+}
+
+impl From<HeartbeatItem> for HeartbeatListEntry {
+    fn from(item: HeartbeatItem) -> Self {
+        Self {
+            wakatime_type: item.entity_type.clone(),
+            lineno: item.line_number,
+            cursorpos: item.cursor_position,
+            item,
+        }
+    }
 }
 
 /// 1 heartbeat ใน response list — เฉพาะ fields ที่ client ต้องการ
@@ -595,11 +623,21 @@ pub async fn list(
         })
         .collect();
 
+    let (range_start, range_end) = range.unix_bounds();
     Ok(Json(HeartbeatListResponse {
         total: items.len(),
         date,
-        data: items,
+        data: items.into_iter().map(HeartbeatListEntry::from).collect(),
+        start: rfc3339(range_start),
+        end: rfc3339(range_end - 1.0),
+        timezone: range.timezone.to_string(),
     }))
+}
+
+fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
 }
 
 fn sanitize_entity(entity: &str) -> String {
@@ -1434,7 +1472,7 @@ mod tests {
 
     #[test]
     fn history_item_serializes_projected_actor_confidence() {
-        let item = HeartbeatItem {
+        let mut item = HeartbeatItem {
             entity: "src/main.rs".to_string(),
             entity_type: "file".to_string(),
             time: 1_700_000_000.0,
@@ -1482,10 +1520,21 @@ mod tests {
             actor_confidence: 1.0,
         };
 
-        let serialized = serde_json::to_value(item).unwrap();
-        assert_eq!(serialized["actor_type"], "human");
-        assert_eq!(serialized["actor_confidence"], 1.0);
-        assert_eq!(serialized["is_ai_generated"], false);
+        item.line_number = Some(42);
+        item.cursor_position = Some(7);
+        let entry = serde_json::to_value(super::HeartbeatListEntry::from(item)).unwrap();
+        // WakaTime's names (https://wakatime.com/developers#heartbeats) next to ours.
+        assert_eq!(entry["type"], "file");
+        assert_eq!(entry["lineno"], 42);
+        assert_eq!(entry["cursorpos"], 7);
+        assert_eq!(entry["entity_type"], "file");
+        assert_eq!(entry["line_number"], 42);
+        assert_eq!(entry["cursor_position"], 7);
+        assert_eq!(entry["time"], 1_700_000_000.0);
+
+        assert_eq!(entry["actor_type"], "human");
+        assert_eq!(entry["actor_confidence"], 1.0);
+        assert_eq!(entry["is_ai_generated"], false);
     }
 
     #[test]

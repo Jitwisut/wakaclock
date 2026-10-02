@@ -438,7 +438,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -456,7 +456,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -726,7 +726,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Items carry WakaTime's type/lineno/cursorpos next to entity_type/line_number/cursor_position; envelope start/end/timezone added. machine_name_id and WakaTime ai_* fields are not produced."
     },
     {
       "method": "POST",
@@ -1068,7 +1068,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1086,7 +1086,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1140,7 +1140,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1158,7 +1158,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",

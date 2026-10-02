@@ -6,6 +6,9 @@ pub struct DurationBlock {
     pub start: f64,
     pub end: f64,
     pub duration_seconds: f64,
+    /// WakaTime's names for `start` and `duration_seconds`.
+    pub time: f64,
+    pub duration: f64,
     pub heartbeat_count: u64,
     pub project: Option<String>,
     pub language: Option<String>,
@@ -25,6 +28,9 @@ pub struct DurationsResponse {
     pub total_seconds: f64,
     pub total: usize,
     pub data: Vec<DurationBlock>,
+    /// WakaTime's envelope: the local day's UTC bounds as ISO-8601, inclusive end.
+    pub start: String,
+    pub end: String,
     /// Optional duration-v2 diagnostics. Legacy clients can ignore these additive fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparable_seconds: Option<f64>,
