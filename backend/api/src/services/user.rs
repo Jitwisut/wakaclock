@@ -321,7 +321,7 @@ impl UserService {
     /// Generate a key once. PostgreSQL owns its lifecycle when configured; the
     /// compatibility store never contains a retrievable plaintext credential.
     pub async fn generate_api_key(&self, user_id: Uuid) -> Result<GenerateApiKeyResponse> {
-        let plaintext_key = auth::generate_key();
+        let plaintext_key = auth::generate_wakatime_api_key();
         let key_hash = auth::hash_key(&plaintext_key);
         // Seal a recoverable copy, bound to this user, only when a master key is
         // configured. Without it the key stays hash-only and reads return blank.
