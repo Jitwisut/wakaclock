@@ -69,6 +69,7 @@ impl AiUsageRepository {
                     usage_event_id String,
                     event_payload_hash Nullable(String),
                     ai_session_id String,
+                    collector_id Nullable(String),
                     event_time UInt32,
                     project_id Nullable(UUID),
                     project_attribution_method Nullable(String),
@@ -282,6 +283,7 @@ impl AiUsageRepository {
             .await
             .context("Failed to migrate ai_model_pricing.currency to String")?;
 
+        self.client.get_client().query("ALTER TABLE wakaclock.ai_usage_events ADD COLUMN IF NOT EXISTS collector_id Nullable(String)").execute().await?;
         self.client
             .get_client()
             .query(
@@ -491,7 +493,7 @@ impl AiUsageRepository {
             .query(
                 "SELECT
                     user_id, toUInt16(date) AS date, usage_event_id, event_payload_hash,
-                    ai_session_id, event_time, project_id, project_attribution_method,
+                    ai_session_id, collector_id, event_time, project_id, project_attribution_method,
                     ai_agent, ai_provider, ai_model,
                     prompt_count, prompt_character_count, input_tokens, output_tokens,
                     cache_read_tokens, cache_write_tokens, estimated_cost_microusd,
@@ -555,7 +557,7 @@ impl AiUsageRepository {
             .query(
                 "SELECT
                     user_id, toUInt16(date) AS date, usage_event_id, event_payload_hash,
-                    ai_session_id, event_time, project_id, project_attribution_method,
+                    ai_session_id, collector_id, event_time, project_id, project_attribution_method,
                     ai_agent, ai_provider, ai_model,
                     prompt_count, prompt_character_count, input_tokens, output_tokens,
                     cache_read_tokens, cache_write_tokens, estimated_cost_microusd,

@@ -1,4 +1,4 @@
-# Measurement Trust implementation status — 2026-09-23
+# Measurement Trust implementation status — 2026-09-25
 
 This is the implementation record for the six-month AtoAxis plan. `validated_local`
 means code and local tests passed; it does not mean live certification, release, or
@@ -7,11 +7,11 @@ proof of superiority to WakaTime.
 | Deliverable | State | Evidence and remaining gate |
 | --- | --- | --- |
 | Time and AI runtime certification | blocked | Existing correctness plan and certification runners remain the source of truth. A fresh seven-day comparison, independent activity ground truth, and separate Codex CLI/Desktop and Claude Code runtime readback have not been run for this build. |
-| Measurement Trust read API and page | validated_local, beta | Canonical summary evidence, AI attribution denominators, metadata-only operation receipts, calculation version, and explicit unavailable delivery state. No project filter, complete local queue state, or capture-recall estimate yet. |
+| Measurement Trust read API and page | validated_local, beta | Canonical summary evidence, project-scoped timeline filtering, AI attribution denominators, metadata-only operation receipts with keyset pagination, calculation version, and explicit unavailable delivery state. The page exposes the server capability matrix and keeps totals independent from the loaded evidence pages. |
 | Consent-based team analytics | validated_local, beta | Aggregate and individual sharing are separate and default off. Active membership and sharing are checked for each read; consent changes are audited. PostgreSQL/ClickHouse integration and concurrent revocation tests still require live services. |
-| Resumable WakaTime import | validated_local, beta | Chunks, progress, reason counts, canonical all-time totals before/after, and resume use PostgreSQL; exact heartbeat content yields stable IDs across changed chunk boundaries. The browser strips unrelated export fields. A live large-export reconciliation and accounting for a history previously imported with the v1 identity scheme remain open. Concurrent activity can also affect the displayed net total. |
+| Resumable WakaTime import | validated_local, beta | Chunks, progress, reason counts, canonical all-time totals before/after, and resume use PostgreSQL; exact heartbeat content yields stable IDs across changed chunk boundaries. The browser strips unrelated export fields, runs a bounded legacy-overlap preflight, and requires explicit confirmation for ambiguous v1 history. A live large-export reconciliation remains open. Concurrent activity can also affect the displayed net total. |
 | Editor migration check | validated_local, beta | Setup instructions reuse a WakaTime plugin and verify today's heartbeat and project through authenticated APIs. Editor-specific plugin/version certification remains open. |
-| Launch and capability publication | in_progress | New features are `beta` in the feature matrix; runtime availability is derived from service dependencies. User trials for solo AI users, teams, and other editors have not happened. |
+| Launch and capability publication | implementation complete, beta | Runtime availability is derived from service dependencies and the Trust Center now displays feature status, availability, storage mode, and line metric versions from `/api/v2/capabilities`. New features remain `beta` until the verified build has passed the live release gates. User trials for solo AI users, teams, and other editors have not happened. |
 
 ## Local checks
 
@@ -20,6 +20,20 @@ proof of superiority to WakaTime.
 - `npm run typecheck` in `frontend/app`
 - `npx vitest run test/wakatime-import-chunks.test.ts` in `frontend/app`
 - Targeted ESLint for changed frontend files
+
+## Development phase closeout
+
+The implementation work for the Trust Center scope is complete for this build. The
+remaining work is evidence collection and release validation; it must not be represented
+as production-ready by changing the feature matrix alone.
+
+- The web page shows project selection, range/timezone-consistent totals, queue snapshot
+  freshness, paginated operation receipts, repair preview/history, and runtime capability
+  status.
+- The CLI and desktop client read the local queue while offline and report unavailable
+  when the queue cannot be opened; queued seconds stay outside confirmed dashboard totals.
+- The API and UI preserve `null`/unknown values and keep metadata-only evidence free of
+  source paths, prompts, responses, and diffs.
 
 ## Release gates
 

@@ -14,7 +14,11 @@ import {
   ProjectDeepDive,
   ProjectFilesPanel,
 } from '@/components/wakaclock/analytics/project-deep-dive';
-import { ProjectStudio, StudioBreakdown } from '@/components/wakaclock/analytics/project-studio';
+import {
+  ProjectRhythm,
+  ProjectStudio,
+  StudioBreakdown,
+} from '@/components/wakaclock/analytics/project-studio';
 import {
   getProjectAnalyticsBranches,
   getProjectAnalyticsDetail,
@@ -31,7 +35,10 @@ vi.mock('@/lib/wakaclock/endpoints', () => ({
   getProjectAnalyticsDetail: vi.fn(),
   getProjectAnalyticsFiles: vi.fn(),
 }));
-vi.mock('@/lib/wakaclock/user-store', () => ({ useWakaclockUserStore: () => 'test-user' }));
+vi.mock('@/lib/wakaclock/user-store', () => ({
+  useWakaclockUserStore: (select: (state: { userId: string }) => unknown) =>
+    select({ userId: 'test-user' }),
+}));
 
 const range = { ...studioFixture.range, branch: 'all' };
 const base = {
@@ -260,5 +267,125 @@ describe('Project Studio', () => {
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retry files' }));
     await screen.findByRole('heading', { name: 'Your file landscape' });
+  });
+});
+
+it('renders a project rhythm from recorded hourly activity, with an explicit unavailable state', () => {
+  const view = render(<ProjectRhythm data={studioFixture} />);
+  expect(screen.getAllByRole('img')).toHaveLength(168);
+  expect(screen.getByText(/recorded in your busiest weekly hour/)).toBeVisible();
+  view.rerender(<ProjectRhythm data={{ ...studioFixture, time_heatmap: [] }} />);
+  expect(screen.getByText('Hourly activity is not available for this selection.')).toBeVisible();
+  view.rerender(
+    <ProjectRhythm
+      data={{
+        ...studioFixture,
+        time_heatmap: studioFixture.time_heatmap.map((cell) => ({ ...cell, total_seconds: 0 })),
+      }}
+    />
+  );
+  expect(screen.getByText('Your rhythm starts here')).toBeVisible();
+  expect(screen.getByText('No activity in this selection.')).toBeVisible();
+});
+it('renders the busiest project day and handles an empty breakdown or measured zero without NaN', () => {
+  const view = render(<ProjectStudio name="Lab" data={studioFixture} />);
+  expect(screen.queryByText('No activity in this range')).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Explore your files' })).toHaveAttribute(
+    'href',
+    '#project-files'
+  );
+  view.rerender(
+    <ProjectStudio
+      name="Lab"
+      data={{
+        ...studioFixture,
+        range: { ...studioFixture.range, days_included: 0 },
+        summary: { ...studioFixture.summary, active_days: 1 },
+        calendar_heatmap: studioFixture.calendar_heatmap.map((day) => ({
+          ...day,
+          total_seconds: 0,
+        })),
+      }}
+    />
+  );
+  expect(screen.getByText('Across 1 active day')).toBeVisible();
+  expect(screen.getByText('0%')).toBeVisible();
+  view.rerender(
+    <StudioBreakdown title="Languages" eyebrow="Language use" items={[]} onSelect={vi.fn()} />
+  );
+  expect(screen.getByText('No activity recorded in this selection.')).toBeVisible();
+  view.rerender(
+    <StudioBreakdown
+      title="Languages"
+      eyebrow="Language use"
+      items={[{ key: 'Rust', name: 'Rust', total_seconds: 0 }]}
+      onSelect={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('button', { name: /Rust/ })).toHaveTextContent('0.0%');
+});
+
+describe('Project drill-down recovery', () => {
+  beforeEach(() => {
+    vi.mocked(getProjectAnalyticsDetail).mockResolvedValue(detail);
+    vi.mocked(getProjectAnalyticsBranches).mockResolvedValue(branchPage);
+    vi.mocked(getProjectAnalyticsFiles).mockResolvedValue({ ...filePage, next_cursor: null });
+  });
+  it('retries detail and branch failures independently without losing loaded files', async () => {
+    vi.mocked(getProjectAnalyticsDetail).mockRejectedValueOnce(new Error('offline'));
+    vi.mocked(getProjectAnalyticsBranches).mockRejectedValueOnce(new Error('offline'));
+    renderDeepDive();
+    await screen.findByRole('table');
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry details' }));
+    await screen.findByRole('heading', { name: 'A closer look at your co-pilots' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry branches' }));
+    await screen.findByRole('option', { name: 'feature/studio' });
+    expect(getProjectAnalyticsDetail).toHaveBeenCalledTimes(2);
+    expect(getProjectAnalyticsBranches).toHaveBeenCalledTimes(2);
+    expect(getProjectAnalyticsFiles).toHaveBeenCalledTimes(1);
+  });
+  it('loads branch pages and allows clicking a branch twice or resetting back to all', async () => {
+    vi.mocked(getProjectAnalyticsBranches).mockImplementation(async (_id, params) =>
+      params.cursor
+        ? { ...branchPage, items: [{ ...branchItems[0], branch: '' }], next_cursor: null }
+        : { ...branchPage, next_cursor: 'next-branch' }
+    );
+    renderDeepDive();
+    await userEvent.click(await screen.findByRole('button', { name: 'Load more branches' }));
+    expect(getProjectAnalyticsBranches).toHaveBeenCalledWith(
+      'demo',
+      expect.objectContaining({ cursor: 'next-branch' })
+    );
+    await screen.findByRole('option', { name: 'Unknown branch' });
+    const branch = within(screen.getByRole('region', { name: 'Project branches' })).getByRole(
+      'button',
+      { name: /^main/ }
+    );
+    await userEvent.click(branch);
+    expect(screen.getByLabelText('Branch')).toHaveValue('main');
+    await userEvent.click(branch);
+    expect(screen.getByLabelText('Branch')).toHaveValue('all');
+    await userEvent.selectOptions(screen.getByLabelText('Branch'), 'feature/studio');
+    await userEvent.click(screen.getByRole('button', { name: 'Reset branch' }));
+    expect(screen.getByLabelText('Branch')).toHaveValue('all');
+  });
+  it('sorts loaded files by path and distinguishes no matches from unavailable totals', async () => {
+    render(
+      <ProjectFilesPanel
+        files={fileFixtures}
+        totalSeconds={0}
+        hasMore={false}
+        loadingMore={false}
+        onLoadMore={vi.fn()}
+      />
+    );
+    await userEvent.selectOptions(screen.getByLabelText('Sort loaded files'), 'name');
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent(
+      [...fileFixtures].sort((a, b) => a.path.localeCompare(b.path))[0].path
+    );
+    await userEvent.type(screen.getByRole('searchbox'), 'not-a-fixture');
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(1);
+    expect(screen.getByText(/No loaded files match/)).toBeVisible();
   });
 });

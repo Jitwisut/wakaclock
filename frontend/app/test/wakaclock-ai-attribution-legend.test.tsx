@@ -26,7 +26,7 @@ describe('AiAttributionLegend', () => {
 
     expect(screen.getByText(/native agent hook or MCP tool/i)).toBeInTheDocument();
     expect(screen.getByText(/inside the correlation window/i)).toBeInTheDocument();
-    expect(screen.getByText(/positive editor keystroke or save/i)).toBeInTheDocument();
+    expect(screen.getByText(/positive editor activity/i)).toBeInTheDocument();
     expect(screen.getByText(/authorship could not be proven/i)).toBeInTheDocument();
   });
 

@@ -43,6 +43,8 @@ type RepairDraft = {
   selected: boolean;
 };
 
+const REPAIR_HISTORY_KEY = 'measurement-repair-history';
+
 function parseLineCount(value: string): null | number {
   if (value.trim() === '') return null;
   const parsed = Number(value);
@@ -113,7 +115,7 @@ export default function MeasurementTrustPage() {
   });
   const repairHistory = useQuery({
     enabled: Boolean(userId),
-    queryKey: ['measurement-repair-history', userId],
+    queryKey: [REPAIR_HISTORY_KEY, userId],
     queryFn: listMeasurementRepairs,
   });
   const createRepair = useMutation({
@@ -127,7 +129,7 @@ export default function MeasurementTrustPage() {
       }),
     onSuccess: async (job) => {
       setActiveRepairId(job.repair_id);
-      await queryClient.invalidateQueries({ queryKey: ['measurement-repair-history', userId] });
+      await queryClient.invalidateQueries({ queryKey: [REPAIR_HISTORY_KEY, userId] });
     },
   });
   const applyRepair = useMutation({
@@ -135,7 +137,7 @@ export default function MeasurementTrustPage() {
     onSuccess: async (job) => {
       setActiveRepairId(job.repair_id);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['measurement-repair-history', userId] }),
+        queryClient.invalidateQueries({ queryKey: [REPAIR_HISTORY_KEY, userId] }),
         queryClient.invalidateQueries({ queryKey: ['measurement-quality', userId] }),
         queryClient.invalidateQueries({ queryKey: ['operation-evidence', userId] }),
       ]);
@@ -146,7 +148,7 @@ export default function MeasurementTrustPage() {
     onSuccess: async (job) => {
       setActiveRepairId(job.repair_id);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['measurement-repair-history', userId] }),
+        queryClient.invalidateQueries({ queryKey: [REPAIR_HISTORY_KEY, userId] }),
         queryClient.invalidateQueries({ queryKey: ['measurement-quality', userId] }),
         queryClient.invalidateQueries({ queryKey: ['operation-evidence', userId] }),
       ]);
@@ -154,6 +156,11 @@ export default function MeasurementTrustPage() {
   });
   const { data } = report;
   const lineCoverage = data?.attribution_coverage.line_coverage_percent;
+  let deliveryMessage: string | undefined;
+  if (delivery.isLoading) deliveryMessage = 'Loading delivery status…';
+  else if (delivery.error) deliveryMessage = 'Delivery status is unavailable from the server.';
+  else if (!delivery.data?.devices.length)
+    {deliveryMessage = 'No queue snapshot has reached the server yet.';}
   const operations = evidence.data?.pages.flatMap((page) => page.operations) ?? [];
   const projectOptions = projects.data?.pages.flatMap((page) => page.items) ?? [];
   const selectedCandidates = operations.flatMap((operation): MeasurementRepairCandidate[] => {
@@ -268,20 +275,19 @@ export default function MeasurementTrustPage() {
                     <p className="text-muted-foreground">
                       Queued activity is shown separately and is not added to confirmed time.
                     </p>
-                    {delivery.isLoading ? (
-                      <p>Loading delivery status…</p>
-                    ) : delivery.error ? (
-                      <p>Delivery status is unavailable from the server.</p>
-                    ) : delivery.data?.devices.length ? (
+                    {deliveryMessage ? (
+                      <p>{deliveryMessage}</p>
+                    ) : (
                       <ul className="mt-2 space-y-2">
-                        {delivery.data.devices.map((device) => (
+                        {delivery.data?.devices.map((device) => (
                           <li
                             className="rounded-md border p-3"
                             key={`${device.device_id}:${device.queue_id}`}
                           >
                             <div className="flex flex-wrap justify-between gap-2">
                               <span>
-                                Device {device.device_id.slice(0, 8)} · queue {device.queue_id.slice(0, 8)}
+                                Device {device.device_id.slice(0, 8)} · queue{' '}
+                                {device.queue_id.slice(0, 8)}
                               </span>
                               <span className="font-medium">{device.status}</span>
                             </div>
@@ -306,8 +312,6 @@ export default function MeasurementTrustPage() {
                           </li>
                         ))}
                       </ul>
-                    ) : (
-                      <p>No queue snapshot has reached the server yet.</p>
                     )}
                   </div>
                 </CardContent>
@@ -439,11 +443,15 @@ export default function MeasurementTrustPage() {
                               ? 'unavailable'
                               : `+${operation.lines_added} / -${operation.lines_deleted}`}
                           </p>
-                          <fieldset className="mt-3 grid gap-2 rounded-md bg-muted/30 p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
-                            <legend className="sr-only">Correct measured outcome and line counts</legend>
+                          <fieldset className="bg-muted/30 mt-3 grid gap-2 rounded-md p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
+                            <legend className="sr-only">
+                              Correct measured outcome and line counts
+                            </legend>
                             <label className="flex items-center gap-2 pb-2 text-sm">
                               <input
-                                checked={repairDrafts[operation.repair_reference]?.selected ?? false}
+                                checked={
+                                  repairDrafts[operation.repair_reference]?.selected ?? false
+                                }
                                 onChange={(event) =>
                                   setRepairDrafts((drafts) => {
                                     const current =
@@ -481,7 +489,9 @@ export default function MeasurementTrustPage() {
                                     };
                                   })
                                 }
-                                value={repairDrafts[operation.repair_reference]?.outcome ?? 'unknown'}
+                                value={
+                                  repairDrafts[operation.repair_reference]?.outcome ?? 'unknown'
+                                }
                               >
                                 <option value="unknown">Unknown</option>
                                 <option value="success">Success</option>
@@ -503,7 +513,8 @@ export default function MeasurementTrustPage() {
                                           selected:
                                             drafts[operation.repair_reference]?.selected ?? true,
                                           outcome:
-                                            drafts[operation.repair_reference]?.outcome ?? 'unknown',
+                                            drafts[operation.repair_reference]?.outcome ??
+                                            'unknown',
                                           linesDeleted:
                                             drafts[operation.repair_reference]?.linesDeleted ?? '',
                                           linesAdded: event.target.value,
@@ -511,7 +522,9 @@ export default function MeasurementTrustPage() {
                                       }))
                                     }
                                     type="number"
-                                    value={repairDrafts[operation.repair_reference]?.linesAdded ?? ''}
+                                    value={
+                                      repairDrafts[operation.repair_reference]?.linesAdded ?? ''
+                                    }
                                   />
                                 </label>
                                 <label className="grid gap-1 text-sm">
@@ -526,7 +539,8 @@ export default function MeasurementTrustPage() {
                                           selected:
                                             drafts[operation.repair_reference]?.selected ?? true,
                                           outcome:
-                                            drafts[operation.repair_reference]?.outcome ?? 'unknown',
+                                            drafts[operation.repair_reference]?.outcome ??
+                                            'unknown',
                                           linesAdded:
                                             drafts[operation.repair_reference]?.linesAdded ?? '',
                                           linesDeleted: event.target.value,
@@ -534,7 +548,9 @@ export default function MeasurementTrustPage() {
                                       }))
                                     }
                                     type="number"
-                                    value={repairDrafts[operation.repair_reference]?.linesDeleted ?? ''}
+                                    value={
+                                      repairDrafts[operation.repair_reference]?.linesDeleted ?? ''
+                                    }
                                   />
                                 </label>
                               </>
@@ -583,8 +599,11 @@ export default function MeasurementTrustPage() {
                   </p>
                   <p className="text-muted-foreground">
                     To reparse local transcripts, run{' '}
-                    <code className="break-all">wakaclock ai repair-measurements --from YYYY-MM-DD --to YYYY-MM-DD --timezone Asia/Bangkok</code>
-                    {' '}with the dates replaced, then refresh this page. The CLI sends only opaque
+                    <code className="break-all">
+                      wakaclock ai repair-measurements --from YYYY-MM-DD --to YYYY-MM-DD --timezone
+                      Asia/Bangkok
+                    </code>{' '}
+                    with the dates replaced, then refresh this page. The CLI sends only opaque
                     operation references and measured line metadata; apply the resulting preview
                     here.
                   </p>
@@ -595,7 +614,9 @@ export default function MeasurementTrustPage() {
                       onClick={() => createRepair.mutate(selectedCandidates)}
                       type="button"
                     >
-                      {createRepair.isPending ? 'Preparing preview…' : `Preview ${selectedCandidates.length} selected`}
+                      {createRepair.isPending
+                        ? 'Preparing preview…'
+                        : `Preview ${selectedCandidates.length} selected`}
                     </button>
                     <label className="flex items-center gap-2">
                       Repair history
@@ -623,8 +644,8 @@ export default function MeasurementTrustPage() {
                       <div className="flex flex-wrap justify-between gap-2">
                         <span className="font-medium">
                           Preview status: {activeRepair.status} · {activeRepair.ready} ready ·{' '}
-                          {activeRepair.unchanged} unchanged · {activeRepair.unresolved} unresolved ·{' '}
-                          {activeRepair.conflict_count} conflicts
+                          {activeRepair.unchanged} unchanged · {activeRepair.unresolved} unresolved
+                          · {activeRepair.conflict_count} conflicts
                         </span>
                         <span>
                           AI lines +{activeRepair.before_added_total ?? 'unavailable'} / -
@@ -641,17 +662,19 @@ export default function MeasurementTrustPage() {
                             {item.repair_reference.slice(0, 12)}
                             {item.reason ? ` · ${item.reason}` : ''}
                             {item.before && item.after && (
-                              <span className="ml-2 text-muted-foreground">
+                              <span className="text-muted-foreground ml-2">
                                 ({item.before.ai_lines_added ?? 'unknown'} added →{' '}
                                 {item.after.ai_lines_added ?? 'unknown'}; revision{' '}
-                                {item.base_revision ?? 'unknown'} → {item.applied_revision ?? 'pending'})
+                                {item.base_revision ?? 'unknown'} →{' '}
+                                {item.applied_revision ?? 'pending'})
                               </span>
                             )}
                           </li>
                         ))}
                       </ul>
                       <div className="flex flex-wrap gap-2">
-                        {(activeRepair.status === 'preview' || activeRepair.status === 'applying') &&
+                        {(activeRepair.status === 'preview' ||
+                          activeRepair.status === 'applying') &&
                           activeRepair.ready > 0 && (
                             <button
                               className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
@@ -662,7 +685,8 @@ export default function MeasurementTrustPage() {
                               {applyRepair.isPending ? 'Applying…' : 'Apply reviewed corrections'}
                             </button>
                           )}
-                        {(activeRepair.status === 'applied' || activeRepair.status === 'conflict') &&
+                        {(activeRepair.status === 'applied' ||
+                          activeRepair.status === 'conflict') &&
                           activeRepair.applied > activeRepair.rolled_back && (
                             <button
                               className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
@@ -670,7 +694,9 @@ export default function MeasurementTrustPage() {
                               onClick={() => rollbackRepair.mutate(activeRepair.repair_id)}
                               type="button"
                             >
-                              {rollbackRepair.isPending ? 'Rolling back…' : 'Rollback applied revisions'}
+                              {rollbackRepair.isPending
+                                ? 'Rolling back…'
+                                : 'Rollback applied revisions'}
                             </button>
                           )}
                       </div>

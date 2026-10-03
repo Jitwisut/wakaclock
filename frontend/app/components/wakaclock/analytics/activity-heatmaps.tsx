@@ -446,7 +446,3 @@ export function CalendarHeatmap({
     </Card>
   );
 }
-
-export function TimeOfDayHeatmap() {
-  return null;
-}

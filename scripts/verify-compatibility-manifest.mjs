@@ -15,6 +15,8 @@ const validStatuses = new Set([
   "client_only",
   "partial",
   "beta",
+  "experimental",
+  "unavailable",
   "production_ready",
   "deprecated",
 ]);

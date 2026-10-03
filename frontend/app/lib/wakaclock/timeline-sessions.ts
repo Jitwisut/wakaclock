@@ -2,13 +2,13 @@ import { timelineProjectLabel } from '@/lib/wakaclock/project-timeline-colors';
 import type { DurationBlock } from '@/lib/wakaclock/types';
 
 export interface TimelineSession {
-  project: string;
-  start: number;
-  end: number;
+  categories: string[];
   duration_seconds: number;
+  end: number;
   heartbeat_count: number;
   languages: string[];
-  categories: string[];
+  project: string;
+  start: number;
 }
 
 // Presentation grouping only; gaps never contribute to recorded duration.

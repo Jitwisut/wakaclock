@@ -37,3 +37,8 @@ it('reduces audio with distance inside a pod while preserving audibility', () =>
   expect(podAudioVolume(listener, { x: 35, y: 30 })).toBeLessThan(1);
   expect(podAudioVolume(listener, { x: 100, y: 100 })).toBe(0.2);
 });
+
+it('mutes invalid coordinates instead of passing NaN to media volume', () => {
+  expect(podAudioVolume({ x: NaN, y: 0 }, { x: 0, y: 0 })).toBe(0);
+  expect(podAudioVolume({ x: 0, y: 0 }, { x: Infinity, y: 0 })).toBe(0);
+});

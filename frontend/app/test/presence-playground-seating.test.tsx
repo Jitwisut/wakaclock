@@ -140,3 +140,77 @@ describe('presence playground seating', () => {
     expect(onMove).toHaveBeenCalledWith({ x: seat.x, y: seat.y + 3 });
   });
 });
+
+it('uses Enter to sit at the nearest pod and to leave it, reporting zone changes', () => {
+  const onMove = vi.fn();
+  const onZone = vi.fn();
+  const users = roster({ x: 73, y: 60 });
+  const props = {
+    currentUserId: 'self',
+    onMoveCurrentUser: onMove,
+    onZoneChange: onZone,
+    reducedMotion: true,
+    zones: ZONES,
+  };
+  const view = render(<PresencePlayground {...props} users={users} />);
+  fireEvent.keyDown(screen.getByRole('button', { name: /^You,/ }), { key: 'Enter' });
+  expect(onMove).toHaveBeenCalledWith(seatAnchor(ZONES[2], 0));
+  expect(onZone).toHaveBeenCalledWith('c');
+  view.rerender(
+    <PresencePlayground {...props} users={roster({ ...seatAnchor(ZONES[2], 0), zoneId: 'c' })} />
+  );
+  fireEvent.keyDown(screen.getByRole('button', { name: /^You,/ }), { key: 'Enter' });
+  expect(onZone).toHaveBeenLastCalledWith(null);
+});
+it('renders every participant once when a pod is over capacity and highlights an active session', () => {
+  const others = Array.from({ length: 5 }, (_, i) => ({
+    ...roster({})[1],
+    id: `peer-${i}`,
+    username: `Peer ${i}`,
+    zoneId: 'a',
+    status: i === 0 ? ('coding' as const) : ('idle' as const),
+  }));
+  const self = { ...roster({})[0], ...seatAnchor(ZONES[0], 0), zoneId: 'a' };
+  const users = [self, ...others];
+  const sessions = [{ zoneId: 'a', participantIds: users.map((u) => u.id) }];
+  const view = render(
+    <PresencePlayground
+      currentUserId="self"
+      onMoveCurrentUser={vi.fn()}
+      reducedMotion={false}
+      users={users}
+      zones={ZONES}
+      sessions={sessions}
+      heightScale={5}
+    />
+  );
+  for (const user of others)
+    expect(screen.getAllByText(new RegExp(`^${user.username}`))).toHaveLength(1);
+  expect(screen.getByText('6 together')).toBeVisible();
+  expect(view.container.querySelector('.office-proximity-ring')).toBeInTheDocument();
+  expect(view.container.querySelector('.office-floor')).toHaveStyle({ minHeight: '644px' });
+});
+it('supports an empty floor and ignores Enter when there are no pods', () => {
+  const move = vi.fn();
+  const view = render(
+    <PresencePlayground
+      currentUserId="self"
+      onMoveCurrentUser={move}
+      reducedMotion
+      users={[]}
+      heightScale={0}
+    />
+  );
+  expect(screen.queryByRole('button', { name: /^You,/ })).not.toBeInTheDocument();
+  expect(view.container.querySelector('.office-floor')).toHaveStyle({ minHeight: '276px' });
+  view.rerender(
+    <PresencePlayground
+      currentUserId="self"
+      onMoveCurrentUser={move}
+      reducedMotion
+      users={roster({})}
+    />
+  );
+  fireEvent.keyDown(screen.getByRole('button', { name: /^You,/ }), { key: 'Enter' });
+  expect(move).not.toHaveBeenCalled();
+});

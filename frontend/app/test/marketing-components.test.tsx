@@ -26,6 +26,13 @@ describe('localized marketing components', () => {
     );
     expect(screen.getByText('$12')).toBeInTheDocument();
     expect(screen.getByText('/เดือน')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /รายปี.*ประหยัด 31%/ }));
+    expect(screen.getByText('$99')).toBeInTheDocument();
+    expect(screen.getByText('/ปี')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'รายเดือน' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
   });
 
   it('keeps duplicate FAQ questions renderable without duplicate React keys', () => {

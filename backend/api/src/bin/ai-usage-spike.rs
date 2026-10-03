@@ -359,6 +359,7 @@ mod enabled {
     fn sample_records(session_id: &str) -> Vec<AiUsageRecord> {
         vec![
             AiUsageRecord {
+                collector_id: None,
                 usage_event_id: format!("k5-usage-{}-1", uuid::Uuid::now_v7()),
                 ai_session_id: session_id.to_string(),
                 occurred_at: Utc::now() - ChronoDuration::seconds(2),
@@ -375,6 +376,7 @@ mod enabled {
                 project_hint: Some("k5-project".to_string()),
             },
             AiUsageRecord {
+                collector_id: None,
                 usage_event_id: format!("k5-usage-{}-2", uuid::Uuid::now_v7()),
                 ai_session_id: session_id.to_string(),
                 occurred_at: Utc::now() - ChronoDuration::seconds(1),

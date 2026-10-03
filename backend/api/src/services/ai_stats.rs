@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -8,6 +8,7 @@ use crate::model::ai_stats::{
     AiIdentitySummary, AiStatsCoverage, AiStatsData, AiStatsResponse, AiTotalsRow,
     AiUsageMetricsRow, AI_STATS_SCHEMA_VERSION,
 };
+use crate::model::date_range::ResolvedRange;
 use crate::repository::canonical::canonical_winner_relation;
 use wakaclock_core::ai::{KNOWN_AGENT_IDS, KNOWN_PROVIDER_IDS};
 // Keep the dashboard conservative when reading rows written by older clients. The
@@ -93,14 +94,36 @@ impl AiStatsService {
         start: &str,
         end: &str,
     ) -> Result<AiStatsResponse> {
-        validate_date(start)?;
-        validate_date(end)?;
+        let range = ResolvedRange::parse_unbounded(start, end, None)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        self.get_resolved_range(user_id, &range).await
+    }
 
-        let totals = self.fetch_totals(user_id, start, end).await?;
-        let usage = self.fetch_usage_metrics(user_id, start, end).await?;
-        let agents = self.fetch_agents(user_id, start, end).await?;
+    pub async fn get_range_in_timezone(
+        &self,
+        user_id: Uuid,
+        start: &str,
+        end: &str,
+        timezone: Option<&str>,
+    ) -> Result<AiStatsResponse> {
+        let range = ResolvedRange::parse(start, end, timezone)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        self.get_resolved_range(user_id, &range).await
+    }
+
+    async fn get_resolved_range(
+        &self,
+        user_id: Uuid,
+        range: &ResolvedRange,
+    ) -> Result<AiStatsResponse> {
+        let start = range.start.to_string();
+        let end = range.end.to_string();
+
+        let totals = self.fetch_totals(user_id, range).await?;
+        let usage = self.fetch_usage_metrics(user_id, range).await?;
+        let agents = self.fetch_agents(user_id, range).await?;
         let identity = identity_summary(&agents);
-        let daily = self.fetch_daily(user_id, start, end).await?;
+        let daily = self.fetch_daily(user_id, range).await?;
 
         let ai_heartbeat_percentage = percentage(totals.ai_heartbeats, totals.total_heartbeats);
         let ai_verified_heartbeat_percentage =
@@ -134,6 +157,14 @@ impl AiStatsService {
                 total_human_keystrokes: totals.total_human_keystrokes,
                 total_human_chars_added: totals.total_human_chars_added,
                 total_heartbeats: totals.total_heartbeats,
+                usage_coverage: usage.coverage(),
+                line_measurements: crate::model::ai_stats::LineMeasurementCounts {
+                    ai_added: totals.ai_added_measured,
+                    ai_deleted: totals.ai_deleted_measured,
+                    human_added: totals.human_added_measured,
+                    human_deleted: totals.human_deleted_measured,
+                    human_keystrokes: totals.human_keystrokes_measured,
+                },
                 total_prompt_characters: usage.prompt_characters,
                 total_input_tokens: usage.input_tokens,
                 total_output_tokens: usage.output_tokens,
@@ -196,15 +227,19 @@ impl AiStatsService {
         })
     }
 
-    async fn fetch_totals(&self, user_id: Uuid, start: &str, end: &str) -> Result<AiTotalsRow> {
+    async fn fetch_totals(&self, user_id: Uuid, range: &ResolvedRange) -> Result<AiTotalsRow> {
+        let (start, end) = range.unix_bounds();
         let effective_actor_type = effective_actor_type_expr();
-        let relation = canonical_winner_relation(
-            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
-            "h",
-        );
+        let relation =
+            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
         let query = format!(
             "
                 SELECT
+                    countIf(h.ai_lines_added IS NOT NULL AND h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_added_measured,
+                    countIf(h.ai_lines_deleted IS NOT NULL AND h.effective_actor_type IN ('ai_verified', 'ai_inferred')) AS ai_deleted_measured,
+                    countIf(h.human_lines_added IS NOT NULL AND h.effective_actor_type = 'human') AS human_added_measured,
+                    countIf(h.human_lines_deleted IS NOT NULL AND h.effective_actor_type = 'human') AS human_deleted_measured,
+                    countIf(h.keystrokes IS NOT NULL AND h.effective_actor_type = 'human') AS human_keystrokes_measured,
                     coalesce(sumIf(h.ai_lines_added, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_added,
                     coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS total_ai_lines_deleted,
                     coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_verified'), 0) AS total_ai_verified_lines_added,
@@ -244,12 +279,11 @@ impl AiStatsService {
             .map_err(|error| anyhow::anyhow!("ClickHouse ai_stats totals query error: {error}"))
     }
 
-    async fn fetch_agents(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiAgentRow>> {
+    async fn fetch_agents(&self, user_id: Uuid, range: &ResolvedRange) -> Result<Vec<AiAgentRow>> {
+        let (start, end) = range.unix_bounds();
         let effective_actor_type = effective_actor_type_expr();
-        let relation = canonical_winner_relation(
-            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
-            "h",
-        );
+        let relation =
+            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
         let query = format!(
             "
                 SELECT
@@ -267,6 +301,8 @@ impl AiStatsService {
                         'unavailable')) AS identity_status,
                     if(h.effective_actor_type IN ('ai_verified', 'ai_inferred'),
                         multiIf(
+                            lower(trim(ifNull(h.identity_status, ''))) = 'confirmed'
+                                AND lower(trim(ifNull(h.identity_reason, ''))) = '', NULL,
                             lower(trim(ifNull(h.identity_reason, ''))) IN ('missing_agent', 'missing_provider', 'missing_model', 'internal_marker', 'context_unavailable', 'conflicting_evidence'),
                             lower(trim(ifNull(h.identity_reason, ''))),
                             'context_unavailable'
@@ -311,21 +347,28 @@ impl AiStatsService {
     async fn fetch_usage_metrics(
         &self,
         user_id: Uuid,
-        start: &str,
-        end: &str,
+        range: &ResolvedRange,
     ) -> Result<AiUsageMetricsRow> {
+        let (start, end) = range.unix_bounds();
         self.clickhouse
             .get_client()
             .query(
                 "SELECT
-                    sumOrNull(prompt_character_count) AS prompt_characters,
-                    sumOrNull(input_tokens) AS input_tokens,
-                    sumOrNull(output_tokens) AS output_tokens,
-                    sumOrNull(cache_read_tokens) AS cache_read_tokens,
-                    sumOrNull(cache_write_tokens) AS cache_write_tokens,
-                    sumOrNull(estimated_cost_microusd) AS estimated_cost_microusd
-                 FROM wakaclock.ai_usage_events FINAL
-                 WHERE user_id = ? AND toDate(toDateTime(event_time)) BETWEEN toDate(?) AND toDate(?)",
+                    count() AS event_count,
+                    count(u.prompt_character_count) AS prompt_measured,
+                    count(u.input_tokens) AS input_measured,
+                    count(u.output_tokens) AS output_measured,
+                    count(u.cache_read_tokens) AS cache_read_measured,
+                    count(u.cache_write_tokens) AS cache_write_measured,
+                    count(u.estimated_cost_microusd) AS cost_measured,
+                    sumOrNull(u.prompt_character_count) AS prompt_characters,
+                    sumOrNull(u.input_tokens) AS input_tokens,
+                    sumOrNull(u.output_tokens) AS output_tokens,
+                    sumOrNull(u.cache_read_tokens) AS cache_read_tokens,
+                    sumOrNull(u.cache_write_tokens) AS cache_write_tokens,
+                    sumOrNull(u.estimated_cost_microusd) AS estimated_cost_microusd
+                 FROM wakaclock.ai_usage_events AS u FINAL
+                 WHERE user_id = ? AND event_time >= ? AND event_time < ?",
             )
             .bind(user_id)
             .bind(start)
@@ -335,16 +378,15 @@ impl AiStatsService {
             .map_err(|error| anyhow::anyhow!("ClickHouse ai usage metrics query error: {error}"))
     }
 
-    async fn fetch_daily(&self, user_id: Uuid, start: &str, end: &str) -> Result<Vec<AiDailyRow>> {
+    async fn fetch_daily(&self, user_id: Uuid, range: &ResolvedRange) -> Result<Vec<AiDailyRow>> {
+        let (start, end) = range.unix_bounds();
         let effective_actor_type = effective_actor_type_expr();
-        let relation = canonical_winner_relation(
-            "h.user_id = ? AND h.date BETWEEN toDate(?) AND toDate(?)",
-            "h",
-        );
+        let relation =
+            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
         let query = format!(
             "
                 SELECT
-                    toString(h.date) AS day,
+                    toString(toDate(toDateTime(h.time, ?))) AS day,
                     coalesce(sumIf(h.ai_lines_added, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_added,
                     coalesce(sumIf(h.ai_lines_deleted, h.effective_actor_type IN ('ai_verified', 'ai_inferred')), 0) AS ai_lines_deleted,
                     coalesce(sumIf(h.ai_lines_added, h.effective_actor_type = 'ai_verified'), 0) AS ai_verified_lines_added,
@@ -373,6 +415,7 @@ impl AiStatsService {
         self.clickhouse
             .get_client()
             .query(&query)
+            .bind(range.timezone.to_string())
             .bind(user_id)
             .bind(start)
             .bind(end)
@@ -490,12 +533,6 @@ fn percentage(part: u64, total: u64) -> f64 {
     }
 }
 
-fn validate_date(date: &str) -> Result<()> {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .context("Invalid date format, expected YYYY-MM-DD")?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -507,6 +544,11 @@ mod tests {
 
     fn totals() -> AiTotalsRow {
         AiTotalsRow {
+            ai_added_measured: 0,
+            ai_deleted_measured: 0,
+            human_added_measured: 0,
+            human_deleted_measured: 0,
+            human_keystrokes_measured: 0,
             total_ai_lines_added: 10,
             total_ai_lines_deleted: 2,
             total_ai_verified_lines_added: 10,
@@ -629,6 +671,62 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn timezone_queries_share_half_open_bounds_and_local_daily_buckets() {
+        use crate::model::date_range::ResolvedRange;
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        HeartbeatRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        crate::repository::ai_usage::AiUsageRepository::new(clickhouse.clone())
+            .migrate()
+            .await
+            .unwrap();
+        let service = AiStatsService::new(clickhouse.clone());
+        for (date, timezone, hours) in [
+            ("2026-09-30", "Asia/Bangkok", 24),
+            ("2026-09-30", "UTC", 24),
+            ("2026-03-08", "America/New_York", 23),
+            ("2026-11-01", "America/New_York", 25),
+        ] {
+            let user = Uuid::new_v4();
+            let range = ResolvedRange::parse(date, date, Some(timezone)).unwrap();
+            let (start, end) = range.unix_bounds();
+            assert_eq!(end - start, hours as f64 * 3600.0);
+            for (index, time) in [start - 1.0, start, start + 1.0, end - 1.0, end, end + 1.0]
+                .into_iter()
+                .enumerate()
+            {
+                let sql = format!("INSERT INTO wakaclock.heartbeats (user_id, entity, entity_type, time, date, is_write, category, editor, operating_system, machine, user_agent, actor_type, heartbeat_id, created_at) VALUES ('{user}', 'boundary-{index}', 'file', {time}, toDate(toDateTime({time})), 1, 'coding', 'test', 'test', 'test', 'test', 'unknown', 'boundary-{index}', {index})");
+                clickhouse.get_client().query(&sql).execute().await.unwrap();
+                let sql = format!("INSERT INTO wakaclock.ai_usage_events (user_id, date, usage_event_id, ai_session_id, event_time, ai_agent, prompt_count, input_tokens, token_source, version, received_at) VALUES ('{user}', toDate(toDateTime({time})), 'boundary-{index}', 'boundary', {time}, 'codex', 1, 2, 'transcript', 1, {time})");
+                clickhouse.get_client().query(&sql).execute().await.unwrap();
+            }
+            let stats = service
+                .get_range_in_timezone(user, date, date, Some(timezone))
+                .await
+                .unwrap();
+            assert_eq!(stats.data.total_heartbeats, 3);
+            assert_eq!(stats.data.total_input_tokens, Some(6));
+            assert_eq!(stats.data.usage_coverage.event_count, 3);
+            assert_eq!(stats.data.daily.len(), 1);
+            assert_eq!(stats.data.daily[0].date, date);
+            assert_eq!(stats.data.daily[0].heartbeat_count, 3);
+            let utc = service.get_range(user, date, date).await.unwrap();
+            let explicit = service
+                .get_range_in_timezone(user, date, date, Some("UTC"))
+                .await
+                .unwrap();
+            assert_eq!(utc.data.total_heartbeats, explicit.data.total_heartbeats);
+            assert_eq!(
+                utc.data.total_input_tokens,
+                explicit.data.total_input_tokens
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
     async fn agents_query_deserializes_nullable_identity_status() {
         let clickhouse = crate::test_support::clickhouse_client().await;
         HeartbeatRepository::new(clickhouse.clone())
@@ -675,7 +773,11 @@ mod tests {
 
         let service = AiStatsService::new(clickhouse);
         let rows = service
-            .fetch_agents(user_id, "2026-09-12", "2026-09-12")
+            .fetch_agents(
+                user_id,
+                &crate::model::date_range::ResolvedRange::parse("2026-09-12", "2026-09-12", None)
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -684,6 +786,7 @@ mod tests {
             .find(|row| row.actor_type == "ai_verified")
             .expect("verified agent row");
         assert_eq!(verified.identity_status.as_deref(), Some("confirmed"));
+        assert_eq!(verified.identity_reason, None);
         assert_eq!(verified.ai_added_measured_heartbeats, 1);
         assert_eq!(verified.ai_deleted_measured_heartbeats, 0);
         assert_eq!(verified.ai_lines_deleted, 0); // Known subtotal, not measured-zero proof.

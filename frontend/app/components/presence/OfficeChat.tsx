@@ -6,6 +6,12 @@ import { v7 as uuidv7 } from 'uuid';
 import { officeCommand, type OfficeMessage, officeMessages } from '@/lib/wakaclock/office';
 
 export function OfficeChat({ roomId }: { roomId: string }) {
+  // Bind asynchronous history and send state to one room, including requests that
+  // finish after navigation. A new room starts with independent state.
+  return <RoomChat key={roomId} roomId={roomId} />;
+}
+
+function RoomChat({ roomId }: { roomId: string }) {
   const [messages, setMessages] = React.useState<OfficeMessage[]>([]);
   const [cursor, setCursor] = React.useState<null | string>(null);
   const [body, setBody] = React.useState('');
