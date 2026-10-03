@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from pathlib import Path
-from local_lab import ROOT, private_json, request
+from local_lab import ROOT, private_json, request, daily_blockers
 from build_manifest import file_digest
 from checks import report_errors
 from receipt_readback import digest_parts
@@ -66,6 +66,15 @@ def window_blockers(build_hash, codex, claude, checks):
     return blockers
 
 
+def rehearsal_blockers(records, build_hash, owner):
+    completed = {r.get('agent') for r in records if r.get('evidence_kind') == 'rehearsal'
+                 and r.get('build_manifest_sha256') == build_hash
+                 and r.get('owner_reference') == digest_parts(['observation-owner', owner])
+                 and r.get('finished_at') and r.get('receipt_id') and r.get('reviewed') is True
+                 and r.get('ground_truth_before_readback') is True and r.get('mismatches') == []}
+    return [agent + ':daily_rehearsal_incomplete' for agent in AGENTS if agent not in completed]
+
+
 def readiness(observations, window, build_hash, current=None):
     current = current or now()
     elapsed = 0 if window is None else max(0, (current - datetime.fromisoformat(window['started_at'])).total_seconds() / 86400)
@@ -110,18 +119,35 @@ def main():
     subs.add_parser('report')
     args = parser.parse_args()
     manifest = ROOT / 'evidence/build-manifest.json'
-    build_hash = file_digest(manifest)
+    try:
+        build_hash = file_digest(manifest)
+    except OSError:
+        if args.action == 'check-ready':
+            print(json.dumps({'ready': False, 'blockers': ['build_manifest_unavailable'],
+                              'window_started': (ROOT / 'evidence/observation-window.json').exists()}))
+            return
+        raise ValueError('build_manifest_unavailable') from None
     folder = ROOT / 'evidence/observations'
     window_path = ROOT / 'evidence/observation-window.json'
     if args.action in ('start-window', 'check-ready'):
-        blockers = window_blockers(build_hash, *(json.loads(Path(filename).read_text())
-                                    for filename in (args.codex, args.claude, args.checks)))
+        try:
+            blockers = window_blockers(build_hash, *(json.loads(Path(filename).read_text())
+                                        for filename in (args.codex, args.claude, args.checks)))
+        except (OSError, ValueError, TypeError, KeyError):
+            blockers = ['readiness_evidence_unavailable']
+        blockers.extend(daily_blockers())
+        try:
+            account = json.loads((ROOT / 'daily-account.json').read_text())
+            blockers.extend(rehearsal_blockers([json.loads(p.read_text()) for p in folder.glob('*.json')],
+                                               build_hash, account['user_id']))
+        except (OSError, ValueError, KeyError):
+            blockers.append('daily_rehearsal_evidence_unavailable')
         try:
             preflight()
         except (ValueError, OSError, KeyError):
             blockers.append('lab_preflight_failed')
         if args.action == 'check-ready':
-            print(json.dumps({'ready': not blockers, 'blockers': blockers, 'window_started': False}))
+            print(json.dumps({'ready': not blockers, 'blockers': blockers, 'window_started': window_path.exists()}))
             return
         if blockers:
             raise ValueError(';'.join(blockers))

@@ -3,7 +3,7 @@
 import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { CalendarIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -113,7 +113,7 @@ export function DurationTimeline() {
             <PopoverTrigger asChild>
               <Button className="gap-1.5" size="sm" variant="outline">
                 <CalendarIcon className="size-3.5" />
-                {format(new Date(date), 'MMM d, yyyy')}
+                {format(parseISO(date), 'MMM d, yyyy')}
                 <span className="text-muted-foreground">· {data?.timezone ?? timezone}</span>
               </Button>
             </PopoverTrigger>
@@ -121,7 +121,7 @@ export function DurationTimeline() {
               <Calendar
                 mode="single"
                 onSelect={(d) => d && setDate(format(d, 'yyyy-MM-dd'))}
-                selected={new Date(date)}
+                selected={parseISO(date)}
               />
             </PopoverContent>
           </Popover>
@@ -141,20 +141,26 @@ export function DurationTimeline() {
                   <div className="bg-primary/5 rounded-lg border px-3 py-2">
                     <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
                     <dd className="mt-1 text-lg font-semibold">
-                      {formatProjectDuration(data?.active_seconds ?? 0)}
+                      {data?.active_seconds == null
+                        ? 'Not available'
+                        : formatProjectDuration(data.active_seconds)}
                     </dd>
                   </div>
                 )}
                 <div className="bg-muted/30 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
                   <dd className="mt-1 text-lg font-semibold">
-                    {formatProjectDuration(data?.comparable_seconds ?? 0)}
+                    {data?.comparable_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.comparable_seconds)}
                   </dd>
                 </div>
                 <div className="bg-muted/30 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
                   <dd className="mt-1 text-lg font-semibold">
-                    {formatProjectDuration(data?.ai_additional_seconds ?? 0)}
+                    {data?.ai_additional_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.ai_additional_seconds)}
                   </dd>
                 </div>
               </dl>

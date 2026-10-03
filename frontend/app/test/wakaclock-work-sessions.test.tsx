@@ -83,7 +83,7 @@ describe('work session receipt', () => {
       agent: 'codex',
       model: null,
       provider: null,
-      repair_reference: null,
+      repair_reference: 'opaque-repair',
       lines_added: 2,
       lines_deleted: 0,
       revision: 1,

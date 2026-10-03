@@ -59,3 +59,51 @@ it('does not show a floating index when the page has fewer than two chapters', (
   );
   expect(screen.getByText('สารบัญ')).not.toBeVisible();
 });
+
+it('closes a focused index with Escape and clamps reading progress while coalescing scroll updates', () => {
+  let paint!: FrameRequestCallback;
+  const schedule = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    paint = callback;
+    return 1;
+  });
+  const cancel = vi.spyOn(window, 'cancelAnimationFrame');
+  vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(2000);
+  vi.stubGlobal('innerHeight', 1000);
+  vi.stubGlobal('scrollY', 3000);
+  const view = render(
+    <div className="wakaclock-marketing">
+      <main>
+        <section id="one">
+          <h2>One</h2>
+        </section>
+        <section id="two">
+          <h2>Two</h2>
+        </section>
+        <section id="skip">No heading</section>
+      </main>
+      <MarketingScrollIndex locale="en" />
+    </div>
+  );
+  const panel = view.container.querySelector('details')!;
+  const marker = view.container.querySelector('.axis-scroll-index') as HTMLElement;
+  expect(marker.style.getPropertyValue('--reading-progress')).toBe('1');
+  fireEvent.click(screen.getByText('Index'));
+  screen.getByRole('link', { name: /One/ }).focus();
+  fireEvent.keyDown(window, { key: 'Tab' });
+  expect(panel.open).toBe(true);
+  fireEvent.keyDown(window, { key: 'Escape' });
+  expect(panel.open).toBe(false);
+  expect(panel.querySelector('summary')).toHaveFocus();
+  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.scroll(window);
+  fireEvent.resize(window);
+  expect(schedule).toHaveBeenCalledTimes(1);
+  act(() => paint(16));
+  view.unmount();
+  expect(cancel).toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
+it('remains hidden outside a marketing container', () => {
+  render(<MarketingScrollIndex locale="en" />);
+  expect(screen.getByText('Index')).not.toBeVisible();
+});

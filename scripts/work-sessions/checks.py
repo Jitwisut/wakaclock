@@ -13,12 +13,14 @@ STATES = ('not_run', 'failed', 'blocked', 'passed')
 
 
 def report_errors(report, build_hash, root=ROOT):
-    if report.get('schema_version') != 3 or report.get('build_manifest_sha256') != build_hash:
+    if not isinstance(report, dict) or report.get('schema_version') != 3 or report.get('build_manifest_sha256') != build_hash:
         return ['checks_schema_or_build_mismatch']
+    if not isinstance(report.get('checks'), dict):
+        return ['checks_entries_missing']
     errors = []
     for name in NAMES:
         item = report.get('checks', {}).get(name, {})
-        if item.get('status') != 'passed' or item.get('reviewed') is not True:
+        if not isinstance(item, dict) or item.get('status') != 'passed' or item.get('reviewed') is not True:
             errors.append(name + ':not_reviewed_or_passed')
             continue
         reference = item.get('evidence', '')

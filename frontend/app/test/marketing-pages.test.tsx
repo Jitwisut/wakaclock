@@ -1,7 +1,10 @@
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 
-import { LocalizedMarketingPage } from '@/components/marketing/localized-page';
+import {
+  LocalizedMarketingPage,
+  marketingPageMetadata,
+} from '@/components/marketing/localized-page';
 import { MARKETING_PAGE_KEYS, PAGE_COPY } from '@/components/marketing/marketing-copy';
 import { GET } from '@/app/llms-full.txt/route';
 import sitemap from '@/app/sitemap';
@@ -13,6 +16,14 @@ for (const locale of ['en', 'th'] as const) {
   for (const path of MARKETING_PAGE_KEYS) {
     it(`${locale}${path}: exposes one title, working chapter links and matching page identity`, () => {
       const copy = PAGE_COPY[path][locale];
+      const metadata = marketingPageMetadata(path, locale);
+      expect(metadata.description).toBe(copy.description);
+      expect(metadata.alternates?.canonical).toBe(localizedPath(locale, path));
+      expect(metadata.title).toEqual(
+        copy.metadataTitle.includes('AtoAxis')
+          ? { absolute: copy.metadataTitle }
+          : copy.metadataTitle
+      );
       const { container } = render(<LocalizedMarketingPage locale={locale} path={path} />);
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(copy.title);

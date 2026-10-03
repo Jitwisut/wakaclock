@@ -63,6 +63,8 @@ def main():
      assert result.returncode==0 and '1 passed;' in (ROOT/(name+'.log')).read_text()
      stages[name]='passed'
     report={'schema_version':3,'build_manifest_sha256':build,'status':'passed','evidence_kind':'validation_run','runner':'check_repair','runner_sha256':file_digest(Path(__file__)),'sample_count':1,'mismatches':[],'blockers':[],'scenarios':[{'scenario':'repair_rollback','status':'passed','mismatches':[]}],'stages':stages,'pagination_pages':pages,'promotable':False}
+    if preflight() != build:
+        raise ValueError('build_changed_during_repair_checks')
     private_json(ROOT/'evidence/extra-runtime-checks.json',report)
     print(json.dumps(report))
 

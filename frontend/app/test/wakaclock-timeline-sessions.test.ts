@@ -90,3 +90,10 @@ describe('project timeline sessions', () => {
     expect(buildTimelineSessions([])).toEqual([]);
   });
 });
+
+it('unions simultaneous starts deterministically without inventing activity', () => {
+  const data = [block(0, 120), block(0, 60), block(0, 120)];
+  expect(buildTimelineSessions(data)).toMatchObject([
+    { start: 0, end: 120, duration_seconds: 120, heartbeat_count: 3 },
+  ]);
+});

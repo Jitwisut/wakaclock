@@ -116,7 +116,12 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
   React.useEffect(() => {
     setCurrentToken(state.token);
     if (!hydrated.current) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // Storage may be unavailable in restricted browser contexts. The in-memory
+      // session and authorization token still follow login/logout immediately.
+    }
   }, [state]);
 
   // Let the axios interceptor end the session when the server rejects our token.

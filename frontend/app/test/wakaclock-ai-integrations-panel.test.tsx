@@ -100,3 +100,34 @@ describe('AiIntegrationsPanel', () => {
     expect(body).not.toContain('source code');
   });
 });
+
+it.each([
+  [{ enabled: false }, 'Needs trust'],
+  [{ verification: 'unverified' }, 'Captured locally'],
+  [{ last_evidence_unix: null }, 'Unverified'],
+  [{ pending_events: 1 }, 'Degraded'],
+  [{ dead_letter_events: 1 }, 'Degraded'],
+  [{ transcript_lag_seconds: 301 }, 'Degraded'],
+  [{ diagnostic_code: 'auth_required' }, 'Degraded'],
+] as [Partial<AdapterFreshness>, string][])(
+  'shows the bounded integration readiness for %j',
+  (overrides, label) => {
+    render(<AiIntegrationsPanel report={report([adapter({ transport: null, ...overrides })])} />);
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.getByText('Transport not reported')).toBeVisible();
+  }
+);
+it.each([
+  [120, '2m ago'],
+  [7200, '2h ago'],
+  [172800, '2d ago'],
+])('shows evidence age without treating stale capture as recent (%s seconds)', (seconds, label) => {
+  render(
+    <AiIntegrationsPanel
+      report={report([
+        adapter({ last_evidence_unix: Math.floor(Date.now() / 1000) - Number(seconds) }),
+      ])}
+    />
+  );
+  expect(screen.getByText(label)).toBeVisible();
+});

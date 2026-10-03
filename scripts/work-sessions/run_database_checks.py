@@ -22,6 +22,7 @@ def main():
         'timezone_queries_share_half_open_bounds_and_local_daily_buckets',
         'agents_query_deserializes_nullable_identity_status',
         'receipt_live_databases_isolate_sessions_replay_revisions_and_outcomes',
+        'handlers::v2::work_sessions::tests::cursor_is_owner_filter_and_expiry_bound',
     )
     report = {'schema_version': 2, 'source_snapshot_sha256': source_digest(),
               'generated_at': datetime.now(timezone.utc).isoformat(), 'tests': []}
@@ -31,7 +32,7 @@ def main():
         with log_path.open('w') as log:
             result = subprocess.run(['cargo', 'test', '--locked', '--offline', '--manifest-path',
                                      'backend/api/Cargo.toml', '-p', 'wakaclock-server', '--lib',
-                                     test, '--', '--ignored', '--test-threads=1', '--nocapture'], cwd=REPO,
+                                     test, '--', *(['--ignored'] if test != tests[3] else []), '--test-threads=1', '--nocapture'], cwd=REPO,
                                     env=values, stdout=log, stderr=subprocess.STDOUT)
         log_path.chmod(0o600)
         # A mistyped filter executes zero tests: never count that as a pass.
@@ -51,6 +52,7 @@ def main():
                               'deterministic_union', 'missing_intervals', 'facts_10000',
                               'facts_10001', 'operations_10000', 'operations_10001'), receipt_status)
     scenarios['timezone'] = statuses[tests[0]]
+    scenarios['cursor'] = statuses[tests[3]]
     evidence = run_evidence(build, __file__, scenarios, sample_count=len(tests),
                             tests=report['tests'], source_snapshot_sha256=report['source_snapshot_sha256'])
     private_json(ROOT / 'evidence/database-checks.json', evidence)

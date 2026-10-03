@@ -62,3 +62,13 @@ describe('device approval', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
+
+it('accepts a manually entered code when there is no URL code and prevents an empty approval', async () => {
+  query.value = '';
+  approve.mockResolvedValue(undefined);
+  renderScreen();
+  expect(screen.getByRole('button', { name: 'Approve device' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Device code'), { target: { value: ' abcd efgh ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Approve device' }));
+  await waitFor(() => expect(approve).toHaveBeenCalledWith('ABCD-EFGH'));
+});

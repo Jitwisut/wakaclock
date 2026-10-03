@@ -9,6 +9,9 @@ import {
   formatIntegrationAgentName,
   formatIntegrationProviderModel,
   normalizeAiMetadata,
+  isConfirmedAiIdentity,
+  formatAiIdentityReason,
+  formatActorType,
 } from '@/lib/wakaclock/ai-display';
 import type { AiAdapterFreshnessV2 } from '@/lib/wakaclock/types';
 
@@ -121,4 +124,56 @@ describe('AI metadata display', () => {
     );
     expect(aiAdapterGuidance(base).label).toBe('Healthy');
   });
+});
+
+it('does not display missing or internal model markers as a confirmed identity', () => {
+  const base = {
+    actor_type: 'ai_verified' as const,
+    agent: 'codex',
+    provider: 'openai',
+    model: 'model-v1',
+  };
+  expect(isConfirmedAiIdentity(base)).toBe(true);
+  expect(
+    isConfirmedAiIdentity({ ...base, identity_status: 'confirmed', identity_reason: null })
+  ).toBe(true);
+  expect(
+    isConfirmedAiIdentity({
+      ...base,
+      identity_status: 'confirmed',
+      identity_reason: 'context_unavailable',
+    })
+  ).toBe(false);
+  expect(isConfirmedAiIdentity({ ...base, identity_status: 'partial' })).toBe(false);
+  expect(isConfirmedAiIdentity({ ...base, actor_type: 'human' })).toBe(false);
+  for (const field of ['agent', 'provider', 'model'] as const) {
+    for (const value of [
+      null,
+      '',
+      '<synthetic>',
+      'synthetic',
+      'internal model marker',
+      'internal_model_marker',
+      'model not reported',
+      'provider not reported',
+    ]) {
+      expect(isConfirmedAiIdentity({ ...base, [field]: value })).toBe(false);
+    }
+  }
+  expect(formatAiIdentityReason()).toBe('Identity evidence is incomplete');
+  expect(formatAiIdentityReason('future_reason')).toBe('Identity evidence needs review');
+  expect(formatAiIdentityReason('missing_model')).toBe('Model not reported');
+  expect(formatActorType()).toBe('Unknown authorship');
+  expect(formatAiProviderModel()).toBe('Provider not reported / Model not reported');
+  expect(formatIntegrationProviderModel(null, 'model')).toBe('Provider not reported / model');
+  expect(formatIntegrationProviderModel('provider', null)).toBe('provider / Model not reported');
+});
+it('handles equivalent bounded diagnostic codes without exposing server messages', () => {
+  for (const [alias, canonical] of [
+    ['disabled_by_policy', 'consent_disabled'],
+    ['authentication_required', 'auth_required'],
+    ['schema_mismatch', 'outdated_schema'],
+    ['delivery_pending', 'offline_queue'],
+  ])
+    expect(aiRepairGuidance(alias)).toEqual(aiRepairGuidance(canonical));
 });

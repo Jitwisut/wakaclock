@@ -43,18 +43,23 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
         if (!pending) return;
         const generation = generationRef.current;
         sequenceRef.current += 1;
+        const sequence = sequenceRef.current;
         void updatePresenceMemberV2(pending.roomId, {
           client_id: getPresenceClientId(),
-          client_seq: sequenceRef.current,
+          client_seq: sequence,
           position: pending.position,
           zone_id: pending.zoneId,
         })
           .then((next) => {
-            if (generation === generationRef.current) onSnapshot(next);
+            if (generation === generationRef.current && sequence === sequenceRef.current) {
+              onSnapshot(next);
+            }
             return next;
           })
           .catch(() => {
-            if (generation === generationRef.current) onError?.();
+            if (generation === generationRef.current && sequence === sequenceRef.current) {
+              onError?.();
+            }
           });
       };
       flush();

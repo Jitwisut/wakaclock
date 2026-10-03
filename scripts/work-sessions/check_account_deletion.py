@@ -12,6 +12,7 @@ from local_lab import ROOT, API, config, env, request, private_json
 from local_s3 import request as s3_request
 from receipt_readback import Reader, receipt_id, session_scope
 from runtime_binding import preflight
+from evidence_contract import run_evidence
 
 
 def pg(sql):
@@ -94,7 +95,13 @@ def main():
     except Exception as error:
         # Never print arbitrary HTTP, SQL, credential or account detail.
         report['mismatch_codes'] = [str(error) if isinstance(error, ValueError) else type(error).__name__]
-    private_json(path, report)
+    if preflight() != build_hash:
+        raise ValueError('build_changed_during_deletion_check')
+    evidence = run_evidence(build_hash, __file__,
+        dict.fromkeys(('request_worker_purge', 'outcome_history', 'delayed_replay'), report['status']),
+        stages=report['stages'], generated_at=report['generated_at'],
+        replay_scope='api_ingestion_only', worker_duration_seconds=report.get('worker_duration_seconds'))
+    private_json(path, evidence)
     print(json.dumps(report))
     raise SystemExit(0 if report['status'] == 'passed' else 1)
 

@@ -1,4 +1,7 @@
 import json
+import io
+from contextlib import redirect_stdout
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
@@ -9,11 +12,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_manifest import file_digest
 from checks import validate_report
 from evidence_contract import REQUIRED
-from observation import finish_record, readiness
+from observation import finish_record, readiness, rehearsal_blockers
+from run_browser_checks import successful
 from receipt_readback import digest_parts
+from receipt_campaign import SCENARIOS
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_readiness_without_manifest_reports_blocker_without_creating_a_window(self):
+        import observation
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = io.StringIO()
+            with patch.object(observation, 'ROOT', root), patch.object(sys, 'argv', [
+                    'observation.py', 'check-ready', '--codex', 'missing', '--claude', 'missing', '--checks', 'missing']), redirect_stdout(output):
+                observation.main()
+            self.assertEqual(json.loads(output.getvalue()), {'ready': False,
+                             'blockers': ['build_manifest_unavailable'], 'window_started': False})
+            self.assertEqual(list(root.iterdir()), [])
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -28,8 +45,18 @@ class EvidenceTests(unittest.TestCase):
                    'blockers': [], 'sample_count': 1, 'runner': 'test_runner', 'runner_sha256': 'a' * 64}
             if gate == 'release_checks':
                 run['coverage'] = dict.fromkeys(('statements', 'branches', 'functions', 'lines'), 100)
-            child = self.write(gate + '-run.json', run)
-            proof = {**run, 'evidence_kind': 'validation_gate', 'gate': gate, 'children': [child]}
+            children = []
+            if gate == 'capture_identity':
+                for scenario, agent in (('codex_native', 'codex'), ('claude_native', 'claude-code')):
+                    native = {**run, 'scenarios': [{'scenario': scenario, 'status': 'passed', 'mismatches': []}],
+                              'native_campaign': {'schema_version': 2, 'agent': agent, 'evidence_kind': 'controlled_live',
+                              'build_manifest_sha256': 'build', 'blockers': [], 'scenarios': [
+                              {'scenario': s, 'status': 'passed', 'mismatches': [], 'stages': dict.fromkeys(
+                                  ('native', 'fixture', 'capture', 'delivery', 'receipt', 'replay'), 'passed')} for s in SCENARIOS]}}
+                    children.append(self.write(scenario + '.json', native))
+                run = {**run, 'scenarios': [r for r in rows if not r['scenario'].endswith('_native')]}
+            children.append(self.write(gate + '-run.json', run))
+            proof = {**run, 'scenarios': rows, 'evidence_kind': 'validation_gate', 'gate': gate, 'children': children}
             ref = self.write(gate + '.json', proof)
             self.report['checks'][gate] = {'status': 'passed', 'reviewed': True,
                                            'evidence': ref['path'], 'sha256': ref['sha256']}
@@ -85,6 +112,22 @@ class EvidenceTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_skipped_empty_retried_or_failed_browser_runs_cannot_pass(self):
+        passed = {'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
+        report = {'suites': [{'specs': [{'tests': [passed, passed]}]}]}
+        self.assertTrue(successful(report))
+        for rows in [[], [passed], [passed, {**passed, 'status': 'skipped'}],
+                     [passed, {**passed, 'results': [{'status': 'failed'}, {'status': 'passed'}]}]]:
+            self.assertFalse(successful({'suites': [{'specs': [{'tests': rows}]}]}))
+
+    def test_both_reviewed_rehearsals_must_match_current_build_and_account(self):
+        rows = [{**self.finish(), 'agent': agent, 'evidence_kind': 'rehearsal'} for agent in ('codex', 'claude-code')]
+        self.assertEqual(rehearsal_blockers(rows, 'build', 'owner'), [])
+        self.assertEqual(len(rehearsal_blockers(rows, 'build', 'other')), 2)
+        self.assertEqual(len(rehearsal_blockers(rows, 'old', 'owner')), 2)
+        rows[0]['mismatches'] = ['missing_operation']
+        self.assertEqual(rehearsal_blockers(rows, 'build', 'owner'), ['codex:daily_rehearsal_incomplete'])
+
     def setUp(self):
         self.current = datetime(2026, 10, 1, tzinfo=timezone.utc)
         self.record = {'agent': 'codex', 'started_at': (self.current - timedelta(seconds=10)).isoformat(),

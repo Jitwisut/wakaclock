@@ -898,13 +898,12 @@ def main() -> int:
             # Separate artifact contract: preserve the generic certification stdout schema.
             import sys
             sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "work-sessions"))
-            from receipt_campaign import run as run_receipts, SCENARIOS as RECEIPT_SCENARIOS
-            from local_lab import private_json
+            from receipt_campaign import run as run_receipts, save_report, SCENARIOS as RECEIPT_SCENARIOS
             selected = args.scenario_ids or list(RECEIPT_SCENARIOS)
             if set(selected) - set(RECEIPT_SCENARIOS):
                 raise ValueError("unsupported receipt scenario")
             report = run_receipts("codex", args.execute, selected, min(args.timeout, 300))
-            private_json(args.receipt_output, report)
+            save_report(args.receipt_output, report)
             summary = empty_summary()
             summary["scenarios"] = {r["scenario"]: r["status"] for r in report["scenarios"]}
             summary["blockers"] = report["blockers"] + ["receipt_artifact_requires_review"]

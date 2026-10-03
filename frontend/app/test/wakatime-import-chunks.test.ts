@@ -36,3 +36,36 @@ describe('WakaTime export chunking', () => {
     ).toThrow('No raw heartbeats');
   });
 });
+
+it.each([null, [], {}, { user: [], days: [] }, { user: {}, days: null }])(
+  'rejects malformed export shape %j before producing upload chunks',
+  (value) => {
+    expect(() => splitWakaTimeExport(JSON.stringify(value))).toThrow('Expected a WakaTime export');
+  }
+);
+it('skips invalid days and heartbeats while preserving permitted metadata', () => {
+  const result = splitWakaTimeExport(
+    JSON.stringify({
+      user: { last_plugin: 12, last_plugin_name: 'VS Code' },
+      days: [null, [], { heartbeats: [null, [], 42, { entity: 'ok.ts', time: 1 }] }],
+    })
+  );
+  expect(result).toHaveLength(1);
+  expect(JSON.parse(result[0])).toEqual({
+    user: { last_plugin: null, last_plugin_name: 'VS Code' },
+    days: [{ heartbeats: [{ entity: 'ok.ts', time: 1 }] }],
+  });
+});
+it('uses UTF-8 bytes to split below the budget and rejects a single oversize heartbeat', () => {
+  const heartbeat = { entity: 'ก'.repeat(100_000), time: 1 };
+  const chunks = splitWakaTimeExport(
+    JSON.stringify({ user: {}, days: [{ heartbeats: [heartbeat, heartbeat, heartbeat] }] })
+  );
+  expect(chunks).toHaveLength(2);
+  expect(chunks.every((chunk) => new TextEncoder().encode(chunk).length <= 800_000)).toBe(true);
+  expect(() =>
+    splitWakaTimeExport(
+      JSON.stringify({ user: {}, days: [{ heartbeats: [{ entity: 'ก'.repeat(300_000) }] }] })
+    )
+  ).toThrow('A single heartbeat exceeds');
+});

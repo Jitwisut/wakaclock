@@ -30,3 +30,81 @@ it('sends another move after an idle throttle window, including leaving the desk
     expect.objectContaining({ position: { x: 60, y: 60 }, zone_id: null })
   );
 });
+
+it('coalesces rapid moves, increases sequence and rejects responses from an earlier room', async () => {
+  vi.useFakeTimers();
+  const snapshot = { zones: [] } as unknown as PresenceV2Snapshot;
+  let resolve!: (value: PresenceV2Snapshot) => void;
+  const next = vi.fn();
+  vi.mocked(updatePresenceMemberV2)
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    )
+    .mockResolvedValue(snapshot);
+  const view = renderHook(({ roomId }) => useRoomMovement({ roomId, snapshot, onSnapshot: next }), {
+    initialProps: { roomId: 'one' },
+  });
+  act(() => {
+    view.result.current.move({ x: 10, y: 10 });
+    view.result.current.move({ x: 20, y: 20 });
+    view.result.current.move({ x: 30, y: 30 });
+  });
+  expect(updatePresenceMemberV2).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTimeAsync(250));
+  expect(updatePresenceMemberV2).toHaveBeenLastCalledWith(
+    'one',
+    expect.objectContaining({ position: { x: 30, y: 30 }, client_seq: 2 })
+  );
+  view.rerender({ roomId: 'two' });
+  next.mockClear();
+  await act(async () => resolve(snapshot));
+  expect(next).not.toHaveBeenCalled();
+});
+it('does not apply an old movement acknowledgement after a newer one in the same room', async () => {
+  vi.useFakeTimers();
+  const snapshot = { zones: [] } as unknown as PresenceV2Snapshot;
+  const next = vi.fn();
+  let resolve!: (value: PresenceV2Snapshot) => void;
+  vi.mocked(updatePresenceMemberV2)
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    )
+    .mockResolvedValue(snapshot);
+  const { result } = renderHook(() =>
+    useRoomMovement({ roomId: 'one', snapshot, onSnapshot: next })
+  );
+  act(() => {
+    result.current.move({ x: 10, y: 10 });
+    result.current.move({ x: 20, y: 20 });
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(250));
+  expect(next).toHaveBeenCalledTimes(1);
+  await act(async () => resolve(snapshot));
+  expect(next).toHaveBeenCalledTimes(1);
+});
+it('reports a current-room failure, but ignores moves without a room or snapshot', async () => {
+  vi.useFakeTimers();
+  const snapshot = { zones: [] } as unknown as PresenceV2Snapshot;
+  const onError = vi.fn();
+  vi.mocked(updatePresenceMemberV2).mockRejectedValue(new Error('offline'));
+  const view = renderHook(
+    ({ roomId, data }: { roomId: null | string; data: null | PresenceV2Snapshot }) =>
+      useRoomMovement({ roomId, snapshot: data, onSnapshot: vi.fn(), onError }),
+    { initialProps: { roomId: null as string | null, data: snapshot as PresenceV2Snapshot | null } }
+  );
+  act(() => view.result.current.move({ x: 0, y: 0 }));
+  expect(updatePresenceMemberV2).not.toHaveBeenCalled();
+  view.rerender({ roomId: 'one', data: null });
+  act(() => view.result.current.move({ x: 0, y: 0 }));
+  expect(updatePresenceMemberV2).not.toHaveBeenCalled();
+  view.rerender({ roomId: 'one', data: snapshot });
+  await act(async () => view.result.current.move({ x: 0, y: 0 }));
+  expect(onError).toHaveBeenCalledTimes(1);
+  view.unmount();
+});

@@ -252,7 +252,25 @@ def run_campaign(agent, execute=False, selected=SCENARIOS, timeout=300):
                     row['stages'][stage] = 'blocked'
     result['schema_version'] = 2
     result['finished_at'] = utc()
+    try:
+        if preflight() != result['build_manifest_sha256']:
+            result['blockers'].append('build_changed_during_campaign')
+    except (OSError, ValueError, KeyError):
+        result['blockers'].append('build_changed_during_campaign')
     return result
+
+
+def save_report(output, result):
+    output = Path(output)
+    private_json(output, result)
+    from observation import campaign_passed
+    from evidence_contract import run_evidence
+    build_hash = result.get('build_manifest_sha256')
+    if build_hash and campaign_passed(result, result['agent'], build_hash):
+        name = 'codex_native' if result['agent'] == 'codex' else 'claude_native'
+        evidence = run_evidence(build_hash, __file__, {name: 'passed'},
+                                sample_count=len(result['scenarios']), native_campaign=result)
+        private_json(output.with_name(output.stem + '-evidence.json'), evidence)
 
 
 def main(agent=None):
@@ -264,7 +282,7 @@ def main(agent=None):
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     result = run(agent or args.agent, args.execute, args.scenario or SCENARIOS)
-    private_json(args.output, result)
+    save_report(args.output, result)
     print(json.dumps({'agent': result['agent'], 'blockers': result['blockers'], 'scenarios': len(result['scenarios']), 'promotable': False}))
     return 0 if result['scenarios'] and all(r['status'] == 'passed' for r in result['scenarios']) and not result['blockers'] else 2
 

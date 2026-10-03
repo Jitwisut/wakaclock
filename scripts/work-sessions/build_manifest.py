@@ -67,5 +67,10 @@ def build(values):
         'api_origin': values['NEXT_PUBLIC_WAKACLOCK_API_URL'],
         'review_status': 'pending', 'promotable': False,
     }
-    private_json(ROOT / 'evidence/build-manifest.json', manifest)
+    manifest_path = ROOT / 'evidence/build-manifest.json'
+    private_json(manifest_path, manifest)
+    from evidence_contract import run_evidence
+    private_json(ROOT / 'evidence/production-build-evidence.json',
+                 run_evidence(file_digest(manifest_path), __file__, {'production_build': 'passed'},
+                              sample_count=len(commands), source_snapshot_sha256=after))
     print('Builds passed with unchanged source; manifest written to local evidence directory.')

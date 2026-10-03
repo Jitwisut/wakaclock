@@ -173,3 +173,76 @@ describe('AiDiagnosticsPanel', () => {
     expect(screen.getByText('No adapters reported yet.')).toBeInTheDocument();
   });
 });
+
+it.each([
+  ['certification_verified', 'Certified'],
+  ['certification_expired', 'Certification expired'],
+  ['certification_revoked', 'Certification revoked'],
+  ['certification_mismatch', 'Tuple mismatch'],
+  ['certification_historical', 'Historical evidence'],
+  [undefined, 'Reported Installed'],
+] as const)(
+  'renders certification state %s separately from runtime measurements',
+  (status, label) => {
+    const data = certifiedDegradedReport();
+    data.adapters[0] = {
+      ...data.adapters[0],
+      certification_status: status,
+      certificate_id: undefined,
+      verification: 'installed',
+      detected: { availability: 'available', value: false, measured_at: null },
+      enabled: { availability: 'available', value: false, measured_at: null },
+      last_evidence_at: 'invalid',
+    };
+    data.broker.running.value = true;
+    data.broker.last_error_code = null;
+    data.broker.last_delivery_at = new Date().toISOString();
+    render(<AiDiagnosticsPanel report={data} />);
+    expect(screen.getAllByText(label, { exact: false }).length).toBeGreaterThan(0);
+    expect(screen.getByText(/not detected · disabled/)).toBeVisible();
+    expect(screen.getByText('last delivery just now')).toBeVisible();
+    expect(screen.getByText('unavailable')).toBeVisible();
+  }
+);
+it.each([
+  [0, 'just now'],
+  [7200, '2h ago'],
+  [172800, '2d ago'],
+  [null, 'never'],
+] as const)('shows legacy evidence age %s without inferring readiness', (seconds, label) => {
+  const data = report();
+  data.adapters[0] = {
+    ...data.adapters[0],
+    detected: false,
+    enabled: false,
+    last_evidence_unix: seconds === null ? null : Math.floor(Date.now() / 1000) - seconds,
+  };
+  render(<AiDiagnosticsPanel report={data} />);
+  expect(
+    screen.getByText(`not detected · disabled · Verified · last evidence ${label}`)
+  ).toBeVisible();
+});
+it('preserves legacy inbox field names and reports an empty adapter inventory', () => {
+  const data = report();
+  data.adapters = [];
+  data.broker = {
+    running: true,
+    inbox_pending: 2,
+    inbox_retry: 3,
+    inbox_dead_letter: 4,
+    last_error_code: null,
+    last_delivery_unix: null,
+  };
+  const view = render(<AiDiagnosticsPanel report={data} />);
+  expect(screen.getByText('2 pending · 3 retry · 4 dead-letter')).toBeVisible();
+  expect(screen.getByText('No adapters reported yet.')).toBeVisible();
+  view.rerender(
+    <AiDiagnosticsPanel
+      report={{
+        ...data,
+        broker: { running: false, last_error_code: null, last_delivery_unix: null },
+      }}
+    />
+  );
+  expect(screen.getByText('0 pending · 0 retry · 0 dead-letter')).toBeVisible();
+});

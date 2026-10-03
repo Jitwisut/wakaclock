@@ -1,6 +1,7 @@
 """Fail-closed, build-bound validation evidence. Old reports remain historical only."""
 import json
 import argparse
+import re
 from pathlib import Path
 
 from build_manifest import file_digest
@@ -83,10 +84,15 @@ def validate_node(report, build_hash, directory, ancestors=()):
     else:
         if not isinstance(report.get('runner'), str) or not report['runner']:
             raise ValueError('runner_missing')
-        if not isinstance(report.get('runner_sha256'), str) or len(report['runner_sha256']) != 64:
+        if not isinstance(report.get('runner_sha256'), str) or not re.fullmatch('[0-9a-f]{64}', report['runner_sha256']):
             raise ValueError('runner_digest_missing')
-        if report.get('sample_count', 0) < 1:
+        if type(report.get('sample_count')) is not int or report['sample_count'] < 1:
             raise ValueError('no_executed_samples')
+        for scenario, agent in (('codex_native', 'codex'), ('claude_native', 'claude-code')):
+            if scenario in names:
+                from observation import campaign_passed
+                if not campaign_passed(report.get('native_campaign', {}), agent, build_hash):
+                    raise ValueError('native_campaign_not_complete')
     if 'coverage' in names:
         coverage = report.get('coverage')
         if not isinstance(coverage, dict) or any(coverage.get(k) != 100 for k in ('statements', 'branches', 'functions', 'lines')):

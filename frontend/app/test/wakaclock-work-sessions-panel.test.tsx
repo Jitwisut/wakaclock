@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
   user: 'owner-a' as null | string,
   enabled: true,
   params: 'keep=yes',
+  start: '2026-10-01',
+  end: '2026-10-02',
   replace: vi.fn(),
   setRange: vi.fn(),
 }));
@@ -22,7 +24,7 @@ vi.mock('@/hooks/use-capabilities', () => ({
   useCapabilities: () => ({ featureAvailability: { work_session_receipts: state.enabled } }),
 }));
 vi.mock('@/hooks/use-wakaclock-range', () => ({
-  useWakaclockRange: () => ({ start: '2026-10-01', end: '2026-10-02', setRange: state.setRange }),
+  useWakaclockRange: () => ({ start: state.start, end: state.end, setRange: state.setRange }),
 }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
   useWakaclockUserStore: (select: (value: { userId: null | string }) => unknown) =>
@@ -74,7 +76,13 @@ function setup() {
   return { ...render(view()), view, client };
 }
 beforeEach(() => {
-  Object.assign(state, { user: 'owner-a', enabled: true, params: 'keep=yes' });
+  Object.assign(state, {
+    user: 'owner-a',
+    enabled: true,
+    params: 'keep=yes',
+    start: '2026-10-01',
+    end: '2026-10-02',
+  });
   vi.mocked(getWorkSessions).mockResolvedValue(empty);
   vi.mocked(getProjectAnalytics).mockResolvedValue({
     items: [{ project_id: 'project-a', name: 'Project A' }],
@@ -163,4 +171,35 @@ it('does not display the previous owner sessions while the new account loads', a
     screen.queryByRole('button', { name: /codex.*received usage events/ })
   ).not.toBeInTheDocument();
   expect(screen.getByRole('status')).toHaveTextContent('Loading sessions');
+});
+
+it('starts a new first page when the date range changes and never reuses the old cursor', async () => {
+  vi.mocked(getWorkSessions).mockImplementation(async (filters, cursor) => {
+    if (filters.start === '2026-09-01')
+      return { ...empty, items: [{ ...row, agent: 'september' }] };
+    return cursor
+      ? { ...empty, items: [{ ...row, id: 'page-two', agent: 'old-page-two' }] }
+      : { items: [row], has_more: true, next_cursor: 'october-cursor' };
+  });
+  const view = setup();
+  await screen.findByRole('button', { name: /codex.*received usage events/ });
+  fireEvent.click(screen.getByRole('button', { name: 'More sessions' }));
+  await screen.findByRole('button', { name: /old-page-two.*received usage events/ });
+  state.start = '2026-09-01';
+  state.end = '2026-09-02';
+  view.rerender(view.view());
+  expect(
+    await screen.findByRole('button', { name: /september.*received usage events/ })
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: /old-page-two.*received usage events/ })
+  ).not.toBeInTheDocument();
+  expect(getWorkSessions).toHaveBeenLastCalledWith(
+    expect.objectContaining({ start: state.start, end: state.end }),
+    undefined
+  );
+  expect(getProjectAnalytics).toHaveBeenLastCalledWith(
+    expect.objectContaining({ start: state.start, end: state.end })
+  );
+  expect(screen.queryByRole('button', { name: 'More sessions' })).not.toBeInTheDocument();
 });

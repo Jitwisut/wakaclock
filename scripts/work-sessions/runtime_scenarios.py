@@ -87,11 +87,11 @@ def snapshot_queue(home, workspace):
         return []
     rows = []
     with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
-        for (payload,) in db.execute('SELECT payload FROM heartbeat_queue WHERE destination=?', (API,)):
+        for payload, retries in db.execute('SELECT payload, retry_count FROM heartbeat_queue WHERE destination=?', (API,)):
             value = json.loads(payload)
             entity = value.get('entity')
             if isinstance(entity, str) and Path(entity).resolve().is_relative_to(workspace.resolve()):
-                rows.append(value)
+                rows.append({**value, 'queue_retry_count': retries})
     return rows
 
 
@@ -119,12 +119,88 @@ def check_capture(rows, canonical):
     for key, local in latest.items():
         if key not in remote:
             continue
-        for field in ('session_id', 'ai_agent', 'identity_source', 'identity_status'):
+        for field in ('session_id', 'ai_agent', 'identity_source', 'identity_status', 'actor_type'):
             if (local.get(field) or None) != (remote[key].get(field) or None):
                 mismatches.append('capture_' + field + '_mismatch')
         if int(remote[key]['revision']) != local.get('revision', 0):
             mismatches.append('capture_revision_mismatch')
     return sorted(set(mismatches))
+
+
+def check_attribution(scenario, rows, events):
+    """Compare claims to the prepared scenario, independently of database readback.
+
+    Unknown activity remains unknown. Human activity is not a claim of human code
+    authorship, and non-operation editor activity is allowed during an agent run.
+    """
+    mismatches, blockers = [], []
+    ai = [row for row in rows if row.get('actor_type') in ('ai_verified', 'ai_inferred')]
+    operations = [row for row in rows if row.get('ai_event_id') or row.get('ai_change_id')]
+    if scenario in ('human_only', 'formatter', 'idle', 'sleep_wake') and ai:
+        mismatches.append('unexpected_ai_attribution')
+    if scenario in ('ai_only', 'human_after_ai', 'two_agents', 'offline_retry', 'restart_resume'):
+        if not operations:
+            blockers.append('agent_operation_capture_required')
+        if any(row.get('actor_type') == 'human' for row in operations):
+            mismatches.append('agent_operation_labeled_human')
+    if scenario == 'two_agents' and {row.get('ai_agent') for row in operations} != {'codex', 'claude-code'}:
+        blockers.append('both_agents_attribution_required')
+    if scenario == 'human_after_ai':
+        stops = [e['timestamp'] for e in events if e['event'] == 'agent_stop']
+        starts = [e['timestamp'] for e in events if e['event'] == 'human_active'
+                  and any(stop <= e['timestamp'] for stop in stops)]
+        if not starts:
+            blockers.append('ordered_human_after_agent_markers_required')
+        elif not any(row.get('is_write') and row.get('time', 0) >= min(starts)
+                     and row.get('actor_type') in ('human', 'unknown')
+                     and not row.get('ai_event_id') and not row.get('ai_change_id') for row in rows):
+            blockers.append('human_followup_capture_required')
+    return mismatches, blockers
+
+
+def physical_intervals(captures, canonical, events, scenario):
+    """Compare captured intervals with canonical rows, then check observed inactive gaps.
+
+    The existing editor lease allows at most 15 seconds after the last input. Sleep
+    has no lease extension. Operator markers delimit the check; they do not become
+    measured execution time or a claim of human code authorship.
+    """
+    latest = {}
+    for row in captures:
+        key = row.get('heartbeat_id')
+        if key not in latest or row.get('revision', 0) > latest[key].get('revision', 0):
+            latest[key] = row
+    mismatches, segments = [], []
+    for remote in canonical:
+        local = latest.get(remote['heartbeat_id'])
+        if local is None:
+            continue
+        actual = remote.get('activity_segments') or []
+        if isinstance(actual, str):
+            actual = json.loads(actual)
+        expected = local.get('activity_segments') or []
+        if actual != expected:
+            mismatches.append('canonical_activity_segments_mismatch')
+        segments.extend((s['start'], s['end']) for s in expected if s.get('source') == 'editor_active_v1')
+    if not segments:
+        return sorted(set(mismatches)), ['live_editor_intervals_missing']
+    union_seconds(segments)  # Reject malformed ranges before comparing gaps.
+    if scenario == 'sleep_wake':
+        gaps = intervals(events, 'sleep', 'wake')
+        grace = 0
+    else:
+        # Only inspect closed idle gaps. A trailing idle marker cannot prove duration.
+        idle_events = [e for e in events if e['event'] in ('human_idle', 'human_active')]
+        while idle_events and idle_events[0]['event'] == 'human_active':
+            idle_events.pop(0)
+        gaps = intervals(idle_events, 'human_idle', 'human_active')
+        grace = 15
+    if not gaps or not any(end - start > grace for start, end in gaps):
+        return mismatches, ['bounded_inactive_gap_required']
+    for start, end in gaps:
+        if any(min(stop, end) > max(begin, start + grace) for begin, stop in segments):
+            mismatches.append('activity_crosses_observed_inactive_gap')
+    return sorted(set(mismatches)), []
 
 
 def verify_run(record, workspace, reader, account, values, build):
@@ -134,8 +210,13 @@ def verify_run(record, workspace, reader, account, values, build):
     if not check_fixture(workspace, record['scenario']):
         mismatches.append('independent_fixture_diff_mismatch')
     captures = record.get('captures', [])
+    attribution_errors, attribution_missing = check_attribution(record['scenario'], captures, record['events'])
+    mismatches.extend(attribution_errors)
+    blockers.extend(attribution_missing)
+    if record['scenario'] == 'offline_retry' and not any(row.get('queue_retry_count', 0) > 0 for row in captures):
+        blockers.append('failed_delivery_queue_evidence_required')
     start = datetime.fromisoformat(record['started_at']).timestamp()
-    canonical = reader.rows('SELECT heartbeat_id, session_id, ai_agent, identity_source, identity_status, revision FROM wakaclock.heartbeats_canonical WHERE user_id={user:UUID} AND startsWith(entity,{prefix:String}) AND time >= {start:Float64}',
+    canonical = reader.rows('SELECT heartbeat_id, session_id, ai_agent, identity_source, identity_status, actor_type, activity_segments, revision FROM wakaclock.heartbeats_canonical WHERE user_id={user:UUID} AND startsWith(entity,{prefix:String}) AND time >= {start:Float64}',
                             user=account['user_id'], prefix=str(workspace.resolve()) + '/', start=start)
     capture_issues = check_capture(captures, canonical)
     if 'queue_capture_missing' in capture_issues:
@@ -179,12 +260,23 @@ def verify_run(record, workspace, reader, account, values, build):
                 'offline_retry': ('offline', 'online'), 'restart_resume': ('restart', 'resume')}.get(record['scenario'], ())
     if not set(required).issubset(e['event'] for e in events):
         blockers.append('required_runtime_events_missing')
-    reference = interval_reference(events)
+    reference = interval_reference([])
+    try:
+        reference = interval_reference(events)
+        if record['scenario'] in ('idle', 'sleep_wake'):
+            errors, missing = physical_intervals(captures, canonical, events, record['scenario'])
+            mismatches.extend(errors)
+            blockers.extend(missing)
+    except (ValueError, KeyError, TypeError):
+        mismatches.append('interval_evidence_invalid')
     status = 'failed' if mismatches else 'blocked' if blockers else 'passed'
+    scenarios = [record['scenario']]
+    if record['capture_mode'] in ('live_editor', 'live_hook'):
+        scenarios.append(record['capture_mode'])
     return {'schema_version': 3, 'evidence_kind': 'validation_run', 'build_manifest_sha256': build,
             'runner': 'runtime_scenarios', 'runner_sha256': file_digest(Path(__file__)), 'sample_count': 1,
             'status': status, 'blockers': sorted(set(blockers)), 'mismatches': sorted(set(mismatches)),
-            'scenarios': [{'scenario': record['scenario'], 'status': status, 'mismatches': sorted(set(mismatches))}],
+            'scenarios': [{'scenario': name, 'status': status, 'mismatches': sorted(set(mismatches))} for name in scenarios],
             'capture_mode': record['capture_mode'], 'captured_count': len(captures), 'canonical_count': len(canonical),
             'interval_reference': reference, 'receipts': receipts, 'review_status': 'pending', 'promotable': False}
 

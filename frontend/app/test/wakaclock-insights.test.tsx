@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -18,7 +18,10 @@ vi.mock('@/lib/wakaclock/endpoints', () => ({
   getStats: vi.fn(),
   getBrowserTimezone: () => 'Asia/Bangkok',
 }));
-vi.mock('@/lib/wakaclock/user-store', () => ({ useWakaclockUserStore: () => 'test-user' }));
+vi.mock('@/lib/wakaclock/user-store', () => ({
+  useWakaclockUserStore: (select: (state: { userId: string }) => unknown) =>
+    select({ userId: 'test-user' }),
+}));
 function report(data = insightsFixture) {
   return render(
     <DashboardPanelsProvider>
@@ -139,4 +142,41 @@ describe('Insights', () => {
       await screen.findByText('Your next insight starts with a little activity')
     ).toBeVisible();
   });
+});
+
+it('sorts entries by name and heartbeat count and selects a legend entry', async () => {
+  const data = {
+    ...insightsFixture,
+    data: [
+      { ...insightsFixture.data[0], name: 'Zulu', total_seconds: 60, heartbeats: 1, days: 1 },
+      { ...insightsFixture.data[0], name: 'Alpha', total_seconds: 60, heartbeats: 4, days: 1 },
+    ],
+  };
+  report(data);
+  const user = userEvent.setup();
+  const sort = screen.getByRole('combobox', { name: 'Sort entries' });
+  await user.selectOptions(sort, 'name');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  await user.selectOptions(sort, 'heartbeats');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  await user.selectOptions(sort, 'days');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  const legend = screen
+    .getAllByRole('button', { name: /Zulu/ })
+    .find((button) => !button.closest('table'))!;
+  await user.click(legend);
+  expect(screen.getByRole('complementary', { name: 'Selected insight' })).toHaveTextContent('Zulu');
+});
+
+it('retries unavailable daily statistics without losing the insight report', async () => {
+  vi.mocked(getStats).mockRejectedValueOnce(new Error('statistics offline'));
+  workspace();
+  await screen.findByRole('table');
+  const retry = await screen.findByRole('button', { name: /Retry/i });
+  await userEvent.click(retry);
+  await waitFor(() =>
+    expect(screen.queryByText(/Daily statistics could not load/)).not.toBeInTheDocument()
+  );
+  expect(getStats).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('table')).toBeVisible();
 });

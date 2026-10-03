@@ -14,7 +14,9 @@ def package_metadata(archive, collector_hash):
     with zipfile.ZipFile(archive) as package:
         metadata = json.loads(package.read('extension/package.json'))
         bundled = json.loads(package.read('extension/resources/cli-manifest.json'))
-        binary = package.read('extension/resources/bin/' + bundled['binary'])
+        if bundled.get('binary') != 'wakaclock':
+            raise ValueError('unexpected_collector_binary')
+        binary = package.read('extension/resources/bin/wakaclock')
     if metadata['publisher'] != 'atoaxis' or metadata['name'] != 'atoaxis-vscode':
         raise ValueError('unexpected_extension')
     if bundled['sha256'] != collector_hash or hashlib.sha256(binary).hexdigest() != collector_hash:
@@ -42,6 +44,8 @@ def verify_profile(identity):
     extension = installed[0]
     package = json.loads((extension / 'package.json').read_text())
     bundled = json.loads((extension / 'resources/cli-manifest.json').read_text())
+    if bundled.get('binary') != 'wakaclock':
+        raise ValueError('unexpected_collector_binary')
     if (bundled['sha256'] != data['collector_sha256'] or
             file_digest(extension / 'resources/bin' / bundled['binary']) != data['collector_sha256']):
         raise ValueError('installed_extension_collector_mismatch')

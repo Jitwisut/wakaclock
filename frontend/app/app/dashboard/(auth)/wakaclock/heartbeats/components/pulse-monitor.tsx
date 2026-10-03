@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { CalendarIcon } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 
@@ -321,14 +321,14 @@ export function PulseMonitor({
             <PopoverTrigger asChild>
               <Button className={cn(styles.darkControl, 'gap-1.5')} size="sm" variant="outline">
                 <CalendarIcon className="size-3.5" />
-                {format(new Date(date), 'MMM d, yyyy')}
+                {format(parseISO(date), 'MMM d, yyyy')}
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
               <Calendar
                 mode="single"
                 onSelect={(d) => d && onDateChange(format(d, 'yyyy-MM-dd'))}
-                selected={new Date(date)}
+                selected={parseISO(date)}
               />
             </PopoverContent>
           </Popover>
@@ -348,7 +348,7 @@ export function PulseMonitor({
           </div>
           <p className="mt-3 text-sm text-white/70">
             heartbeats recorded on{' '}
-            <span className="text-white">{format(new Date(date), 'EEEE, MMMM d')}</span>
+            <span className="text-white">{format(parseISO(date), 'EEEE, MMMM d')}</span>
           </p>
         </div>
         <dl className="flex flex-wrap gap-2">

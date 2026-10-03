@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthScreen } from '@/components/auth/auth-screen';
@@ -146,3 +146,39 @@ describe('AuthScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard/wakaclock'));
   });
 });
+
+it.each(['login', 'register'] as const)(
+  'shows and hides the password and blocks duplicate %s submits while pending',
+  async (mode) => {
+    let finish!: (value: unknown) => void;
+    (mode === 'login' ? login : register).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    renderScreen(mode);
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'demo' } });
+    const password = screen.getByLabelText('Password');
+    fireEvent.change(password, { target: { value: 'test-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(password).toHaveAttribute('type', 'text');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(password).toHaveAttribute('type', 'password');
+    fireEvent.click(
+      screen.getByRole('button', { name: mode === 'login' ? 'Sign in' : 'Create account' })
+    );
+    expect(
+      await screen.findByRole('button', {
+        name: mode === 'login' ? 'Signing in…' : 'Creating account…',
+      })
+    ).toBeDisabled();
+    await act(async () =>
+      finish({ data: { user_id: 'u-1', username: 'demo', token: fakeJwt(3600) } })
+    );
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard/wakaclock'));
+    expect(mode === 'login' ? login : register).toHaveBeenCalledExactlyOnceWith(
+      'demo',
+      'test-password'
+    );
+  }
+);

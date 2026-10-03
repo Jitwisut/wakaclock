@@ -17,7 +17,8 @@ function preflight() {
   const campaign = JSON.parse(fs.readFileSync(path.join(root, 'evidence/' + (process.argv[2] || 'codex-campaign-final.json'))));
   const row = campaign.scenarios[0];
   if (campaign.build_manifest_sha256 !== build) throw new Error('campaign_build_mismatch');
-  if (row.status !== 'passed') throw new Error('native_smoke_required');
+  if (campaign.schema_version !== 2 || !['codex', 'claude-code'].includes(campaign.agent)) throw new Error('unsupported_native_campaign');
+  if (row.status !== 'passed' || !Number.isInteger(row.operation_count) || row.operation_count < 1) throw new Error('native_smoke_required');
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const stages = {};
   const snapshots = {};
@@ -31,9 +32,16 @@ function preflight() {
       await page.goto('http://127.0.0.1:13000/dashboard/wakaclock/ai?session=' + row.receipt_id);
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByText(campaign.agent + ' · experimental')).toBeVisible();
-      await expect(dialog.getByRole('heading', { name: 'Operation evidence (1)' })).toBeVisible();
-      await expect(dialog.getByText(/revision 0/)).toBeVisible();
-      await expect(dialog.getByText(/transcript.*No identity reason reported/)).toBeVisible();
+      await expect(dialog.getByRole('heading', { name: `Operation evidence (${row.operation_count})` })).toBeVisible();
+      const evidence = dialog.getByRole('region', { name: 'Operation evidence' });
+      await expect(evidence.getByRole('listitem')).toHaveCount(Math.min(25, row.operation_count));
+      while (await evidence.getByRole('button', { name: 'More evidence' }).isVisible()) {
+        const before = await evidence.getByRole('listitem').count();
+        await evidence.getByRole('button', { name: 'More evidence' }).click();
+        await expect(evidence.getByRole('listitem')).toHaveCount(Math.min(before + 25, row.operation_count));
+        if (before >= row.operation_count) throw new Error('unexpected_extra_evidence_page');
+      }
+      await expect(evidence.getByRole('listitem')).toHaveCount(row.operation_count);
       const outcome = dialog.getByLabel('Your outcome');
       await outcome.selectOption('needs_work');
       await expect(outcome).toBeEnabled();
@@ -51,7 +59,11 @@ function preflight() {
       const exported = JSON.parse(text);
       expect(exported.id).toBe(row.receipt_id);
       expect(exported.revision_fingerprint).toBe(snapshot.revision_fingerprint);
-      expect(exported.evidence_references).toHaveLength(1);
+      expect(exported.evidence_count).toBe(row.operation_count);
+      expect(exported.evidence_references).toEqual(snapshot.evidence_references);
+      expect(exported.lines).toEqual(snapshot.lines);
+      expect(exported.time).toEqual(snapshot.time);
+      expect(exported.outcome).toEqual(snapshot.outcome);
       expect(exported.outcome.value).toBe('needs_work');
       snapshots[name] = exported.revision_fingerprint;
       for (const secret of [account.api_key, account.token, '/Users/', 'ws1_']) expect(text.includes(secret)).toBe(false);
@@ -75,7 +87,7 @@ function preflight() {
     promotable: false,
   };
   if (preflight() !== build) throw new Error('build_changed_during_browser_check');
-  fs.writeFileSync(path.join(root, 'evidence/native-browser.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
+  fs.writeFileSync(path.join(root, `evidence/${campaign.agent}-native-browser.json`), JSON.stringify(report, null, 2), { mode: 0o600 });
   console.log(JSON.stringify(report));
 })().catch(error => {
   fs.writeFileSync(path.join(root, 'native-browser-private-error.log'), error.message, { mode: 0o600 });

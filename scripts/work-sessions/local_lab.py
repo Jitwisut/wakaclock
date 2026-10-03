@@ -103,6 +103,33 @@ def collector_env(identity='campaign'):
     return values
 
 
+def auth_available(identity, tool):
+    command = ['codex', 'login', 'status'] if tool == 'codex' else ['claude', 'auth', 'status']
+    try:
+        status = subprocess.run(command, env=collector_env(identity),
+                                cwd=ROOT / identity / 'workspace', capture_output=True, text=True, timeout=20)
+        return status.returncode == 0 and (tool == 'codex' or json.loads(status.stdout).get('loggedIn') is True)
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return False
+
+
+def daily_blockers():
+    from editor_profile import verify_profile
+    blockers = []
+    for tool in ('codex', 'claude-code'):
+        if not auth_available('daily', tool):
+            blockers.append(tool + ':daily_auth_unavailable')
+    try:
+        verify_profile('daily')
+        values = collector_env('daily')
+        if values['WAKACLOCK_SERVER_URL'] != API:
+            blockers.append('daily_collector_destination_mismatch')
+        request('/api/v2/me/work-sessions?limit=1', token=values['WAKACLOCK_API_KEY'])
+    except (OSError, ValueError, KeyError):
+        blockers.append('daily_profile_or_account_unavailable')
+    return blockers
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['init', 'up', 'stop', 'bootstrap', 'api', 'ui', 'worker', 'relay', 'readiness', 'collector', 'build', 'runtime', 'login', 'agent', 'auth-status', 'prepare-editor', 'editor', 'editor-status'])
@@ -204,12 +231,7 @@ def main():
         if args.action == 'login':
             command += ['login'] if args.tool == 'codex' else ['auth', 'login']
         elif args.action == 'auth-status':
-            command += ['login', 'status'] if args.tool == 'codex' else ['auth', 'status']
-            status = subprocess.run(command, env=values, capture_output=True, text=True, timeout=20)
-            authenticated = status.returncode == 0
-            if args.tool != 'codex' and authenticated:
-                authenticated = json.loads(status.stdout).get('loggedIn') is True
-            print(json.dumps({'agent': args.tool, 'isolated_auth_available': authenticated}))
+            print(json.dumps({'agent': args.tool, 'isolated_auth_available': auth_available(args.identity, args.tool)}))
             return
         else:
             command += extra
