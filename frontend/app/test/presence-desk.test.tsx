@@ -1,11 +1,57 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { appearanceFor } from '@/components/presence/appearance';
 import { DeskWorkstation } from '@/components/presence/DeskWorkstation';
 import { PresencePlayer } from '@/components/presence/PresencePlayer';
+import { SeatedOccupant } from '@/components/presence/SeatedOccupant';
 import type { PresenceUser } from '@/types/presence';
+
+it('commits a drag once when pointerup and pointercancel arrive in the same render batch', () => {
+  class Pointer extends MouseEvent {
+    pointerId = 1;
+  }
+  vi.stubGlobal('PointerEvent', Pointer);
+  try {
+    const containerRef = createRef<HTMLDivElement>();
+    const onMove = vi.fn();
+    render(
+      <div ref={containerRef}>
+        <PresencePlayer
+          containerRef={containerRef}
+          onMove={onMove}
+          reducedMotion
+          user={{ id: 'self', username: 'Me', isCurrentUser: true, status: 'idle', x: 50, y: 50 }}
+        />
+      </div>
+    );
+    vi.spyOn(containerRef.current!, 'getBoundingClientRect').mockReturnValue({
+      width: 1000,
+      height: 500,
+    } as DOMRect);
+    fireEvent.pointerDown(screen.getByRole('button'), { button: 0, clientX: 500, clientY: 250 });
+    act(() => {
+      window.dispatchEvent(new Pointer('pointerup', { clientX: 600, clientY: 300 }));
+      window.dispatchEvent(new Pointer('pointercancel', { clientX: 600, clientY: 300 }));
+    });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith({ x: 60, y: 60 });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('shows an idle seated coworker without a live coding indicator', () => {
+  render(
+    <SeatedOccupant
+      user={{ id: 'peer', username: 'Ada', isCurrentUser: false, status: 'idle', x: 50, y: 50 }}
+      reducedMotion
+      screenTone="#123456"
+    />
+  );
+  expect(screen.getByText('Ada')).toBeVisible();
+  expect(screen.queryByText('●')).toBeNull();
+});
 
 describe('presence desk pose', () => {
   it('drags onto a desk and back out without waiting for server props', () => {

@@ -355,6 +355,11 @@ it('renders a project rhythm from recorded hourly activity, with an explicit una
   view.rerender(<ProjectRhythm data={{ ...studioFixture, time_heatmap: [] }} />);
   expect(screen.getByText('Hourly activity is not available for this selection.')).toBeVisible();
   view.rerender(
+    <ProjectRhythm data={{ ...studioFixture, time_heatmap: [studioFixture.time_heatmap[1]] }} />
+  );
+  expect(screen.getAllByRole('img')).toHaveLength(168);
+  expect(screen.getByRole('img', { name: 'Mon 00:00 — 0s' })).toBeVisible();
+  view.rerender(
     <ProjectRhythm
       data={{
         ...studioFixture,
@@ -459,6 +464,47 @@ describe('Project drill-down recovery', () => {
     await userEvent.selectOptions(screen.getByLabelText('Branch'), 'feature/studio');
     await userEvent.click(screen.getByRole('button', { name: 'Reset branch' }));
     expect(screen.getByLabelText('Branch')).toHaveValue('all');
+  });
+  it('keeps loaded branches visible and disables pagination while the next page is pending', async () => {
+    let complete!: (value: ProjectBranchesResponse) => void;
+    vi.mocked(getProjectAnalyticsBranches).mockImplementation(async (_id, params) =>
+      params.cursor
+        ? new Promise((resolve) => {
+            complete = resolve;
+          })
+        : { ...branchPage, next_cursor: 'next-branch' }
+    );
+    renderDeepDive();
+    await userEvent.click(await screen.findByRole('button', { name: 'Load more branches' }));
+    expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'main' })).toBeVisible();
+    complete({ ...branchPage, items: [], next_cursor: null });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Loading…' })).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Load more branches' })).toBeNull();
+  });
+  it('keeps the selected branch available after the branch list is corrected', async () => {
+    vi.mocked(getProjectAnalyticsBranches)
+      .mockResolvedValueOnce(branchPage)
+      .mockResolvedValue({ ...branchPage, items: [{ ...branchItems[0], branch: 'all' }] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectDeepDive
+          projectId="demo"
+          start={range.start}
+          end={range.end}
+          timezone="UTC"
+          hasExplorerFilters={false}
+        />
+      </QueryClientProvider>
+    );
+    await screen.findByRole('option', { name: 'feature/studio' });
+    await userEvent.selectOptions(screen.getByLabelText('Branch'), 'feature/studio');
+    await client.invalidateQueries();
+    await waitFor(() => expect(screen.queryByRole('option', { name: 'main' })).toBeNull());
+    expect(screen.getByLabelText('Branch')).toHaveValue('feature/studio');
+    expect(screen.getByRole('option', { name: 'feature/studio' })).toBeVisible();
+    expect(screen.getAllByRole('option', { name: 'All branches' })).toHaveLength(1);
   });
   it('sorts loaded files by path and distinguishes no matches from unavailable totals', async () => {
     render(

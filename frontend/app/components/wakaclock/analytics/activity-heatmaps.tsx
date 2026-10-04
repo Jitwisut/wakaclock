@@ -105,11 +105,12 @@ export function buildCalendarWeeks(data: AnalyticsExplorerResponse): WeekColumn[
         inRange: date >= rangeStart && date <= rangeEnd,
       };
     });
-    const firstInRange = cells.find((cell) => cell.inRange);
+    // Every generated week intersects the validated range; label its first included day.
+    const firstInRange = new Date(Math.max(cursor.getTime(), rangeStart.getTime()));
     weeks.push({
       cells,
       key: dateKey(cursor),
-      monthLabel: firstInRange ? MONTH_FORMATTER.format(parseDate(firstInRange.date)) : '',
+      monthLabel: MONTH_FORMATTER.format(firstInRange),
     });
   }
 

@@ -6,10 +6,11 @@ import { SidebarProvider } from '@/components/ui/sidebar';
 const state = vi.hoisted(() => ({
   pathname: '/dashboard/wakaclock/analytics/timeline',
   mobile: false,
+  query: 'source=ai',
 }));
 vi.mock('next/navigation', () => ({
   usePathname: () => state.pathname,
-  useSearchParams: () => new URLSearchParams('source=ai'),
+  useSearchParams: () => new URLSearchParams(state.query),
 }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => state.mobile }));
 vi.mock('@/hooks/use-visible-nav-items', () => ({
@@ -45,7 +46,26 @@ const groups: NavGroup[] = [
 beforeEach(() => {
   state.pathname = '/dashboard/wakaclock/analytics/timeline';
   state.mobile = false;
+  state.query = 'source=ai';
 });
+
+it.each(['/dashboard/wakaclock/analytics', '/dashboard/wakaclock/analytics/projects/'])(
+  'keeps navigation free of empty project IDs or query suffixes from %s',
+  (pathname) => {
+    state.pathname = pathname;
+    state.query = '';
+    render(
+      <SidebarProvider>
+        <NavMain items={groups} />
+      </SidebarProvider>
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: 'Analytics' })[1]);
+    expect(screen.getByRole('link', { name: 'Timeline' })).toHaveAttribute(
+      'href',
+      '/dashboard/wakaclock/analytics/timeline'
+    );
+  }
+);
 it('marks the active destination, preserves filters for subpages and renders configured badges', () => {
   const view = render(
     <SidebarProvider>

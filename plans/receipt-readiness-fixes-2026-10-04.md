@@ -37,6 +37,11 @@ Status: in progress. Observation has **not started**. These local checks do not 
 - Import chunk serialization uses its existing conservative 800 KB admission bound; removed a redundant full-body UTF-8 encoding. Tests include large plugin metadata, escaped Thai text, oversized records and reconstructed payload equality.
 - Removed an unreachable pricing-copy fallback shadowed by `DOC_BLOCKS['/pricing#1']`; English/Thai rendered-page and text-export parity remains tested.
 - Known local-lab blockers produce allowlisted status codes instead of raw exceptions containing private paths or credentials.
+- Goal progress failures now show an unavailable state and retry instead of claiming no activity.
+- A pointer gesture commits once even when pointer-up and pointer-cancel arrive together; the regression reproduced two writes before the fix.
+- Presence editability is derived from the current account ID, preventing stale roster flags from granting movement controls for another member.
+- Reading navigation omits headings with no readable title. Explicit marketing section factories preserve existing English/Thai copy and reject missing authored content during builds.
+- Additional tests cover account switches, pending pagination, correction selection, absent timezone, optional marketing content and early-access navigation. Internal unreachable fallbacks were removed only where closed types or construction invariants prove they cannot occur.
 
 ## Local validation ledger
 
@@ -54,16 +59,16 @@ Raw logs and test accounts remain under ignored `.local/receipt-validation/readi
 | Adapter inventory tests | passed | `ai-tools-tests.log`: 47 passed |
 | Receipt validation tools | passed | `receipt-tools-tests.log`: 38 passed |
 | Extension tests/package | passed | `extension-tests.log`: 165 tests; `extension-package.log`: VSIX built; bundled collector not yet final-manifest bound |
-| Frontend typecheck/strict lint | passed | `frontend-typecheck.log`, `frontend-lint.log` |
-| Production Webpack build/prerender | passed | `production-build.log`, `prerender.log`: 40 routes; intermediate build |
-| Frontend full coverage | failed | 877 tests passed; statements 99.49%, branches 97.63%, functions 100%, lines 99.84%; 38 files / 88 branches / 6 lines remain. Thresholds unchanged. |
+| Frontend typecheck/strict lint | passed | `frontend-typecheck-next.log`, `frontend-lint-next.log` |
+| Production Webpack build/prerender | passed | `frontend-production-next.log`: Webpack build and 40 public pages passed; intermediate build |
+| Frontend full coverage | passed | `frontend-coverage-next.log`: 103 files / 903 tests; statements 4311/4311, branches 3584/3584, functions 1498/1498, lines 3871/3871 (all 100%). Thresholds unchanged; final-manifest rerun required. |
 | Frontend production audit | passed | 0 high/critical, 1 moderate; full dependency tree still has 73 high development findings, 0 critical |
 | Extension audit | passed | 0 findings |
 | Adapter historical integrity | passed | All five adapters remain `not_certified`; dates unchanged |
 | Current duration certification | blocked | Existing evidence older than 30 days; requires a fresh live comparison |
 | K0 live integration | passed | `k0-final-attempt.log`: 11/11 scenarios. Earlier failures and interrupted attempts retained; no timeout increase. |
 | K5 live integration | passed | `k5-matrix.log`: 6 scenarios, 2 initial facts, replay inserted 0, 1 DLQ record, 1 reconcile job, prompt count 3 |
-| Codex final-build native campaign | blocked | Isolated auth previously passed; current source/build binding is stale |
+| Codex final-build native campaign | blocked | Normal isolated auth status passed again; current source/build binding is stale |
 | Claude final-build native campaign | blocked | Isolated auth not authenticated; normal login required |
 
 ## Observation gates — final manifest
@@ -73,7 +78,7 @@ All nine gates remain `not_run` against the final manifest: capture/identity, re
 Remaining sequence:
 
 1. Preserve the passing K0/K5 reports and rerun them if their source or runtime changes.
-2. Close frontend coverage without reducing thresholds or adding exclusions; rerun strict checks/build.
+2. Preserve the completed frontend coverage and strict checks; rerun them against the frozen manifest.
 3. Refresh duration evidence and current adapter evidence through their actual validation workflows; keep historical evidence unchanged.
 4. Commit source, create a managed validation worktree, build one manifest, restart/bind all lab processes and VSIX collector.
 5. Run the nine gates, both native campaigns, and both daily rehearsals on that manifest.
@@ -86,4 +91,4 @@ Remaining sequence:
 - `2b2429f` — session hydration and heartbeat fixes, behavior coverage and proven redundant-code cleanup.
 - `9890ec1` — safe lab failure diagnostics and tests.
 
-No commit has been pushed. A clean checkpoint is not a release approval: coverage, fresh certification, final-manifest gates and native campaigns remain outstanding.
+No commit has been pushed. A clean checkpoint is not a release approval: fresh certification, final-manifest checks/gates and native campaigns remain outstanding.

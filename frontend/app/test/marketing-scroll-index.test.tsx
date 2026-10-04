@@ -6,6 +6,30 @@ import { MarketingScrollIndex } from '@/components/marketing/marketing-scroll-in
 vi.mock('next/navigation', () => ({ usePathname: () => '/' }));
 afterEach(() => vi.restoreAllMocks());
 
+it('excludes sections with missing or blank headings from the reading index', () => {
+  render(
+    <div className="wakaclock-marketing">
+      <main>
+        <section id="unlabeled">Decorative content</section>
+        <section id="blank">
+          <h2> </h2>
+        </section>
+        <section id="first">
+          <h2>First chapter</h2>
+        </section>
+        <section id="second">
+          <h2>Second chapter</h2>
+        </section>
+      </main>
+      <MarketingScrollIndex locale="en" />
+    </div>
+  );
+  fireEvent.click(screen.getByText('Index'));
+  expect(screen.getAllByRole('link')).toHaveLength(2);
+  expect(screen.queryByRole('link', { name: 'Decorative content' })).toBeNull();
+  expect(screen.getByRole('link', { name: /Second chapter/ })).toHaveAttribute('href', '#second');
+});
+
 it('uses real headings, follows scroll position, and closes after a jump', () => {
   let secondTop = 900;
   let paint: FrameRequestCallback = () => {};

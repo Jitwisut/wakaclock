@@ -274,18 +274,17 @@ export const SITE_MODIFIED = [
   .at(-1) as string;
 
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
-export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [
-  ...EN_PUBLIC_ROUTES.map((path) => ({
-    locale: 'en' as const,
-    path,
-    ...(ROUTE_CONTENT_DATES[path] ? { lastModified: ROUTE_CONTENT_DATES[path] } : {}),
-  })),
-  ...EN_PUBLIC_ROUTES.map((path) => ({
-    locale: 'th' as const,
-    path: localizedPath('th', path),
-    ...(contentModified(path, 'th') ? { lastModified: contentModified(path, 'th') } : {}),
-  })),
-];
+export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = SITE_LOCALES.flatMap(
+  (locale) =>
+    EN_PUBLIC_ROUTES.map((path) => {
+      const lastModified = contentModified(path, locale);
+      return {
+        locale,
+        path: localizedPath(locale, path),
+        ...(lastModified ? { lastModified } : {}),
+      };
+    })
+);
 
 /** Canonical public URL paths, including both language variants. */
 export const PUBLIC_ROUTES = [...EN_PUBLIC_ROUTES, ...TH_PUBLIC_ROUTES] as readonly string[];

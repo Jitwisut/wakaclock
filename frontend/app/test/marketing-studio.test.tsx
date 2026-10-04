@@ -27,6 +27,39 @@ describe('activity studio', () => {
 });
 
 describe('backend signup', () => {
+  it('navigates after the backend explicitly confirms persistence and prevents resubmission during navigation', async () => {
+    const navigate = vi.fn();
+    const actualWindow = window;
+    vi.stubGlobal(
+      'window',
+      new Proxy(actualWindow, {
+        get(target, property) {
+          return property === 'location'
+            ? { assign: navigate }
+            : Reflect.get(target, property, target);
+        },
+      })
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ accepted: true }) })
+    );
+    render(<EarlyAccessForm />);
+    fireEvent.submit(screen.getByRole('button', { name: 'Join the list' }).closest('form')!);
+    await act(async () => {});
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/early-access/success');
+    expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+  it('uses the solo default when the optional interest control is not submitted', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal('fetch', request);
+    render(<EarlyAccessForm />);
+    (screen.getByLabelText('What are you interested in?') as HTMLSelectElement).disabled = true;
+    fireEvent.submit(screen.getByRole('button', { name: 'Join the list' }).closest('form')!);
+    await screen.findByRole('alert');
+    expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ interest: 'solo' });
+  });
   it.each([null, 'accepted', { accepted: false }, { accepted: 'true' }])(
     'requires an explicit persistence acknowledgement, received %j',
     async (result) => {

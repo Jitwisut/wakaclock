@@ -1849,16 +1849,14 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
 // generated `faqCount` used to produce. Keep writing real entries for any new page.
 const genericFaq = (
   locale: SiteLocale,
-  entries?: readonly FaqEntry[]
-): MarketingPageCopy['faq'] => {
-  if (!entries) return undefined;
-  return faq(locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย', entries);
-};
+  entries: readonly FaqEntry[]
+): NonNullable<MarketingPageCopy['faq']> =>
+  faq(locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย', entries);
 const generic = (
   path: MarketingPageKey,
   en: {
     description: string;
-    faqEntries?: readonly FaqEntry[];
+    faqEntries: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1866,7 +1864,7 @@ const generic = (
   },
   th: {
     description: string;
-    faqEntries?: readonly FaqEntry[];
+    faqEntries: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1888,7 +1886,7 @@ const generic = (
       section(
         heading,
         `${path.slice(1).replaceAll('/', '-')}-${index + 1}`,
-        genericBlocks(path, heading, index, locale)
+        genericBlocks(path, index, locale)
       )
     ),
     form: value.form,
@@ -2668,19 +2666,9 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       ),
     ],
   ],
-]);
-
-const genericBlocks = (
-  path: MarketingPageKey,
-  heading: string,
-  index: number,
-  locale: SiteLocale
-): MarketingBlock[] => {
-  const en = locale === 'en';
-  const specific = DOC_BLOCKS.get(`${path}#${index}`);
-  if (specific) return specific(en);
-  if (path === '/integrations/vscode' && index === 0) {
-    return [
+  [
+    '/integrations/vscode#0',
+    (en) => [
       bullets(
         en
           ? [
@@ -2696,21 +2684,24 @@ const genericBlocks = (
               'AI attribution fields ที่เลือกใช้ได้',
             ]
       ),
-    ];
-  }
-  if (path === '/about' && index === 2) {
-    return [email(en ? 'For product questions, contact ' : 'ติดต่อเรื่องผลิตภัณฑ์ได้ที่ ', '.')];
-  }
-  if (path === '/terms' && index === 3) {
-    return [
+    ],
+  ],
+  [
+    '/about#2',
+    (en) => [email(en ? 'For product questions, contact ' : 'ติดต่อเรื่องผลิตภัณฑ์ได้ที่ ', '.')],
+  ],
+  [
+    '/terms#3',
+    (en) => [
       email(
         en ? 'Contact ' : 'ติดต่อ ',
         en ? ' with questions about these terms.' : ' หากมีคำถามเกี่ยวกับข้อกำหนด'
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 0) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#0',
+    (en) => [
       p(en ? 'The heartbeat schema can include:' : 'Heartbeat schema อาจมีข้อมูลเหล่านี้:'),
       bullets(
         en
@@ -2729,10 +2720,11 @@ const genericBlocks = (
               'Activity category, AI fields และ timestamp',
             ]
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 1) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#1',
+    (en) => [
       p(en ? 'There is no field for:' : 'ไม่มี field สำหรับ:'),
       bullets(
         en
@@ -2749,10 +2741,11 @@ const genericBlocks = (
               'Screenshot หรือ recording',
             ]
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 3) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#3',
+    (en) => [
       p(
         en
           ? 'AI heartbeats store the flag, agent name and line counts. Provider-reported token usage may be stored as usage metadata; prompt and response text never is.'
@@ -2764,10 +2757,11 @@ const genericBlocks = (
           ? 'Estimated cost is null when provider pricing is unknown, and coverage metadata explains why.'
           : 'estimated cost เป็น null เมื่อไม่รู้ราคา provider และ coverage metadata จะบอกเหตุผล'
       ),
-    ];
-  }
-  if (path === '/pricing' && index === 0) {
-    return [
+    ],
+  ],
+  [
+    '/pricing#0',
+    (en) => [
       p(
         en
           ? `The planned plan is designed as one complete product rather than a ladder of feature gates. At $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year, it is intended to include the full coding history, analysis views and import tools described below. These are planned Early Access terms; checkout is not open and joining the list does not create a subscription.`
@@ -2792,17 +2786,17 @@ const genericBlocks = (
               'Goals และ leaderboards แบบ opt-in เมื่อ server รัน PostgreSQL',
             ]
       ),
-    ];
-  }
-  if (path === '/early-access') return [];
-  return [
-    p(
-      en
-        ? `This section explains ${heading.toLowerCase()} and the practical limits of the current hosted product.`
-        : `ส่วนนี้อธิบาย${heading}และขอบเขตของ hosted product ที่ใช้งานอยู่ในปัจจุบัน`
-    ),
-  ];
-};
+    ],
+  ],
+]);
+
+// Every authored section has an explicit block factory. Missing section copy now
+// fails during the build instead of silently generating placeholder prose.
+const genericBlocks = (
+  path: MarketingPageKey,
+  index: number,
+  locale: SiteLocale
+): MarketingBlock[] => DOC_BLOCKS.get(`${path}#${index}`)!(locale === 'en');
 const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
   const en = locale === 'en';
   const links: Record<string, MarketingLinkCopy[]> = {

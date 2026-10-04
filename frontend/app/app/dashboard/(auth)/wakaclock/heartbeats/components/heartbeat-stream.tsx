@@ -219,7 +219,8 @@ export function HeartbeatStream({
       const hour = heartbeatHour(rows[index]);
       totals.set(hour, (totals.get(hour) ?? 0) + 1);
     }
-    for (const group of out) group.total = totals.get(group.hour) ?? group.indices.length;
+    // Each displayed group is a subset of the same matching indices counted above.
+    for (const group of out) group.total = totals.get(group.hour) as number;
     return out;
   }, [limit, matching, rows]);
 

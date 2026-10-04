@@ -8,6 +8,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it('moves by the viewport width when an overflowing gallery contains plain text', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1008);
+  render(<FeatureGallery locale="en">An overflowing text feature</FeatureGallery>);
+  const rail = screen.getByRole('region');
+  rail.scrollBy = vi.fn();
+  fireEvent.click(screen.getByRole('button', { name: 'Next features' }));
+  expect(rail.scrollBy).toHaveBeenCalledWith({ left: 344, behavior: 'smooth' });
+});
+
 it('disables both controls when all cards fit even without browser observers', () => {
   const resizeObserver = window.ResizeObserver;
   const intersectionObserver = window.IntersectionObserver;

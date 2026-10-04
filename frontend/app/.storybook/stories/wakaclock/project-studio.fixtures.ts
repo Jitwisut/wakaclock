@@ -97,7 +97,7 @@ export const fileFixtures: ProjectFileItem[] = [
 ].map((path, index) => ({
   entity_key: path,
   path,
-  display_name: path.split('/').at(-1) ?? path,
+  display_name: path.split('/').at(-1) as string,
   language: path.endsWith('.rs') ? 'Rust' : 'TypeScript',
   total_seconds: (12 - index) * 420,
   percentage_of_project: (12 - index) * 0.58,

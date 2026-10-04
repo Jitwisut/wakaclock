@@ -55,11 +55,10 @@ function RoomChat({ roomId }: { roomId: string }) {
       clearTimeout(timer);
     };
   }, [roomId]);
-  const older = async () => {
-    if (!cursor) return;
+  const older = async (pageCursor: string) => {
     setBusy(true);
     try {
-      const page = await officeMessages(roomId, cursor);
+      const page = await officeMessages(roomId, pageCursor);
       setMessages((old) => [...new Map([...page.items, ...old].map((m) => [m.id, m])).values()]);
       setCursor(page.next_cursor);
     } catch (error_) {
@@ -98,7 +97,7 @@ function RoomChat({ roomId }: { roomId: string }) {
         <button
           className="presence-button"
           disabled={busy}
-          onClick={() => void older()}
+          onClick={() => void older(cursor)}
           type="button"
         >
           Load older messages

@@ -1,11 +1,22 @@
 import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AnswerGuide } from '@/components/marketing/answer-guide';
 import { webPageSchema } from '@/lib/seo/schema';
 import { contentModified } from '@/lib/seo/site';
+import * as site from '@/lib/seo/site';
 
 describe('audit answer guides', () => {
+  it('uses the documented site review date when a guide has no dedicated content date', () => {
+    const dates = vi.spyOn(site, 'contentModified').mockReturnValue(undefined);
+    try {
+      const { container } = render(<AnswerGuide path="/teams" />);
+      expect(container.querySelector('time')).toHaveAttribute('datetime', site.SITE_MODIFIED);
+      expect(container.querySelector('time')).toHaveTextContent(site.SITE_MODIFIED);
+    } finally {
+      dates.mockRestore();
+    }
+  });
   it.each([
     '/',
     '/teams',
@@ -73,7 +84,9 @@ describe('audit answer guides', () => {
 
   it('does not invent a content update for untouched translations', () => {
     const page = { path: '/contact', name: 'Contact', description: 'Contact AtoAxis' };
-    expect(webPageSchema({ ...page, locale: 'en' }).dateModified).toBe(contentModified('/contact', 'en'));
+    expect(webPageSchema({ ...page, locale: 'en' }).dateModified).toBe(
+      contentModified('/contact', 'en')
+    );
     expect(webPageSchema({ ...page, locale: 'th' })).not.toHaveProperty('dateModified');
   });
 });

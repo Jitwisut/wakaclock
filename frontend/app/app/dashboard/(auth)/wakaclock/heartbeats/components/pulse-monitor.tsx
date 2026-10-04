@@ -75,8 +75,8 @@ function signalLabel(isToday: boolean, isLive: boolean) {
 }
 
 /** Catmull-Rom through the points, with control points clamped to the plot band. */
-function smoothPath(points: Array<[number, number]>) {
-  if (points.length === 0) return '';
+type TracePoint = [number, number];
+function smoothPath(points: [TracePoint, ...TracePoint[]]) {
   if (points.length === 1) return `M${points[0][0]},${points[0][1]}`;
   let d = `M${points[0][0].toFixed(1)},${points[0][1].toFixed(1)}`;
   for (let i = 0; i < points.length - 1; i += 1) {
@@ -108,19 +108,23 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
     nowMinute === null ? n - 1 : Math.min(n - 1, Math.floor(nowMinute / BUCKET_MINUTES));
 
   const { area, line, tip } = React.useMemo(() => {
-    const points: Array<[number, number]> = [];
-    for (let i = 0; i <= lastIndex; i += 1) {
+    // Five-minute daily buckets and the current clock always include bucket zero.
+    // Carry that invariant in the type instead of rendering an impossible empty trace.
+    const points: [TracePoint, ...TracePoint[]] = [
+      [W / (2 * n), BASE - Math.sqrt(buckets[0] / max) * (BASE - TOP)],
+    ];
+    for (let i = 1; i <= lastIndex; i += 1) {
       // Square-root scale keeps a quiet five minutes visible next to a busy one.
       const y = BASE - Math.sqrt(buckets[i] / max) * (BASE - TOP);
       points.push([((i + 0.5) / n) * W, y]);
     }
     const linePath = smoothPath(points);
     const first = points[0];
-    const last = points.at(-1);
+    const last = points[points.length - 1];
     return {
-      area: first && last ? `${linePath} L${last[0]},${BASE} L${first[0]},${BASE} Z` : '',
+      area: `${linePath} L${last[0]},${BASE} L${first[0]},${BASE} Z`,
       line: linePath,
-      tip: last ?? null,
+      tip: last,
     };
   }, [buckets, lastIndex, max, n]);
 
@@ -132,7 +136,7 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
     setHover(Math.max(0, Math.min(n - 1, Math.floor(fraction * n))));
   }
 
-  const nowX = tip ? (tip[0] / W) * 100 : null;
+  const nowX = (tip[0] / W) * 100;
   const hoverCount = hover === null ? 0 : buckets[hover];
 
   return (
@@ -140,7 +144,7 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
       <div
         aria-label={`Heartbeats in ${BUCKET_MINUTES}-minute buckets. Busiest bucket ${formatMinute(
           peakIndex * BUCKET_MINUTES
-        )} with ${buckets[peakIndex] ?? 0} heartbeats.`}
+        )} with ${buckets[peakIndex]} heartbeats.`}
         className="relative h-[150px] cursor-crosshair touch-pan-y sm:h-[190px]"
         onPointerLeave={() => setHover(null)}
         onPointerMove={onPointerMove}
@@ -172,59 +176,53 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
             y1={BASE}
             y2={BASE}
           />
-          {area && (
-            <motion.path
-              animate={{ opacity: 1 }}
-              d={area}
-              fill="url(#hb-area)"
-              initial={reduced ? false : { opacity: 0 }}
-              transition={{ delay: 0.5, duration: 1.2 }}
-            />
-          )}
-          {line && (
-            <motion.path
-              animate={{ pathLength: 1 }}
-              className={styles.traceGlow}
-              d={line}
-              fill="none"
-              initial={reduced ? false : { pathLength: 0 }}
-              stroke="url(#hb-line)"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              transition={{ duration: 1.8, ease: [0.65, 0, 0.35, 1] }}
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
+          <motion.path
+            animate={{ opacity: 1 }}
+            d={area}
+            fill="url(#hb-area)"
+            initial={reduced ? false : { opacity: 0 }}
+            transition={{ delay: 0.5, duration: 1.2 }}
+          />
+          <motion.path
+            animate={{ pathLength: 1 }}
+            className={styles.traceGlow}
+            d={line}
+            fill="none"
+            initial={reduced ? false : { pathLength: 0 }}
+            stroke="url(#hb-line)"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            transition={{ duration: 1.8, ease: [0.65, 0, 0.35, 1] }}
+            vectorEffect="non-scaling-stroke"
+          />
         </svg>
 
         {!reduced && <div aria-hidden="true" className={styles.sweep} />}
 
         {/* Leading edge of the trace: the latest bucket (or "now" on today). */}
-        {tip && nowX !== null && (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute"
-            style={{ left: `${nowX}%`, top: `${(tip[1] / H) * 100}%` }}
-          >
-            <span className="absolute -translate-x-1/2 -translate-y-1/2">
-              <span className="block size-2.5 rounded-full bg-[oklch(0.93_0.16_140)] shadow-[0_0_14px_oklch(0.86_0.17_158)]" />
-            </span>
-            <AnimatePresence>
-              {!reduced && beat > 0 && (
-                <motion.span
-                  animate={{ opacity: 0, scale: 5 }}
-                  className="absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[oklch(0.86_0.17_158)]"
-                  exit={{ opacity: 0 }}
-                  initial={{ opacity: 0.9, scale: 1 }}
-                  key={beat}
-                  transition={{ duration: 1.4, ease: 'easeOut' }}
-                />
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-        {nowMinute !== null && nowX !== null && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute"
+          style={{ left: `${nowX}%`, top: `${(tip[1] / H) * 100}%` }}
+        >
+          <span className="absolute -translate-x-1/2 -translate-y-1/2">
+            <span className="block size-2.5 rounded-full bg-[oklch(0.93_0.16_140)] shadow-[0_0_14px_oklch(0.86_0.17_158)]" />
+          </span>
+          <AnimatePresence>
+            {!reduced && beat > 0 && (
+              <motion.span
+                animate={{ opacity: 0, scale: 5 }}
+                className="absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[oklch(0.86_0.17_158)]"
+                exit={{ opacity: 0 }}
+                initial={{ opacity: 0.9, scale: 1 }}
+                key={beat}
+                transition={{ duration: 1.4, ease: 'easeOut' }}
+              />
+            )}
+          </AnimatePresence>
+        </div>
+        {nowMinute !== null && (
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 w-px bg-gradient-to-b from-transparent via-[oklch(0.86_0.17_158/0.45)] to-transparent"
@@ -259,11 +257,7 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
       <div aria-hidden="true" className="relative mt-2 h-4 font-mono text-[10px] text-white/45">
         {HOUR_TICKS.map((hour) => (
           <span
-            className={cn(
-              'absolute',
-              tickAlign(hour),
-              hour % 6 !== 0 && 'hidden sm:inline'
-            )}
+            className={cn('absolute', tickAlign(hour), hour % 6 !== 0 && 'hidden sm:inline')}
             key={hour}
             style={{ left: `${(hour / 24) * 100}%` }}
           >
@@ -309,10 +303,7 @@ export function PulseMonitor({
     <section aria-labelledby="heartbeats-title" className={cn(styles.monitor, 'p-5 sm:p-7')}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className={cn(styles.eyebrow, 'flex items-center gap-2.5')}>
-          <span
-            aria-hidden="true"
-            className={cn(styles.livePip, !isLive && styles.livePipIdle)}
-          />
+          <span aria-hidden="true" className={cn(styles.livePip, !isLive && styles.livePipIdle)} />
           {signalLabel(isToday, isLive)}
           {timezone && <span className="text-white/40">· {timezone}</span>}
         </div>
@@ -327,7 +318,8 @@ export function PulseMonitor({
             <PopoverContent align="end" className="w-auto p-0">
               <Calendar
                 mode="single"
-                onSelect={(d) => d && onDateChange(format(d, 'yyyy-MM-dd'))}
+                onSelect={(d) => onDateChange(format(d, 'yyyy-MM-dd'))}
+                required
                 selected={parseISO(date)}
               />
             </PopoverContent>
@@ -367,9 +359,7 @@ export function PulseMonitor({
           {isToday && sinceLast !== null && (
             <div className={styles.metaChip}>
               <dt>Last beat</dt>
-              <dd className="font-mono text-white tabular-nums">
-                {formatAgo(sinceLast)}
-              </dd>
+              <dd className="font-mono text-white tabular-nums">{formatAgo(sinceLast)}</dd>
             </div>
           )}
           {total > 0 && (

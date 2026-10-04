@@ -62,16 +62,18 @@ export function RangePicker({ value, onChange }: RangePickerProps) {
         <PopoverContent align="end" className="w-auto p-0">
           <Calendar
             defaultMonth={calendarRange.from}
+            max={0}
+            min={0}
             mode="range"
             numberOfMonths={2}
             onSelect={(range) => {
-              if (range?.from && range?.to) {
-                onChange({
-                  start: format(range.from, 'yyyy-MM-dd'),
-                  end: format(range.to, 'yyyy-MM-dd'),
-                });
-              }
+              // required + min/max 0 keep both endpoints selected, including a single day.
+              onChange({
+                start: format(range.from!, 'yyyy-MM-dd'),
+                end: format(range.to!, 'yyyy-MM-dd'),
+              });
             }}
+            required
             selected={calendarRange}
           />
         </PopoverContent>

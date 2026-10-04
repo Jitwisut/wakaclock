@@ -108,7 +108,9 @@ describe('TopProjects', () => {
     const link = await screen.findByRole('link', { name: 'wakaclock' });
     expect(link).toHaveAttribute(
       'href',
-      expect.stringContaining('/dashboard/wakaclock/analytics/projects/11111111-1111-4111-8111-111111111111?')
+      expect.stringContaining(
+        '/dashboard/wakaclock/analytics/projects/11111111-1111-4111-8111-111111111111?'
+      )
     );
     expect(await screen.findByRole('link', { name: 'atoaxis-vscode' })).toHaveAttribute(
       'href',
@@ -167,5 +169,18 @@ describe('TopProjects', () => {
     renderPanel();
 
     expect(api.getProjectAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('requests UTC when the browser has no timezone name', async () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...Intl.DateTimeFormat().resolvedOptions(),
+      timeZone: '',
+    });
+    api.getProjectAnalytics.mockResolvedValue({ items: [], next_cursor: null });
+    renderPanel();
+    await screen.findByText('No projects yet');
+    expect(api.getProjectAnalytics).toHaveBeenCalledWith(
+      expect.objectContaining({ timezone: 'UTC' })
+    );
   });
 });

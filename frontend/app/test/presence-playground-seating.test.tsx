@@ -65,7 +65,36 @@ function mountFloor(users: PresenceUser[], onMove: (next: { x: number; y: number
   return view;
 }
 
+it('uses the current account ID to select the editable character when roster flags are stale', () => {
+  const move = vi.fn();
+  const users = roster({ isCurrentUser: false });
+  users[1] = { ...users[1], isCurrentUser: true };
+  mountFloor(users, move);
+  fireEvent.keyDown(screen.getByRole('button', { name: /^You,/ }), { key: 'ArrowRight' });
+  expect(move).toHaveBeenCalledExactlyOnceWith({ x: 49, y: 46 });
+});
+
 describe('presence playground seating', () => {
+  it('preserves a drop outside every pod without snapping it to a desk', () => {
+    stubPointerEvents();
+    try {
+      const move = vi.fn();
+      mountFloor(roster({}), move);
+      const player = screen.getByRole('button', { name: /^You,/ });
+      fireEvent.pointerDown(player, { button: 0, ...pixels({ x: 46, y: 46 }) });
+      fireEvent.pointerUp(player, pixels({ x: 10, y: 90 }));
+      expect(move).toHaveBeenCalledExactlyOnceWith({ x: 10, y: 90 });
+      expect(player).toHaveAttribute('data-pose', 'standing');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it('chooses the earlier nearest pod when later pods are farther away', () => {
+    const move = vi.fn();
+    mountFloor(roster({ x: 25, y: 55 }), move);
+    fireEvent.keyDown(screen.getByRole('button', { name: /^You,/ }), { key: 'Enter' });
+    expect(move).toHaveBeenCalledExactlyOnceWith(seatAnchor(ZONES[0], 0));
+  });
   it('snaps a drop inside a pod onto that pod’s desk slot instead of the raw drop point', () => {
     stubPointerEvents();
     const onMove = vi.fn();

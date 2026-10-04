@@ -32,6 +32,12 @@ function report(data = insightsFixture) {
     </DashboardPanelsProvider>
   );
 }
+
+it('keeps future breakdown types readable using a generic entry label', () => {
+  report({ ...insightsFixture, type: 'future_dimension' });
+  expect(screen.getByPlaceholderText('Find entries…')).toBeVisible();
+  expect(screen.getByRole('columnheader', { name: 'Rank / Entries' })).toBeVisible();
+});
 function workspace() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(

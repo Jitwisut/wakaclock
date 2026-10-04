@@ -17,6 +17,22 @@ beforeEach(() => {
   session.userId = 'test-user';
 });
 
+it('uses UTC when the browser cannot resolve a timezone', async () => {
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    ...Intl.DateTimeFormat().resolvedOptions(),
+    timeZone: '',
+  });
+  vi.mocked(getDurations).mockResolvedValue({ date: todayDateString(), total: 0, data: [] });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  await screen.findByText('No sessions on this day');
+  expect(getDurations).toHaveBeenCalledWith('test-user', todayDateString(), 'UTC');
+});
+
 it('does not fetch private timeline data without an owner', () => {
   session.userId = null;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
