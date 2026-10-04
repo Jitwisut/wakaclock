@@ -190,5 +190,10 @@ test('loads more than 25 real evidence rows on desktop and mobile without duplic
     await expect(evidence.getByRole('button', { name: 'More evidence' })).toHaveCount(0);
     const rows = await evidence.getByRole('listitem').allTextContents();
     expect(new Set(rows).size).toBe(26);
+    await page
+      .getByRole('dialog')
+      .getByRole('link', { name: 'Open Trust Center and correction history' })
+      .click();
+    await expect(page).toHaveURL(/analytics\/trust/);
   }
 });

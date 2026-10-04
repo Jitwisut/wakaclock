@@ -42,7 +42,8 @@ def main():
     if preflight() != build:
         raise ValueError('build_changed_during_browser_checks')
     evidence = run_evidence(build, __file__, dict.fromkeys(
-        ('evidence_over_25', 'owner_mismatch', 'outcome_withdrawal', 'export_snapshot_privacy'),
+        ('desktop', 'mobile', 'trust_link', 'evidence_over_25', 'owner_mismatch',
+         'outcome_withdrawal', 'export_snapshot_privacy'),
         'passed' if passed else 'failed'), sample_count=len(completed_tests(report)),
         evidence_origin='synthetic_integration')
     private_json(ROOT / 'evidence/browser-checks.json', evidence)
