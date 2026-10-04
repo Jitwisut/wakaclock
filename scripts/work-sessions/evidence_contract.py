@@ -120,7 +120,7 @@ def main():
     parser.add_argument('--run', type=Path, action='append', required=True)
     args = parser.parse_args()
     build = preflight()
-    directory = ROOT / 'evidence'
+    directory = (ROOT / 'evidence').resolve()
     children, names = [], set()
     coverage = None
     for path in args.run:

@@ -76,6 +76,34 @@ class EvidenceTests(unittest.TestCase):
         self.report['checks']['owner_scope']['reviewed'] = False
         self.assertFalse(validate_report(self.report, 'build', self.root))
 
+    def test_gate_assembly_with_symlinked_lab_keeps_child_references_relative(self):
+        import local_lab
+        import evidence_contract
+        alias = self.root / 'lab-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        with patch.object(local_lab, 'ROOT', alias), patch('runtime_binding.preflight', return_value='build'), \
+                patch.object(sys, 'argv', ['evidence_contract.py', '--gate', 'owner_scope',
+                                          '--run', str(self.evidence / 'owner_scope-run.json')]), \
+                redirect_stdout(io.StringIO()):
+            evidence_contract.main()
+        gate = json.loads((self.evidence / 'gates/owner_scope.json').read_text())
+        self.assertEqual(gate['children'][0]['path'], 'owner_scope-run.json')
+        self.assertEqual(gate['review_status'], 'pending')
+
+    def test_check_writer_accepts_lab_alias_without_exporting_absolute_paths(self):
+        import checks
+        alias = self.root / 'lab-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        (self.evidence / 'build-manifest.json').write_text('{}')
+        with patch.object(checks, 'ROOT', alias), \
+                patch.object(sys, 'argv', ['checks.py', '--check', 'owner_scope', '--status', 'blocked',
+                                          '--evidence', str(self.evidence / 'owner_scope.json')]), \
+                redirect_stdout(io.StringIO()):
+            checks.main()
+        report = json.loads((self.evidence / 'checks.json').read_text())
+        self.assertEqual(report['checks']['owner_scope']['evidence'], 'owner_scope.json')
+        self.assertEqual(report['checks']['owner_scope']['status'], 'blocked')
+
     def test_empty_failed_old_and_missing_scenarios_cannot_pass_with_valid_hash(self):
         gate = 'owner_scope'
         original = json.loads((self.evidence / (gate + '.json')).read_text())
