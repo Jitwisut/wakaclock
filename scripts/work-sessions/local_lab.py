@@ -15,6 +15,20 @@ API = 'http://127.0.0.1:18080'
 UI = 'http://127.0.0.1:13000'
 
 
+def failure_code(error):
+    """Expose only known lab blockers, never raw exception messages or credentials."""
+    codes = {'source_build_mismatch', 'frontend_build_mismatch', 'receipts_disabled',
+             'lab_bucket_initialization_failed', 'lab_object_store_not_ready', 'vsix_required'}
+    codes.update(key + '_mismatch' for key in (
+        'collector_sha256', 'server_sha256', 'deletion_worker_sha256', 'job_worker_sha256'))
+    codes.update(prefix + service for prefix in (
+        'lab_process_build_mismatch_', 'lab_process_not_ready_', 'lab_process_failed_')
+        for service in ('api', 'ui', 'worker', 'relay'))
+    codes.update('lab_port_in_use_' + str(port) for port in (
+        18080, 13000, 18082, 18083, 55439, 58129, 55679, 59000))
+    return str(error) if isinstance(error, ValueError) and str(error) in codes else 'lab_command_failed'
+
+
 def private_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -246,6 +260,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-        print('Lab command failed; inspect private local logs. No credentials are printed.')
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(json.dumps({'status': 'blocked', 'reason': failure_code(error)}))
         raise SystemExit(2)
