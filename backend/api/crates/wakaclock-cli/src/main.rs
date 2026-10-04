@@ -2600,6 +2600,15 @@ fn sort_transcript_paths_newest_first(paths: &mut [PathBuf]) {
     });
 }
 
+/// Usage parsers read the whole transcript (they pair records across turns), so they must
+/// not run on every heartbeat for files that have not grown. A cursor is only saved after
+/// that transcript's usage was enqueued (idempotently, by usage event id), so a reused
+/// cursor sitting exactly at EOF proves there are no unseen usage bytes. A reset cursor,
+/// `--from-start`, or any new byte keeps the full-file parse unchanged.
+fn usage_scan_needed(cursor_reused: bool, cursor_offset: u64, file_len: u64) -> bool {
+    !(cursor_reused && cursor_offset == file_len)
+}
+
 fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     // Keep the human-friendly discovery details below, but take health/runtime
     // state from the same typed collector used by `ai doctor` and the extension
@@ -5256,6 +5265,7 @@ async fn run_ai_sync(
                 .map(|meta| meta.len())
                 .unwrap_or(0);
             let file_identity = transcript_identity(&transcript_path);
+            let mut cursor_reused = false;
             let cursor = match existing_cursor {
                 Some(cursor)
                     if !from_start
@@ -5263,6 +5273,7 @@ async fn run_ai_sync(
                         && cursor.file_identity == file_identity
                         && cursor.byte_offset <= file_len =>
                 {
+                    cursor_reused = true;
                     cursor
                 }
                 _ => ParserCursor {
@@ -5313,6 +5324,9 @@ async fn run_ai_sync(
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
             let usage_records = match id {
+                _ if !usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) => {
+                    Ok(Vec::new())
+                }
                 "claude-code" => parse_claude_usage(&transcript_path),
                 "codex" => parse_codex_usage(&transcript_path),
                 "gemini-cli" => parse_gemini_usage(&transcript_path),
@@ -5758,6 +5772,17 @@ mod ai_usage_ack_tests {
             unpriced: Some(1),
             sessions_touched: Some(1),
         }
+    }
+
+    #[test]
+    fn usage_scan_is_skipped_only_for_a_reused_cursor_at_eof() {
+        // Unchanged transcript: every usage byte was enqueued before the cursor was saved.
+        assert!(!usage_scan_needed(true, 540_000_000, 540_000_000));
+        // The transcript grew since the last sync.
+        assert!(usage_scan_needed(true, 1_000, 1_024));
+        // Reset cursor (new file, rotated identity, or --from-start) always rescans.
+        assert!(usage_scan_needed(false, 0, 1_024));
+        assert!(usage_scan_needed(false, 0, 0));
     }
 
     #[test]
