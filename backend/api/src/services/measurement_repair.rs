@@ -154,9 +154,7 @@ impl MeasurementRepairService {
                 continue;
             }
             let row = matches[0];
-            if !matches!(row.actor_type.as_str(), "ai_verified" | "ai_inferred")
-                && !row.is_ai_generated
-            {
+            if !repair_actor_eligible(&row.actor_type) {
                 items.push(unresolved("non_ai_operation"));
                 continue;
             }
@@ -533,6 +531,13 @@ fn validate_reference(reference: &str) -> Result<()> {
     Ok(())
 }
 
+// A line repair cannot establish authorship. Legacy/unresolved rows must first
+// receive an evidence-backed identity correction; a stale compatibility bit is
+// insufficient to make a human or downgraded operation eligible for AI repair.
+fn repair_actor_eligible(actor_type: &str) -> bool {
+    matches!(actor_type, "ai_verified" | "ai_inferred")
+}
+
 fn measurement_repair_reference(row: &HeartbeatRow) -> String {
     let session = row.session_id.as_deref().unwrap_or_default();
     let operation = row
@@ -589,7 +594,7 @@ fn parse_job_range(job: &StoredRepairJob) -> Result<(f64, f64)> {
     Ok(range.unix_bounds())
 }
 
-fn rows_by_reference<'a>(rows: &'a [HeartbeatRow]) -> HashMap<String, Vec<&'a HeartbeatRow>> {
+fn rows_by_reference(rows: &[HeartbeatRow]) -> HashMap<String, Vec<&HeartbeatRow>> {
     let mut map = HashMap::<String, Vec<&HeartbeatRow>>::new();
     for row in rows {
         map.entry(measurement_repair_reference(row))
@@ -714,6 +719,16 @@ fn public_values(values: StoredMeasurementValues) -> MeasurementRepairValues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_repair_requires_canonical_ai_attribution() {
+        for actor in ["human", "unknown", "", "legacy", "AI_VERIFIED"] {
+            assert!(!repair_actor_eligible(actor), "must not repair {actor}");
+        }
+        for actor in ["ai_verified", "ai_inferred"] {
+            assert!(repair_actor_eligible(actor));
+        }
+    }
 
     #[test]
     fn reference_digest_uses_only_the_operation_key_material() {

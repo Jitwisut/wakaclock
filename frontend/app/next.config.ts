@@ -11,6 +11,13 @@ const withBundleAnalyzer = bundleAnalyzer({
 
 const developmentScriptPolicy = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : '';
 const developmentConnectPolicy = process.env.NODE_ENV === 'development' ? ' http: ws: wss:' : '';
+const receiptValidation = process.env.ATOAXIS_VALIDATION_BUILD === '1';
+const validationApiOrigin = receiptValidation
+  ? new URL(process.env.NEXT_PUBLIC_WAKACLOCK_API_URL || 'http://127.0.0.1:18080').origin
+  : '';
+if (receiptValidation && new URL(validationApiOrigin).hostname !== '127.0.0.1') {
+  throw new Error('Receipt validation builds require a loopback API');
+}
 
 const mediaOrigin = process.env.NEXT_PUBLIC_LIVEKIT_URL
   ? new URL(process.env.NEXT_PUBLIC_LIVEKIT_URL).origin
@@ -34,7 +41,7 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${developmentConnectPolicy}${mediaConnectPolicy} https://api.atoaxis.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.posthog.com`,
+  `connect-src 'self'${developmentConnectPolicy}${mediaConnectPolicy}${validationApiOrigin ? ` ${validationApiOrigin}` : ''} https://api.atoaxis.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com https://*.posthog.com`,
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
 ].join('; ');
@@ -43,6 +50,7 @@ const contentSecurityPolicy = [
 // NEXT.JS CONFIGURATION
 // =============================================================================
 const nextConfig: NextConfig = {
+  distDir: receiptValidation ? 'build/receipt-validation' : '.next',
   // ---------------------------------------------------------------------------
   // React & Compilation
   // ---------------------------------------------------------------------------

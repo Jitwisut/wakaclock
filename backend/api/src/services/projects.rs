@@ -143,10 +143,10 @@ impl ProjectsService {
                     existing.last_heartbeat_at =
                         existing.last_heartbeat_at.max(row.last_heartbeat_at);
                     // The target's own identity wins over a merged source's.
-                    if row.name == name || existing.project_id.is_empty() {
-                        if !row.project_id.is_empty() {
-                            existing.project_id = row.project_id;
-                        }
+                    if (row.name == name || existing.project_id.is_empty())
+                        && !row.project_id.is_empty()
+                    {
+                        existing.project_id = row.project_id;
                     }
                 }
                 None => {

@@ -1,5 +1,7 @@
 'use client';
 
+import { Suspense } from 'react';
+
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Label, Pie, PieChart, XAxis, YAxis } from 'recharts';
 
@@ -21,12 +23,16 @@ import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
+import { WorkSessionsPanel } from '@/components/wakaclock/work-sessions-panel';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { formatAiIdentityReason } from '@/lib/wakaclock/ai-display';
-import { getAiDiagnostics, getAiDiagnosticsV2, getAiStats } from '@/lib/wakaclock/endpoints';
+import { getAiDiagnostics, getAiDiagnosticsV2 } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatPercent } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+import { getEffectiveness } from '@/lib/wakaclock/work-sessions';
+
+const UNAVAILABLE = 'Not available';
 
 const attributionConfig = {
   heartbeats: { label: 'Heartbeats' },
@@ -38,21 +44,22 @@ const attributionConfig = {
 
 const dailyConfig = {
   ai_lines_added: { label: 'AI lines added', color: 'var(--chart-1)' },
-  human_lines_added: { label: 'Human lines added', color: 'var(--chart-3)' },
+  human_lines_added: { label: 'Measured human additions', color: 'var(--chart-3)' },
   unknown_lines_added: { label: 'Unknown lines added', color: 'var(--chart-4)' },
 } satisfies ChartConfig;
 
 function AiStatsPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const { start, end, setRange } = useWakaclockRange(14);
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   const { data, isLoading, error } = useQuery({
-    queryKey: wakaclockKeys.aiStats(userId, start, end),
-    queryFn: () => getAiStats(userId, start, end),
+    queryKey: [...wakaclockKeys.aiStats(userId, start, end), 'effectiveness-v2', timezone],
+    queryFn: () => getEffectiveness(start, end, timezone),
     enabled: Boolean(userId),
   });
 
-  const stats = data?.data;
+  const stats = data?.stats;
   const aiPct = stats?.ai_heartbeat_percentage ?? 0;
   const aiVerifiedPct = stats?.ai_verified_heartbeat_percentage ?? 0;
   const aiInferredPct = stats?.ai_inferred_heartbeat_percentage ?? 0;
@@ -63,37 +70,38 @@ function AiStatsPanel() {
   const knownHeartbeatCount = stats?.coverage
     ? Math.max(0, stats.coverage.heartbeat_denominator - stats.coverage.unknown_heartbeats)
     : null;
-  const pieData = stats
-    ? [
-        {
-          key: 'ai_verified',
-          heartbeats: Math.round(aiVerifiedPct * 10) / 10,
-          fill: 'var(--color-ai_verified)',
-        },
-        {
-          key: 'ai_inferred',
-          heartbeats: Math.round(aiInferredPct * 10) / 10,
-          fill: 'var(--color-ai_inferred)',
-        },
-        {
-          key: 'human',
-          heartbeats: Math.round(humanPct * 10) / 10,
-          fill: 'var(--color-human)',
-        },
-        {
-          key: 'unknown',
-          heartbeats: Math.round(unknownPct * 10) / 10,
-          fill: 'var(--color-unknown)',
-        },
-      ]
-    : [];
+  const pieData =
+    stats && stats.total_heartbeats > 0
+      ? [
+          {
+            key: 'ai_verified',
+            heartbeats: Math.round(aiVerifiedPct * 10) / 10,
+            fill: 'var(--color-ai_verified)',
+          },
+          {
+            key: 'ai_inferred',
+            heartbeats: Math.round(aiInferredPct * 10) / 10,
+            fill: 'var(--color-ai_inferred)',
+          },
+          {
+            key: 'human',
+            heartbeats: Math.round(humanPct * 10) / 10,
+            fill: 'var(--color-human)',
+          },
+          {
+            key: 'unknown',
+            heartbeats: Math.round(unknownPct * 10) / 10,
+            fill: 'var(--color-unknown)',
+          },
+        ]
+      : [];
 
   return (
     <Card>
       <CardHeader>
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>AI party member</CardTitle>
+            <CardTitle>AI activity evidence</CardTitle>
           </div>
           <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
@@ -101,26 +109,54 @@ function AiStatsPanel() {
       <CardContent>
         <QueryState
           error={error}
-          isEmpty={!isLoading && !error && stats?.total_heartbeats === 0}
+          isEmpty={
+            !isLoading &&
+            !error &&
+            stats?.total_heartbeats === 0 &&
+            (stats.usage_coverage?.event_count ?? 0) === 0
+          }
           isLoading={isLoading}
         >
           {stats && (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-                <StatTile label="AI heartbeats" value={formatPercent(aiPct)} />
                 <StatTile
-                  label="AI lines added"
-                  subtext={`${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`}
-                  value={formatCompactNumber(stats.total_ai_lines_added)}
+                  label="AI heartbeats"
+                  value={stats.total_heartbeats > 0 ? formatPercent(aiPct) : UNAVAILABLE}
                 />
                 <StatTile
-                  label="Human lines added"
-                  subtext={`${formatCompactNumber(stats.total_human_lines_deleted)} deleted`}
-                  value={formatCompactNumber(stats.total_human_lines_added)}
+                  label="AI lines added"
+                  subtext={
+                    stats.line_measurements?.ai_deleted
+                      ? `${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`
+                      : 'Deletions unavailable'
+                  }
+                  value={
+                    stats.line_measurements?.ai_added
+                      ? formatCompactNumber(stats.total_ai_lines_added)
+                      : UNAVAILABLE
+                  }
+                />
+                <StatTile
+                  label="Measured human additions"
+                  subtext={
+                    stats.line_measurements?.human_deleted
+                      ? `${formatCompactNumber(stats.total_human_lines_deleted)} deleted`
+                      : 'Deletions unavailable'
+                  }
+                  value={
+                    stats.line_measurements?.human_added
+                      ? formatCompactNumber(stats.total_human_lines_added)
+                      : UNAVAILABLE
+                  }
                 />
                 <StatTile
                   label="Human keystrokes"
-                  value={formatCompactNumber(stats.total_human_keystrokes)}
+                  value={
+                    stats.line_measurements?.human_keystrokes
+                      ? formatCompactNumber(stats.total_human_keystrokes)
+                      : UNAVAILABLE
+                  }
                 />
                 <StatTile
                   label="Total heartbeats"
@@ -128,6 +164,14 @@ function AiStatsPanel() {
                 />
               </div>
 
+              <p className="text-muted-foreground text-sm">
+                AI share of measured line changes:{' '}
+                {data?.metrics_v2?.ai_line_share == null
+                  ? UNAVAILABLE
+                  : formatPercent(data.metrics_v2.ai_line_share * 100)}
+                . Human activity does not prove code authorship. Heartbeat shares are not code
+                percentages.
+              </p>
               <div className="rounded-md border p-3 text-sm" role="status">
                 <p className="font-medium">
                   Attribution coverage: {coverageStatus.replaceAll('_', ' ')}
@@ -166,11 +210,13 @@ function AiStatsPanel() {
                   </div>
                   <p className="text-muted-foreground mt-1 text-xs">
                     Confirmation rate uses all AI verified heartbeats in this range as the
-                    denominator ({formatCompactNumber(
+                    denominator (
+                    {formatCompactNumber(
                       stats.identity.ai_verified_heartbeat_denominator ??
                         stats.identity.confirmed_ai_heartbeats +
                           stats.identity.incomplete_ai_heartbeats
-                    )}).
+                    )}
+                    ).
                   </p>
                   {stats.identity.incomplete_ai_heartbeats > 0 && (
                     <p className="text-muted-foreground mt-1 text-xs">
@@ -194,7 +240,7 @@ function AiStatsPanel() {
               <DashboardPanel id="ai.charts">
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
-                    <h3 className="mb-2 text-sm font-medium">Heartbeats by authorship evidence</h3>
+                    <h3 className="mb-2 text-sm font-medium">Heartbeats by activity evidence</h3>
                     <ChartContainer
                       className="mx-auto aspect-square max-h-64"
                       config={attributionConfig}
@@ -223,14 +269,16 @@ function AiStatsPanel() {
                                       x={viewBox.cx}
                                       y={viewBox.cy}
                                     >
-                                      {formatPercent(aiPct, 0)}
+                                      {stats.total_heartbeats > 0
+                                        ? formatPercent(aiPct, 0)
+                                        : UNAVAILABLE}
                                     </tspan>
                                     <tspan
                                       className="fill-muted-foreground text-xs"
                                       x={viewBox.cx}
                                       y={(viewBox.cy ?? 0) + 20}
                                     >
-                                      AI-assisted
+                                      AI heartbeats
                                     </tspan>
                                   </text>
                                 );
@@ -284,10 +332,10 @@ function AiStatsPanel() {
                   </div>
                 </div>
                 <AiAttributionLegend
-                  aiInferredPercent={aiInferredPct}
-                  aiVerifiedPercent={aiVerifiedPct}
-                  humanPercent={humanPct}
-                  unknownPercent={unknownPct}
+                  aiInferredPercent={stats.total_heartbeats > 0 ? aiInferredPct : null}
+                  aiVerifiedPercent={stats.total_heartbeats > 0 ? aiVerifiedPct : null}
+                  humanPercent={stats.total_heartbeats > 0 ? humanPct : null}
+                  unknownPercent={stats.total_heartbeats > 0 ? unknownPct : null}
                 />
               </DashboardPanel>
 
@@ -340,10 +388,13 @@ export default function AiStatsPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        description="How much of the work your AI party member carried vs. what you typed yourself."
+        description="Received human and agent activity, measured changes, and evidence coverage."
         title="AI Stats"
       />
       <RequireUser>
+        <Suspense fallback={<p>Loading sessions…</p>}>
+          <WorkSessionsPanel />
+        </Suspense>
         <AiStatsPanel />
         <AiDiagnosticsPanelContainer />
       </RequireUser>

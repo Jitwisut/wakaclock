@@ -931,6 +931,27 @@ impl Queue {
         Ok(())
     }
 
+    /// Stable opaque installation identity shared by capture and delivery diagnostics.
+    pub fn device_id(&self) -> Result<String, AppError> {
+        let candidate_device_id = Uuid::new_v4().to_string();
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO delivery_device_state(singleton, device_id)
+                 VALUES (1, ?1)",
+                [&candidate_device_id],
+            )
+            .map_err(AppError::Queue)?;
+        let device_id: String = self
+            .conn
+            .query_row(
+                "SELECT device_id FROM delivery_device_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(AppError::Queue)?;
+        Ok(device_id)
+    }
+
     /// Capture and reserve an ordered, throttled queue snapshot for the authenticated
     /// delivery scope. Returning `None` means another process uploaded (or attempted)
     /// this queue within the last minute. The counters and timestamps are read from
@@ -968,22 +989,7 @@ impl Queue {
             .map_err(AppError::Queue)?
             .flatten();
 
-        let candidate_device_id = Uuid::new_v4().to_string();
-        self.conn
-            .execute(
-                "INSERT OR IGNORE INTO delivery_device_state(singleton, device_id)
-                 VALUES (1, ?1)",
-                [&candidate_device_id],
-            )
-            .map_err(AppError::Queue)?;
-        let device_id: String = self
-            .conn
-            .query_row(
-                "SELECT device_id FROM delivery_device_state WHERE singleton = 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(AppError::Queue)?;
+        let device_id = self.device_id()?;
         let now_seconds = now.timestamp();
         self.conn
             .execute(

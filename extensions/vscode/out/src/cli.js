@@ -97,6 +97,10 @@ class WakaclockCliService {
         this.pushOptionalNumber(args, "--human-lines-deleted", primaryExtra.human_lines_deleted);
         this.pushOptionalNumber(args, "--unattributed-lines-added", primaryExtra.unattributed_lines_added);
         this.pushOptionalNumber(args, "--unattributed-lines-deleted", primaryExtra.unattributed_lines_deleted);
+        this.pushOptionalString(args, "--line-metric-version", primaryExtra.line_metric_version);
+        this.pushOptionalString(args, "--line-measurement-status", primaryExtra.line_measurement_status);
+        this.pushOptionalString(args, "--line-measurement-reason", primaryExtra.line_measurement_reason);
+        this.pushOptionalString(args, "--measurement-window-id", primaryExtra.measurement_window_id);
         if (this.clipboardCapability !== false) {
             this.pushOptionalNumber(args, "--clipboard-tracking-version", primaryExtra.clipboard_tracking_version);
             this.pushOptionalNumber(args, "--copy-actions", primaryExtra.copy_actions);

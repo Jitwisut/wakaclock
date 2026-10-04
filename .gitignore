@@ -13,3 +13,4 @@ apps/desktop/src-tauri/gen/
 
 # SwiftPM build cache
 /.build/
+/.local/receipt-validation/

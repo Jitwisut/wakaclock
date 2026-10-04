@@ -35,6 +35,9 @@ ALLOWED_FILES = {
     # Identity repair still reads the legacy bit as a guard when an old row has no
     # actor_type evidence. It must never be used to promote a human row by itself.
     "backend/api/src/handlers/v1/ai_identity.rs",
+    # Receipt database fixtures populate the deprecated storage column alongside
+    # explicit actor_type. Production Receipt calculations use canonical actors.
+    "backend/api/src/handlers/v2/work_sessions.rs",
     "backend/api/src/model/heartbeat.rs",
     "backend/api/src/repository/analytics.rs",
     "backend/api/src/repository/heartbeat.rs",

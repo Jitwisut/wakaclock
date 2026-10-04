@@ -3,7 +3,46 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { FeatureGallery } from '@/components/marketing/feature-gallery';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it('moves by the viewport width when an overflowing gallery contains plain text', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1008);
+  render(<FeatureGallery locale="en">An overflowing text feature</FeatureGallery>);
+  const rail = screen.getByRole('region');
+  rail.scrollBy = vi.fn();
+  fireEvent.click(screen.getByRole('button', { name: 'Next features' }));
+  expect(rail.scrollBy).toHaveBeenCalledWith({ left: 344, behavior: 'smooth' });
+});
+
+it('disables both controls when all cards fit even without browser observers', () => {
+  const resizeObserver = window.ResizeObserver;
+  const intersectionObserver = window.IntersectionObserver;
+  Object.assign(window, { ResizeObserver: undefined, IntersectionObserver: undefined });
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(320);
+  try {
+    const view = render(
+      <FeatureGallery locale="en">
+        <article>Only feature</article>
+      </FeatureGallery>
+    );
+    expect(screen.getByRole('button', { name: 'Previous features' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next features' })).toBeDisabled();
+    expect(
+      screen.getByRole('region').parentElement?.style.getPropertyValue('--gallery-progress')
+    ).toBe('1');
+    view.unmount();
+  } finally {
+    Object.assign(window, {
+      ResizeObserver: resizeObserver,
+      IntersectionObserver: intersectionObserver,
+    });
+  }
+});
 
 it('moves one card at a time, respects reduced motion, and disables controls at the edges', () => {
   let paint: FrameRequestCallback = () => {};
@@ -38,4 +77,58 @@ it('moves one card at a time, respects reduced motion, and disables controls at 
   expect(previous).toBeEnabled();
   fireEvent.click(previous);
   expect(rail.scrollBy).toHaveBeenLastCalledWith({ left: -344, behavior: 'auto' });
+});
+
+it('reveals cards within the rail, coalesces scroll updates and releases observers', () => {
+  const original = window.IntersectionObserver;
+  let enter!: (entries: { target: Element; isIntersecting: boolean }[]) => void;
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  window.IntersectionObserver = class {
+    observe = observe;
+    disconnect = disconnect;
+    constructor(callback: typeof enter) {
+      enter = callback;
+    }
+  } as unknown as typeof IntersectionObserver;
+  let paint!: FrameRequestCallback;
+  const schedule = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    paint = callback;
+    return 42;
+  });
+  const cancel = vi.spyOn(window, 'cancelAnimationFrame');
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(200);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(800);
+  vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false } as MediaQueryList);
+  try {
+    const view = render(
+      <FeatureGallery locale="th">
+        <article>Card</article>
+      </FeatureGallery>
+    );
+    const rail = screen.getByRole('region', { name: 'เลื่อนดูฟีเจอร์ AtoAxis' });
+    const card = screen.getByText('Card');
+    expect(observe).toHaveBeenCalledWith(card);
+    enter([{ target: card, isIntersecting: true }]);
+    expect(card).toHaveAttribute('data-in-view', 'true');
+    enter([{ target: card, isIntersecting: false }]);
+    expect(card).toHaveAttribute('data-in-view', 'false');
+    card.getBoundingClientRect = () => ({ width: 200 }) as DOMRect;
+    rail.scrollBy = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'ฟีเจอร์ถัดไป' }));
+    expect(rail.scrollBy).toHaveBeenCalledWith({ left: 224, behavior: 'smooth' });
+    rail.scrollLeft = 300;
+    fireEvent.scroll(rail);
+    fireEvent.scroll(rail);
+    expect(schedule).toHaveBeenCalledOnce();
+    act(() => paint(16));
+    expect(rail.parentElement?.style.getPropertyValue('--gallery-progress')).toBe('0.5');
+    expect(screen.getByRole('button', { name: 'ฟีเจอร์ก่อนหน้า' })).toBeEnabled();
+    fireEvent.scroll(rail);
+    view.unmount();
+    expect(cancel).toHaveBeenLastCalledWith(42);
+    expect(disconnect).toHaveBeenCalledOnce();
+  } finally {
+    window.IntersectionObserver = original;
+  }
 });

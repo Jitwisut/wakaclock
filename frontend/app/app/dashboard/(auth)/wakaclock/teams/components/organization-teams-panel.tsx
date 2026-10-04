@@ -45,14 +45,15 @@ function TeamMembers({
   organizationId,
   organizationMembers,
   team,
+  userId,
 }: {
   organizationId: string;
   /** Present only for owners/admins — which is also what lets them manage the team. */
   organizationMembers?: OrganizationMember[];
   team: OrganizationTeam;
+  userId: string;
 }) {
   const canManage = organizationMembers !== undefined;
-  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
   const client = useQueryClient();
   const membersKey = wakaclockKeys.teamMembers(userId, organizationId, team.id);
   const [candidate, setCandidate] = React.useState('');
@@ -265,6 +266,7 @@ export function OrganizationTeamsPanel({ organizationId }: { organizationId: str
             organizationId={organizationId}
             organizationMembers={organizationMembers.data}
             team={team}
+            userId={userId}
           />
         ) : null}
       </QueryState>

@@ -278,6 +278,10 @@ impl PostgresClient {
             ("delivery status", DELIVERY_STATUS_MIGRATION),
             ("measurement repairs", MEASUREMENT_REPAIRS_MIGRATION),
             (
+                "work session outcomes",
+                include_str!("../../migrations/postgres/027_work_session_outcomes.sql"),
+            ),
+            (
                 "WakaTime import previews",
                 WAKATIME_IMPORT_PREVIEWS_MIGRATION,
             ),

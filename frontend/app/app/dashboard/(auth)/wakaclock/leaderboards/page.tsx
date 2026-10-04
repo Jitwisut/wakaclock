@@ -46,8 +46,7 @@ function describe(board: Leaderboard): string {
   return [metric, period, board.language, board.country].filter(Boolean).join(' · ');
 }
 
-function MemberList({ board }: { board: Leaderboard }) {
-  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
+function MemberList({ board, userId }: { board: Leaderboard; userId: string }) {
   const queryClient = useQueryClient();
   const [memberId, setMemberId] = React.useState('');
 
@@ -86,7 +85,7 @@ function MemberList({ board }: { board: Leaderboard }) {
       <QueryState
         emptyDescription="No members yet."
         error={error}
-        isEmpty={!isLoading && !error && (data?.length ?? 0) === 0}
+        isEmpty={!isLoading && !error && data?.length === 0}
         isLoading={isLoading}
         skeletonClassName="h-16 w-full"
       >
@@ -257,7 +256,7 @@ function LeaderboardsPanel() {
                 </div>
               </CardHeader>
               <CardContent>
-                <MemberList board={board} />
+                <MemberList board={board} userId={userId} />
               </CardContent>
             </Card>
           ))}

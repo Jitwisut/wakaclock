@@ -47,6 +47,8 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod work_sessions;
+
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
 const WAKATIME_COMPATIBILITY_MANIFEST: &str =
     include_str!("../../../../docs/wakatime-compatibility-manifest.json");
@@ -165,6 +167,8 @@ struct FeatureMatrixEntry {
 pub struct AiEffectivenessData {
     pub stats: AiStatsData,
     pub metrics: AiEffectivenessMetrics,
+    pub metrics_v2: crate::model::ai_stats::EffectivenessMetricsV2,
+    pub legacy_metrics_deprecated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -645,6 +649,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
                 .post(crate::handlers::v1::api_key::generate)
                 .delete(crate::handlers::v1::api_key::revoke),
         )
+        .route("/me/work-sessions", get(work_sessions::list))
+        .route("/me/work-sessions/:id", get(work_sessions::detail))
+        .route("/me/work-sessions/:id/evidence", get(work_sessions::evidence))
+        .route("/me/work-sessions/:id/outcome", put(work_sessions::set_outcome).delete(work_sessions::clear_outcome))
         .with_state(app_state)
 }
 
@@ -677,6 +685,8 @@ fn feature_available(
     }
 
     match key {
+        "ai_human_follow_up" => false,
+        "ai_human_follow_up_events" | "work_session_receipts" => true,
         "data_exports" => export_available && postgres,
         "postgres_transactional_store"
         | "personal_organizations"
@@ -695,7 +705,6 @@ fn feature_available(
         | "ai_line_attribution"
         | "ai_tokens_and_cost"
         | "ai_prompt_length"
-        | "ai_human_follow_up"
         | "measurement_trust_center"
         | "ai_operation_evidence"
         | "oauth_scope_enforcement"
@@ -784,8 +793,10 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                 .features
                 .into_iter()
                 .map(|feature| {
-                    let feature_enabled = feature.key != "measurement_repair"
-                        || state.config.measurement_repair_enabled;
+                    let feature_enabled = (feature.key != "measurement_repair"
+                        || state.config.measurement_repair_enabled)
+                        && (feature.key != "work_session_receipts"
+                            || state.config.work_sessions_enabled);
                     FeatureCapability {
                         available: feature_enabled
                             && feature_available(
@@ -957,7 +968,7 @@ pub async fn measurement_quality(
             .map_err(ApiError::internal)?;
         let coverage = coverage_from_metric_groups(&line_metric_coverage, "editor-before-after-v1")
             .or_else(|| coverage_from_metric_groups(&line_metric_coverage, "legacy_unversioned"))
-            .unwrap_or_else(|| empty_project_coverage());
+            .unwrap_or_else(empty_project_coverage);
         let mut data = build_measurement_quality(summary, coverage);
         data.days = timeline
             .days
@@ -994,21 +1005,16 @@ pub async fn measurement_quality(
             .map_err(ApiError::internal)?;
         let stats = state
             .ai_stats_service
-            .get_range(user_id, &start, &end)
+            .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
             .await
             .map_err(ApiError::internal)?;
         let measured_coverage =
             coverage_from_metric_groups(&line_metric_coverage, "editor-before-after-v1").or_else(
                 || coverage_from_metric_groups(&line_metric_coverage, "legacy_unversioned"),
             );
-        let attribution_date_basis = if measured_coverage.is_some() {
-            "heartbeat_timestamp_in_requested_timezone"
-        } else {
-            "stored_heartbeat_date"
-        };
         let coverage = measured_coverage.unwrap_or(stats.data.coverage);
         let mut data = build_measurement_quality(summary, coverage);
-        data.attribution_date_basis = attribution_date_basis;
+        data.attribution_date_basis = "heartbeat_timestamp_in_requested_timezone";
         data.project_id = None;
         data
     };
@@ -1757,7 +1763,7 @@ pub async fn ai_effectiveness(
     let (start, end) = resolve_range(query.start, query.end, query.timezone.as_deref())?;
     let stats = state
         .ai_stats_service
-        .get_range(user_id, &start, &end)
+        .get_range_in_timezone(user_id, &start, &end, query.timezone.as_deref())
         .await
         .map_err(ApiError::internal)?;
 
@@ -1786,14 +1792,38 @@ pub async fn ai_effectiveness(
         .total_input_tokens
         .zip(stats_data.total_output_tokens)
         .map(|(input, output)| input.saturating_add(output));
-    let tokens_per_ai_line = reported_tokens.map(|tokens| tokens as f64 / ai_lines.max(1.0));
-    let cost_per_ai_line_microusd = stats_data
-        .total_estimated_cost_microusd
-        .map(|cost| cost as f64 / ai_lines.max(1.0));
+    let tokens_per_ai_line =
+        crate::model::ai_stats::measured_ratio(reported_tokens, ai_lines as u64);
+    let cost_per_ai_line_microusd = crate::model::ai_stats::measured_ratio(
+        stats_data.total_estimated_cost_microusd,
+        ai_lines as u64,
+    );
     let prompt_character_count = stats_data.total_prompt_characters;
+    let usage_coverage = stats_data.usage_coverage.clone();
+    let token_status = if usage_coverage.event_count == 0 {
+        "no_data"
+    } else if usage_coverage.input_tokens.reported_events == 0
+        && usage_coverage.output_tokens.reported_events == 0
+    {
+        "unavailable"
+    } else if usage_coverage.input_tokens.status == "complete"
+        && usage_coverage.output_tokens.status == "complete"
+    {
+        "complete"
+    } else {
+        "partial"
+    };
+    let metrics_v2 = crate::model::ai_stats::EffectivenessMetricsV2::new(
+        ai_lines as u64,
+        human_lines as u64,
+        unknown_lines as u64,
+        total_lines as u64,
+    );
 
     Ok(Json(envelope(
         AiEffectivenessData {
+            metrics_v2,
+            legacy_metrics_deprecated: true,
             stats: stats_data,
             metrics: AiEffectivenessMetrics {
                 ai_line_share,
@@ -1816,17 +1846,20 @@ pub async fn ai_effectiveness(
                     line_change_denominator: stats_coverage.line_change_denominator,
                     line_attribution: coverage,
                     unknown_line_changes: stats_coverage.unknown_line_changes,
-                    token_usage: "not_available_in_heartbeat_stream",
-                    prompt_length: "not_available_in_heartbeat_stream",
+                    token_usage: token_status,
+                    prompt_length: usage_coverage.prompt_characters.status,
                     human_follow_up: "not_available_until_ai_change_ledger_is_enabled",
                 },
             },
         },
         query.timezone.as_deref().unwrap_or("UTC"),
         Some(json!({
-            "ai_stats": if total_heartbeats == 0 { "empty" } else { "complete" },
-            "tokens": "missing",
-            "prompt_length": "missing",
+            "ai_stats": coverage,
+            "tokens": token_status,
+            "prompt_length": usage_coverage.prompt_characters.status,
+            "usage": usage_coverage,
+            "date_basis": "event_timestamp_in_requested_timezone",
+            "range_end": "exclusive_after_local_end_date",
             "follow_up": "missing"
         })),
     )))
@@ -2751,7 +2784,7 @@ pub async fn organization_analytics(
                 .await?;
             let stats = state
                 .ai_stats_service
-                .get_range(member_id, &start, &end)
+                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
                 .await?;
             let seconds = summary
                 .days
@@ -2834,7 +2867,7 @@ pub async fn organization_analytics(
         },
         query.timezone.as_deref().unwrap_or("UTC"),
         Some(
-            json!({ "analytics": "consented_members_only", "attribution_date_basis": "stored_heartbeat_date" }),
+            json!({ "analytics": "consented_members_only", "attribution_date_basis": "heartbeat_timestamp_in_requested_timezone" }),
         ),
     )))
 }
@@ -3486,6 +3519,8 @@ fn resolve_range(
     if start > end {
         return Err(ApiError::bad_request("start must be on or before end"));
     }
+    ResolvedRange::parse(&start, &end, timezone)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     Ok((start, end))
 }
 
@@ -3505,6 +3540,17 @@ fn compatibility_route_status(
 #[cfg(test)]
 mod capability_tests {
     use super::{feature_available, feature_runtime_status};
+
+    #[test]
+    fn requested_range_over_limit_is_a_client_error_before_stats_query() {
+        let error = super::resolve_range(
+            Some("2025-01-01".into()),
+            Some("2026-09-30".into()),
+            Some("Asia/Bangkok"),
+        )
+        .unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn unfinished_worker_features_are_not_advertised_as_available() {

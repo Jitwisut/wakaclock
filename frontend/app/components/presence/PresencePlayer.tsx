@@ -81,13 +81,10 @@ export function PresencePlayer({
     clientX: number;
     clientY: number;
     pointerId: number;
+    preview: { x: number; y: number };
     x: number;
     y: number;
   } | null>(null);
-  /** Last previewed point, so a gesture that ends without usable coordinates (a
-   * `pointercancel`, a release the browser reports outside the floor) still commits
-   * where the character was actually dragged to instead of throwing the drag away. */
-  const lastPreview = React.useRef<{ x: number; y: number } | null>(null);
   const appearance = user.appearance ?? appearanceFor(user.id);
   const pendingPosition =
     localPosition?.serverX === user.x && localPosition.serverY === user.y ? localPosition : null;
@@ -115,7 +112,7 @@ export function PresencePlayer({
     if (!isDragging) return;
 
     const preview = (position: { x: number; y: number }) => {
-      lastPreview.current = position;
+      if (gesture.current) gesture.current.preview = position;
       setLocalPosition({ ...position, serverX: user.x, serverY: user.y });
     };
 
@@ -126,12 +123,11 @@ export function PresencePlayer({
 
     const handlePointerEnd = (event: PointerEvent) => {
       const start = gesture.current;
-      if (start && event.pointerId !== start.pointerId) return;
-      const dropped = pointerPosition(event) ?? lastPreview.current;
+      if (!start || event.pointerId !== start.pointerId) return;
+      // The gesture owns its last point, including cancellation without usable coordinates.
+      const dropped = pointerPosition(event) ?? start.preview;
       gesture.current = null;
-      lastPreview.current = null;
       setIsDragging(false);
-      if (!dropped) return;
       const resolved = resolveDrop ? resolveDrop(dropped) : dropped;
       preview(resolved);
       onMove?.(resolved);
@@ -212,12 +208,12 @@ export function PresencePlayer({
         event.currentTarget.focus();
         gesture.current = {
           pointerId: event.pointerId,
+          preview: { x: safeX, y: safeY },
           clientX: event.clientX,
           clientY: event.clientY,
           x: safeX,
           y: safeY,
         };
-        lastPreview.current = { x: safeX, y: safeY };
         setIsDragging(true);
       }}
       style={{

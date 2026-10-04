@@ -551,6 +551,7 @@ export function ProjectDeepDive({
           </button>
         </div>
       )}
+      {/* Infinite-query data includes its initial response even when no files match. */}
       {files.data && (
         <ProjectFilesPanel
           files={fileItems}
@@ -558,7 +559,7 @@ export function ProjectDeepDive({
           key={`${projectId}:${start}:${end}:${timezone}:${branch}`}
           loadingMore={files.isFetchingNextPage}
           onLoadMore={() => void files.fetchNextPage()}
-          totalSeconds={files.data.pages[0]?.project_total_seconds ?? 0}
+          totalSeconds={files.data.pages[0].project_total_seconds}
         />
       )}
     </div>

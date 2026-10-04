@@ -124,7 +124,7 @@ impl DeliveryStatusService {
                 received_at: *received_at,
             })
             .collect();
-        entries.sort_by(|left, right| right.received_at.cmp(&left.received_at));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.received_at));
         Ok(entries)
     }
 }

@@ -122,7 +122,8 @@ export function MarketingMotion() {
                 )
                   ? Math.min(
                       3,
-                      [...(entry.target.parentElement?.children ?? [])].indexOf(entry.target)
+                      // Every selector in this branch requires an ancestor/parent.
+                      [...entry.target.parentElement!.children].indexOf(entry.target)
                     ) * staggerStep
                   : 0,
                 easing: 'cubic-bezier(0.22, 1, 0.36, 1)',

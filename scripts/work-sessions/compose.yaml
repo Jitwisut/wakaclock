@@ -1,0 +1,54 @@
+name: atoaxis-receipt-validation
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: receipt_validation
+      POSTGRES_USER: receipt_validation
+      POSTGRES_PASSWORD: ${RECEIPT_DB_PASSWORD:?Run local_lab.py init first}
+    ports: ["127.0.0.1:55439:5432"]
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U receipt_validation -d receipt_validation"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10.2.80-alpine
+    environment:
+      CLICKHOUSE_DB: wakaclock
+      CLICKHOUSE_USER: receipt_validation
+      CLICKHOUSE_PASSWORD: ${RECEIPT_DB_PASSWORD:?Run local_lab.py init first}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports: ["127.0.0.1:58129:8123"]
+    volumes: ["clickhouse:/var/lib/clickhouse"]
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user receipt_validation --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: receipt_validation
+      RABBITMQ_DEFAULT_PASS: ${RECEIPT_QUEUE_PASSWORD:?Run local_lab.py init first}
+    ports: ["127.0.0.1:55679:5672"]
+    volumes: ["rabbitmq:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  object-store:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: receipt_validation
+      MINIO_ROOT_PASSWORD: ${RECEIPT_STORAGE_PASSWORD:?Run local_lab.py init first}
+    ports: ["127.0.0.1:59000:9000"]
+    volumes: ["object-store:/data"]
+volumes:
+  postgres:
+  clickhouse:
+  rabbitmq:
+  object-store:

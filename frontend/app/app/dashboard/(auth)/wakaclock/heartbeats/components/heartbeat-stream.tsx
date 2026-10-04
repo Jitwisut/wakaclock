@@ -74,6 +74,7 @@ function ActiveChip({ label, onClear }: { label: string; onClear: () => void }) 
   return (
     <motion.button
       animate={{ opacity: 1, scale: 1 }}
+      aria-label={`Remove filter: ${label}`}
       className="bg-muted hover:bg-muted/70 focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center gap-1 rounded-full pr-1.5 pl-2.5 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
       exit={{ opacity: 0, scale: 0.9 }}
       initial={{ opacity: 0, scale: 0.9 }}
@@ -190,6 +191,9 @@ export function HeartbeatStream({
 }) {
   // The page size resets whenever the filter changes.
   const [paging, setPaging] = React.useState({ filter, limit: PAGE });
+  if (paging.filter !== filter) {
+    setPaging({ filter, limit: PAGE });
+  }
   const limit = paging.filter === filter ? paging.limit : PAGE;
 
   // Newest first; indices point back into the API's ascending array so row keys
@@ -215,14 +219,16 @@ export function HeartbeatStream({
       const hour = heartbeatHour(rows[index]);
       totals.set(hour, (totals.get(hour) ?? 0) + 1);
     }
-    for (const group of out) group.total = totals.get(group.hour) ?? group.indices.length;
+    // Each displayed group is a subset of the same matching indices counted above.
+    for (const group of out) group.total = totals.get(group.hour) as number;
     return out;
   }, [limit, matching, rows]);
 
   const set = (patch: Partial<HeartbeatFilter>) => onFilterChange({ ...filter, ...patch });
   const chips: Array<{ clear: () => void; key: string; label: string }> = [];
-  if (filter.agent !== null)
-    {chips.push({ clear: () => set({ agent: null }), key: 'a', label: `Agent: ${filter.agent}` });}
+  if (filter.agent !== null) {
+    chips.push({ clear: () => set({ agent: null }), key: 'a', label: `Agent: ${filter.agent}` });
+  }
   if (filter.project !== null) {
     chips.push({ clear: () => set({ project: null }), key: 'p', label: filter.project });
   }

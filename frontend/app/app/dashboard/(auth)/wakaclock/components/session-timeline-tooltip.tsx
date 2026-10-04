@@ -16,10 +16,10 @@ export function SessionTimelineTooltip({
   duration,
   projectTotal,
 }: {
-  session: TimelineSession;
   color: string;
   duration: string;
   projectTotal: number;
+  session: TimelineSession;
 }) {
   const share =
     projectTotal > 0 ? Math.min(100, (session.duration_seconds / projectTotal) * 100) : 0;
@@ -29,8 +29,8 @@ export function SessionTimelineTooltip({
   return (
     <TooltipContent
       className={styles.panel}
-      sideOffset={14}
       collisionPadding={16}
+      sideOffset={14}
       style={{ '--session-color': color } as CSSProperties}
     >
       <div className={styles.content}>
@@ -55,7 +55,7 @@ export function SessionTimelineTooltip({
             <span>Started</span>
             <strong>{formatEpochTime(session.start)}</strong>
           </div>
-          <div className={styles.connector} aria-hidden="true">
+          <div aria-hidden="true" className={styles.connector}>
             <i />
             <span />
             <i />
@@ -67,7 +67,7 @@ export function SessionTimelineTooltip({
         </div>
 
         {session.languages.length > 0 && (
-          <div className={styles.languages} aria-label="Session languages">
+          <div aria-label="Session languages" className={styles.languages}>
             {session.languages.slice(0, 3).map((language) => (
               <span key={language}>{language}</span>
             ))}
@@ -84,7 +84,7 @@ export function SessionTimelineTooltip({
             <span>Of this project’s day</span>
             <strong>{share.toFixed(1)}%</strong>
           </div>
-          <div className={styles.shareTrack} aria-hidden="true">
+          <div aria-hidden="true" className={styles.shareTrack}>
             <span style={{ width: `${share}%` }} />
           </div>
         </div>

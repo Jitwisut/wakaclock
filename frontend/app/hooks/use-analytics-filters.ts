@@ -146,7 +146,8 @@ export function useAnalyticsFilters(defaultDays = 30) {
   );
 
   const toRequest = React.useCallback(
-    (fallbackTimezone: string, fixedProjectId?: string): AnalyticsExplorerParams => ({
+    // Retain the legacy argument; filters already resolve missing/blank zones to UTC.
+    (_fallbackTimezone: string, fixedProjectId?: string): AnalyticsExplorerParams => ({
       category: filters.category,
       actor_type: filters.actorType,
       editor: filters.editor,
@@ -156,7 +157,7 @@ export function useAnalyticsFilters(defaultDays = 30) {
       project_id: fixedProjectId ?? filters.projectId,
       source: filters.source,
       start: filters.start,
-      timezone: filters.timezone || fallbackTimezone,
+      timezone: filters.timezone,
     }),
     [filters]
   );

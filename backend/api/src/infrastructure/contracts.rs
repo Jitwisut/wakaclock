@@ -1112,6 +1112,7 @@ mod tests {
     #[test]
     fn ai_usage_payload_rejects_content_like_or_future_unversioned_fields() {
         let record = wakaclock_core::ai::AiUsageRecord {
+            collector_id: None,
             usage_event_id: "message-1".to_string(),
             ai_session_id: "session-1".to_string(),
             occurred_at: fixed_time("2026-09-10T03:15:00Z"),

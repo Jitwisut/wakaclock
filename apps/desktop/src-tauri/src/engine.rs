@@ -385,7 +385,9 @@ async fn send_activity(
     heartbeat.category = activity.category.into();
     heartbeat.editor = "AtoAxis Desktop".into();
     heartbeat.operating_system = friendly_os().into();
-    heartbeat.machine = std::env::consts::ARCH.into();
+    heartbeat.machine = wakaclock_core::queue::Queue::open()
+        .and_then(|queue| queue.device_id())
+        .map_err(|error| error.to_string())?;
     // Desktop activity is sampled only while a foreground app is active and the
     // operating-system idle timer is below the configured threshold. Mark it as
     // human/editor evidence explicitly so combined_v2 keeps the tracker stream in

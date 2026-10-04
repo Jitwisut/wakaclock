@@ -630,6 +630,7 @@ mod tests {
         usage_repo
             .insert_usage_events(&[
                 AiUsageEventRow {
+                    collector_id: None,
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "project-regression-priced".to_string(),
@@ -654,6 +655,7 @@ mod tests {
                     received_at: event_base + 60,
                 },
                 AiUsageEventRow {
+                    collector_id: None,
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "project-regression-unpriced".to_string(),
