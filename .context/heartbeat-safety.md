@@ -17,6 +17,41 @@ commit หรือ push ที่เกี่ยวข้องกับงา�
 
 การอนุมัติให้แก้ไฟล์ **ไม่เท่ากับ** การอนุมัติให้ commit หรือ push.
 
+## Locked time-counting baseline — ห้ามแก้เด็ดขาดโดยไม่ได้รับอนุญาต
+
+สถานะ: **LOCKED by the project owner (2026-10-04)**
+
+เจ้าของโปรเจกต์ตรวจแล้วว่าอัลกอริทึมชุดนี้ให้ผลตรงกับ WakaTime จริง (วันที่ 4 ต.ค. 2026
+AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช้งาน editor ชุดเดียวกัน รวม heartbeat
+ที่ค้างในคิวออฟไลน์ 2 วันซึ่งถูกส่งย้อนหลังครบ) และต้องการให้คงไว้ตามนี้
+
+**ห้ามแก้ค่าหรือพฤติกรรมใดๆ ในตารางด้านล่างเด็ดขาด** จนกว่าจะได้รับอนุญาตจากเจ้าของโปรเจกต์
+**ทุกครั้ง** การอนุญาตครั้งก่อนไม่ครอบคลุมครั้งถัดไป และกฎนี้ใช้กับทุกกรณีที่ทำให้ค่าหรือ
+พฤติกรรมเหล่านี้เปลี่ยน เช่น bug fix, refactor, performance, cleanup, การย้ายโค้ด,
+การรวม/แยก constant, การเปลี่ยน default ของ env var, และการแก้ test/fixture ให้ผ่าน
+ถ้าพบว่าส่วนใดดูผิด ให้รายงานพร้อมหลักฐานแล้วรอคำตอบ ห้ามแก้เอง
+
+| ขั้น | สิ่งที่ล็อกไว้ (ค่าปัจจุบัน) | ที่อยู่ |
+| --- | --- | --- |
+| 1. วัดที่ client | กิจกรรมของคนหนึ่งครั้ง lease เวลาได้สูงสุด **15 วินาที** (`ACTIVE_LEASE_SECONDS = 15`) ส่งเป็น `activity_segments`; จังหวะการส่ง heartbeat (~120 วินาที) **ห้าม**ถูกนับเป็นเวลา | `extensions/vscode/src/activity.ts`, `wakaclock-core/src/heartbeat.rs` |
+| 2. แปลงเป็นช่วงเวลา | heartbeat รุ่นเก่า/WakaTime import ถูกตัดที่ **120 วินาที** (`MAX_ACTIVITY_GAP_SECONDS`); งาน AI tool ถูกตัดที่ **6 ชั่วโมง** (`MAX_AI_TOOL_DURATION_SECONDS`); heartbeat ไฟล์เดียวกันภายใน **120 วินาที** ถือว่าซ้ำ (`DEDUP_WINDOW_SECONDS`) | `wakaclock-core/src/heartbeat.rs`, `backend/api/src/services/activity_timeline.rs` |
+| 3. ไทม์ไลน์ไม่ซ้อน | `canonicalize`: แต่ละวินาทีมีเจ้าของ**เดียว**; ลำดับ `source_priority` คือ editor (`editor`, `editor_active_v1`) > AI (`ai`, `ai_tool_v1`) > อื่นๆ; เสมอกันตัดสินด้วย heartbeat/segment ID | `activity_timeline.rs` |
+| 4. เชื่อมช่วงพัก | `IDLE_TIMEOUT_MINUTES` default **15**: ช่องว่าง ≤ 15 นาทีนับเป็นเวลาทำงาน, เกินไม่นับ; เวลาพักยกให้ช่วง**ก่อนหน้า**; ช่วงท้ายหลังกิจกรรมสุดท้าย**ไม่นับ**; anchor (heartbeat ที่ไม่มี duration) ใช้ต่อ chain ได้ | `bridge_idle_gaps_with_anchors`, `bridge_by_attendance` ใน `activity_timeline.rs`, `config/mod.rs` |
+| 5. แยกคนกับ AI | `AGENT_IDLE_TIMEOUT_MINUTES` default = ค่าเดียวกับ `IDLE_TIMEOUT_MINUTES`; ค่า `off` คือรวมทุก source ไว้ timeline เดียว | `config/mod.rs`, `BridgeConfig` |
+| 6. ค่าที่แสดงหลัก | `DURATION_PRIMARY_MODE` default **`wakatime_compatible`**; `DURATION_CALCULATION_MODE` default **`legacy`**; `active_v1` / `combined_v2` เป็น canary ที่ต้องเปิดเองเท่านั้น | `config/mod.rs`, `services/duration.rs` |
+| 7. คิวออฟไลน์ | error แบบต่อไม่ติด/retry ได้ **ไม่มีเพดานจำนวนครั้งและไม่มีเพดานอายุ** (ห้ามทิ้ง heartbeat); backoff 60s → 120 → 240 → 480 → 960 → 1920 → สูงสุด **3600s**; `Retry-After` สูงสุด 86,400s; dead-letter เฉพาะ error ที่ retry ไม่ได้ | `wakaclock-core/src/queue.rs`, `wakaclock-core/src/api_client.rs` |
+
+เป้าหมายที่ล็อกไว้: ยอดแบบ `wakatime_compatible` ต้องห่างจาก WakaTime **ไม่เกิน 1%**
+บนข้อมูลชุดเดียวกัน การเปลี่ยนใดๆ ที่อาจทำให้ยอดนี้ขยับ ถือว่าแตะ baseline นี้
+
+การขออนุญาตต้องใช้ template ใน "Approval gate" ด้านล่าง และต้องเพิ่ม 3 ข้อนี้:
+
+1. ระบุว่าจะเปลี่ยนแถวไหนในตารางนี้ และค่าเดิม → ค่าใหม่
+2. ผลต่อยอดเวลาต่อวันที่คาดไว้ (เพิ่ม/ลดกี่ % และในกรณีไหน)
+3. หลักฐานเทียบก่อน/หลังบนข้อมูลจริงหรือ fixture ที่ครอบคลุมทุกแถวที่ได้รับผล
+
+ถ้าได้รับอนุญาตให้เปลี่ยน ต้องอัปเดตตารางนี้และวันที่ใน commit เดียวกัน
+
 ## Approval gate — ต้องถามก่อนแก้
 
 ก่อนแก้ protected scope ให้ส่งคำขอที่ระบุครบทุกข้อ:

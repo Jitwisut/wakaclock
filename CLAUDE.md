@@ -81,6 +81,9 @@ Full list and known-broken targets: [.context/commands.md](.context/commands.md)
    exact files/change/expected result to the user, and receiving explicit approval.
    The approval gate also covers related client producers, migrations, tests and
    readback semantics; do not infer permission from a plan or a bug report.
+   The current counting algorithm is **LOCKED** by the owner: never change any
+   value in the "Locked time-counting baseline" table there without fresh,
+   explicit approval each time.
 
 ## Context Routing — MANDATORY
 
