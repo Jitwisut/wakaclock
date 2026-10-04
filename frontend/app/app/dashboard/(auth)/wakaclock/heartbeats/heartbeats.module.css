@@ -106,7 +106,10 @@
   line-height: 0.92;
   letter-spacing: -0.055em;
   font-variant-numeric: tabular-nums;
-  background: linear-gradient(180deg, var(--ink) 30%, oklch(0.8 0.05 175));
+  /* Longhand, not the `background` shorthand: the CSS build splits a shorthand that
+     holds var() into its own rule emitted after this one, which reset background-clip
+     to border-box and painted the gradient as a solid box behind the digits. */
+  background-image: linear-gradient(180deg, var(--ink) 30%, oklch(0.8 0.05 175));
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;

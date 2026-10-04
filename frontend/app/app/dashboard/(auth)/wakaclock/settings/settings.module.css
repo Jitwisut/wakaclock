@@ -59,7 +59,9 @@
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.05em;
-  background: linear-gradient(180deg, var(--ink) 35%, oklch(0.8 0.06 175));
+  /* Longhand on purpose: a `background` shorthand holding var() is emitted as a later
+     rule by the CSS build and resets background-clip, painting a solid box. */
+  background-image: linear-gradient(180deg, var(--ink) 35%, oklch(0.8 0.06 175));
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
