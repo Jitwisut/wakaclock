@@ -71,18 +71,69 @@ Raw logs and test accounts remain under ignored `.local/receipt-validation/readi
 | Codex final-build native campaign | blocked | Normal isolated auth status passed again; current source/build binding is stale |
 | Claude final-build native campaign | blocked | Isolated auth not authenticated; normal login required |
 
+## Frozen candidate — final local evidence
+
+- Validation source commit: `9f2b399d3c04c2e50d00d770f323e1bc35674429`.
+- Managed worktree: `receipt-ready-validation`, detached at that commit. Use this checkout for lab commands; later documentation commits on the development branch do not change its source.
+- Source snapshot: `430454a4bddadebd274a1764e6b72586f5ac348ce93b4edec09e7931773e087f`.
+- Manifest SHA-256: `7de0b130aa228640c691002bd6a72615fb65225291e263bdf5f7140c2739761b`.
+- Collector SHA-256: `59e438e90b653cb86f213683d0564ba7e1043b4bbc29c08d9774328a564154d9`.
+- Artifacts live in ignored `.local/receipt-validation/evidence/`: `build-manifest.json`, `runtime.json`, both editor-profile reports and `release-checks-20261004T105714212361.json`.
+- Final local release checks passed: frontend 903 tests, Rust 938, Python 87, extension 165; typecheck, strict lint, compatibility and production Webpack build also passed. Frontend coverage remains 100% in all four dimensions.
+- Real database readback passed 4 tests. The limit queries took 493 ms for facts and 390 ms for operations in this run; these are local sample timings, not performance guarantees.
+- Production browser passed 2 tests, including both viewport sizes, 26 evidence rows, Trust links, owner isolation, outcome withdrawal and export privacy. This is synthetic integration evidence, not a native-agent or daily session.
+- Disposable-account deletion passed through the real API/outbox/workers, PostgreSQL, ClickHouse and local object store, including delayed API replay rejection. Flag/restart checks passed separately.
+- Both isolated VS Code profiles have extension 0.2.0 with the final collector digest and loopback destination verified. Live editor capture remains untested.
+- Source/build/process binding passed again after all checks. Packaging-generated tracked files were restored before checks; tracked extension output was synchronized in a separate local commit.
+- Gate writers now resolve a symlinked lab directory before producing relative references. Two regression tests failed before the fix; the 40-test Receipt tool suite passes afterward.
+
 ## Observation gates — final manifest
 
-All nine gates remain `not_run` against the final manifest: capture/identity, retry/revision, time, owner/scope, deletion, production browser, flag rollback, receipt limits, release checks. The intermediate passing database tests do not promote these gates automatically.
+| Gate | Status | Evidence / remaining work |
+| --- | --- | --- |
+| Capture/identity | blocked | Codex smoke on `e13c179` failed with `native_usage_limit_exceeded`; Claude preflight reported `isolated_agent_login_required`. Neither is current-build certification. Both complete native campaigns plus live editor/hook and attribution scenarios remain required. |
+| Retry/revision | not_run | Final database duplicate/revision checks passed; live offline/retry, restart/resume and native repair rollback remain. |
+| Time union | not_run | Final timezone, deterministic union and missing-interval checks passed; actual idle and scheduled physical sleep/wake evidence remain. |
+| Owner/scope | passed | Current database and browser child reports, hashes and mandatory scenarios verified. |
+| Account deletion | passed | `gates/account_deletion.json`, backed by the real disposable-account worker test. |
+| Production browser | passed | `gates/production_browser.json`, backed by 2 executed integration tests. |
+| Flag rollback | passed | `gates/flag_rollback.json`, backed by disabled ingest/read/write and restart persistence assertions. |
+| Receipt limits | passed | `gates/receipt_limits.json`, backed by 10,000/10,001 facts and operations assertions. |
+| Release checks | passed | `gates/release_checks.json`, backed by final release and production-build reports. |
 
-Remaining sequence:
+`checks.json` retains the three incomplete gates. `readiness-current.json` reports `ready=false`, `window_started=false`, both campaigns missing for the current build, both daily profiles unauthenticated and both rehearsals incomplete. No model retry was performed after the quota failure. Native browser and native repair checks are also pending; synthetic browser success does not promote them.
 
-1. Preserve the passing K0/K5 reports and rerun them if their source or runtime changes.
-2. Preserve the completed frontend coverage and strict checks; rerun them against the frozen manifest.
-3. Refresh duration evidence and current adapter evidence through their actual validation workflows; keep historical evidence unchanged.
-4. Commit source, create a managed validation worktree, build one manifest, restart/bind all lab processes and VSIX collector.
-5. Run the nine gates, both native campaigns, and both daily rehearsals on that manifest.
-6. Run `check-ready`; start observation only if every required result is complete and valid.
+## Resume runbook
+
+Use the attached `receipt-ready-validation` worktree (find it with `git worktree list`). Lab secrets and transcripts stay in ignored state; never add that directory to Git. API/UI remain on loopback ports 18080/13000, with the four owned processes bound to the manifest above.
+
+1. Run `python3 scripts/work-sessions/local_lab.py readiness`. A changed source, artifact or old process must be fixed before native calls.
+2. Complete normal isolated login with `python3 scripts/work-sessions/local_lab.py login --tool claude-code`. Check only `auth-status`; do not use rejected credential diagnostics. Once the Codex quota is available, perform a new explicitly executed smoke attempt:
+
+```sh
+python3 scripts/ai-coverage/run_codex_cli_campaign.py --execute --timeout 180 --scenario-id single-file --receipt-output .local/receipt-validation/evidence/codex-smoke-current.json
+python3 scripts/ai-coverage/run_claude_cli_campaign.py --execute --scenario single-file --output .local/receipt-validation/evidence/claude-smoke-current.json
+```
+
+Claude calls use the runner's bounded 300-second timeout. Inspect each report before proceeding; there is no automatic model retry. A smoke report is not a complete campaign.
+
+3. After each agent's smoke passes, run its full five-scenario campaign in a new attempt:
+
+```sh
+python3 scripts/ai-coverage/run_codex_cli_campaign.py --execute --timeout 180 --receipt-output .local/receipt-validation/evidence/codex-campaign-current.json
+python3 scripts/ai-coverage/run_claude_cli_campaign.py --execute --output .local/receipt-validation/evidence/claude-campaign-current.json
+node scripts/work-sessions/check_native_browser.cjs codex-campaign-current.json
+```
+
+After reviewing the complete current Codex campaign, copy its metadata report to `.local/receipt-validation/evidence/codex-campaign-final.json`, then run `python3 scripts/work-sessions/check_repair.py`; this runner requires that filename and a passed create/delete/rename row. Keep `review_status=pending`, `promotable=false`; Receipt campaigns do not renew adapter certification automatically.
+
+4. Complete runtime scenarios with `runtime_scenarios.py prepare`, `record`, then `verify`. Record ground truth before analytics. Human/editor, formatter, human-after-AI, two-agent, offline/retry, restart/resume, idle and sleep/wake must use actual capture sources. Never substitute transcript import for live hook/editor capture; never trigger sleep automatically.
+5. Assemble the three remaining gates with `evidence_contract.py` only from complete current-build run reports, then review and register them with `checks.py`. Existing six passed gates do not cover missing scenarios.
+6. Authenticate both daily profiles using `local_lab.py login --identity daily --tool codex` and the equivalent Claude command. Run `editor-status --identity daily` and confirm destination before rehearsal.
+7. Rehearse each agent with `observation.py begin --rehearsal --agent AGENT --scenario bugfix --expected-result file_changes`, use a new native session, sync, inspect its Receipt, then `finish --observation ID --receipt ID --reviewed` and `report`. These sessions never count toward daily observation.
+8. Run `observation.py check-ready --codex PATH --claude PATH --checks .local/receipt-validation/evidence/checks.json`. Use complete five-scenario campaign paths. Start the window only after this returns ready with all nine gates and both daily rehearsals complete. Any source change requires a new manifest and affected evidence again.
+
+Fresh duration certification and live adapter evidence remain separate release blockers. Preserve expired artifacts unchanged; current catalog entries remain unverified until their actual validation workflows pass. Hosted CI success is still unknown because this branch has not been pushed.
 
 ## Local commits
 
@@ -90,5 +141,11 @@ Remaining sequence:
 - `08fa155` — Next/Tiptap/VSCE dependency updates and packaging runtime.
 - `2b2429f` — session hydration and heartbeat fixes, behavior coverage and proven redundant-code cleanup.
 - `9890ec1` — safe lab failure diagnostics and tests.
+
+- `36bff69` — full frontend coverage, goal error handling, drag dedup and presence owner regressions.
+- `5cf4533` — synchronize tracked extension output.
+- `e13c179` — complete pagination fixture usage/actor fields.
+- `1b929f9` — production Trust drill-down on both viewport sizes.
+- `9f2b399` — symlink-safe relative gate/evidence references and regressions; frozen candidate.
 
 No commit has been pushed. A clean checkpoint is not a release approval: fresh certification, final-manifest checks/gates and native campaigns remain outstanding.
