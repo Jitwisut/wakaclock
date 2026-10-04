@@ -1,14 +1,14 @@
-//! Per-user service lifecycle for the always-on AI Activity Broker.
+//! Diagnostics and cleanup for retired per-user AI broker services.
 //!
-//! The watcher deliberately has a small dependency footprint: filesystem scans are
-//! bounded by the broker worker and transcript parsers, while these manifests let the OS
-//! restart the same binary after login/reboot without administrator privileges.
+//! Capture and delivery use bounded sync invocations. Retain status and uninstall
+//! support for manifests left by older releases; do not install a background service.
 
 use fs2::FileExt;
 use serde::Serialize;
+#[cfg(test)]
+use std::io::Write;
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -18,7 +18,6 @@ use std::{
 const SERVICE_LABEL: &str = "com.atoaxis.wakaclock.agent";
 #[cfg(target_os = "windows")]
 const TASK_NAME: &str = "AtoAxis\\WakaclockAgent";
-const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct AgentServiceReport {
@@ -32,6 +31,7 @@ pub struct AgentServiceReport {
     pub last_error: Option<String>,
 }
 
+#[cfg(test)]
 pub struct AgentLock {
     // Keep the descriptor open for the whole broker lifetime.  The OS-level lock
     // is the ownership boundary; a PID text file alone races during launchd/systemd
@@ -39,11 +39,8 @@ pub struct AgentLock {
     _file: fs::File,
 }
 
+#[cfg(test)]
 impl AgentLock {
-    pub fn acquire() -> Result<Self, String> {
-        Self::acquire_at(lock_path())
-    }
-
     /// planai2.md Phase 0.2: the singleton-lock body, parameterised on the lock
     /// path so the "a second broker cannot start while the first holds the lock,
     /// and a crashed broker's stale lock is reclaimed" invariant is unit-testable
@@ -83,28 +80,6 @@ impl AgentLock {
 // `AgentLock` deliberately has no custom Drop implementation: dropping the held
 // `fs::File` closes the descriptor and releases the OS lock, while the path stays
 // in place so a concurrent restart can acquire it without a delete/recreate race.
-
-pub fn append_log(message: &str) {
-    let path = log_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::metadata(&path)
-        .map(|metadata| metadata.len() > MAX_LOG_BYTES)
-        .unwrap_or(false)
-    {
-        let rotated = path.with_extension("log.1");
-        let _ = fs::remove_file(&rotated);
-        let _ = fs::rename(&path, rotated);
-    }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .unwrap_or_default();
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{now} {message}");
-    }
-}
 
 pub fn record_scan(success: bool, heartbeat_at: Option<u64>, error: Option<&str>) {
     let path = state_path();
@@ -155,6 +130,7 @@ pub fn record_heartbeat() {
 /// out to launchctl / systemctl / schtasks. There is exactly one `broker run`
 /// invocation in every platform's output.
 #[cfg(target_os = "macos")]
+#[cfg(test)]
 fn manifest_content(executable: &str, log_path: &str) -> String {
     // LaunchAgents do not inherit HOME reliably (launchd only supplies a small
     // default environment).  The broker resolves all per-user state through
@@ -176,6 +152,7 @@ fn manifest_content(executable: &str, log_path: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!(
         "[Unit]\nDescription=AtoAxis AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
@@ -184,12 +161,14 @@ fn manifest_content(executable: &str, _log_path: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!("{executable} broker run\r\n")
 }
 
 // A stub so the pure test below still compiles on unsupported targets.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!("{executable} broker run\n")
 }
@@ -201,51 +180,6 @@ fn manifest_content(executable: &str, _log_path: &str) -> String {
 #[cfg(target_os = "macos")]
 fn service_executable_path() -> PathBuf {
     wakaclock_dir().join("bin").join("wakaclock")
-}
-
-fn service_executable() -> Result<PathBuf, String> {
-    let current = std::env::current_exe().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "macos")]
-    {
-        let target = service_executable_path();
-        let current_identity = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
-        let target_identity = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
-        if current_identity != target_identity {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            let permissions = fs::metadata(&current)
-                .map_err(|error| error.to_string())?
-                .permissions();
-            let temporary = target.with_file_name(format!("wakaclock.tmp-{}", std::process::id()));
-            fs::copy(&current, &temporary).map_err(|error| {
-                format!(
-                    "could not copy wakaclock runtime to {}: {error}",
-                    target.display()
-                )
-            })?;
-            fs::set_permissions(&temporary, permissions).map_err(|error| error.to_string())?;
-            fs::rename(&temporary, &target).map_err(|error| {
-                format!(
-                    "could not activate wakaclock runtime at {}: {error}",
-                    target.display()
-                )
-            })?;
-        }
-        #[allow(clippy::needless_return)]
-        return Ok(target);
-    }
-    #[cfg(not(target_os = "macos"))]
-    Ok(current)
-}
-
-pub fn install() -> Result<AgentServiceReport, String> {
-    // Service registration is retired. Keep this API as a compatibility shim so
-    // older callers clean up an existing manifest instead of recreating it.
-    let mut retired = uninstall()?;
-    retired.message =
-        Some("background service installation is disabled; use on-demand CLI sync".to_string());
-    Ok(retired)
 }
 
 /// planai2.md Phase 0.1: an older CLI wrote this service manifest to invoke the
@@ -268,18 +202,6 @@ pub fn manifest_uses_legacy_alias() -> bool {
     fs::read_to_string(manifest_path())
         .map(|content| content_uses_legacy_alias(&content))
         .unwrap_or(false)
-}
-
-/// Rewrite a legacy-alias service manifest to the current `broker run` form and
-/// re-register it with the OS. Returns `Ok(false)` (a no-op) when the manifest is
-/// already current or absent. Non-destructive: the generated manifest has no user
-/// configuration to preserve, so this is a plain `install()`.
-pub fn migrate_legacy_service_manifest() -> Result<bool, String> {
-    if !manifest_uses_legacy_alias() && !manifest_points_at_stale_binary() {
-        return Ok(false);
-    }
-    install()?;
-    Ok(true)
 }
 
 /// planai2.md Phase 0.2: the executable path baked into a service manifest, so a
@@ -375,14 +297,6 @@ pub fn uninstall() -> Result<AgentServiceReport, String> {
     }
     let _ = fs::remove_file(&manifest);
     Ok(report(platform_name(), manifest, false, false, None))
-}
-
-pub fn start() -> Result<AgentServiceReport, String> {
-    let mut retired = uninstall()?;
-    retired.message = Some(
-        "background service start is disabled; use an event-triggered CLI invocation".to_string(),
-    );
-    Ok(retired)
 }
 
 pub fn stop() -> Result<AgentServiceReport, String> {
@@ -585,6 +499,7 @@ fn uid() -> String {
 }
 
 #[cfg(target_os = "macos")]
+#[cfg(test)]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -595,6 +510,7 @@ fn xml_escape(value: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(test)]
 fn shell_escape(value: &str) -> String {
     if value
         .chars()
