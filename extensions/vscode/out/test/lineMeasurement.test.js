@@ -72,10 +72,17 @@ const manager = (store = { classify: vitest_1.vi.fn().mockResolvedValue({ attrib
             results.push([measured.status, measured.linesAdded, measured.linesDeleted]);
             (0, vitest_1.expect)(measured).toMatchObject({ metricVersion: "editor-before-after-v1", boundary: "flush" });
             const payload = sendHeartbeat.mock.calls.at(-1)[4];
-            (0, vitest_1.expect)(payload).toMatchObject({ actor_type: "unknown", chars_added: 3 });
+            (0, vitest_1.expect)(payload).toMatchObject({
+                actor_type: "unknown",
+                chars_added: 3,
+                line_metric_version: "editor-before-after-v1",
+                line_measurement_status: "measured",
+                unattributed_lines_added: 1,
+                unattributed_lines_deleted: 0,
+            });
             (0, vitest_1.expect)(payload.human_lines_added).toBeUndefined();
-            (0, vitest_1.expect)(payload.unattributed_lines_added).toBeUndefined();
             (0, vitest_1.expect)(payload.keystrokes).toBeUndefined();
+            (0, vitest_1.expect)(payload.measurement_window_id).toBe(payload.heartbeat_id);
             // A random heartbeat id may legitimately contain the letters "abc"; check
             // the metadata shape instead of making a probabilistic string assertion.
             (0, vitest_1.expect)(payload).not.toHaveProperty("content");

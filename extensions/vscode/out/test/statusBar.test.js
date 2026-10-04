@@ -67,7 +67,7 @@ function createConfig(overrides = {}) {
                 .mockRejectedValue(new Error("Error: API key was rejected by the server."))
         }, new logging_1.Logger(() => false));
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(warning) Wakaclock: key rejected");
+        (0, vitest_1.expect)(item.text).toBe("$(warning) AtoAxis: key rejected");
         (0, vitest_1.expect)(item.command).toBe("wakaclock.setApiKey");
         (0, vitest_1.expect)(item.backgroundColor).toBeDefined();
         (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(1);
@@ -221,7 +221,7 @@ function createConfig(overrides = {}) {
             getToday: vitest_1.vi.fn().mockRejectedValue(new Error("boom"))
         }, new logging_1.Logger(() => false));
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(clock) Wakaclock");
+        (0, vitest_1.expect)(item.text).toBe("$(clock) AtoAxis");
         (0, vitest_1.expect)(item.tooltip).toContain("Unable to read today's total");
     });
 });
