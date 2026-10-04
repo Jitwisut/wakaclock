@@ -147,6 +147,10 @@ ClickHouse database on infrastructure you control.
 
 ## Local development
 
+Use Node.js 24 for build and packaging, matching CI. The development dependency
+`@vscode/vsce` 4 requires Node.js 22 or newer; this does not change the minimum
+VS Code version for installed extensions.
+
 ```bash
 npm install
 npm run compile
