@@ -2,7 +2,6 @@
 
 import { useRef, useState } from 'react';
 
-import { env } from '@/lib/env';
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { MKT_BORDER } from './tokens';
@@ -65,15 +64,14 @@ export function EarlyAccessForm({
     };
 
     try {
-      const response = await fetch(
-        `${env.NEXT_PUBLIC_WAKACLOCK_API_URL.replace(/\/$/, '')}/api/v1/early-access`,
-        {
-          body: JSON.stringify(payload),
-          headers: { 'Content-Type': 'application/json' },
-          method: 'POST',
-          signal: AbortSignal.timeout(15_000),
-        }
-      );
+      // Same-origin route handler (app/api/early-access): the list must work on the
+      // marketing host even before the Rust API is deployed.
+      const response = await fetch('/api/early-access', {
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        signal: AbortSignal.timeout(15_000),
+      });
       const result: unknown = response.ok ? await response.json() : null;
       if (
         !result ||

@@ -106,7 +106,7 @@ describe('backend signup', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'ลงทะเบียน' }).closest('form')!);
     expect(await screen.findByRole('alert')).toHaveTextContent('เกิดข้อผิดพลาด');
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8080/api/v1/early-access',
+      '/api/early-access',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({

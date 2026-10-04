@@ -88,6 +88,8 @@ means adding it to **both** the schema block and `runtimeEnv`.
 | `ARCJET_KEY` | optional; rate limiting / bot protection |
 | `DATABASE_URL`, `AUTH_SECRET` | Declared in the schema but **unused by product code** — inherited from the shadcn template. Do not add features that depend on them without checking. |
 | `SKIP_ENV_VALIDATION` | bypasses validation during builds |
+| `EARLY_ACCESS_DATABASE_URL` | Postgres connection string for the public Early Access list (`app/api/early-access/route.ts`). Falls back to `POSTGRES_URL`, the name the Vercel Postgres/Neon integration injects; `DATABASE_URL` is deliberately **not** read. Server-only and read directly in `lib/early-access/store.ts`, deliberately **not** in `env.ts`, so a hosted URL with query parameters can never fail the build. Unset means the form gets 503 at runtime. |
+| `POSTGRES_URL` | fallback for `EARLY_ACCESS_DATABASE_URL` only (see above) |
 
 ## Compose
 
