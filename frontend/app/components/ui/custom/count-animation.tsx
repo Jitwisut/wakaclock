@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useEffect, useLayoutEffect } from 'react';
 import { cn } from '@/lib/utils';
-import { motion, useMotionValue, useTransform, animate } from 'motion/react';
+import { motion, useMotionValue, useMotionValueEvent, animate } from 'motion/react';
 
 /**
  * CountAnimation component props
@@ -78,8 +78,15 @@ const CountAnimation = React.forwardRef<HTMLSpanElement, CountAnimationProps>(
     const shouldAnimate = safeDuration > 0;
 
     const count = useMotionValue(shouldAnimate ? safeFrom : safeNumber);
-    const rounded = useTransform(count, Math.round);
-    const renderedNumber = shouldAnimate ? rounded : Math.round(safeNumber);
+    // Render through React state, not by handing the motion value to `motion.span`.
+    // A motion-value child rewrites the text node outside React on every frame, and
+    // WebKit then never repaints a `background-clip: text` ancestor: Safari showed the
+    // whole gradient as a solid box instead of the digits (heartbeats `.bigNumber`).
+    const [animatedNumber, setAnimatedNumber] = React.useState(() =>
+      Math.round(shouldAnimate ? safeFrom : safeNumber)
+    );
+    useMotionValueEvent(count, 'change', (latest) => setAnimatedNumber(Math.round(latest)));
+    const renderedNumber = shouldAnimate ? animatedNumber : Math.round(safeNumber);
 
     useLayoutEffect(() => {
       if (shouldAnimate) return;
