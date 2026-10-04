@@ -37,14 +37,9 @@ const CATEGORIES: Category[] = [
   'communicating',
 ];
 
-export function SendHeartbeatDialog({
-  date,
-  timezone,
-}: {
-  date: string;
-  timezone: null | string;
-}) {
+export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone: null | string }) {
   const [open, setOpen] = React.useState(false);
+  const fieldId = React.useId();
   const userId = useWakaclockUserStore((s) => s.userId);
   const queryClient = useQueryClient();
 
@@ -84,10 +79,9 @@ export function SendHeartbeatDialog({
     onError: (error: Error) => toast.error(error.message),
   });
 
-  function handleSingleSubmit() {
-    if (!userId) return;
+  function handleSingleSubmit(owner: string) {
     const payload: HeartbeatPayload = {
-      user_id: userId,
+      user_id: owner,
       entity,
       entity_type: entityType,
       time: Date.now() / 1000,
@@ -106,7 +100,8 @@ export function SendHeartbeatDialog({
       if (!Array.isArray(value)) throw new Error('Expected a JSON array');
       parsed = value as HeartbeatPayload[];
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Invalid JSON');
+      // JSON.parse and the array check above both throw Error instances.
+      toast.error((error as Error).message);
       return;
     }
     bulkMutation.mutate(parsed);
@@ -129,7 +124,7 @@ export function SendHeartbeatDialog({
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="single">
-          <TabsList className="w-full max-w-full justify-start overflow-x-auto no-scrollbar">
+          <TabsList className="no-scrollbar w-full max-w-full justify-start overflow-x-auto">
             <TabsTrigger className="flex-1" value="single">
               Single
             </TabsTrigger>
@@ -140,12 +135,17 @@ export function SendHeartbeatDialog({
           <TabsContent className="space-y-3 pt-2" value="single">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Entity</Label>
-                <Input onChange={(e) => setEntity(e.target.value)} value={entity} />
+                <Label htmlFor={`${fieldId}-entity`}>Entity</Label>
+                <Input
+                  id={`${fieldId}-entity`}
+                  onChange={(e) => setEntity(e.target.value)}
+                  value={entity}
+                />
               </div>
               <div className="space-y-1.5">
-                <Label>Entity type</Label>
+                <Label htmlFor={`${fieldId}-entity-type`}>Entity type</Label>
                 <NativeSelect
+                  id={`${fieldId}-entity-type`}
                   onChange={(e) => setEntityType(e.target.value as EntityType)}
                   value={entityType}
                 >
@@ -157,16 +157,25 @@ export function SendHeartbeatDialog({
                 </NativeSelect>
               </div>
               <div className="space-y-1.5">
-                <Label>Project</Label>
-                <Input onChange={(e) => setProject(e.target.value)} value={project} />
+                <Label htmlFor={`${fieldId}-project`}>Project</Label>
+                <Input
+                  id={`${fieldId}-project`}
+                  onChange={(e) => setProject(e.target.value)}
+                  value={project}
+                />
               </div>
               <div className="space-y-1.5">
-                <Label>Language</Label>
-                <Input onChange={(e) => setLanguage(e.target.value)} value={language} />
+                <Label htmlFor={`${fieldId}-language`}>Language</Label>
+                <Input
+                  id={`${fieldId}-language`}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  value={language}
+                />
               </div>
               <div className="space-y-1.5">
-                <Label>Category</Label>
+                <Label htmlFor={`${fieldId}-category`}>Category</Label>
                 <NativeSelect
+                  id={`${fieldId}-category`}
                   onChange={(e) => setCategory(e.target.value as Category)}
                   value={category}
                 >
@@ -181,17 +190,17 @@ export function SendHeartbeatDialog({
                 <input
                   checked={isWrite}
                   className="size-4"
-                  id="is_write"
+                  id={`${fieldId}-write`}
                   onChange={(e) => setIsWrite(e.target.checked)}
                   type="checkbox"
                 />
-                <Label htmlFor="is_write">is_write</Label>
+                <Label htmlFor={`${fieldId}-write`}>is_write</Label>
               </div>
             </div>
             <DialogFooter>
               <Button
                 disabled={singleMutation.isPending || !userId || !timezone}
-                onClick={handleSingleSubmit}
+                onClick={userId ? () => handleSingleSubmit(userId) : undefined}
               >
                 {singleMutation.isPending ? 'Sending…' : 'Send'}
               </Button>
@@ -203,6 +212,7 @@ export function SendHeartbeatDialog({
               <strong>first element only</strong> and applies it to the whole batch.
             </p>
             <Textarea
+              aria-label="Heartbeat batch JSON"
               className="font-mono text-xs"
               onChange={(e) => setBulkJson(e.target.value)}
               placeholder={`[\n  { "user_id": "${userId}", "entity": "src/lib.rs", "entity_type": "file", "time": ${(
@@ -212,7 +222,10 @@ export function SendHeartbeatDialog({
               value={bulkJson}
             />
             <DialogFooter>
-              <Button disabled={bulkMutation.isPending} onClick={handleBulkSubmit}>
+              <Button
+                disabled={bulkMutation.isPending || !userId || !timezone}
+                onClick={handleBulkSubmit}
+              >
                 {bulkMutation.isPending ? 'Sending…' : 'Send batch'}
               </Button>
             </DialogFooter>

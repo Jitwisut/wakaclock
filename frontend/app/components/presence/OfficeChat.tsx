@@ -6,6 +6,12 @@ import { v7 as uuidv7 } from 'uuid';
 import { officeCommand, type OfficeMessage, officeMessages } from '@/lib/wakaclock/office';
 
 export function OfficeChat({ roomId }: { roomId: string }) {
+  // Bind asynchronous history and send state to one room, including requests that
+  // finish after navigation. A new room starts with independent state.
+  return <RoomChat key={roomId} roomId={roomId} />;
+}
+
+function RoomChat({ roomId }: { roomId: string }) {
   const [messages, setMessages] = React.useState<OfficeMessage[]>([]);
   const [cursor, setCursor] = React.useState<null | string>(null);
   const [body, setBody] = React.useState('');
@@ -49,11 +55,10 @@ export function OfficeChat({ roomId }: { roomId: string }) {
       clearTimeout(timer);
     };
   }, [roomId]);
-  const older = async () => {
-    if (!cursor) return;
+  const older = async (pageCursor: string) => {
     setBusy(true);
     try {
-      const page = await officeMessages(roomId, cursor);
+      const page = await officeMessages(roomId, pageCursor);
       setMessages((old) => [...new Map([...page.items, ...old].map((m) => [m.id, m])).values()]);
       setCursor(page.next_cursor);
     } catch (error_) {
@@ -92,7 +97,7 @@ export function OfficeChat({ roomId }: { roomId: string }) {
         <button
           className="presence-button"
           disabled={busy}
-          onClick={() => void older()}
+          onClick={() => void older(cursor)}
           type="button"
         >
           Load older messages

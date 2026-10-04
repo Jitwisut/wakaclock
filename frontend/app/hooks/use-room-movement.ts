@@ -13,15 +13,17 @@ interface UseRoomMovementArgs {
   snapshot: null | PresenceV2Snapshot;
 }
 
+interface PendingMove {
+  position: { x: number; y: number };
+  roomId: string;
+  zoneId: null | string;
+}
+
 export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRoomMovementArgs) {
   const sequenceRef = React.useRef(0);
   const generationRef = React.useRef(0);
   const timerRef = React.useRef<null | number>(null);
-  const pendingRef = React.useRef<{
-    position: { x: number; y: number };
-    roomId: string;
-    zoneId: null | string;
-  } | null>(null);
+  const pendingRef = React.useRef<null | PendingMove>(null);
 
   const move = React.useCallback(
     (position: { x: number; y: number }) => {
@@ -36,31 +38,34 @@ export function useRoomMovement({ onError, onSnapshot, roomId, snapshot }: UseRo
       pendingRef.current = { position, roomId, zoneId: zone?.id ?? null };
       if (timerRef.current !== null) return;
 
-      const flush = () => {
-        const pending = pendingRef.current;
+      const flush = (pending: PendingMove) => {
         pendingRef.current = null;
         timerRef.current = null;
-        if (!pending) return;
         const generation = generationRef.current;
         sequenceRef.current += 1;
+        const sequence = sequenceRef.current;
         void updatePresenceMemberV2(pending.roomId, {
           client_id: getPresenceClientId(),
-          client_seq: sequenceRef.current,
+          client_seq: sequence,
           position: pending.position,
           zone_id: pending.zoneId,
         })
           .then((next) => {
-            if (generation === generationRef.current) onSnapshot(next);
+            if (generation === generationRef.current && sequence === sequenceRef.current) {
+              onSnapshot(next);
+            }
             return next;
           })
           .catch(() => {
-            if (generation === generationRef.current) onError?.();
+            if (generation === generationRef.current && sequence === sequenceRef.current) {
+              onError?.();
+            }
           });
       };
-      flush();
+      flush(pendingRef.current);
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null;
-        if (pendingRef.current) flush();
+        if (pendingRef.current) flush(pendingRef.current);
       }, 250);
     },
     [onError, onSnapshot, roomId, snapshot]

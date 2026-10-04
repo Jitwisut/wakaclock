@@ -2125,12 +2125,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     &config,
                     &api_client,
                     agent.as_deref(),
-                    dry_run,
-                    true,
-                    from_start,
                     transcript.as_deref(),
-                    false,
-                    Some(Instant::now() + Duration::from_secs(60)),
+                    AiSyncOptions {
+                        dry_run,
+                        verbose: true,
+                        from_start,
+                        lease_already_held: false,
+                        deadline: Some(Instant::now() + Duration::from_secs(60)),
+                    },
                 )
                 .await?
             }
@@ -2382,19 +2384,6 @@ fn adapter_install_kind(manifest: &wakaclock_core::ai::AdapterManifest) -> &'sta
         wakaclock_core::ai::InstallStrategy::TranscriptOnly => "transcript_only",
         wakaclock_core::ai::InstallStrategy::Manual { .. } => "manual",
     }
-}
-
-/// The on-disk identity, when it differs from the one the agent is currently using.
-///
-/// Returns `None` on an unreadable or half-written config.toml: a watcher that is
-/// already authenticated must keep running rather than abort on a transient read.
-pub(crate) fn reloaded_agent_config(current: &Config) -> Option<Config> {
-    let mut candidate = Config::try_load()?;
-    apply_env_overrides(&mut candidate).ok()?;
-    let changed = candidate.api_key != current.api_key
-        || candidate.server_url != current.server_url
-        || candidate.user_id != current.user_id;
-    changed.then_some(candidate)
 }
 
 fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, queue_count: usize) {
@@ -5036,7 +5025,7 @@ fn measurement_repair_range(
     from: &str,
     to: &str,
     timezone: &str,
-) -> Result<(NaiveDate, NaiveDate, f64, f64, Tz), Box<dyn Error>> {
+) -> Result<ResolvedRepairRange, Box<dyn Error>> {
     let start = NaiveDate::parse_from_str(from, "%Y-%m-%d")
         .map_err(|_| "--from must be a calendar date in YYYY-MM-DD format")?;
     let end = NaiveDate::parse_from_str(to, "%Y-%m-%d")
@@ -5133,17 +5122,30 @@ mod measurement_repair_cli_tests {
     }
 }
 
+type ResolvedRepairRange = (NaiveDate, NaiveDate, f64, f64, Tz);
+
+struct AiSyncOptions {
+    dry_run: bool,
+    verbose: bool,
+    from_start: bool,
+    lease_already_held: bool,
+    deadline: Option<Instant>,
+}
+
 async fn run_ai_sync(
     config: &Config,
     api_client: &ApiClient,
     agent_filter: Option<&str>,
-    dry_run: bool,
-    verbose: bool,
-    from_start: bool,
     transcript_override: Option<&Path>,
-    lease_already_held: bool,
-    deadline: Option<Instant>,
+    options: AiSyncOptions,
 ) -> Result<(), Box<dyn Error>> {
+    let AiSyncOptions {
+        dry_run,
+        verbose,
+        from_start,
+        lease_already_held,
+        deadline,
+    } = options;
     if let Some(agent) = agent_filter {
         let supported = supported_ai_parsers()
             .iter()
@@ -5380,7 +5382,10 @@ async fn run_ai_sync(
                 // Persist before the network call and before the next transcript
                 // rotation can hide the source bytes. INSERT is idempotent by the
                 // provider event id and stores only the sanitised record.
-                state.enqueue_pending_usage(&usage_records)?;
+                state.enqueue_pending_usage_with_collector(
+                    &usage_records,
+                    &wakaclock_core::queue::Queue::open()?.device_id()?,
+                )?;
             }
 
             if !new_events.is_empty() {
@@ -5517,12 +5522,14 @@ async fn run_on_demand_sync(
         config,
         api_client,
         agent_filter,
-        dry_run,
-        verbose,
-        from_start,
         transcript_override,
-        true,
-        Some(deadline),
+        AiSyncOptions {
+            dry_run,
+            verbose,
+            from_start,
+            lease_already_held: true,
+            deadline: Some(deadline),
+        },
     )
     .await?;
 
@@ -6849,12 +6856,14 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
                 config,
                 api_client,
                 Some(agent),
-                false,
-                false,
-                false,
                 None,
-                false,
-                Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
+                AiSyncOptions {
+                    dry_run: false,
+                    verbose: false,
+                    from_start: false,
+                    lease_already_held: false,
+                    deadline: Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
+                },
             ),
         )
         .await

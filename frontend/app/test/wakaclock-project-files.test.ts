@@ -49,3 +49,19 @@ describe('Project file identity regressions', () => {
     expect(result.map((file) => file.ai_changes)).toEqual([12, 12]);
   });
 });
+
+it('adds known counts but does not turn a missing language row count into zero', () => {
+  const base = { ...fileFixtures[0], language: '', unknown_changes: 2, unattributed_changes: 3 };
+  const second = { ...base, language: 'Rust', unknown_changes: 4, unattributed_changes: 5 };
+  expect(normalizeProjectFiles([base, second])[0]).toMatchObject({
+    language: 'Rust',
+    unknown_changes: 6,
+    unattributed_changes: 8,
+  });
+  expect(
+    normalizeProjectFiles([
+      second,
+      { ...base, unknown_changes: null, unattributed_changes: null },
+    ])[0]
+  ).toMatchObject({ unknown_changes: null, unattributed_changes: null });
+});

@@ -224,7 +224,7 @@ function fakeOfflineCli() {
             ...base,
             connection: { state: "auth_rejected", reachable: true, authenticated: false, httpStatus: 401 },
         }).refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(warning) Wakaclock: key rejected");
+        (0, vitest_1.expect)(item.text).toBe("$(warning) AtoAxis: key rejected");
         (0, vitest_1.expect)(item.command).toBe("wakaclock.setApiKey");
         (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(1);
         for (const state of ["offline", "subscription_required", "retryable_server_error"]) {

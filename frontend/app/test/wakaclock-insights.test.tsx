@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -13,12 +13,18 @@ import {
 } from '@/components/wakaclock/insights/insights-workspace';
 import { getInsights, getStats } from '@/lib/wakaclock/endpoints';
 
+const session = vi.hoisted(() => ({
+  userId: 'test-user' as null | string,
+  timezone: 'Asia/Bangkok' as undefined | string,
+}));
 vi.mock('@/lib/wakaclock/endpoints', () => ({
   getInsights: vi.fn(),
   getStats: vi.fn(),
-  getBrowserTimezone: () => 'Asia/Bangkok',
+  getBrowserTimezone: () => session.timezone,
 }));
-vi.mock('@/lib/wakaclock/user-store', () => ({ useWakaclockUserStore: () => 'test-user' }));
+vi.mock('@/lib/wakaclock/user-store', () => ({
+  useWakaclockUserStore: (select: (state: { userId: null | string }) => unknown) => select(session),
+}));
 function report(data = insightsFixture) {
   return render(
     <DashboardPanelsProvider>
@@ -26,6 +32,12 @@ function report(data = insightsFixture) {
     </DashboardPanelsProvider>
   );
 }
+
+it('keeps future breakdown types readable using a generic entry label', () => {
+  report({ ...insightsFixture, type: 'future_dimension' });
+  expect(screen.getByPlaceholderText('Find entries…')).toBeVisible();
+  expect(screen.getByRole('columnheader', { name: 'Rank / Entries' })).toBeVisible();
+});
 function workspace() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
@@ -37,10 +49,54 @@ function workspace() {
   );
 }
 beforeEach(() => {
+  session.userId = 'test-user';
+  session.timezone = 'Asia/Bangkok';
   vi.mocked(getInsights)
     .mockReset()
     .mockImplementation(async (_user, type, range) => ({ ...insightsFixture, type, range }));
   vi.mocked(getStats).mockReset().mockResolvedValue(insightsStatsFixture);
+});
+
+it('does not fetch private insights after signing out', () => {
+  session.userId = null;
+  workspace();
+  expect(screen.getByRole('heading', { name: 'Insights' })).toBeVisible();
+  expect(getInsights).not.toHaveBeenCalled();
+  expect(getStats).not.toHaveBeenCalled();
+});
+
+it('loads insights with UTC fallback when browser timezone is unavailable', async () => {
+  session.timezone = undefined;
+  workspace();
+  await screen.findByRole('table');
+  expect(getInsights).toHaveBeenCalledWith('test-user', 'languages', 'last_7_days');
+});
+
+it('keeps daily statistics pending and missing AI measurements unavailable', () => {
+  render(
+    <DashboardPanelsProvider>
+      <InsightsReport
+        data={{ ...insightsFixture, ai_additional_seconds: undefined }}
+        statsPending
+      />
+    </DashboardPanelsProvider>
+  );
+  expect(screen.getAllByText('…').length).toBeGreaterThan(0);
+  expect(screen.getByText('Additional measured AI').nextElementSibling).toHaveTextContent(
+    'Unavailable'
+  );
+});
+
+it('clears the report when a refreshed range contains no entries', () => {
+  const view = report();
+  expect(screen.getByRole('table')).toBeVisible();
+  view.rerender(
+    <DashboardPanelsProvider>
+      <InsightsReport data={{ ...insightsFixture, data: [] }} />
+    </DashboardPanelsProvider>
+  );
+  expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
 });
 describe('Insights', () => {
   it('selects any entry and calculates its share and average from real data', async () => {
@@ -139,4 +195,41 @@ describe('Insights', () => {
       await screen.findByText('Your next insight starts with a little activity')
     ).toBeVisible();
   });
+});
+
+it('sorts entries by name and heartbeat count and selects a legend entry', async () => {
+  const data = {
+    ...insightsFixture,
+    data: [
+      { ...insightsFixture.data[0], name: 'Zulu', total_seconds: 60, heartbeats: 1, days: 1 },
+      { ...insightsFixture.data[0], name: 'Alpha', total_seconds: 60, heartbeats: 4, days: 1 },
+    ],
+  };
+  report(data);
+  const user = userEvent.setup();
+  const sort = screen.getByRole('combobox', { name: 'Sort entries' });
+  await user.selectOptions(sort, 'name');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  await user.selectOptions(sort, 'heartbeats');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  await user.selectOptions(sort, 'days');
+  expect(within(screen.getByRole('table')).getAllByRole('row')[1]).toHaveTextContent('Alpha');
+  const legend = screen
+    .getAllByRole('button', { name: /Zulu/ })
+    .find((button) => !button.closest('table'))!;
+  await user.click(legend);
+  expect(screen.getByRole('complementary', { name: 'Selected insight' })).toHaveTextContent('Zulu');
+});
+
+it('retries unavailable daily statistics without losing the insight report', async () => {
+  vi.mocked(getStats).mockRejectedValueOnce(new Error('statistics offline'));
+  workspace();
+  await screen.findByRole('table');
+  const retry = await screen.findByRole('button', { name: /Retry/i });
+  await userEvent.click(retry);
+  await waitFor(() =>
+    expect(screen.queryByText(/Daily statistics could not load/)).not.toBeInTheDocument()
+  );
+  expect(getStats).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('table')).toBeVisible();
 });

@@ -101,7 +101,11 @@ const COPY = {
     ] as const,
     sourcesHeading: 'Sources and review',
     sources: [
-      { href: '/pricing', label: 'AtoAxis pricing page', note: 'the planned monthly and annual figures' },
+      {
+        href: '/pricing',
+        label: 'AtoAxis pricing page',
+        note: 'the planned monthly and annual figures',
+      },
       {
         href: '/wakatime-alternative',
         label: 'AtoAxis WakaTime alternative guide',
@@ -349,15 +353,9 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
         <ul className="mt-4 space-y-3">
           {copy.sources.map((source) => (
             <li key={source.href}>
-              {source.href.startsWith('/') ? (
-                <Link className="underline" href={localizedPath(locale, source.href)}>
-                  {source.label}
-                </Link>
-              ) : (
-                <a className="underline" href={source.href} rel="noopener noreferrer">
-                  {source.label}
-                </a>
-              )}
+              <Link className="underline" href={localizedPath(locale, source.href)}>
+                {source.label}
+              </Link>
               : {source.note}.
             </li>
           ))}

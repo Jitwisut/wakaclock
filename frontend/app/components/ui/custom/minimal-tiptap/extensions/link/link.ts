@@ -61,6 +61,7 @@ export const Link = TiptapLink.extend({
       openOnClick: false,
       autolink: true,
       linkOnPaste: true,
+      markdownLinks: false,
       protocols: [],
       defaultProtocol: 'https',
       enableClickSelection: false,

@@ -76,7 +76,8 @@ function renderBlock(block: MarketingBlock, key: string): ReactNode {
         </CodeBlock>
       );
     }
-    case 'email': {
+    // Email is the remaining member of the closed MarketingBlock union.
+    default: {
       return (
         <p key={key} style={MUTED_TEXT}>
           {block.before}
@@ -86,9 +87,6 @@ function renderBlock(block: MarketingBlock, key: string): ReactNode {
           {block.after}
         </p>
       );
-    }
-    default: {
-      return null;
     }
   }
 }

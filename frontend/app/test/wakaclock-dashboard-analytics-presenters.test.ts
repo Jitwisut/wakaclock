@@ -93,3 +93,27 @@ describe('attribution coverage presenters', () => {
     expect(presentAttributionDataCoverage(value).value).toBe('No code changes');
   });
 });
+
+it('keeps unavailable ratios distinct from measured zero with complete and partial coverage', () => {
+  expect(
+    presentPeriodComparison(
+      { current_seconds: 60, previous_seconds: 30, direction: 'increase', percent: null },
+      1
+    )
+  ).toMatchObject({ label: 'Change vs previous 1 day', value: 'Unavailable' });
+  expect(
+    presentPeriodComparison(
+      { current_seconds: 30, previous_seconds: 30, direction: 'unchanged', percent: 0 },
+      1
+    ).value
+  ).toBe('No change');
+  const missing = coverage({ attribution_percent: null, attribution_data_coverage_percent: null });
+  expect(presentCodeAttribution(missing).value).toBe('Unavailable');
+  expect(presentAttributionDataCoverage(missing).value).toBe('Unavailable');
+  const measured = coverage({ attribution_percent: 0, attribution_data_coverage_percent: 0 });
+  expect(presentCodeAttribution(measured).value).toBe('0.0%');
+  expect(presentAttributionDataCoverage(measured)).toMatchObject({
+    value: '0.0%',
+    subtext: 'All code-change records include attribution metadata.',
+  });
+});

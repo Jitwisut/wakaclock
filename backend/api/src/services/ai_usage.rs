@@ -620,6 +620,7 @@ impl AiUsageService {
                 project_id.map(|_| "explicit_project_hint".to_string());
 
             rows.push(AiUsageEventRow {
+                collector_id: record.collector_id.clone(),
                 user_id,
                 date: (event_time / 86_400) as u16,
                 usage_event_id: record.usage_event_id.clone(),
@@ -1049,6 +1050,7 @@ mod tests {
 
     fn record(input: Option<u64>, output: Option<u64>) -> AiUsageRecord {
         AiUsageRecord {
+            collector_id: None,
             usage_event_id: "msg_1".to_string(),
             ai_session_id: "s1".to_string(),
             occurred_at: Utc.timestamp_opt(1_000, 0).unwrap(),
@@ -1206,6 +1208,7 @@ mod tests {
         project_attribution_method: Option<&str>,
     ) -> AiUsageEventRow {
         AiUsageEventRow {
+            collector_id: None,
             user_id: Uuid::nil(),
             date: 0,
             usage_event_id: id.to_string(),

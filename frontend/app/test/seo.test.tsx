@@ -238,6 +238,19 @@ describe('site URL resolution', () => {
     expect(scopedAbsoluteUrl('/pricing')).toBe('https://atoaxis.example.com/pricing');
   });
 
+  it('uses the Vercel preview host when no preferred public origin is supplied', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '');
+    vi.stubEnv('URL', '');
+    vi.stubEnv('DEPLOY_PRIME_URL', '');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', '');
+    vi.stubEnv('VERCEL_URL', 'preview.atoaxis.example.com');
+    const { SITE_URL: siteUrl, absoluteUrl: previewUrl } = await import('@/lib/seo/site');
+    expect(siteUrl).toBe('https://preview.atoaxis.example.com');
+    expect(previewUrl('/docs')).toBe('https://preview.atoaxis.example.com/docs');
+    vi.unstubAllEnvs();
+  });
+
   it('throws on a production build when no public origin is configured', async () => {
     vi.resetModules();
     delete process.env.NEXT_PUBLIC_APP_URL;

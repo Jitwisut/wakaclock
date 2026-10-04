@@ -453,6 +453,36 @@ impl AiAttributionState {
     /// a no-op; a local ID collision with different sanitised payload is retained
     /// in the conflict quarantine before the parser advances, so it cannot turn
     /// into an ambiguous retry or block unrelated sessions.
+    /// Attach installation metadata only to new records. Replays retain their original
+    /// serialized identity (including a legacy missing collector) across upgrades.
+    pub fn enqueue_pending_usage_with_collector(
+        &self,
+        records: &[AiUsageRecord],
+        collector: &str,
+    ) -> Result<usize, AppError> {
+        let mut scoped = records.to_vec();
+        for record in &mut scoped {
+            let existing: Option<Option<String>> = self.conn.query_row(
+                "SELECT record_json FROM pending_usage WHERE usage_event_id = ?1
+                 UNION ALL SELECT record_json FROM delivered_usage WHERE usage_event_id = ?1
+                 UNION ALL SELECT record_json FROM usage_dead_letters WHERE usage_event_id = ?1 LIMIT 1",
+                [&record.usage_event_id], |row| row.get(0)).optional()?;
+            record.collector_id = match existing {
+                Some(Some(json)) => serde_json::from_str::<AiUsageRecord>(&json)?.collector_id,
+                Some(None) => None,
+                None => Some(collector.to_string()),
+            };
+            if let Some(collector) = record.collector_id.as_deref() {
+                record.ai_session_id = crate::ai::usage::scoped_session_id(
+                    collector,
+                    &record.agent,
+                    &record.ai_session_id,
+                );
+            }
+        }
+        self.enqueue_pending_usage(&scoped)
+    }
+
     pub fn enqueue_pending_usage(&self, records: &[AiUsageRecord]) -> Result<usize, AppError> {
         let now = chrono::Utc::now().timestamp();
         // Validate and insert the complete batch under one SQLite transaction.
@@ -1092,6 +1122,7 @@ mod tests {
 
     fn sample_usage(id: &str) -> AiUsageRecord {
         AiUsageRecord {
+            collector_id: None,
             usage_event_id: id.to_string(),
             ai_session_id: "session-1".to_string(),
             occurred_at: chrono::Utc::now(),
@@ -1262,6 +1293,48 @@ mod tests {
             .filter_undelivered_usage(&ids[..1])
             .unwrap()
             .contains("usage-1"));
+    }
+
+    #[test]
+    fn collector_attachment_preserves_legacy_replay_and_new_retry_identity() {
+        let path = temp_db_path("collector-upgrade");
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let legacy = sample_usage("legacy");
+        state
+            .enqueue_pending_usage(std::slice::from_ref(&legacy))
+            .unwrap();
+        let fresh = sample_usage("fresh");
+        let collector = uuid::Uuid::new_v4().to_string();
+        state
+            .enqueue_pending_usage_with_collector(&[legacy.clone(), fresh.clone()], &collector)
+            .unwrap();
+        state
+            .enqueue_pending_usage_with_collector(
+                &[legacy, fresh],
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+        let pending = state.pending_usage_due(i64::MAX).unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(
+            pending
+                .iter()
+                .find(|r| r.record.usage_event_id == "legacy")
+                .unwrap()
+                .record
+                .collector_id,
+            None
+        );
+        assert_eq!(
+            pending
+                .iter()
+                .find(|r| r.record.usage_event_id == "fresh")
+                .unwrap()
+                .record
+                .collector_id
+                .as_deref(),
+            Some(collector.as_str())
+        );
     }
 
     #[test]

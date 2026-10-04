@@ -3,7 +3,7 @@
 import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { CalendarIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -66,7 +66,8 @@ export function DurationTimeline() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: wakaclockKeys.durations(userId, date, timezone ?? undefined),
-    queryFn: () => getDurations(userId, date, timezone ?? undefined),
+    // The query stays disabled until the browser timezone has been resolved.
+    queryFn: () => getDurations(userId, date, timezone as string),
     enabled: Boolean(userId && timezone),
   });
 
@@ -113,15 +114,16 @@ export function DurationTimeline() {
             <PopoverTrigger asChild>
               <Button className="gap-1.5" size="sm" variant="outline">
                 <CalendarIcon className="size-3.5" />
-                {format(new Date(date), 'MMM d, yyyy')}
+                {format(parseISO(date), 'MMM d, yyyy')}
                 <span className="text-muted-foreground">· {data?.timezone ?? timezone}</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
               <Calendar
                 mode="single"
-                onSelect={(d) => d && setDate(format(d, 'yyyy-MM-dd'))}
-                selected={new Date(date)}
+                onSelect={(d) => setDate(format(d, 'yyyy-MM-dd'))}
+                required
+                selected={parseISO(date)}
               />
             </PopoverContent>
           </Popover>
@@ -141,20 +143,26 @@ export function DurationTimeline() {
                   <div className="bg-primary/5 rounded-lg border px-3 py-2">
                     <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
                     <dd className="mt-1 text-lg font-semibold">
-                      {formatProjectDuration(data?.active_seconds ?? 0)}
+                      {data?.active_seconds == null
+                        ? 'Not available'
+                        : formatProjectDuration(data.active_seconds)}
                     </dd>
                   </div>
                 )}
                 <div className="bg-muted/30 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
                   <dd className="mt-1 text-lg font-semibold">
-                    {formatProjectDuration(data?.comparable_seconds ?? 0)}
+                    {data?.comparable_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.comparable_seconds)}
                   </dd>
                 </div>
                 <div className="bg-muted/30 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
                   <dd className="mt-1 text-lg font-semibold">
-                    {formatProjectDuration(data?.ai_additional_seconds ?? 0)}
+                    {data?.ai_additional_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.ai_additional_seconds)}
                   </dd>
                 </div>
               </dl>
@@ -182,7 +190,8 @@ export function DurationTimeline() {
                       const projectSessions = sessions.filter(
                         (block) => timelineProjectLabel(block.project) === project
                       );
-                      const projectTotal = projectTotals.get(project) ?? 0;
+                      // Both collections come from the same labeled sessions.
+                      const projectTotal = projectTotals.get(project) as number;
                       const projectColor = timelineProjectColor(project);
 
                       return (
@@ -225,19 +234,19 @@ export function DurationTimeline() {
                               return (
                                 <Tooltip
                                   key={sessionKey}
-                                  open={activeSession === sessionKey}
                                   onOpenChange={(open) =>
-                                    setActiveSession((current) =>
-                                      open ? sessionKey : current === sessionKey ? null : current
-                                    )
+                                    setActiveSession((current) => {
+                                      if (open) return sessionKey;
+                                      return current === sessionKey ? null : current;
+                                    })
                                   }
+                                  open={activeSession === sessionKey}
                                 >
                                   <TooltipTrigger asChild>
-                                    <div
+                                    <button
                                       aria-label={`${project}, ${formatEpochRange(block.start, block.end)}, ${formatProjectDuration(block.duration_seconds)}`}
                                       className={sessionStyles.sessionBar}
-                                      tabIndex={0}
-                                      role="img"
+                                      onClick={() => setActiveSession(sessionKey)}
                                       style={
                                         {
                                           '--session-color': projectColor,
@@ -246,13 +255,14 @@ export function DurationTimeline() {
                                           minWidth: '2px',
                                         } as React.CSSProperties
                                       }
+                                      type="button"
                                     />
                                   </TooltipTrigger>
                                   <SessionTimelineTooltip
-                                    session={block}
                                     color={projectColor}
                                     duration={formatProjectDuration(block.duration_seconds)}
                                     projectTotal={projectTotal}
+                                    session={block}
                                   />
                                 </Tooltip>
                               );

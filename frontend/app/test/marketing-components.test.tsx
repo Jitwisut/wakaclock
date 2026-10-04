@@ -3,6 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { FaqSection } from '@/components/marketing/faq-section';
 import { PricingSection } from '@/components/marketing/pricing-section';
+import { PageIllustration } from '@/components/marketing/page-illustration';
+import { CodeBlock, Section } from '@/components/marketing/prose';
+
+it('keeps explanatory content immediately visible without requiring a reveal animation or code label', () => {
+  render(
+    <Section heading="Setup instructions" reveal={false}>
+      <CodeBlock>npm run build</CodeBlock>
+    </Section>
+  );
+  expect(
+    screen.getByRole('heading', { name: 'Setup instructions' }).closest('section')
+  ).not.toHaveClass('mkt-reveal');
+  expect(screen.getByText('npm run build')).toBeVisible();
+  expect(document.querySelector('figcaption')).toBeNull();
+});
+
+it('does not invent artwork for a page without an illustration', () => {
+  const { container } = render(<PageIllustration path="/docs" locale="en" />);
+  expect(container).toBeEmptyDOMElement();
+});
 
 describe('localized marketing components', () => {
   it('renders the Thai monthly/annual pricing toggle and localized CTA', () => {
@@ -26,6 +46,13 @@ describe('localized marketing components', () => {
     );
     expect(screen.getByText('$12')).toBeInTheDocument();
     expect(screen.getByText('/เดือน')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /รายปี.*ประหยัด 31%/ }));
+    expect(screen.getByText('$99')).toBeInTheDocument();
+    expect(screen.getByText('/ปี')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'รายเดือน' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
   });
 
   it('keeps duplicate FAQ questions renderable without duplicate React keys', () => {

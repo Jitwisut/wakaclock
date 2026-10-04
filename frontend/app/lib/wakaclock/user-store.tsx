@@ -60,18 +60,11 @@ interface StoredShape {
 
 type Action = { token: string; type: 'set'; userId: string; username: string } | { type: 'clear' };
 
-function reducer(state: StoredShape, action: Action): StoredShape {
-  switch (action.type) {
-    case 'set': {
-      return { userId: action.userId, username: action.username, token: action.token };
-    }
-    case 'clear': {
-      return { userId: null, username: null, token: null };
-    }
-    default: {
-      return state;
-    }
+function reducer(_state: StoredShape, action: Action): StoredShape {
+  if (action.type === 'set') {
+    return { userId: action.userId, username: action.username, token: action.token };
   }
+  return { userId: null, username: null, token: null };
 }
 
 const WakaclockUserContext = React.createContext<null | WakaclockUserState>(null);
@@ -82,9 +75,8 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     username: null,
     token: null,
   });
-  const hydrated = React.useRef(false);
   /*
-   * Exposed as state, not just the ref above, because consumers have to be able to tell
+   * Exposed as state because consumers have to be able to tell
    * "no session" apart from "the session has not been read out of localStorage yet". They
    * look identical on the first render, and a gate that cannot tell them apart bounces a
    * logged-in visitor to the login page every time they open the app.
@@ -108,16 +100,22 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     } catch {
       // ignore malformed localStorage state
     } finally {
-      hydrated.current = true;
       setIsHydrated(true);
     }
   }, []);
 
   React.useEffect(() => {
     setCurrentToken(state.token);
-    if (!hydrated.current) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+    // The initial render still contains anonymous state. Wait for the hydration
+    // render before persisting, or it briefly overwrites a valid stored session.
+    if (!isHydrated) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // Storage may be unavailable in restricted browser contexts. The in-memory
+      // session and authorization token still follow login/logout immediately.
+    }
+  }, [isHydrated, state]);
 
   // Let the axios interceptor end the session when the server rejects our token.
   React.useEffect(() => {

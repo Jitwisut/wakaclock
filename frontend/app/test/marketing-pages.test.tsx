@@ -1,7 +1,10 @@
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 
-import { LocalizedMarketingPage } from '@/components/marketing/localized-page';
+import {
+  LocalizedMarketingPage,
+  marketingPageMetadata,
+} from '@/components/marketing/localized-page';
 import { MARKETING_PAGE_KEYS, PAGE_COPY } from '@/components/marketing/marketing-copy';
 import { GET } from '@/app/llms-full.txt/route';
 import sitemap from '@/app/sitemap';
@@ -13,6 +16,14 @@ for (const locale of ['en', 'th'] as const) {
   for (const path of MARKETING_PAGE_KEYS) {
     it(`${locale}${path}: exposes one title, working chapter links and matching page identity`, () => {
       const copy = PAGE_COPY[path][locale];
+      const metadata = marketingPageMetadata(path, locale);
+      expect(metadata.description).toBe(copy.description);
+      expect(metadata.alternates?.canonical).toBe(localizedPath(locale, path));
+      expect(metadata.title).toEqual(
+        copy.metadataTitle.includes('AtoAxis')
+          ? { absolute: copy.metadataTitle }
+          : copy.metadataTitle
+      );
       const { container } = render(<LocalizedMarketingPage locale={locale} path={path} />);
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(copy.title);
@@ -55,6 +66,21 @@ it('exports visible Thai answers and their canonical URL in the AI text resource
   expect(text).toContain(absoluteUrl('/th/pricing'));
   expect(text).toContain(PAGE_COPY['/docs'].en.lead);
 });
+
+it.each(['en', 'th'] as const)(
+  'keeps %s pricing chapter copy identical in the page and text export',
+  async (locale) => {
+    const chapter = PAGE_COPY['/pricing'][locale].sections[1];
+    render(<LocalizedMarketingPage locale={locale} path="/pricing" />);
+    const text = await GET().text();
+    for (const block of chapter.blocks) {
+      if (block.kind === 'paragraph') {
+        expect(screen.getByText(block.text)).toBeVisible();
+        expect(text).toContain(block.text);
+      }
+    }
+  }
+);
 
 it('pairs every sitemap entry with published English and Thai counterparts', () => {
   const entries = sitemap();

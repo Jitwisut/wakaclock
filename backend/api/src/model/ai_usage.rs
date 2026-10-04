@@ -19,6 +19,7 @@ pub struct AiUsageEventRow {
     /// for legacy rows created before identity-conflict detection was deployed.
     pub event_payload_hash: Option<String>,
     pub ai_session_id: String,
+    pub collector_id: Option<String>,
     pub event_time: u32,
     #[serde(with = "clickhouse::serde::uuid::option")]
     pub project_id: Option<Uuid>,

@@ -111,3 +111,21 @@ describe('EvidenceSplitPanel', () => {
     expect(screen.getAllByText('0%').length).toBeGreaterThan(0);
   });
 });
+
+it('shows comparable and additional time only when both measurements are available', () => {
+  const view = render(
+    <EvidenceSplitPanel evidence={{ ...AGENT_HEAVY_DAY, comparable_seconds: 600 }} />
+  );
+  expect(screen.queryByText('WakaTime-comparable activity')).not.toBeInTheDocument();
+  view.rerender(
+    <EvidenceSplitPanel
+      evidence={{ ...AGENT_HEAVY_DAY, comparable_seconds: 600, ai_additional_seconds: 0 }}
+    />
+  );
+  expect(screen.getByText('WakaTime-comparable activity').nextElementSibling).toHaveTextContent(
+    '10 min'
+  );
+  expect(screen.getByText('Additional measured AI time').nextElementSibling).toHaveTextContent(
+    '0 min'
+  );
+});

@@ -116,6 +116,9 @@ pub struct Config {
     /// Opt-in rollout gate for historical measurement preview/apply/rollback.
     #[serde(default)]
     pub measurement_repair_enabled: bool,
+    /// Personal experimental receipts; independent of capture and analytics ingestion.
+    #[serde(default)]
+    pub work_sessions_enabled: bool,
     /// How long a pause between two *proven* activity intervals may last before the
     /// clock stops. This is WakaTime's per-user timeout, and it exists because a
     /// segment can only ever be as long as the strict 120-second evidence window:
@@ -238,6 +241,10 @@ impl Config {
             presence_v2_enabled: std::env::var("PRESENCE_V2_ENABLED")
                 .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            work_sessions_enabled: parse_opt_in_feature_flag(
+                std::env::var("ATOAXIS_WORK_SESSIONS_ENABLED").ok(),
+                "ATOAXIS_WORK_SESSIONS_ENABLED",
+            )?,
             jwt_secret,
             cors_origins,
             trusted_proxy_ips: std::env::var("TRUSTED_PROXY_IPS")

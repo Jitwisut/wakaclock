@@ -241,9 +241,8 @@ export function ApiKeyPanel() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  async function copyKey() {
-    if (!shownKey) return;
-    await navigator.clipboard.writeText(shownKey);
+  async function copyKey(key: string) {
+    await navigator.clipboard.writeText(key);
     setCopied(true);
     toast.success('Copied to clipboard');
   }
@@ -367,7 +366,7 @@ export function ApiKeyPanel() {
               <Button
                 aria-label="Copy API key"
                 className="shrink-0 rounded-lg"
-                onClick={copyKey}
+                onClick={() => void copyKey(shownKey)}
                 size="icon"
                 variant="secondary"
               >
