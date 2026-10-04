@@ -108,3 +108,34 @@ it('reports a current-room failure, but ignores moves without a room or snapshot
   expect(onError).toHaveBeenCalledTimes(1);
   view.unmount();
 });
+
+it('does not report an old room movement failure in the newly selected room', async () => {
+  const snapshot = { zones: [] } as unknown as PresenceV2Snapshot;
+  let reject!: (error: Error) => void;
+  vi.mocked(updatePresenceMemberV2).mockReturnValueOnce(
+    new Promise((_resolve, fail) => {
+      reject = fail;
+    })
+  );
+  const onError = vi.fn();
+  const view = renderHook(
+    ({ roomId }) => useRoomMovement({ roomId, snapshot, onSnapshot: vi.fn(), onError }),
+    {
+      initialProps: { roomId: 'old' },
+    }
+  );
+  act(() => view.result.current.move({ x: 20, y: 20 }));
+  view.rerender({ roomId: 'new' });
+  await act(async () => reject(new Error('late failure')));
+  expect(onError).not.toHaveBeenCalled();
+});
+
+it('handles a failed move when the caller does not request error notifications', async () => {
+  const snapshot = { zones: [] } as unknown as PresenceV2Snapshot;
+  vi.mocked(updatePresenceMemberV2).mockRejectedValueOnce(new Error('offline'));
+  const onSnapshot = vi.fn();
+  const { result } = renderHook(() => useRoomMovement({ roomId: 'room', snapshot, onSnapshot }));
+  await act(async () => result.current.move({ x: 20, y: 20 }));
+  expect(updatePresenceMemberV2).toHaveBeenCalledOnce();
+  expect(onSnapshot).not.toHaveBeenCalled();
+});

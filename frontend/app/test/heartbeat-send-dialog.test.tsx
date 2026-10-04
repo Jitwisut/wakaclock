@@ -108,3 +108,42 @@ it('disables entry when owner or timezone is unavailable', () => {
   setup(null);
   expect(screen.getByRole('button', { name: 'Send test heartbeat' })).toBeDisabled();
 });
+
+it('prevents bulk submission after signing out with the dialog still open', async () => {
+  const view = setup();
+  fireEvent.click(screen.getByRole('button', { name: 'Send test heartbeat' }));
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Bulk JSON' }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Heartbeat batch JSON' }), {
+    target: { value: '[{"user_id":"owner","entity":"fixture.rs","entity_type":"file","time":1}]' },
+  });
+  state.user = null;
+  view.rerender(view.view());
+  expect(screen.getByRole('button', { name: 'Send batch' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Send batch' }));
+  expect(sendHeartbeatsBulk).not.toHaveBeenCalled();
+});
+
+it('disables bulk submission while a batch is pending', async () => {
+  let resolve!: (value: Awaited<ReturnType<typeof sendHeartbeatsBulk>>) => void;
+  vi.mocked(sendHeartbeatsBulk).mockReturnValue(
+    new Promise((done) => {
+      resolve = done;
+    })
+  );
+  setup();
+  fireEvent.click(screen.getByRole('button', { name: 'Send test heartbeat' }));
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Bulk JSON' }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Heartbeat batch JSON' }), {
+    target: { value: '[{"user_id":"owner","entity":"fixture.rs","entity_type":"file","time":1}]' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Send batch' }));
+  expect(await screen.findByRole('button', { name: 'Sending…' })).toBeDisabled();
+  await act(async () => resolve({ status: 'ok', heartbeats_inserted: 1 }));
+  expect(toast.success).toHaveBeenCalledWith('Bulk insert: 1 heartbeats');
+});

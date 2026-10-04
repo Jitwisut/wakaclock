@@ -3,7 +3,36 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { FeatureGallery } from '@/components/marketing/feature-gallery';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it('disables both controls when all cards fit even without browser observers', () => {
+  const resizeObserver = window.ResizeObserver;
+  const intersectionObserver = window.IntersectionObserver;
+  Object.assign(window, { ResizeObserver: undefined, IntersectionObserver: undefined });
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(320);
+  try {
+    const view = render(
+      <FeatureGallery locale="en">
+        <article>Only feature</article>
+      </FeatureGallery>
+    );
+    expect(screen.getByRole('button', { name: 'Previous features' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next features' })).toBeDisabled();
+    expect(
+      screen.getByRole('region').parentElement?.style.getPropertyValue('--gallery-progress')
+    ).toBe('1');
+    view.unmount();
+  } finally {
+    Object.assign(window, {
+      ResizeObserver: resizeObserver,
+      IntersectionObserver: intersectionObserver,
+    });
+  }
+});
 
 it('moves one card at a time, respects reduced motion, and disables controls at the edges', () => {
   let paint: FrameRequestCallback = () => {};

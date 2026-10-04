@@ -101,20 +101,23 @@ describe('ApiKeyPanel inside the Settings tabs', () => {
 });
 
 describe('ApiKeyPanel when the response has no key', () => {
-  it('reports an error instead of a silent success', async () => {
-    // Generating replaces the old key server-side, so a "success" with nothing shown
-    // would leave the account with a key nobody holds.
-    generateApiKey.mockResolvedValue({ data: { user_id: 'user-1' } });
-    const { toast } = await import('sonner');
-    const user = userEvent.setup();
-    renderPanel();
+  it.each([undefined, {}, { data: { user_id: 'user-1' } }])(
+    'reports an error instead of a silent success for %j',
+    async (response) => {
+      // Generating replaces the old key server-side, so a "success" with nothing shown
+      // would leave the account with a key nobody holds.
+      generateApiKey.mockResolvedValue(response);
+      const { toast } = await import('sonner');
+      const user = userEvent.setup();
+      renderPanel();
 
-    await user.click(screen.getByRole('button', { name: /generate key/i }));
-    await user.click(screen.getByRole('button', { name: /^generate$/i }));
+      await user.click(screen.getByRole('button', { name: /generate key/i }));
+      await user.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-    expect(toast.success).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(toast.success).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('ApiKeyPanel on load', () => {

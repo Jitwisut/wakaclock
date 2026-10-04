@@ -13,14 +13,17 @@ import {
 } from '@/components/wakaclock/insights/insights-workspace';
 import { getInsights, getStats } from '@/lib/wakaclock/endpoints';
 
+const session = vi.hoisted(() => ({
+  userId: 'test-user' as null | string,
+  timezone: 'Asia/Bangkok' as undefined | string,
+}));
 vi.mock('@/lib/wakaclock/endpoints', () => ({
   getInsights: vi.fn(),
   getStats: vi.fn(),
-  getBrowserTimezone: () => 'Asia/Bangkok',
+  getBrowserTimezone: () => session.timezone,
 }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (select: (state: { userId: string }) => unknown) =>
-    select({ userId: 'test-user' }),
+  useWakaclockUserStore: (select: (state: { userId: null | string }) => unknown) => select(session),
 }));
 function report(data = insightsFixture) {
   return render(
@@ -40,10 +43,54 @@ function workspace() {
   );
 }
 beforeEach(() => {
+  session.userId = 'test-user';
+  session.timezone = 'Asia/Bangkok';
   vi.mocked(getInsights)
     .mockReset()
     .mockImplementation(async (_user, type, range) => ({ ...insightsFixture, type, range }));
   vi.mocked(getStats).mockReset().mockResolvedValue(insightsStatsFixture);
+});
+
+it('does not fetch private insights after signing out', () => {
+  session.userId = null;
+  workspace();
+  expect(screen.getByRole('heading', { name: 'Insights' })).toBeVisible();
+  expect(getInsights).not.toHaveBeenCalled();
+  expect(getStats).not.toHaveBeenCalled();
+});
+
+it('loads insights with UTC fallback when browser timezone is unavailable', async () => {
+  session.timezone = undefined;
+  workspace();
+  await screen.findByRole('table');
+  expect(getInsights).toHaveBeenCalledWith('test-user', 'languages', 'last_7_days');
+});
+
+it('keeps daily statistics pending and missing AI measurements unavailable', () => {
+  render(
+    <DashboardPanelsProvider>
+      <InsightsReport
+        data={{ ...insightsFixture, ai_additional_seconds: undefined }}
+        statsPending
+      />
+    </DashboardPanelsProvider>
+  );
+  expect(screen.getAllByText('…').length).toBeGreaterThan(0);
+  expect(screen.getByText('Additional measured AI').nextElementSibling).toHaveTextContent(
+    'Unavailable'
+  );
+});
+
+it('clears the report when a refreshed range contains no entries', () => {
+  const view = report();
+  expect(screen.getByRole('table')).toBeVisible();
+  view.rerender(
+    <DashboardPanelsProvider>
+      <InsightsReport data={{ ...insightsFixture, data: [] }} />
+    </DashboardPanelsProvider>
+  );
+  expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
 });
 describe('Insights', () => {
   it('selects any entry and calculates its share and average from real data', async () => {

@@ -225,6 +225,24 @@ it('discards late credentials and connections after leaving the pod', async () =
   expect(mock.disconnect.mock.calls.length).toBe(calls + 1);
 });
 
+it('ignores connection errors from a pod that has already been left', async () => {
+  let reject!: (reason: Error) => void;
+  mock.connect.mockReturnValueOnce(
+    new Promise((_resolve, fail) => {
+      reject = fail;
+    })
+  );
+  const { result, rerender } = renderHook(({ zone }) => useOfficeMedia('room', zone, true), {
+    initialProps: { zone: 'pod' as null | string },
+  });
+  await waitFor(() => expect(mock.connect).toHaveBeenCalledOnce());
+  rerender({ zone: null });
+  await act(async () => reject(new Error('Old connection failed')));
+  expect(result.current.status).toBe('Join a pod to talk');
+  expect(result.current.error).toBeNull();
+  expect(result.current.ready).toBe(false);
+});
+
 it.each([false, true])(
   'ignores a late device completion after leaving (reject=%s)',
   async (reject) => {

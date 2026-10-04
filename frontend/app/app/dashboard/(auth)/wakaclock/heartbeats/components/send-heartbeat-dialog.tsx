@@ -222,7 +222,10 @@ export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone
               value={bulkJson}
             />
             <DialogFooter>
-              <Button disabled={bulkMutation.isPending} onClick={handleBulkSubmit}>
+              <Button
+                disabled={bulkMutation.isPending || !userId || !timezone}
+                onClick={handleBulkSubmit}
+              >
                 {bulkMutation.isPending ? 'Sending…' : 'Send batch'}
               </Button>
             </DialogFooter>

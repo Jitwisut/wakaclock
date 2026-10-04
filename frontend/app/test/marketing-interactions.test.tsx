@@ -7,7 +7,7 @@ import { MarketingNav } from '@/components/marketing/marketing-nav';
 import { isNavLinkActive } from '@/components/marketing/nav-links.data';
 import { QuickStartSection } from '@/components/marketing/quick-start-section';
 
-const pathname = vi.hoisted(() => ({ value: '/' }));
+const pathname = vi.hoisted(() => ({ value: '/' as string | null }));
 const linkStatus = vi.hoisted(() => ({ pending: false }));
 
 vi.mock('next/navigation', () => ({
@@ -41,6 +41,13 @@ describe('isNavLinkActive', () => {
 });
 
 describe('MarketingNav', () => {
+  it('keeps navigation and the language switch usable before the pathname is ready', () => {
+    pathname.value = null;
+    render(<MarketingNav locale="en" />);
+    expect(screen.getByRole('link', { name: 'อ่านภาษาไทย' })).toHaveAttribute('href', '/th');
+    expect(screen.getByRole('link', { name: 'Pricing' })).toHaveAttribute('href', '/pricing');
+  });
+
   it('marks the current page with aria-current in both the bar and the mobile menu', () => {
     pathname.value = '/pricing';
     render(<MarketingNav locale="en" />);

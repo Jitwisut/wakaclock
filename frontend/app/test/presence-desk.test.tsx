@@ -167,3 +167,38 @@ it('recovers invalid server coordinates and ignores keyboard movement without a 
   fireEvent.keyDown(button, { key: 'ArrowRight' });
   expect(button).toHaveStyle({ left: '46%', top: '46%' });
 });
+
+it('recovers to finite floor coordinates when pointer delta overflows', () => {
+  class Pointer extends MouseEvent {
+    pointerId = 1;
+  }
+  vi.stubGlobal('PointerEvent', Pointer);
+  try {
+    const containerRef = createRef<HTMLDivElement>();
+    const onMove = vi.fn();
+    const user: PresenceUser = {
+      id: 'self',
+      username: 'Me',
+      isCurrentUser: true,
+      status: 'idle',
+      x: 20,
+      y: 20,
+    };
+    render(
+      <div ref={containerRef}>
+        <PresencePlayer user={user} containerRef={containerRef} onMove={onMove} reducedMotion />
+      </div>
+    );
+    vi.spyOn(containerRef.current!, 'getBoundingClientRect').mockReturnValue({
+      width: Number.MIN_VALUE,
+      height: 500,
+    } as DOMRect);
+    const button = screen.getByRole('button');
+    fireEvent.pointerDown(button, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 0 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith({ x: 50, y: 20 });
+    expect(button).toHaveStyle({ left: '50%', top: '20%' });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

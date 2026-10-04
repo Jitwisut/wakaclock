@@ -2794,29 +2794,6 @@ const genericBlocks = (
       ),
     ];
   }
-  if (path === '/pricing' && index === 1) {
-    return [
-      p(
-        en
-          ? `Billing is not active during Early Access. The public target is $${PRICING.monthlyUsd} when paying month to month or $${PRICING.annualUsd} for a year, a planned difference of $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} compared with twelve monthly payments. Final checkout terms will be shown before anyone is charged.`
-          : `ช่วง Early Access ยังไม่มีการเรียกเก็บเงิน ราคาเป้าหมายที่ประกาศไว้คือ $${PRICING.monthlyUsd} เมื่อจ่ายรายเดือน หรือ $${PRICING.annualUsd} สำหรับหนึ่งปี ซึ่งต่างจากการจ่ายรายเดือนครบสิบสองครั้ง $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} เงื่อนไขสุดท้ายจะแสดงใน checkout ให้ตรวจสอบก่อนมีการเรียกเก็บเงิน`
-      ),
-      sub(en ? 'What joining Early Access means' : 'การเข้าร่วม Early Access หมายถึงอะไร'),
-      bullets(
-        en
-          ? [
-              'No payment details are collected on the marketing site today',
-              'Joining the list does not start a trial or subscription',
-              'Availability and final terms will be communicated before checkout opens',
-            ]
-          : [
-              'เว็บไซต์การตลาดยังไม่เก็บข้อมูลการชำระเงิน',
-              'การเข้าร่วมรายการไม่เริ่ม trial หรือ subscription',
-              'ระบบจะแจ้งวันเปิดใช้งานและเงื่อนไขสุดท้ายก่อนเปิด checkout',
-            ]
-      ),
-    ];
-  }
   if (path === '/early-access') return [];
   return [
     p(

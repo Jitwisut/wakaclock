@@ -69,3 +69,26 @@ it('uses UTF-8 bytes to split below the budget and rejects a single oversize hea
     )
   ).toThrow('A single heartbeat exceeds');
 });
+
+it('includes large plugin metadata and escaped multibyte fields in every chunk budget', () => {
+  const user = { last_plugin: 'ก'.repeat(100_000), last_plugin_name: 'VS Code' };
+  const heartbeat = { entity: '"\\\nก'.repeat(25_000), time: 1 };
+  const heartbeats = Array.from({ length: 5 }, () => heartbeat);
+  const chunks = splitWakaTimeExport(JSON.stringify({ user, days: [{ heartbeats }] }));
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.every((chunk) => new TextEncoder().encode(chunk).length <= 800_000)).toBe(true);
+  expect(
+    chunks.flatMap((chunk) => {
+      const parsed = JSON.parse(chunk) as { days: { heartbeats: unknown[] }[] };
+      return parsed.days[0].heartbeats;
+    })
+  ).toEqual(heartbeats);
+  expect(() =>
+    splitWakaTimeExport(
+      JSON.stringify({
+        user: { last_plugin: 'ก'.repeat(300_000) },
+        days: [{ heartbeats: [{ time: 1 }] }],
+      })
+    )
+  ).toThrow('A single heartbeat exceeds');
+});

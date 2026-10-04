@@ -24,6 +24,33 @@ function agent(actor_type: ActorType, overrides: Partial<AiAgentItem> = {}): AiA
 }
 
 describe('AiAgentsTable', () => {
+  it('explains an empty range without rendering a fictitious identity', () => {
+    render(<AiAgentsTable agents={[]} />);
+    expect(screen.getByRole('status')).toHaveTextContent('No AI activity was detected');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('shows unresolved partial identities and keeps human and unknown groups separate', () => {
+    render(
+      <AiAgentsTable
+        agents={[
+          agent('ai_verified', { provider: null, model: 'model-only', identity_status: 'partial' }),
+          agent('ai_verified', {
+            provider: 'provider-only',
+            model: null,
+            identity_status: 'partial',
+          }),
+          agent('human'),
+          agent('unknown'),
+        ]}
+      />
+    );
+    expect(screen.getByText(/AI identity needs review \(2 groups\)/)).toBeVisible();
+    expect(screen.getByText(/provider not reported \/ model-only/)).toBeVisible();
+    expect(screen.getByText(/provider-only \/ model not reported/)).toBeVisible();
+    expect(screen.getByText(/Human \/ unknown authorship \(2 groups\)/)).toBeVisible();
+  });
+
   it('distinguishes a measured zero from missing and partial line counts', () => {
     render(
       <AiAgentsTable

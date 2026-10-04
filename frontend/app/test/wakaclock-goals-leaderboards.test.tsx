@@ -25,6 +25,7 @@ import type { Goal, Leaderboard } from '@/lib/wakaclock/types';
  */
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const session = vi.hoisted(() => ({ userId: 'user-1' as null | string }));
 
 const v2 = vi.hoisted(() => ({
   getCapabilities: vi.fn(),
@@ -57,8 +58,8 @@ vi.mock('@/components/wakaclock/require-user', () => ({
 }));
 
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (selector: (state: { userId: string }) => unknown) =>
-    selector({ userId: 'user-1' }),
+  useWakaclockUserStore: (selector: (state: { userId: null | string }) => unknown) =>
+    selector(session),
 }));
 
 const goal: Goal = {
@@ -99,6 +100,7 @@ function renderPage(page: React.ReactElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  session.userId = 'user-1';
   v2.getCapabilities.mockResolvedValue({
     features: [
       {
@@ -110,6 +112,37 @@ beforeEach(() => {
     ],
     postgres_enabled: true,
   });
+});
+
+it.each([
+  ['goals', <GoalsPage />],
+  ['leaderboards', <LeaderboardsPage />],
+])('does not query private %s without an authenticated owner', async (_name, page) => {
+  session.userId = null;
+  renderPage(page as React.ReactElement);
+  await act(async () => {});
+  expect(v2.listGoals).not.toHaveBeenCalled();
+  expect(v2.getGoalProgress).not.toHaveBeenCalled();
+  expect(v2.listLeaderboards).not.toHaveBeenCalled();
+  expect(v2.listLeaderboardMembers).not.toHaveBeenCalled();
+  expect(getProjects).not.toHaveBeenCalled();
+});
+
+it('uses UTC for new goals when the browser cannot resolve a timezone', async () => {
+  const options = Intl.DateTimeFormat().resolvedOptions();
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    ...options,
+    timeZone: '',
+  });
+  v2.listGoals.mockResolvedValue([]);
+  vi.mocked(createGoal).mockResolvedValue(goal);
+  renderPage(<GoalsPage />);
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'UTC goal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create goal' }));
+  await waitFor(() =>
+    expect(createGoal).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }))
+  );
+  expect(await screen.findByText('No goals yet. Create one above.')).toBeVisible();
 });
 
 describe('Goals page', () => {

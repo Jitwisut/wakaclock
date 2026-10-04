@@ -74,6 +74,56 @@ it('discards an old room history response after switching rooms', async () => {
 });
 
 afterEach(() => vi.useRealTimers());
+it.each(['resolve', 'reject'])(
+  'ignores a poll that completes after leaving the room: %s',
+  async (completion) => {
+    let resolve!: (value: Awaited<ReturnType<typeof officeMessages>>) => void;
+    let reject!: (reason: Error) => void;
+    vi.mocked(officeMessages).mockReturnValueOnce(
+      new Promise((done, fail) => {
+        resolve = done;
+        reject = fail;
+      })
+    );
+    const view = render(<OfficeChat roomId="room-a" />);
+    view.rerender(<OfficeChat roomId="room-b" />);
+    await waitFor(() => expect(officeMessages).toHaveBeenCalledWith('room-b'));
+    await act(async () => {
+      if (completion === 'resolve') resolve({ items: [message], next_cursor: 'old-cursor' });
+      else reject(new Error('Old room failure'));
+    });
+    expect(screen.queryByText('Hello office')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load older messages' })).not.toBeInTheDocument();
+  }
+);
+
+it('preserves the older-history cursor across live polls and ignores repeated submits while sending', async () => {
+  vi.useFakeTimers();
+  vi.mocked(officeMessages)
+    .mockResolvedValueOnce({ items: [message], next_cursor: 'initial-cursor' })
+    .mockResolvedValue({ items: [message], next_cursor: null });
+  let resolve!: (value: Awaited<ReturnType<typeof officeCommand>>) => void;
+  vi.mocked(officeCommand).mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    })
+  );
+  render(<OfficeChat roomId="room-a" />);
+  await act(async () => {});
+  await act(async () => vi.advanceTimersByTimeAsync(2000));
+  expect(screen.getByRole('button', { name: 'Load older messages' })).toBeEnabled();
+  const input = screen.getByLabelText('Message');
+  fireEvent.change(input, { target: { value: 'Hello again' } });
+  fireEvent.submit(input.closest('form')!);
+  fireEvent.submit(input.closest('form')!);
+  expect(officeCommand).toHaveBeenCalledOnce();
+  await act(async () => resolve({ ok: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+  await act(async () => {});
+  expect(officeMessages).toHaveBeenLastCalledWith('room-a', 'initial-cursor');
+});
+
 it('skips hidden-tab polling, retries visible errors and cancels its timer on unmount', async () => {
   vi.useFakeTimers();
   const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
