@@ -215,7 +215,17 @@ def main() -> int:
             process.stdin.write(lsp_message({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None}))
             process.stdin.write(lsp_message({"jsonrpc": "2.0", "method": "exit", "params": None}))
             process.stdin.flush()
-            print("wakaclock-ls process smoke passed")
+            # Delivery-status reports are metadata-only: none of them may carry the file
+            # path, not just the first one checked above.
+            reports = [delivery]
+            while True:
+                try:
+                    reports.append(DELIVERY_STATUS.get_nowait())
+                except queue.Empty:
+                    break
+            for report in reports:
+                assert str(source) not in json.dumps(report["payload"]), report
+            print(f"wakaclock-ls process smoke passed ({len(reports)} delivery-status reports)")
             return 0
         finally:
             process.terminate()
