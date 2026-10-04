@@ -336,7 +336,11 @@ impl ReprocessService {
                     ai_lines_added, ai_lines_deleted,
                     human_lines_added, human_lines_deleted,
                     unattributed_lines_added, unattributed_lines_deleted,
-                    created_at, actor_type, actor_confidence, revision, session_id
+                    created_at, actor_type, actor_confidence,
+                    clipboard_tracking_version, copy_actions, paste_actions,
+                    copied_chars, copied_lines, pasted_chars, pasted_lines,
+                    paste_same_file_actions, paste_same_workspace_actions,
+                    paste_external_or_unknown_actions, revision, session_id
                 FROM wakaclock.heartbeats_canonical AS h
                 WHERE h.user_id = ? AND toDate(h.date) BETWEEN toDate(?) AND toDate(?)
                 ORDER BY h.time ASC

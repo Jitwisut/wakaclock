@@ -7,6 +7,7 @@
 use anyhow::Result;
 use clickhouse::Row;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -291,8 +292,40 @@ impl ProjectAnalyticsRepository {
         query
             .fetch_all::<ProjectFileRow>()
             .await
+            .map(merge_project_file_rows)
             .map_err(|error| anyhow::anyhow!("Project files query failed: {error}"))
     }
+}
+
+// A file can arrive with a known language and Unknown from different collectors.
+// Collapse those disjoint aggregates before the service assigns canonical entity
+// duration and paginates by entity_key, otherwise both time and cursors duplicate.
+fn merge_project_file_rows(rows: Vec<ProjectFileRow>) -> Vec<ProjectFileRow> {
+    let mut files: HashMap<String, ProjectFileRow> = HashMap::new();
+    for row in rows {
+        if let Some(file) = files.get_mut(&row.entity_key) {
+            file.total_seconds += row.total_seconds;
+            file.ai_changes += row.ai_changes;
+            file.ai_verified_changes += row.ai_verified_changes;
+            file.ai_inferred_changes += row.ai_inferred_changes;
+            file.human_changes += row.human_changes;
+            file.unattributed_changes += row.unattributed_changes;
+            file.unattributed_unknown += row.unattributed_unknown;
+            if file.language.is_empty() || file.language.eq_ignore_ascii_case("unknown") {
+                file.language = row.language;
+            }
+        } else {
+            files.insert(row.entity_key.clone(), row);
+        }
+    }
+    let mut files: Vec<_> = files.into_values().collect();
+    files.sort_by(|a, b| {
+        b.total_seconds
+            .total_cmp(&a.total_seconds)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.entity_key.cmp(&b.entity_key))
+    });
+    files
 }
 
 fn scoped_sql(base: &str, suffix: &str, branch: Option<&str>) -> (String, bool) {
@@ -409,7 +442,45 @@ mod tests {
     use crate::repository::heartbeat::HeartbeatRepository;
     use crate::repository::project_identity::ProjectIdentityRepository;
 
-    use super::ProjectAnalyticsRepository;
+    use super::{merge_project_file_rows, ProjectAnalyticsRepository, ProjectFileRow};
+
+    #[test]
+    fn file_language_rows_merge_before_canonical_duration_and_pagination() {
+        let row = ProjectFileRow {
+            entity_key: "file-a".into(),
+            path: "main.rs".into(),
+            language: "Unknown".into(),
+            total_seconds: 60.0,
+            ai_verified_changes: 3,
+            ai_inferred_changes: 2,
+            ai_changes: 5,
+            human_changes: 4,
+            unattributed_changes: 1,
+            unattributed_unknown: 1,
+        };
+        let known = ProjectFileRow {
+            language: "Rust".into(),
+            total_seconds: 40.0,
+            ..row.clone()
+        };
+        // The same sanitized name in another directory must remain a separate file.
+        let other = ProjectFileRow {
+            entity_key: "file-b".into(),
+            ..row.clone()
+        };
+        let files = merge_project_file_rows(vec![row, known, other]);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].entity_key, "file-a");
+        assert_eq!(files[0].language, "Rust");
+        assert_eq!(files[0].total_seconds, 100.0);
+        assert_eq!(files[0].ai_changes, 10);
+        assert_eq!(files[0].ai_verified_changes, 6);
+        assert_eq!(files[0].ai_inferred_changes, 4);
+        assert_eq!(files[0].human_changes, 8);
+        assert_eq!(files[0].unattributed_changes, 2);
+        assert_eq!(files[0].unattributed_unknown, 2);
+        assert_eq!(files[1].entity_key, "file-b");
+    }
 
     #[tokio::test]
     #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
@@ -534,6 +605,10 @@ mod tests {
             paste_same_workspace_actions: None,
             paste_external_or_unknown_actions: None,
             revision: 0,
+            line_metric_version: None,
+            line_measurement_status: None,
+            line_measurement_reason: None,
+            measurement_window_id: None,
         };
         let mut unknown_row = human_row.clone();
         unknown_row.time = (event_base + 240) as f64;
@@ -555,6 +630,7 @@ mod tests {
         usage_repo
             .insert_usage_events(&[
                 AiUsageEventRow {
+                    collector_id: None,
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "project-regression-priced".to_string(),
@@ -579,6 +655,7 @@ mod tests {
                     received_at: event_base + 60,
                 },
                 AiUsageEventRow {
+                    collector_id: None,
                     user_id,
                     date: unix_day as u16,
                     usage_event_id: "project-regression-unpriced".to_string(),

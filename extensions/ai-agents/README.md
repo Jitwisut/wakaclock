@@ -9,14 +9,14 @@ Gemini CLI plugins use. The VS Code extension also has a workspace-scoped filesy
 receiver for external writes, but native hooks remain the only source that can prove
 an AI model's identity while the editor is closed.
 
-All adapters send the same metadata-only event to the local Broker through the existing
-`wakaclock` binary:
+All adapters send the same metadata-only event to the local SQLite inbox through the
+existing `wakaclock` binary:
 
 ```
 cat event.json | wakaclock ai emit --json
 ```
 
-The Broker resolves the canonical `actor_type` and `actor_confidence`, then derives the
+The on-demand processor resolves the canonical `actor_type` and `actor_confidence`, then derives the
 deprecated `is_ai_generated` compatibility field from that enum at heartbeat creation
 (see `backend/api/crates/wakaclock-cli`). The hooks read `WAKACLOCK_CLI_PATH` first and then
 `~/.wakaclock/cli-path` (written by the VS Code setup wizard), so the binary does not
@@ -27,12 +27,15 @@ working — see the repo root README's Quick Start if that isn't set up yet.
 The VS Code extension bundles these files, detects the corresponding CLIs and offers
 `AtoAxis: Set Up AI Tracking`. The setup writes only its own managed hook block and
 keeps a stable copy under `~/.wakaclock/agent-plugins/`, so a VSIX update does not
-leave another tool pointing at a deleted extension directory. It also installs a
-per-user `wakaclock broker` service. The service scans Codex, Claude and Gemini
-transcripts every five seconds, resumes per-agent/per-file cursors, and starts old
-transcripts at their tail (only the last 24 hours are replayed on first discovery).
-Use `wakaclock broker status --json` to inspect process, inbox, outbound queue and
-delivery error state. `wakaclock agent status --json` remains a compatibility alias.
+leave another tool pointing at a deleted extension directory. It never installs a
+per-user service. Native hooks invoke a bounded `wakaclock sync --automatic --json`
+pass at lifecycle boundaries; the SQLite cursor resumes the active transcript and
+old transcripts start at their tail (only the last 24 hours are replayed on first
+discovery). Use `wakaclock sync --json` to inspect accepted/sent/pending work,
+heartbeat and AI-usage queues, retry/dead-letter counts, and the current on-demand
+lease. `wakaclock ai doctor --json` reports adapter coverage and exact runtime
+metadata. `wakaclock broker status --json` and `wakaclock agent status --json` remain
+read-only compatibility aliases.
 
 The same setup is available without VS Code:
 
@@ -45,9 +48,9 @@ wakaclock ai setup --all --json   # machine-readable health and remediation repo
 
 The CLI copies this tested bundle to a versioned directory below
 `~/.wakaclock/agent-plugins/` before registering paths. Missing clients are reported
-as `not_detected`, and a service-manager failure does not prevent another adapter
-from being configured. Run `wakaclock doctor ai --json` afterward to inspect the
-actual broker and transcript state.
+as `not_detected`; scaffold adapters remain scaffold and are not promoted by a name
+in the registry. Run `wakaclock doctor ai --json` afterward to inspect the actual
+on-demand and transcript state.
 
 ## Claude Code (`plugins/atoaxis-heartbeat/`)
 
@@ -71,8 +74,17 @@ previously installed plugin versions.
 
 ## Codex CLI (`codex/`)
 
-Codex has no plugin-marketplace equivalent yet — hooks are behind a feature flag and
-registered by hand in `~/.codex/config.toml`:
+Current Codex CLI/Desktop builds install the versioned AtoAxis plugin through a local
+marketplace. The setup command performs the registration idempotently:
+
+```
+wakaclock ai setup codex --yes
+```
+
+The managed bundle contains `.codex-plugin/plugin.json`, `hooks/hooks.json`, and the
+local marketplace entry. For older builds that do not expose `codex plugin`, setup
+falls back to a marker-bounded block in `~/.codex/config.toml` and removes only that
+block on uninstall:
 
 ```toml
 [features]
@@ -113,16 +125,19 @@ also accepts the older `input`/`patch` shapes for one upgrade cycle. Shell
 and MCP mutations use the shared Before/After fingerprint engine and therefore do not
 need to parse command text. Current Codex releases use `[features].hooks = true`; the VS Code setup
 helper migrates the deprecated `codex_hooks = true` setting automatically. Codex hook
-coverage has varied between releases/tool execution paths, so the always-on transcript
-parser remains a second independent fallback rather than treating hooks as infallible.
+coverage has varied between releases/tool execution paths, so the event-triggered
+transcript parser remains a second independent fallback rather than treating hooks as
+infallible.
 
 ## Gemini CLI (`gemini-cli/`)
 
-Gemini CLI extensions do bundle hooks (closer to Claude Code's experience than
-Codex's):
+Gemini CLI extensions bundle hooks (closer to Claude Code's experience than
+Codex's). Setup uses a bounded, non-interactive install:
 
 ```
-gemini extensions install <path-or-git-url-to>/extensions/ai-agents/gemini-cli
+wakaclock ai setup gemini-cli --yes
+# equivalent underlying command:
+gemini extensions install <path> --consent --skip-settings
 ```
 
 Registers the verified `AfterTool` adapter on `write_file|replace`, plus Before/After

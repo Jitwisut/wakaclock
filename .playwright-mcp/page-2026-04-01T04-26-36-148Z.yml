@@ -35,10 +35,10 @@
               - generic [ref=e28]: 
               - text: Dashboard
           - listitem [ref=e29]:
-            - link " Lodash (Thailand)" [ref=e30] [cursor=pointer]:
+            - link " team Atoaxis" [ref=e30] [cursor=pointer]:
               - /url: /orgs/018e0ef4-037f-44dd-8d26-f10efeac8149
               - generic [ref=e31]: 
-              - text: Lodash (Thailand)
+              - text: team Atoaxis
           - listitem [ref=e32]:
             - link " Projects" [ref=e33] [cursor=pointer]:
               - /url: /projects

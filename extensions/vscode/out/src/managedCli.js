@@ -44,9 +44,9 @@ const SUPPORTED_CLI_PROTOCOL_VERSION = 1;
 const SAFE_CLI_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 /**
  * Owns the lifecycle of the native CLI shipped in the VSIX. The executable is
- * copied out of VS Code's versioned extension directory before it is used by an
- * agent service; updates therefore never leave LaunchAgent/systemd pointing at a
- * path that VS Code has just removed.
+ * copied out of VS Code's versioned extension directory before it is used by
+ * event-triggered hooks; updates therefore never depend on a service manifest
+ * pointing at a path that VS Code has just removed.
  */
 class ManagedCliManager {
     context;

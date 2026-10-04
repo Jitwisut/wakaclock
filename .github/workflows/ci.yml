@@ -39,6 +39,10 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run validate
+      - name: Require complete frontend coverage
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run test:coverage
       - name: Build with production URL
         env:
           NEXT_PUBLIC_APP_URL: https://atoaxis.com
@@ -80,7 +84,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Install native Kafka build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev libcurl4-openssl-dev libsasl2-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run strict Clippy
@@ -117,7 +121,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Install native Kafka build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev libcurl4-openssl-dev libsasl2-dev
       - name: Check workspace formatting
         run: cargo fmt --all -- --check
       - name: Check workspace with Kafka feature
@@ -134,7 +138,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native Kafka build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake pkg-config libssl-dev libcurl4-openssl-dev libsasl2-dev
       - name: Start isolated K5 infrastructure
         run: docker compose -p wakaclock-k5 -f docker-compose.kafka-spike.yml up -d --wait
       - name: Re-run the K0 11-scenario matrix
@@ -220,20 +224,15 @@ jobs:
         run: python3 scripts/duration-audit/verify_certification.py
 
   ai-adapter-certification:
-    name: Universal AI adapter certification privacy and expiry gate
+    name: AI adapter evidence privacy, integrity and current expiry
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Verify metadata-only adapter artifacts
-        run: |
-          python3 scripts/verify_ai_certification.py certifications/ai-adapters/claude-code
-          python3 scripts/verify_ai_certification.py certifications/ai-adapters/codex
-          python3 scripts/verify_ai_certification.py certifications/ai-adapters/kilo-code
-          python3 scripts/verify_ai_certification.py certifications/ai-adapters/kimi-code-cli
-          python3 scripts/verify_ai_certification.py certifications/ai-adapters/deep-code
+      - name: Verify historical integrity and current certificate freshness
+        run: python3 scripts/ai-coverage/verify_inventory.py certifications/ai-adapters
       - name: Validate F4 certification artifacts and catalog
         run: |
           python3 -m unittest discover -s scripts/ai-coverage/tests -v
@@ -303,11 +302,16 @@ jobs:
       - name: Run ignored database tests against isolated ClickHouse
         env:
           CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          CLICKHOUSE_TEST_USER: default
+          CLICKHOUSE_TEST_PASSWORD: ""
           POSTGRES_TEST_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_test
+          PRESENCE_TEST_POSTGRES_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_test
           RABBITMQ_TEST_URL: amqp://guest:guest@127.0.0.1:5672/%2f
         # The broker-restart test runs `docker restart` on a named container; CI's
         # service container cannot be restarted from inside the job, so it is skipped.
-        run: cargo test --workspace -- --ignored --test-threads=1 --skip survive_a_broker_restart
+        run: cargo test -p wakaclock-server -- --ignored --test-threads=1 --skip survive_a_broker_restart
+      - name: Run collector process and offline lifecycle tests
+        run: cargo test -p wakaclock-cli --tests -- --test-threads=1
       - name: Build API for cross-replica security regression tests
         run: cargo build -p wakaclock-server --bin wakaclock-server
       - name: Install PostgreSQL test client
@@ -329,7 +333,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
       - name: Install dependencies

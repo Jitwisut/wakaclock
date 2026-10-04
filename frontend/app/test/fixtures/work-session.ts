@@ -1,0 +1,67 @@
+import type { WorkSessionReceipt } from '@/lib/wakaclock/work-sessions';
+
+const missing = {
+  value: null,
+  coverage: { status: 'unavailable', reported_events: 0, total_events: 2 },
+};
+export const receiptFixture: WorkSessionReceipt = {
+  id: 'a'.repeat(64),
+  agent: 'codex',
+  schema_version: 1,
+  calculation_version: 'work-session-receipt-v1',
+  generated_at: '2026-09-28T10:00:00Z',
+  revision_fingerprint: 'b'.repeat(64),
+  runtime_status: 'experimental',
+  identity_status: 'scoped',
+  observed_window: {
+    start: 1789171200,
+    end: 1789171260,
+    kind: 'received_evidence_window',
+    is_execution_time: false,
+  },
+  project_ids: [],
+  usage_events: 2,
+  usage: {
+    input_tokens: {
+      value: 0,
+      coverage: { status: 'partial', reported_events: 1, total_events: 2 },
+    },
+    output_tokens: missing,
+    cache_read_tokens: missing,
+    cache_write_tokens: missing,
+    estimated_cost_microusd: missing,
+    prompt_characters: missing,
+    pricing_versions: [],
+    unassigned_project_events: 2,
+    unassigned_estimated_cost_microusd: missing,
+  },
+  time: {
+    human_context_seconds: 15,
+    agent_execution_seconds: null,
+    overlap_seconds: null,
+    combined_observed_seconds: null,
+    reason: 'session_execution_intervals_unavailable',
+    human_context_reason: 'same_user_window_context_not_task_authorship',
+    additive_across_receipts: false,
+  },
+  lines: {
+    verified_ai_added: missing,
+    verified_ai_deleted: missing,
+    inferred_operations: 0,
+    unknown_operations: 0,
+    reason: 'no_exact_session_operations',
+  },
+  evidence_count: 0,
+  evidence_references: [],
+  evidence_references_truncated: false,
+  diagnostics: {
+    latest_received_at: 1789171261,
+    max_ingestion_lag_seconds: 1,
+    coverage_basis: 'received_facts_only',
+    unmatched_operations: null,
+    unmatched_reason: 'unjoined_operations_remain_in_trust_center',
+  },
+  outcome: null,
+  outcome_available: true,
+  outcome_source: 'user_reported',
+};

@@ -1,0 +1,66 @@
+/*
+ * Actor colors for the Human vs AI view. The theme's --chart-* tokens are one hue at
+ * different lightness, which made four stacked series indistinguishable. Human and AI
+ * use the validated categorical pair (blue/orange: CVD ΔE 24.7 light, 26.8 dark);
+ * Unknown is neutral because it is the absence of an identity, and AI inferred reuses
+ * the AI hue with a texture because it is the same actor at lower certainty.
+ */
+.root {
+  --hai-human: #2a78d6;
+  --hai-ai: #eb6834;
+  --hai-unknown: #a8a29e;
+  --hai-gap: var(--card);
+}
+
+:global(.dark) .root {
+  --hai-human: #3987e5;
+  --hai-ai: #d95926;
+  --hai-unknown: #57534e;
+}
+
+.human {
+  background: var(--hai-human);
+}
+
+.ai {
+  background: var(--hai-ai);
+}
+
+.inferred {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--hai-ai) 0 2px,
+    color-mix(in oklab, var(--hai-ai) 35%, transparent) 2px 5px
+  );
+}
+
+.unknown {
+  background: var(--hai-unknown);
+}
+
+/* A stacked bar: segments are separated by a 2px surface gap and the ends are rounded. */
+.stack {
+  display: flex;
+  gap: 2px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--muted);
+}
+
+.segment {
+  min-width: 0;
+  height: 100%;
+  transition: opacity 120ms ease;
+}
+
+.stack[data-dimmed='true'] .segment:not([data-active='true']) {
+  opacity: 0.35;
+}
+
+.swatch {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+}

@@ -78,7 +78,13 @@ export interface AiSetupReport {
   suggested_action?: string;
   bundle?: string;
   bundle_detail?: string;
-  broker?: { installed: boolean; running: boolean; detail?: string };
+  broker?: {
+    installed: boolean;
+    running: boolean;
+    cleanup_ok?: boolean;
+    runtime_mode?: string;
+    detail?: string;
+  };
   agents: AiSetupAgentOutcome[];
 }
 
@@ -476,7 +482,12 @@ export async function setupDetectedAiAgents(
       );
       if (report) {
         outcomes.push(...report.agents);
-        if (report.broker?.detail && report.overall !== "success") {
+        if (
+          report.broker?.detail &&
+          (report.broker.cleanup_ok === false ||
+            (report.broker.installed && !report.broker.running)) &&
+          report.overall !== "success"
+        ) {
           failed.push({ id: "wakaclock-broker", error: report.broker.detail });
         }
         for (const outcome of report.agents) {
@@ -567,9 +578,9 @@ async function setupClaudeCode(
   manifest?: AdapterManifestLite
 ): Promise<void> {
   if (process.platform === "win32") {
-    // Windows uses the transcript watcher baseline; shell hooks are an optional
+    // Windows uses the transcript-sync baseline; shell hooks are an optional
     // fast path and must not turn a successful consent into a failed setup.
-    logger.debug("agentSetup: Claude Code configured in transcript-only mode on Windows");
+    logger.debug("agentSetup: Claude Code configured in on-demand transcript mode on Windows");
     return;
   }
   await runCommandAllowAlreadyConfigured(
@@ -990,9 +1001,8 @@ export async function writeHookConsentState(
 }
 
 /**
- * Persist the extension-level automatic hook policy for the standalone broker.
- * The broker is a separate process, so an in-memory VS Code setting would not
- * stop its ten-minute repair pass. This file carries one boolean only; it never
+ * Persist the extension-level automatic hook policy for event-triggered setup.
+ * An in-memory VS Code setting would not reach native agent hooks. This file carries one boolean only; it never
  * contains an agent path, command, prompt, or hook payload.
  */
 export async function writeHookAutoInstallPolicy(

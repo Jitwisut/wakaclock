@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: atoaxis-test
       POSTGRES_DB: atoaxis_k0
     ports:
-      - "${KAFKA_SPIKE_POSTGRES_PORT:-15432}:5432"
+      - "127.0.0.1:${KAFKA_SPIKE_POSTGRES_PORT:-15432}:5432"
     volumes:
       - k0_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,9 +27,9 @@ services:
       - --check=false
       - --node-id=0
       - --kafka-addr=PLAINTEXT://0.0.0.0:19092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+      - --advertise-kafka-addr=PLAINTEXT://127.0.0.1:19092
     ports:
-      - "${KAFKA_SPIKE_KAFKA_PORT:-19092}:19092"
+      - "127.0.0.1:${KAFKA_SPIKE_KAFKA_PORT:-19092}:19092"
     volumes:
       - k0_redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -49,7 +49,7 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       CLICKHOUSE_PASSWORD: default
     ports:
-      - "${KAFKA_SPIKE_CLICKHOUSE_PORT:-18123}:8123"
+      - "127.0.0.1:${KAFKA_SPIKE_CLICKHOUSE_PORT:-18123}:8123"
     volumes:
       - k0_clickhouse_data:/var/lib/clickhouse
     healthcheck:
@@ -61,7 +61,7 @@ services:
   redis:
     image: redis:7.4-alpine
     ports:
-      - "${KAFKA_SPIKE_REDIS_PORT:-16379}:6379"
+      - "127.0.0.1:${KAFKA_SPIKE_REDIS_PORT:-16379}:6379"
     volumes:
       - k0_redis_data:/data
     healthcheck:
@@ -76,8 +76,8 @@ services:
       RABBITMQ_DEFAULT_USER: atoaxis
       RABBITMQ_DEFAULT_PASS: atoaxis-test
     ports:
-      - "${KAFKA_SPIKE_RABBITMQ_PORT:-15673}:5672"
-      - "${KAFKA_SPIKE_RABBITMQ_MANAGEMENT_PORT:-15674}:15672"
+      - "127.0.0.1:${KAFKA_SPIKE_RABBITMQ_PORT:-15673}:5672"
+      - "127.0.0.1:${KAFKA_SPIKE_RABBITMQ_MANAGEMENT_PORT:-15674}:15672"
     volumes:
       - k0_rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -93,8 +93,8 @@ services:
       MINIO_ROOT_USER: atoaxis
       MINIO_ROOT_PASSWORD: atoaxis-test
     ports:
-      - "${KAFKA_SPIKE_MINIO_PORT:-19000}:9000"
-      - "${KAFKA_SPIKE_MINIO_CONSOLE_PORT:-19001}:9001"
+      - "127.0.0.1:${KAFKA_SPIKE_MINIO_PORT:-19000}:9000"
+      - "127.0.0.1:${KAFKA_SPIKE_MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
       - k0_minio_data:/data
     healthcheck:

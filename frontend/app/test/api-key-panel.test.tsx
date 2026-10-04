@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,9 +15,9 @@ vi.mock('@/lib/wakaclock/endpoints', () => ({
   revokeApiKey: () => revokeApiKey(),
 }));
 
+const session = vi.hoisted(() => ({ userId: 'user-1' as null | string }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (selector: (s: { userId: string }) => unknown) =>
-    selector({ userId: 'user-1' }),
+  useWakaclockUserStore: (selector: (s: typeof session) => unknown) => selector(session),
 }));
 
 vi.mock('sonner', () => ({
@@ -36,12 +36,39 @@ function renderPanel() {
 }
 
 beforeEach(() => {
+  session.userId = 'user-1';
   // Vitest resets mock implementations between tests. Keep the read query a valid
   // Promise in every case; individual tests override it when they need a stored key.
   getCurrentApiKey.mockResolvedValue({ data: { api_key: null, user_id: 'user-1' } });
 });
 
 describe('ApiKeyPanel', () => {
+  it('does not fetch a key without an owner', () => {
+    session.userId = null;
+    renderPanel();
+    expect(getCurrentApiKey).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Copy API key' })).toBeNull();
+  });
+  it('hides a revealed key immediately when switching accounts', async () => {
+    getCurrentApiKey
+      .mockResolvedValueOnce({ data: { api_key: 'fixture-key-owner-1', user_id: 'user-1' } })
+      .mockReturnValue(new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = () => (
+      <QueryClientProvider client={client}>
+        <ApiKeyPanel />
+      </QueryClientProvider>
+    );
+    const rendered = render(view());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /reveal/i }));
+    expect(screen.getByDisplayValue('fixture-key-owner-1')).toBeVisible();
+    session.userId = 'user-2';
+    rendered.rerender(view());
+    expect(screen.queryByDisplayValue('fixture-key-owner-1')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy API key' })).toBeNull();
+    await waitFor(() => expect(getCurrentApiKey).toHaveBeenCalledTimes(2));
+  });
   it('shows the generated key so it can be copied', async () => {
     // The freshly generated key must appear immediately, without waiting for a refetch.
     generateApiKey.mockResolvedValue({
@@ -101,20 +128,23 @@ describe('ApiKeyPanel inside the Settings tabs', () => {
 });
 
 describe('ApiKeyPanel when the response has no key', () => {
-  it('reports an error instead of a silent success', async () => {
-    // Generating replaces the old key server-side, so a "success" with nothing shown
-    // would leave the account with a key nobody holds.
-    generateApiKey.mockResolvedValue({ data: { user_id: 'user-1' } });
-    const { toast } = await import('sonner');
-    const user = userEvent.setup();
-    renderPanel();
+  it.each([undefined, {}, { data: { user_id: 'user-1' } }])(
+    'reports an error instead of a silent success for %j',
+    async (response) => {
+      // Generating replaces the old key server-side, so a "success" with nothing shown
+      // would leave the account with a key nobody holds.
+      generateApiKey.mockResolvedValue(response);
+      const { toast } = await import('sonner');
+      const user = userEvent.setup();
+      renderPanel();
 
-    await user.click(screen.getByRole('button', { name: /generate key/i }));
-    await user.click(screen.getByRole('button', { name: /^generate$/i }));
+      await user.click(screen.getByRole('button', { name: /generate key/i }));
+      await user.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-    expect(toast.success).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(toast.success).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('ApiKeyPanel on load', () => {
@@ -164,5 +194,129 @@ describe('ApiKeyPanel on load', () => {
 
     const field = (await screen.findByDisplayValue('wcl_fresh_value')) as HTMLInputElement;
     expect(field.type).toBe('password');
+  });
+});
+
+describe('ApiKeyPanel actions', () => {
+  it('copies the stored key to the clipboard', async () => {
+    getCurrentApiKey.mockResolvedValue({
+      data: { api_key: 'wcl_copy_me', user_id: 'user-1' },
+    });
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+    renderPanel();
+
+    await screen.findByDisplayValue('wcl_copy_me');
+    await user.click(screen.getByRole('button', { name: /copy api key/i }));
+
+    expect(writeText).toHaveBeenCalledWith('wcl_copy_me');
+  });
+
+  it('revokes the key and clears it from the screen', async () => {
+    getCurrentApiKey.mockResolvedValue({
+      data: { api_key: 'wcl_to_revoke', user_id: 'user-1' },
+    });
+    revokeApiKey.mockResolvedValue({ status: 'ok' });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await screen.findByDisplayValue('wcl_to_revoke');
+    getCurrentApiKey.mockResolvedValue({ data: { api_key: null, user_id: 'user-1' } });
+    await user.click(screen.getByRole('button', { name: /revoke key/i }));
+    await user.click(screen.getByRole('button', { name: /^revoke$/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByDisplayValue('wcl_to_revoke')).not.toBeInTheDocument()
+    );
+    expect(revokeApiKey).toHaveBeenCalled();
+  });
+
+  it('reports a failed generate request', async () => {
+    generateApiKey.mockRejectedValue(new Error('boom'));
+    const { toast } = await import('sonner');
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /generate key/i }));
+    await user.click(screen.getByRole('button', { name: /^generate$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'));
+  });
+
+  it('reports a failed revoke request', async () => {
+    revokeApiKey.mockRejectedValue(new Error('nope'));
+    const { toast } = await import('sonner');
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /revoke key/i }));
+    await user.click(screen.getByRole('button', { name: /^revoke$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('nope'));
+  });
+});
+
+describe('ApiKeyPanel quick setup', () => {
+  it('copies the stdin CLI command, never the key itself', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /copy cli command/i }));
+
+    expect(writeText).toHaveBeenCalledWith('pbpaste | wakaclock config set-key --stdin');
+  });
+
+  it('reports a clipboard failure', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
+    const { toast } = await import('sonner');
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /copy cli command/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not copy to the clipboard')
+    );
+  });
+
+  it('switches to the VS Code steps', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('tab', { name: 'VS Code' }));
+
+    expect(await screen.findByText('Run “AtoAxis: Set API Key”')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'VS Code' })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('ApiKeyPanel with reduced motion', () => {
+  it('still copies, confirms and resets without animating', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...original(query),
+      matches: query.includes('prefers-reduced-motion'),
+    })) as typeof window.matchMedia;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+      renderPanel();
+
+      await user.click(screen.getByRole('tab', { name: 'VS Code' }));
+      await user.click(screen.getByRole('tab', { name: 'CLI' }));
+      await user.click(screen.getByRole('button', { name: /copy cli command/i }));
+      expect(writeText).toHaveBeenCalledTimes(1);
+
+      // The check mark reverts to the copy icon once the confirmation window passes.
+      await act(async () => {
+        vi.advanceTimersByTime(1700);
+      });
+      expect(screen.getByRole('button', { name: /copy cli command/i })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+      window.matchMedia = original;
+    }
   });
 });

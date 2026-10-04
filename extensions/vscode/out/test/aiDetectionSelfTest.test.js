@@ -25,12 +25,12 @@ function deps(overrides = {}) {
         (0, vitest_1.expect)(report.verdict).toBe('ok');
         (0, vitest_1.expect)(report.checks.every((c) => c.severity === 'ok')).toBe(true);
     });
-    (0, vitest_1.it)('fails when the broker is not running', async () => {
+    (0, vitest_1.it)('does not fail when no background process is running in on-demand mode', async () => {
         const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)(deps({
             getBrokerStatus: vitest_1.vi.fn().mockResolvedValue({ running: false, inbox: { dead_letter: 0 } }),
         }));
-        (0, vitest_1.expect)(report.verdict).toBe('failing');
-        (0, vitest_1.expect)(report.checks.find((c) => c.id === 'broker-running')?.severity).toBe('fail');
+        (0, vitest_1.expect)(report.verdict).toBe('degraded');
+        (0, vitest_1.expect)(report.checks.find((c) => c.id === 'on-demand-sync')?.severity).toBe('ok');
     });
     (0, vitest_1.it)('fails with a broker-reachable check when the status call throws', async () => {
         const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)(deps({ getBrokerStatus: vitest_1.vi.fn().mockRejectedValue(new Error('no json on stdout')) }));
@@ -88,7 +88,7 @@ function deps(overrides = {}) {
         const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)(deps());
         const text = (0, aiDetectionSelfTest_1.formatAiDetectionReport)(report);
         (0, vitest_1.expect)(text.split('\n')[0]).toBe('AI detection looks healthy.');
-        (0, vitest_1.expect)(text).toContain('✓ Local AI broker running');
+        (0, vitest_1.expect)(text).toContain('✓ On-demand AI sync available');
     });
     (0, vitest_1.it)('never leaks source content', async () => {
         const report = await (0, aiDetectionSelfTest_1.runAiDetectionSelfTest)(deps());

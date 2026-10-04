@@ -7,7 +7,7 @@ import { MarketingNav } from '@/components/marketing/marketing-nav';
 import { isNavLinkActive } from '@/components/marketing/nav-links.data';
 import { QuickStartSection } from '@/components/marketing/quick-start-section';
 
-const pathname = vi.hoisted(() => ({ value: '/' }));
+const pathname = vi.hoisted(() => ({ value: '/' as string | null }));
 const linkStatus = vi.hoisted(() => ({ pending: false }));
 
 vi.mock('next/navigation', () => ({
@@ -41,6 +41,13 @@ describe('isNavLinkActive', () => {
 });
 
 describe('MarketingNav', () => {
+  it('keeps navigation and the language switch usable before the pathname is ready', () => {
+    pathname.value = null;
+    render(<MarketingNav locale="en" />);
+    expect(screen.getByRole('link', { name: 'อ่านภาษาไทย' })).toHaveAttribute('href', '/th');
+    expect(screen.getByRole('link', { name: 'Pricing' })).toHaveAttribute('href', '/pricing');
+  });
+
   it('marks the current page with aria-current in both the bar and the mobile menu', () => {
     pathname.value = '/pricing';
     render(<MarketingNav locale="en" />);
@@ -177,4 +184,27 @@ describe('FormSubmitButton', () => {
 
     expect(screen.getByRole('button', { name: 'Join the list' })).toBeEnabled();
   });
+});
+
+it('closes the mobile menu after each destination, outside pointer, or route change', () => {
+  const view = render(<MarketingNav />);
+  for (const href of ['/docs', '/early-access', '/login']) {
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    const menu = document.querySelector('#marketing-mobile-menu')!;
+    fireEvent.pointerDown(menu);
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(menu).toBeInTheDocument();
+    const link = menu.querySelector<HTMLAnchorElement>(`a[href="${href}"]`)!;
+    link.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(link);
+    expect(document.querySelector('#marketing-mobile-menu')).toBeNull();
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+  fireEvent.pointerDown(document.body);
+  expect(document.querySelector('#marketing-mobile-menu')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+  pathname.value = '/teams';
+  view.rerender(<MarketingNav />);
+  expect(document.querySelector('#marketing-mobile-menu')).toBeNull();
+  expect(screen.getByRole('link', { name: 'Teams' })).toHaveAttribute('aria-current', 'page');
 });

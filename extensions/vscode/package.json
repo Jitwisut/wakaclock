@@ -2,7 +2,7 @@
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis — Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "atoaxis",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/Jitwisut/wakaclock#readme",
@@ -49,27 +49,27 @@
     "commands": [
       {
         "command": "wakaclock.configureCliPath",
-        "title": "Wakaclock: Configure CLI Path"
+        "title": "AtoAxis: Configure CLI Path"
       },
       {
         "command": "wakaclock.showToday",
-        "title": "Wakaclock: Show Today's Total"
+        "title": "AtoAxis: Show Today's Total"
       },
       {
         "command": "wakaclock.sendHeartbeatNow",
-        "title": "Wakaclock: Send Heartbeat Now"
+        "title": "AtoAxis: Send Heartbeat Now"
       },
       {
         "command": "wakaclock.toggleStatusBar",
-        "title": "Wakaclock: Toggle Status Bar"
+        "title": "AtoAxis: Toggle Status Bar"
       },
       {
         "command": "wakaclock.setApiKey",
-        "title": "Wakaclock: Set API Key"
+        "title": "AtoAxis: Set API Key"
       },
       {
         "command": "wakaclock.clearApiKey",
-        "title": "Wakaclock: Clear API Key"
+        "title": "AtoAxis: Clear API Key"
       },
       {
         "command": "wakaclock.setupAiTracking",
@@ -93,7 +93,7 @@
       }
     ],
     "configuration": {
-      "title": "Wakaclock",
+      "title": "AtoAxis",
       "properties": {
         "wakaclock.cliPath": {
           "type": "string",
@@ -139,7 +139,7 @@
         "wakaclock.debugLogging": {
           "type": "boolean",
           "default": false,
-          "description": "Enable verbose Wakaclock logging in the extension host console."
+          "description": "Enable verbose AtoAxis logging in the extension host console."
         },
         "wakaclock.trackDebugSessions": {
           "type": "boolean",
@@ -182,7 +182,7 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^3.2.1",
+    "@vscode/vsce": "4.0.0",
     "typescript": "^5.7.3",
     "vitest": "^4.1.11"
   }

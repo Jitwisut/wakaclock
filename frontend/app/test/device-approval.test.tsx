@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DeviceApprovalScreen } from '@/app/(account)/device/components/device-approval-screen';
@@ -61,4 +61,31 @@ describe('device approval', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('device code is invalid or expired');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
+});
+
+it('accepts a manually entered code when there is no URL code and prevents an empty approval', async () => {
+  query.value = '';
+  approve.mockResolvedValue(undefined);
+  renderScreen();
+  expect(screen.getByRole('button', { name: 'Approve device' })).toBeDisabled();
+  fireEvent.submit(screen.getByLabelText('Device code').closest('form')!);
+  expect(approve).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Device code'), { target: { value: ' abcd efgh ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Approve device' }));
+  await waitFor(() => expect(approve).toHaveBeenCalledWith('ABCD-EFGH'));
+});
+
+it('disables approval while the request is pending and shows completion only after confirmation', async () => {
+  let resolve!: () => void;
+  approve.mockReturnValue(
+    new Promise<void>((done) => {
+      resolve = done;
+    })
+  );
+  renderScreen();
+  fireEvent.click(screen.getByRole('button', { name: 'Approve device' }));
+  expect(await screen.findByRole('button', { name: 'Approving…' })).toBeDisabled();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  await act(async () => resolve());
+  expect(await screen.findByRole('status')).toHaveTextContent('Device approved');
 });

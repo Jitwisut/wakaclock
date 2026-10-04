@@ -2,10 +2,10 @@
 # AtoAxis terminal-only bootstrap installer.
 #
 # The release host can be overridden for self-hosted deployments. The script is
-# intentionally idempotent: it installs one binary, asks the CLI to reconcile its
-# per-user broker service, and records explicit hook consent before any agent
-# configuration can be touched. No prompts, source code, or tool arguments are
-# collected by this installer.
+# intentionally idempotent: it installs one binary, snapshots the existing local
+# SQLite state, removes any legacy per-user broker registration, and records explicit
+# hook consent before any agent configuration can be touched. No prompts, source
+# code, or tool arguments are collected by this installer.
 set -eu
 
 VERSION="${WAKACLOCK_VERSION:-latest}"
@@ -62,6 +62,60 @@ else
 fi
 
 chmod 0755 "$TMP_DIR/wakaclock"
+
+# Take an SQLite-consistent snapshot when the system sqlite3 utility is present.
+# The fallback copies WAL/SHM sidecars together for older hosts without sqlite3;
+# either path is performed only after the legacy service cleanup boundary below.
+snapshot_sqlite() {
+  SOURCE_DB="$1"
+  TARGET_DB="$2"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    ESCAPED_TARGET="$(printf '%s' "$TARGET_DB" | sed "s/'/''/g")"
+    sqlite3 "$SOURCE_DB" ".timeout 5000" ".backup '$ESCAPED_TARGET'"
+  else
+    cp "$SOURCE_DB" "$TARGET_DB"
+    [ ! -f "${SOURCE_DB}-wal" ] || cp "${SOURCE_DB}-wal" "${TARGET_DB}-wal"
+    [ ! -f "${SOURCE_DB}-shm" ] || cp "${SOURCE_DB}-shm" "${TARGET_DB}-shm"
+  fi
+}
+
+# Migration boundary: stop/remove the old service before replacing its executable,
+# then preserve every SQLite sidecar (including WAL/SHM files) in a timestamped,
+# user-owned snapshot. A failed copy aborts the installation before the old binary
+# is overwritten, so accepted local events remain recoverable.
+MIGRATION_SNAPSHOT="${HOME}/.wakaclock/migrations/$(date -u '+%Y%m%dT%H%M%SZ')-pre-on-demand"
+case "$(uname -s)" in
+  Darwin) LEGACY_MANIFEST="$HOME/Library/LaunchAgents/com.atoaxis.wakaclock.agent.plist" ;;
+  Linux) LEGACY_MANIFEST="$HOME/.config/systemd/user/atoaxis-wakaclock-agent.service" ;;
+  *) LEGACY_MANIFEST="$HOME/.wakaclock/agent-task.txt" ;;
+esac
+if [ -x "$PREFIX/wakaclock" ] || [ -f "$HOME/.wakaclock/broker.json" ] || [ -f "$LEGACY_MANIFEST" ]; then
+  if ! "$TMP_DIR/wakaclock" broker uninstall --json >/dev/null 2>&1; then
+    echo "wakaclock installer: could not remove the legacy service; existing binary and queue were left untouched" >&2
+    exit 1
+  fi
+  mkdir -p "$MIGRATION_SNAPSHOT"
+  for DB in \
+    "$HOME/.wakaclock/queue.db" \
+    "$HOME/.wakaclock/broker.db" \
+    "$HOME/.wakaclock/broker.sqlite" \
+    "$HOME/.wakaclock/broker.sqlite3" \
+    "$HOME/.wakaclock/ai-attribution.sqlite3"
+  do
+    if [ -f "$DB" ]; then
+      snapshot_sqlite "$DB" "$MIGRATION_SNAPSHOT/$(basename "$DB")"
+    fi
+  done
+  for STATE in \
+    "$HOME/.wakaclock/ai-events.cursor.json" \
+    "$HOME/.wakaclock/ai-pipeline.json" \
+    "$HOME/.wakaclock/ai-sessions.json"
+  do
+    if [ -f "$STATE" ]; then
+      cp "$STATE" "$MIGRATION_SNAPSHOT/$(basename "$STATE")"
+    fi
+  done
+fi
 install -m 0755 "$TMP_DIR/wakaclock" "$PREFIX/wakaclock"
 if [ -d "$TMP_DIR/resources/ai-agents" ]; then
   mkdir -p "$PREFIX/resources"
@@ -71,10 +125,9 @@ if [ -d "$TMP_DIR/resources/ai-agents" ]; then
   mv "$PREFIX/resources/ai-agents.new" "$PREFIX/resources/ai-agents"
 fi
 
-# The per-user broker service is always reconciled; it is safe to repeat. Adapter
-# hook setup requires explicit consent via WAKACLOCK_SETUP_YES=1 — without it, the
-# CLI still detects adapters but does not write any agent-owned configuration.
-"$PREFIX/wakaclock" broker install --json >/dev/null
+# Adapter hooks use bounded, on-demand CLI invocations.  Installation deliberately
+# does not register a LaunchAgent, systemd unit, scheduled task, local HTTP broker,
+# or any other long-lived collector.
 if [ "$SETUP_YES" = "1" ]; then
   "$PREFIX/wakaclock" ai setup --all --yes --json >/dev/null
 else
@@ -82,4 +135,7 @@ else
 fi
 
 echo "wakaclock installed at $PREFIX/wakaclock"
+if [ -d "${MIGRATION_SNAPSHOT:-}" ]; then
+  echo "SQLite migration snapshot: $MIGRATION_SNAPSHOT"
+fi
 echo "Run WAKACLOCK_SETUP_YES=1 sh install.sh to consent to local adapter setup."

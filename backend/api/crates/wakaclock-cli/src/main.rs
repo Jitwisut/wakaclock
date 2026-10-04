@@ -1,6 +1,9 @@
+use chrono::{Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -10,7 +13,7 @@ use std::{
     process::Command,
     str::FromStr,
     sync::OnceLock,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 mod agent_service;
@@ -38,8 +41,9 @@ use wakaclock_core::{
         PRODUCER_CONTRACT_VERSION, REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
     },
     api_client::{
-        is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
-        AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient,
+        http_status_of, is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
+        AiIdentityRepairReport, AiIdentityRepairRequest, ApiClient, ConnectionState,
+        DeliveryFailureKind,
     },
     broker::{scoped_storage_event_id, BrokerEventV1},
     config::Config,
@@ -49,6 +53,7 @@ use wakaclock_core::{
         resolve_attribution, union_activity_seconds, ActivitySegment, ActorType, AttributionInput,
         Category, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS, MAX_AI_TOOL_DURATION_SECONDS,
     },
+    project::{resolve_project, ProjectSource},
     queue::Queue,
 };
 
@@ -110,7 +115,7 @@ impl AiSyncLock {
 }
 
 #[derive(Parser)]
-#[command(name = "wakaclock", version, about = "Wakaclock CLI Hub")]
+#[command(name = "wakaclock", version, about = "AtoAxis CLI Hub")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -126,8 +131,14 @@ enum Commands {
         #[arg(long = "type", default_value = "file")]
         entity_type: String,
 
+        /// Force this project name, overriding repository detection.
         #[arg(long)]
         project: Option<String>,
+
+        /// Fallback project name (e.g. the editor's workspace folder), used only when no
+        /// repository or project marker identifies the entity.
+        #[arg(long)]
+        alternate_project: Option<String>,
 
         #[arg(long, default_value = "coding")]
         category: String,
@@ -257,10 +268,43 @@ enum Commands {
         #[arg(long)]
         unattributed_lines_deleted: Option<u32>,
 
+        #[arg(long)]
+        line_metric_version: Option<String>,
+
+        #[arg(long)]
+        line_measurement_status: Option<String>,
+
+        #[arg(long)]
+        line_measurement_reason: Option<String>,
+
+        #[arg(long)]
+        measurement_window_id: Option<String>,
+
         #[arg(long, default_value_t = false)]
         extra_heartbeats: bool,
 
         /// Emit a machine-readable outcome in addition to the normal text mode.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Process queued metadata and newly written AI transcripts once, then exit.
+    /// This is the supported on-demand collector entry point.
+    Sync {
+        /// Only sync this agent (`claude-code`, `codex`, or `gemini-cli`).
+        #[arg(long)]
+        agent: Option<String>,
+        /// Use the short hook budget; intended for native lifecycle hooks.
+        #[arg(long, hide = true, default_value_t = false)]
+        automatic: bool,
+        /// Parse and report without contacting the server or advancing delivery state.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Replay transcript bytes from the beginning while retaining event deduplication.
+        #[arg(long, default_value_t = false)]
+        from_start: bool,
+        /// Parse one exact transcript file. Requires `--agent`.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -350,12 +394,12 @@ enum DoctorTarget {
 
 #[derive(Subcommand)]
 enum BrokerAction {
-    /// Run the local AI Activity Broker in the foreground.
+    /// Deprecated compatibility command: remove any legacy service and run one bounded sync.
     Run {
         #[arg(long, default_value_t = 1)]
         interval_seconds: u64,
     },
-    /// Install or update the per-user broker service and start it immediately.
+    /// Deprecated compatibility command: remove the legacy service; never install one.
     Install {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -383,7 +427,7 @@ enum BrokerAction {
         #[arg(long, default_value_t = false)]
         all: bool,
     },
-    /// Rotate the local bearer token and restart the service.
+    /// Rotate the legacy local token; on-demand mode does not restart a service.
     RotateToken {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -425,12 +469,12 @@ enum RepairAction {
 
 #[derive(Subcommand)]
 enum AgentAction {
-    /// Run the transcript watcher in the foreground. Service managers invoke this.
+    /// Deprecated compatibility command: remove any legacy service and run one bounded sync.
     Run {
         #[arg(long, default_value_t = 5)]
         interval_seconds: u64,
     },
-    /// Install or update the per-user service and start it immediately.
+    /// Deprecated compatibility command: remove the legacy service; never install one.
     Install {
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -491,9 +535,8 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Remove the CLI-owned adapter registration/consent records and, when no
-    /// adapters remain, the AtoAxis-owned watcher service. Agent configuration
-    /// files are preserved.
+    /// Remove the CLI-owned adapter registration/consent records and legacy service
+    /// registration. Agent configuration files are preserved.
     Uninstall {
         agent: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -512,7 +555,7 @@ enum AiAction {
     },
     /// Ingest one privacy-safe AI file-mutation event from stdin as JSON. This is the
     /// universal adapter surface for MCP/tool bridges (for example ChatGPT -> Tan) and
-    /// agents that do not expose a transcript format WakaClock can parse itself.
+    /// agents that do not expose a transcript format AtoAxis can parse itself.
     Emit {
         /// Print a machine-readable delivery outcome.
         #[arg(long, default_value_t = false)]
@@ -602,11 +645,33 @@ enum AiAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Reparse local agent transcripts and create a metadata-only historical line
+    /// measurement preview. Applying corrections requires confirmation in Trust Center.
+    #[command(name = "repair-measurements")]
+    RepairMeasurements {
+        /// First inclusive calendar date (YYYY-MM-DD).
+        #[arg(long)]
+        from: String,
+        /// Last inclusive calendar date (YYYY-MM-DD).
+        #[arg(long)]
+        to: String,
+        /// IANA timezone used to resolve the selected calendar dates.
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        /// Restrict the scan to one supported transcript adapter.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Reparse one exact transcript instead of discovered sources. Requires `--agent`.
+        #[arg(long)]
+        transcript: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Save an API key generated from the Wakaclock dashboard into ~/.wakaclock/config.toml
+    /// Save an API key generated from the AtoAxis dashboard into ~/.wakaclock/config.toml
     SetKey {
         /// Deprecated positional form. Prefer `--stdin` so the secret never appears
         /// in shell history or process listings.
@@ -616,7 +681,7 @@ enum ConfigAction {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Save the API origin used by the CLI and always-on agent.
+    /// Save the API origin used by the CLI and event-triggered hooks.
     SetServerUrl {
         url: String,
         #[arg(long, default_value_t = false)]
@@ -632,6 +697,8 @@ struct ExtraHeartbeatInput {
     entity_type: Option<String>,
     #[serde(default)]
     project: Option<String>,
+    #[serde(default)]
+    alternate_project: Option<String>,
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
@@ -702,6 +769,14 @@ struct ExtraHeartbeatInput {
     unattributed_lines_added: Option<u32>,
     #[serde(default)]
     unattributed_lines_deleted: Option<u32>,
+    #[serde(default)]
+    line_metric_version: Option<String>,
+    #[serde(default)]
+    line_measurement_status: Option<String>,
+    #[serde(default)]
+    line_measurement_reason: Option<String>,
+    #[serde(default)]
+    measurement_window_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -973,6 +1048,86 @@ async fn main() {
     }
 }
 
+/// `verify --json` status for a failed probe, from the same classifier as `today`.
+/// The emitted values are unchanged; `reachable` means the server sent a response.
+fn verify_outcome(error: &AppError) -> (&'static str, bool) {
+    let reachable = match error {
+        AppError::Http(inner) => inner.status().is_some(),
+        AppError::Auth(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => true,
+        _ => false,
+    };
+    let status = match DeliveryFailureKind::from_error(error) {
+        DeliveryFailureKind::Auth401 => "invalid_key",
+        DeliveryFailureKind::Payment402 => "subscription_required",
+        DeliveryFailureKind::Network => "unreachable",
+        _ => "server_error",
+    };
+    (status, reachable)
+}
+
+/// Render one scope's delivery failure. `category`/`http_status`/`message_code` are
+/// what callers decide on; `message` stays a bounded local diagnostic, and `at` keeps
+/// the pre-scope field name so existing readers do not break.
+fn delivery_failure_json(
+    failure: wakaclock_core::queue::DeliveryFailureRecord,
+) -> serde_json::Value {
+    serde_json::json!({
+        "at": failure.recorded_at as f64,
+        "last_attempt_at": failure.last_attempt_at as f64,
+        "message": failure.detail.clone().unwrap_or_default(),
+        "category": failure.kind,
+        "http_status": failure.http_status,
+        "message_code": failure.message_code,
+        "consecutive_failures": failure.consecutive_failures,
+    })
+}
+
+/// Structured reachability for `wakaclock today --json`.
+///
+/// The GET probe decides reachability. When it succeeds, a recorded POST refusal
+/// for entitlement (402) or payload (400/422) still wins, because reading today's
+/// total keeps working while heartbeat delivery is refused. A recorded 401 does not:
+/// the successful GET was authenticated with the same credential, so it proves the
+/// key works now. Recorded network/server failures are likewise superseded and only
+/// reported as `last_error_kind`.
+fn today_connection(
+    probe_failure: Option<(DeliveryFailureKind, Option<u16>)>,
+    recorded: Option<&wakaclock_core::queue::DeliveryFailureRecord>,
+) -> serde_json::Value {
+    if let Some((kind, http_status)) = probe_failure {
+        let authenticated = match kind {
+            DeliveryFailureKind::Auth401 => Some(false),
+            DeliveryFailureKind::Payment402 | DeliveryFailureKind::Validation => Some(true),
+            _ => None,
+        };
+        return serde_json::json!({
+            "state": ConnectionState::from_failure_kind(kind).as_str(),
+            "reachable": kind != DeliveryFailureKind::Network,
+            "authenticated": authenticated,
+            "http_status": http_status,
+            "last_error_kind": kind.as_str(),
+            "last_error_at": chrono::Utc::now().timestamp() as f64,
+        });
+    }
+    let refusal =
+        recorded.filter(|failure| matches!(failure.kind.as_str(), "payment_402" | "validation"));
+    let state = refusal
+        .and_then(|failure| match failure.kind.as_str() {
+            "payment_402" => Some(ConnectionState::SubscriptionRequired),
+            "validation" => Some(ConnectionState::ValidationRejected),
+            _ => None,
+        })
+        .unwrap_or(ConnectionState::Online);
+    serde_json::json!({
+        "state": state.as_str(),
+        "reachable": true,
+        "authenticated": true,
+        "http_status": refusal.and_then(|failure| failure.http_status),
+        "last_error_kind": recorded.map(|failure| failure.kind.clone()),
+        "last_error_at": recorded.map(|failure| failure.recorded_at as f64),
+    })
+}
+
 /// Environment overrides layered on top of `config.toml`.
 ///
 /// An API key from the environment (set by the VS Code extension via SecretStorage)
@@ -1024,6 +1179,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             entity,
             entity_type,
             project,
+            alternate_project,
             category,
             write,
             line_number,
@@ -1060,13 +1216,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
             human_lines_deleted,
             unattributed_lines_added,
             unattributed_lines_deleted,
+            line_metric_version,
+            line_measurement_status,
+            line_measurement_reason,
+            measurement_window_id,
             extra_heartbeats,
             json,
         } => {
             // Hook-originated AI heartbeats are already attributed. Running transcript
             // sync from inside them would create a second event for the same patch. A
-            // background transcript read is also consent-gated: installing the watcher
-            // alone must never open a production attribution path.
+            // transcript reads are also consent-gated: installing hooks alone must
+            // never open a production attribution path.
             let observer_enabled = load_observer_config().enabled;
             // New registry-driven setup persists per-adapter hook consent. Keep
             // the legacy state file as a compatibility fallback for installations
@@ -1105,6 +1265,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 entity: entity.clone(),
                 entity_type: None,
                 project: None,
+                alternate_project: None,
                 category: None,
                 write: Some(write),
                 line_number,
@@ -1140,12 +1301,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 human_lines_deleted,
                 unattributed_lines_added,
                 unattributed_lines_deleted,
+                line_metric_version,
+                line_measurement_status,
+                line_measurement_reason,
+                measurement_window_id,
             };
             let mut primary = build_heartbeat(
                 &config,
                 &entity,
                 entity_type,
-                project,
+                project.clone(),
+                alternate_project.clone(),
                 category,
                 write,
                 Some(primary_extra),
@@ -1180,8 +1346,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         .map(EntityType::from_str)
                         .transpose()?
                         .unwrap_or_else(|| primary.entity_type.clone());
-                    let resolved_project =
-                        extra.project.clone().or_else(|| primary.project.clone());
+                    // Inherit the raw command-line names, not `primary.project`: that value
+                    // may have come from the primary entity's repository, and an extra
+                    // entity can live in a different one.
+                    let resolved_project = extra.project.clone().or_else(|| project.clone());
+                    let resolved_alternate_project = extra
+                        .alternate_project
+                        .clone()
+                        .or_else(|| alternate_project.clone());
                     let resolved_category = extra
                         .category
                         .as_deref()
@@ -1193,6 +1365,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         &resolved_entity,
                         resolved_entity_type,
                         resolved_project,
+                        resolved_alternate_project,
                         resolved_category,
                         extra.write.unwrap_or(false),
                         Some(extra),
@@ -1266,6 +1439,155 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        Commands::Sync {
+            agent,
+            automatic,
+            dry_run,
+            from_start,
+            transcript,
+            json,
+        } => {
+            if transcript.is_some() && agent.is_none() {
+                return Err("--transcript requires --agent".into());
+            }
+            const AUTOMATIC_SYNC_DEADLINE: Duration = Duration::from_secs(10);
+            const MANUAL_SYNC_DEADLINE: Duration = Duration::from_secs(60);
+            let deadline = Instant::now()
+                + if automatic {
+                    AUTOMATIC_SYNC_DEADLINE
+                } else {
+                    MANUAL_SYNC_DEADLINE
+                };
+            let (sync_error, timed_out) = match tokio::time::timeout(
+                if automatic {
+                    AUTOMATIC_SYNC_DEADLINE
+                } else {
+                    MANUAL_SYNC_DEADLINE
+                },
+                run_on_demand_sync(
+                    &config,
+                    &api_client,
+                    agent.as_deref(),
+                    dry_run,
+                    !json,
+                    from_start,
+                    transcript.as_deref(),
+                    deadline,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => (None, false),
+                Ok(Err(error)) => {
+                    eprintln!("On-demand sync deferred: {error}");
+                    let timed_out = error.to_string() == "deadline_exceeded";
+                    (Some(error.to_string()), timed_out)
+                }
+                Err(_) => {
+                    eprintln!(
+                        "On-demand sync reached the {}-second deadline; remaining work stays queued",
+                        if automatic { 10 } else { 60 }
+                    );
+                    (Some("deadline_exceeded".to_string()), true)
+                }
+            };
+            let queue_scope = api_client.queue_scope();
+            let heartbeat_queue = Queue::open()
+                .and_then(|queue| queue.status_scoped(&queue_scope))
+                .unwrap_or_default();
+            let outbound_pending = heartbeat_queue.pending;
+            let broker_stats = wakaclock_core::broker::BrokerStore::open()
+                .and_then(|store| store.stats())
+                .ok();
+            let inbox_pending = broker_stats
+                .as_ref()
+                .map(|stats| {
+                    stats
+                        .pending
+                        .saturating_add(stats.processing)
+                        .saturating_add(stats.retry)
+                })
+                .unwrap_or_default() as usize;
+            let ai_usage_queue = AiAttributionState::open()
+                .and_then(|state| state.usage_queue_status(chrono::Utc::now().timestamp()))
+                .unwrap_or_default();
+            let pending = outbound_pending
+                .saturating_add(inbox_pending)
+                .saturating_add(ai_usage_queue.pending);
+            let deferred_reason = sync_deferred_reason(
+                sync_error.as_deref(),
+                timed_out,
+                pending,
+                ai_usage_queue.conflicts,
+            );
+            let deferred = deferred_reason.is_some();
+            let last_error = sync_error.clone().or_else(|| {
+                (ai_usage_queue.conflicts > 0).then(|| "usage_conflicts_quarantined".to_string())
+            });
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 2,
+                        "runtime_mode": "on_demand",
+                        "status": if deferred {
+                            "deferred"
+                        } else if dry_run {
+                            "accepted"
+                        } else {
+                            "sent"
+                        },
+                        "accepted": dry_run || sync_error.is_none(),
+                        "sent": !dry_run
+                            && sync_error.is_none()
+                            && pending == 0
+                            && ai_usage_queue.conflicts == 0,
+                        "pending": pending,
+                        "unresolved_conflicts": ai_usage_queue.conflicts,
+                        "outbound_pending": outbound_pending,
+                        "inbox_pending": inbox_pending,
+                        "heartbeat_queue": {
+                            "pending": heartbeat_queue.pending,
+                            "eligible": heartbeat_queue.eligible,
+                            "leased": heartbeat_queue.leased,
+                            "retry": heartbeat_queue.retry,
+                            "dead_letter": heartbeat_queue.dead_letter,
+                        },
+                        "ai_usage_queue": {
+                            "pending": ai_usage_queue.pending,
+                            "eligible": ai_usage_queue.eligible,
+                            "leased": 0,
+                            "retry": ai_usage_queue.retry,
+                            "dead_letter": ai_usage_queue.dead_letter,
+                            "conflicts": ai_usage_queue.conflicts,
+                        },
+                        "inbox": {
+                            "pending": broker_stats.as_ref().map(|stats| stats.pending).unwrap_or(0),
+                            "eligible": broker_stats.as_ref().map(|stats| stats.pending).unwrap_or(0),
+                            "leased": broker_stats.as_ref().map(|stats| stats.processing).unwrap_or(0),
+                            "retry": broker_stats.as_ref().map(|stats| stats.retry).unwrap_or(0),
+                            "dead_letter": broker_stats.as_ref().map(|stats| stats.dead_letter).unwrap_or(0),
+                        },
+                        "lease_active": sync_error.as_deref() == Some("already_running"),
+                        "deferred_reason": deferred_reason,
+                        "deferred": deferred,
+                        "last_error": last_error,
+                    })
+                );
+            } else {
+                if timed_out {
+                    println!(
+                        "On-demand sync reached its {}-second deadline.",
+                        if automatic { 10 } else { 60 }
+                    );
+                } else if sync_error.is_some() {
+                    println!("On-demand sync completed with deferred work.");
+                } else {
+                    println!("On-demand sync completed.");
+                }
+                println!("Pending heartbeat(s): {pending}.");
+            }
+        }
         Commands::Config { action } => match action {
             None => {
                 println!("Config path: {}", Config::config_path().display());
@@ -1316,10 +1638,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         },
         Commands::Status { json } => {
-            let queue = Queue::open()?;
-            let queued = queue.len()?;
+            let queue_scope = api_client.queue_scope();
+            let (queue, queue_status, queue_error) = match Queue::open() {
+                Ok(queue) => match queue.status_scoped(&queue_scope) {
+                    Ok(status) => (Some(queue), Some(status), None),
+                    Err(error) => (None, None, Some(error.to_string())),
+                },
+                Err(error) => (None, None, Some(error.to_string())),
+            };
+            let queued = queue_status.map(|status| status.pending);
             let identity = build_identity();
             let cli_paths = cli_path_report();
+            let legacy_service = agent_service::status();
             let legacy_service_alias = agent_service::manifest_uses_legacy_alias();
             let stale_service_binary = agent_service::manifest_points_at_stale_binary();
 
@@ -1333,7 +1663,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 Err(error) => ("unreachable", Some(error.to_string())),
             };
 
-            let flush = api_client.flush_queue().await?;
+            let flush = match api_client.flush_queue().await {
+                Ok(flush) => flush,
+                Err(error) => wakaclock_core::api_client::FlushReport {
+                    flushed: 0,
+                    stopped_because: Some(format!("queue unavailable: {error}")),
+                },
+            };
+            // After the key check: a verified same-account key has already rebound
+            // its older rows, so only rows that still lack proof are counted.
+            let orphaned = queue
+                .as_ref()
+                .and_then(|queue| queue.orphaned_len(&api_client.queue_scope()).ok());
 
             if json {
                 println!(
@@ -1345,7 +1686,29 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "config_path": Config::config_path().display().to_string(),
                         "server_url": config.server_url,
                         "identity": identity_line(&config),
+                        "queue_status": if queued.is_some() { "available" } else { "unavailable" },
+                        "queue_status_detail": queue_error,
                         "queued_heartbeats": queued,
+                        "queue_eligible": queue_status.map(|status| status.eligible),
+                        "queue_leased": queue_status.map(|status| status.leased),
+                        "queue_retry": queue_status.map(|status| status.retry),
+                        "queue_dead_letter": queue_status.map(|status| status.dead_letter),
+                        "queue_line_metrics_pending":
+                            queue_status.map(|status| status.line_metrics_pending),
+                        "queue_oldest_pending_at": queue_status.and_then(|status| {
+                            status
+                                .oldest_pending_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                        }),
+                        "queue_last_successful_delivery_at": queue_status.and_then(|status| {
+                            status.last_successful_delivery_at.and_then(|seconds| {
+                                chrono::DateTime::from_timestamp(seconds, 0)
+                            })
+                        }),
+                        "runtime_mode": "on_demand",
+                        "service_installed": legacy_service.installed,
+                        "service_running": legacy_service.running,
+                        "orphaned_queued_heartbeats": orphaned,
                         "key_check": key_check,
                         "key_check_detail": key_check_detail,
                         "flushed_now": flush.flushed,
@@ -1365,7 +1728,55 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     identity.version, identity.git_sha, identity.build_time
                 );
                 println!("{}", identity_line(&config));
-                println!("Queued heartbeats: {queued}");
+                println!("Runtime mode: on_demand (no background collector)");
+                if legacy_service.installed || legacy_service.running {
+                    println!(
+                        "Legacy service detected: installed={} running={} (run `wakaclock broker uninstall` to remove it)",
+                        legacy_service.installed, legacy_service.running
+                    );
+                }
+                match queued {
+                    Some(queued) => {
+                        println!("Queued heartbeats: {queued}");
+                        if let Some(status) = queue_status {
+                            println!(
+                                "Queue detail: eligible={} leased={} retry={} dead_letter={} line_metrics_pending={}",
+                                status.eligible,
+                                status.leased,
+                                status.retry,
+                                status.dead_letter,
+                                status.line_metrics_pending
+                            );
+                            if let Some(oldest) = status
+                                .oldest_pending_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                            {
+                                println!("Oldest pending heartbeat: {}", oldest.to_rfc3339());
+                            }
+                            if let Some(last_successful) = status
+                                .last_successful_delivery_at
+                                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                            {
+                                println!(
+                                    "Last successful delivery: {}",
+                                    last_successful.to_rfc3339()
+                                );
+                            }
+                        }
+                    }
+                    None => println!(
+                        "Queued heartbeats: unavailable{}",
+                        queue_error
+                            .as_deref()
+                            .map(|error| format!(" ({error})"))
+                            .unwrap_or_default()
+                    ),
+                }
+                if let Some(orphaned) = orphaned.filter(|count| *count > 0) {
+                    println!(
+                        "Orphaned heartbeats: {orphaned} (queued under another API key or server; kept until the same account is verified)"
+                    );
+                }
                 println!("Capabilities: clipboard_metrics_v1, ai_producer_v1 (contract v{PRODUCER_CONTRACT_VERSION})");
                 match key_check {
                     "verified" => {
@@ -1390,21 +1801,24 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if legacy_service_alias {
                     println!(
-                        "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it to `broker run`"
+                        "warning: the installed service manifest still runs the legacy `agent run` alias — run `wakaclock broker uninstall` to remove it"
                     );
                 }
                 if stale_service_binary {
                     println!(
-                        "warning: the installed service manifest points at a different `wakaclock` binary than this one — run `wakaclock broker install` to repoint it"
+                        "warning: the installed service manifest points at a different `wakaclock` binary — run `wakaclock broker uninstall` to remove it"
                     );
                 }
             }
         }
         Commands::Today { timezone, json } => {
-            let (mut snapshot, server_error) =
+            // `--json` reports a rejected key as `connection.state = auth_rejected` so
+            // editors decide on a typed state. Text mode keeps the historical non-zero
+            // exit, which older editor builds rely on to show "key rejected".
+            let (mut snapshot, server_error, probe_failure) =
                 match api_client.today_with_timezone(timezone.as_deref()).await {
-                    Ok(snapshot) => (snapshot, None),
-                    Err(AppError::Auth(message)) => return Err(message.into()),
+                    Ok(snapshot) => (snapshot, None, None),
+                    Err(AppError::Auth(message)) if !json => return Err(message.into()),
                     Err(error) => (
                         wakaclock_core::api_client::StatusBarSnapshot {
                             total_seconds: 0.0,
@@ -1424,16 +1838,30 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             active_seconds: None,
                             active_coverage: None,
                             wakatime_compatible_seconds: None,
+                            queue_owner_id: None,
                         },
                         Some(error.to_string()),
+                        Some((
+                            DeliveryFailureKind::from_error(&error),
+                            http_status_of(&error),
+                        )),
                     ),
                 };
             let queue = Queue::open()?;
             let queue_scope = api_client.queue_scope();
-            let delivery_failure = wakaclock_core::api_client::ApiClient::last_delivery_failure();
+            // Scoped to this origin + credential: another account's or server's
+            // refusal must never describe this one (and a pre-scope record never does).
+            let delivery_record = api_client.delivery_failure();
+            let delivery_failure = delivery_record.clone().map(delivery_failure_json);
             let queued_segments =
                 queue.queued_segments_for_day_scoped(timezone.as_deref(), &queue_scope)?;
             let queued_heartbeats = queue.len_scoped(&queue_scope).unwrap_or(0);
+            // Rows under another credential/origin that this scope cannot deliver.
+            // Never deleted: a same-account proof rebinds them (API-key rotation).
+            let orphaned_heartbeats = queue.orphaned_len(&queue_scope).unwrap_or(0);
+            // Rows a flush would pick up right now: the rest are waiting on a retry
+            // backoff, which is a different answer to "why is nothing being sent".
+            let eligible_heartbeats = queue.eligible_len_scoped(&queue_scope).unwrap_or(0);
             let queued_seconds = union_activity_seconds(&queued_segments);
             let queued_active_segments = queued_segments
                 .iter()
@@ -1480,6 +1908,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             if snapshot.agent_health.is_none() {
                 snapshot.agent_health = Some(agent_health);
             }
+            let connection = today_connection(probe_failure, delivery_record.as_ref());
             if json {
                 println!(
                     "{}",
@@ -1508,6 +1937,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "queued_heartbeats": queued_heartbeats,
                     "queued_active_seconds": queued_active_seconds,
                     "delivery_failure": delivery_failure,
+                    // Typed state for editor clients. Queue depth/seconds are reported
+                    // separately and never decide whether the server is reachable.
+                    "connection": connection,
+                    "queue": {
+                        "depth": queued_heartbeats,
+                        "seconds_today": displayed_queued_seconds,
+                        "eligible_now": eligible_heartbeats,
+                        "orphaned": orphaned_heartbeats,
+                    },
+                    "orphaned_queued_heartbeats": orphaned_heartbeats,
                     }))?
                 );
             } else {
@@ -1515,6 +1954,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     println!("Server error: {error}");
                 }
                 println!("Today: {}", snapshot.human_readable);
+                if let Some(state) = connection["state"].as_str() {
+                    println!("Connection: {state}");
+                }
                 println!("Total seconds: {}", snapshot.total_seconds);
                 println!("Confirmed seconds: {}", confirmed_seconds);
                 println!("Queued seconds: {}", displayed_queued_seconds);
@@ -1526,11 +1968,21 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         "Queued heartbeats: {queued_heartbeats} (not yet accepted by the server)"
                     );
                 }
-                if let Some(failure) = &delivery_failure {
-                    println!("Delivery: REFUSED - {}", failure.message);
+                if let Some(failure) = &delivery_record {
+                    // Only a server refusal is "REFUSED"; older editor builds map that
+                    // word to "subscription required", so an outage must not use it.
+                    let label = match failure.kind.as_str() {
+                        "network" => "OFFLINE",
+                        "server_error" => "RETRYING",
+                        _ => "REFUSED",
+                    };
+                    println!(
+                        "Delivery: {label} - {}",
+                        failure.detail.as_deref().unwrap_or(&failure.message_code)
+                    );
                     println!(
                         "  No heartbeat accepted since {}. Queued activity stays local until one is.",
-                        chrono::DateTime::from_timestamp(failure.at as i64, 0)
+                        chrono::DateTime::from_timestamp(failure.recorded_at, 0)
                             .map(|at| at.to_rfc3339())
                             .unwrap_or_else(|| "an earlier time".to_string())
                     );
@@ -1569,28 +2021,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let queue_count = queue_count();
             let (status, authenticated, reachable, error) = match api_client.verify().await {
                 Ok(()) => ("verified", true, true, None),
-                Err(AppError::Auth(message)) => ("invalid_key", false, true, Some(message)),
-                Err(AppError::Http(error)) => {
-                    let status = error.status().map(|value| value.as_u16());
-                    let outcome = match status {
-                        Some(402) => "subscription_required",
-                        Some(value) if value >= 500 => "server_error",
-                        Some(401) => "invalid_key",
-                        Some(_) => "server_error",
-                        None => "unreachable",
+                Err(error) => {
+                    let (status, reachable) = verify_outcome(&error);
+                    let detail = match &error {
+                        AppError::Auth(message) | AppError::HttpStatus { message, .. } => {
+                            message.clone()
+                        }
+                        AppError::Http(inner) => inner.to_string(),
+                        other => other.to_string(),
                     };
-                    (outcome, false, status.is_some(), Some(error.to_string()))
+                    (status, false, reachable, Some(detail))
                 }
-                Err(AppError::HttpStatus { status, message }) => {
-                    let outcome = match status {
-                        402 => "subscription_required",
-                        401 => "invalid_key",
-                        value if value >= 500 => "server_error",
-                        _ => "server_error",
-                    };
-                    (outcome, false, true, Some(message))
-                }
-                Err(error) => ("server_error", false, false, Some(error.to_string())),
             };
             if json {
                 println!(
@@ -1684,10 +2125,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     &config,
                     &api_client,
                     agent.as_deref(),
-                    dry_run,
-                    true,
-                    from_start,
                     transcript.as_deref(),
+                    AiSyncOptions {
+                        dry_run,
+                        verbose: true,
+                        from_start,
+                        lease_already_held: false,
+                        deadline: Some(Instant::now() + Duration::from_secs(60)),
+                    },
                 )
                 .await?
             }
@@ -1718,14 +2163,47 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 )
                 .await?
             }
+            AiAction::RepairMeasurements {
+                from,
+                to,
+                timezone,
+                agent,
+                transcript,
+                json,
+            } => {
+                if transcript.is_some() && agent.is_none() {
+                    return Err("--transcript requires --agent".into());
+                }
+                run_ai_measurement_repair_preview(
+                    &config,
+                    &api_client,
+                    &from,
+                    &to,
+                    &timezone,
+                    agent.as_deref(),
+                    transcript.as_deref(),
+                    json,
+                )
+                .await?
+            }
         },
         Commands::Broker { action } => match action {
-            BrokerAction::Run { interval_seconds } => {
-                broker::run(config, interval_seconds.max(1)).await?;
+            BrokerAction::Run { .. } => {
+                // Keep the old command as a compatibility entry point for stale
+                // service manifests, but make it a bounded one-shot sync and remove
+                // the manifest first. This prevents an upgraded LaunchAgent from
+                // bringing the daemon back.
+                eprintln!(
+                    "Warning: `wakaclock broker run` is deprecated; using one-shot sync and removing the legacy service."
+                );
+                let _ = agent_service::uninstall();
+                run_bounded_ai_sync(&config, &api_client).await;
             }
             BrokerAction::Install { json } => {
-                broker::ensure_token()?;
-                let report = agent_service::install().map_err(io::Error::other)?;
+                // `install` is retained only as a migration command.  It removes
+                // a legacy service and never creates a replacement.
+                let report = agent_service::uninstall().map_err(io::Error::other)?;
+                broker::cleanup_discovery();
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Uninstall { json } => {
@@ -1734,12 +2212,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Start { json } => {
-                if agent_service::migrate_legacy_service_manifest().map_err(io::Error::other)? {
-                    eprintln!(
-                        "migrated service manifest from the legacy `agent run` alias to `broker run`"
-                    );
-                }
-                let report = agent_service::start().map_err(io::Error::other)?;
+                let report = agent_service::uninstall().map_err(io::Error::other)?;
+                broker::cleanup_discovery();
                 print_broker_report(&report, json, broker_status_json()?);
             }
             BrokerAction::Stop { json } => {
@@ -1759,33 +2233,19 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("Requeued broker events: {changed}");
             }
             BrokerAction::RotateToken { json } => {
-                let before = agent_service::status();
-                if before.running && !before.installed {
-                    return Err(
-                        "cannot rotate a foreground broker token while it is running; stop the broker first"
-                            .into(),
-                    );
-                }
-                broker::rotate_token()?;
-                // A running broker keeps its bearer token in memory. Stop/start is
-                // intentionally explicit here so rotation takes effect immediately on
-                // every supported service manager, not only on the next login.
-                let service_restarted = if before.running {
-                    let _ = agent_service::stop();
-                    agent_service::start().map_err(io::Error::other)?.running
-                } else {
-                    false
-                };
+                // The local HTTP broker and bearer token are retired. Keep the
+                // command for old scripts, but do not create or rotate credentials.
                 if json {
                     println!(
                         "{}",
                         serde_json::json!({
-                            "rotated": true,
-                            "service_restarted": service_restarted,
+                            "rotated": false,
+                            "deprecated": true,
+                            "runtime_mode": "on_demand",
                         })
                     );
                 } else {
-                    println!("Broker token rotated; service restart requested.");
+                    println!("Local broker tokens are retired; on-demand CLI mode remains active.");
                 }
             }
             BrokerAction::EditorObserve { json } => {
@@ -1824,12 +2284,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
             match action {
-                AgentAction::Run { interval_seconds } => {
-                    broker::run(config, interval_seconds.max(1)).await?;
+                AgentAction::Run { .. } => {
+                    eprintln!(
+                        "Warning: `wakaclock agent run` is deprecated; using one-shot sync and removing the legacy service."
+                    );
+                    let _ = agent_service::uninstall();
+                    run_bounded_ai_sync(&config, &api_client).await;
                 }
                 AgentAction::Install { json } => {
-                    broker::ensure_token()?;
-                    let report = agent_service::install().map_err(io::Error::other)?;
+                    let report = agent_service::uninstall().map_err(io::Error::other)?;
+                    broker::cleanup_discovery();
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Uninstall { json } => {
@@ -1838,7 +2302,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Start { json } => {
-                    let report = agent_service::start().map_err(io::Error::other)?;
+                    let report = agent_service::uninstall().map_err(io::Error::other)?;
+                    broker::cleanup_discovery();
                     print_agent_report(&report, json, queue_count());
                 }
                 AgentAction::Stop { json } => {
@@ -1921,25 +2386,13 @@ fn adapter_install_kind(manifest: &wakaclock_core::ai::AdapterManifest) -> &'sta
     }
 }
 
-/// The on-disk identity, when it differs from the one the agent is currently using.
-///
-/// Returns `None` on an unreadable or half-written config.toml: a watcher that is
-/// already authenticated must keep running rather than abort on a transient read.
-pub(crate) fn reloaded_agent_config(current: &Config) -> Option<Config> {
-    let mut candidate = Config::try_load()?;
-    apply_env_overrides(&mut candidate).ok()?;
-    let changed = candidate.api_key != current.api_key
-        || candidate.server_url != current.server_url
-        || candidate.user_id != current.user_id;
-    changed.then_some(candidate)
-}
-
 fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, queue_count: usize) {
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "platform": report.platform,
+                "runtime_mode": "on_demand",
                 "installed": report.installed,
                 "running": report.running,
                 "queue_count": queue_count,
@@ -1951,6 +2404,7 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
         );
     } else {
         println!("Platform: {}", report.platform);
+        println!("Runtime mode: on_demand (no background collector)");
         println!("Installed: {}", report.installed);
         println!("Running: {}", report.running);
         println!("Queue count: {}", queue_count);
@@ -1988,14 +2442,20 @@ fn print_broker_report(
             "service_running".to_string(),
             serde_json::Value::Bool(report.running),
         );
+        status.insert(
+            "legacy_service_present".to_string(),
+            serde_json::Value::Bool(report.installed || report.running),
+        );
+        status.insert(
+            "runtime_mode".to_string(),
+            serde_json::Value::String("on_demand".to_string()),
+        );
         println!("{}", serde_json::Value::Object(status));
     } else {
         println!("Platform: {}", report.platform);
-        println!("Installed: {}", report.installed);
-        println!("Running: {}", report.running);
-        if let Some(running) = broker_status.get("running") {
-            println!("Broker running: {}", running);
-        }
+        println!("Runtime mode: on_demand (no background collector)");
+        println!("Legacy service installed: {}", report.installed);
+        println!("Legacy service running: {}", report.running);
         if let Some(inbox) = broker_status.get("inbox") {
             println!("Broker inbox: {inbox}");
         }
@@ -2018,6 +2478,65 @@ fn broker_status_json() -> Result<serde_json::Value, AppError> {
 
 fn queue_count() -> usize {
     Queue::open().and_then(|queue| queue.len()).unwrap_or(0)
+}
+
+/// Keep machine-readable sync deferrals stable and bounded. The detailed error
+/// remains in `last_error` for local troubleshooting, while consumers can switch
+/// on this small enum without parsing transport text.
+fn sync_deferred_reason(
+    error: Option<&str>,
+    timed_out: bool,
+    pending: usize,
+    conflicts: usize,
+) -> Option<&'static str> {
+    if timed_out {
+        return Some("deadline_exceeded");
+    }
+    let Some(error) = error else {
+        return if pending > 0 {
+            Some("backoff")
+        } else if conflicts > 0 {
+            // Stable-ID payload conflicts are quarantined locally rather than
+            // retried. Keep the public reason enum backwards-compatible while
+            // exposing the precise disposition in `last_error` and the
+            // `unresolved_conflicts` counter.
+            Some("server")
+        } else {
+            None
+        };
+    };
+    if error == "already_running" {
+        return Some("already_running");
+    }
+    if error == "deadline_exceeded" {
+        return Some("deadline_exceeded");
+    }
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("sqlite") || lower.contains("database is locked") {
+        return Some("sqlite_busy");
+    }
+    if lower.contains("unsupported") {
+        return Some("unsupported_adapter");
+    }
+    if lower.contains("401")
+        || lower.contains("402")
+        || lower.contains("credential")
+        || lower.contains("api key")
+    {
+        return Some("auth");
+    }
+    if lower.contains("429")
+        || lower.contains("500")
+        || lower.contains("502")
+        || lower.contains("503")
+        || lower.contains("504")
+        || lower.contains("timeout")
+        || lower.contains("network")
+        || lower.contains("connect")
+    {
+        return Some("server");
+    }
+    Some("server")
 }
 
 const AI_SETUP_STATE_VERSION: u8 = 1;
@@ -2081,6 +2600,15 @@ fn sort_transcript_paths_newest_first(paths: &mut [PathBuf]) {
     });
 }
 
+/// Usage parsers read the whole transcript (they pair records across turns), so they must
+/// not run on every heartbeat for files that have not grown. A cursor is only saved after
+/// that transcript's usage was enqueued (idempotently, by usage event id), so a reused
+/// cursor sitting exactly at EOF proves there are no unseen usage bytes. A reset cursor,
+/// `--from-start`, or any new byte keeps the full-file parse unchanged.
+fn usage_scan_needed(cursor_reused: bool, cursor_offset: u64, file_len: u64) -> bool {
+    !(cursor_reused && cursor_offset == file_len)
+}
+
 fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     // Keep the human-friendly discovery details below, but take health/runtime
     // state from the same typed collector used by `ai doctor` and the extension
@@ -2135,7 +2663,63 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
                 )
             }
         };
-        reports.push(serde_json::json!({"agent": id, "status": description}));
+        let freshness = diagnostics
+            .adapters
+            .iter()
+            .find(|adapter| adapter.agent == id);
+        reports.push(serde_json::json!({
+            "agent": id,
+            "status": description.clone(),
+            "detected": freshness.and_then(|adapter| adapter.detected.value),
+            "installed": freshness.and_then(|adapter| adapter.enabled.value),
+            "hook_state": serde_json::Value::Null,
+            "transcript_state": description,
+            "runtime_health": freshness.map(|adapter| adapter.runtime_health),
+            "verification": freshness.map(|adapter| adapter.verification),
+            "last_evidence_at": freshness.and_then(|adapter| adapter.last_evidence_at),
+            "exact_tuple": freshness.and_then(|adapter| adapter.certification.clone()),
+            "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
+        }));
+    }
+    // Kilo and Kimi are native-hook adapters rather than transcript parsers. Keep
+    // them on the same status surface so an installed hook is not mistaken for an
+    // unsupported adapter merely because there is no parser implementation.
+    for native in native_adapter_doctor_entries(&context.home_dir) {
+        let agent = native
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let installed = native
+            .get("installed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let detected = native
+            .get("native_executable")
+            .is_some_and(|value| !value.is_null());
+        let status = if installed {
+            "native hook installed"
+        } else if detected {
+            "native executable detected; adapter not installed"
+        } else {
+            "not installed"
+        };
+        let freshness = diagnostics
+            .adapters
+            .iter()
+            .find(|adapter| adapter.agent == agent);
+        reports.push(serde_json::json!({
+            "agent": agent,
+            "status": status,
+            "detected": freshness.and_then(|adapter| adapter.detected.value),
+            "installed": freshness.and_then(|adapter| adapter.enabled.value),
+            "hook_state": if installed { "installed" } else { "not_installed" },
+            "transcript_state": "not_applicable",
+            "runtime_health": freshness.map(|adapter| adapter.runtime_health),
+            "verification": freshness.map(|adapter| adapter.verification),
+            "last_evidence_at": freshness.and_then(|adapter| adapter.last_evidence_at),
+            "exact_tuple": freshness.and_then(|adapter| adapter.certification.clone()),
+            "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
+        }));
     }
     if json {
         println!(
@@ -2732,7 +3316,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     RuntimeHealth::Unavailable
                 } else if diagnostic_code.is_some() {
                     RuntimeHealth::Degraded
-                } else if service_running == Some(true) {
+                } else if broker_available && queue_available {
                     RuntimeHealth::Healthy
                 } else {
                     RuntimeHealth::Degraded
@@ -2751,6 +3335,11 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     diagnostic_code,
                 });
             }
+            adapters.extend(native_adapter_freshness_entries(
+                &context.home_dir,
+                &observer,
+                measured_at,
+            ));
             (
                 ParserLagSummaryV2 {
                     availability: MeasurementAvailability::Available,
@@ -2769,7 +3358,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
             )
         }
         Err(_) => {
-            let adapters = supported_ai_parsers()
+            let mut adapters = supported_ai_parsers()
                 .into_iter()
                 .map(|(id, _)| AdapterFreshnessV2 {
                     agent: id.to_string(),
@@ -2784,7 +3373,17 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
                     last_evidence_at: None,
                     diagnostic_code: Some("discovery_unavailable".to_string()),
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            // Even if transcript discovery is unavailable, native adapter setup is
+            // still observable locally. Preserve those distinctions instead of
+            // collapsing Kilo/Kimi into the parser-level unavailable result.
+            if let Ok(context) = ai_discovery_context() {
+                adapters.extend(native_adapter_freshness_entries(
+                    &context.home_dir,
+                    &observer,
+                    measured_at,
+                ));
+            }
             (
                 ParserLagSummaryV2 {
                     availability: MeasurementAvailability::Unavailable,
@@ -2802,7 +3401,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
         RuntimeHealth::Disabled
     } else if !broker_available || !queue_available || parser_probe_failed {
         RuntimeHealth::Degraded
-    } else if service_running == Some(true) {
+    } else if broker_available && queue_available {
         RuntimeHealth::Healthy
     } else {
         RuntimeHealth::Degraded
@@ -3367,14 +3966,26 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     // planai2.md Phase 0.5: attach a classified `category` so the reader can tell a
     // 402 (billing lapsed, capture fine) apart from a 401 (bad credential) or a
     // network failure without eyeballing the raw message.
-    let last_delivery_failure =
-        wakaclock_core::api_client::ApiClient::last_delivery_failure().map(|failure| {
-            serde_json::json!({
-                "at": failure.at,
-                "message": failure.message,
-                "category": failure.kind().as_str(),
+    // Diagnostics show this scope's failure first; a record migrated from the
+    // pre-scope file is still reported, but labelled so it is never read as the
+    // current server/account's state.
+    let last_delivery_failure = ApiClient::new(config.clone()).ok().and_then(|client| {
+        client
+            .delivery_failure()
+            .map(|failure| (failure, "current"))
+            .or_else(|| {
+                client
+                    .legacy_unscoped_delivery_failure()
+                    .map(|failure| (failure, "legacy_unscoped"))
             })
-        });
+            .map(|(failure, scope)| {
+                let mut value = delivery_failure_json(failure);
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("scope".to_string(), serde_json::json!(scope));
+                }
+                value
+            })
+    });
     let latest_native_hook_event_at = latest_sidecar_event_time();
 
     let identity = build_identity();
@@ -3455,15 +4066,17 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
     }
     if legacy_service_alias {
         println!(
-            "  MISMATCH: the installed service manifest runs the legacy `agent run` alias — run `wakaclock broker install` to migrate it"
+            "  LEGACY SERVICE: the installed manifest runs the old `agent run` alias — run `wakaclock broker uninstall` to remove it"
         );
     }
     if stale_service_binary {
         println!(
-            "  MISMATCH: the installed service manifest points at a different `wakaclock` binary — run `wakaclock broker install` to repoint it"
+            "  LEGACY SERVICE: the installed manifest points at an old `wakaclock` binary — run `wakaclock broker uninstall` to remove it"
         );
     }
-    println!("== Broker ==");
+    println!("== Runtime ==");
+    println!("  mode=on_demand (no background collector)");
+    println!("== Legacy broker service ==");
     println!(
         "  installed={} running={}",
         service.installed, service.running
@@ -3493,6 +4106,7 @@ fn print_ai_doctor_report(config: &Config, json: bool) -> Result<(), Box<dyn Err
 fn ai_doctor_report_keys() -> &'static [&'static str] {
     &[
         "cli_identity",
+        "runtime_mode",
         "legacy_service_alias",
         "stale_service_binary",
         "broker_installed",
@@ -3525,6 +4139,7 @@ struct AiDoctorReportParts {
 fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
     serde_json::json!({
         "cli_identity": parts.cli_identity,
+        "runtime_mode": "on_demand",
         "legacy_service_alias": parts.legacy_service_alias,
         "stale_service_binary": parts.stale_service_binary,
         "broker_installed": parts.broker_installed,
@@ -3725,10 +4340,102 @@ fn native_adapter_doctor_entries(home_dir: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Convert the metadata-only native adapter probe into the typed diagnostics
+/// contract. Kilo and Kimi currently have no transcript parser, so their
+/// evidence timestamp intentionally stays empty until a native hook records an
+/// event in the sidecar. Installation/detection state is still useful and must
+/// not be reported as a fake zero or as parser failure.
+fn native_adapter_freshness_entries(
+    home_dir: &Path,
+    observer: &ObserverConfig,
+    measured_at: chrono::DateTime<chrono::Utc>,
+) -> Vec<AdapterFreshnessV2> {
+    native_adapter_doctor_entries(home_dir)
+        .into_iter()
+        .filter_map(|value| {
+            let agent = value.get("agent")?.as_str()?.to_string();
+            let detected = value
+                .get("native_executable")
+                .is_some_and(|entry| !entry.is_null());
+            let installed = value
+                .get("installed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let verification = match value
+                .get("verification_status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("verified") => VerificationStatus::Verified,
+                // The diagnostics wire enum predates the registry's distinct
+                // `unverified` label; keep that distinction in `diagnostic_code`
+                // while mapping the lifecycle value to the conservative scaffold
+                // state for backwards-compatible consumers.
+                Some("unverified") => VerificationStatus::Scaffold,
+                _ => VerificationStatus::Scaffold,
+            };
+            let diagnostic_code = if !detected {
+                Some("native_executable_missing".to_string())
+            } else if !installed {
+                Some("not_installed".to_string())
+            } else {
+                Some("native_hook_only".to_string())
+            };
+            let runtime_health = if !observer.enabled {
+                RuntimeHealth::Disabled
+            } else if !detected {
+                RuntimeHealth::Unavailable
+            } else if !installed {
+                RuntimeHealth::Degraded
+            } else {
+                RuntimeHealth::Idle
+            };
+            Some(AdapterFreshnessV2 {
+                agent: agent.clone(),
+                availability: MeasurementAvailability::Available,
+                detected: DiagnosticMeasurement::available(detected, measured_at),
+                enabled: DiagnosticMeasurement::available(observer.enabled, measured_at),
+                runtime_health,
+                verification,
+                certification: certification_tuple_for_agent(&agent),
+                certificate_id: None,
+                certification_status: None,
+                last_evidence_at: None,
+                diagnostic_code,
+            })
+        })
+        .collect()
+}
+
 fn resolve_named_command(names: &[String]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    // Prefer PATH, but also recognize vendor-standard per-user install
+    // locations.  Kimi's official checksum-verifying installer intentionally
+    // keeps `kimi` under ~/.kimi-code/bin instead of modifying the caller's
+    // shell profile.  Doctor/setup run from VS Code or a hook therefore may
+    // not inherit that directory in PATH.  This is detection-only: we never
+    // execute an untrusted path or add it to PATH globally.
+    let path_candidates: Vec<PathBuf> = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .collect();
+    let home_candidates: Vec<PathBuf> = std::env::var_os("HOME")
+        .into_iter()
+        .flat_map(|home| {
+            let home = PathBuf::from(home);
+            names.iter().flat_map(move |name| {
+                let mut candidates = Vec::new();
+                if name == "kimi" {
+                    candidates.push(home.join(".kimi-code/bin/kimi"));
+                    candidates.push(home.join(".kimi/bin/kimi"));
+                    candidates.push(home.join(".local/bin/kimi"));
+                }
+                candidates
+            })
+        })
+        .collect();
+    path_candidates
+        .into_iter()
+        .chain(home_candidates)
         .find(|candidate| candidate.is_file())
 }
 
@@ -4130,29 +4837,354 @@ async fn run_ai_identity_repair(
     Ok(())
 }
 
+/// Reparse transcript edits on this machine and send only line counts, outcomes and
+/// opaque references. No transcript path, prompt, response, diff or source text is
+/// included in the preview request. The server matches references to rows owned by
+/// the authenticated account; the resulting job still requires a session confirmation.
+async fn run_ai_measurement_repair_preview(
+    _config: &Config,
+    api_client: &ApiClient,
+    from: &str,
+    to: &str,
+    timezone: &str,
+    agent_filter: Option<&str>,
+    transcript_override: Option<&Path>,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (start_date, end_date, start_epoch, end_epoch, timezone) =
+        measurement_repair_range(from, to, timezone)?;
+    let normalized_agent = agent_filter.map(normalize_agent_id);
+    if let Some(agent) = normalized_agent.as_deref() {
+        if !supported_ai_parsers()
+            .iter()
+            .any(|(parser_id, _)| *parser_id == agent)
+        {
+            return Err(format!("unsupported measurement repair agent: {agent}").into());
+        }
+    }
+
+    let context = ai_discovery_context()?;
+    let mut events_by_id = BTreeMap::<(String, String, String), AiEditEvent>::new();
+    let mut parser_versions = Vec::new();
+    let mut transcripts_scanned = 0usize;
+    let mut warning_count = 0usize;
+    for (id, parser) in supported_ai_parsers() {
+        if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
+        let paths = if let Some(path) = transcript_override {
+            let canonical = path.canonicalize()?;
+            if !canonical.is_file() {
+                return Err(format!("transcript is not a file: {}", canonical.display()).into());
+            }
+            vec![canonical]
+        } else {
+            parser
+                .discover_sources(&context)
+                .into_iter()
+                .filter_map(|result| match result.state {
+                    DiscoveryState::TranscriptFound { path } => Some(path),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for path in paths {
+            transcripts_scanned += 1;
+            let path = path.canonicalize().unwrap_or(path);
+            let mut cursor = ParserCursor {
+                source_path: path.to_string_lossy().into_owned(),
+                file_identity: transcript_identity(&path),
+                byte_offset: 0,
+                last_record_id: None,
+                last_record_time: None,
+                context: None,
+            };
+            let file_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            let mut iterations = 0usize;
+            loop {
+                iterations += 1;
+                if iterations > 10_000 {
+                    warning_count += 1;
+                    break;
+                }
+                let previous_offset = cursor.byte_offset;
+                let batch = parser
+                    .parse_since(&ParseContext::default(), Some(&cursor))
+                    .map_err(|error| format!("{id}: {}: {error}", path.display()))?;
+                warning_count += batch.warnings.len();
+                for event in batch.events {
+                    let occurred_at = event.occurred_at.timestamp_millis() as f64 / 1000.0;
+                    if occurred_at < start_epoch || occurred_at >= end_epoch {
+                        continue;
+                    }
+                    let key = (
+                        event.agent.clone(),
+                        event.session_id.clone().unwrap_or_default(),
+                        event.event_id.clone(),
+                    );
+                    events_by_id.entry(key).or_insert(event);
+                }
+                let next_cursor = batch.next_cursor;
+                let pending = next_cursor
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| !context.pending_calls.is_empty());
+                let progressed = next_cursor.byte_offset > previous_offset
+                    || next_cursor.context != cursor.context;
+                cursor = next_cursor;
+                if cursor.byte_offset >= file_len && !pending {
+                    break;
+                }
+                if !progressed {
+                    break;
+                }
+            }
+        }
+    }
+
+    if events_by_id.is_empty() {
+        let report = serde_json::json!({
+            "status": "no_local_operations",
+            "from": start_date,
+            "to": end_date,
+            "timezone": timezone.to_string(),
+            "transcripts_scanned": transcripts_scanned,
+            "warnings": warning_count,
+            "preview": null
+        });
+        if json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("No local AI edit operations were found in the selected date range.");
+            println!(
+                "Transcripts scanned: {transcripts_scanned}; parser warnings: {warning_count}"
+            );
+        }
+        return Ok(());
+    }
+
+    const MAX_REPAIR_CANDIDATES: usize = 1_000;
+    if events_by_id.len() > MAX_REPAIR_CANDIDATES {
+        return Err(format!(
+            "{} local operations exceed the server preview limit of {MAX_REPAIR_CANDIDATES}; narrow the date range or select one --agent",
+            events_by_id.len()
+        )
+        .into());
+    }
+    let candidates = events_by_id
+        .values()
+        .map(|event| {
+            let (outcome, lines_added, lines_deleted) =
+                match (event.lines_added, event.lines_deleted) {
+                    (Some(added), Some(deleted)) => ("success", Some(added), Some(deleted)),
+                    _ => ("unknown", None, None),
+                };
+            serde_json::json!({
+                "repair_reference": measurement_repair_reference(event),
+                "outcome": outcome,
+                "lines_added": lines_added,
+                "lines_deleted": lines_deleted,
+            })
+        })
+        .collect::<Vec<_>>();
+    let repair_id = Uuid::new_v4().to_string();
+    let response = api_client
+        .preview_measurement_repair(
+            &repair_id,
+            &start_date.to_string(),
+            &end_date.to_string(),
+            &timezone.to_string(),
+            &candidates,
+        )
+        .await?;
+    let preview = response.get("data").cloned().unwrap_or(response);
+    let report = serde_json::json!({
+        "status": "preview_created",
+        "repair_id": repair_id,
+        "from": start_date,
+        "to": end_date,
+        "timezone": timezone.to_string(),
+        "transcripts_scanned": transcripts_scanned,
+        "local_operations": candidates.len(),
+        "parser_versions": parser_versions,
+        "warnings": warning_count,
+        "preview": preview,
+        "confirmation": "Review and apply this preview in Trust Center. This CLI command does not apply corrections."
+    });
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "Measurement repair preview created: {}",
+            report["repair_id"]
+        );
+        println!("Local operations: {}", report["local_operations"]);
+        println!("Ready: {}", preview["ready"]);
+        println!("Unresolved: {}", preview["unresolved"]);
+        println!("Unchanged: {}", preview["unchanged"]);
+        println!("Parser warnings: {warning_count}");
+        println!("Review and apply the preview in the Trust Center.");
+    }
+    Ok(())
+}
+
+fn measurement_repair_range(
+    from: &str,
+    to: &str,
+    timezone: &str,
+) -> Result<ResolvedRepairRange, Box<dyn Error>> {
+    let start = NaiveDate::parse_from_str(from, "%Y-%m-%d")
+        .map_err(|_| "--from must be a calendar date in YYYY-MM-DD format")?;
+    let end = NaiveDate::parse_from_str(to, "%Y-%m-%d")
+        .map_err(|_| "--to must be a calendar date in YYYY-MM-DD format")?;
+    if start > end {
+        return Err("--from must not be after --to".into());
+    }
+    if (end - start).num_days() >= 90 {
+        return Err("measurement repair ranges may include at most 90 calendar days".into());
+    }
+    let timezone: Tz = timezone
+        .parse()
+        .map_err(|_| format!("unknown IANA timezone: {timezone}"))?;
+    let local_midnight = |date: NaiveDate| -> Result<chrono::DateTime<Utc>, Box<dyn Error>> {
+        let local = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or("calendar midnight is invalid")?;
+        let zoned = timezone
+            .from_local_datetime(&local)
+            .earliest()
+            .or_else(|| timezone.from_local_datetime(&local).latest())
+            .ok_or("timezone has no offset at local midnight")?;
+        Ok(zoned.with_timezone(&Utc))
+    };
+    let start_at = local_midnight(start)?;
+    let end_at = local_midnight(end + ChronoDuration::days(1))?;
+    Ok((
+        start,
+        end,
+        start_at.timestamp_millis() as f64 / 1000.0,
+        end_at.timestamp_millis() as f64 / 1000.0,
+        timezone,
+    ))
+}
+
+fn measurement_repair_reference(event: &AiEditEvent) -> String {
+    let session = event.session_id.as_deref().unwrap_or_default();
+    let operation = event.event_id.as_str();
+    let entity = event.entity.to_string_lossy();
+    let material = format!(
+        "{}:{session}{}:{operation}{}:{entity}",
+        session.len(),
+        operation.len(),
+        entity.len(),
+    );
+    format!("{:x}", Sha256::digest(material.as_bytes()))
+}
+
+#[cfg(test)]
+mod measurement_repair_cli_tests {
+    use super::*;
+
+    #[test]
+    fn repair_range_uses_inclusive_local_dates_and_dst_boundaries() {
+        let (start, end, start_epoch, end_epoch, zone) =
+            measurement_repair_range("2026-03-08", "2026-03-08", "America/New_York").unwrap();
+        assert_eq!(start.to_string(), "2026-03-08");
+        assert_eq!(end.to_string(), "2026-03-08");
+        assert_eq!(zone.to_string(), "America/New_York");
+        assert_eq!(end_epoch - start_epoch, 23.0 * 60.0 * 60.0);
+    }
+
+    #[test]
+    fn repair_reference_is_fixed_length_and_does_not_expose_entity_path() {
+        let event = AiEditEvent {
+            event_id: "ai-event-1".to_string(),
+            agent: "codex".to_string(),
+            provider: None,
+            model: None,
+            session_id: Some("session-1".to_string()),
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            tool_event_id: None,
+            producer_surface: None,
+            occurred_at: Utc::now(),
+            entity: PathBuf::from("/private/workspace/source.rs"),
+            project_root: None,
+            change_kind: wakaclock_core::broker::BrokerChangeKind::Modify,
+            previous_entity: None,
+            lines_added: Some(0),
+            lines_deleted: Some(0),
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        };
+        let reference = measurement_repair_reference(&event);
+        assert_eq!(reference.len(), 64);
+        assert!(!reference.contains("workspace"));
+        assert!(!reference.contains("source.rs"));
+    }
+}
+
+type ResolvedRepairRange = (NaiveDate, NaiveDate, f64, f64, Tz);
+
+struct AiSyncOptions {
+    dry_run: bool,
+    verbose: bool,
+    from_start: bool,
+    lease_already_held: bool,
+    deadline: Option<Instant>,
+}
+
 async fn run_ai_sync(
     config: &Config,
     api_client: &ApiClient,
     agent_filter: Option<&str>,
-    dry_run: bool,
-    verbose: bool,
-    from_start: bool,
     transcript_override: Option<&Path>,
+    options: AiSyncOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let _sync_lock = if dry_run {
+    let AiSyncOptions {
+        dry_run,
+        verbose,
+        from_start,
+        lease_already_held,
+        deadline,
+    } = options;
+    if let Some(agent) = agent_filter {
+        let supported = supported_ai_parsers()
+            .iter()
+            .any(|(parser_id, _)| *parser_id == agent);
+        if !supported {
+            return Err(
+                format!("AI transcript sync is not supported for adapter `{agent}`").into(),
+            );
+        }
+    }
+    let _sync_lock = if dry_run || lease_already_held {
         None
     } else {
         match AiSyncLock::acquire()? {
             Some(lock) => Some(lock),
             None => {
-                eprintln!("AI sync already running (AlreadyRunning); skipping this invocation");
-                return Ok(());
+                return Err("already_running".into());
             }
         }
     };
     let mut state = AiAttributionState::open()?;
     let context = ai_discovery_context()?;
     let mut first_delivery_error: Option<AppError> = None;
+    let check_deadline = || -> Result<(), Box<dyn Error>> {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            return Err("deadline_exceeded".into());
+        }
+        Ok(())
+    };
+    check_deadline()?;
 
     // Flush durable usage before discovering new transcript bytes. This makes a
     // restarted watcher drain an outage backlog first while still allowing the
@@ -4161,9 +5193,11 @@ async fn run_ai_sync(
         if let Some(error) = flush_pending_usage(&mut state, api_client, verbose).await? {
             first_delivery_error = Some(error);
         }
+        check_deadline()?;
     }
 
     for (id, parser) in supported_ai_parsers() {
+        check_deadline()?;
         if agent_filter.is_some_and(|filter| filter != id) {
             continue;
         }
@@ -4219,6 +5253,7 @@ async fn run_ai_sync(
         sort_transcript_paths_newest_first(&mut transcript_paths);
 
         for transcript_path in transcript_paths {
+            check_deadline()?;
             // Resume from the saved cursor only if it still points at the same file — a
             // new session file (Claude Code starts one per session) means byte offset 0
             // against the file discover() just found, not a stale offset into a file we
@@ -4230,6 +5265,7 @@ async fn run_ai_sync(
                 .map(|meta| meta.len())
                 .unwrap_or(0);
             let file_identity = transcript_identity(&transcript_path);
+            let mut cursor_reused = false;
             let cursor = match existing_cursor {
                 Some(cursor)
                     if !from_start
@@ -4237,6 +5273,7 @@ async fn run_ai_sync(
                         && cursor.file_identity == file_identity
                         && cursor.byte_offset <= file_len =>
                 {
+                    cursor_reused = true;
                     cursor
                 }
                 _ => ParserCursor {
@@ -4250,8 +5287,8 @@ async fn run_ai_sync(
             };
 
             // On first discovery, old transcripts are intentionally seeded at EOF. This
-            // keeps a newly-installed always-on agent from uploading an entire history;
-            // recent files (and explicit --from-start) still replay normally.
+            // keeps a newly-enabled adapter from uploading an entire history; recent
+            // files (and explicit --from-start) still replay normally.
             let is_first_cursor = state.load_cursor(&cursor_key)?.is_none();
             let is_old = fs::metadata(&transcript_path)
                 .and_then(|meta| meta.modified())
@@ -4282,10 +5319,14 @@ async fn run_ai_sync(
                     break;
                 }
             };
+            check_deadline()?;
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
             let usage_records = match id {
+                _ if !usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) => {
+                    Ok(Vec::new())
+                }
                 "claude-code" => parse_claude_usage(&transcript_path),
                 "codex" => parse_codex_usage(&transcript_path),
                 "gemini-cli" => parse_gemini_usage(&transcript_path),
@@ -4355,7 +5396,10 @@ async fn run_ai_sync(
                 // Persist before the network call and before the next transcript
                 // rotation can hide the source bytes. INSERT is idempotent by the
                 // provider event id and stores only the sanitised record.
-                state.enqueue_pending_usage(&usage_records)?;
+                state.enqueue_pending_usage_with_collector(
+                    &usage_records,
+                    &wakaclock_core::queue::Queue::open()?.device_id()?,
+                )?;
             }
 
             if !new_events.is_empty() {
@@ -4387,6 +5431,7 @@ async fn run_ai_sync(
                     submitted_events.push(*event);
                 }
                 if !broker_events.is_empty() {
+                    check_deadline()?;
                     let report =
                         submit_events_with_optional_handoff(config, api_client, &broker_events)
                             .await?;
@@ -4420,6 +5465,7 @@ async fn run_ai_sync(
                 // without creating another activity row.
                 state.save_cursor(&cursor_key, &batch.next_cursor)?;
             }
+            check_deadline()?;
         }
     }
 
@@ -4445,6 +5491,116 @@ async fn run_ai_sync(
     }
 
     Ok(())
+}
+
+/// Run the complete WakaTime-style one-shot pass.  Transcript reconciliation is
+/// only one part of a sync invocation: an offline hook may already have durable
+/// inbox rows or queued heartbeats that need delivery even when no transcript byte
+/// changed.  Drain both sides before and after parsing, while keeping the same
+/// absolute deadline for the whole invocation.
+async fn run_on_demand_sync(
+    config: &Config,
+    api_client: &ApiClient,
+    agent_filter: Option<&str>,
+    dry_run: bool,
+    verbose: bool,
+    from_start: bool,
+    transcript_override: Option<&Path>,
+    deadline: Instant,
+) -> Result<(), Box<dyn Error>> {
+    let check_deadline = || -> Result<(), Box<dyn Error>> {
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        Ok(())
+    };
+    let mut deferred_error: Option<&'static str> = None;
+    // The lease covers the complete one-shot lifecycle. Previously the pre-scan
+    // drain ran before `run_ai_sync` acquired its lock, so two CLI processes could
+    // concurrently drain/parse/flush and the losing process still reported success.
+    let _sync_lock = if dry_run {
+        None
+    } else {
+        match AiSyncLock::acquire()? {
+            Some(lock) => Some(lock),
+            None => return Err("already_running".into()),
+        }
+    };
+
+    if !dry_run {
+        deferred_error = drain_on_demand_delivery(config, api_client, deadline, false).await?;
+    }
+
+    check_deadline()?;
+    run_ai_sync(
+        config,
+        api_client,
+        agent_filter,
+        transcript_override,
+        AiSyncOptions {
+            dry_run,
+            verbose,
+            from_start,
+            lease_already_held: true,
+            deadline: Some(deadline),
+        },
+    )
+    .await?;
+
+    if !dry_run {
+        if let Some(error) = drain_on_demand_delivery(config, api_client, deadline, true).await? {
+            deferred_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = deferred_error {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// Drain durable delivery in bounded batches. The pre-scan pass is intentionally
+/// one batch so a large offline backlog cannot starve the active transcript; the
+/// post-scan pass rotates inbox and heartbeat batches until they are empty, a retry
+/// backoff/deferred observation is encountered, or the caller's deadline expires.
+async fn drain_on_demand_delivery(
+    config: &Config,
+    api_client: &ApiClient,
+    deadline: Instant,
+    repeat_until_stable: bool,
+) -> Result<Option<&'static str>, Box<dyn Error>> {
+    let mut deferred_error: Option<&'static str> = None;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        let report = broker::process_pending(config, api_client, broker::MAX_BATCH_EVENTS).await?;
+        if report.dead_lettered > 0 {
+            deferred_error.get_or_insert("dead_lettered");
+        }
+        if Instant::now() >= deadline {
+            return Err("deadline_exceeded".into());
+        }
+        let flush = api_client.flush_queue().await?;
+        if flush.stopped_because.is_some() {
+            // The detailed server response stays in the local delivery state. Do
+            // not copy it into hook/debug output, where it could contain payload
+            // material; the machine-readable status only needs the stable reason.
+            deferred_error.get_or_insert("delivery_deferred");
+        }
+
+        let made_progress = report.processed > 0
+            || report.retried > 0
+            || report.dead_lettered > 0
+            || flush.flushed > 0;
+        if !repeat_until_stable
+            || flush.stopped_because.is_some()
+            || !made_progress
+            || report.claimed == 0
+        {
+            break;
+        }
+    }
+    Ok(deferred_error)
 }
 
 /// Drain the durable AI usage queue in deterministic, bounded batches. A successful
@@ -4616,6 +5772,17 @@ mod ai_usage_ack_tests {
             unpriced: Some(1),
             sessions_touched: Some(1),
         }
+    }
+
+    #[test]
+    fn usage_scan_is_skipped_only_for_a_reused_cursor_at_eof() {
+        // Unchanged transcript: every usage byte was enqueued before the cursor was saved.
+        assert!(!usage_scan_needed(true, 540_000_000, 540_000_000));
+        // The transcript grew since the last sync.
+        assert!(usage_scan_needed(true, 1_000, 1_024));
+        // Reset cursor (new file, rotated identity, or --from-start) always rescans.
+        assert!(usage_scan_needed(false, 0, 1_024));
+        assert!(usage_scan_needed(false, 0, 0));
     }
 
     #[test]
@@ -5696,11 +6863,11 @@ fn prepare_handoff(
 }
 
 /// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
-/// are not dependent on a user remembering to run `wakaclock ai sync`. Each agent gets
-/// its own bounded pass: a large or malformed Claude history must not consume the whole
+/// do not depend on a user remembering to run `wakaclock sync`. Each agent gets its
+/// own bounded pass: a large or malformed Claude history must not consume the whole
 /// budget before Codex gets a chance to scan its current session. A timeout/error leaves
 /// the ordinary heartbeat path untouched and the transcript cursor replayable on the
-/// next call.
+/// next event-triggered call.
 pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
     const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
 
@@ -5710,7 +6877,19 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
     for agent in ["codex", "claude-code", "gemini-cli"] {
         match tokio::time::timeout(
             AUTO_SYNC_AGENT_BUDGET,
-            run_ai_sync(config, api_client, Some(agent), false, false, false, None),
+            run_ai_sync(
+                config,
+                api_client,
+                Some(agent),
+                None,
+                AiSyncOptions {
+                    dry_run: false,
+                    verbose: false,
+                    from_start: false,
+                    lease_already_held: false,
+                    deadline: Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
+                },
+            ),
         )
         .await
         {
@@ -5755,34 +6934,17 @@ pub(crate) fn build_ai_heartbeat(
     } else {
         None
     };
+    // The project name is decided from the entity path alone, never from the reported
+    // cwd: agents `cd` into subfolders and Codex Desktop keeps stale session roots, so a
+    // cwd basename (or its nearest manifest) turned `backend/api/crates/wakaclock-core`
+    // into a project of its own. `resolve_project` is a stat walk without `gix`, so it
+    // keeps the broker free of the ref-resolution stalls described above.
     heartbeat.project = git_info
         .as_ref()
         .map(|info| info.project.clone())
-        // A transcript parser that supplies project_root has already resolved and
-        // validated the workspace boundary. Do not walk/open the entity path again:
-        // a macOS LaunchAgent can block indefinitely when it probes a new Desktop
-        // folder through TCC, stalling the durable broker queue behind one event.
         .or_else(|| {
-            event
-                .project_root
-                .is_none()
-                .then(|| infer_non_git_project_name(Path::new(&entity_path)))
-                .flatten()
-        })
-        // `project_root` คือ cwd ที่ agent รายงานมาเอง ซึ่งอาจเป็นโฟลเดอร์อะไรก็ได้ —
-        // การรับชื่อมันดื้อ ๆ ทำให้ smoke test ใน `/private/tmp` กลายเป็น project ชื่อ
-        // `tmp` ปนอยู่ใน dashboard ต้องมี marker ยืนยันว่าเป็น root ของโปรเจกต์จริงก่อน
-        // ไม่งั้นปล่อยเป็น NULL ดีกว่ารายงานชื่อที่ไม่ใช่ project ของใครเลย
-        .or_else(|| {
-            event
-                .project_root
-                .as_deref()
-                .filter(|root| {
-                    (event.agent == "codex" && event.source == AiEventSource::Transcript)
-                        || has_workspace_marker(root)
-                        || has_project_marker(root)
-                })
-                .and_then(|root| project_name_from_root(Some(root)))
+            resolve_project(&event.entity, event.project_root.as_deref())
+                .map(|resolved| resolved.name)
         });
     heartbeat.branch = git_info.map(|info| info.branch);
     heartbeat.is_write = true;
@@ -5888,12 +7050,6 @@ fn count_file_lines(path: &Path) -> io::Result<u32> {
     Ok(newline_count.saturating_add(1))
 }
 
-fn project_name_from_root(root: Option<&Path>) -> Option<String> {
-    root.and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().trim().to_string())
-        .filter(|name| !name.is_empty())
-}
-
 fn infer_language_from_path(entity: &str) -> Option<String> {
     let extension = Path::new(entity)
         .extension()
@@ -5931,82 +7087,12 @@ fn infer_language_from_path(entity: &str) -> Option<String> {
     Some(language.to_string())
 }
 
-/// Resolve a stable project name for a non-Git workspace.
-///
-/// Git remains authoritative when present. For folders that are intentionally not Git
-/// repositories (for example a pnpm monorepo copied from elsewhere), prefer a strong
-/// workspace marker over a nested package.json. This prevents an edit inside
-/// `apps/foo/node_modules/bar` or `apps/foo` from being reported as project `bar`/`foo`
-/// when the real workspace root is the parent monorepo.
-fn infer_non_git_project_name(entity_path: &Path) -> Option<String> {
-    discover_non_git_workspace_root(entity_path)
-        .as_deref()
-        .and_then(|root| project_name_from_root(Some(root)))
-}
-
-fn discover_non_git_workspace_root(entity_path: &Path) -> Option<PathBuf> {
-    let start = if entity_path.is_dir() {
-        entity_path
-    } else {
-        entity_path.parent()?
-    };
-    let mut nearest_project_root = None;
-
-    for ancestor in start.ancestors() {
-        if has_workspace_marker(ancestor) {
-            return Some(ancestor.to_path_buf());
-        }
-        if nearest_project_root.is_none() && has_project_marker(ancestor) {
-            nearest_project_root = Some(ancestor.to_path_buf());
-        }
-    }
-
-    nearest_project_root
-}
-
-fn has_workspace_marker(path: &Path) -> bool {
-    if ["pnpm-workspace.yaml", "lerna.json", "nx.json", "rush.json"]
-        .iter()
-        .any(|marker| path.join(marker).is_file())
-    {
-        return true;
-    }
-
-    let package_json = path.join("package.json");
-    fs::read_to_string(package_json)
-        .ok()
-        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-        .and_then(|value| value.get("workspaces").cloned())
-        .is_some()
-}
-
-fn has_project_marker(path: &Path) -> bool {
-    // Transcript events already carry their authoritative workspace root. A bare
-    // Git repository does not need a language-specific manifest at that root (this
-    // repository, for example, keeps Cargo.toml and package.json in subfolders).
-    // Treat both a normal `.git/` directory and a worktree `.git` file as strong
-    // project evidence so create/delete events keep their project name even when
-    // the changed entity no longer exists by the time the broker processes it.
-    if path.join(".git").exists() {
-        return true;
-    }
-
-    [
-        "package.json",
-        "Cargo.toml",
-        "pyproject.toml",
-        "go.mod",
-        "composer.json",
-    ]
-    .iter()
-    .any(|marker| path.join(marker).is_file())
-}
-
 fn build_heartbeat(
     config: &Config,
     entity: &str,
     entity_type: EntityType,
     project_override: Option<String>,
+    alternate_project: Option<String>,
     category: Category,
     is_write: bool,
     extra: Option<ExtraHeartbeatInput>,
@@ -6020,9 +7106,19 @@ fn build_heartbeat(
     );
 
     let git_info = git::discover(&entity_path);
-    heartbeat.project = project_override
-        .or_else(|| git_info.as_ref().map(|g| g.project.clone()))
-        .or_else(|| infer_non_git_project_name(Path::new(&entity_path)));
+    // WakaTime order: an explicit `--project` override, then the repository, then the
+    // editor's `--alternate-project` (its workspace folder name), then non-Git markers.
+    // The stat-walk repository check backs up `gix`, so a workspace folder opened on a
+    // repository subfolder (`extensions/vscode`) can never outrank the repository.
+    heartbeat.project = project_override.or_else(|| {
+        git_info.as_ref().map(|g| g.project.clone()).or_else(|| {
+            let resolved = resolve_project(Path::new(&entity_path), None);
+            match resolved {
+                Some(resolved) if resolved.source == ProjectSource::Git => Some(resolved.name),
+                other => alternate_project.or_else(|| other.map(|resolved| resolved.name)),
+            }
+        })
+    });
     heartbeat.branch = git_info.as_ref().map(|g| g.branch.clone());
     heartbeat.is_write = is_write;
     heartbeat.category = category;
@@ -6129,10 +7225,17 @@ fn build_heartbeat(
         heartbeat.human_lines_deleted = extra.human_lines_deleted;
         heartbeat.unattributed_lines_added = extra.unattributed_lines_added;
         heartbeat.unattributed_lines_deleted = extra.unattributed_lines_deleted;
+        heartbeat.line_metric_version = extra.line_metric_version;
+        heartbeat.line_measurement_status = extra.line_measurement_status;
+        heartbeat.line_measurement_reason = extra.line_measurement_reason;
+        heartbeat.measurement_window_id = extra.measurement_window_id;
     }
 
     if heartbeat.heartbeat_id.is_none() {
         heartbeat.heartbeat_id = Some(Uuid::new_v4().to_string());
+    }
+    if heartbeat.line_metric_version.is_some() && heartbeat.measurement_window_id.is_none() {
+        heartbeat.measurement_window_id = heartbeat.heartbeat_id.clone();
     }
 
     // Keep local dry-runs and offline queue entries subject to the same
@@ -6318,67 +7421,116 @@ fn active_seconds_with_queued(server: &[ActivitySegment], queued: &[ActivitySegm
 mod generic_ai_ingress_tests {
     use super::*;
 
-    #[test]
-    fn git_root_is_a_project_marker_without_a_root_manifest() {
-        let root = std::env::temp_dir().join(format!("wakaclock-git-root-{}", Uuid::new_v4()));
-        fs::create_dir_all(root.join(".git")).unwrap();
-
-        assert!(has_project_marker(&root));
-        assert_eq!(
-            project_name_from_root(Some(&root)),
-            root.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        );
-
-        fs::remove_dir_all(root).unwrap();
+    fn ai_event_for(agent: &str, entity: PathBuf, project_root: Option<PathBuf>) -> AiEditEvent {
+        AiEditEvent {
+            event_id: format!("{agent}-project-test"),
+            agent: agent.to_string(),
+            provider: None,
+            model: None,
+            session_id: None,
+            turn_id: None,
+            identity_message_id: None,
+            identity_status: None,
+            identity_reason: None,
+            identity_source: None,
+            tool_event_id: None,
+            producer_surface: None,
+            occurred_at: chrono::Utc::now(),
+            entity,
+            project_root,
+            change_kind: wakaclock_core::broker::BrokerChangeKind::Modify,
+            previous_entity: None,
+            lines_added: Some(1),
+            lines_deleted: None,
+            input_tokens: None,
+            output_tokens: None,
+            source: AiEventSource::Transcript,
+            confidence: AiConfidence::Verified,
+        }
     }
 
     #[test]
-    fn non_git_monorepo_root_wins_over_nested_package_names() {
-        let root = std::env::temp_dir().join(format!("wakaclock-project-root-{}", Uuid::new_v4()));
-        let nested = root
-            .join("apps/desktop/node_modules/ibm-plex-sans-thai/src")
-            .join("styles.css");
-        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fn ai_heartbeat_names_the_repository_not_the_agent_cwd_or_nested_crate() {
+        let base = std::env::temp_dir().join(format!("wakaclock-ai-project-{}", Uuid::new_v4()));
+        let repo = base.join("wakaclock");
+        let api = repo.join("backend/api");
+        let crate_root = api.join("crates/wakaclock-core");
+        let entity = crate_root.join("src/ai/codex.rs");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(api.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(
-            root.join("pnpm-workspace.yaml"),
-            "packages:\n  - 'apps/*'\n",
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"wakaclock-core\"\n",
         )
         .unwrap();
-        fs::write(
-            root.join("package.json"),
-            r#"{"private":true,"workspaces":["apps/*"]}"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join("apps/desktop/node_modules/ibm-plex-sans-thai/package.json"),
-            r#"{"name":"ibm-plex-sans-thai"}"#,
-        )
-        .unwrap();
-        fs::write(&nested, "body {}\n").unwrap();
+        let config = Config::default();
 
+        // Claude records follow `cd`, so its reported root can be a manifest subfolder.
+        let claude = ai_event_for("claude-code", entity.clone(), Some(api.clone()));
         assert_eq!(
-            infer_non_git_project_name(&nested),
-            project_name_from_root(Some(&root))
+            build_ai_heartbeat(&config, &claude, 0.0).project.as_deref(),
+            Some("wakaclock")
+        );
+        // Codex transcripts used to bypass every check and name the root folder.
+        let codex = ai_event_for("codex", entity.clone(), Some(crate_root.clone()));
+        assert_eq!(
+            build_ai_heartbeat(&config, &codex, 0.0).project.as_deref(),
+            Some("wakaclock")
+        );
+        let rootless = ai_event_for("codex", repo.join("WAKACLOCK-SMOKE.md"), None);
+        assert_eq!(
+            build_ai_heartbeat(&config, &rootless, 0.0)
+                .project
+                .as_deref(),
+            Some("wakaclock")
         );
 
-        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
-    fn plain_non_git_package_uses_its_package_root() {
-        let root = std::env::temp_dir().join(format!("wakaclock-package-root-{}", Uuid::new_v4()));
-        let nested = root.join("src/lib.ts");
-        fs::create_dir_all(nested.parent().unwrap()).unwrap();
-        fs::write(root.join("package.json"), r#"{"name":"plain-project"}"#).unwrap();
-        fs::write(&nested, "export {};\n").unwrap();
+    fn editor_alternate_project_is_only_a_fallback_below_the_repository() {
+        let base = std::env::temp_dir().join(format!("wakaclock-alt-project-{}", Uuid::new_v4()));
+        let repo = base.join("wakaclock");
+        let entity = repo.join("extensions/vscode/src/cli.ts");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(repo.join("extensions/vscode/package.json"), "{}").unwrap();
+        fs::write(&entity, "export {};\n").unwrap();
+        let loose = base.join("loose/notes.txt");
+        fs::create_dir_all(loose.parent().unwrap()).unwrap();
+        fs::write(&loose, "x").unwrap();
+        let config = Config::default();
+        let project_of = |entity: &Path, project: Option<&str>, alternate: Option<&str>| {
+            build_heartbeat(
+                &config,
+                entity.to_str().unwrap(),
+                EntityType::File,
+                project.map(str::to_string),
+                alternate.map(str::to_string),
+                Category::Coding,
+                false,
+                None,
+            )
+            .unwrap()
+            .project
+        };
 
         assert_eq!(
-            infer_non_git_project_name(&nested),
-            project_name_from_root(Some(&root))
+            project_of(&entity, None, Some("vscode")).as_deref(),
+            Some("wakaclock")
+        );
+        assert_eq!(
+            project_of(&loose, None, Some("notes-folder")).as_deref(),
+            Some("notes-folder")
+        );
+        assert_eq!(
+            project_of(&entity, Some("forced"), Some("vscode")).as_deref(),
+            Some("forced")
         );
 
-        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn sample_input() -> GenericAiEventInput {
@@ -6613,6 +7765,35 @@ mod generic_ai_ingress_tests {
                 action: AiAction::SessionEnd { json: true }
             }
         ));
+    }
+
+    #[test]
+    fn top_level_sync_supports_on_demand_json_and_hook_budget() {
+        let parsed = Cli::try_parse_from([
+            "wakaclock",
+            "sync",
+            "--agent",
+            "codex",
+            "--automatic",
+            "--json",
+        ])
+        .expect("sync should parse");
+        assert!(matches!(
+            parsed.command,
+            Commands::Sync {
+                agent: Some(agent),
+                automatic: true,
+                json: true,
+                ..
+            } if agent == "codex"
+        ));
+    }
+
+    #[test]
+    fn sync_status_distinguishes_quarantined_conflicts_from_transport_pending() {
+        assert_eq!(sync_deferred_reason(None, false, 0, 0), None);
+        assert_eq!(sync_deferred_reason(None, false, 4, 0), Some("backoff"));
+        assert_eq!(sync_deferred_reason(None, false, 0, 3), Some("server"));
     }
 
     #[test]

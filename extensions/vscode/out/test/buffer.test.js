@@ -88,8 +88,9 @@ function createConfig() {
             actor_confidence: 0,
             unattributed_lines_added: 2,
             unattributed_lines_deleted: 1,
-            project: "wakaclock",
+            alternate_project: "wakaclock",
         }));
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[0][4]).not.toHaveProperty("project");
     });
     (0, vitest_1.it)("does not duplicate a native AI heartbeat when the external change matches its sidecar", async () => {
         const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "atoaxis-external-ai-"));
@@ -186,7 +187,7 @@ function createConfig() {
         await manager.flushDueBuffers("timer", 31_000);
         (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledTimes(1);
         (0, vitest_1.expect)(sendHeartbeat).toHaveBeenCalledWith("C:/project/a.ts", false, "coding", [], vitest_1.expect.objectContaining({
-            project: "Daniel",
+            alternate_project: "Daniel",
             keystrokes: undefined,
             chars_added: 5,
             // Like WakaTime, one isolated heartbeat has no duration until another
@@ -199,6 +200,7 @@ function createConfig() {
             line_number: 5,
             cursor_position: 3
         }));
+        (0, vitest_1.expect)(sendHeartbeat.mock.calls[0][4]).not.toHaveProperty("project");
     });
     (0, vitest_1.it)("reports undo character volume without fabricating keys or unversioned line totals", async () => {
         // An undo is observed activity; its generation identity is unknown.

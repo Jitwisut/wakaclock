@@ -49,6 +49,7 @@ export interface V2Capabilities {
     wakatime_protocol: string;
   };
   features: Array<{ api: string; available?: boolean; key: string; status: string }>;
+  line_metric_versions: Array<{ status: string; version: string }>;
   postgres_enabled: boolean;
   presence_v2_available: boolean;
   privacy: {
@@ -78,17 +79,17 @@ export const INSIGHT_TYPES: InsightType[] = [
 // GET /status_bar/today
 // ---------------------------------------------------------------------------
 export interface StatusBarResponse {
+  active_ai_only_seconds?: number;
   active_ai_seconds?: number;
   active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
+  active_human_only_seconds?: number;
+  active_human_seconds?: number;
   active_intervals?: Array<{
     end: number;
     segment_id: string;
     source: string;
     start: number;
   }>;
-  active_human_seconds?: number;
-  active_human_only_seconds?: number;
-  active_ai_only_seconds?: number;
   active_overlap_seconds?: number;
   active_seconds?: number;
   agent_health?: unknown;
@@ -120,11 +121,11 @@ export interface StatusBarResponse {
 // GET /all_time_since_today
 // ---------------------------------------------------------------------------
 export interface AllTimeData {
+  active_ai_only_seconds?: number;
   active_ai_seconds?: number;
   active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
-  active_human_seconds?: number;
   active_human_only_seconds?: number;
-  active_ai_only_seconds?: number;
+  active_human_seconds?: number;
   active_overlap_seconds?: number;
   active_seconds?: number;
   ai_additional_seconds?: number;
@@ -179,11 +180,11 @@ export interface EvidenceSplit {
 }
 
 export interface StatsData {
+  active_ai_only_seconds?: number;
   active_ai_seconds?: number;
   active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
-  active_human_seconds?: number;
   active_human_only_seconds?: number;
-  active_ai_only_seconds?: number;
+  active_human_seconds?: number;
   active_overlap_seconds?: number;
   active_seconds?: number;
   ai_additional_seconds?: number;
@@ -225,11 +226,11 @@ export interface SummaryItem {
 }
 
 export interface SummaryGrandTotal {
+  active_ai_only_seconds?: number;
   active_ai_seconds?: number;
   active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
-  active_human_seconds?: number;
   active_human_only_seconds?: number;
-  active_ai_only_seconds?: number;
+  active_human_seconds?: number;
   active_overlap_seconds?: number;
   active_seconds?: number;
   ai_additional_seconds?: number;
@@ -265,11 +266,11 @@ export interface SummaryCalculation {
 }
 
 export interface SummariesResponse {
+  /** Additive effective-settings contract for external duration comparisons. */
+  calculation?: SummaryCalculation;
   days: SummaryDay[];
   end: string;
   start: string;
-  /** Additive effective-settings contract for external duration comparisons. */
-  calculation?: SummaryCalculation;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,11 +288,11 @@ export interface DurationBlock {
 }
 
 export interface DurationsResponse {
+  active_ai_only_seconds?: number;
   active_ai_seconds?: number;
   active_coverage?: 'measured' | 'partial' | 'unavailable' | string;
-  active_human_seconds?: number;
   active_human_only_seconds?: number;
-  active_ai_only_seconds?: number;
+  active_human_seconds?: number;
   active_overlap_seconds?: number;
   active_seconds?: number;
   ai_additional_seconds?: number;
@@ -303,9 +304,9 @@ export interface DurationsResponse {
   range_end?: number;
   range_start?: number;
   timezone?: string;
-  wakatime_compatible_seconds?: number;
   total: number;
   total_seconds?: number;
+  wakatime_compatible_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +407,13 @@ export interface AiStatsData {
   daily: AiDailyItem[];
   human_heartbeat_percentage: number;
   identity?: AiIdentitySummary;
+  line_measurements?: {
+    ai_added: number;
+    ai_deleted: number;
+    human_added: number;
+    human_deleted: number;
+    human_keystrokes: number;
+  };
   total_ai_inferred_lines_added: number;
   total_ai_inferred_lines_deleted: number;
   total_ai_lines_added: number;
@@ -420,6 +428,11 @@ export interface AiStatsData {
   total_unknown_lines_added: number;
   total_unknown_lines_deleted: number;
   unknown_heartbeat_percentage: number;
+  usage_coverage?: {
+    event_count: number;
+    input_tokens: { reported_events: number; status: string; total_events: number };
+    output_tokens: { reported_events: number; status: string; total_events: number };
+  };
 }
 
 export interface AiIdentitySummary {
@@ -1210,7 +1223,9 @@ export interface ProjectRuleMutationResponse {
 }
 
 // ---------------------------------------------------------------------------
-// project_merges — user_id REQUIRED; only /projects applies these at read time
+// project_merges — user_id REQUIRED; applied at read time by /projects and by every
+// duration surface built on the backend's build_timeline (durations/session timeline,
+// stats, all-time, project analytics)
 // ---------------------------------------------------------------------------
 export interface ProjectMergeItem {
   created_at: number;
@@ -1299,11 +1314,23 @@ export interface PresencePoint {
   y: number;
 }
 
+/** PresenceStatus in infrastructure/redis_presence.rs — a status message the user typed
+ * themselves (never inferred from activity). `expires_at` is unix seconds. */
+export interface PresenceStatusMessage {
+  emoji: null | string;
+  expires_at: number;
+  text: string;
+}
+
 /** Also doubles as presence v2's roster entry shape (RosterItem in
  * handlers/presence_v2.rs) — the two happen to be identical. */
 export interface PresenceRosterEntry {
+  /** Unix seconds until which the member asked not to be disturbed (v2 only). */
+  focus_until?: number;
   position: null | PresencePoint;
   state: PresenceState;
+  /** Present only when the member has set a status message (v2 only). */
+  status?: PresenceStatusMessage;
   user_id: string;
   username: string;
   zone_id: null | string;

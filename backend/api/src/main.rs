@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
     let app_state = Arc::new(app_state);
 
     // Initialise logging from AppState
-    info!("Wakaclock Server Starting...");
+    info!("AtoAxis Server Starting...");
 
     let migration_guard = match &app_state.postgres {
         Some(postgres) => Some(postgres.migration_guard().await?),

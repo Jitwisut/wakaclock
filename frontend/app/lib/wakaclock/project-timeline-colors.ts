@@ -1,9 +1,15 @@
-const UNASSIGNED_PROJECT = 'Unassigned';
+export const UNASSIGNED_PROJECT = 'Unassigned';
+
+/** True when a timeline block carries no project (null or blank). */
+export function isUnassignedTimelineProject(project: null | string): boolean {
+  return !project?.trim();
+}
 
 function hashProjectName(value: string) {
   let hash = 2_166_136_261;
   for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.codePointAt(index) ?? 0;
+    // The loop bounds guarantee an existing UTF-16 position.
+    hash ^= value.codePointAt(index) as number;
     hash = Math.imul(hash, 16_777_619);
   }
   return hash >>> 0;
@@ -42,7 +48,7 @@ export function orderedTimelineProjects(projects: Array<null | string>) {
 }
 
 export function timelineProjectTotals(
-  entries: Array<{ durationSeconds: number; project: null | string }>,
+  entries: Array<{ durationSeconds: number; project: null | string }>
 ) {
   const totals = new Map<string, number>();
 

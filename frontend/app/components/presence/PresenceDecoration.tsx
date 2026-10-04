@@ -16,20 +16,22 @@ function mirrorRow(left: string): string {
 }
 
 function pixelGridSvg(
-  leftHalves: readonly string[],
+  leftHalves: readonly [string, ...string[]],
   colorFor: Record<string, string>,
   cell: number,
   extra?: React.ReactNode
 ) {
   const rows = leftHalves.map(mirrorRow);
-  const cols = rows[0]?.length ?? 0;
+  const cols = leftHalves[0].length * 2;
   const pixels: React.ReactNode[] = [];
 
   for (const [y, row] of rows.entries()) {
     for (let x = 0; x < row.length; x += 1) {
       const fill = colorFor[row[x]];
       if (!fill) continue;
-      pixels.push(<rect fill={fill} height={cell} key={`${x}-${y}`} width={cell} x={x * cell} y={y * cell} />);
+      pixels.push(
+        <rect fill={fill} height={cell} key={`${x}-${y}`} width={cell} x={x * cell} y={y * cell} />
+      );
     }
   }
 
@@ -99,13 +101,7 @@ const FLOWER_ROWS = ['.P', 'S.'] as const;
 
 const FLOWER_PALETTES = ['#ff8fa3', '#ffd166', '#ffffff'] as const;
 
-export function PixelFlower({
-  className,
-  variant = 0,
-}: {
-  className?: string;
-  variant?: number;
-}) {
+export function PixelFlower({ className, variant = 0 }: { className?: string; variant?: number }) {
   const petal = FLOWER_PALETTES[variant % FLOWER_PALETTES.length];
   return (
     <div className={className}>{pixelGridSvg(FLOWER_ROWS, { P: petal, S: '#2f8f4e' }, 6)}</div>

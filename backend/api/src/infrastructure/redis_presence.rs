@@ -32,6 +32,17 @@ pub const MAX_ROOM_VIEWERS: i64 = 30;
 /// normal working session, not reappear on the next throttled heartbeat tick a few
 /// seconds later.
 pub const AUTO_JOIN_SNOOZE_SECONDS: i64 = 3600;
+/// Bounds for a user-set status message ("Fixing the auth bug"). The status is shown only
+/// in the roster of rooms the user is in and always expires, so a stale "In a meeting"
+/// cannot follow someone around for weeks.
+pub const STATUS_TEXT_MAX_CHARS: usize = 80;
+pub const STATUS_EMOJI_MAX_CHARS: usize = 8;
+pub const STATUS_MIN_TTL_SECONDS: i64 = 5 * 60;
+pub const STATUS_MAX_TTL_SECONDS: i64 = 7 * 24 * 3600;
+/// Bounds for a focus block ("do not disturb until 15:00"). Long enough for a deep-work
+/// morning, short enough that a forgotten focus block never hides someone for a day.
+pub const FOCUS_MIN_SECONDS: i64 = 5 * 60;
+pub const FOCUS_MAX_SECONDS: i64 = 8 * 3600;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -69,6 +80,135 @@ pub struct LiveRosterEntry {
     pub state: LivePresenceState,
     pub position: Option<LivePosition>,
     pub zone_id: Option<Uuid>,
+    /// What the user chose to share, if anything. Never derived from their activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<PresenceStatus>,
+    /// Unix seconds until which the user asked not to be disturbed, if they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_until: Option<i64>,
+}
+
+/// A status message the user typed themselves. Unlike `state`, nothing here is inferred
+/// from editor activity; it is opt-in text with a hard expiry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceStatus {
+    pub text: String,
+    pub emoji: Option<String>,
+    /// Unix seconds. Also enforced by the Redis key TTL; checked on read as well so a
+    /// clock-skewed or not-yet-evicted key is never shown past its expiry.
+    pub expires_at: i64,
+}
+
+/// Why a status message was rejected. Messages are safe to show to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusError {
+    Empty,
+    TooLong,
+    InvalidEmoji,
+    InvalidExpiry,
+}
+
+impl StatusError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Empty => "status text cannot be empty",
+            Self::TooLong => "status text must be 80 characters or fewer",
+            Self::InvalidEmoji => "status emoji must be a short symbol, not text",
+            Self::InvalidExpiry => "status must expire between 5 minutes and 7 days from now",
+        }
+    }
+}
+
+/// Normalises user input into a storable status: trims and collapses whitespace, drops
+/// control characters, bounds the length, and requires the optional emoji to be a short
+/// non-alphanumeric symbol so it cannot be used as a second text field.
+pub fn normalize_status(
+    text: &str,
+    emoji: Option<&str>,
+    expires_in_seconds: i64,
+    now: i64,
+) -> Result<PresenceStatus, StatusError> {
+    // Control characters become spaces (so "a\tb" stays two words), then runs of
+    // whitespace collapse to one. Bidirectional overrides are format characters rather
+    // than control characters, so they are named explicitly: other people read this
+    // text, and a right-to-left override would let it render as something else.
+    let text = text
+        .chars()
+        .map(|character| {
+            if character.is_control() || is_bidi_control(character) {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        return Err(StatusError::Empty);
+    }
+    if text.chars().count() > STATUS_TEXT_MAX_CHARS {
+        return Err(StatusError::TooLong);
+    }
+    let emoji = match emoji.map(str::trim).filter(|value| !value.is_empty()) {
+        None => None,
+        Some(value) => {
+            let valid = value.chars().count() <= STATUS_EMOJI_MAX_CHARS
+                && !value
+                    .chars()
+                    .any(|character| character.is_alphanumeric() || character.is_control());
+            if !valid {
+                return Err(StatusError::InvalidEmoji);
+            }
+            Some(value.to_string())
+        }
+    };
+    if !(STATUS_MIN_TTL_SECONDS..=STATUS_MAX_TTL_SECONDS).contains(&expires_in_seconds) {
+        return Err(StatusError::InvalidExpiry);
+    }
+    Ok(PresenceStatus {
+        text,
+        emoji,
+        expires_at: now + expires_in_seconds,
+    })
+}
+
+fn is_bidi_control(character: char) -> bool {
+    matches!(character, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Splits the snapshot's combined MGET reply into `groups` runs of `members` values each
+/// (heartbeats, then statuses, then focus blocks). A short reply pads with `None`, so a
+/// missing key reads as "not set" rather than shifting later members' values.
+fn split_mget_groups(
+    values: Vec<RedisValue>,
+    members: usize,
+    groups: usize,
+) -> Vec<Vec<Option<RedisValue>>> {
+    let mut values = values.into_iter();
+    (0..groups)
+        .map(|_| (0..members).map(|_| values.next()).collect())
+        .collect()
+}
+
+/// Validates a focus request and returns when it ends.
+pub fn focus_until(duration_seconds: i64, now: i64) -> Option<i64> {
+    (FOCUS_MIN_SECONDS..=FOCUS_MAX_SECONDS)
+        .contains(&duration_seconds)
+        .then_some(now + duration_seconds)
+}
+
+/// A stored focus deadline, or `None` when missing, unreadable or already over.
+fn live_focus(raw: Option<RedisValue>, now: i64) -> Option<i64> {
+    raw.and_then(integer_optional).filter(|until| *until > now)
+}
+
+/// A stored status value, or `None` when it is missing, unreadable or already expired.
+fn live_status(raw: Option<String>, now: i64) -> Option<PresenceStatus> {
+    serde_json::from_str::<PresenceStatus>(&raw?)
+        .ok()
+        .filter(|status| status.expires_at > now)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +350,69 @@ impl RedisPresenceStore {
             ],
         )
         .await?;
+        Ok(())
+    }
+
+    /// Stores the user's status until its expiry and nudges every room they are in, so the
+    /// next snapshot each viewer applies carries it.
+    pub async fn set_status(&self, user_id: Uuid, status: &PresenceStatus) -> Result<()> {
+        let ttl = (status.expires_at - now_seconds()).max(1);
+        self.command(
+            "SET",
+            &[
+                status_key(user_id),
+                serde_json::to_string(status)?,
+                "EX".to_string(),
+                ttl.to_string(),
+            ],
+        )
+        .await?;
+        self.bump_user_rooms(user_id).await
+    }
+
+    pub async fn clear_status(&self, user_id: Uuid) -> Result<()> {
+        self.command("DEL", &[status_key(user_id)]).await?;
+        self.bump_user_rooms(user_id).await
+    }
+
+    pub async fn status(&self, user_id: Uuid) -> Result<Option<PresenceStatus>> {
+        let raw = bulk_string(self.command("GET", &[status_key(user_id)]).await?);
+        Ok(live_status(raw, now_seconds()))
+    }
+
+    /// Marks the user as focusing until `until` and nudges their rooms.
+    pub async fn set_focus(&self, user_id: Uuid, until: i64) -> Result<()> {
+        let ttl = (until - now_seconds()).max(1);
+        self.command(
+            "SET",
+            &[
+                focus_key(user_id),
+                until.to_string(),
+                "EX".to_string(),
+                ttl.to_string(),
+            ],
+        )
+        .await?;
+        self.bump_user_rooms(user_id).await
+    }
+
+    pub async fn clear_focus(&self, user_id: Uuid) -> Result<()> {
+        self.command("DEL", &[focus_key(user_id)]).await?;
+        self.bump_user_rooms(user_id).await
+    }
+
+    pub async fn focus(&self, user_id: Uuid) -> Result<Option<i64>> {
+        let raw = self.command("GET", &[focus_key(user_id)]).await?;
+        Ok(live_focus(Some(raw), now_seconds()))
+    }
+
+    async fn bump_user_rooms(&self, user_id: Uuid) -> Result<()> {
+        let rooms = array_values(self.command("SMEMBERS", &[user_rooms_key(user_id)]).await?)?;
+        for room in rooms.into_iter().filter_map(bulk_string) {
+            if let Ok(room_id) = Uuid::parse_str(&room) {
+                self.bump_version(room_id).await?;
+            }
+        }
         Ok(())
     }
 
@@ -548,25 +751,39 @@ impl RedisPresenceStore {
         // Fetch heartbeat timestamps for the whole roster in one Redis round trip rather
         // than one GET per viewer. This keeps a 30-person room bounded even when every
         // browser holds an SSE stream.
-        let states = if members.is_empty() {
-            Vec::new()
+        // Status messages ride in the same MGET: the first half of the reply is heartbeat
+        // timestamps, the second half the matching status keys.
+        let mut groups = if members.is_empty() {
+            vec![Vec::new(), Vec::new(), Vec::new()]
         } else {
             let keys = members
                 .iter()
                 .map(|(user_id, _)| user_key(*user_id))
+                .chain(members.iter().map(|(user_id, _)| status_key(*user_id)))
+                .chain(members.iter().map(|(user_id, _)| focus_key(*user_id)))
                 .collect::<Vec<_>>();
-            array_values(self.command("MGET", &keys).await?)?
+            let values = array_values(self.command("MGET", &keys).await?)?;
+            split_mget_groups(values, members.len(), 3)
         };
+        let focus = groups.pop().unwrap_or_default();
+        let statuses = groups.pop().unwrap_or_default();
+        let states = groups.pop().unwrap_or_default();
         let mut roster = members
             .into_iter()
             .zip(states)
-            .map(|((user_id, member), heartbeat)| LiveRosterEntry {
-                user_id,
-                username: member.username,
-                state: derive_state_at(integer_optional(heartbeat), now),
-                position: member.position,
-                zone_id: member.zone_id,
-            })
+            .zip(statuses)
+            .zip(focus)
+            .map(
+                |((((user_id, member), heartbeat), status), focus)| LiveRosterEntry {
+                    user_id,
+                    username: member.username,
+                    state: derive_state_at(heartbeat.and_then(integer_optional), now),
+                    position: member.position,
+                    zone_id: member.zone_id,
+                    status: live_status(status.and_then(bulk_string), now),
+                    focus_until: live_focus(focus, now),
+                },
+            )
             .collect::<Vec<_>>();
         roster.sort_by(|a, b| a.username.cmp(&b.username));
 
@@ -657,6 +874,8 @@ impl RedisPresenceStore {
             "DEL",
             &[
                 user_key(user_id),
+                status_key(user_id),
+                focus_key(user_id),
                 movement_rate_key(user_id),
                 user_rooms_key(user_id),
                 user_tickets_key(user_id),
@@ -1184,6 +1403,12 @@ fn version_key(room_id: Uuid) -> String {
 fn user_key(user_id: Uuid) -> String {
     format!("presence:user:{user_id}")
 }
+fn focus_key(user_id: Uuid) -> String {
+    format!("presence:user:{user_id}:focus")
+}
+fn status_key(user_id: Uuid) -> String {
+    format!("presence:user:{user_id}:status")
+}
 fn movement_rate_key(user_id: Uuid) -> String {
     format!("presence:rate:movement:{user_id}")
 }
@@ -1229,6 +1454,119 @@ mod tests {
         assert_eq!(hash, hash_token(token));
         assert_eq!(hash.len(), 64);
         assert!(!hash.contains(token));
+    }
+
+    #[test]
+    fn status_is_trimmed_collapsed_and_expires() {
+        let status = normalize_status("  Fixing \n the\tauth   bug ", Some(" 🐛 "), 3600, 1_000)
+            .expect("valid status");
+        assert_eq!(status.text, "Fixing the auth bug");
+        assert_eq!(status.emoji.as_deref(), Some("🐛"));
+        assert_eq!(status.expires_at, 4_600);
+        assert_eq!(
+            normalize_status("Reviewing", Some("  "), 300, 0)
+                .unwrap()
+                .emoji,
+            None
+        );
+        assert_eq!(
+            normalize_status("Reviewing", None, 300, 0).unwrap().emoji,
+            None
+        );
+    }
+
+    #[test]
+    fn status_rejects_empty_long_texty_emoji_and_bad_expiry() {
+        assert_eq!(
+            normalize_status(" \t ", None, 600, 0),
+            Err(StatusError::Empty)
+        );
+        assert_eq!(
+            normalize_status(&"a".repeat(STATUS_TEXT_MAX_CHARS + 1), None, 600, 0),
+            Err(StatusError::TooLong)
+        );
+        assert!(normalize_status(&"é".repeat(STATUS_TEXT_MAX_CHARS), None, 600, 0).is_ok());
+        assert_eq!(
+            normalize_status("ok", Some("hi"), 600, 0),
+            Err(StatusError::InvalidEmoji)
+        );
+        assert_eq!(
+            normalize_status("ok", Some("🎯🎯🎯🎯🎯🎯🎯🎯🎯"), 600, 0),
+            Err(StatusError::InvalidEmoji)
+        );
+        assert_eq!(
+            normalize_status("ok", None, STATUS_MIN_TTL_SECONDS - 1, 0),
+            Err(StatusError::InvalidExpiry)
+        );
+        assert_eq!(
+            normalize_status("ok", None, STATUS_MAX_TTL_SECONDS + 1, 0),
+            Err(StatusError::InvalidExpiry)
+        );
+        assert!(!StatusError::InvalidExpiry.message().is_empty());
+    }
+
+    #[test]
+    fn status_neutralises_bidirectional_overrides() {
+        let status = normalize_status("Reviewing \u{202E}gub", None, 600, 0).unwrap();
+        assert_eq!(status.text, "Reviewing gub");
+        assert_eq!(
+            normalize_status("\u{2066}ok\u{2069}", None, 600, 0)
+                .unwrap()
+                .text,
+            "ok"
+        );
+    }
+
+    #[test]
+    fn combined_mget_reply_splits_into_member_groups() {
+        let reply = vec![
+            RedisValue::Integer(10),
+            RedisValue::Integer(20),
+            RedisValue::Bulk(Some(b"status-a".to_vec())),
+            RedisValue::Bulk(None),
+            RedisValue::Bulk(None),
+            RedisValue::Bulk(Some(b"1700".to_vec())),
+        ];
+        let groups = split_mget_groups(reply, 2, 3);
+        assert_eq!(groups.len(), 3);
+        assert!(groups.iter().all(|group| group.len() == 2));
+        assert_eq!(groups[0][1].clone().and_then(integer_optional), Some(20));
+        assert_eq!(
+            groups[1][0].clone().and_then(bulk_string).as_deref(),
+            Some("status-a")
+        );
+        assert_eq!(live_focus(groups[2][1].clone(), 1_000), Some(1_700));
+        assert_eq!(live_focus(groups[2][0].clone(), 1_000), None);
+
+        let short = split_mget_groups(vec![RedisValue::Integer(1)], 2, 3);
+        assert_eq!(short[0][0].clone().and_then(integer_optional), Some(1));
+        assert!(short[0][1].is_none());
+        assert!(short[1].iter().chain(&short[2]).all(Option::is_none));
+    }
+
+    #[test]
+    fn focus_blocks_are_bounded_and_expire() {
+        assert_eq!(
+            focus_until(FOCUS_MIN_SECONDS, 100),
+            Some(100 + FOCUS_MIN_SECONDS)
+        );
+        assert_eq!(focus_until(FOCUS_MAX_SECONDS, 0), Some(FOCUS_MAX_SECONDS));
+        assert_eq!(focus_until(FOCUS_MIN_SECONDS - 1, 0), None);
+        assert_eq!(focus_until(FOCUS_MAX_SECONDS + 1, 0), None);
+        assert_eq!(live_focus(Some(RedisValue::Integer(500)), 499), Some(500));
+        assert_eq!(live_focus(Some(RedisValue::Integer(500)), 500), None);
+        assert_eq!(live_focus(Some(RedisValue::Bulk(None)), 0), None);
+        assert_eq!(live_focus(None, 0), None);
+    }
+
+    #[test]
+    fn stored_status_is_hidden_once_expired_or_unreadable() {
+        let status = normalize_status("Pairing", None, 600, 1_000).unwrap();
+        let raw = serde_json::to_string(&status).unwrap();
+        assert_eq!(live_status(Some(raw.clone()), 1_599), Some(status));
+        assert_eq!(live_status(Some(raw), 1_600), None);
+        assert_eq!(live_status(Some("not json".to_string()), 0), None);
+        assert_eq!(live_status(None, 0), None);
     }
 
     #[test]

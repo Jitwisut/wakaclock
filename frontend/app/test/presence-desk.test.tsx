@@ -1,11 +1,57 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { appearanceFor } from '@/components/presence/appearance';
 import { DeskWorkstation } from '@/components/presence/DeskWorkstation';
 import { PresencePlayer } from '@/components/presence/PresencePlayer';
+import { SeatedOccupant } from '@/components/presence/SeatedOccupant';
 import type { PresenceUser } from '@/types/presence';
+
+it('commits a drag once when pointerup and pointercancel arrive in the same render batch', () => {
+  class Pointer extends MouseEvent {
+    pointerId = 1;
+  }
+  vi.stubGlobal('PointerEvent', Pointer);
+  try {
+    const containerRef = createRef<HTMLDivElement>();
+    const onMove = vi.fn();
+    render(
+      <div ref={containerRef}>
+        <PresencePlayer
+          containerRef={containerRef}
+          onMove={onMove}
+          reducedMotion
+          user={{ id: 'self', username: 'Me', isCurrentUser: true, status: 'idle', x: 50, y: 50 }}
+        />
+      </div>
+    );
+    vi.spyOn(containerRef.current!, 'getBoundingClientRect').mockReturnValue({
+      width: 1000,
+      height: 500,
+    } as DOMRect);
+    fireEvent.pointerDown(screen.getByRole('button'), { button: 0, clientX: 500, clientY: 250 });
+    act(() => {
+      window.dispatchEvent(new Pointer('pointerup', { clientX: 600, clientY: 300 }));
+      window.dispatchEvent(new Pointer('pointercancel', { clientX: 600, clientY: 300 }));
+    });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith({ x: 60, y: 60 });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('shows an idle seated coworker without a live coding indicator', () => {
+  render(
+    <SeatedOccupant
+      user={{ id: 'peer', username: 'Ada', isCurrentUser: false, status: 'idle', x: 50, y: 50 }}
+      reducedMotion
+      screenTone="#123456"
+    />
+  );
+  expect(screen.getByText('Ada')).toBeVisible();
+  expect(screen.queryByText('●')).toBeNull();
+});
 
 describe('presence desk pose', () => {
   it('drags onto a desk and back out without waiting for server props', () => {
@@ -89,4 +135,116 @@ describe('presence desk pose', () => {
     expect(container.querySelector('.office-anim-keys-l')).toBeNull();
     expect(container.querySelector('.office-crt-line')).toBeNull();
   });
+});
+
+it.each(['idle', 'offline', 'coding'] as const)(
+  'renders %s workstation activity without inventing typing',
+  (status) => {
+    const { container } = render(
+      <DeskWorkstation appearance={appearanceFor('desk')} reducedMotion={false} status={status} />
+    );
+    expect(Boolean(container.querySelector('.office-anim-typing'))).toBe(status === 'coding');
+    expect(Boolean(container.querySelector('.office-anim-breathe'))).toBe(status === 'idle');
+    expect(Boolean(container.querySelector('.office-crt-line'))).toBe(status === 'coding');
+  }
+);
+
+it('ignores secondary pointers and preserves the last preview when the floor collapses during a drag', () => {
+  class Pointer extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+    }
+  }
+  vi.stubGlobal('PointerEvent', Pointer);
+  try {
+    const containerRef = createRef<HTMLDivElement>();
+    const onMove = vi.fn();
+    const user: PresenceUser = {
+      id: 'self',
+      username: 'Me',
+      isCurrentUser: true,
+      status: 'idle',
+      x: 50,
+      y: 50,
+    };
+    const view = render(
+      <div ref={containerRef}>
+        <PresencePlayer user={user} containerRef={containerRef} onMove={onMove} reducedMotion />
+      </div>
+    );
+    const rect = vi
+      .spyOn(containerRef.current!, 'getBoundingClientRect')
+      .mockReturnValue({ width: 1000, height: 500 } as DOMRect);
+    const button = screen.getByRole('button');
+    fireEvent.pointerDown(button, { button: 2, pointerId: 1 });
+    expect(button).toHaveStyle({ cursor: 'grab' });
+    fireEvent.pointerDown(button, { button: 0, pointerId: 1, clientX: 500, clientY: 250 });
+    fireEvent.pointerDown(button, { button: 0, pointerId: 2, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(window, { pointerId: 2 });
+    expect(onMove).not.toHaveBeenCalled();
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 600, clientY: 300 });
+    expect(button).toHaveStyle({ left: '60%', top: '60%' });
+    rect.mockReturnValue({ width: 0, height: 0 } as DOMRect);
+    fireEvent.pointerCancel(window, { pointerId: 1 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith({ x: 60, y: 60 });
+    view.unmount();
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(onMove).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('recovers invalid server coordinates and ignores keyboard movement without a handler', () => {
+  const user: PresenceUser = {
+    id: 'self',
+    username: 'Me',
+    isCurrentUser: true,
+    status: 'offline',
+    x: NaN,
+    y: Infinity,
+  };
+  render(<PresencePlayer user={user} containerRef={createRef<HTMLDivElement>()} reducedMotion />);
+  const button = screen.getByRole('button');
+  expect(button).toHaveStyle({ left: '46%', top: '46%' });
+  fireEvent.keyDown(button, { key: 'ArrowRight' });
+  expect(button).toHaveStyle({ left: '46%', top: '46%' });
+});
+
+it('recovers to finite floor coordinates when pointer delta overflows', () => {
+  class Pointer extends MouseEvent {
+    pointerId = 1;
+  }
+  vi.stubGlobal('PointerEvent', Pointer);
+  try {
+    const containerRef = createRef<HTMLDivElement>();
+    const onMove = vi.fn();
+    const user: PresenceUser = {
+      id: 'self',
+      username: 'Me',
+      isCurrentUser: true,
+      status: 'idle',
+      x: 20,
+      y: 20,
+    };
+    render(
+      <div ref={containerRef}>
+        <PresencePlayer user={user} containerRef={containerRef} onMove={onMove} reducedMotion />
+      </div>
+    );
+    vi.spyOn(containerRef.current!, 'getBoundingClientRect').mockReturnValue({
+      width: Number.MIN_VALUE,
+      height: 500,
+    } as DOMRect);
+    const button = screen.getByRole('button');
+    fireEvent.pointerDown(button, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 0 });
+    expect(onMove).toHaveBeenCalledExactlyOnceWith({ x: 50, y: 20 });
+    expect(button).toHaveStyle({ left: '50%', top: '20%' });
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

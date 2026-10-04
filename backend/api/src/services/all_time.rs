@@ -49,6 +49,7 @@ impl AllTimeService {
                 active_ai_seconds: Some(row.active_ai_seconds),
                 active_overlap_seconds: Some(row.active_overlap_seconds),
                 active_coverage: Some(row.active_coverage),
+                wakatime: None,
             },
         })
     }

@@ -14,13 +14,18 @@ import time
 
 
 REQUESTS: queue.Queue[dict] = queue.Queue()
+DELIVERY_STATUS: queue.Queue[dict] = queue.Queue()
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
-        REQUESTS.put({"path": self.path, "payload": payload, "authorization": self.headers.get("Authorization")})
+        request = {"path": self.path, "payload": payload, "authorization": self.headers.get("Authorization")}
+        # Delivery diagnostics are independent of document activity. Keep unexpected
+        # endpoints in REQUESTS so they still fail the heartbeat contract assertions.
+        destination = DELIVERY_STATUS if self.path == "/api/v2/me/delivery-status" else REQUESTS
+        destination.put(request)
         body = b'{"status":"ok","heartbeats_inserted":1}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -178,6 +183,11 @@ def main() -> int:
             assert saved_heartbeat["is_write"] is True, saved_heartbeat
             assert saved_heartbeat["lines"] == 3, saved_heartbeat
 
+            delivery = DELIVERY_STATUS.get(timeout=10)
+            assert delivery["authorization"] == "Bearer wcl_phase3_smoke", delivery
+            assert delivery["payload"]["schema_version"] == 1, delivery
+            assert "entity" not in delivery["payload"], delivery
+
             # Non-file buffers may exist in Zed but must never leave the machine as heartbeats.
             process.stdin.write(
                 lsp_message(
@@ -205,7 +215,17 @@ def main() -> int:
             process.stdin.write(lsp_message({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None}))
             process.stdin.write(lsp_message({"jsonrpc": "2.0", "method": "exit", "params": None}))
             process.stdin.flush()
-            print("wakaclock-ls process smoke passed")
+            # Delivery-status reports are metadata-only: none of them may carry the file
+            # path, not just the first one checked above.
+            reports = [delivery]
+            while True:
+                try:
+                    reports.append(DELIVERY_STATUS.get_nowait())
+                except queue.Empty:
+                    break
+            for report in reports:
+                assert str(source) not in json.dumps(report["payload"]), report
+            print(f"wakaclock-ls process smoke passed ({len(reports)} delivery-status reports)")
             return 0
         finally:
             process.terminate()

@@ -26,7 +26,7 @@ const COPY = {
       },
       {
         title: 'Point your editor at it',
-        body: 'Install the VS Code extension and run Wakaclock: Set API Key. In any editor that already has a WakaTime plugin, change one line in ~/.wakatime.cfg instead.',
+        body: 'Install the VS Code extension and run AtoAxis: Set API Key. In any editor that already has a WakaTime plugin, change one line in ~/.wakatime.cfg instead.',
         command: 'api_url = https://api.atoaxis.com/api/v1',
       },
       {
@@ -50,7 +50,7 @@ const COPY = {
       },
       {
         title: 'ชี้ editor มาที่ AtoAxis',
-        body: 'ติดตั้ง extension บน VS Code แล้วรัน Wakaclock: Set API Key หรือถ้า editor ของคุณมี WakaTime plugin อยู่แล้ว แก้เพียงบรรทัดเดียวใน ~/.wakatime.cfg',
+        body: 'ติดตั้ง extension บน VS Code แล้วรัน AtoAxis: Set API Key หรือถ้า editor ของคุณมี WakaTime plugin อยู่แล้ว แก้เพียงบรรทัดเดียวใน ~/.wakatime.cfg',
         command: 'api_url = https://api.atoaxis.com/api/v1',
       },
       {

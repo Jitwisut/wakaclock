@@ -1,11 +1,13 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { ChevronDownIcon } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Table,
   TableBody,
@@ -15,13 +17,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { QueryState } from '@/components/wakaclock/query-state';
-import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { getBrowserTimezone, getSummaries } from '@/lib/wakaclock/endpoints';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { SummaryDay, SummaryItem } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import styles from '../overview.module.css';
+
+import { OVERVIEW_RANGE_DAYS } from './overview-toolbar';
 
 const chartConfig = {
   seconds: { label: 'Time', color: 'var(--chart-1)' },
@@ -33,7 +38,8 @@ function topItem(items: SummaryItem[]) {
 
 export function SummariesPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
-  const { start, end, setRange } = useWakaclockRange(7);
+  // Follows the overview toolbar's range (30 days by default) instead of its own picker.
+  const { start, end } = useWakaclockRange(OVERVIEW_RANGE_DAYS);
   const timezone = getBrowserTimezone();
 
   const { data, isLoading, error } = useQuery({
@@ -62,9 +68,7 @@ export function SummariesPanel() {
   const activeSeconds = days.reduce(
     (sum, day) =>
       sum +
-      (day.grand_total.active_coverage === 'measured'
-        ? (day.grand_total.active_seconds ?? 0)
-        : 0),
+      (day.grand_total.active_coverage === 'measured' ? (day.grand_total.active_seconds ?? 0) : 0),
     0
   );
   const hasActive = days.some((day) => day.grand_total.active_coverage === 'measured');
@@ -75,8 +79,8 @@ export function SummariesPanel() {
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Daily summaries</CardTitle>
+            <CardDescription>Your coding time per day across the selected range</CardDescription>
           </div>
-          <RangePicker onChange={setRange} value={{ start, end }} />
         </div>
       </CardHeader>
       <CardContent>
@@ -86,15 +90,15 @@ export function SummariesPanel() {
           isLoading={isLoading}
         >
           <div className="space-y-6">
-            <ChartContainer className="h-56 w-full" config={chartConfig}>
-              <AreaChart data={chartData} margin={{ left: 8, right: 8 }}>
+            <ChartContainer className="h-64 w-full" config={chartConfig}>
+              <AreaChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
                 <defs>
                   <linearGradient id="summaryHoursFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-seconds)" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="var(--color-seconds)" stopOpacity={0.02} />
+                    <stop offset="0%" stopColor="var(--color-seconds)" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="var(--color-seconds)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <CartesianGrid strokeOpacity={0.5} vertical={false} />
                 <XAxis
                   axisLine={false}
                   dataKey="date"
@@ -113,12 +117,19 @@ export function SummariesPanel() {
                       formatter={(value) => formatDurationShort(Number(value))}
                     />
                   }
+                  cursor={{
+                    stroke: 'var(--color-seconds)',
+                    strokeDasharray: '4 4',
+                    strokeOpacity: 0.6,
+                  }}
                 />
                 <Area
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--card)' }}
+                  animationDuration={900}
                   dataKey="seconds"
                   fill="url(#summaryHoursFill)"
                   stroke="var(--color-seconds)"
-                  strokeWidth={2}
+                  strokeWidth={2.5}
                   type="monotone"
                 />
               </AreaChart>
@@ -127,7 +138,7 @@ export function SummariesPanel() {
             {(hasDurationV2 || hasActive) && (
               <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
                 {hasActive && (
-                  <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                  <div className="border-primary/30 bg-primary/5 rounded-md border p-3">
                     <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
                     <dd className="text-lg font-semibold tabular-nums">
                       {formatDurationShort(activeSeconds)}
@@ -149,34 +160,42 @@ export function SummariesPanel() {
               </dl>
             )}
 
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Total</TableHead>
-                    <TableHead>Heartbeats</TableHead>
-                    <TableHead>Top language</TableHead>
-                    <TableHead>Top project</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {days.map((day: SummaryDay) => (
-                    <TableRow key={day.date}>
-                      <TableCell className="font-mono text-xs">{day.date}</TableCell>
-                      <TableCell>{day.grand_total.text}</TableCell>
-                      <TableCell>{day.grand_total.heartbeats}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {day.languages.length > 0 ? topItem(day.languages).name : '—'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {day.projects.length > 0 ? topItem(day.projects).name : '—'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <Collapsible>
+              <CollapsibleTrigger className={styles.disclosure}>
+                Daily breakdown table ({days.length} {days.length === 1 ? 'day' : 'days'})
+                <ChevronDownIcon aria-hidden className="size-4" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-3">
+                <div className="overflow-x-auto rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Total</TableHead>
+                        <TableHead>Heartbeats</TableHead>
+                        <TableHead>Top language</TableHead>
+                        <TableHead>Top project</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {days.map((day: SummaryDay) => (
+                        <TableRow key={day.date}>
+                          <TableCell className="font-mono text-xs">{day.date}</TableCell>
+                          <TableCell>{day.grand_total.text}</TableCell>
+                          <TableCell>{day.grand_total.heartbeats}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {day.languages.length > 0 ? topItem(day.languages).name : '—'}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {day.projects.length > 0 ? topItem(day.projects).name : '—'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </div>
         </QueryState>
       </CardContent>

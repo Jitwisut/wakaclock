@@ -21,7 +21,6 @@ import {
   PUBLIC_ROUTE_DEFINITIONS,
   PUBLIC_ROUTES,
   SITE_NAME,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 /** Reads the JSON-LD payload back out of a rendered <JsonLd /> block. */
@@ -67,7 +66,8 @@ describe('structured data', () => {
 
     expect(schema.name).toBe(SITE_NAME);
     expect(schema.applicationCategory).toBe('DeveloperApplication');
-    expect(schema.sameAs).toContain(SOURCE_REPOSITORY_URL);
+    expect(schema.sameAs).toBeUndefined();
+    expect(schema.codeRepository).toBeUndefined();
   });
 
   it('never fabricates ratings, reviews or download counts', () => {
@@ -86,6 +86,14 @@ describe('structured data', () => {
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('does not publish a private repository as public evidence', () => {
+    const serialized = JSON.stringify(
+      graph(organizationSchema(), websiteSchema(), softwareApplicationSchema())
+    );
+
+    expect(serialized).not.toContain('github.com/Jitwisut/wakaclock');
   });
 
   it('contains no undefined values', () => {
@@ -228,6 +236,19 @@ describe('site URL resolution', () => {
     const { absoluteUrl: scopedAbsoluteUrl } = await import('@/lib/seo/site');
 
     expect(scopedAbsoluteUrl('/pricing')).toBe('https://atoaxis.example.com/pricing');
+  });
+
+  it('uses the Vercel preview host when no preferred public origin is supplied', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '');
+    vi.stubEnv('URL', '');
+    vi.stubEnv('DEPLOY_PRIME_URL', '');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', '');
+    vi.stubEnv('VERCEL_URL', 'preview.atoaxis.example.com');
+    const { SITE_URL: siteUrl, absoluteUrl: previewUrl } = await import('@/lib/seo/site');
+    expect(siteUrl).toBe('https://preview.atoaxis.example.com');
+    expect(previewUrl('/docs')).toBe('https://preview.atoaxis.example.com/docs');
+    vi.unstubAllEnvs();
   });
 
   it('throws on a production build when no public origin is configured', async () => {

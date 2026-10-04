@@ -30,3 +30,11 @@ it('renders the `from` value initially when animating', () => {
     window.requestAnimationFrame = raf;
   }
 });
+
+it('renders the animated value through React so the final number reaches the DOM', async () => {
+  // Safari regression: a motion-value text child bypassed React and never repainted a
+  // `background-clip: text` parent. The count must settle via a normal React render.
+  render(<CountAnimation duration={0.05} from={0} value={2092} />);
+
+  expect(await screen.findByText('2092', {}, { timeout: 2000 })).toBeInTheDocument();
+});

@@ -9,25 +9,21 @@ import {
   createMarketingMetadata,
   localizedPath,
   ORGANIZATION,
+  PUBLIC_EVIDENCE_URL,
   SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { AnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { CtaSection } from './cta-section';
-import { DashboardPreviewSection } from './dashboard-preview-section';
-import { EditorWallSection } from './editor-wall';
+import { CinematicHome } from './experience/cinematic-home';
 import { FaqSection } from './faq-section';
-import { FeatureGridSection } from './feature-grid-section';
-import { HeroSection } from './hero-section';
 import { EN_HOME, TH_HOME } from './marketing-copy';
 import { PricingSection } from './pricing-section';
 import { Bullets, MUTED_TEXT, Section } from './prose';
 import { QuickStartSection } from './quick-start-section';
-import { WorkspaceIllustrationSection } from './workspace-illustration-section';
 
 const HOME_COPY = { en: EN_HOME, th: TH_HOME } as const;
 
@@ -35,49 +31,50 @@ const ACCOUNTABILITY_COPY = {
   en: {
     heading: 'Who publishes and reviews this page?',
     intro:
-      'AtoAxis product engineering writes and reviews this page against the shipped code and the primary documentation linked below. The publisher is named here so every capability claim has an accountable owner rather than an anonymous byline.',
+      'AtoAxis product engineering writes and reviews this page against published product behavior and the primary documentation linked below. The publisher is named here so every capability claim has an accountable owner rather than an anonymous byline.',
     publisher: 'Publisher',
     reviewer: 'Reviewed by',
     reviewerValue: 'AtoAxis product engineering',
     markCaption: 'The AtoAxis product mark, used by the publisher named below.',
     reviewed: 'Last reviewed',
     evidence: 'Evidence',
-    evidenceValue: 'Public source code and primary vendor documentation',
+    evidenceValue: 'Public product documentation and primary vendor documentation',
     policies: 'Policies and contact',
     about: 'About the publisher',
     privacy: 'Privacy',
     contact: 'Contact',
-    source: 'Source repository',
+    source: 'Product documentation',
   },
   th: {
     heading: 'ใครเป็นผู้เผยแพร่และตรวจทานหน้านี้?',
     intro:
-      'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับโค้ดที่ใช้งานจริงและเอกสารต้นทางที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ ไม่ใช่บทความนิรนาม',
+      'ทีมผลิตภัณฑ์ AtoAxis เขียนและตรวจทานหน้านี้เทียบกับพฤติกรรมที่เผยแพร่ในเอกสารและแหล่งข้อมูลทางการที่ลิงก์ไว้ด้านล่าง เราระบุผู้เผยแพร่ไว้ชัดเจนเพื่อให้ทุกคำกล่าวอ้างมีผู้รับผิดชอบ หากคุณพบข้อมูลที่ไม่ตรงกับการทำงานจริงของผลิตภัณฑ์ แจ้งเราได้ผ่านหน้าติดต่อ วันที่ตรวจทานล่าสุดแสดงไว้ด้านล่าง เพื่อให้คุณรู้ว่าข้อมูลนี้ใหม่แค่ไหน',
     publisher: 'ผู้เผยแพร่',
     reviewer: 'ผู้ตรวจทาน',
     reviewerValue: 'ทีมวิศวกรรมผลิตภัณฑ์ AtoAxis',
     markCaption: 'เครื่องหมายผลิตภัณฑ์ AtoAxis ใช้โดยผู้เผยแพร่ที่ระบุด้านล่าง',
     reviewed: 'ตรวจทานล่าสุด',
     evidence: 'หลักฐาน',
-    evidenceValue: 'source code สาธารณะและเอกสารต้นทางของผู้ให้บริการ',
+    evidenceValue: 'เอกสารผลิตภัณฑ์สาธารณะและเอกสารต้นทางของผู้ให้บริการ',
     policies: 'นโยบายและช่องทางติดต่อ',
     about: 'เกี่ยวกับผู้เผยแพร่',
     privacy: 'ความเป็นส่วนตัว',
     contact: 'ติดต่อ',
-    source: 'source repository',
+    source: 'เอกสารผลิตภัณฑ์',
   },
 } as const;
 
 export function marketingHomeMetadata(locale: SiteLocale) {
   const copy = HOME_COPY[locale];
+  const title = copy.title.replace('\n', ' ');
   return {
     ...createMarketingMetadata({
       description: copy.description,
       locale,
       path: '/',
-      title: `${SITE_NAME} — ${copy.title.replace('\n', ' ')}`,
+      title,
     }),
-    title: { absolute: `${SITE_NAME} — ${copy.title.replace('\n', ' ')}` },
+    title: { absolute: title },
   };
 }
 
@@ -86,13 +83,14 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
   const accountability = ACCOUNTABILITY_COPY[locale];
   return (
     <>
-      <HeroSection locale={locale} />
-      <EditorWallSection locale={locale} />
-      <WorkspaceIllustrationSection locale={locale} />
-      <FeatureGridSection locale={locale} />
-      <div className="axis-product-walkthrough">
-        <DashboardPreviewSection locale={locale} />
-      </div>
+      {/*
+        The six-chapter experience replaces the previous hero, editor wall, workspace
+        illustration, feature list and worked example. Their indexable content moved with
+        them: the category eyebrow and answer paragraph (hero), the compatible-editor list
+        (chapter 2), the worked example's id and interpretation (chapter 4) and the feature
+        list with its #features anchor (chapter 5). Everything below is unchanged.
+      */}
+      <CinematicHome locale={locale} />
       <QuickStartSection locale={locale} />
       <div className="axis-briefing mkt-story-grid">
         {/*
@@ -139,7 +137,9 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
           >
             {copy.atAGlance.entries.map((entry) => (
               <Fragment key={entry.label}>
-                <dt className="font-semibold">{entry.label}:</dt>
+                <dt>
+                  <strong>{entry.label}:</strong>
+                </dt>
                 <dd style={MUTED_TEXT}>{entry.value}</dd>
               </Fragment>
             ))}
@@ -232,11 +232,15 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
             style={{ borderColor: 'var(--mkt-border)' }}
           >
             <div>
-              <dt className="font-semibold">{accountability.publisher}:</dt>
+              <dt>
+                <strong>{accountability.publisher}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>{ORGANIZATION.legalName}</dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.reviewer}:</dt>
+              <dt>
+                <strong>{accountability.reviewer}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <Link
                   className="underline underline-offset-4"
@@ -248,26 +252,30 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.reviewed}:</dt>
+              <dt>
+                <strong>{accountability.reviewed}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <time dateTime={SITE_MODIFIED}>{SITE_MODIFIED}</time>
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.evidence}:</dt>
+              <dt>
+                <strong>{accountability.evidence}:</strong>
+              </dt>
               <dd style={MUTED_TEXT}>
                 <a
                   className="underline underline-offset-4"
-                  href={SOURCE_REPOSITORY_URL}
-                  rel="noopener noreferrer"
-                  target="_blank"
+                  href={localizedPath(locale, PUBLIC_EVIDENCE_URL)}
                 >
                   {accountability.evidenceValue}
                 </a>
               </dd>
             </div>
             <div>
-              <dt className="font-semibold">{accountability.policies}:</dt>
+              <dt>
+                <strong>{accountability.policies}:</strong>
+              </dt>
               <dd className="flex flex-wrap gap-x-3" style={MUTED_TEXT}>
                 <Link href={localizedPath(locale, '/about')}>{accountability.about}</Link>
                 <Link href={localizedPath(locale, '/privacy')}>{accountability.privacy}</Link>

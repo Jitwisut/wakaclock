@@ -42,7 +42,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime profile keys added next to the AtoAxis account fields: display_name, last_heartbeat_at/last_plugin/last_plugin_name/last_project/last_branch from the latest heartbeat, plan, has_premium_features, created_at/modified_at. Public-profile and social fields are null/false; timezone is UTC (no per-account zone is stored)."
     },
     {
       "method": "GET",
@@ -60,7 +60,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime profile keys added next to the AtoAxis account fields: display_name, last_heartbeat_at/last_plugin/last_plugin_name/last_project/last_branch from the latest heartbeat, plan, has_premium_features, created_at/modified_at. Public-profile and social fields are null/false; timezone is UTC (no per-account zone is stored)."
     },
     {
       "method": "GET",
@@ -78,7 +78,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime decimal/digital/daily_average/is_up_to_date/percent_calculated/range{...}/timeout added next to the AtoAxis fields (text keeps the AtoAxis format). The project filter is not supported."
     },
     {
       "method": "GET",
@@ -96,7 +96,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime decimal/digital/daily_average/is_up_to_date/percent_calculated/range{...}/timeout added next to the AtoAxis fields (text keeps the AtoAxis format). The project filter is not supported."
     },
     {
       "method": "GET",
@@ -438,7 +438,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -456,7 +456,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -625,7 +625,7 @@
       "path": "/api/v1/users/:user/goals",
       "pattern": "/users/:user/goals",
       "section": "Goals",
-      "status": "not_started",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -636,14 +636,14 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Routed to the goals service, but the body is the AtoAxis goal definition: WakaTime's chart_data progress (read by wakatime-cli --today-goal) is not produced yet."
     },
     {
       "method": "GET",
       "path": "/api/v1/users/current/goals",
       "pattern": "/users/current/goals",
       "section": "Goals",
-      "status": "not_started",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -654,14 +654,14 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Routed to the goals service, but the body is the AtoAxis goal definition: WakaTime's chart_data progress (read by wakatime-cli --today-goal) is not produced yet."
     },
     {
       "method": "GET",
       "path": "/api/v1/users/:user/goals/:goal",
       "pattern": "/users/:user/goals/:goal",
       "section": "Goal",
-      "status": "not_started",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -672,14 +672,14 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Routed to the goals service, but the body is the AtoAxis goal definition: WakaTime's chart_data progress (read by wakatime-cli --today-goal) is not produced yet."
     },
     {
       "method": "GET",
       "path": "/api/v1/users/current/goals/:goal",
       "pattern": "/users/current/goals/:goal",
       "section": "Goal",
-      "status": "not_started",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -690,7 +690,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Routed to the goals service, but the body is the AtoAxis goal definition: WakaTime's chart_data progress (read by wakatime-cli --today-goal) is not produced yet."
     },
     {
       "method": "GET",
@@ -726,7 +726,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Items carry WakaTime's type/lineno/cursorpos next to entity_type/line_number/cursor_position; envelope start/end/timezone added. machine_name_id and WakaTime ai_* fields are not produced."
     },
     {
       "method": "POST",
@@ -769,7 +769,7 @@
       "path": "/api/v1/users/:user/heartbeats.bulk",
       "pattern": "/users/:user/heartbeats.bulk",
       "section": "Heartbeats",
-      "status": "not_started",
+      "status": "beta",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -780,7 +780,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Same handler as /users/current; the :user segment is accepted but identity comes only from the credential. Contract-tested against wakatime-cli 05f417c fixtures (fixtures/wakatime-cli) and a live wakatime-cli run: accepts type/lineno/cursorpos and all 21 categories, answers 202 with one responses[i] entry per request heartbeat."
     },
     {
       "method": "POST",
@@ -798,7 +798,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Contract-tested against wakatime-cli 05f417c fixtures (fixtures/wakatime-cli) and a live wakatime-cli run: accepts type/lineno/cursorpos and all 21 categories, answers 202 with one responses[i] entry per request heartbeat."
     },
     {
       "method": "DELETE",
@@ -1068,7 +1068,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1086,7 +1086,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1140,7 +1140,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1158,7 +1158,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime item time/duration and envelope start/end/timezone added next to the AtoAxis fields. Blocks are finer-grained than WakaTime's default project slice (project+language+category+entity) but sum to the same day total; slice_by, project, branches, timeout and writes_only are not supported. WakaTime ai_* item fields are not produced."
     },
     {
       "method": "GET",
@@ -1176,7 +1176,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1194,7 +1194,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1212,7 +1212,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1230,7 +1230,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1374,7 +1374,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Without start/end it answers WakaTime's project list (id, first/last heartbeat with human-readable ages, urlencoded_name, url to the AtoAxis project page, q name filter; sharing/badge/color fields empty). With start/end it keeps the dashboard's per-range totals."
     },
     {
       "method": "GET",
@@ -1392,7 +1392,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Without start/end it answers WakaTime's project list (id, first/last heartbeat with human-readable ages, urlencoded_name, url to the AtoAxis project page, q name filter; sharing/badge/color fields empty). With start/end it keeps the dashboard's per-range totals."
     },
     {
       "method": "GET",
@@ -1446,7 +1446,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",
@@ -1464,7 +1464,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",
@@ -1482,7 +1482,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Inventory entry not yet wired to a live handler."
+      "notes": "Accepts WakaTime ranges (last_7_days, last_30_days, last_6_months, last_year, all_time, YYYY, YYYY-MM) plus today; invalid ranges are 400. Every documented non-AI stats key is present alongside the AtoAxis fields (item hours stays a float, text keeps the AtoAxis format). WakaTime's ai_* fields are not produced. Totals reconciled against an independent WakaTime-algorithm reference for 8 ranges."
     },
     {
       "method": "GET",
@@ -1500,7 +1500,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Additive WakaTime data.grand_total/range envelope alongside the AtoAxis fields; honours the Timezone header. wakatime-cli itself calls the undocumented statusbar spelling, listed under client_routes."
     },
     {
       "method": "GET",
@@ -1518,7 +1518,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Additive WakaTime data.grand_total/range envelope alongside the AtoAxis fields; honours the Timezone header. wakatime-cli itself calls the undocumented statusbar spelling, listed under client_routes."
     },
     {
       "method": "GET",
@@ -1536,7 +1536,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1554,7 +1554,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "WakaTime data[]/cumulative_total/daily_average/timezone envelope flattened next to the AtoAxis days/calculation fields; data[] is built from the same clipped intervals as days[]. Reconciled against an independent WakaTime-algorithm reference (331 days, UTC and Asia/Bangkok). The range= shorthand and project/branches filters are not supported yet."
     },
     {
       "method": "GET",
@@ -1594,11 +1594,34 @@
     }
   ],
   "summary": {
-    "production_ready": 18,
-    "beta": 15,
-    "partial": 2,
-    "not_started": 52
+    "beta": 16,
+    "not_started": 47,
+    "partial": 6,
+    "production_ready": 18
   },
   "generated_from": "wakatime-api-routes.json",
-  "compatibility_rule": "Unknown routes return an explicit compatibility error; v1 envelopes and auth are never silently changed."
+  "compatibility_rule": "Unknown routes return an explicit compatibility error; v1 envelopes and auth are never silently changed.",
+  "client_routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/users/current/statusbar/today",
+      "status": "production_ready",
+      "caller": "wakatime-cli --today, WakaTime web plugins",
+      "notes": "Same handler as status_bar/today; not in WakaTime's published API reference."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/users/current/file_experts",
+      "status": "partial",
+      "caller": "wakatime-cli --file-experts, WakaTime VS Code",
+      "notes": "Answers {data: []}; AtoAxis does not compute file experts."
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/plugins/errors",
+      "status": "production_ready",
+      "caller": "wakatime-cli crash diagnostics",
+      "notes": "Authenticated, 256 KiB body limit, returns 201 and discards the body unread (it carries local paths)."
+    }
+  ]
 }

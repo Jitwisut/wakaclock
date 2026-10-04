@@ -1,7 +1,14 @@
 /* eslint-disable sonarjs/cognitive-complexity, sonarjs/no-all-duplicated-branches, sonarjs/no-duplicate-string */
 
 import type { FaqEntry } from '@/lib/seo/schema';
-import { PRICING, SITE_NAME, type SiteLocale } from '@/lib/seo/site';
+import {
+  PRICING,
+  PRODUCT_ANSWER,
+  PRODUCT_STATUS,
+  PUBLIC_EVIDENCE_URL,
+  SITE_NAME,
+  type SiteLocale,
+} from '@/lib/seo/site';
 
 export type Localized<T> = Readonly<Record<SiteLocale, T>>;
 
@@ -63,6 +70,10 @@ export const MARKETING_PAGE_KEYS = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/migrate-from-wakatime',
+  '/docs/how-coding-time-is-calculated',
+  '/docs/ai-attribution-and-coverage',
+  '/docs/ai-cost-methodology',
   '/about',
   '/contact',
   '/terms',
@@ -92,12 +103,14 @@ const local = (en: MarketingPageCopy, th: MarketingPageCopy): Localized<Marketin
 });
 
 export const EN_HOME = {
-  badge: 'Complete history, and it works with the WakaTime API',
-  title: 'Developer time tracking\nwith your full history.',
-  tagline: 'One timeline for everything you do.',
+  badge: 'Developer time tracking · AI coding analytics',
+  title: 'AtoAxis — Developer Time Tracking & AI Coding Analytics',
+  headline: ['Your coding time.', 'The whole picture.'],
+  highlights: ['Complete history', 'WakaTime compatible', 'No source code uploaded'],
+  tagline: 'Make every working session make sense.',
   // Kept under ~155 characters so search engines show it whole rather than truncating
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
-  description: `${SITE_NAME} records your coding time by project, language, branch and editor. It implements the WakaTime API and keeps your complete coding history.`,
+  description: `${SITE_NAME} tracks coding time, projects and AI contributions. Keep your complete history, connect WakaTime plugins and review attribution coverage.`,
   /**
    * The visible opening paragraph, deliberately separate from `description` above.
    *
@@ -106,7 +119,7 @@ export const EN_HOME = {
    * the first paragraph on the page is what an answer engine lifts as a snippet and is
    * useless when it is one line long. Keeping two fields lets each be the right length.
    */
-  heroLead: `${SITE_NAME} is a developer time tracking service for people who want the whole picture. It records how long you spend coding and breaks that down by project, programming language, branch and editor. It speaks the WakaTime API, so the plugin your editor already has can point at it, and every account keeps its full history instead of a rolling window.`,
+  heroLead: `${SITE_NAME} tracks your coding time by project, language and editor, with AI contributions shown alongside your work. Keep your complete history, connect your existing WakaTime plugin, and see where attribution is known or still missing.`,
   /**
    * The homepage's summary block. Every line restates a claim already made and verified
    * elsewhere on this page — nothing here introduces a capability the product does not
@@ -126,15 +139,15 @@ export const EN_HOME = {
    * anything above it — while each paragraph stays short enough to quote by itself.
    */
   /**
-   * The first entry is deliberately one 120-180 word block rather than split further: it
-   * needs to stand alone as a complete answer to "what is AtoAxis", opening with the
+   * The first entry shares the concise product definition used in structured data
+   * and discovery documents. It stands alone as a complete answer to "what is AtoAxis", opening with the
    * definition, for a reader or an answer engine that quotes only this one paragraph. The
    * second stays short — it is a boundary statement (what heartbeats do NOT contain), and
    * padding it would just be filler.
    */
   whatIs: [
-    `${SITE_NAME} is a developer time tracking service that turns editor activity into dashboards for coding time, projects, programming languages, branches and editors. Your editor sends it heartbeats — small metadata events describing what you are working on, such as which file, project and branch you touched and when, and nothing about the contents of the file itself. It implements the WakaTime API, so an editor that already has a WakaTime plugin can point at it without installing anything new, and a WakaTime export can be imported into the same dashboard. Every account keeps its complete coding history rather than a limited recent window, so a project you touched in your first week is still there to look back on however long you have been using it.`,
-    'Your source code, prompts and AI responses never leave your editor: a heartbeat carries file metadata and counts, never file contents.',
+    PRODUCT_ANSWER,
+    'AtoAxis heartbeat payloads contain activity metadata and counts, not source code, prompts or AI responses. Connected AI providers have their own data policies.',
   ],
   howItWorks: [
     'Your editor sends a heartbeat when you type, switch to or save a file. Each signal carries metadata such as file path, project, branch, language, editor and operating system — never the contents of the file.',
@@ -188,7 +201,7 @@ export const EN_HOME = {
     heading: `${SITE_NAME} at a glance`,
     entries: [
       { label: 'Product', value: 'Hosted developer time tracking service' },
-      { label: 'Status', value: 'Early Access — checkout is not open yet' },
+      { label: 'Status', value: `${PRODUCT_STATUS.en.label} — checkout is not open yet` },
       {
         label: 'Planned price',
         value: `$${PRICING.monthlyUsd} per month, or $${PRICING.annualUsd} per year`,
@@ -225,6 +238,12 @@ export const EN_HOME = {
     intro: `Every capability described above is checked against the source it comes from rather than a competitor round-up: 9 languages are verified by parsing rather than guessed from a file extension, and 5 AI agents ship with a bundled hook or adapter rather than being claimed without one. The WakaTime comparison in particular was verified against wakatime.com in August 2026, and we re-check it monthly.`,
     items: [
       {
+        claim:
+          '84% of developers use or plan to use AI tools in their development process, yet more distrust the accuracy of AI output (46%) than trust it (33%).',
+        href: 'https://survey.stackoverflow.co/2025/ai',
+        label: 'Stack Overflow Developer Survey 2025: AI',
+      },
+      {
         claim: `${SITE_NAME} implements the WakaTime API, so an editor with an existing WakaTime plugin can send to it.`,
         href: 'https://wakatime.com/developers',
         label: 'WakaTime API documentation',
@@ -249,6 +268,12 @@ export const EN_HOME = {
           'Language is confirmed by parsing the file, not guessed from its extension. Nine languages have a grammar — Rust, Python, JavaScript, TypeScript, TSX, Go, C, C++ and Objective-C — which is how an ambiguous extension like .h is resolved.',
         href: 'https://tree-sitter.github.io/tree-sitter/',
         label: 'Tree-sitter',
+      },
+      {
+        claim:
+          'Current product boundaries and availability are explained in the AtoAxis public guides.',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
       },
     ],
   },
@@ -312,11 +337,13 @@ export const EN_HOME = {
 
 export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
-  title: 'ติดตามเวลาการเขียนโค้ด\nพร้อมประวัติของคุณครบถ้วน',
-  tagline: 'ไทม์ไลน์เดียวสำหรับทุกสิ่งที่คุณทำ',
+  title: 'AtoAxis — ติดตามเวลาเขียนโค้ด และวิเคราะห์การใช้ AI',
+  headline: ['ทุกเวลาที่เขียนโค้ด', 'เห็นภาพชัดกว่าเดิม'],
+  highlights: ['เก็บประวัติครบ', 'รองรับ WakaTime', 'ไม่อัปโหลดโค้ด'],
+  tagline: 'เข้าใจงานของคุณ ในไทม์ไลน์เดียว',
   // Same length budget as the English description above.
-  description: `${SITE_NAME} คือเครื่องมือติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา แยกตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API และเก็บประวัติของคุณครบถ้วน`,
-  heroLead: `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนาที่อยากเห็นภาพรวมทั้งหมด ระบบบันทึกว่าคุณใช้เวลาเขียนโค้ดไปเท่าไร แล้วแยกให้เห็นตามโปรเจกต์ ภาษา branch และ editor รองรับ WakaTime API จึงใช้ plugin ที่ editor ของคุณมีอยู่แล้วชี้มาที่นี่ได้ และทุกบัญชีเก็บประวัติไว้ครบถ้วน ไม่ใช่แค่ช่วงเวลาล่าสุด`,
+  description: `${SITE_NAME} ติดตามเวลาเขียนโค้ด วิเคราะห์โปรเจกต์และสัดส่วนงานจาก AI รองรับ WakaTime เก็บประวัติครบ พร้อมแสดงความครอบคลุมของข้อมูลผู้เขียน`,
+  heroLead: `${SITE_NAME} ช่วยติดตามเวลาเขียนโค้ด แยกตามโปรเจกต์ ภาษา และ editor พร้อมดูสัดส่วนงานจาก AI ในไทม์ไลน์เดียว เชื่อมต่อ WakaTime plugin เดิม เก็บประวัติครบถ้วน และเห็นชัดว่าข้อมูลส่วนใดยังระบุผู้เขียนไม่ได้`,
   keyTakeaways: [
     `${SITE_NAME} บันทึกเวลาเขียนโค้ดของคุณจาก editor heartbeat โดยเก็บเฉพาะ metadata ไม่เก็บ source code`,
     'รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้ และนำเข้า WakaTime export ได้',
@@ -325,21 +352,24 @@ export const TH_HOME = {
     `Early Access: ราคาที่วางแผนไว้คือ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี และยังไม่เปิดให้ชำระเงิน`,
   ],
   whatIs: [
-    `${SITE_NAME} คือบริการติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา เปลี่ยน activity ใน editor เป็น dashboard ของเวลา โปรเจกต์ ภาษา branch และ editor editor ของคุณจะส่ง heartbeat ซึ่งเป็น metadata ขนาดเล็ก เช่น ไฟล์ โปรเจกต์ และ branch ที่คุณแตะและเวลาที่แตะ ไม่มีเนื้อหาในไฟล์เลย รองรับ WakaTime API จึงใช้ plugin WakaTime เดิมชี้มาที่นี่ได้โดยไม่ต้องติดตั้งอะไรใหม่ และนำเข้า WakaTime export มาดูใน dashboard เดียวกันได้ ทุกบัญชีเก็บประวัติการเขียนโค้ดไว้ครบถ้วน ไม่ใช่แค่ช่วงล่าสุด โปรเจกต์ที่คุณแตะตั้งแต่สัปดาห์แรกยังอยู่ให้ย้อนดูได้ ไม่ว่าจะใช้งานมานานแค่ไหน`,
-    'ส่วน source code, prompt และคำตอบของ AI จะไม่ออกจาก editor ของคุณเลย เพราะ heartbeat มีแค่ metadata ของไฟล์และตัวเลข ไม่มีเนื้อหาในไฟล์',
+    `${SITE_NAME} คือบริการติดตามเวลาเขียนโค้ดและวิเคราะห์การใช้ AI สำหรับนักพัฒนา เราเปลี่ยน heartbeat จาก editor ของคุณ เป็นรายงานแยกตามโปรเจกต์ ภาษา branch และ editor`,
+    'ระบบรองรับ WakaTime API และเก็บประวัติการเขียนโค้ดของคุณครบถ้วน integration ที่เชื่อมต่อจะรายงานการแก้ไขจาก AI มนุษย์ และส่วนที่ยังระบุไม่ได้ พร้อมบอกความครอบคลุมของข้อมูล ตอนนี้เราเปิด Early Access แบบเชิญ',
+    'ถ้าคุณเคยใช้ WakaTime มาก่อน คุณชี้ plugin เดิมมาที่ AtoAxis ได้เลย ไม่ต้องติดตั้ง editor ใหม่ และนำเข้า WakaTime export เพื่อดูประวัติเดิมต่อใน dashboard เดียวกันได้',
+    'Heartbeat ที่ส่งไปยัง AtoAxis มีเฉพาะ metadata และตัวเลข ไม่ส่ง source code, prompt หรือคำตอบของ AI ส่วนผู้ให้บริการ AI ที่คุณเชื่อมต่อมีนโยบายข้อมูลของตนเอง',
   ],
   howItWorks: [
     'editor ของคุณจะส่ง heartbeat เมื่อพิมพ์ เปลี่ยนไฟล์ หรือ save โดยแต่ละครั้งมีเฉพาะ metadata เช่น file path, project, branch, language, editor และระบบปฏิบัติการ ไม่มีเนื้อหาในไฟล์',
     'ระบบจะรวม heartbeat ที่เกิดต่อเนื่องกันเป็น duration block และเมื่อเว้นช่วงนานพอ block นั้นจะถูกปิดแทนที่จะนับต่อ เวลาที่ไม่ได้ทำงานจึงไม่ถูกนับเป็นเวลาเขียนโค้ด',
     'ส่วนบรรทัดที่เปลี่ยนจะถูกแยกเป็นสามทาง คือ AI, มนุษย์ และ Unattributed งานที่เราพิสูจน์ไม่ได้ว่ามาจากทางไหนจะคงสถานะ Unattributed แทนที่จะยกให้คุณ และทุกยอดรวมจะรายงาน coverage เป็นเปอร์เซ็นต์แทนการเดา',
+    'ตัวอย่างเช่น ถ้าคุณเขียนโค้ดต่อเนื่อง 50 นาที แล้วลุกไปประชุม 40 นาที โดยเปิด editor ค้างไว้ ช่วงประชุมจะไม่มี heartbeat ใหม่ block จึงถูกปิด และเวลาประชุมไม่ถูกนับ คุณจึงเห็นเวลาเขียนโค้ดจริง ไม่ใช่เวลาที่หน้าต่างเปิดอยู่',
   ],
   useCases: [
-    'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง',
-    'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch',
+    'ดูเวลาการเขียนโค้ดวันนี้ สัปดาห์นี้ หรือช่วงวันที่กำหนดเอง เพื่อรู้ว่าเวลาของคุณหมดไปกับอะไร',
+    'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch เมื่อคุณต้องสรุปงานหรือประเมินเวลาให้ลูกค้า',
     'กรองเฉพาะโปรเจกต์หรือภาษาเดียว แล้ว drill timeline, heatmap และรายชื่อไฟล์จากลิงก์เดียว',
-    'เปรียบเทียบ AI-attributed lines กับ human keystrokes และ characters',
+    'เปรียบเทียบ AI-attributed lines กับ human keystrokes และ characters เพื่อดูว่า AI ช่วยงานคุณมากแค่ไหน',
     'ตั้งเป้าเวลาเขียนโค้ดรายวันหรือรายสัปดาห์ แล้ววัดเทียบกับ timeline เดียวกัน',
-    'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge',
+    'รวมหลาย checkout เป็นโปรเจกต์เดียวด้วย project rules และ merge เมื่อคุณ clone repo เดียวกันไว้หลายที่ ยอดเวลาจึงไม่กระจายหลายโปรเจกต์',
     'นำเข้า WakaTime export เพื่อดู history เดิมใน dashboard เดียวกัน',
   ],
   limitationsIntro: `นั่นคือข้อดีของ ${SITE_NAME} ในทางกลับกัน นี่คือสิ่งที่เรายังไม่ได้ทำ บอกไว้ตรง ๆ เพราะเราอยากให้คุณตัดสินใจไม่เลือกเราตั้งแต่ตอนนี้ ดีกว่ามาเจอทีหลังตอนย้ายมาแล้ว:`,
@@ -355,7 +385,7 @@ export const TH_HOME = {
     heading: `${SITE_NAME} โดยสรุป`,
     entries: [
       { label: 'ผลิตภัณฑ์', value: 'บริการติดตามเวลาเขียนโค้ดสำหรับนักพัฒนา (hosted)' },
-      { label: 'สถานะ', value: 'Early Access — ยังไม่เปิดให้ชำระเงิน' },
+      { label: 'สถานะ', value: `${PRODUCT_STATUS.th.label} — ยังไม่เปิดให้ชำระเงิน` },
       {
         label: 'ราคาที่วางแผนไว้',
         value: `$${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี`,
@@ -388,8 +418,14 @@ export const TH_HOME = {
   ],
   sources: {
     heading: 'เราตรวจสอบข้อมูลเหล่านี้อย่างไร?',
-    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่ตรวจสอบได้ใน repository โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
+    intro: `ทุกความสามารถที่อธิบายไว้ข้างบนตรวจสอบจากแหล่งต้นทางจริง ไม่ได้คัดลอกจากบทความเปรียบเทียบของคนอื่น เรายืนยัน 9 ภาษาด้วยการ parse จริง ไม่ใช่เดาจากนามสกุลไฟล์ และ 5 AI agent มี hook หรือ adapter ที่อธิบายไว้ในคู่มือ integration โดยเฉพาะการเทียบกับ WakaTime เราตรวจจาก wakatime.com เมื่อสิงหาคม 2026 และตรวจซ้ำทุกเดือน`,
     items: [
+      {
+        claim:
+          'นักพัฒนา 84% ใช้หรือวางแผนจะใช้เครื่องมือ AI ในการพัฒนา แต่ 46% ไม่เชื่อถือความถูกต้องของผลลัพธ์จาก AI และมีเพียง 33% ที่เชื่อถือ',
+        href: 'https://survey.stackoverflow.co/2025/ai',
+        label: 'Stack Overflow Developer Survey 2025: AI',
+      },
       {
         claim: `${SITE_NAME} รองรับ WakaTime API ทำให้ editor ที่มี plugin WakaTime อยู่แล้วส่งข้อมูลมาที่นี่ได้`,
         href: 'https://wakatime.com/developers',
@@ -416,14 +452,19 @@ export const TH_HOME = {
         href: 'https://tree-sitter.github.io/tree-sitter/',
         label: 'Tree-sitter',
       },
+      {
+        claim: 'ขอบเขตและสถานะของผลิตภัณฑ์อธิบายไว้ในคู่มือสาธารณะของ AtoAxis',
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'เอกสารสาธารณะของ AtoAxis',
+      },
     ],
   },
   verdict: {
     heading: `สรุปแล้ว ${SITE_NAME} เหมาะกับคุณไหม?`,
-    fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร`,
+    fits: `${SITE_NAME} เหมาะที่สุดถ้าคุณเขียนโค้ดใน editor ที่รองรับ WakaTime อยู่แล้ว ต้องการประวัติครบถ้วนแทนช่วงเวลาล่าสุด และอยากรู้ว่างานที่ AI ทำจริง ๆ มีสัดส่วนเท่าไร โดยเฉพาะถ้าคุณทำหลายโปรเจกต์พร้อมกัน และใช้ Claude Code, Codex CLI หรือ Gemini CLI เป็นประจำ`,
     doesNotFit:
       'แต่ยังไม่เหมาะถ้าคุณต้องการ desktop หรือ browser client ถ้าทีมต้องการ organisation dashboard ร่วมกัน หรือถ้าคุณทำงานกับ Cursor หรือ Copilot เป็นหลัก เพราะสองตัวนี้ยังต้องมี adapter',
-    closing: `เราวางแผนคิดราคา $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แต่ยังไม่เปิดให้ชำระเงินในช่วง Early Access การเข้าร่วมรายชื่อตอนนี้จึงไม่มีค่าใช้จ่ายกับคุณ`,
+    closing: `เราวางแผนคิดราคา $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แต่ยังไม่เปิดให้ชำระเงินในช่วง Early Access การเข้าร่วมรายชื่อตอนนี้จึงไม่มีค่าใช้จ่ายกับคุณ ถ้ายังไม่แน่ใจ ลองอ่านหน้าเปรียบเทียบกับ WakaTime ก่อนตัดสินใจ`,
   },
   faq: [
     {
@@ -852,14 +893,14 @@ const developerAnalytics = local(
     ]),
   },
   {
-    metadataTitle: 'Developer Analytics และ Coding Metrics',
+    metadataTitle: 'AtoAxis Developer analytics และ coding metrics',
     description:
-      'ดู analytics ของเวลา โปรเจกต์ ภาษา branch keystrokes และ AI attribution พร้อมวิธีคำนวณที่อธิบายได้',
+      'ดูเวลาเขียนโค้ดแยกตามโปรเจกต์ ภาษา editor และ branch พร้อม AI attribution และ coverage เรียนรู้วิธีคำนวณจาก heartbeat และข้อจำกัดของข้อมูลก่อนเปรียบเทียบผลงาน',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Developer analytics', path: '/developer-analytics' },
     ],
-    title: 'Developer analytics',
+    title: 'AtoAxis Developer analytics',
     lead: `${SITE_NAME} เปลี่ยน editor heartbeat เป็นเวลารวม ค่าเฉลี่ยต่อวัน และ breakdown ตาม project, language, editor, operating system และ branch ทุกมุมมองกรองและ drill down ต่อได้ พร้อม keystrokes, characters และ AI-attributed lines`,
     sections: [
       section('Metrics ที่มีให้ดู', 'metrics', [
@@ -1129,7 +1170,7 @@ page(
   {
     metadataTitle: 'ทางเลือก WakaTime สำหรับติดตามเวลานักพัฒนา',
     description:
-      'AtoAxis เป็นทางเลือก WakaTime ที่รองรับ API มีประวัติครบถ้วน และอธิบายขอบเขต AI อย่างตรงไปตรงมา',
+      'เปรียบเทียบ AtoAxis กับระบบติดตามเวลาเดิม: รองรับ WakaTime API นำเข้าประวัติได้ เก็บประวัติครบ และแสดง AI attribution พร้อมข้อจำกัดที่ควรตรวจสอบก่อนย้าย',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'ทางเลือก WakaTime', path: '/wakatime-alternative' },
@@ -1391,7 +1432,7 @@ dualPage(
   {
     metadataTitle: 'ติดตาม AI Coding Activity',
     description:
-      'ดูวิธีบันทึก AI-assisted coding ด้วยชื่อ agent และ line counts โดยไม่เก็บ prompt, response หรือ source code',
+      'ติดตาม AI coding ด้วยชื่อ agent จำนวนบรรทัด และ attribution coverage แยกงาน AI, human และ Unattributed พร้อมอธิบายข้อจำกัด โดยไม่เก็บ prompt หรือ source code',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'AI coding tracker', path: '/ai-coding-tracker' },
@@ -1670,14 +1711,14 @@ emptyPagePair(
     ]),
   },
   {
-    metadataTitle: 'Editor Integrations',
+    metadataTitle: 'การเชื่อมต่อ Editor กับ AtoAxis',
     description:
-      'เชื่อม VS Code ด้วย AtoAxis extension หรือใช้ WakaTime-compatible plugin กับ hosted API',
+      'เชื่อม VS Code ผ่าน extension ของ AtoAxis หรือใช้ WakaTime-compatible plugin กับ editor อื่น ดูวิธีตั้งค่า API, ตรวจ heartbeat แรก และขอบเขตข้อมูลที่แต่ละ client ส่ง',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Integrations', path: '/integrations' },
     ],
-    title: 'Editor integrations',
+    title: 'การเชื่อมต่อ Editor กับ AtoAxis',
     lead: 'เชื่อมต่อ editor ที่คุณใช้อยู่ได้เลย VS Code มี first-party extension ส่วน editor อื่นใช้ WakaTime-compatible plugin แล้วเปลี่ยน api_url ให้ชี้ไป hosted API',
     sections: [
       section('การเชื่อมต่อที่เราดูแลเอง', 'first-party', [
@@ -1796,6 +1837,7 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
   Record<MarketingPageKey, { en: string; path: MarketingPageKey; th: string }>
 > = {
   '/docs/getting-started': { en: 'Docs', path: '/docs', th: 'เอกสาร' },
+  '/docs/migrate-from-wakatime': { en: 'Docs', path: '/docs', th: 'เอกสาร' },
   '/integrations/vscode': { en: 'Integrations', path: '/integrations', th: 'การเชื่อมต่อ' },
 };
 
@@ -1807,16 +1849,14 @@ const GENERIC_BREADCRUMB_PARENTS: Partial<
 // generated `faqCount` used to produce. Keep writing real entries for any new page.
 const genericFaq = (
   locale: SiteLocale,
-  entries?: readonly FaqEntry[]
-): MarketingPageCopy['faq'] => {
-  if (!entries) return undefined;
-  return faq(locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย', entries);
-};
+  entries: readonly FaqEntry[]
+): NonNullable<MarketingPageCopy['faq']> =>
+  faq(locale === 'en' ? 'Frequently asked questions' : 'คำถามที่พบบ่อย', entries);
 const generic = (
   path: MarketingPageKey,
   en: {
     description: string;
-    faqEntries?: readonly FaqEntry[];
+    faqEntries: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1824,7 +1864,7 @@ const generic = (
   },
   th: {
     description: string;
-    faqEntries?: readonly FaqEntry[];
+    faqEntries: readonly FaqEntry[];
     form?: MarketingPageCopy['form'];
     headings: string[];
     lead: string;
@@ -1846,12 +1886,12 @@ const generic = (
       section(
         heading,
         `${path.slice(1).replaceAll('/', '-')}-${index + 1}`,
-        genericBlocks(path, heading, index, locale)
+        genericBlocks(path, index, locale)
       )
     ),
     form: value.form,
     howTo:
-      path === '/docs/getting-started'
+      path === '/docs/getting-started' || path === '/docs/migrate-from-wakatime'
         ? { name: value.title, description: value.description }
         : undefined,
     component: path === '/pricing' ? { kind: 'pricing', afterSectionId: null } : undefined,
@@ -1886,12 +1926,20 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'Getting started: requirements, API key, editor setup, verification',
+              'Migrate from WakaTime: keep your plugin, change two settings, import your history',
+              'How coding time is calculated: heartbeat intervals, idle timeout and duration examples',
+              'AI attribution and coverage: evidence for AI, human and Unattributed changes',
+              'AI cost methodology: token classes, effective prices and unknown estimates',
               'VS Code integration: what the extension sends, its settings and its limits',
               'AI coding tracker: how Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI activity is attributed',
               'Privacy: the exact heartbeat fields, and the fields that do not exist',
             ]
           : [
               'เริ่มต้นใช้งาน: สิ่งที่ต้องเตรียม, API key, การตั้งค่า editor และการตรวจสอบ',
+              'ย้ายจาก WakaTime: ใช้ plugin เดิม แก้สองค่า แล้ว import ประวัติ',
+              'วิธีคำนวณเวลาการเขียนโค้ด: heartbeat, idle timeout และตัวอย่าง duration',
+              'AI attribution และ coverage: หลักฐานของ AI, human และ Unattributed',
+              'วิธีคำนวณค่าใช้จ่าย AI: ประเภท token ราคา effective และยอดที่ไม่ทราบ',
               'VS Code integration: extension ส่งอะไร มี settings อะไร และมีข้อจำกัดอะไร',
               'AI coding tracker: วิธี attribute งานจาก Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI',
               'Privacy: field ใน heartbeat ทั้งหมด และ field ที่ไม่มีอยู่จริง',
@@ -1948,7 +1996,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/integrations/vscode#2',
     (en) => [
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: Wakaclock: Set API Key\nCommand Palette: Wakaclock: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -2022,7 +2070,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     (en) => [
       sub(en ? 'VS Code, the first-party extension' : 'VS Code กับ extension ของเราเอง'),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: Wakaclock: Set API Key\nCommand Palette: Wakaclock: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -2061,12 +2109,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'The VS Code status bar shows the same total and refreshes every 15 seconds',
-              'Wakaclock: Send Heartbeat Now flushes buffered activity immediately instead of waiting for the 120-second same-file cadence',
+              'AtoAxis: Send Heartbeat Now flushes buffered activity immediately instead of waiting for the 120-second same-file cadence',
               'The dashboard Overview page shows the total once the first heartbeat has landed',
             ]
           : [
               'status bar ของ VS Code แสดงยอดเดียวกันและรีเฟรชทุก 15 วินาที',
-              'คำสั่ง Wakaclock: Send Heartbeat Now จะ flush activity ที่ค้างอยู่ทันที ไม่ต้องรอรอบ 120 วินาทีของไฟล์เดิม',
+              'คำสั่ง AtoAxis: Send Heartbeat Now จะ flush activity ที่ค้างอยู่ทันที ไม่ต้องรอรอบ 120 วินาทีของไฟล์เดิม',
               'หน้า Overview ใน dashboard จะแสดงยอดรวมทันทีที่ heartbeat แรกเข้าระบบ',
             ]
       ),
@@ -2084,14 +2132,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       bullets(
         en
           ? [
-              'No total in the status bar: the CLI cannot be found. Run Wakaclock: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
+              'No total in the status bar: the CLI cannot be found. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
               'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
               'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
-              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
               'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
@@ -2101,6 +2149,180 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     ],
   ],
 
+  // Migration guide. Facts are taken from the shipped import path, not from memory:
+  // `backend/api/src/services/wakatime_import.rs` (raw heartbeats only, 1 MiB and 10,000
+  // records per upload, content-derived IDs so a re-upload is skipped, WakaTime AI flags kept
+  // without an agent name) and `app/dashboard/(auth)/wakaclock/import/page.tsx` (connection
+  // check, chunked resumable upload, before/after totals). The WakaTime side — an export of
+  // type `heartbeats` rather than `daily`, created at wakatime.com/settings — is from
+  // wakatime.com/developers, checked 2026-09-28.
+  [
+    '/docs/migrate-from-wakatime#0',
+    (en) => [
+      p(
+        en
+          ? 'Moving has two independent parts. Live tracking takes two lines in the settings file of the WakaTime plugin you already use. Your history moves separately, as a WakaTime data export you import into the dashboard. You can do either one first, and nothing in your WakaTime account is deleted by either.'
+          : 'การย้ายมีสองส่วนที่แยกจากกัน ส่วนแรกคือการติดตามเวลาต่อจากนี้ ซึ่งแก้แค่สองบรรทัดในไฟล์ตั้งค่าของ WakaTime plugin ที่คุณใช้อยู่ ส่วนที่สองคือประวัติเดิม ซึ่งย้ายมาด้วยไฟล์ export ของ WakaTime แล้ว import เข้า dashboard คุณจะทำส่วนไหนก่อนก็ได้ และทั้งสองส่วนไม่ลบข้อมูลใดในบัญชี WakaTime ของคุณ'
+      ),
+      bullets(
+        en
+          ? [
+              'Your editor with its WakaTime plugin, left installed exactly as it is',
+              'An AtoAxis account and API key. During Early Access, keys are issued to people on the list',
+              'Optional: your WakaTime history as a data export that contains raw heartbeats',
+            ]
+          : [
+              'editor ของคุณพร้อม WakaTime plugin เดิม ไม่ต้องถอนหรือติดตั้งอะไรใหม่',
+              'บัญชี AtoAxis และ API key ช่วง Early Access เราออก key ให้เฉพาะผู้ที่อยู่ในรายชื่อ',
+              'ถ้าต้องการย้ายประวัติด้วย: ไฟล์ export ของ WakaTime แบบที่มี heartbeat ดิบ',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#1',
+    (en) => [
+      p(
+        en
+          ? 'One AtoAxis key replaces your WakaTime key in the plugin. The same key also covers every other editor and AI hook on your account.'
+          : 'key ของ AtoAxis หนึ่งตัวจะใช้แทน key ของ WakaTime ใน plugin และ key เดียวกันนี้ใช้ได้กับ editor และ AI hook ทุกตัวในบัญชีของคุณ'
+      ),
+      bullets(
+        en
+          ? [
+              'Open Settings in the dashboard and find the API key panel',
+              'Choose Generate key and copy it',
+              'Regenerating later replaces the old key at once, so update every machine when you do',
+            ]
+          : [
+              'เปิดหน้า Settings ใน dashboard แล้วไปที่แผง API key',
+              'กด Generate key แล้วคัดลอกไว้',
+              'ถ้า regenerate ภายหลัง key เก่าจะใช้ไม่ได้ทันที คุณต้องอัปเดตทุกเครื่องที่ใช้อยู่',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#2',
+    (en) => [
+      p(
+        en
+          ? 'Every WakaTime plugin reads the same settings file in your home folder: ~/.wakatime.cfg on macOS and Linux, %USERPROFILE%\\.wakatime.cfg on Windows. Set two values and save it.'
+          : 'WakaTime plugin ทุกตัวอ่านไฟล์ตั้งค่าเดียวกันใน home folder ของคุณ คือ ~/.wakatime.cfg บน macOS และ Linux หรือ %USERPROFILE%\\.wakatime.cfg บน Windows ให้แก้สองค่านี้แล้ว save'
+      ),
+      code(
+        '[settings]\napi_url = https://api.atoaxis.com/api/v1\napi_key = your_atoaxis_api_key',
+        '~/.wakatime.cfg'
+      ),
+      bullets(
+        en
+          ? [
+              'No AtoAxis extension is needed for this editor. AtoAxis implements the WakaTime heartbeat API, so the plugin keeps working as before',
+              'A plugin sends to one server, so from now on new activity goes to AtoAxis instead of WakaTime',
+              'Some plugins cache their settings until the editor restarts. If nothing arrives, restart the editor once',
+              'VS Code users can also switch to the first-party AtoAxis extension, which adds AI hook setup',
+            ]
+          : [
+              'editor นี้ไม่ต้องติดตั้ง extension ของ AtoAxis เพราะ AtoAxis รองรับ WakaTime heartbeat API plugin จึงทำงานได้เหมือนเดิม',
+              'plugin ส่งข้อมูลไปได้ทีละ server ดังนั้นกิจกรรมใหม่จะไปที่ AtoAxis แทน WakaTime ตั้งแต่ตอนนี้',
+              'plugin บางตัวจำค่าตั้งค่าไว้จนกว่าจะปิดเปิด editor ใหม่ ถ้าข้อมูลยังไม่เข้า ให้ restart editor หนึ่งครั้ง',
+              'ถ้าใช้ VS Code คุณเปลี่ยนไปใช้ extension ของ AtoAxis ได้ด้วย ซึ่งช่วยตั้งค่า AI hook ให้',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#3',
+    (en) => [
+      p(
+        en
+          ? 'Edit and save a file in any project, then open Import WakaTime history in the dashboard and choose Check heartbeat and project. It shows today’s heartbeat count, the time of the latest heartbeat and the projects seen today.'
+          : 'แก้ไขและ save ไฟล์ในโปรเจกต์ใดก็ได้ แล้วเปิดหน้า Import WakaTime history ใน dashboard และกด Check heartbeat and project ระบบจะแสดงจำนวน heartbeat ของวันนี้ เวลาของ heartbeat ล่าสุด และโปรเจกต์ที่เห็นในวันนี้'
+      ),
+      bullets(
+        en
+          ? [
+              'If the latest heartbeat is older than your test edit, check the plugin log and restart the editor',
+              'Reading code without editing, saving or switching files produces no heartbeat by design',
+              'The Overview page shows the same total once the first heartbeat has landed',
+            ]
+          : [
+              'ถ้า heartbeat ล่าสุดเก่ากว่าการแก้ไขที่คุณเพิ่งทำ ให้ดู log ของ plugin แล้ว restart editor',
+              'การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์ จะไม่สร้าง heartbeat ตามการออกแบบ',
+              'หน้า Overview จะแสดงยอดเดียวกันทันทีที่ heartbeat แรกเข้าระบบ',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#4',
+    (en) => [
+      p(
+        en
+          ? 'Create the export at wakatime.com/settings, or through the WakaTime API. Choose the export of heartbeats, not daily summaries: a summary cannot be turned back into a timeline, so the importer rejects it.'
+          : 'สร้างไฟล์ export ที่ wakatime.com/settings หรือผ่าน WakaTime API โดยเลือกแบบ heartbeats ไม่ใช่ daily summaries เพราะข้อมูลสรุปรายวันสร้าง timeline กลับคืนไม่ได้ ระบบ import จึงไม่รับไฟล์แบบนั้น'
+      ),
+      code(
+        'POST https://wakatime.com/api/v1/users/current/data_dumps\n{ "type": "heartbeats" }',
+        en ? 'WakaTime API' : 'WakaTime API'
+      ),
+      p(
+        en
+          ? 'WakaTime prepares the file in the background and gives each export an expiry date, so download it once it is ready. Keep the JSON file as it is; there is no need to edit or split it yourself.'
+          : 'WakaTime จะเตรียมไฟล์ให้เบื้องหลัง และลิงก์ดาวน์โหลดแต่ละไฟล์มีวันหมดอายุ จึงควรดาวน์โหลดทันทีที่พร้อม เก็บไฟล์ JSON ไว้ตามเดิม ไม่ต้องแก้ไขหรือแบ่งไฟล์เอง'
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#5',
+    (en) => [
+      p(
+        en
+          ? 'Open Import WakaTime history in the dashboard, choose the JSON file and select Review and import history. The browser splits a large export into chunks, strips fields the import does not use, and uploads the chunks in order.'
+          : 'เปิดหน้า Import WakaTime history ใน dashboard เลือกไฟล์ JSON แล้วกด Review and import history browser จะแบ่งไฟล์ใหญ่เป็นชิ้น ตัด field ที่การ import ไม่ได้ใช้ออก แล้วอัปโหลดทีละชิ้นตามลำดับ'
+      ),
+      bullets(
+        en
+          ? [
+              'Interrupted? Select the same file again and the import resumes from the chunks already received',
+              'Importing the same file twice does not count its time twice: already imported heartbeats are skipped',
+              'When it finishes, the page shows your all-time total before and after, plus how many records were skipped and why',
+              'A small export, up to 1 MiB and 10,000 heartbeats, can also go through Settings → Maintenance',
+            ]
+          : [
+              'ถ้าการ import ขาดกลางทาง ให้เลือกไฟล์เดิมอีกครั้ง ระบบจะทำต่อจากชิ้นที่ได้รับแล้ว',
+              'import ไฟล์เดิมซ้ำจะไม่ทำให้เวลาถูกนับซ้ำ เพราะ heartbeat ที่ import แล้วจะถูกข้าม',
+              'เมื่อเสร็จ หน้าเว็บจะแสดงยอดเวลารวมทั้งหมดก่อนและหลัง import พร้อมจำนวนรายการที่ถูกข้ามและเหตุผล',
+              'ไฟล์ขนาดเล็กไม่เกิน 1 MiB และไม่เกิน 10,000 heartbeat จะ import ผ่าน Settings → Maintenance ก็ได้',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/docs/migrate-from-wakatime#6',
+    (en) => [
+      p(
+        en
+          ? 'Your old and new activity now sit on one timeline, and every account keeps its complete history rather than a recent window. A few things behave differently from WakaTime, and it is better to know them before you compare totals.'
+          : 'ตอนนี้กิจกรรมเก่าและใหม่ของคุณอยู่บน timeline เดียวกัน และทุกบัญชีเก็บประวัติครบถ้วน ไม่ใช่แค่ช่วงล่าสุด มีบางอย่างที่ทำงานต่างจาก WakaTime ซึ่งควรรู้ไว้ก่อนเทียบยอดเวลา'
+      ),
+      bullets(
+        en
+          ? [
+              'Imported AI work stays AI but has no agent name: a WakaTime export shows that AI was involved, not which tool, so AtoAxis does not guess one',
+              'Two checkouts of one repository may appear as two projects; join them under Settings with project rules or a manual merge',
+              'AI hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI are set up separately from the WakaTime plugin',
+              'To go back, delete the api_url line and put your WakaTime key back in api_key. Nothing in either account is lost',
+            ]
+          : [
+              'งาน AI ที่ import มายังนับเป็น AI แต่ไม่มีชื่อ agent เพราะ export ของ WakaTime บอกได้แค่ว่ามี AI เกี่ยวข้อง ไม่ได้บอกว่าเป็นเครื่องมือตัวไหน AtoAxis จึงไม่เดาให้',
+              'checkout สองที่ของ repository เดียวกันอาจแสดงเป็นสองโปรเจกต์ ให้รวมกันที่หน้า Settings ด้วย project rules หรือการ merge เอง',
+              'AI hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ตั้งค่าแยกจาก WakaTime plugin',
+              'ถ้าต้องการย้ายกลับ ให้ลบบรรทัด api_url แล้วใส่ key ของ WakaTime กลับใน api_key ข้อมูลในทั้งสองบัญชีไม่หายไปไหน',
+            ]
+      ),
+    ],
+  ],
   [
     '/pricing#1',
     (en) => [
@@ -2365,12 +2587,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'VS Code 1.90 or newer',
               'wakaclock-cli on PATH, or an absolute path in wakaclock.cliPath',
-              'An API key, stored through Wakaclock: Set API Key rather than in settings.json',
+              'An API key, stored through AtoAxis: Set API Key rather than in settings.json',
             ]
           : [
               'VS Code 1.90 ขึ้นไป',
               'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ wakaclock.cliPath',
-              'API key ที่บันทึกผ่านคำสั่ง Wakaclock: Set API Key ไม่ใช่เก็บใน settings.json',
+              'API key ที่บันทึกผ่านคำสั่ง AtoAxis: Set API Key ไม่ใช่เก็บใน settings.json',
             ]
       ),
     ],
@@ -2444,19 +2666,9 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       ),
     ],
   ],
-]);
-
-const genericBlocks = (
-  path: MarketingPageKey,
-  heading: string,
-  index: number,
-  locale: SiteLocale
-): MarketingBlock[] => {
-  const en = locale === 'en';
-  const specific = DOC_BLOCKS.get(`${path}#${index}`);
-  if (specific) return specific(en);
-  if (path === '/integrations/vscode' && index === 0) {
-    return [
+  [
+    '/integrations/vscode#0',
+    (en) => [
       bullets(
         en
           ? [
@@ -2472,21 +2684,24 @@ const genericBlocks = (
               'AI attribution fields ที่เลือกใช้ได้',
             ]
       ),
-    ];
-  }
-  if (path === '/about' && index === 2) {
-    return [email(en ? 'For product questions, contact ' : 'ติดต่อเรื่องผลิตภัณฑ์ได้ที่ ', '.')];
-  }
-  if (path === '/terms' && index === 3) {
-    return [
+    ],
+  ],
+  [
+    '/about#2',
+    (en) => [email(en ? 'For product questions, contact ' : 'ติดต่อเรื่องผลิตภัณฑ์ได้ที่ ', '.')],
+  ],
+  [
+    '/terms#3',
+    (en) => [
       email(
         en ? 'Contact ' : 'ติดต่อ ',
         en ? ' with questions about these terms.' : ' หากมีคำถามเกี่ยวกับข้อกำหนด'
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 0) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#0',
+    (en) => [
       p(en ? 'The heartbeat schema can include:' : 'Heartbeat schema อาจมีข้อมูลเหล่านี้:'),
       bullets(
         en
@@ -2505,10 +2720,11 @@ const genericBlocks = (
               'Activity category, AI fields และ timestamp',
             ]
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 1) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#1',
+    (en) => [
       p(en ? 'There is no field for:' : 'ไม่มี field สำหรับ:'),
       bullets(
         en
@@ -2525,10 +2741,11 @@ const genericBlocks = (
               'Screenshot หรือ recording',
             ]
       ),
-    ];
-  }
-  if (path === '/privacy' && index === 3) {
-    return [
+    ],
+  ],
+  [
+    '/privacy#3',
+    (en) => [
       p(
         en
           ? 'AI heartbeats store the flag, agent name and line counts. Provider-reported token usage may be stored as usage metadata; prompt and response text never is.'
@@ -2540,10 +2757,11 @@ const genericBlocks = (
           ? 'Estimated cost is null when provider pricing is unknown, and coverage metadata explains why.'
           : 'estimated cost เป็น null เมื่อไม่รู้ราคา provider และ coverage metadata จะบอกเหตุผล'
       ),
-    ];
-  }
-  if (path === '/pricing' && index === 0) {
-    return [
+    ],
+  ],
+  [
+    '/pricing#0',
+    (en) => [
       p(
         en
           ? `The planned plan is designed as one complete product rather than a ladder of feature gates. At $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year, it is intended to include the full coding history, analysis views and import tools described below. These are planned Early Access terms; checkout is not open and joining the list does not create a subscription.`
@@ -2568,40 +2786,17 @@ const genericBlocks = (
               'Goals และ leaderboards แบบ opt-in เมื่อ server รัน PostgreSQL',
             ]
       ),
-    ];
-  }
-  if (path === '/pricing' && index === 1) {
-    return [
-      p(
-        en
-          ? `Billing is not active during Early Access. The public target is $${PRICING.monthlyUsd} when paying month to month or $${PRICING.annualUsd} for a year, a planned difference of $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} compared with twelve monthly payments. Final checkout terms will be shown before anyone is charged.`
-          : `ช่วง Early Access ยังไม่มีการเรียกเก็บเงิน ราคาเป้าหมายที่ประกาศไว้คือ $${PRICING.monthlyUsd} เมื่อจ่ายรายเดือน หรือ $${PRICING.annualUsd} สำหรับหนึ่งปี ซึ่งต่างจากการจ่ายรายเดือนครบสิบสองครั้ง $${PRICING.monthlyUsd * 12 - PRICING.annualUsd} เงื่อนไขสุดท้ายจะแสดงใน checkout ให้ตรวจสอบก่อนมีการเรียกเก็บเงิน`
-      ),
-      sub(en ? 'What joining Early Access means' : 'การเข้าร่วม Early Access หมายถึงอะไร'),
-      bullets(
-        en
-          ? [
-              'No payment details are collected on the marketing site today',
-              'Joining the list does not start a trial or subscription',
-              'Availability and final terms will be communicated before checkout opens',
-            ]
-          : [
-              'เว็บไซต์การตลาดยังไม่เก็บข้อมูลการชำระเงิน',
-              'การเข้าร่วมรายการไม่เริ่ม trial หรือ subscription',
-              'ระบบจะแจ้งวันเปิดใช้งานและเงื่อนไขสุดท้ายก่อนเปิด checkout',
-            ]
-      ),
-    ];
-  }
-  if (path === '/early-access') return [];
-  return [
-    p(
-      en
-        ? `This section explains ${heading.toLowerCase()} and the practical limits of the current hosted product.`
-        : `ส่วนนี้อธิบาย${heading}และขอบเขตของ hosted product ที่ใช้งานอยู่ในปัจจุบัน`
-    ),
-  ];
-};
+    ],
+  ],
+]);
+
+// Every authored section has an explicit block factory. Missing section copy now
+// fails during the build instead of silently generating placeholder prose.
+const genericBlocks = (
+  path: MarketingPageKey,
+  index: number,
+  locale: SiteLocale
+): MarketingBlock[] => DOC_BLOCKS.get(`${path}#${index}`)!(locale === 'en');
 const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
   const en = locale === 'en';
   const links: Record<string, MarketingLinkCopy[]> = {
@@ -2642,6 +2837,32 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         description: en ? 'Connect an editor' : 'เชื่อม editor',
       },
       {
+        href: '/docs/migrate-from-wakatime',
+        label: en ? 'Migrate from WakaTime' : 'ย้ายจาก WakaTime',
+        description: en
+          ? 'Keep your plugin and import your history'
+          : 'ใช้ plugin เดิมและ import ประวัติ',
+      },
+      {
+        href: '/docs/how-coding-time-is-calculated',
+        label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
+        description: en
+          ? 'Heartbeats, idle gaps and duration blocks'
+          : 'heartbeat, idle gap และ duration block',
+      },
+      {
+        href: '/docs/ai-attribution-and-coverage',
+        label: en ? 'AI attribution and coverage' : 'AI attribution และ coverage',
+        description: en
+          ? 'Evidence behind AI and human totals'
+          : 'หลักฐานเบื้องหลังยอด AI และ human',
+      },
+      {
+        href: '/docs/ai-cost-methodology',
+        label: en ? 'AI cost methodology' : 'วิธีคำนวณค่าใช้จ่าย AI',
+        description: en ? 'Token prices and unknown estimates' : 'ราคา token และยอดที่ไม่ทราบ',
+      },
+      {
         href: '/integrations',
         label: en ? 'Editor integrations' : 'การเชื่อมต่อ editor',
         description: en
@@ -2671,6 +2892,41 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
         href: '/integrations/vscode',
         label: en ? 'VS Code integration' : 'VS Code integration',
         description: en ? 'Extension settings' : 'settings ของ extension',
+      },
+      {
+        href: '/docs/migrate-from-wakatime',
+        label: en ? 'Migrate from WakaTime' : 'ย้ายจาก WakaTime',
+        description: en
+          ? 'Keep your plugin and import your history'
+          : 'ใช้ plugin เดิมและ import ประวัติ',
+      },
+    ],
+    '/docs/migrate-from-wakatime': [
+      {
+        href: '/wakatime-alternative',
+        label: en ? 'AtoAxis vs WakaTime' : 'เทียบ AtoAxis กับ WakaTime',
+        description: en
+          ? 'What differs before you decide to move'
+          : 'สิ่งที่ต่างกันก่อนตัดสินใจย้าย',
+      },
+      {
+        href: '/docs/getting-started',
+        label: en ? 'Getting started' : 'เริ่มต้นใช้งาน',
+        description: en ? 'API key, CLI and first heartbeat' : 'API key, CLI และ heartbeat แรก',
+      },
+      {
+        href: '/docs/how-coding-time-is-calculated',
+        label: en ? 'How coding time is calculated' : 'วิธีคำนวณเวลาการเขียนโค้ด',
+        description: en
+          ? 'Why totals can differ between tools'
+          : 'ทำไมยอดเวลาของแต่ละเครื่องมืออาจต่างกัน',
+      },
+      {
+        href: '/integrations',
+        label: en ? 'Editor integrations' : 'การเชื่อมต่อ editor',
+        description: en
+          ? 'Editors that work through the WakaTime protocol'
+          : 'editor ที่ใช้งานผ่าน WakaTime protocol',
       },
     ],
     '/about': [
@@ -2726,12 +2982,12 @@ generic(
       {
         question: 'Where is my API key stored?',
         answer:
-          "In VS Code's secret storage after running Wakaclock: Set API Key — never in settings.json, so it is never synced or committed with your editor config.",
+          "In VS Code's secret storage after running AtoAxis: Set API Key — never in settings.json, so it is never synced or committed with your editor config.",
       },
       {
         question: 'Why does the status bar show zero?',
         answer:
-          'The extension cannot find wakaclock-cli. Run Wakaclock: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
+          'The extension cannot find wakaclock-cli. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
       },
       {
         question: 'Does it track other apps or browser tabs?',
@@ -2746,7 +3002,7 @@ generic(
     ],
   },
   {
-    title: 'VS Code time tracking extension',
+    title: 'ส่วนขยาย AtoAxis สำหรับติดตามเวลาใน VS Code',
     description: 'ติดตั้งและตั้งค่า AtoAxis VS Code extension',
     lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
     headings: [
@@ -2771,12 +3027,12 @@ generic(
       {
         question: 'API key เก็บไว้ที่ไหน?',
         answer:
-          'เก็บใน secret storage ของ VS Code หลังรันคำสั่ง Wakaclock: Set API Key ไม่เคยเก็บใน settings.json จึงไม่ถูก sync หรือ commit ไปกับ config อื่น',
+          'เก็บใน secret storage ของ VS Code หลังรันคำสั่ง AtoAxis: Set API Key ไม่เคยเก็บใน settings.json จึงไม่ถูก sync หรือ commit ไปกับ config อื่น',
       },
       {
         question: 'ทำไม status bar ถึงขึ้นศูนย์?',
         answer:
-          'extension หา wakaclock-cli ไม่เจอ ให้รัน Wakaclock: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+          'extension หา wakaclock-cli ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
       },
       {
         question: 'ติดตามแอปอื่นหรือ browser tab ด้วยหรือไม่?',
@@ -2831,7 +3087,7 @@ generic(
   },
   {
     title: 'ราคา',
-    description: `ราคาแผนที่วางไว้ $${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี`,
+    description: `ตรวจราคาเป้าหมายของ AtoAxis: $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี พร้อมสิ่งที่รวมในแผนและสถานะ Early Access ซึ่งยังไม่เปิด checkout หรือเก็บเงิน`,
     lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
     faqEntries: [
@@ -2912,7 +3168,8 @@ generic(
       },
       {
         question: 'What happens if I revoke my API key?',
-        answer: 'New data stops immediately; revoking a key does not delete data that already exists.',
+        answer:
+          'New data stops immediately; revoking a key does not delete data that already exists.',
       },
     ],
   },
@@ -2999,17 +3256,32 @@ generic(
           'Yes. The AI coding tracker guide explains supported agent hooks, attribution categories, token coverage and unknown cost handling.',
       },
       {
+        question: 'Where is the coding-time calculation explained?',
+        answer:
+          'The coding-time guide explains duration blocks, the default idle timeout, short-gap bridging and why trailing gaps are not counted.',
+      },
+      {
+        question: 'Where is the AI cost formula documented?',
+        answer:
+          'The AI cost methodology guide shows token classes, effective-dated provider/model prices, micro-USD arithmetic and unknown-cost handling.',
+      },
+      {
         question: 'Can I verify behavior against the implementation?',
         answer:
-          'Yes. The documentation links to the public source repository and identifies the shipped CLI commands, configuration paths and integration boundaries.',
+          'Yes. The documentation identifies the shipped CLI commands, configuration paths and integration boundaries, and the contact page can answer implementation questions that are not covered there.',
       },
     ],
   },
   {
     title: 'เอกสาร AtoAxis',
-    description: 'เอกสาร setup, editor integration และ heartbeat privacy',
+    description:
+      'เริ่มใช้ AtoAxis จากคู่มือเชื่อม editor และตรวจ heartbeat แรก อ่านวิธีคำนวณเวลา AI attribution การตั้งค่า integration และข้อมูลที่ส่งเพื่อใช้งานอย่างเข้าใจ',
     lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
-    headings: ['เริ่มต้นที่นี่'],
+    headings: [
+      'เอกสารนี้มีอะไรบ้าง?',
+      'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?',
+      'ตรวจสอบ integration และ privacy ที่ไหน?',
+    ],
     faqEntries: [
       {
         question: 'ผู้ใช้ AtoAxis ใหม่ควรเริ่มที่ไหน?',
@@ -3032,9 +3304,19 @@ generic(
           'ครอบคลุม คู่มือ AI coding tracker อธิบาย agent hooks ที่รองรับ หมวด attribution, token coverage และการจัดการ cost ที่ไม่ทราบค่า',
       },
       {
+        question: 'อธิบายวิธีคำนวณ coding time ที่ไหน?',
+        answer:
+          'ดูคู่มือวิธีคำนวณเวลาการเขียนโค้ด ซึ่งอธิบาย duration block, idle timeout, การเชื่อม gap สั้น และเหตุผลที่ไม่รวมเวลาหลัง event สุดท้าย',
+      },
+      {
+        question: 'สูตรคำนวณค่าใช้จ่าย AI อยู่ที่ไหน?',
+        answer:
+          'ดูคู่มือวิธีคำนวณค่าใช้จ่าย AI ซึ่งแสดงประเภท token, ราคา provider/model ตามช่วงเวลา หน่วย micro-USD และการจัดการราคาที่ไม่ทราบ',
+      },
+      {
         question: 'ตรวจสอบข้อมูลกับ implementation ได้หรือไม่?',
         answer:
-          'ได้ เอกสารเชื่อมไปยัง source repository สาธารณะและระบุ CLI command, config path และขอบเขต integration ที่มีอยู่จริง',
+          'ได้ เอกสารระบุ CLI command, config path และขอบเขต integration ที่มีอยู่จริง ส่วนคำถามที่เอกสารยังไม่ครอบคลุมสามารถสอบถามผ่านหน้าติดต่อได้',
       },
     ],
   }
@@ -3066,7 +3348,7 @@ generic(
       {
         question: 'How do I connect VS Code?',
         answer:
-          'Install "AtoAxis — Developer Time Tracking", then run Wakaclock: Set API Key from the Command Palette.',
+          'Install "AtoAxis — Developer Time Tracking", then run AtoAxis: Set API Key from the Command Palette.',
       },
       {
         question: 'How do I connect an editor that already has a WakaTime plugin?',
@@ -3109,7 +3391,8 @@ generic(
       },
       {
         question: 'เชื่อม VS Code อย่างไร?',
-        answer: 'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน Wakaclock: Set API Key จาก Command Palette',
+        answer:
+          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
@@ -3130,11 +3413,108 @@ generic(
   }
 );
 generic(
+  '/docs/migrate-from-wakatime',
+  {
+    title: 'Migrate from WakaTime to AtoAxis',
+    description:
+      'Move from WakaTime to AtoAxis: keep your WakaTime plugin, change two settings, then import your WakaTime heartbeat export without double-counting time.',
+    lead: 'To move from WakaTime to AtoAxis, keep the WakaTime plugin you already use and change two lines in ~/.wakatime.cfg: api_url and api_key. New coding time then goes to AtoAxis. To bring your history, export your heartbeats from WakaTime and import the JSON file in the dashboard; the import resumes after interruptions and never counts the same heartbeat twice.',
+    headings: [
+      'Before you start',
+      'Get an AtoAxis API key',
+      'Point your WakaTime plugin at AtoAxis',
+      'Check that the first heartbeat arrived',
+      'Export your WakaTime history',
+      'Import the export into AtoAxis',
+      'What changes after you move',
+    ],
+    faqEntries: [
+      {
+        question: 'Do I need to uninstall the WakaTime plugin?',
+        answer:
+          'No. Keep it installed and change api_url and api_key in ~/.wakatime.cfg. AtoAxis implements the WakaTime heartbeat API, so the plugin works as before.',
+      },
+      {
+        question: 'Can I import my full WakaTime history?',
+        answer:
+          'Yes, from a WakaTime data export of type heartbeats. Large exports are split into chunks in the browser and imported in order, and the import can be resumed with the same file.',
+      },
+      {
+        question: 'Why was my WakaTime export rejected?',
+        answer:
+          'It most likely contains daily summaries instead of raw heartbeats. Summaries cannot be rebuilt into a timeline, so create a new export and choose heartbeats.',
+      },
+      {
+        question: 'Will importing the same file twice double my time?',
+        answer:
+          'No. Each imported heartbeat gets an ID derived from its content, so heartbeats that were already imported are skipped and reported as skipped.',
+      },
+      {
+        question: 'Does the imported history keep AI information?',
+        answer:
+          'Heartbeats that WakaTime marked as AI stay AI, but without an agent name, because the export does not say which tool made the change.',
+      },
+      {
+        question: 'Can I switch back to WakaTime later?',
+        answer:
+          'Yes. Delete the api_url line and put your WakaTime key back in api_key. Data already in either account is not deleted.',
+      },
+    ],
+  },
+  {
+    title: 'ย้ายจาก WakaTime มาใช้ AtoAxis',
+    description:
+      'วิธีย้ายจาก WakaTime มา AtoAxis ใช้ WakaTime plugin เดิม แก้ค่าตั้งค่าสองบรรทัด แล้ว import ประวัติ heartbeat จาก WakaTime โดยเวลาไม่ถูกนับซ้ำ',
+    lead: 'การย้ายจาก WakaTime มา AtoAxis ไม่ต้องถอน plugin เดิม คุณแค่แก้สองบรรทัดใน ~/.wakatime.cfg คือ api_url และ api_key แล้วเวลาเขียนโค้ดใหม่จะเข้ามาที่ AtoAxis ส่วนประวัติเดิม ให้ export heartbeat จาก WakaTime แล้ว import ไฟล์ JSON ใน dashboard ระบบทำต่อได้ถ้าขาดกลางทาง และไม่นับ heartbeat เดิมซ้ำ',
+    headings: [
+      'ก่อนเริ่ม',
+      'สร้าง API key ของ AtoAxis',
+      'ชี้ WakaTime plugin มาที่ AtoAxis',
+      'ตรวจว่า heartbeat แรกเข้าแล้ว',
+      'export ประวัติจาก WakaTime',
+      'import ไฟล์ export เข้า AtoAxis',
+      'อะไรเปลี่ยนไปหลังย้าย',
+    ],
+    faqEntries: [
+      {
+        question: 'ต้องถอน WakaTime plugin ออกไหม?',
+        answer:
+          'ไม่ต้อง เก็บ plugin ไว้ตามเดิม แล้วแก้ api_url และ api_key ใน ~/.wakatime.cfg เพราะ AtoAxis รองรับ WakaTime heartbeat API plugin จึงทำงานได้เหมือนเดิม',
+      },
+      {
+        question: 'import ประวัติ WakaTime ทั้งหมดได้ไหม?',
+        answer:
+          'ได้ ใช้ไฟล์ export ของ WakaTime แบบ heartbeats ไฟล์ใหญ่จะถูกแบ่งเป็นชิ้นใน browser แล้ว import ตามลำดับ และทำต่อได้ด้วยการเลือกไฟล์เดิมอีกครั้ง',
+      },
+      {
+        question: 'ทำไมไฟล์ export ของ WakaTime ถึงถูกปฏิเสธ?',
+        answer:
+          'ส่วนใหญ่เป็นเพราะไฟล์มีแต่สรุปรายวัน (daily) ไม่มี heartbeat ดิบ ข้อมูลสรุปสร้าง timeline กลับคืนไม่ได้ ให้สร้าง export ใหม่แล้วเลือกแบบ heartbeats',
+      },
+      {
+        question: 'import ไฟล์เดิมสองครั้ง เวลาจะเพิ่มเป็นสองเท่าไหม?',
+        answer:
+          'ไม่ heartbeat ที่ import แต่ละรายการมี ID ที่คำนวณจากเนื้อหาของมันเอง รายการที่ import ไปแล้วจึงถูกข้าม และแสดงเป็นจำนวนที่ถูกข้าม',
+      },
+      {
+        question: 'ประวัติที่ import มายังมีข้อมูล AI อยู่ไหม?',
+        answer:
+          'heartbeat ที่ WakaTime ระบุว่าเป็นงาน AI จะยังนับเป็น AI แต่ไม่มีชื่อ agent เพราะไฟล์ export ไม่ได้บอกว่าเครื่องมือตัวไหนเป็นผู้แก้ไข',
+      },
+      {
+        question: 'ย้ายกลับไป WakaTime ภายหลังได้ไหม?',
+        answer:
+          'ได้ ลบบรรทัด api_url แล้วใส่ key ของ WakaTime กลับใน api_key ข้อมูลที่อยู่ในทั้งสองบัญชีแล้วจะไม่ถูกลบ',
+      },
+    ],
+  }
+);
+generic(
   '/about',
   {
     title: `About ${SITE_NAME}`,
     description: `Learn why ${SITE_NAME} exists and who builds it.`,
-    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product built by a team of fourth-year students. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
+    lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product developed by team Atoaxis. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
     headings: ['Why we are building it', 'Current status', 'Who builds it'],
     faqEntries: [
       {
@@ -3143,7 +3523,7 @@ generic(
       },
       {
         question: 'Who builds AtoAxis?',
-        answer: 'A team of fourth-year students designs, builds and operates the hosted service.',
+        answer: 'Team Atoaxis designs, develops and operates the hosted service.',
       },
       {
         question: 'What is actually working today?',
@@ -3160,7 +3540,7 @@ generic(
   {
     title: `เกี่ยวกับ ${SITE_NAME}`,
     description: `รู้จักเหตุผลและผู้พัฒนา ${SITE_NAME}`,
-    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาโดยนักศึกษาปี 4 ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
+    lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาขึ้น โดย team Atoaxis ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
     headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้พัฒนา'],
     faqEntries: [
       {
@@ -3169,7 +3549,7 @@ generic(
       },
       {
         question: `ใครเป็นผู้พัฒนา ${SITE_NAME}?`,
-        answer: 'ทีมนักศึกษาปี 4 เป็นผู้ออกแบบ พัฒนา และดูแลบริการ hosted นี้',
+        answer: 'พัฒนาขึ้น โดย team Atoaxis ซึ่งเป็นผู้ออกแบบ พัฒนา และดูแลบริการ hosted นี้',
       },
       {
         question: 'ตอนนี้ใช้งานได้จริงส่วนไหนบ้าง?',
@@ -3178,7 +3558,8 @@ generic(
       },
       {
         question: 'ส่วนไหนยังไม่พร้อม?',
-        answer: 'ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
+        answer:
+          'ระบบเรียกเก็บเงินและ checkout, team และ organisation seat ที่กำหนดให้ และ adapter สำหรับ Cursor และ Copilot',
       },
     ],
   }
@@ -3231,11 +3612,13 @@ generic(
       },
       {
         question: 'ถามเรื่อง field ใน heartbeat ได้ไหม?',
-        answer: 'ได้ แต่หน้า privacy มีรายการ field ทั้งหมดอยู่แล้ว และตอบคำถามส่วนใหญ่ได้เร็วกว่าการรอคำตอบ',
+        answer:
+          'ได้ แต่หน้า privacy มีรายการ field ทั้งหมดอยู่แล้ว และตอบคำถามส่วนใหญ่ได้เร็วกว่าการรอคำตอบ',
       },
       {
         question: 'มีช่องทาง support สำหรับบัญชีโดยเฉพาะหรือไม่?',
-        answer: 'ฟอร์มนี้ตอบคำถามเกี่ยวกับผลิตภัณฑ์ ช่วง Early Access ยังไม่มีช่องทาง support แยกสำหรับบัญชี',
+        answer:
+          'ฟอร์มนี้ตอบคำถามเกี่ยวกับผลิตภัณฑ์ ช่วง Early Access ยังไม่มีช่องทาง support แยกสำหรับบัญชี',
       },
     ],
   }
@@ -3258,7 +3641,8 @@ generic(
       },
       {
         question: 'Can I share one API key across a team?',
-        answer: 'No. One key identifies one account; sharing it is against the acceptable-use rules.',
+        answer:
+          'No. One key identifies one account; sharing it is against the acceptable-use rules.',
       },
       {
         question: 'Will these terms change before launch?',
@@ -3287,7 +3671,8 @@ generic(
       },
       {
         question: 'ข้อกำหนดนี้จะเปลี่ยนก่อนเปิดตัวหรือไม่?',
-        answer: 'จะเปลี่ยน นี่เป็นข้อกำหนดเบื้องต้นและจะถูกแทนที่ก่อนที่ผลิตภัณฑ์จะเริ่มมีค่าใช้จ่าย',
+        answer:
+          'จะเปลี่ยน นี่เป็นข้อกำหนดเบื้องต้นและจะถูกแทนที่ก่อนที่ผลิตภัณฑ์จะเริ่มมีค่าใช้จ่าย',
       },
     ],
   }
@@ -3307,7 +3692,8 @@ generic(
       },
       {
         question: 'When do I get an API key?',
-        answer: 'Keys are issued to people on the list as Early Access opens, not automatically at signup.',
+        answer:
+          'Keys are issued to people on the list as Early Access opens, not automatically at signup.',
       },
       {
         question: 'What is the planned price once checkout opens?',
@@ -3655,6 +4041,653 @@ dualPage(
         question: 'ต้องเก็บ prompt หรือ response เพื่อคำนวณค่าใช้จ่ายหรือไม่?',
         answer:
           'ไม่ต้อง usage stream มีเฉพาะ identifier และตัวเลข ความยาว prompt นับในเครื่องแล้วทิ้งข้อความ',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/how-coding-time-is-calculated',
+  {
+    metadataTitle: 'How AtoAxis calculates coding time',
+    description:
+      'Learn how AtoAxis turns editor heartbeats into duration blocks, bridges short idle gaps and leaves long or trailing gaps uncounted.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'How coding time is calculated', path: '/docs/how-coding-time-is-calculated' },
+    ],
+    title: 'How AtoAxis calculates coding time',
+    lead: 'AtoAxis derives coding time from editor heartbeats. Nearby evidence becomes a duration block; a long or trailing gap stays outside the total.',
+    howTo: {
+      name: 'Calculate coding time from editor heartbeats',
+      description: 'Follow the data path from a heartbeat to a duration total.',
+    },
+    sections: [
+      section('What a heartbeat proves', 'inputs', [
+        p(
+          'A heartbeat is an event from a connected editor. It can include a timestamp, file and project metadata, branch, language, editor and activity counts. It describes observed editor activity; it does not prove that every minute spent planning, reading or talking produced coding time.'
+        ),
+        bullets([
+          'The timestamp places the event on the account timeline.',
+          'Metadata lets the same interval be filtered by project, language, branch or editor.',
+          'Counts and attribution fields remain separate from the duration calculation.',
+        ]),
+      ]),
+      section('From events to duration blocks', 'blocks', [
+        p(
+          'AtoAxis canonicalises overlapping evidence first, then orders the remaining intervals. The duration of a block is the union of its intervals, so two sources cannot count the same seconds twice. A single isolated event proves an instant but does not invent a long session after it.'
+        ),
+        code(
+          '09:00 interval ───── 09:05 interval ───── 09:10 interval\n          one continuous duration block',
+          'Illustrative timeline'
+        ),
+      ]),
+      section('How idle gaps are handled', 'idle', [
+        p(
+          'The default human idle timeout is 15 minutes. When two proven intervals are separated by a positive gap no longer than that timeout, the gap is bridged to the earlier interval, matching the WakaTime-compatible session model. A gap longer than the configured timeout closes the block. The timeout is configurable per deployment, so the deployed setting is the source of truth.'
+        ),
+        bullets([
+          'A short gap between two real events can be included in the earlier block.',
+          'A gap longer than the timeout starts a new block instead of padding the old one.',
+          'Time after the final event is never added just because the session was once active.',
+          'Agent activity can use its own timeout when that deployment enables the split timeline.',
+        ]),
+      ]),
+      section('Worked example', 'example', [
+        p(
+          'Illustrative example, not customer data: suppose an interval ends at 09:00 and the next begins at 09:10. With the default 15-minute timeout, that 10-minute gap is bridged. If the next interval begins at 09:30, the 20-minute gap is too long, so the first block ends and a second block begins. Time after the final interval remains uncounted.'
+        ),
+        code(
+          '09:00 ──(10 min gap)── 09:10    bridged\n09:10 ──(20 min gap)── 09:30    new block',
+          'Worked example'
+        ),
+        p(
+          'The arithmetic explains the rule, not a promise about a particular dashboard total. Check the timeline and its interval evidence when a total looks surprising.'
+        ),
+      ]),
+      section('How to read the result', 'interpretation', [
+        bullets([
+          'Coding time is observed editor activity, not all time spent on a task.',
+          'A duration total does not measure code quality, value, focus or productivity.',
+          'Use project, language, branch and editor filters to find which evidence produced a total.',
+          'Compare the duration with the activity timeline and coverage fields before drawing a conclusion.',
+        ]),
+      ]),
+      section('Verify your first total', 'verify', [
+        p(
+          'Connect one editor, run wakaclock-cli status, make a small change and wait for the first heartbeat. The dashboard timeline should show the event and the Overview page should use the same duration model. If it does not, check the API key, server URL and local queue before adding another client.'
+        ),
+        p('Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/docs/getting-started',
+          label: 'Getting started',
+          description: 'Connect an editor and verify a first heartbeat',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'See the metrics and filters built on this timeline',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy and data collection',
+          description: 'Review the fields a heartbeat can carry',
+        },
+      ]),
+    ],
+    faq: faq('Coding time FAQ', [
+      {
+        question: 'Does AtoAxis count time after my last heartbeat?',
+        answer:
+          'No. A trailing gap after the final observed event is not added to the duration total.',
+      },
+      {
+        question: 'What is the default idle timeout?',
+        answer:
+          'The default human timeout is 15 minutes. A deployment can configure it, so check the deployed setting when comparing totals.',
+      },
+      {
+        question: 'Does a heartbeat include my source code?',
+        answer:
+          'No. Heartbeats carry activity metadata and counts; source code, prompts and responses are outside the payload.',
+      },
+      {
+        question: 'Is coding time a productivity score?',
+        answer:
+          'No. It is a record of observed editor activity and should be read with its limits and coverage.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'AtoAxis คำนวณเวลาการเขียนโค้ดอย่างไร',
+    description:
+      'ดูวิธีที่ AtoAxis เปลี่ยน editor heartbeat เป็นช่วงเวลา เชื่อมช่วงว่างสั้น และไม่นับช่วงว่างยาวหรือเวลาหลัง heartbeat สุดท้าย',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'วิธีคำนวณเวลาการเขียนโค้ด', path: '/docs/how-coding-time-is-calculated' },
+    ],
+    title: 'AtoAxis คำนวณเวลาการเขียนโค้ดอย่างไร',
+    lead: 'AtoAxis คำนวณเวลาจาก editor heartbeat หลักฐานที่อยู่ใกล้กันจะรวมเป็นช่วงเวลา ส่วนช่วงว่างยาวหรือหลังเหตุการณ์สุดท้ายจะไม่ถูกเติมเข้าไป',
+    howTo: {
+      name: 'คำนวณเวลาจาก editor heartbeat',
+      description: 'ตามเส้นทางข้อมูลตั้งแต่ heartbeat ไปจนถึงยอดเวลาที่แสดง',
+    },
+    sections: [
+      section('Heartbeat ยืนยันอะไร', 'inputs', [
+        p(
+          'Heartbeat คือ event จาก editor ที่เชื่อมต่ออยู่ อาจมีเวลา file และ project metadata, branch, language, editor และ activity counts ข้อมูลนี้ยืนยันกิจกรรมที่ editor สังเกตได้ ไม่ได้หมายความว่าเวลาวางแผน อ่าน หรือประชุมทุกนาทีจะกลายเป็น coding time'
+        ),
+        bullets([
+          'เวลาใน event วางกิจกรรมบน timeline ของบัญชี',
+          'Metadata ทำให้กรองตาม project, language, branch หรือ editor ได้',
+          'Counts และ attribution แยกจากการคำนวณ duration',
+        ]),
+      ]),
+      section('จาก event เป็น duration block', 'blocks', [
+        p(
+          'AtoAxis รวมหลักฐานที่ทับซ้อนกันก่อน แล้วเรียง interval ที่เหลือ ระยะเวลาของ block คือ union ของ interval จึงไม่นับวินาทีซ้ำจากหลายแหล่ง event เดี่ยวพิสูจน์เพียงจุดเวลา ไม่ได้สร้าง session ยาวต่อท้ายเอง'
+        ),
+        code(
+          '09:00 interval ───── 09:05 interval ───── 09:10 interval\n          เป็น duration block เดียวกัน',
+          'Timeline ตัวอย่าง'
+        ),
+      ]),
+      section('จัดการ idle gap อย่างไร', 'idle', [
+        p(
+          'ค่าเริ่มต้นของ idle timeout สำหรับกิจกรรมจากคนคือ 15 นาที หาก interval ที่พิสูจน์ได้สองช่วงมี gap ไม่เกินค่านี้ ระบบจะเชื่อม gap ให้กับ interval ก่อนหน้า ตาม session model ที่เข้ากันได้กับ WakaTime หาก gap ยาวกว่านั้น block เดิมจะจบและเริ่ม block ใหม่ ค่า timeout ปรับได้ตาม deployment จึงควรยึดค่าของระบบที่ใช้งานจริง'
+        ),
+        bullets([
+          'gap สั้นระหว่าง event จริงอาจถูกรวมใน block ก่อนหน้า',
+          'gap ยาวกว่าค่าที่ตั้งจะปิด block เดิม ไม่เติมเวลาให้',
+          'หลัง event สุดท้ายจะไม่เติมเวลาเพียงเพราะ session เคย active',
+          'กิจกรรมจาก agent อาจใช้ timeout แยก หาก deployment เปิด timeline แบบแยก',
+        ]),
+      ]),
+      section('ตัวอย่างการคำนวณ', 'example', [
+        p(
+          'ตัวอย่างสมมติ ไม่ใช่ข้อมูลลูกค้า: interval หนึ่งจบเวลา 09:00 และช่วงถัดไปเริ่ม 09:10 เมื่อ timeout เริ่มต้นคือ 15 นาที gap 10 นาทีจึงเชื่อมกัน หากช่วงถัดไปเริ่ม 09:30 gap 20 นาทีจะยาวเกินไป block แรกจึงจบและเริ่ม block ที่สอง เวลาหลัง interval สุดท้ายไม่ถูกนับ'
+        ),
+        code(
+          '09:00 ──(gap 10 นาที)── 09:10    เชื่อมกัน\n09:10 ──(gap 20 นาที)── 09:30    block ใหม่',
+          'ตัวอย่าง'
+        ),
+        p(
+          'ตัวเลขนี้อธิบายกติกา ไม่ใช่การรับประกันยอด dashboard ใด ๆ ให้ดู timeline และหลักฐานของ interval เมื่อยอดไม่ตรงกับความคาดหมาย'
+        ),
+      ]),
+      section('อ่านผลลัพธ์อย่างไร', 'interpretation', [
+        bullets([
+          'Coding time คือกิจกรรมจาก editor ที่สังเกตได้ ไม่ใช่เวลาทั้งหมดของงาน',
+          'ยอด duration ไม่ใช่คะแนนคุณภาพ คุณค่า สมาธิ หรือ productivity',
+          'ใช้ filter ตาม project, language, branch และ editor เพื่อหา evidence ของยอดนั้น',
+          'อ่าน timeline คู่กับ coverage ก่อนสรุปผล',
+        ]),
+      ]),
+      section('ตรวจสอบยอดแรก', 'verify', [
+        p(
+          'เชื่อม editor หนึ่งตัว รัน wakaclock-cli status แก้ไฟล์เล็กน้อย และรอ heartbeat แรก หน้า timeline ควรเห็น event และหน้า Overview ควรใช้ duration model เดียวกัน หากไม่เห็น ให้ตรวจ API key, server URL และ local queue ก่อนเพิ่ม client ตัวอื่น'
+        ),
+        p('ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/docs/getting-started',
+          label: 'เริ่มต้นใช้งาน',
+          description: 'เชื่อม editor และยืนยัน heartbeat แรก',
+        },
+        {
+          href: '/developer-analytics',
+          label: 'Developer analytics',
+          description: 'metric และ filter ที่สร้างจาก timeline นี้',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy และข้อมูลที่เก็บ',
+          description: 'field ที่ heartbeat อาจส่ง',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่องการคำนวณ coding time', [
+      {
+        question: 'หลัง heartbeat สุดท้ายระบบนับเวลาต่อหรือไม่?',
+        answer: 'ไม่ เวลาหลัง event ที่สังเกตได้สุดท้ายจะไม่ถูกเติมในยอด duration',
+      },
+      {
+        question: 'ค่า idle timeout เริ่มต้นเท่าไร?',
+        answer:
+          'ค่าเริ่มต้นของกิจกรรมจากคนคือ 15 นาที แต่ deployment ปรับได้ ให้ตรวจค่าของระบบจริง',
+      },
+      {
+        question: 'Heartbeat ส่ง source code หรือไม่?',
+        answer:
+          'ไม่ ส่ง metadata และ counts ของกิจกรรม ส่วน source code, prompt และ response ไม่อยู่ใน payload',
+      },
+      {
+        question: 'Coding time เป็น productivity score หรือไม่?',
+        answer: 'ไม่ เป็นบันทึกกิจกรรมจาก editor ที่สังเกตได้และต้องอ่านคู่กับข้อจำกัดและ coverage',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/ai-attribution-and-coverage',
+  {
+    metadataTitle: 'AtoAxis AI attribution and coverage',
+    description:
+      'Understand how AtoAxis separates AI, human and Unattributed line changes and reports the evidence coverage behind each total.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'AI attribution and coverage', path: '/docs/ai-attribution-and-coverage' },
+    ],
+    title: 'AtoAxis AI attribution and coverage',
+    lead: 'AtoAxis keeps AI, human and Unattributed changes separate. Coverage tells you how much of the observed change set has evidence instead of turning uncertainty into a confident zero.',
+    sections: [
+      section('The three attribution buckets', 'buckets', [
+        bullets([
+          'AI: a hook or client explicitly marks the activity as AI-assisted and can provide an agent name and line counts.',
+          'Human: the editor reports hand-typed keystrokes or characters and the corresponding measured changes.',
+          'Unattributed: the system has observed a change but cannot prove which source produced it.',
+        ]),
+        p(
+          'The buckets are mutually exclusive in the canonical totals. Unattributed is evidence that is missing, not a synonym for human work and not a reason to guess.'
+        ),
+      ]),
+      section('Where evidence comes from', 'evidence', [
+        p(
+          'AI attribution comes from explicit fields supplied by a supported hook or client, such as an agent name, is_ai_generated flag and line counts. Human attribution uses editor activity fields such as keystrokes and characters. A compatible editor can send time without sending every attribution field, so missing fields remain visible.'
+        ),
+        code(
+          '{\n  "is_ai_generated": true,\n  "ai_agent": "your-agent-name",\n  "ai_lines_added": 42,\n  "ai_lines_deleted": 3\n}',
+          'Illustrative heartbeat fields'
+        ),
+      ]),
+      section('What coverage means', 'coverage', [
+        p(
+          'Line coverage is calculated from the same canonical totals: attributed AI and human line changes divided by attributed plus Unattributed line changes. The response also exposes the denominators and an explicit status. With no activity, the percentage is unavailable rather than a misleading 0%.'
+        ),
+        code(
+          'Illustrative change set: 40 AI + 35 human + 25 Unattributed = 100 lines\nAttributed line coverage: (40 + 35) / 100 = 75%',
+          'Worked example — not customer data'
+        ),
+        p(
+          'Data coverage is a separate question from the AI share. A result can have a high AI percentage among known lines while still having incomplete evidence for the whole period. Read both the line totals and the coverage status.'
+        ),
+      ]),
+      section('How to compare agents', 'compare', [
+        bullets([
+          'Compare agents only over the same date range, project filters and evidence status.',
+          'Check whether a tool has a bundled hook or a provider-specific adapter before expecting automatic attribution.',
+          'Do not treat line counts as correctness, maintainability, time saved or business value.',
+          'Keep Unattributed visible when a tool reports activity without attribution metadata.',
+        ]),
+      ]),
+      section('Privacy boundary', 'privacy', [
+        p(
+          'Attribution carries labels, identifiers and numeric counts. It does not require sending source code, prompts or AI response text. Provider usage can add token metadata, but the text of the transcript remains outside the usage event.'
+        ),
+      ]),
+      section('Review and verification', 'review', [
+        p(
+          'Use the AI coding tracker page for supported hooks and the dashboard analytics response for the denominators behind a result. Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'AI coding activity tracking',
+          description: 'Supported hooks and attribution limits',
+        },
+        {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'Usage fields and estimated cost coverage',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy and data collection',
+          description: 'The heartbeat payload boundary',
+        },
+      ]),
+    ],
+    faq: faq('AI attribution FAQ', [
+      {
+        question: 'Does Unattributed mean human?',
+        answer:
+          'No. Unattributed means the available evidence cannot establish AI or human attribution.',
+      },
+      {
+        question: 'How is line coverage calculated?',
+        answer:
+          'Attributed AI and human line changes are divided by attributed plus Unattributed line changes from the canonical totals.',
+      },
+      {
+        question: 'Can AtoAxis infer AI activity from line count alone?',
+        answer:
+          'No. AI attribution requires explicit metadata from a supported hook or client; unsupported evidence stays Unattributed.',
+      },
+      {
+        question: 'Are prompts stored for attribution?',
+        answer: 'No. Attribution uses labels, identifiers and counts, not prompt or response text.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'AtoAxis แยก AI attribution และ coverage อย่างไร',
+    description:
+      'ทำความเข้าใจการแยกการเปลี่ยนแปลงเป็น AI, human และ Unattributed พร้อม coverage ของหลักฐานที่อยู่เบื้องหลังยอดรวม',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'AI attribution และ coverage', path: '/docs/ai-attribution-and-coverage' },
+    ],
+    title: 'AtoAxis แยก AI attribution และ coverage อย่างไร',
+    lead: 'AtoAxis แยกการเปลี่ยนแปลงเป็น AI, human และ Unattributed พร้อมบอก coverage ของหลักฐาน แทนการเปลี่ยนข้อมูลที่ไม่แน่ใจให้เป็นศูนย์อย่างมั่นใจเกินจริง',
+    sections: [
+      section('สามกลุ่มของ attribution', 'buckets', [
+        bullets([
+          'AI: hook หรือ client ระบุชัดว่าเป็นงานที่ AI ช่วย และอาจส่งชื่อ agent กับจำนวนบรรทัด',
+          'Human: editor รายงาน keystroke หรือ character ที่พิมพ์เองและการเปลี่ยนแปลงที่วัดได้',
+          'Unattributed: ระบบเห็นการเปลี่ยนแปลงแต่พิสูจน์ไม่ได้ว่าเกิดจากแหล่งใด',
+        ]),
+        p(
+          'ยอด canonical ทำให้ทั้งสามกลุ่มไม่ทับกัน Unattributed คือหลักฐานที่ขาด ไม่ใช่คำพ้องกับ human และไม่ใช่เหตุผลให้ระบบเดา'
+        ),
+      ]),
+      section('หลักฐานมาจากไหน', 'evidence', [
+        p(
+          'AI attribution มาจาก field ที่ hook หรือ client ที่รองรับส่งมาโดยตรง เช่น ชื่อ agent, is_ai_generated และ line counts ส่วน human attribution ใช้ข้อมูลกิจกรรมจาก editor เช่น keystroke และ character editor ที่รองรับ protocol อาจส่งเวลาได้โดยไม่ส่ง attribution ครบ field ที่ไม่มีจึงคงเป็นข้อมูลที่ขาด'
+        ),
+        code(
+          '{\n  "is_ai_generated": true,\n  "ai_agent": "your-agent-name",\n  "ai_lines_added": 42,\n  "ai_lines_deleted": 3\n}',
+          'field ตัวอย่าง'
+        ),
+      ]),
+      section('Coverage หมายถึงอะไร', 'coverage', [
+        p(
+          'Line coverage คำนวณจากยอด canonical ชุดเดียวกัน คือ line change ของ AI และ human ที่มีหลักฐาน หารด้วยยอดที่มีหลักฐานรวมกับ Unattributed response ยังแสดง denominator และ status และถ้าไม่มี activity จะไม่สร้างเปอร์เซ็นต์ 0% ปลอม'
+        ),
+        code(
+          'ตัวอย่างสมมติ: AI 40 + human 35 + Unattributed 25 = 100 บรรทัด\nline coverage: (40 + 35) / 100 = 75%',
+          'ตัวอย่าง ไม่ใช่ข้อมูลลูกค้า'
+        ),
+        p(
+          'AI share ในบรรทัดที่รู้ กับ coverage ของหลักฐานทั้งช่วงเวลาเป็นคนละเรื่อง จึงควรอ่านทั้งยอดและ status'
+        ),
+      ]),
+      section('เปรียบเทียบ agent อย่างไร', 'compare', [
+        bullets([
+          'ใช้ช่วงเวลาและ filter project เดียวกันก่อนเทียบ agent',
+          'ตรวจว่าเครื่องมือมี bundled hook หรือ adapter เฉพาะ provider ก่อนคาดหวัง attribution อัตโนมัติ',
+          'อย่าแปลจำนวนบรรทัดเป็นความถูกต้อง คุณภาพ เวลาที่ประหยัด หรือคุณค่าทางธุรกิจ',
+          'เก็บ Unattributed ให้เห็นเมื่อเครื่องมือส่ง activity แต่ไม่มี metadata ของ attribution',
+        ]),
+      ]),
+      section('ขอบเขตความเป็นส่วนตัว', 'privacy', [
+        p(
+          'Attribution ส่ง label, identifier และจำนวน ไม่ต้องส่ง source code, prompt หรือข้อความตอบของ AI Provider usage อาจเพิ่ม token metadata แต่ไม่ส่งข้อความ transcript'
+        ),
+      ]),
+      section('ทบทวนและตรวจสอบ', 'review', [
+        p(
+          'ดูหน้าติดตาม AI coding activity สำหรับ hook ที่รองรับ และดู denominator ใน dashboard analytics เมื่อต้องการตรวจยอด ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-coding-tracker',
+          label: 'ติดตาม AI coding activity',
+          description: 'hook ที่รองรับและข้อจำกัดของ attribution',
+        },
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'field ของ usage และ coverage ของค่าใช้จ่าย',
+        },
+        {
+          href: '/privacy',
+          label: 'Privacy และข้อมูลที่เก็บ',
+          description: 'ขอบเขตข้อมูลใน heartbeat',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่อง AI attribution', [
+      {
+        question: 'Unattributed แปลว่า human หรือไม่?',
+        answer: 'ไม่ หมายถึงหลักฐานที่มีอยู่ยังยืนยันไม่ได้ว่าเป็น AI หรือ human',
+      },
+      {
+        question: 'Line coverage คำนวณอย่างไร?',
+        answer:
+          'นำ line change ของ AI และ human ที่มีหลักฐานหารด้วยยอดดังกล่าวรวมกับ Unattributed จาก canonical totals',
+      },
+      {
+        question: 'AtoAxis เดา AI จากจำนวนบรรทัดได้หรือไม่?',
+        answer:
+          'ไม่ได้ ต้องมี metadata จาก hook หรือ client ที่รองรับ หากไม่มีหลักฐานจะเป็น Unattributed',
+      },
+      {
+        question: 'ต้องเก็บ prompt เพื่อทำ attribution หรือไม่?',
+        answer: 'ไม่ ใช้ label, identifier และ counts โดยไม่เก็บ prompt หรือ response text',
+      },
+    ]),
+  }
+);
+
+dualPage(
+  '/docs/ai-cost-methodology',
+  {
+    metadataTitle: 'AtoAxis AI cost methodology',
+    description:
+      'See how AtoAxis estimates AI cost from reported token classes, provider and model price windows, and why unknown prices stay unknown.',
+    breadcrumbs: [
+      { name: 'Home', path: '/' },
+      { name: 'Docs', path: '/docs' },
+      { name: 'AI cost methodology', path: '/docs/ai-cost-methodology' },
+    ],
+    title: 'AtoAxis AI cost methodology',
+    lead: 'AtoAxis estimates usage cost from provider-reported token classes and the price that was effective when the event occurred. Missing prices produce an unknown estimate, not a zero.',
+    sections: [
+      section('What is recorded', 'usage', [
+        p(
+          'A usage event contains identifiers, provider and model names, an event time and numeric token counts. Input, output, cache-read and cache-write tokens remain separate because providers can price each class differently.'
+        ),
+        code(
+          '{\n  "provider": "example-provider",\n  "model": "example-model",\n  "input_tokens": 1000000,\n  "output_tokens": 500000,\n  "token_source": "reported"\n}',
+          'Illustrative usage event'
+        ),
+      ]),
+      section('How the estimate is calculated', 'formula', [
+        p(
+          'For every token class that the provider reports, AtoAxis multiplies the count by that class rate per million tokens, divides by 1,000,000 and adds the result in micro-USD. A class that is absent does not block the estimate; a reported class without a known rate makes the event cost unknown so a partial total cannot look complete.'
+        ),
+        code(
+          'Example rates (illustrative only):\ninput 1,000,000 × $3.00 / 1M = $3.00\noutput 500,000 × $15.00 / 1M = $7.50\nestimated total = $10.50 = 10,500,000 micro-USD',
+          'Worked arithmetic — not a live price'
+        ),
+      ]),
+      section('Provider, model and effective date', 'price-window', [
+        p(
+          'The lookup matches both provider and model. It then selects the price window whose effective-from and effective-to dates contain the event timestamp. A later price change therefore does not silently rewrite an older event, and the pricing version can be inspected with the result.'
+        ),
+        bullets([
+          'The same model label at two providers is treated as two different price records.',
+          'A provider or model with no matching price remains unpriced.',
+          'A cache class with no rate makes cost unknown when that class is present.',
+          'Historical events keep the rate effective at their own event time.',
+        ]),
+      ]),
+      section('Why unknown is not zero', 'unknown', [
+        p(
+          'A zero could mean free usage, missing usage, an unpriced provider or a genuinely zero count. Those cases are not equivalent. AtoAxis reports token usage when it has it and leaves estimated cost unavailable when the price evidence is incomplete, with coverage explaining how much of the range is priced.'
+        ),
+      ]),
+      section('Project totals and limitations', 'limits', [
+        bullets([
+          'Usage is grouped by project when the session provides an unambiguous project context.',
+          'A session that spans several projects stays Unattributed instead of being copied into every project.',
+          'An estimate is not an invoice: negotiated rates, subscriptions and provider-side adjustments may be outside the visible data.',
+          'Prompt and response text are not required and are not stored in the usage event.',
+        ]),
+      ]),
+      section('Review and verification', 'review', [
+        p(
+          'Use the AI cost tracking page for supported agents, then compare the dashboard token total, priced-token coverage and pricing version for the same range. Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-cost-tracking',
+          label: 'AI cost and token tracking',
+          description: 'Supported agents and project breakdowns',
+        },
+        {
+          href: '/docs/ai-attribution-and-coverage',
+          label: 'AI attribution and coverage',
+          description: 'Interpret AI, human and Unattributed changes',
+        },
+        {
+          href: '/pricing',
+          label: 'Planned AtoAxis pricing',
+          description: 'Hosted product pricing and Early Access status',
+        },
+      ]),
+    ],
+    faq: faq('AI cost methodology FAQ', [
+      {
+        question: 'Does the estimate equal my provider invoice?',
+        answer:
+          'No. It is based on reported usage and visible price rows; negotiated rates, subscriptions and provider adjustments may not be available.',
+      },
+      {
+        question: 'What happens when a model price is unknown?',
+        answer:
+          'Token usage can remain visible, but the estimated cost is unavailable rather than reported as zero.',
+      },
+      {
+        question: 'Why do cache tokens have their own fields?',
+        answer:
+          'Providers can price cache reads and writes differently from input and output, so combining them would hide the calculation.',
+      },
+      {
+        question: 'Does AtoAxis store prompts to calculate cost?',
+        answer:
+          'No. The usage event needs numeric token counts and identifiers, not prompt or response text.',
+      },
+    ]),
+  },
+  {
+    metadataTitle: 'วิธีคำนวณค่าใช้จ่าย AI ของ AtoAxis',
+    description:
+      'ดูวิธีที่ AtoAxis ประมาณค่าใช้จ่ายจาก token ที่ provider รายงานและราคาตามช่วงเวลา พร้อมเหตุผลที่ราคาที่ไม่รู้จะไม่กลายเป็นศูนย์',
+    breadcrumbs: [
+      { name: 'หน้าหลัก', path: '/' },
+      { name: 'เอกสาร', path: '/docs' },
+      { name: 'วิธีคำนวณค่าใช้จ่าย AI', path: '/docs/ai-cost-methodology' },
+    ],
+    title: 'วิธีคำนวณค่าใช้จ่าย AI ของ AtoAxis',
+    lead: 'AtoAxis ประมาณค่าใช้จ่ายจาก token ที่ provider รายงานและราคาที่มีผลในเวลาที่ event เกิด หากหลักฐานราคาไม่ครบ ระบบจะรายงานว่าไม่ทราบ ไม่ใช่ศูนย์',
+    sections: [
+      section('ข้อมูลที่บันทึก', 'usage', [
+        p(
+          'Usage event มี identifier, ชื่อ provider และ model, เวลา event และจำนวน token แยก input, output, cache-read และ cache-write เพราะ provider อาจตั้งราคาแต่ละประเภทไม่เท่ากัน'
+        ),
+        code(
+          '{\n  "provider": "example-provider",\n  "model": "example-model",\n  "input_tokens": 1000000,\n  "output_tokens": 500000,\n  "token_source": "reported"\n}',
+          'usage event ตัวอย่าง'
+        ),
+      ]),
+      section('สูตรประมาณค่าใช้จ่าย', 'formula', [
+        p(
+          'ทุก token class ที่ provider รายงานจะคูณกับ rate ต่อหนึ่งล้าน token หารด้วย 1,000,000 แล้วรวมเป็นหน่วย micro-USD class ที่ไม่มีการรายงานจะไม่ขัดขวางการคำนวณ แต่ถ้ามี class ที่รายงานแล้วไม่มี rate ระบบจะทำให้ cost ของ event นั้นเป็นไม่ทราบ เพื่อไม่ให้ยอดบางส่วนดูเหมือนครบ'
+        ),
+        code(
+          'ตัวอย่างราคา (สมมติ ไม่ใช่ราคาปัจจุบัน):\ninput 1,000,000 × $3.00 / 1M = $3.00\noutput 500,000 × $15.00 / 1M = $7.50\nยอดประมาณ = $10.50 = 10,500,000 micro-USD',
+          'ตัวอย่างการคำนวณ'
+        ),
+      ]),
+      section('Provider, model และวันที่มีผล', 'price-window', [
+        p(
+          'ระบบจับคู่ทั้ง provider และ model แล้วเลือก price window ที่ effective-from และ effective-to ครอบคลุมเวลา event การเปลี่ยนราคาในภายหลังจึงไม่เขียนทับ event เก่า และผลลัพธ์ตรวจ pricing version ได้'
+        ),
+        bullets([
+          'model ชื่อเหมือนกันแต่คนละ provider ถือเป็นราคาอีกชุดหนึ่ง',
+          'provider หรือ model ที่ไม่มีราคา matching จะยังเป็น unpriced',
+          'ถ้า cache class มีข้อมูลแต่ไม่มี rate cost จะเป็นไม่ทราบ',
+          'event เก่าใช้ราคาที่มีผลในเวลาเกิด event นั้น',
+        ]),
+      ]),
+      section('ทำไมไม่ทราบจึงไม่ใช่ศูนย์', 'unknown', [
+        p(
+          'เลขศูนย์อาจหมายถึงใช้ฟรี ไม่มีข้อมูล provider ไม่มีราคา หรือจำนวนเป็นศูนย์ ซึ่งไม่ใช่ความหมายเดียวกัน AtoAxis จึงแสดง token เมื่อมีข้อมูลและเว้น estimated cost เมื่อหลักฐานราคาไม่ครบ พร้อม coverage ว่าช่วงใดคิดราคาได้'
+        ),
+      ]),
+      section('ยอดต่อโปรเจกต์และข้อจำกัด', 'limits', [
+        bullets([
+          'ระบบจัด usage ตาม project เมื่อ session ให้บริบทที่ชัดเจน',
+          'session ที่แตะหลาย project จะคงเป็น Unattributed แทนการคัดลอกไปทุก project',
+          'ยอดประมาณไม่ใช่ใบแจ้งหนี้ ราคา negotiated, subscription และการปรับฝั่ง provider อาจอยู่นอกข้อมูล',
+          'ไม่ต้องและไม่เก็บ prompt หรือ response text เพื่อคำนวณ',
+        ]),
+      ]),
+      section('ทบทวนและตรวจสอบ', 'review', [
+        p(
+          'ดูหน้าติดตามค่าใช้จ่าย AI สำหรับ agent ที่รองรับ แล้วเทียบ token total, priced-token coverage และ pricing version ในช่วงเวลาเดียวกัน ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'
+        ),
+      ]),
+    ],
+    related: [
+      related([
+        {
+          href: '/ai-cost-tracking',
+          label: 'ติดตาม token และค่าใช้จ่าย AI',
+          description: 'agent ที่รองรับและยอดแยกตาม project',
+        },
+        {
+          href: '/docs/ai-attribution-and-coverage',
+          label: 'AI attribution และ coverage',
+          description: 'อ่าน AI, human และ Unattributed',
+        },
+        {
+          href: '/pricing',
+          label: 'ราคา AtoAxis ที่วางแผนไว้',
+          description: 'สถานะ hosted product และ Early Access',
+        },
+      ]),
+    ],
+    faq: faq('คำถามเรื่องวิธีคำนวณค่าใช้จ่าย AI', [
+      {
+        question: 'ยอดประมาณตรงกับใบแจ้งหนี้ provider หรือไม่?',
+        answer:
+          'ไม่ คำนวณจาก usage ที่รายงานและ price row ที่มองเห็น ราคา negotiated, subscription และการปรับฝั่ง provider อาจไม่มีในข้อมูล',
+      },
+      {
+        question: 'ถ้าไม่รู้ราคา model จะเกิดอะไรขึ้น?',
+        answer: 'ยังแสดง token ได้ แต่ estimated cost จะเป็นไม่ทราบ ไม่รายงานเป็นศูนย์',
+      },
+      {
+        question: 'ทำไม cache token ต้องแยก field?',
+        answer:
+          'เพราะ provider อาจตั้งราคา cache read และ cache write ต่างจาก input และ output การรวมทันทีจะซ่อนที่มาของสูตร',
+      },
+      {
+        question: 'ต้องเก็บ prompt เพื่อคำนวณหรือไม่?',
+        answer: 'ไม่ ใช้จำนวน token และ identifier โดยไม่เก็บ prompt หรือ response text',
       },
     ]),
   }

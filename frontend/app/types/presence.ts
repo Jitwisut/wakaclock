@@ -1,4 +1,8 @@
-import type { PresenceRosterEntry, PresenceState } from '@/lib/wakaclock/types';
+import type {
+  PresenceRosterEntry,
+  PresenceState,
+  PresenceStatusMessage,
+} from '@/lib/wakaclock/types';
 
 import type { SpriteAppearance } from './sprite';
 
@@ -18,12 +22,16 @@ import type { SpriteAppearance } from './sprite';
 export interface PresenceUser {
   appearance?: SpriteAppearance;
   avatar?: string;
+  /** Unix seconds until which the member asked not to be disturbed, if they did. */
+  focusUntil?: number;
   id: string;
   isCurrentUser: boolean;
   /** Real backend states are `coding | idle | offline` — kept as-is rather than
    * collapsing to just `coding | idle`, since dropping "offline" would throw away a
    * signal the server already computes from heartbeat recency. */
   status: PresenceState;
+  /** A message the member chose to share, if any — see `PresenceStatusMessage`. */
+  statusMessage?: PresenceStatusMessage;
   username: string;
   x: number;
   y: number;
@@ -54,6 +62,8 @@ export function toPresenceUser(entry: PresenceRosterEntry, currentUserId: string
     id: entry.user_id,
     username: entry.username,
     status: entry.state,
+    statusMessage: entry.status,
+    focusUntil: entry.focus_until,
     isCurrentUser: entry.user_id === currentUserId,
     x: entry.position?.x ?? DEFAULT_SPAWN_POSITION.x,
     y: entry.position?.y ?? DEFAULT_SPAWN_POSITION.y,

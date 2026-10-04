@@ -1,13 +1,16 @@
 import {
+  EN_HOME,
   MARKETING_PAGE_KEYS,
   type MarketingBlock,
   PAGE_COPY,
+  TH_HOME,
 } from '@/components/marketing/marketing-copy';
 import {
   absoluteUrl,
   localizedPath,
   ORGANIZATION,
   PRODUCT_ANSWER,
+  PRODUCT_STATUS,
   SITE_NAME,
   type SiteLocale,
 } from '@/lib/seo/site';
@@ -42,18 +45,15 @@ function renderBlock(block: MarketingBlock): string {
       const label = block.label ? `${block.label}:` : '';
       return [label, '```', block.value, '```'].filter(Boolean).join('\n');
     }
-    case 'email': {
-      return `${block.before}${ORGANIZATION.email}${block.after ?? ''}`;
-    }
+    // Email is the remaining member of the closed MarketingBlock union.
     default: {
-      return '';
+      return `${block.before}${ORGANIZATION.email}${block.after ?? ''}`;
     }
   }
 }
 
-function renderPage(path: string, locale: SiteLocale): string {
-  const copy = PAGE_COPY[path as (typeof MARKETING_PAGE_KEYS)[number]]?.[locale];
-  if (!copy) return '';
+function renderPage(path: (typeof MARKETING_PAGE_KEYS)[number], locale: SiteLocale): string {
+  const copy = PAGE_COPY[path][locale];
 
   const sections = copy.sections
     .map(
@@ -79,12 +79,27 @@ function renderPage(path: string, locale: SiteLocale): string {
   return `## ${copy.title}\n\nURL: ${absoluteUrl(localizedPath(locale, path))}\nLanguage: ${locale}\nTranslation: ${translatedUrl}\n\n${copy.lead}\n\n${sections}${faq}`;
 }
 
+function renderHome(locale: SiteLocale): string {
+  const copy = locale === 'th' ? TH_HOME : EN_HOME;
+  return [
+    `## ${copy.title}`,
+    `URL: ${absoluteUrl(localizedPath(locale, '/'))}\nLanguage: ${locale}`,
+    copy.heroLead,
+    ...copy.whatIs,
+    copy.keyTakeaways.map((item) => `- ${item}`).join('\n'),
+    ...copy.howItWorks,
+    copy.limitationsIntro,
+    copy.limitations.map((item) => `- ${item}`).join('\n'),
+    ...copy.faq.map((entry) => `### ${entry.question}\n\n${entry.answer}`),
+  ].join('\n\n');
+}
+
 const BODY = `# ${SITE_NAME} — full text
 
 > ${PRODUCT_ANSWER}
 
-${SITE_NAME} is a commercial, proprietary product developed by a team of fourth-year students.
-It is a hosted service; customers do not deploy or maintain its infrastructure.
+${SITE_NAME} is a commercial, proprietary product developed by team Atoaxis.
+It is a hosted service currently in ${PRODUCT_STATUS.en.label}. ${PRODUCT_STATUS.en.signup} Customers do not deploy or maintain its infrastructure.
 
 Every page below is also published in Thai under /th with the same content, and each page
 is self-canonical with hreflang between the two. Capability claims on this site are held to
@@ -92,6 +107,14 @@ what the shipped code does: planned work is labelled as in development and is ne
 as a current capability. Figures that cannot be derived — AI token totals and estimated
 cost without provider-reported usage and a known price — are reported as unknown with a
 coverage percentage rather than as zero.
+
+${renderHome('en')}
+
+---
+
+${renderHome('th')}
+
+---
 
 ${MARKETING_PAGE_KEYS.flatMap((path) => [renderPage(path, 'en'), renderPage(path, 'th')])
   .filter(Boolean)

@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
@@ -10,6 +11,20 @@ const MAX_READ_BYTES = 512 * 1024;
 const DEBOUNCE_MS = 150;
 const SUPPRESSION_TTL_MS = 2_000;
 const MAX_SNAPSHOTS = 2_048;
+// A batch is the set of files one workspace folder reported before it went quiet for
+// DEBOUNCE_MS. More distinct files than this in one batch is a bulk filesystem operation
+// (branch switch, pull, unzip, worktree add/remove), not someone writing code.
+const BULK_BATCH_FILES = 200;
+// A folder that never goes quiet is flushed anyway so a steady trickle cannot starve it.
+const MAX_BATCH_MS = 5_000;
+// After a bulk batch, the folder's events keep being dropped until it has been quiet this
+// long, so the tail of a large operation that arrives in later chunks is not reported.
+const BULK_QUIET_MS = 1_500;
+// Files git writes while creating a nested worktree or clone carry an mtime right after
+// that tree's `.git` entry was created. Later writes in the same tree are real edits.
+const CHECKOUT_WINDOW_MS = 60_000;
+const GIT_ROOT_CACHE_TTL_MS = 30_000;
+const MAX_GIT_ROOT_CACHE = 4_096;
 
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
@@ -46,12 +61,28 @@ interface Suppression {
   expiresAt: number;
 }
 
+type ChangeKind = "create" | "modify" | "delete";
+
+interface PendingBatch {
+  events: Map<string, { kind: ChangeKind; uri: vscode.Uri }>;
+  startedAt: number;
+  timer?: NodeJS.Timeout;
+}
+
+interface NestedGitRootEntry {
+  /** When the nested tree's `.git` entry was created; undefined when `dir` is not a git root. */
+  createdAt?: number;
+  checkedAt: number;
+}
+
 /** Watches the VS Code workspace for writes that do not produce a document event. */
 export class ExternalFileObserver implements vscode.Disposable {
   private readonly folderWatchers = new Map<string, vscode.Disposable[]>();
   private readonly snapshots = new Map<string, FileSnapshot>();
-  private readonly pending = new Map<string, NodeJS.Timeout>();
+  private readonly batches = new Map<string, PendingBatch>();
+  private readonly bulkUntil = new Map<string, number>();
   private readonly suppressions = new Map<string, Suppression>();
+  private readonly gitRoots = new Map<string, NestedGitRootEntry>();
   private disposed = false;
 
   public constructor(
@@ -143,11 +174,7 @@ export class ExternalFileObserver implements vscode.Disposable {
 
     const oldKey = this.key(oldUri);
     const newKey = this.key(newUri);
-    for (const key of [oldKey, newKey]) {
-      const timer = this.pending.get(key);
-      if (timer) clearTimeout(timer);
-      this.pending.delete(key);
-    }
+    for (const key of [oldKey, newKey]) this.cancelPending(key);
 
     const previous = this.snapshots.get(oldKey);
     const current = await this.readSnapshot(newUri);
@@ -202,35 +229,84 @@ export class ExternalFileObserver implements vscode.Disposable {
 
   public dispose(): void {
     this.disposed = true;
-    for (const timer of this.pending.values()) clearTimeout(timer);
-    this.pending.clear();
+    for (const batch of this.batches.values()) {
+      if (batch.timer) clearTimeout(batch.timer);
+    }
+    this.batches.clear();
+    this.bulkUntil.clear();
     for (const subscriptions of this.folderWatchers.values()) {
       for (const subscription of subscriptions) subscription.dispose();
     }
     this.folderWatchers.clear();
   }
 
-  private schedule(kind: "create" | "modify" | "delete", uri: vscode.Uri): void {
+  /**
+   * Collect events per workspace folder until the folder has been quiet for DEBOUNCE_MS
+   * (or MAX_BATCH_MS has passed), then process the batch. Only the last event per file
+   * counts, as with a per-file debounce.
+   */
+  private schedule(kind: ChangeKind, uri: vscode.Uri): void {
     if (this.disposed || !this.isEligible(uri)) return;
     const key = this.key(uri);
-    const previous = this.pending.get(key);
-    if (previous) clearTimeout(previous);
-    const timer = setTimeout(() => {
-      this.pending.delete(key);
-      void this.process(kind, uri);
-    }, DEBOUNCE_MS);
-    this.pending.set(key, timer);
+    const root = this.batchRoot(uri);
+    const now = Date.now();
+    if ((this.bulkUntil.get(root) ?? 0) > now) {
+      this.bulkUntil.set(root, now + BULK_QUIET_MS);
+      this.snapshots.delete(key);
+      return;
+    }
+    this.bulkUntil.delete(root);
+    let batch = this.batches.get(root);
+    if (!batch) {
+      batch = { events: new Map(), startedAt: now };
+      this.batches.set(root, batch);
+    }
+    batch.events.delete(key);
+    batch.events.set(key, { kind, uri });
+    if (batch.timer) clearTimeout(batch.timer);
+    const delay = now - batch.startedAt >= MAX_BATCH_MS ? 0 : DEBOUNCE_MS;
+    batch.timer = setTimeout(() => this.flush(root), delay);
   }
 
-  private async process(
-    kind: "create" | "modify" | "delete",
-    uri: vscode.Uri,
-  ): Promise<void> {
+  private flush(root: string): void {
+    const batch = this.batches.get(root);
+    if (!batch) return;
+    this.batches.delete(root);
+    if (this.disposed) return;
+    if (batch.events.size > BULK_BATCH_FILES) {
+      // Reading thousands of files to fingerprint a checkout would cost more than the
+      // events are worth, so their snapshots are dropped too.
+      for (const key of batch.events.keys()) this.snapshots.delete(key);
+      this.bulkUntil.set(root, Date.now() + BULK_QUIET_MS);
+      this.logger?.debug("skipped bulk filesystem write", {
+        workspaceRoot: root || undefined,
+        files: batch.events.size,
+      });
+      return;
+    }
+    for (const { kind, uri } of batch.events.values()) void this.process(kind, uri);
+  }
+
+  private cancelPending(key: string): void {
+    for (const batch of this.batches.values()) batch.events.delete(key);
+  }
+
+  private batchRoot(uri: vscode.Uri): string {
+    const root = this.workspaceRootForUri(uri);
+    return root ? normalizeFsPath(root) : "";
+  }
+
+  private async process(kind: ChangeKind, uri: vscode.Uri): Promise<void> {
     if (this.disposed || !this.isEligible(uri)) return;
     const key = this.key(uri);
     const now = Date.now();
     const previous = this.snapshots.get(key);
     const current = kind === "delete" ? undefined : await this.readSnapshot(uri);
+    if (current && this.isNestedCheckoutWrite(key, uri, current, now)) {
+      // Leave no snapshot behind: removing the tree later must not read as deletions.
+      this.snapshots.delete(key);
+      return;
+    }
     const suppression = this.suppressions.get(key);
     if (suppression && suppression.expiresAt >= now) {
       const matches =
@@ -316,6 +392,45 @@ export class ExternalFileObserver implements vscode.Disposable {
     return normalizeFsPath(uri.fsPath);
   }
 
+  /**
+   * True when git wrote this file while checking out a working tree nested inside the
+   * workspace (a linked worktree under `.worktrees/`, a clone, a submodule). Edits made
+   * in that tree afterwards still count; the workspace's own repository is never treated
+   * as nested.
+   */
+  private isNestedCheckoutWrite(
+    key: string,
+    uri: vscode.Uri,
+    snapshot: FileSnapshot,
+    now: number,
+  ): boolean {
+    if (snapshot.mtime === undefined) return false;
+    const workspaceRoot = this.workspaceRootForUri(uri);
+    if (!workspaceRoot) return false;
+    const createdAt = this.nestedGitRootCreatedAt(key, normalizeFsPath(workspaceRoot), now);
+    return createdAt !== undefined && snapshot.mtime <= createdAt + CHECKOUT_WINDOW_MS;
+  }
+
+  private nestedGitRootCreatedAt(
+    file: string,
+    workspaceRoot: string,
+    now: number,
+  ): number | undefined {
+    const prefix = workspaceRoot.endsWith("/") ? workspaceRoot : `${workspaceRoot}/`;
+    let dir = path.posix.dirname(file);
+    while (dir.startsWith(prefix)) {
+      let entry = this.gitRoots.get(dir);
+      if (!entry || now - entry.checkedAt > GIT_ROOT_CACHE_TTL_MS) {
+        entry = { createdAt: gitEntryCreatedAt(dir), checkedAt: now };
+        if (this.gitRoots.size >= MAX_GIT_ROOT_CACHE) this.gitRoots.clear();
+        this.gitRoots.set(dir, entry);
+      }
+      if (entry.createdAt !== undefined) return entry.createdAt;
+      dir = path.posix.dirname(dir);
+    }
+    return undefined;
+  }
+
   private isEligible(uri: vscode.Uri): boolean {
     if (uri.scheme !== "file") return false;
     const normalized = this.key(uri);
@@ -329,6 +444,23 @@ export class ExternalFileObserver implements vscode.Disposable {
       !base.startsWith(".#") &&
       base !== "4913"
     );
+  }
+}
+
+/**
+ * When `dir/.git` (a directory for a clone, a file for a linked worktree) was created,
+ * or undefined when there is none or the time is unknowable. birthtime is 0 on
+ * filesystems that do not record it. A worktree's `.git` file is written once, so its
+ * mtime is an exact fallback; a `.git` directory's mtime moves with every git command,
+ * so without a birthtime the checkout rule does not apply and only the bulk guard does.
+ */
+function gitEntryCreatedAt(dir: string): number | undefined {
+  try {
+    const stat = fs.statSync(path.join(dir, ".git"));
+    if (stat.birthtimeMs > 0) return stat.birthtimeMs;
+    return stat.isFile() ? stat.mtimeMs : undefined;
+  } catch {
+    return undefined;
   }
 }
 

@@ -26,6 +26,17 @@ Package `atoaxis-vscode`, publisher `atoaxis`, entry
 Ingest behaviour changes usually belong in
 [../backend/crates.md](../backend/crates.md), not here.
 
+**Project names are decided by the CLI, not the extension.** The extension sends
+the VS Code workspace-folder name as `--alternate-project` (and
+`alternate_project` in `--extra-heartbeats` JSON) — a WakaTime-style fallback
+used only when no project is detected. It never sends `--project`, which is a
+hard override. The CLI resolves the name with
+`wakaclock_core::project::resolve_project` (`crates/wakaclock-core/src/project.rs`):
+git working tree first (a linked worktree reports the main repository's name),
+then non-Git workspace markers, then a manifest-confirmed hint root, then the
+nearest manifest. A hook or client passing a raw cwd as `project_root` therefore
+cannot rename a project — it is only a hint, below git.
+
 ```bash
 cd extensions/vscode
 npm run compile     # tsc -p ./

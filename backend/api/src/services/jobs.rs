@@ -1513,13 +1513,37 @@ mod tests {
             .create(
                 Some(user_id),
                 JobKind::AnalyticsReprocess,
-                serde_json::json!({ "start": "different" }),
+                serde_json::json!({ "end": "2026-01-31", "start": "2026-01-01" }),
                 Some("key-abc"),
             )
             .await
             .expect("repeat create");
         assert_eq!(again.id, first.id);
         assert!(again.deduplicated);
+
+        let conflict = service
+            .create(
+                Some(user_id),
+                JobKind::AnalyticsReprocess,
+                serde_json::json!({ "start": "different" }),
+                Some("key-abc"),
+            )
+            .await
+            .expect_err("reusing a key with different parameters must be rejected");
+        assert_eq!(
+            conflict.to_string(),
+            "idempotency key conflicts with existing job parameters"
+        );
+        let stored_params: serde_json::Value = postgres
+            .client()
+            .query_one("SELECT params FROM async_jobs WHERE id = $1", &[&first.id])
+            .await
+            .expect("read original job")
+            .get("params");
+        assert_eq!(
+            stored_params,
+            serde_json::json!({ "start": "2026-01-01", "end": "2026-01-31" })
+        );
 
         let outbox_rows: i64 = postgres
             .client()

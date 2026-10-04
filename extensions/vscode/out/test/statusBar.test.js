@@ -67,7 +67,7 @@ function createConfig(overrides = {}) {
                 .mockRejectedValue(new Error("Error: API key was rejected by the server."))
         }, new logging_1.Logger(() => false));
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(warning) Wakaclock: key rejected");
+        (0, vitest_1.expect)(item.text).toBe("$(warning) AtoAxis: key rejected");
         (0, vitest_1.expect)(item.command).toBe("wakaclock.setApiKey");
         (0, vitest_1.expect)(item.backgroundColor).toBeDefined();
         (0, vitest_1.expect)(showErrorMessage).toHaveBeenCalledTimes(1);
@@ -107,6 +107,69 @@ function createConfig(overrides = {}) {
         await controller.refresh();
         (0, vitest_1.expect)(item.text).toBe("$(clock) 1h 0m 0s");
         (0, vitest_1.expect)(item.show).toHaveBeenCalled();
+    });
+    (0, vitest_1.it)("shows on-demand pending work, last sync, and adapter coverage", async () => {
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi.fn().mockResolvedValue({
+                humanReadable: "2m",
+                totalSeconds: 120,
+                heartbeatCount: 3
+            }),
+            getAiDiagnosticsSnapshot: vitest_1.vi.fn().mockResolvedValue({
+                schema_version: 2,
+                runtime_health: "healthy",
+                broker: {
+                    availability: "available",
+                    running: { availability: "available", value: false },
+                    pending: { availability: "available", value: 4 },
+                    retry: { availability: "available", value: 1 },
+                    dead_letter: { availability: "available", value: 0 },
+                    last_delivery_at: "2026-09-22T01:02:03Z"
+                },
+                adapters: [
+                    {
+                        agent: "codex",
+                        availability: "available",
+                        detected: { availability: "available", value: true },
+                        enabled: { availability: "available", value: true },
+                        runtime_health: "healthy",
+                        verification: "verified"
+                    },
+                    {
+                        agent: "claude-code",
+                        availability: "available",
+                        detected: { availability: "available", value: true },
+                        enabled: { availability: "available", value: false },
+                        runtime_health: "disabled",
+                        verification: "verified"
+                    }
+                ]
+            })
+        }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        (0, vitest_1.expect)(item.tooltip).toContain("AI sync: on-demand · pending 4 · retry 1 · dead-letter 0");
+        (0, vitest_1.expect)(item.tooltip).toContain("AI last sync: 2026-09-22T01:02:03Z");
+        (0, vitest_1.expect)(item.tooltip).toContain("AI adapter coverage: 1/2 detected adapters enabled · 1 verified");
+    });
+    (0, vitest_1.it)("falls back to broker status when typed AI diagnostics are unavailable", async () => {
+        const getBrokerStatus = vitest_1.vi.fn().mockResolvedValue({
+            runtime_mode: "on_demand",
+            last_processed_at: 1_795_000_000,
+            inbox: { pending: 2, retry: 0, dead_letter: 0 }
+        });
+        const controller = new statusBar_1.StatusBarController(() => createConfig(), {
+            getToday: vitest_1.vi.fn().mockResolvedValue({
+                humanReadable: "0s",
+                totalSeconds: 0,
+                heartbeatCount: 0
+            }),
+            getAiDiagnosticsSnapshot: vitest_1.vi.fn().mockRejectedValue(new Error("legacy CLI")),
+            getBrokerStatus
+        }, new logging_1.Logger(() => false));
+        await controller.refresh();
+        (0, vitest_1.expect)(getBrokerStatus).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(item.tooltip).toContain("AI sync: on-demand · pending 2 · retry 0 · dead-letter 0");
+        (0, vitest_1.expect)(item.tooltip).toContain("AI last sync:");
     });
     (0, vitest_1.it)("keeps the status bar on the CLI total and reports local activity as pending", async () => {
         const controller = new statusBar_1.StatusBarController(() => createConfig(), {
@@ -158,7 +221,7 @@ function createConfig(overrides = {}) {
             getToday: vitest_1.vi.fn().mockRejectedValue(new Error("boom"))
         }, new logging_1.Logger(() => false));
         await controller.refresh();
-        (0, vitest_1.expect)(item.text).toBe("$(clock) Wakaclock");
+        (0, vitest_1.expect)(item.text).toBe("$(clock) AtoAxis");
         (0, vitest_1.expect)(item.tooltip).toContain("Unable to read today's total");
     });
 });

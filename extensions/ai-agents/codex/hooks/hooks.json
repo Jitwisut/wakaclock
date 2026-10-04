@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*",
+        "hooks": [
+          {
+            "name": "atoaxis-sweep-before",
+            "type": "command",
+            "command": "${pluginRoot}/../git-sweep-before.sh",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "name": "atoaxis-heartbeat",
+            "type": "command",
+            "command": "${pluginRoot}/../heartbeat-hook.sh",
+            "timeout": 60000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*",
+        "hooks": [
+          {
+            "name": "atoaxis-sweep-after",
+            "type": "command",
+            "command": "${pluginRoot}/../git-sweep-after.sh",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|shell_command|exec_command|unified_exec|code_mode_exec|exec|functions[.]exec|mcp__.*",
+        "hooks": [
+          {
+            "name": "atoaxis-tool-abort",
+            "type": "command",
+            "command": "${pluginRoot}/../tool-abort.sh",
+            "timeout": 60000
+          }
+        ]
+      }
+    ]
+  }
+}

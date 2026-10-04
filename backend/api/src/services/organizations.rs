@@ -6,17 +6,78 @@ use uuid::Uuid;
 
 use crate::infrastructure::postgres::PostgresClient;
 use crate::model::organization::{
-    AddOrganizationMemberRequest, CreateOrganizationRequest, CreateOrganizationTeamRequest,
-    Organization, OrganizationAnalytics, OrganizationMember, OrganizationTeam,
-    UpdateOrganizationRequest,
+    AcceptedOrganizationInvite, AddOrganizationMemberRequest, AddOrganizationTeamMemberRequest,
+    CreateOrganizationRequest, CreateOrganizationTeamRequest, InviteOrganizationMemberRequest,
+    Organization, OrganizationAnalytics, OrganizationAnalyticsSharing, OrganizationMember,
+    OrganizationTeam, OrganizationTeamMember, OrganizationUserInvite, UpdateOrganizationRequest,
 };
 use crate::repository::presence::PresenceRepository;
-use crate::services::authorization::{AuthorizationService, Entitlement, OrganizationAction};
+use crate::services::authorization::{AuthorizationService, OrganizationAction};
 
 // Keep the role validation in one place. PostgreSQL also has a CHECK constraint,
 // but validating before the query gives clients a stable 400 instead of a driver error.
 const ROLES: &[&str] = &["admin", "member", "viewer"];
 const SEAT_TYPES: &[&str] = &["developer", "viewer"];
+const TEAM_ROLES: &[&str] = &["lead", "member", "viewer"];
+/// How long a username invite stays open before the invitee has to be asked again.
+const INVITE_TTL_DAYS: i32 = 14;
+
+/// Shared SELECT for invites so every list returns the same shape.
+const INVITE_COLUMNS: &str = "i.id, i.organization_id, o.name AS organization_name,
+        invitee.username, inviter.username AS invited_by, i.role, i.seat_type,
+        i.created_at, i.expires_at
+     FROM organization_user_invites i
+     JOIN organizations o ON o.id = i.organization_id
+     JOIN users invitee ON invitee.id = i.invitee_user_id
+     LEFT JOIN users inviter ON inviter.id = i.invited_by";
+
+/// Validates the organization role and seat type for a new member or invite.
+pub fn member_role_and_seat(
+    role: Option<&str>,
+    seat_type: Option<&str>,
+) -> Result<(String, String), OrganizationRequestError> {
+    let role = role.map(str::trim).unwrap_or("member");
+    let seat_type = seat_type.map(str::trim).unwrap_or("developer");
+    if !ROLES.contains(&role) || !SEAT_TYPES.contains(&seat_type) {
+        return Err(OrganizationRequestError::Invalid(
+            "role must be admin, member or viewer and seat_type developer or viewer",
+        ));
+    }
+    Ok((role.to_string(), seat_type.to_string()))
+}
+
+/// Usernames are matched exactly after trimming; an empty one is rejected up front.
+pub fn invite_username(username: &str) -> Result<&str, OrganizationRequestError> {
+    let username = username.trim();
+    if username.is_empty() || username.len() > 64 {
+        return Err(OrganizationRequestError::Invalid(
+            "enter the username of an existing account",
+        ));
+    }
+    Ok(username)
+}
+
+/// A request the caller can fix — mapped to 404 / 400 by the handler rather than being
+/// string-matched out of a generic error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OrganizationRequestError {
+    #[error("{0}")]
+    NotFound(&'static str),
+    #[error("{0}")]
+    Invalid(&'static str),
+}
+
+/// The team role to store, defaulting to `member`.
+pub fn team_member_role(role: Option<&str>) -> Result<&'static str, OrganizationRequestError> {
+    let role = role.map(str::trim).unwrap_or("member");
+    TEAM_ROLES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == role)
+        .ok_or(OrganizationRequestError::Invalid(
+            "team role must be lead, member or viewer",
+        ))
+}
 
 pub struct OrganizationsService {
     postgres: Option<Arc<PostgresClient>>,
@@ -378,6 +439,422 @@ impl OrganizationsService {
         team_from_row(row)
     }
 
+    /// Invites an existing account, by username, to join the organization. Nothing about
+    /// the invitee changes until they accept; re-inviting refreshes the open invite.
+    pub async fn invite_member(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        request: InviteOrganizationMemberRequest,
+    ) -> Result<OrganizationUserInvite> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
+            .await?;
+        let username = invite_username(&request.username)?;
+        let (role, seat_type) =
+            member_role_and_seat(request.role.as_deref(), request.seat_type.as_deref())?;
+        let postgres = self.required()?;
+        let Some(invitee) = postgres
+            .client()
+            .query_opt(
+                "SELECT id FROM users
+                 WHERE username = $1 AND is_active AND deleted_at IS NULL",
+                &[&username],
+            )
+            .await
+            .context("failed to resolve invitee")?
+        else {
+            return Err(OrganizationRequestError::NotFound("no account with that username").into());
+        };
+        let invitee_id: Uuid = invitee.get("id");
+        if postgres
+            .client()
+            .query_opt(
+                "SELECT 1 FROM organization_members
+                 WHERE organization_id = $1 AND user_id = $2 AND deactivated_at IS NULL",
+                &[&organization_id, &invitee_id],
+            )
+            .await
+            .context("failed to check existing membership")?
+            .is_some()
+        {
+            return Err(OrganizationRequestError::Invalid(
+                "that person is already a member of this organization",
+            )
+            .into());
+        }
+        let id: Uuid = postgres
+            .client()
+            .query_one(
+                "INSERT INTO organization_user_invites
+                    (id, organization_id, invitee_user_id, invited_by, role, seat_type, expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7))
+                 ON CONFLICT (organization_id, invitee_user_id) WHERE status = 'pending'
+                 DO UPDATE SET role = EXCLUDED.role, seat_type = EXCLUDED.seat_type,
+                    invited_by = EXCLUDED.invited_by, expires_at = EXCLUDED.expires_at
+                 RETURNING id",
+                &[
+                    &Uuid::now_v7(),
+                    &organization_id,
+                    &invitee_id,
+                    &actor,
+                    &role,
+                    &seat_type,
+                    &INVITE_TTL_DAYS,
+                ],
+            )
+            .await
+            .context("failed to create organization invite")?
+            .get("id");
+        self.audit(
+            organization_id,
+            actor,
+            "organization.member_invited",
+            "user",
+            Some(invitee_id),
+            serde_json::json!({ "invite_id": id, "role": role, "seat_type": seat_type }),
+        )
+        .await?;
+        let row = postgres
+            .client()
+            .query_one(&format!("SELECT {INVITE_COLUMNS} WHERE i.id = $1"), &[&id])
+            .await
+            .context("failed to load organization invite")?;
+        invite_from_row(row)
+    }
+
+    /// Open invites for an organization (admins only).
+    pub async fn pending_invites(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<OrganizationUserInvite>> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
+            .await?;
+        let rows = self
+            .required()?
+            .client()
+            .query(
+                &format!(
+                    "SELECT {INVITE_COLUMNS}
+                     WHERE i.organization_id = $1 AND i.status = 'pending'
+                       AND i.expires_at > now()
+                     ORDER BY i.created_at DESC"
+                ),
+                &[&organization_id],
+            )
+            .await
+            .context("failed to list organization invites")?;
+        rows.into_iter().map(invite_from_row).collect()
+    }
+
+    /// Withdraws an open invite. Returns false when there was no open invite to revoke.
+    pub async fn revoke_invite(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        invite_id: Uuid,
+    ) -> Result<bool> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageMembers,
+                None,
+            )
+            .await?;
+        let changed = self
+            .required()?
+            .client()
+            .execute(
+                "UPDATE organization_user_invites SET status = 'revoked', responded_at = now()
+                 WHERE id = $1 AND organization_id = $2 AND status = 'pending'",
+                &[&invite_id, &organization_id],
+            )
+            .await
+            .context("failed to revoke organization invite")?;
+        if changed == 1 {
+            self.audit(
+                organization_id,
+                actor,
+                "organization.member_invite_revoked",
+                "invite",
+                Some(invite_id),
+                serde_json::json!({}),
+            )
+            .await?;
+        }
+        Ok(changed == 1)
+    }
+
+    /// Invites waiting for the signed-in user. Identity is the only check needed: the
+    /// query is scoped to the caller's own account.
+    pub async fn my_invites(&self, user_id: Uuid) -> Result<Vec<OrganizationUserInvite>> {
+        let rows = self
+            .required()?
+            .client()
+            .query(
+                &format!(
+                    "SELECT {INVITE_COLUMNS}
+                     WHERE i.invitee_user_id = $1 AND i.status = 'pending'
+                       AND i.expires_at > now()
+                     ORDER BY i.created_at DESC"
+                ),
+                &[&user_id],
+            )
+            .await
+            .context("failed to list your organization invites")?;
+        rows.into_iter().map(invite_from_row).collect()
+    }
+
+    /// Accepts one of the caller's own open invites, joining the organization in the same
+    /// statement so an invite can never be marked accepted without the membership (or the
+    /// reverse). An existing owner is never demoted by an invite.
+    pub async fn accept_invite(
+        &self,
+        user_id: Uuid,
+        invite_id: Uuid,
+    ) -> Result<AcceptedOrganizationInvite> {
+        let postgres = self.required()?;
+        let Some(row) = postgres
+            .client()
+            .query_opt(
+                "WITH invite AS (
+                     UPDATE organization_user_invites
+                     SET status = 'accepted', responded_at = now()
+                     WHERE id = $1 AND invitee_user_id = $2
+                       AND status = 'pending' AND expires_at > now()
+                     RETURNING organization_id, role, seat_type
+                 ), joined AS (
+                     INSERT INTO organization_members
+                        (organization_id, user_id, role, seat_type, deactivated_at)
+                     SELECT organization_id, $2, role, seat_type, NULL FROM invite
+                     ON CONFLICT (organization_id, user_id) DO UPDATE SET
+                        role = CASE WHEN organization_members.role = 'owner'
+                                    THEN organization_members.role ELSE EXCLUDED.role END,
+                        seat_type = EXCLUDED.seat_type,
+                        deactivated_at = NULL
+                     RETURNING organization_id, role, seat_type
+                 )
+                 SELECT organization_id, role, seat_type FROM joined",
+                &[&invite_id, &user_id],
+            )
+            .await
+            .context("failed to accept organization invite")?
+        else {
+            return Err(OrganizationRequestError::NotFound("invite not found or expired").into());
+        };
+        let accepted = AcceptedOrganizationInvite {
+            organization_id: row.get("organization_id"),
+            role: row.get("role"),
+            seat_type: row.get("seat_type"),
+        };
+        self.audit(
+            accepted.organization_id,
+            user_id,
+            "organization.member_invite_accepted",
+            "invite",
+            Some(invite_id),
+            serde_json::json!({ "role": accepted.role.clone() }),
+        )
+        .await?;
+        Ok(accepted)
+    }
+
+    /// Declines one of the caller's own open invites. Returns false when there was none.
+    pub async fn decline_invite(&self, user_id: Uuid, invite_id: Uuid) -> Result<bool> {
+        let postgres = self.required()?;
+        let Some(row) = postgres
+            .client()
+            .query_opt(
+                "UPDATE organization_user_invites SET status = 'declined', responded_at = now()
+                 WHERE id = $1 AND invitee_user_id = $2 AND status = 'pending'
+                 RETURNING organization_id",
+                &[&invite_id, &user_id],
+            )
+            .await
+            .context("failed to decline organization invite")?
+        else {
+            return Ok(false);
+        };
+        self.audit(
+            row.get("organization_id"),
+            user_id,
+            "organization.member_invite_declined",
+            "invite",
+            Some(invite_id),
+            serde_json::json!({}),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    /// Members of one team. Any organization member may read it (`ReadTeam`).
+    pub async fn team_members(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<Vec<OrganizationTeamMember>> {
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadTeam, None)
+            .await?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        let rows = postgres
+            .client()
+            .query(
+                "SELECT tm.user_id, u.username, tm.role, tm.joined_at
+                 FROM team_members tm
+                 JOIN users u ON u.id = tm.user_id
+                 WHERE tm.team_id = $1
+                 ORDER BY tm.joined_at ASC",
+                &[&team_id],
+            )
+            .await
+            .context("failed to list team members")?;
+        rows.into_iter().map(team_member_from_row).collect()
+    }
+
+    /// Adds (or re-roles) a team member. The person must already be an active member of
+    /// the organization — a team is a subset of the organization, never a side door in.
+    pub async fn add_team_member(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+        request: AddOrganizationTeamMemberRequest,
+    ) -> Result<OrganizationTeamMember> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
+            .await?;
+        let role = team_member_role(request.role.as_deref())?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        if postgres
+            .client()
+            .query_opt(
+                "SELECT 1 FROM organization_members m
+                 JOIN users u ON u.id = m.user_id AND u.is_active AND u.deleted_at IS NULL
+                 WHERE m.organization_id = $1 AND m.user_id = $2 AND m.deactivated_at IS NULL",
+                &[&organization_id, &request.user_id],
+            )
+            .await
+            .context("failed to resolve organization membership for team member")?
+            .is_none()
+        {
+            return Err(OrganizationRequestError::Invalid(
+                "add this person to the organization before adding them to a team",
+            )
+            .into());
+        }
+        let row = postgres
+            .client()
+            .query_one(
+                "WITH upserted AS (
+                     INSERT INTO team_members (team_id, user_id, role)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role
+                     RETURNING user_id, role, joined_at
+                 )
+                 SELECT upserted.user_id, u.username, upserted.role, upserted.joined_at
+                 FROM upserted JOIN users u ON u.id = upserted.user_id",
+                &[&team_id, &request.user_id, &role],
+            )
+            .await
+            .context("failed to upsert team member")?;
+        let member = team_member_from_row(row)?;
+        self.audit(
+            organization_id,
+            actor,
+            "organization.team_member_upserted",
+            "team",
+            Some(team_id),
+            serde_json::json!({ "user_id": member.user_id, "role": member.role.clone() }),
+        )
+        .await?;
+        Ok(member)
+    }
+
+    /// Removes someone from a team. Returns false when they were not on it.
+    pub async fn remove_team_member(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        team_id: Uuid,
+        member_user_id: Uuid,
+    ) -> Result<bool> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ManageTeams,
+                None,
+            )
+            .await?;
+        let postgres = self.required()?;
+        self.ensure_team_in_organization(postgres, organization_id, team_id)
+            .await?;
+        let changed = postgres
+            .client()
+            .execute(
+                "DELETE FROM team_members WHERE team_id = $1 AND user_id = $2",
+                &[&team_id, &member_user_id],
+            )
+            .await
+            .context("failed to remove team member")?;
+        if changed == 1 {
+            self.audit(
+                organization_id,
+                actor,
+                "organization.team_member_removed",
+                "team",
+                Some(team_id),
+                serde_json::json!({ "user_id": member_user_id }),
+            )
+            .await?;
+        }
+        Ok(changed == 1)
+    }
+
+    /// A team id from the URL must belong to the organization in the same URL; otherwise
+    /// an admin of one organization could reach another organization's team.
+    async fn ensure_team_in_organization(
+        &self,
+        postgres: &PostgresClient,
+        organization_id: Uuid,
+        team_id: Uuid,
+    ) -> Result<()> {
+        postgres
+            .client()
+            .query_opt(
+                "SELECT 1 FROM teams WHERE id = $1 AND organization_id = $2",
+                &[&team_id, &organization_id],
+            )
+            .await
+            .context("failed to resolve team")?
+            .map(|_| ())
+            .ok_or_else(|| OrganizationRequestError::NotFound("team not found").into())
+    }
+
     pub async fn analytics(
         &self,
         actor: Uuid,
@@ -388,7 +865,7 @@ impl OrganizationsService {
                 actor,
                 organization_id,
                 OrganizationAction::ReadOrganization,
-                Some(Entitlement::OrganizationDashboards),
+                None,
             )
             .await?;
         let postgres = self.required()?;
@@ -413,6 +890,125 @@ impl OrganizationsService {
             team_count: row.get("team_count"),
             data_freshness: "transactional_membership",
         })
+    }
+
+    pub async fn analytics_sharing(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<OrganizationAnalyticsSharing> {
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadSelf, None)
+            .await?;
+        let row = self
+            .required()?
+            .client()
+            .query_opt(
+                "SELECT share_aggregate, share_individual
+             FROM organization_analytics_consents
+             WHERE organization_id = $1 AND user_id = $2",
+                &[&organization_id, &actor],
+            )
+            .await?;
+        Ok(row
+            .map(|row| OrganizationAnalyticsSharing {
+                share_aggregate: row.get("share_aggregate"),
+                share_individual: row.get("share_individual"),
+            })
+            .unwrap_or(OrganizationAnalyticsSharing {
+                share_aggregate: false,
+                share_individual: false,
+            }))
+    }
+
+    pub async fn set_analytics_sharing(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+        sharing: OrganizationAnalyticsSharing,
+    ) -> Result<OrganizationAnalyticsSharing> {
+        if sharing.share_individual && !sharing.share_aggregate {
+            return Err(anyhow!("individual sharing requires aggregate sharing"));
+        }
+        self.authorization
+            .require(actor, organization_id, OrganizationAction::ReadSelf, None)
+            .await?;
+        let mut client = self.required()?.transaction_client().await?;
+        let tx = client.transaction().await?;
+        let row = tx
+            .query_opt(
+                "INSERT INTO organization_analytics_consents
+                 (organization_id, user_id, share_aggregate, share_individual)
+             SELECT $1, $2, $3, $4 FROM organization_members
+             WHERE organization_id = $1 AND user_id = $2 AND deactivated_at IS NULL
+             ON CONFLICT (organization_id, user_id) DO UPDATE SET
+                 share_aggregate = EXCLUDED.share_aggregate,
+                 share_individual = EXCLUDED.share_individual,
+                 updated_at = now()
+             RETURNING share_aggregate, share_individual",
+                &[
+                    &organization_id,
+                    &actor,
+                    &sharing.share_aggregate,
+                    &sharing.share_individual,
+                ],
+            )
+            .await?;
+        let row = row.ok_or_else(|| anyhow!("active organization membership required"))?;
+        let saved = OrganizationAnalyticsSharing {
+            share_aggregate: row.get("share_aggregate"),
+            share_individual: row.get("share_individual"),
+        };
+        tx.execute(
+            "INSERT INTO audit_logs
+                (id, organization_id, actor_user_id, action, resource_type, resource_id, metadata)
+             VALUES ($1, $2, $3, 'organization.analytics_sharing.updated', 'user', $3, $4)",
+            &[
+                &Uuid::now_v7(),
+                &organization_id,
+                &actor,
+                &serde_json::json!({
+                    "share_aggregate": saved.share_aggregate,
+                    "share_individual": saved.share_individual,
+                }),
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(saved)
+    }
+
+    pub async fn consenting_analytics_members(
+        &self,
+        actor: Uuid,
+        organization_id: Uuid,
+    ) -> Result<Vec<(Uuid, bool)>> {
+        self.authorization
+            .require(
+                actor,
+                organization_id,
+                OrganizationAction::ReadOrganization,
+                None,
+            )
+            .await?;
+        let rows = self
+            .required()?
+            .client()
+            .query(
+                "SELECT m.user_id, c.share_individual
+             FROM organization_members m
+             JOIN organization_analytics_consents c
+               ON c.organization_id = m.organization_id AND c.user_id = m.user_id
+             WHERE m.organization_id = $1 AND m.deactivated_at IS NULL
+               AND c.share_aggregate = TRUE
+             ORDER BY m.user_id",
+                &[&organization_id],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("user_id"), row.get("share_individual")))
+            .collect())
     }
 
     pub async fn audit_logs(
@@ -537,6 +1133,29 @@ fn member_from_row(row: Row) -> Result<OrganizationMember> {
     })
 }
 
+fn invite_from_row(row: Row) -> Result<OrganizationUserInvite> {
+    Ok(OrganizationUserInvite {
+        id: row.try_get("id")?,
+        organization_id: row.try_get("organization_id")?,
+        organization_name: row.try_get("organization_name")?,
+        username: row.try_get("username")?,
+        invited_by: row.try_get("invited_by")?,
+        role: row.try_get("role")?,
+        seat_type: row.try_get("seat_type")?,
+        created_at: row.try_get("created_at")?,
+        expires_at: row.try_get("expires_at")?,
+    })
+}
+
+fn team_member_from_row(row: Row) -> Result<OrganizationTeamMember> {
+    Ok(OrganizationTeamMember {
+        user_id: row.try_get("user_id")?,
+        username: row.try_get("username")?,
+        role: row.try_get("role")?,
+        joined_at: row.try_get("joined_at")?,
+    })
+}
+
 fn team_from_row(row: Row) -> Result<OrganizationTeam> {
     Ok(OrganizationTeam {
         id: row.try_get("id")?,
@@ -550,6 +1169,38 @@ fn team_from_row(row: Row) -> Result<OrganizationTeam> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invite_inputs_are_validated() {
+        assert_eq!(
+            member_role_and_seat(None, None),
+            Ok(("member".to_string(), "developer".to_string()))
+        );
+        assert_eq!(
+            member_role_and_seat(Some(" admin "), Some("viewer")),
+            Ok(("admin".to_string(), "viewer".to_string()))
+        );
+        assert!(member_role_and_seat(Some("owner"), None).is_err());
+        assert!(member_role_and_seat(None, Some("guest")).is_err());
+        assert_eq!(invite_username("  ada "), Ok("ada"));
+        assert!(invite_username("   ").is_err());
+        assert!(invite_username(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn team_roles_default_to_member_and_reject_others() {
+        assert_eq!(team_member_role(None), Ok("member"));
+        assert_eq!(team_member_role(Some(" lead ")), Ok("lead"));
+        assert_eq!(team_member_role(Some("viewer")), Ok("viewer"));
+        assert!(matches!(
+            team_member_role(Some("owner")),
+            Err(OrganizationRequestError::Invalid(_))
+        ));
+        assert!(matches!(
+            team_member_role(Some("")),
+            Err(OrganizationRequestError::Invalid(_))
+        ));
+    }
 
     #[test]
     fn slug_normalization_is_stable_and_safe() {

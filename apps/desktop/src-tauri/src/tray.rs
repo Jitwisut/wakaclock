@@ -45,7 +45,7 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                     state.replace_settings(settings);
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => quit_after_flush(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -66,6 +66,24 @@ pub fn setup(app: &App) -> tauri::Result<()> {
     }
     builder.build(app)?;
     Ok(())
+}
+
+/// Quit without throwing away captured activity.
+///
+/// Asks the sampler to stop, then waits — off the UI thread — for the delivery
+/// worker to persist what it still holds. Bounded, so a hung request can never
+/// keep the app from closing.
+fn quit_after_flush(app: &tauri::AppHandle) {
+    let state = app.state::<DesktopState>().inner().clone();
+    state.request_shutdown();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        while !state.is_shutdown_complete() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        handle.exit(0);
+    });
 }
 
 fn show_main(app: &tauri::AppHandle) {

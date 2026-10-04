@@ -16,7 +16,7 @@ use crate::middleware::auth;
 use crate::model::auth::AuthData;
 use crate::model::user::{
     CredentialsRow, ExistingUserRow, GenerateApiKeyData, GenerateApiKeyResponse,
-    RevokeApiKeyResponse, UserData, UserResponse, UserRow,
+    RevokeApiKeyResponse, UserData, UserResponse, UserRow, WakaTimeUserFields,
 };
 use crate::repository::ingest_state::IngestStateRepository;
 
@@ -82,6 +82,7 @@ impl UserService {
                 subscription_status: row.subscription_status,
                 trial_ends_at: row.trial_ends_at,
                 subscription_period_end: row.subscription_period_end,
+                wakatime: None,
             },
             None => UserData {
                 id: user_id,
@@ -91,10 +92,107 @@ impl UserService {
                 subscription_status: "trialing".to_string(),
                 trial_ends_at: default_trial_ends_at(),
                 subscription_period_end: None,
+                wakatime: None,
             },
         };
 
         Ok(UserResponse { data })
+    }
+
+    /// `get_current` plus WakaTime's profile keys, with the `last_*` values read from
+    /// the account's most recent canonical heartbeat.
+    pub async fn get_current_wakatime(&self, user_id: Uuid) -> Result<UserResponse> {
+        #[derive(Debug, clickhouse::Row, serde::Deserialize)]
+        struct AccountTimes {
+            created_at: String,
+            updated_at: String,
+        }
+        #[derive(Debug, clickhouse::Row, serde::Deserialize)]
+        struct LastHeartbeat {
+            time: f64,
+            user_agent: String,
+            editor: String,
+            project: Option<String>,
+            branch: Option<String>,
+        }
+
+        let mut response = self.get_current(user_id).await?;
+        let client = self.clickhouse.get_client();
+        let times = client
+            .query(
+                "SELECT toString(min(created_at)) AS created_at, toString(max(updated_at)) AS updated_at
+                 FROM wakaclock.users FINAL WHERE user_id = ? HAVING count() > 0",
+            )
+            .bind(user_id)
+            .fetch_optional::<AccountTimes>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse users times query error: {error}"))?;
+        let last = client
+            .query(
+                "SELECT time, user_agent, editor, project, branch
+                 FROM wakaclock.heartbeats_canonical
+                 WHERE user_id = ?
+                 ORDER BY time DESC
+                 LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional::<LastHeartbeat>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse last heartbeat query error: {error}"))?;
+
+        let iso = |value: &str| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+                .map(|time| {
+                    time.and_utc()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                })
+                .ok()
+        };
+        let non_empty = |value: String| (!value.is_empty()).then_some(value);
+        let data = &response.data;
+        response.data.wakatime = Some(WakaTimeUserFields {
+            display_name: if data.username.is_empty() {
+                "Anonymous User".to_string()
+            } else {
+                format!("@{}", data.username)
+            },
+            full_name: None,
+            bio: None,
+            photo: None,
+            public_email: None,
+            is_email_public: false,
+            is_photo_public: false,
+            is_email_confirmed: false,
+            // AtoAxis has a single plan with every feature included.
+            has_premium_features: true,
+            plan: data.subscription_status.clone(),
+            timezone: "UTC".to_string(),
+            last_heartbeat_at: last
+                .as_ref()
+                .map(|row| crate::model::summary::rfc3339(row.time)),
+            last_plugin: last
+                .as_ref()
+                .and_then(|row| non_empty(row.user_agent.clone())),
+            last_plugin_name: last.as_ref().and_then(|row| non_empty(row.editor.clone())),
+            last_project: last.as_ref().and_then(|row| row.project.clone()),
+            last_branch: last.as_ref().and_then(|row| row.branch.clone()),
+            website: None,
+            human_readable_website: None,
+            wonderfuldev_username: None,
+            github_username: None,
+            twitter_username: None,
+            linkedin_username: None,
+            city: None,
+            logged_time_public: false,
+            languages_used_public: false,
+            editors_used_public: false,
+            categories_used_public: false,
+            os_used_public: false,
+            is_hireable: false,
+            created_at: times.as_ref().and_then(|row| iso(&row.created_at)),
+            modified_at: times.as_ref().and_then(|row| iso(&row.updated_at)),
+        });
+        Ok(response)
     }
 
     /// Ensure an authenticated legacy/ClickHouse identity exists in PostgreSQL before a
@@ -321,7 +419,7 @@ impl UserService {
     /// Generate a key once. PostgreSQL owns its lifecycle when configured; the
     /// compatibility store never contains a retrievable plaintext credential.
     pub async fn generate_api_key(&self, user_id: Uuid) -> Result<GenerateApiKeyResponse> {
-        let plaintext_key = auth::generate_key();
+        let plaintext_key = auth::generate_wakatime_api_key();
         let key_hash = auth::hash_key(&plaintext_key);
         // Seal a recoverable copy, bound to this user, only when a master key is
         // configured. Without it the key stays hash-only and reads return blank.

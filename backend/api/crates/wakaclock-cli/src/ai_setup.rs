@@ -9,6 +9,7 @@
 //! performs only the adapter-owned configuration change. User config outside the
 //! AtoAxis marker is left byte-for-byte unchanged.
 
+use crate::agent_service;
 use fs2::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -81,6 +82,8 @@ struct SetupAgentReport {
 struct SetupBrokerReport {
     installed: bool,
     running: bool,
+    cleanup_ok: bool,
+    runtime_mode: &'static str,
     detail: Option<String>,
 }
 
@@ -125,6 +128,11 @@ pub(crate) fn run(
     if all && requested_agent.is_some() {
         return Err("choose exactly one of an adapter id or --all".into());
     }
+
+    // Setup is also the migration boundary for upgrades from the retired
+    // LaunchAgent/systemd/task path. Always remove that registration before
+    // writing hooks, even when the caller has not yet granted adapter consent.
+    let legacy_service_cleanup = agent_service::uninstall();
 
     let registry = AdapterRegistry::builtin();
     let selected = selected_ids(&registry, requested_agent, all)?;
@@ -260,41 +268,23 @@ pub(crate) fn run(
         agents.push(report);
     }
 
-    // Broker installation is deliberately best-effort here.  A service manager
-    // may be unavailable in a container/SSH session, while the local adapters can
-    // still spool events and the report should tell the user how to repair it.
-    let broker = if setup_consented {
-        match crate::broker::ensure_token()
-            .map_err(|error| error.to_string())
-            .and_then(|_| crate::agent_service::install())
-        {
-            Ok(_) => {
-                let status = crate::agent_service::status();
-                SetupBrokerReport {
-                    installed: status.installed,
-                    running: status.running,
-                    detail: if status.running {
-                        None
-                    } else {
-                        Some(
-                            "service installed but is not running; run `wakaclock broker start`"
-                                .into(),
-                        )
-                    },
-                }
+    // Adapter setup is intentionally on-demand.  Hooks and the transcript sync
+    // command invoke the CLI for one bounded pass; setup must never create a
+    // LaunchAgent/systemd task or a long-lived local broker.
+    let broker = SetupBrokerReport {
+        installed: false,
+        running: false,
+        cleanup_ok: legacy_service_cleanup.is_ok(),
+        runtime_mode: "on_demand",
+        detail: match legacy_service_cleanup {
+            Ok(_) if setup_consented => {
+                Some("on-demand CLI sync; no background service installed".into())
             }
-            Err(error) => SetupBrokerReport {
-                installed: false,
-                running: false,
-                detail: Some(format!("broker setup unavailable: {error}")),
-            },
-        }
-    } else {
-        SetupBrokerReport {
-            installed: false,
-            running: false,
-            detail: Some("consent_required".into()),
-        }
+            Ok(_) => Some("consent_required; no background service installed".into()),
+            Err(error) => Some(format!(
+                "legacy service cleanup failed ({error}); no replacement service was created"
+            )),
+        },
     };
 
     let observer_detail = if has_enabled_consent_at(&home) {
@@ -354,11 +344,8 @@ fn setup_overall(
     broker: &SetupBrokerReport,
 ) -> (&'static str, Option<String>) {
     let failed = agents.iter().any(|agent| agent.status == "failed")
-        || (broker.installed && !broker.running)
-        || broker
-            .detail
-            .as_deref()
-            .is_some_and(|detail| detail != "consent_required");
+        || !broker.cleanup_ok
+        || (broker.installed && !broker.running);
     let configured = agents
         .iter()
         .any(|agent| matches!(agent.status.as_str(), "configured" | "already_configured"));
@@ -683,18 +670,7 @@ fn uninstall_adapter(
     home: &Path,
 ) -> (String, Option<String>) {
     match runtime {
-        AdapterRuntime::Codex => {
-            let path = home.join(".codex/config.toml");
-            let existing = fs::read_to_string(&path).unwrap_or_default();
-            let updated = remove_codex_managed_hooks(&existing);
-            if updated == existing {
-                ("not_installed".into(), Some("no AtoAxis Codex hook block found".into()))
-            } else if let Err(error) = write_text_atomically(&path, &updated) {
-                ("failed".into(), Some(error.to_string()))
-            } else {
-                ("uninstalled".into(), Some(format!("updated {}", path.display())))
-            }
-        }
+        AdapterRuntime::Codex => uninstall_codex(home),
         AdapterRuntime::ClaudeCode => run_plugin_uninstall(
             manifest
                 .executable
@@ -729,6 +705,53 @@ fn run_plugin_uninstall(program: &str, args: &[&str], home: &Path) -> (String, O
     match run_external(&path, args, home) {
         Ok(()) => ("uninstalled".into(), None),
         Err(error) => ("failed".into(), Some(error)),
+    }
+}
+
+fn uninstall_codex(home: &Path) -> (String, Option<String>) {
+    let config_path = home.join(".codex/config.toml");
+    let existing = fs::read_to_string(&config_path).unwrap_or_default();
+    let updated = remove_codex_managed_hooks(&existing);
+    let config_result = if updated != existing {
+        write_text_atomically(&config_path, &updated)
+            .map(|_| Some(format!("updated {}", config_path.display())))
+            .map_err(|error| error.to_string())
+    } else {
+        Ok(None)
+    };
+
+    let executable = resolve_and_probe_executable(&["codex".to_string()], Some("--version"));
+    let plugin_result = executable
+        .filter(|_| codex_supports_plugins(home))
+        .map(|path| {
+            let removed = run_external(
+                &path,
+                &["plugin", "remove", "atoaxis-heartbeat@atoaxis-local"],
+                home,
+            );
+            let _ = run_external(
+                &path,
+                &["plugin", "marketplace", "remove", "atoaxis-local"],
+                home,
+            );
+            removed
+        });
+
+    match (config_result, plugin_result) {
+        (Err(error), _) => ("failed".into(), Some(error)),
+        // Codex reports a missing plugin as a non-zero command. Uninstall is
+        // intentionally idempotent, so a missing registration is not a setup
+        // failure; a managed config write error above remains a real failure.
+        (Ok(detail), Some(Err(_error))) if detail.is_none() => (
+            "not_installed".into(),
+            Some("no AtoAxis Codex plugin registration found".into()),
+        ),
+        (Ok(detail), _) if detail.is_some() => ("uninstalled".into(), detail),
+        (Ok(_), Some(Ok(()))) => ("uninstalled".into(), Some("Codex plugin removed".into())),
+        (Ok(_), _) => (
+            "not_installed".into(),
+            Some("no AtoAxis Codex hook or plugin found".into()),
+        ),
     }
 }
 
@@ -982,8 +1005,8 @@ fn print_text_report(report: &SetupReport) {
         println!("Bundle note: {detail}");
     }
     println!(
-        "Broker: installed={} running={}",
-        report.broker.installed, report.broker.running
+        "Runtime: {} (legacy service installed={} running={})",
+        report.broker.runtime_mode, report.broker.installed, report.broker.running
     );
     if let Some(detail) = &report.broker.detail {
         println!("Broker note: {detail}");
@@ -1256,6 +1279,9 @@ fn verify_runtime_resources(root: &Path, runtime: AdapterRuntime) -> Result<(), 
             "plugins/atoaxis-heartbeat/hooks/hooks.json",
         ],
         AdapterRuntime::Codex => &[
+            "codex/.codex-plugin/plugin.json",
+            "codex/hooks/hooks.json",
+            "codex/.agents/plugins/marketplace.json",
             "codex/heartbeat-hook.sh",
             "codex/git-sweep-before.sh",
             "codex/git-sweep-after.sh",
@@ -1358,20 +1384,32 @@ fn configure_gemini(
     home: &Path,
 ) -> Result<Option<String>, String> {
     let extension = bundle.join("gemini-cli");
-    // `--consent` skips Gemini's interactive "do you trust this folder? [y/N]" prompt.
-    // Safe to pass here and nowhere earlier: `run` only reaches an adapter's configure
-    // step after AtoAxis's own per-agent consent gate has recorded `HookConsent::Enabled`
-    // (an explicit `--yes`, or a prior stored opt-in). Without it the child blocks on a
+    // `--consent` skips Gemini's extension security confirmation. Safe to pass here and
+    // nowhere earlier: `run` only reaches an adapter's configure step after AtoAxis's
+    // own per-agent consent gate has recorded `HookConsent::Enabled` (an explicit
+    // `--yes`, or a prior stored opt-in). The separate workspace-trust check is handled
+    // by the documented headless environment below; without it the child blocks on a
     // prompt that a null stdin can never answer — see `EXTERNAL_INSTALL_TIMEOUT`.
-    run_external(
+    // Gemini's extension installer checks the source directory as a workspace
+    // before it will create the managed extension.  The setup command is a
+    // non-interactive, explicitly consented operation, so use Gemini's
+    // documented headless trust switch for this child process only.  This does
+    // not weaken trust for the user's later Gemini sessions.
+    run_external_with_timeout_env(
         executable,
         &[
             "extensions",
             "install",
             &extension.display().to_string(),
             "--consent",
+            // The extension's settings wizard is interactive even when the
+            // security prompt is consented. AtoAxis has no settings to inject;
+            // skip that wizard so setup remains a bounded one-shot operation.
+            "--skip-settings",
         ],
         home,
+        GEMINI_INSTALL_TIMEOUT,
+        &[("GEMINI_CLI_TRUST_WORKSPACE", "true")],
     )?;
     Ok(None)
 }
@@ -1396,11 +1434,32 @@ fn configure_script(bundle: &Path, adapter: &str, home: &Path) -> Result<Option<
 /// it simply waits. Without a deadline `wakaclock ai setup` hangs forever, and
 /// `--all` hangs on the first such agent and never reaches the rest.
 const EXTERNAL_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+const GEMINI_INSTALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String> {
+    run_external_with_timeout(program, args, home, EXTERNAL_INSTALL_TIMEOUT)
+}
+
+fn run_external_with_timeout(
+    program: &Path,
+    args: &[&str],
+    home: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    run_external_with_timeout_env(program, args, home, timeout, &[])
+}
+
+fn run_external_with_timeout_env(
+    program: &Path,
+    args: &[&str],
+    home: &Path,
+    timeout: Duration,
+    environment: &[(&str, &str)],
+) -> Result<(), String> {
     let mut child = Command::new(program)
         .args(args)
         .env("HOME", home)
+        .envs(environment.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1426,7 +1485,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
         buffer
     });
 
-    let deadline = Instant::now() + EXTERNAL_INSTALL_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1437,7 +1496,7 @@ fn run_external(program: &Path, args: &[&str], home: &Path) -> Result<(), String
                     return Err(format!(
                         "{} did not finish within {}s",
                         program.display(),
-                        EXTERNAL_INSTALL_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     ));
                 }
                 thread::sleep(Duration::from_millis(100));
@@ -1496,6 +1555,41 @@ fn configure_codex(bundle: &Path, home: &Path) -> Result<Option<String>, String>
         ));
     }
 
+    // Current Codex releases can install a local plugin marketplace. Prefer that
+    // durable, versioned registration when the binary exposes the command, while
+    // retaining the marker-bounded TOML hooks for older CLI/Desktop builds.
+    let plugin_manifest = hook_dir.join(".codex-plugin/plugin.json");
+    let plugin_hooks = hook_dir.join("hooks/hooks.json");
+    let marketplace = hook_dir.join(".agents/plugins/marketplace.json");
+    if plugin_manifest.is_file()
+        && plugin_hooks.is_file()
+        && marketplace.is_file()
+        && codex_supports_plugins(home)
+    {
+        let executable = resolve_and_probe_executable(&["codex".to_string()], Some("--version"))
+            .ok_or("Codex executable disappeared before plugin setup")?;
+        run_external(
+            &executable,
+            &[
+                "plugin",
+                "marketplace",
+                "add",
+                // The descriptor is under the Codex-specific bundle root;
+                // passing the parent would resolve Claude's marketplace first.
+                &hook_dir.display().to_string(),
+            ],
+            home,
+        )?;
+        run_external(
+            &executable,
+            &["plugin", "add", "atoaxis-heartbeat@atoaxis-local", "--json"],
+            home,
+        )?;
+        return Ok(Some(
+            "installed Codex plugin from the local marketplace".into(),
+        ));
+    }
+
     let config_path = home.join(".codex/config.toml");
     let existing = fs::read_to_string(&config_path).unwrap_or_default();
     let updated = ensure_codex_features(existing);
@@ -1506,6 +1600,22 @@ fn configure_codex(bundle: &Path, home: &Path) -> Result<Option<String>, String>
     } else {
         Ok(Some("Codex managed hooks already configured".into()))
     }
+}
+
+fn codex_supports_plugins(home: &Path) -> bool {
+    let Some(executable) = resolve_and_probe_executable(&["codex".to_string()], Some("--version"))
+    else {
+        return false;
+    };
+    Command::new(executable)
+        .args(["plugin", "--help"])
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn ensure_codex_features(mut config: String) -> String {

@@ -72,7 +72,8 @@ function resolveSiteUrl(): string {
 export const SITE_URL = resolveSiteUrl();
 
 export const SOCIAL_IMAGE_PATH = '/opengraph-image';
-export const SOURCE_REPOSITORY_URL = 'https://github.com/Jitwisut/wakaclock';
+/** Public evidence for product claims; the implementation repository is private. */
+export const PUBLIC_EVIDENCE_URL = '/docs';
 
 export function localizedPath(locale: SiteLocale, path: string): string {
   let normalized = path;
@@ -94,11 +95,10 @@ export function absoluteUrl(path: string): string {
   return new URL(path, `${SITE_URL}/`).toString();
 }
 
-/** Who builds the product — AtoAxis is developed by a team of fourth-year students. */
+/** Who builds the product — AtoAxis is developed by team Atoaxis. */
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
-  // No separate registered entity exists yet (student project) — the product name
-  // doubles as the legal/publisher name in structured data until that changes.
+  // The product name is also used as the publisher identity in structured data.
   legalName: SITE_NAME,
   logo: absoluteUrl('/atoaxis-symbol-v2.png'),
   name: SITE_NAME,
@@ -113,9 +113,24 @@ export const PRICING = {
   status: 'planned',
 } as const;
 
+/** Shared availability wording used by page copy and machine-readable discovery files. */
+export const PRODUCT_STATUS = {
+  access: 'invite-only',
+  billing: 'not-open',
+  en: {
+    label: 'Invite-only Early Access',
+    signup:
+      'Joining the list records interest; it does not create an account or charge a payment method.',
+  },
+  th: {
+    label: 'Early Access แบบเชิญ',
+    signup: 'การลงชื่อคือการแสดงความสนใจ ยังไม่สร้างบัญชีและไม่มีการเรียกเก็บเงิน',
+  },
+} as const;
+
 /**
- * The 40-80 word definitional answer. Reused verbatim by the homepage's
- * "What is AtoAxis?" section and by the site-level meta description so search
+ * The concise product definition. Reused verbatim by the homepage's
+ * "What is AtoAxis?" section, software schema and discovery documents so search
  * engines and answer engines extract one consistent definition.
  *
  * Note for future edits: this product is a hosted service. Earlier drafts described it
@@ -124,11 +139,11 @@ export const PRICING = {
  * can query the database.
  */
 export const PRODUCT_ANSWER =
-  `${SITE_NAME} is a developer time tracking service. It receives coding activity from ` +
-  'your editor as heartbeats and turns them into dashboards for coding time, projects, ' +
-  'programming languages, branches and editors. It implements the WakaTime API, so an ' +
-  'editor that already has a WakaTime plugin can send data to it, and every account ' +
-  'includes your complete coding history rather than a limited recent window.';
+  `${SITE_NAME} is a hosted developer time tracking and AI coding analytics service. ` +
+  'It turns editor heartbeats into coding-time reports by project, language, branch and editor, ' +
+  'keeps your complete coding history, and supports the WakaTime API. Connected integrations ' +
+  'report AI, human and Unattributed changes with attribution coverage. Heartbeats contain ' +
+  'activity metadata and counts, not source code. Access is currently invite-only Early Access.';
 
 /**
  * Capabilities that are designed but NOT built. Anything listed here must be described
@@ -160,6 +175,10 @@ export const EN_PUBLIC_ROUTES = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/migrate-from-wakatime',
+  '/docs/how-coding-time-is-calculated',
+  '/docs/ai-attribution-and-coverage',
+  '/docs/ai-cost-methodology',
   '/about',
   '/contact',
   '/terms',
@@ -186,8 +205,12 @@ export interface PublicRouteDefinition {
 const AUDIT_REVIEW_DATE = '2026-09-11';
 /** Round 3 of the SEOScore audit response — see docs/seoscore-audit-2026-09-12-round-3.md. */
 const AUDIT_REVIEW_DATE_ROUND_3 = '2026-09-12';
+const NEW_GUIDES_DATE = '2026-09-20';
+const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
+const THAI_SEO_UPDATE_DATE = '2026-09-23';
+const MIGRATION_GUIDE_DATE = '2026-09-28';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/': AUDIT_REVIEW_DATE,
+  '/': '2026-09-22',
   '/teams': AUDIT_REVIEW_DATE,
   '/developer-analytics': AUDIT_REVIEW_DATE,
   '/ai-coding-tracker': AUDIT_REVIEW_DATE,
@@ -196,26 +219,40 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/integrations': AUDIT_REVIEW_DATE,
   '/docs': AUDIT_REVIEW_DATE,
   '/ai-cost-tracking': '2026-08-23',
-  '/about': AUDIT_REVIEW_DATE_ROUND_3,
+  '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
+  '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
+  '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
+  '/about': ATTRIBUTION_UPDATE_DATE,
   '/contact': AUDIT_REVIEW_DATE_ROUND_3,
   '/terms': AUDIT_REVIEW_DATE_ROUND_3,
   '/privacy': AUDIT_REVIEW_DATE_ROUND_3,
   '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
+  '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
   '/integrations/vscode': AUDIT_REVIEW_DATE_ROUND_3,
   '/join': AUDIT_REVIEW_DATE_ROUND_3,
 };
-/** Thai-only content dates, for pages whose Thai copy changed independently of English. */
+/** Thai route-specific content dates, including guides authored in both languages. */
 const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/wakatime-alternative': AUDIT_REVIEW_DATE_ROUND_3,
-  '/ai-coding-tracker': AUDIT_REVIEW_DATE_ROUND_3,
+  '/about': ATTRIBUTION_UPDATE_DATE,
+  '/wakatime-alternative': THAI_SEO_UPDATE_DATE,
+  '/ai-coding-tracker': THAI_SEO_UPDATE_DATE,
+  '/developer-analytics': THAI_SEO_UPDATE_DATE,
+  '/teams': THAI_SEO_UPDATE_DATE,
+  '/pricing': THAI_SEO_UPDATE_DATE,
+  '/integrations': THAI_SEO_UPDATE_DATE,
+  '/docs': THAI_SEO_UPDATE_DATE,
+  '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
+  '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
+  '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
+  '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {
   // The September 11 audit updated English copy only; round 3 (September 12) added
   // Thai-specific fixes to these two paths without touching their English copy.
   if (locale === 'th') {
-    if (path === '/') return AUDIT_REVIEW_DATE;
+    if (path === '/') return '2026-09-22';
     if (path === '/ai-cost-tracking') return '2026-08-23';
     return TH_ROUTE_CONTENT_DATES[path];
   }
@@ -229,21 +266,25 @@ export function contentModified(path: string, locale: SiteLocale): string | unde
  * to forget. Answer engines read `dateModified` as the freshness signal for the entity,
  * not for one URL, so the most recent editorial change on the site is the honest value.
  */
-export const SITE_MODIFIED = Object.values(ROUTE_CONTENT_DATES).sort().at(-1) as string;
+export const SITE_MODIFIED = [
+  ...Object.values(ROUTE_CONTENT_DATES),
+  ...Object.values(TH_ROUTE_CONTENT_DATES),
+]
+  .sort()
+  .at(-1) as string;
 
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
-export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = [
-  ...EN_PUBLIC_ROUTES.map((path) => ({
-    locale: 'en' as const,
-    path,
-    ...(ROUTE_CONTENT_DATES[path] ? { lastModified: ROUTE_CONTENT_DATES[path] } : {}),
-  })),
-  ...EN_PUBLIC_ROUTES.map((path) => ({
-    locale: 'th' as const,
-    path: localizedPath('th', path),
-    ...(contentModified(path, 'th') ? { lastModified: contentModified(path, 'th') } : {}),
-  })),
-];
+export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = SITE_LOCALES.flatMap(
+  (locale) =>
+    EN_PUBLIC_ROUTES.map((path) => {
+      const lastModified = contentModified(path, locale);
+      return {
+        locale,
+        path: localizedPath(locale, path),
+        ...(lastModified ? { lastModified } : {}),
+      };
+    })
+);
 
 /** Canonical public URL paths, including both language variants. */
 export const PUBLIC_ROUTES = [...EN_PUBLIC_ROUTES, ...TH_PUBLIC_ROUTES] as readonly string[];

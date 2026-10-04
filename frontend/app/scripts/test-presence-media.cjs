@@ -1,5 +1,6 @@
 // Local-only integration smoke test: synthetic devices, no account credentials.
 const { createRequire } = require('node:module');
+const { Buffer } = require('node:buffer');
 const path = require('node:path');
 const appRoot = path.resolve(__dirname, '..');
 const requireApp = createRequire(path.join(appRoot, 'package.json'));

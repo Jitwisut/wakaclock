@@ -5,6 +5,7 @@ pub mod config;
 pub mod error;
 pub mod git;
 pub mod heartbeat;
+pub mod project;
 pub mod queue;
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

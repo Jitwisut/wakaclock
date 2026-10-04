@@ -12,17 +12,17 @@ import { formatPercent } from '@/lib/wakaclock/format';
  * reaches this surface, so none of it is named here either.
  */
 export interface AiAttributionLegendProps {
-  aiInferredPercent: number;
-  aiVerifiedPercent: number;
-  humanPercent: number;
-  unknownPercent: number;
+  aiInferredPercent: null | number;
+  aiVerifiedPercent: null | number;
+  humanPercent: null | number;
+  unknownPercent: null | number;
 }
 
 interface LegendRow {
   evidence: string;
   key: string;
   label: string;
-  percent: number;
+  percent: null | number;
 }
 
 export function AiAttributionLegend({
@@ -48,7 +48,7 @@ export function AiAttributionLegend({
     },
     {
       evidence:
-        'A positive editor keystroke or save was recorded and no agent activity fell in the same window.',
+        'Positive editor activity, such as a keystroke or save, was recorded. This indicates attendance, not proof of code authorship.',
       key: 'human',
       label: 'Human',
       percent: humanPercent,
@@ -71,7 +71,9 @@ export function AiAttributionLegend({
             <dt className="flex items-baseline justify-between gap-2">
               <span className="text-sm font-medium">{row.label}</span>
               <span className="text-muted-foreground text-xs tabular-nums">
-                {formatPercent(row.percent, 0)} of heartbeats
+                {row.percent == null
+                  ? 'Not available'
+                  : `${formatPercent(row.percent, 0)} of heartbeats`}
               </span>
             </dt>
             <dd className="text-muted-foreground mt-1 text-xs">{row.evidence}</dd>

@@ -1,11 +1,22 @@
 import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AnswerGuide } from '@/components/marketing/answer-guide';
 import { webPageSchema } from '@/lib/seo/schema';
 import { contentModified } from '@/lib/seo/site';
+import * as site from '@/lib/seo/site';
 
 describe('audit answer guides', () => {
+  it('uses the documented site review date when a guide has no dedicated content date', () => {
+    const dates = vi.spyOn(site, 'contentModified').mockReturnValue(undefined);
+    try {
+      const { container } = render(<AnswerGuide path="/teams" />);
+      expect(container.querySelector('time')).toHaveAttribute('datetime', site.SITE_MODIFIED);
+      expect(container.querySelector('time')).toHaveTextContent(site.SITE_MODIFIED);
+    } finally {
+      dates.mockRestore();
+    }
+  });
   it.each([
     '/',
     '/teams',
@@ -30,7 +41,7 @@ describe('audit answer guides', () => {
     expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
       contentModified(path, 'en')
     );
-    expect(container.querySelectorAll('a[href^="https://"]')).not.toHaveLength(0);
+    expect(container.querySelectorAll('a[href^="/"], a[href^="https://"]')).not.toHaveLength(0);
     expect(container.textContent).toContain('illustrative, not customer research');
   });
 
@@ -40,7 +51,9 @@ describe('audit answer guides', () => {
     expect(container.textContent).toContain('สรุปสาระสำคัญ');
     expect(container.querySelectorAll('dt')).toHaveLength(4);
     expect(container.querySelector('table caption')?.textContent).toContain('ตีความ');
-    expect(container.querySelector('time')?.getAttribute('datetime')).toBe('2026-09-11');
+    expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
+      contentModified('/', 'th')
+    );
     expect(container.textContent).toContain('ไม่ใช่งานวิจัยหรือข้อมูลลูกค้า');
   });
 
@@ -58,8 +71,8 @@ describe('audit answer guides', () => {
     }
   );
 
-  it('does not render a guide for a Thai page with no Thai-specific content yet', () => {
-    const { container } = render(<AnswerGuide locale="th" path="/teams" />);
+  it('does not render a guide for a Thai route with no dedicated guide', () => {
+    const { container } = render(<AnswerGuide locale="th" path="/unsupported-fixture" />);
     expect(container.querySelector('#answer-guide')).toBeNull();
   });
 
@@ -70,8 +83,10 @@ describe('audit answer guides', () => {
   });
 
   it('does not invent a content update for untouched translations', () => {
-    const page = { path: '/teams', name: 'Teams', description: 'Team prototype' };
-    expect(webPageSchema({ ...page, locale: 'en' }).dateModified).toBe('2026-09-11');
+    const page = { path: '/contact', name: 'Contact', description: 'Contact AtoAxis' };
+    expect(webPageSchema({ ...page, locale: 'en' }).dateModified).toBe(
+      contentModified('/contact', 'en')
+    );
     expect(webPageSchema({ ...page, locale: 'th' })).not.toHaveProperty('dateModified');
   });
 });

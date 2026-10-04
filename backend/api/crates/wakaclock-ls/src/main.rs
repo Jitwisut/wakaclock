@@ -180,7 +180,7 @@ impl Shared {
         if self.heartbeat_tx.send(heartbeat).is_err() {
             warn!("wakaclock-ls: heartbeat worker is not running, dropping heartbeat");
             self.client
-                .log_message(MessageType::WARNING, "Wakaclock: heartbeat worker stopped")
+                .log_message(MessageType::WARNING, "AtoAxis: heartbeat worker stopped")
                 .await;
         }
     }
@@ -238,7 +238,7 @@ impl LanguageServer for Backend {
         );
         self.shared
             .client
-            .log_message(MessageType::INFO, "Wakaclock is tracking this workspace")
+            .log_message(MessageType::INFO, "AtoAxis is tracking this workspace")
             .await;
     }
 

@@ -67,7 +67,8 @@ export type FlushReason =
 export interface BufferedFileState {
     entity: string;
     heartbeatId?: string;
-    project?: string;
+    /** Workspace-folder name; the CLI uses it only when it cannot detect a project. */
+    alternateProject?: string;
     /** Timestamp of the most recent text edit, kept separate from cross-file activity time. */
     lastEditAt?: number;
     /**
@@ -134,7 +135,11 @@ export interface ExtraHeartbeatPayload {
     /** Unix seconds when the captured editor activity occurred. */
     time?: number;
     entity_type?: "file" | "domain" | "url" | "app";
-    project?: string;
+    /**
+     * Fallback project name (WakaTime `alternate_project`). The CLI resolves the real
+     * project from the entity (git root first) and uses this only when none is found.
+     */
+    alternate_project?: string;
     category?: string;
     write?: boolean;
     line_number?: number;
@@ -159,6 +164,10 @@ export interface ExtraHeartbeatPayload {
     human_lines_deleted?: number;
     unattributed_lines_added?: number;
     unattributed_lines_deleted?: number;
+    line_metric_version?: string;
+    line_measurement_status?: "measured" | "unavailable";
+    line_measurement_reason?: string;
+    measurement_window_id?: string;
     clipboard_tracking_version?: number;
     copy_actions?: number;
     paste_actions?: number;
@@ -204,9 +213,31 @@ export type ConnectionState =
   | "needs-api-key"
   | "connecting"
   | "verified"
+  | "offline"
   | "offline-queued"
+  | "key-rejected"
   | "subscription-required"
+  | "service-degraded"
   | "cli-unavailable";
+
+/** `connection.state` from `wakaclock today --json` (wakaclock-core `ConnectionState`). */
+export type ServerConnectionState =
+  | "online"
+  | "offline"
+  | "auth_rejected"
+  | "subscription_required"
+  | "retryable_server_error"
+  | "validation_rejected"
+  | "unknown_error";
+
+export interface ServerConnectionSnapshot {
+  state: ServerConnectionState;
+  reachable?: boolean;
+  authenticated?: boolean | null;
+  httpStatus?: number | null;
+  lastErrorKind?: string | null;
+  lastErrorAt?: number | null;
+}
 
 export interface VerifyResult {
   status: VerifyStatus;
@@ -237,6 +268,9 @@ export interface StatusBarSnapshot {
      *  turning heartbeats away (an expired trial, a revoked key), which is otherwise
      *  indistinguishable from a quiet day. */
     delivery?: string;
+    /** Typed server state. Absent only for CLIs that predate the structured
+     *  `today --json` contract; the status bar then falls back to legacy rules. */
+    connection?: ServerConnectionSnapshot;
     legacyCli?: boolean;
 }
 
@@ -250,6 +284,7 @@ export interface StatusSnapshot {
 }
 
 export interface BrokerStatusSnapshot {
+    runtime_mode?: "on_demand" | string;
     running?: boolean;
     pid?: number | null;
     endpoint?: string | null;

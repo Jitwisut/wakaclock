@@ -29,6 +29,9 @@ use wakaclock_core::heartbeat::{
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatPayload {
     pub entity: String,
+    /// wakatime-cli and WakaTime plugins send `type`, `lineno` and `cursorpos`;
+    /// both spellings are accepted.
+    #[serde(alias = "type")]
     pub entity_type: EntityType,
     pub time: f64,
     pub created_at: Option<String>,
@@ -41,7 +44,9 @@ pub struct HeartbeatPayload {
     pub language: Option<String>,
     pub dependencies: Option<Vec<String>>,
     pub lines: Option<u32>,
+    #[serde(alias = "lineno")]
     pub line_number: Option<u32>,
+    #[serde(alias = "cursorpos")]
     pub cursor_position: Option<u32>,
     pub is_write: Option<bool>,
     pub category: Option<Category>,
@@ -131,12 +136,27 @@ pub struct HeartbeatPayload {
     pub human_lines_deleted: Option<u32>,
     pub unattributed_lines_added: Option<u32>,
     pub unattributed_lines_deleted: Option<u32>,
+    #[serde(default)]
+    pub line_metric_version: Option<String>,
+    #[serde(default)]
+    pub line_measurement_status: Option<String>,
+    #[serde(default)]
+    pub line_measurement_reason: Option<String>,
+    #[serde(default)]
+    pub measurement_window_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct HeartbeatResponse {
     pub status: String,
     pub heartbeats_inserted: usize,
+    /// WakaTime bulk contract: one `[{"data": {"id"}}, status]` pair per request
+    /// heartbeat, in request order. wakatime-cli matches `responses[i]` to the
+    /// heartbeat it sent at position `i` and re-queues any that are missing or
+    /// non-2xx, so a server-side duplicate still reports success here;
+    /// `heartbeats_inserted` remains the separate insert count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responses: Option<Vec<(serde_json::Value, u16)>>,
 }
 
 /// Query params for GET /heartbeats?date=YYYY-MM-DD&timezone=Asia/Bangkok
@@ -151,7 +171,35 @@ pub struct ListQuery {
 pub struct HeartbeatListResponse {
     pub date: String,
     pub total: usize,
-    pub data: Vec<HeartbeatItem>,
+    pub data: Vec<HeartbeatListEntry>,
+    /// WakaTime's envelope: the local day's UTC bounds (inclusive final second) and
+    /// the IANA zone used to resolve it.
+    pub start: String,
+    pub end: String,
+    pub timezone: String,
+}
+
+/// A heartbeat with WakaTime's field names (`type`, `lineno`, `cursorpos`) next to
+/// the AtoAxis ones, so WakaTime API clients and the dashboard read the same rows.
+#[derive(Debug, Serialize)]
+pub struct HeartbeatListEntry {
+    #[serde(flatten)]
+    pub item: HeartbeatItem,
+    #[serde(rename = "type")]
+    pub wakatime_type: String,
+    pub lineno: Option<u32>,
+    pub cursorpos: Option<u32>,
+}
+
+impl From<HeartbeatItem> for HeartbeatListEntry {
+    fn from(item: HeartbeatItem) -> Self {
+        Self {
+            wakatime_type: item.entity_type.clone(),
+            lineno: item.line_number,
+            cursorpos: item.cursor_position,
+            item,
+        }
+    }
 }
 
 /// 1 heartbeat ใน response list — เฉพาะ fields ที่ client ต้องการ
@@ -245,6 +293,12 @@ pub async fn create(
     require_active_access(&state, user_id)
         .await
         .map_err(with_headers)?;
+    if payload.line_metric_version.is_some() && !state.config.editor_line_metrics_enabled {
+        return Err(with_headers(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "versioned editor line metrics are not enabled on this server",
+        )));
+    }
     let mut heartbeat = payload_to_heartbeat(payload, user_id)
         .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
     state
@@ -287,6 +341,7 @@ pub async fn create(
     Ok(Json(HeartbeatResponse {
         status: "ok".to_string(),
         heartbeats_inserted: inserted,
+        responses: None,
     }))
 }
 
@@ -295,7 +350,8 @@ pub async fn create_bulk(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payloads): Json<Vec<HeartbeatPayload>>,
-) -> Result<Json<HeartbeatResponse>, (StatusCode, HeaderMap, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<HeartbeatResponse>), (StatusCode, HeaderMap, Json<serde_json::Value>)>
+{
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
         .ok_or_else(|| with_headers(auth::unauthorized()))?;
@@ -310,6 +366,16 @@ pub async fn create_bulk(
         return Err(with_headers(app_error(
             StatusCode::BAD_REQUEST,
             "at most 1000 heartbeats per request",
+        )));
+    }
+    if payloads
+        .iter()
+        .any(|payload| payload.line_metric_version.is_some())
+        && !state.config.editor_line_metrics_enabled
+    {
+        return Err(with_headers(app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "versioned editor line metrics are not enabled on this server",
         )));
     }
     let mut heartbeats: Vec<Heartbeat> = payloads
@@ -336,6 +402,7 @@ pub async fn create_bulk(
         hb.validate()
             .map_err(|e| with_headers(app_error(StatusCode::BAD_REQUEST, &e)))?;
     }
+    let responses = bulk_responses(&heartbeats);
 
     let count = state
         .heartbeat_ingest_service
@@ -363,10 +430,31 @@ pub async fn create_bulk(
         record_presence_activity(&state, user_id).await;
     }
 
-    Ok(Json(HeartbeatResponse {
-        status: "ok".to_string(),
-        heartbeats_inserted: count,
-    }))
+    // 202, not 200: wakatime-cli accepts only 201/202 and otherwise re-queues the
+    // whole batch. Our own clients accept any 2xx.
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(HeartbeatResponse {
+            status: "ok".to_string(),
+            heartbeats_inserted: count,
+            responses: Some(responses),
+        }),
+    ))
+}
+
+/// Built only after the whole batch validated: a rejected batch is a single 4xx,
+/// never a partial success.
+fn bulk_responses(heartbeats: &[Heartbeat]) -> Vec<(serde_json::Value, u16)> {
+    heartbeats
+        .iter()
+        .map(|heartbeat| {
+            let id = heartbeat
+                .heartbeat_id
+                .clone()
+                .unwrap_or_else(|| Uuid::now_v7().to_string());
+            (serde_json::json!({ "data": { "id": id } }), 201)
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -535,11 +623,21 @@ pub async fn list(
         })
         .collect();
 
+    let (range_start, range_end) = range.unix_bounds();
     Ok(Json(HeartbeatListResponse {
         total: items.len(),
         date,
-        data: items,
+        data: items.into_iter().map(HeartbeatListEntry::from).collect(),
+        start: rfc3339(range_start),
+        end: rfc3339(range_end - 1.0),
+        timezone: range.timezone.to_string(),
     }))
+}
+
+fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
 }
 
 fn sanitize_entity(entity: &str) -> String {
@@ -894,6 +992,10 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
         human_lines_deleted: p.human_lines_deleted,
         unattributed_lines_added: p.unattributed_lines_added,
         unattributed_lines_deleted: p.unattributed_lines_deleted,
+        line_metric_version: p.line_metric_version,
+        line_measurement_status: p.line_measurement_status,
+        line_measurement_reason: p.line_measurement_reason,
+        measurement_window_id: p.measurement_window_id,
         revision: p.revision.unwrap_or(0),
         created_at,
     };
@@ -1030,8 +1132,8 @@ fn kafka_unavailable() -> (StatusCode, HeaderMap, Json<serde_json::Value>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        payload_to_heartbeat, project_history_attribution, sanitize_entity, HeartbeatItem,
-        HeartbeatPayload, HistoryAttributionInput, MAX_HEARTBEAT_REVISION,
+        bulk_responses, payload_to_heartbeat, project_history_attribution, sanitize_entity,
+        HeartbeatItem, HeartbeatPayload, HistoryAttributionInput, MAX_HEARTBEAT_REVISION,
     };
     use serde_json::{json, Value};
     use uuid::Uuid;
@@ -1370,7 +1472,7 @@ mod tests {
 
     #[test]
     fn history_item_serializes_projected_actor_confidence() {
-        let item = HeartbeatItem {
+        let mut item = HeartbeatItem {
             entity: "src/main.rs".to_string(),
             entity_type: "file".to_string(),
             time: 1_700_000_000.0,
@@ -1418,10 +1520,21 @@ mod tests {
             actor_confidence: 1.0,
         };
 
-        let serialized = serde_json::to_value(item).unwrap();
-        assert_eq!(serialized["actor_type"], "human");
-        assert_eq!(serialized["actor_confidence"], 1.0);
-        assert_eq!(serialized["is_ai_generated"], false);
+        item.line_number = Some(42);
+        item.cursor_position = Some(7);
+        let entry = serde_json::to_value(super::HeartbeatListEntry::from(item)).unwrap();
+        // WakaTime's names (https://wakatime.com/developers#heartbeats) next to ours.
+        assert_eq!(entry["type"], "file");
+        assert_eq!(entry["lineno"], 42);
+        assert_eq!(entry["cursorpos"], 7);
+        assert_eq!(entry["entity_type"], "file");
+        assert_eq!(entry["line_number"], 42);
+        assert_eq!(entry["cursor_position"], 7);
+        assert_eq!(entry["time"], 1_700_000_000.0);
+
+        assert_eq!(entry["actor_type"], "human");
+        assert_eq!(entry["actor_confidence"], 1.0);
+        assert_eq!(entry["is_ai_generated"], false);
     }
 
     #[test]
@@ -1482,5 +1595,105 @@ mod tests {
                 other => panic!("unsupported expected result kind {other} in {id}"),
             }
         }
+    }
+
+    const WAKATIME_CLI_BULK_REQUEST: &str =
+        include_str!("../../../../../fixtures/wakatime-cli/api_heartbeats_request.json");
+
+    #[test]
+    fn wakatime_cli_bulk_request_deserializes_with_its_own_field_names() {
+        let payloads: Vec<HeartbeatPayload> =
+            serde_json::from_str(WAKATIME_CLI_BULK_REQUEST).expect("wakatime-cli body");
+        let heartbeats = payloads
+            .into_iter()
+            .map(|payload| payload_to_heartbeat(payload, Uuid::nil()))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("wakatime-cli heartbeats convert");
+
+        assert_eq!(heartbeats.len(), 2);
+        let first = &heartbeats[0];
+        assert_eq!(
+            first.entity_type,
+            wakaclock_core::heartbeat::EntityType::File
+        );
+        assert_eq!(first.line_number, Some(42));
+        assert_eq!(first.cursor_position, Some(12));
+        assert_eq!(first.lines, Some(100));
+        assert_eq!(first.project.as_deref(), Some("wakatime-cli"));
+        assert_eq!(first.branch.as_deref(), Some("heartbeat"));
+        assert_eq!(first.dependencies, vec!["dep1", "dep2"]);
+        assert_eq!(
+            heartbeats[1].category,
+            wakaclock_core::heartbeat::Category::Debugging
+        );
+    }
+
+    #[test]
+    fn native_field_names_still_deserialize() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "src/main.rs",
+            "entity_type": "file",
+            "time": 1_700_000_000.0,
+            "line_number": 7,
+            "cursor_position": 3
+        }))
+        .unwrap();
+        assert_eq!(payload.line_number, Some(7));
+        assert_eq!(payload.cursor_position, Some(3));
+    }
+
+    #[test]
+    fn ai_coding_category_is_a_label_not_an_ai_attribution() {
+        let base = json!({
+            "entity": "src/main.rs",
+            "type": "file",
+            "time": 1_700_000_000.0,
+            "category": "coding"
+        });
+        let mut ai_coding = base.clone();
+        ai_coding["category"] = json!("ai coding");
+
+        let coding =
+            payload_to_heartbeat(serde_json::from_value(base).unwrap(), Uuid::nil()).unwrap();
+        let labelled =
+            payload_to_heartbeat(serde_json::from_value(ai_coding).unwrap(), Uuid::nil()).unwrap();
+        assert_eq!(
+            labelled.category,
+            wakaclock_core::heartbeat::Category::AiCoding
+        );
+        assert_eq!(labelled.actor_type, coding.actor_type);
+        assert_eq!(labelled.actor_confidence, coding.actor_confidence);
+        assert_eq!(labelled.ai_agent, coding.ai_agent);
+    }
+
+    #[test]
+    fn bulk_responses_have_one_success_entry_per_heartbeat_in_request_order() {
+        let payloads: Vec<HeartbeatPayload> =
+            serde_json::from_str(WAKATIME_CLI_BULK_REQUEST).unwrap();
+        let mut heartbeats = payloads
+            .into_iter()
+            .map(|payload| payload_to_heartbeat(payload, Uuid::nil()).unwrap())
+            .collect::<Vec<_>>();
+        heartbeats[0].heartbeat_id = Some("client-id-1".to_string());
+        heartbeats[1].heartbeat_id = None;
+
+        let responses = bulk_responses(&heartbeats);
+        assert_eq!(responses.len(), heartbeats.len());
+        assert_eq!(responses[0].0, json!({ "data": { "id": "client-id-1" } }));
+        assert!(responses[1].0["data"]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        assert!(responses.iter().all(|(_, status)| *status == 201));
+
+        // The exact shape wakatime-cli's ParseHeartbeatResponses reads.
+        let wire = serde_json::to_value(super::HeartbeatResponse {
+            status: "ok".to_string(),
+            heartbeats_inserted: 1,
+            responses: Some(responses),
+        })
+        .unwrap();
+        assert_eq!(wire["responses"][0][1], json!(201));
+        assert_eq!(wire["responses"][0][0]["data"]["id"], json!("client-id-1"));
+        assert_eq!(wire["heartbeats_inserted"], json!(1));
     }
 }

@@ -1,8 +1,9 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ActivityHeatmapBoard,
   buildCalendarWeeks,
   buildLatestWeek,
   buildMonthlyActivity,
@@ -173,14 +174,15 @@ describe('Analytics Explorer frontend foundation', () => {
     expect(href).toContain('project_id=project-123');
   });
 
-  it('exposes the four Analytics submenu destinations in the sidebar', () => {
-    const group = navItems.find((item) => item.title === 'Wakaclock');
+  it('exposes the Analytics submenu destinations in the sidebar', () => {
+    const group = navItems.find((item) => item.title === 'AtoAxis');
     const analytics = group?.items.find((item) => item.title === 'Analytics');
     expect(analytics?.items?.map((item) => item.title)).toEqual([
       'Activity Timeline',
       'Human vs AI',
       'Projects',
       'Activity Heatmap',
+      'Measurement Trust',
     ]);
   });
 
@@ -245,4 +247,65 @@ describe('Analytics Explorer frontend foundation', () => {
     expect(onSelect).toHaveBeenCalledWith('ai');
     expect(screen.getByRole('button', { name: /Unknown: Unavailable/ })).toBeInTheDocument();
   });
+});
+
+it('shows calendar, latest-week and monthly totals and drills down from either daily surface', () => {
+  const onSelectDate = vi.fn();
+  const data = multiMonthResponse();
+  data.calendar_heatmap.push({
+    ...data.calendar_heatmap[0],
+    date: '2026-08-27',
+    total_seconds: 5400,
+  });
+  render(<ActivityHeatmapBoard data={data} onSelectDate={onSelectDate} />);
+  expect(screen.getByText('Peak day · 2026-08-28')).toBeVisible();
+  expect(screen.getByText('Weekly Activity')).toBeVisible();
+  expect(screen.getByText('Monthly Progress')).toBeVisible();
+  expect(screen.getByRole('img', { name: /2026-08:/ })).toBeVisible();
+  const daily = screen.getAllByRole('button', { name: /2026-08-28:/ });
+  expect(daily).toHaveLength(2);
+  fireEvent.focus(daily[0]);
+  expect(document.querySelector('[aria-live]')).toHaveTextContent('2026-08-28');
+  fireEvent.click(daily[0]);
+  fireEvent.click(daily[1]);
+  expect(onSelectDate.mock.calls).toEqual([['2026-08-28'], ['2026-08-28']]);
+  expect(screen.getByRole('button', { name: /2026-08-29:/ })).toBeDisabled();
+});
+it('renders an empty activity board with no peak and disables weekly dates outside a partial range', () => {
+  const data = { ...response(), calendar_heatmap: [] };
+  render(<ActivityHeatmapBoard data={data} onSelectDate={vi.fn()} />);
+  expect(screen.getByText('Peak day · —')).toBeVisible();
+  expect(screen.getByText('Explore your activity')).toBeVisible();
+  expect(screen.getByRole('button', { name: /2026-08-24:/ })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /2026-08-30:/ })).toBeDisabled();
+  expect(screen.getByRole('img', { name: /2026-08:/ })).toBeVisible();
+});
+
+it('keeps missing attribution durations unavailable and preserves measured zero', () => {
+  const data = response();
+  const onSelect = vi.fn();
+  const onSelectActor = vi.fn();
+  const view = render(
+    <SourceSummary data={data} onSelect={onSelect} onSelectActor={onSelectActor} />
+  );
+  expect(screen.getByLabelText('AI verified: Unavailable')).toBeVisible();
+  expect(screen.getByLabelText('AI inferred: Unavailable')).toBeVisible();
+  fireEvent.click(screen.getByLabelText('AI verified: Unavailable').closest('button')!);
+  expect(onSelectActor).toHaveBeenLastCalledWith('ai_verified');
+  data.summary.ai_verified_seconds = 0;
+  data.summary.ai_inferred_seconds = 60;
+  data.summary.ai_share_percent = null;
+  view.rerender(
+    <SourceSummary
+      data={data}
+      selectedActor="ai_verified"
+      onSelect={onSelect}
+      onSelectActor={onSelectActor}
+    />
+  );
+  expect(screen.getByLabelText('AI verified: 0s')).toBeVisible();
+  expect(screen.getByLabelText('AI inferred: 1m')).toBeVisible();
+  expect(screen.getByText('—')).toBeVisible();
+  fireEvent.click(screen.getByLabelText('AI verified: 0s').closest('button')!);
+  expect(onSelectActor).toHaveBeenLastCalledWith(undefined);
 });

@@ -1,168 +1,150 @@
 import type * as React from 'react';
 
-import { ConstructionIcon } from 'lucide-react';
+import { MessageCircleIcon, RefreshCwIcon } from 'lucide-react';
 
-import type { PresenceState } from '@/lib/wakaclock/types';
+import { statusExpiryLabel } from '@/components/presence/StatusComposer';
+import { PRESENCE_STATUS } from '@/lib/presence/presence-status';
+import type { PresenceState, PresenceStatusMessage } from '@/lib/wakaclock/types';
 
-const border = 'var(--presence-border)';
-const panel = 'var(--presence-panel)';
-const muted = 'var(--presence-text-muted)';
-const live = 'var(--presence-live)';
-const headingStyle: React.CSSProperties = { fontFamily: 'var(--font-presence-heading)' };
+import styles from './presence-chrome.module.css';
+
+export type PresenceConnection = 'connecting' | 'live' | 'stale';
 
 interface PresenceHeaderProps {
-  connectionLabel?: null | string;
-  onLockedFeature: (label: string) => void;
+  connection?: null | PresenceConnection;
+  /** Slot for the focus-mode control, rendered beside your status. */
+  focusControl?: React.ReactNode;
+  /** Your own status message; shown in the "You" chip, which opens the editor. */
+  myStatus?: null | PresenceStatusMessage;
+  onEditStatus?: () => void;
+  onReconnect?: () => void;
   partyCount?: null | number;
   presenceState?: null | PresenceState;
+  reconnectStopped?: boolean;
   roomName?: null | string;
   username?: null | string;
 }
 
-const STATE_LABEL: Record<PresenceState, string> = {
-  coding: '🎧 Deep focus',
-  idle: '☕ Idle',
-  offline: '· Away',
-};
+const CONNECTION: Record<PresenceConnection, { className: string; label: string; title: string }> =
+  {
+    connecting: {
+      className: styles.idle,
+      label: 'Connecting',
+      title: 'Opening the live room stream',
+    },
+    live: {
+      className: styles.coding,
+      label: 'Live',
+      title: 'Receiving room updates every few seconds',
+    },
+    stale: {
+      className: styles.offline,
+      label: 'Reconnecting',
+      title: 'The live stream dropped; retrying automatically',
+    },
+  };
 
-const STATE_COLOR: Record<PresenceState, string> = {
-  coding: live,
-  idle: '#b7791f',
-  offline: muted,
-};
-
-function Chip({
-  children,
-  tone = 'panel',
+function StatusButton({
+  myStatus,
+  onEdit,
 }: {
-  children: React.ReactNode;
-  tone?: 'panel' | 'soft';
+  myStatus: null | PresenceStatusMessage;
+  onEdit: () => void;
 }) {
+  const icon = myStatus?.emoji ? (
+    <span aria-hidden>{myStatus.emoji}</span>
+  ) : (
+    <MessageCircleIcon aria-hidden className="size-4" />
+  );
   return (
-    <span
-      className="presence-pixel-shadow-sm inline-flex items-center gap-1.5 border-2 px-2.5 py-1 text-[10px] font-bold"
-      style={{
-        background: tone === 'soft' ? 'var(--presence-bg-soft)' : panel,
-        borderColor: border,
-      }}
+    <button
+      aria-label={myStatus ? `Edit your status: ${myStatus.text}` : 'Set a status'}
+      className={`${styles.btn} ${myStatus ? '' : styles.btnGhost}`}
+      onClick={onEdit}
+      title={myStatus ? `${myStatus.text} · ${statusExpiryLabel(myStatus.expires_at)}` : undefined}
+      type="button"
     >
-      {children}
-    </span>
+      {icon}
+      <span className="max-w-[14rem] truncate">{myStatus?.text ?? 'Set a status'}</span>
+    </button>
   );
 }
 
+/**
+ * The control-room command bar: what this surface is, which room you are in, whether
+ * the live stream is healthy, and your own state. Tool entry points live in the tool
+ * bar below it — never here as well.
+ */
 export function PresenceHeader({
-  connectionLabel,
-  onLockedFeature,
+  connection,
+  focusControl,
+  myStatus = null,
+  onEditStatus,
+  onReconnect,
   partyCount,
   presenceState,
+  reconnectStopped = false,
   roomName,
   username,
 }: PresenceHeaderProps) {
+  const link = connection ? CONNECTION[connection] : null;
+  const me = presenceState ? PRESENCE_STATUS[presenceState] : null;
+  const meClass = presenceState ? styles[presenceState] : '';
+
   return (
-    <header
-      className="presence-pixel-shadow mb-4 flex flex-wrap items-center justify-between gap-3 border-2 p-3"
-      style={{ background: 'var(--presence-bg-soft)', borderColor: border }}
-    >
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span
-          aria-hidden
-          className="presence-pixel-shadow-sm flex size-9 items-center justify-center border-2 text-base"
-          style={{ background: panel, borderColor: border }}
-        >
+    <header className={styles.commandBar}>
+      <div className={styles.brand}>
+        <span aria-hidden className={styles.brandMark}>
           👾
         </span>
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-bold tracking-wide" style={headingStyle}>
-              PixelOffice
-            </span>
-            <span
-              className="border px-1 py-0.5 text-[8px] font-bold"
-              style={{ borderColor: live, color: live }}
-            >
-              2.5D
-            </span>
-          </div>
-          <h1 className="mt-0.5 text-[11px] font-bold" style={{ color: muted }}>
-            Coding presence
+        <div className="min-w-0">
+          <h1 className={styles.brandTitle}>
+            Presence{roomName ? <span className={styles.faint}> / </span> : null}
+            {roomName ? <span className="truncate">{roomName}</span> : null}
           </h1>
+          <p className={styles.brandSub}>
+            PixelOffice · see who is coding, then co-work in a pod · Prototype
+          </p>
         </div>
-
-        {roomName ? (
-          <Chip tone="soft">
-            <span aria-hidden>🏰</span>
-            <span className="max-w-[12rem] truncate">{roomName}</span>
-            {connectionLabel ? (
-              <span style={{ color: connectionLabel === 'Live' ? live : muted }}>
-                · {connectionLabel}
-              </span>
-            ) : null}
-          </Chip>
-        ) : null}
       </div>
 
-      <p
-        className="hidden max-w-sm text-[10px] font-bold lg:block"
-        style={{ color: muted, ...headingStyle }}
-      >
-        Your space to focus together. Move your character into a pod to co-work.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {typeof partyCount === 'number' ? (
-          <Chip>
-            <span
-              className="presence-live-dot size-1.5 rounded-full"
-              style={{ background: live }}
-            />
-            <span style={{ color: live }}>{partyCount} here</span>
-          </Chip>
-        ) : null}
-
-        <button
-          className="presence-pixel-shadow-sm presence-pixel-press inline-flex items-center gap-1.5 border-2 px-2.5 py-1 text-[10px] font-bold"
-          onClick={() => onLockedFeature('Floors')}
-          style={{ background: panel, borderColor: border }}
-          type="button"
-        >
-          <span aria-hidden>🗺️</span> Floors
-        </button>
-
-        {username ? (
-          <span
-            className="presence-pixel-shadow-sm inline-flex items-center gap-2 border-2 px-2 py-1"
-            style={{ background: panel, borderColor: border }}
-          >
+      <div className={styles.barRight}>
+        {link ? (
+          <span className={`${styles.pill} ${link.className}`} role="status" title={link.title}>
             <span
               aria-hidden
-              className="flex size-6 items-center justify-center border text-xs"
-              style={{ borderColor: border }}
-            >
-              🧑‍💻
-            </span>
-            <span className="text-left leading-tight">
-              <span className="block text-[10px] font-bold">{username}</span>
-              {presenceState ? (
-                <span
-                  className="block text-[9px] font-bold"
-                  style={{ color: STATE_COLOR[presenceState] }}
-                >
-                  {STATE_LABEL[presenceState]}
-                </span>
-              ) : null}
-            </span>
+              className={`${styles.dot} ${connection === 'live' ? styles.dotPulse : ''}`}
+            />
+            {link.label}
           </span>
-        ) : (
-          <Chip>
-            <ConstructionIcon
-              aria-hidden
-              className="size-3"
-              style={{ color: 'var(--presence-danger)' }}
-            />
-            Prototype
-          </Chip>
-        )}
+        ) : null}
+        {reconnectStopped && onReconnect ? (
+          <button
+            className={`${styles.btn} ${styles.btnDanger}`}
+            onClick={onReconnect}
+            type="button"
+          >
+            <RefreshCwIcon aria-hidden className="size-4" /> Reconnect
+          </button>
+        ) : null}
+        {typeof partyCount === 'number' ? (
+          <span className={styles.pill}>
+            <strong>{partyCount}</strong> in room
+          </span>
+        ) : null}
+        {username ? (
+          <span className={styles.pill} title={me?.description}>
+            <span className={styles.faint}>You</span>
+            <strong className="max-w-[10rem] truncate">{username}</strong>
+            {me ? (
+              <span className={`${styles.status} ${meClass}`}>
+                <span aria-hidden>{me.glyph}</span> {me.label}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+        {focusControl}
+        {onEditStatus ? <StatusButton myStatus={myStatus} onEdit={onEditStatus} /> : null}
       </div>
     </header>
   );

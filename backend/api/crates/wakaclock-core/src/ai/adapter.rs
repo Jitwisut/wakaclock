@@ -458,6 +458,9 @@ fn catalog_entry(manifest: AdapterManifest) -> AdapterCatalogEntry {
             AdapterRuntime::Codex,
             vec![
                 "common/emit-event.sh".to_string(),
+                "codex/.codex-plugin/plugin.json".to_string(),
+                "codex/hooks/hooks.json".to_string(),
+                "codex/.agents/plugins/marketplace.json".to_string(),
                 "codex/heartbeat-hook.sh".to_string(),
                 "codex/git-sweep-before.sh".to_string(),
                 "codex/git-sweep-after.sh".to_string(),
@@ -576,12 +579,11 @@ fn claude_code_manifest() -> AdapterManifest {
         transcript_roots: vec![".claude/projects".to_string()],
         payload_schema_versions: vec!["jsonl-v1".to_string()],
         supported_change_kinds: vec![BrokerChangeKind::Create, BrokerChangeKind::Modify],
-        // VERIFICATION.md documents a real live end-to-end sync (2026-08-14).
-        verification: Verification::verified(
-            DateTime::parse_from_rfc3339("2026-08-14T00:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            "claude-code (2026-08-14 live sync)",
+        // The old live check predates the current CLI/plugin bundle. Keep the
+        // integration enabled, but require a fresh exact-runtime certification
+        // before exposing a Verified label again.
+        verification: Verification::scaffold(
+            "historical live evidence is stale; recertify the installed Claude Code and bundle tuple",
         ),
         health_probe: HealthProbe::TranscriptFreshness {
             max_lag_seconds: 300,
@@ -597,9 +599,17 @@ fn codex_manifest() -> AdapterManifest {
             command_names: vec!["codex".to_string()],
             version_arg: Some("--version".to_string()),
         },
-        install: InstallStrategy::ConfigHookBlock {
-            config_path_from_home: ".codex/config.toml".to_string(),
-            marker: "# AtoAxis managed AI attribution hook".to_string(),
+        // Codex releases with the plugin command use the versioned local
+        // marketplace. The setup layer probes that command and keeps the
+        // marker-bounded TOML block only as a compatibility fallback for older
+        // CLI/Desktop builds.
+        install: InstallStrategy::NativePlugin {
+            install_args: vec![
+                "codex".to_string(),
+                "plugin".to_string(),
+                "add".to_string(),
+                "atoaxis-heartbeat@atoaxis-local".to_string(),
+            ],
         },
         native_hooks: NativeHookCapabilities {
             pre_tool_use: true,
@@ -1067,7 +1077,10 @@ mod tests {
             manifest.validate().unwrap();
         }
         // Trust is graded honestly.
-        assert!(registry.get("claude-code").unwrap().is_live_verified());
+        assert_eq!(
+            registry.get("claude-code").unwrap().effective_status(),
+            VerificationStatus::Scaffold
+        );
         assert_eq!(
             registry.get("codex").unwrap().effective_status(),
             VerificationStatus::Scaffold
@@ -1157,7 +1170,7 @@ mod tests {
             .filter(|m| m.is_live_verified())
             .map(|m| m.id.as_str())
             .collect();
-        assert_eq!(verified, vec!["claude-code"]);
+        assert!(verified.is_empty());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 'use client';
 
-import type * as React from 'react';
+import * as React from 'react';
 
 import {
+  HeadphonesIcon,
   MaximizeIcon,
   MicIcon,
   MicOffIcon,
@@ -10,7 +11,6 @@ import {
   MinusIcon,
   MonitorUpIcon,
   PlusIcon,
-  ShirtIcon,
   SquareArrowOutUpRightIcon,
   VideoIcon,
   VideoOffIcon,
@@ -18,140 +18,145 @@ import {
 
 import type { OfficeChrome } from '@/hooks/use-office-chrome';
 
-const panel = 'var(--presence-panel)';
-const border = 'var(--presence-border)';
-const muted = 'var(--presence-text-muted)';
-const live = 'var(--presence-live)';
-const danger = 'var(--presence-danger)';
-const headingFont = 'var(--font-presence-heading)';
+import styles from './presence-chrome.module.css';
 
 interface PixelOfficeDockProps {
   canReturnToDesk: boolean;
   chrome: OfficeChrome;
   fullscreenTargetRef: React.RefObject<HTMLElement | null>;
+  /** False when the server has no media backend configured (`office.media_available`). */
+  mediaAvailable: boolean;
   mediaReady?: boolean;
-  onLockedFeature: (label: string) => void;
+  mediaStatus: string;
   onReturnToDesk: () => void;
 }
 
-function DockButton({
-  active,
-  disabled,
-  children,
-  label,
+type IconComponent = React.ComponentType<{ 'aria-hidden'?: boolean; className?: string }>;
+
+interface MediaToggleSpec {
+  hideTextOnMobile?: boolean;
+  offAria: string;
+  offIcon: IconComponent;
+  offText: string;
+  onAria: string;
+  onIcon: IconComponent;
+  onText: string;
+}
+
+const MIC: MediaToggleSpec = {
+  offAria: 'Unmute microphone',
+  offIcon: MicOffIcon,
+  offText: 'Mic off',
+  onAria: 'Mute microphone',
+  onIcon: MicIcon,
+  onText: 'Mic on',
+};
+const CAMERA: MediaToggleSpec = {
+  hideTextOnMobile: true,
+  offAria: 'Turn camera on',
+  offIcon: VideoOffIcon,
+  offText: 'Cam off',
+  onAria: 'Turn camera off',
+  onIcon: VideoIcon,
+  onText: 'Cam on',
+};
+const SCREEN: MediaToggleSpec = {
+  hideTextOnMobile: true,
+  offAria: 'Share screen',
+  offIcon: MonitorUpIcon,
+  offText: 'Screen',
+  onAria: 'Stop sharing screen',
+  onIcon: MonitorUpIcon,
+  onText: 'Sharing',
+};
+
+/** A media control stays usable while on (so it can always be turned off). */
+function MediaToggle({
+  mediaReady,
+  on,
   onClick,
-  tone = 'neutral',
+  spec,
 }: {
-  active?: boolean;
-  children: React.ReactNode;
-  disabled?: boolean;
-  label: string;
+  mediaReady: boolean;
+  on: boolean;
   onClick: () => void;
-  tone?: 'danger' | 'neutral';
+  spec: MediaToggleSpec;
 }) {
-  const background = active && tone === 'danger' ? 'rgba(255, 68, 56, 0.14)' : panel;
-  const borderColor = active && tone === 'danger' ? danger : border;
   return (
     <button
-      aria-label={label}
-      aria-pressed={active}
-      className="presence-pixel-shadow-sm presence-pixel-press flex items-center gap-2 border-2 px-3 py-2 text-xs font-bold"
-      disabled={disabled}
+      aria-label={on ? spec.onAria : spec.offAria}
+      aria-pressed={on}
+      className={`${styles.btn} ${on ? '' : styles.btnGhost}`}
+      disabled={!mediaReady && !on}
       onClick={onClick}
-      style={{ background, borderColor }}
-      title={label}
       type="button"
     >
-      {children}
+      {React.createElement(on ? spec.onIcon : spec.offIcon, {
+        'aria-hidden': true,
+        className: 'size-4',
+      })}
+      <span className={spec.hideTextOnMobile ? 'hidden sm:inline' : undefined}>
+        {on ? spec.onText : spec.offText}
+      </span>
     </button>
   );
 }
 
+/**
+ * In-room controls. Media buttons only appear when the server can actually carry pod
+ * audio/video; otherwise the dock says so instead of showing controls that cannot work.
+ */
 export function PixelOfficeDock({
   canReturnToDesk,
-  mediaReady = false,
   chrome,
   fullscreenTargetRef,
-  onLockedFeature,
+  mediaAvailable,
+  mediaReady = false,
+  mediaStatus,
   onReturnToDesk,
 }: PixelOfficeDockProps) {
+  let mediaLabel = 'Pod audio is not set up on this server';
+  if (mediaAvailable) mediaLabel = mediaReady ? 'Pod audio connected' : mediaStatus;
+
   return (
-    <footer
-      className="presence-pixel-shadow flex flex-wrap items-center justify-between gap-3 border-2 p-3"
-      style={{ background: 'var(--presence-bg-soft)', borderColor: border }}
-    >
-      <div className="flex items-center gap-2">
+    <footer aria-label="Room controls" className={styles.dock}>
+      <div className={styles.dockGroup}>
         <span
-          aria-hidden
-          className="flex size-9 items-center justify-center border-2 text-[10px] font-bold"
-          style={{ background: panel, borderColor: live, color: live, fontFamily: headingFont }}
+          className={`${styles.pill} ${mediaReady ? styles.coding : styles.offline}`}
+          role="status"
         >
-          POD
+          <HeadphonesIcon aria-hidden className="size-3.5" />
+          {mediaLabel}
         </span>
-        <div className="leading-tight">
-          <p className="text-xs font-bold" style={{ fontFamily: headingFont }}>
-            Pod audio
-          </p>
-          <p className="text-[10px] font-bold" style={{ color: live }}>
-            {mediaReady ? '● Connected to your pod' : 'Join a pod · connect media'}
-          </p>
-        </div>
+        {mediaAvailable ? (
+          <>
+            <MediaToggle
+              mediaReady={mediaReady}
+              on={chrome.mic}
+              onClick={chrome.toggleMic}
+              spec={MIC}
+            />
+            <MediaToggle
+              mediaReady={mediaReady}
+              on={chrome.camera}
+              onClick={chrome.toggleCamera}
+              spec={CAMERA}
+            />
+            <MediaToggle
+              mediaReady={mediaReady}
+              on={chrome.screenShare}
+              onClick={chrome.toggleScreenShare}
+              spec={SCREEN}
+            />
+          </>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <DockButton
-          active={!chrome.mic}
-          disabled={!mediaReady && !chrome.mic}
-          label={chrome.mic ? 'Mute microphone' : 'Unmute microphone'}
-          onClick={chrome.toggleMic}
-          tone="danger"
-        >
-          {chrome.mic ? (
-            <MicIcon aria-hidden className="size-4" style={{ color: live }} />
-          ) : (
-            <MicOffIcon aria-hidden className="size-4" style={{ color: danger }} />
-          )}
-          <span>{chrome.mic ? 'Mic on' : 'Muted'}</span>
-        </DockButton>
-
-        <DockButton
-          active={chrome.camera}
-          disabled={!mediaReady && !chrome.camera}
-          label={chrome.camera ? 'Turn camera off' : 'Turn camera on'}
-          onClick={chrome.toggleCamera}
-        >
-          {chrome.camera ? (
-            <VideoIcon aria-hidden className="size-4" style={{ color: live }} />
-          ) : (
-            <VideoOffIcon aria-hidden className="size-4" style={{ color: muted }} />
-          )}
-          <span className="hidden sm:inline">{chrome.camera ? 'Cam on' : 'Cam off'}</span>
-        </DockButton>
-
-        <DockButton
-          active={chrome.screenShare}
-          disabled={!mediaReady && !chrome.screenShare}
-          label={chrome.screenShare ? 'Stop sharing screen' : 'Share screen'}
-          onClick={chrome.toggleScreenShare}
-        >
-          <MonitorUpIcon
-            aria-hidden
-            className="size-4"
-            style={{ color: chrome.screenShare ? live : muted }}
-          />
-          <span className="hidden sm:inline">{chrome.screenShare ? 'Sharing' : 'Screen'}</span>
-        </DockButton>
-
-        <DockButton label="Edit sprite" onClick={() => onLockedFeature('Sprite customizer')}>
-          <ShirtIcon aria-hidden className="size-4" style={{ color: muted }} />
-          <span className="hidden md:inline">Edit sprite</span>
-        </DockButton>
-
+      <div className={styles.dockGroup}>
         <button
-          className="presence-pixel-shadow-sm presence-pixel-press flex items-center gap-1.5 border-2 px-3 py-2 text-xs font-bold text-white disabled:opacity-45"
+          className={`${styles.btn} ${styles.btnPrimary}`}
           disabled={!canReturnToDesk}
           onClick={onReturnToDesk}
-          style={{ background: danger, borderColor: border }}
           title={
             canReturnToDesk
               ? 'Walk back to your co-working table'
@@ -160,40 +165,31 @@ export function PixelOfficeDock({
           type="button"
         >
           <SquareArrowOutUpRightIcon aria-hidden className="size-4" />
-          <span>My desk</span>
+          My desk
         </button>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <div
-          className="flex items-center gap-1 border-2 p-1"
-          style={{ background: panel, borderColor: border }}
-        >
+        <div className={styles.zoom}>
           <button
             aria-label="Zoom out"
-            className="presence-pixel-press flex size-6 items-center justify-center"
+            className={`${styles.btn} ${styles.btnGhost} ${styles.btnIcon}`}
             onClick={chrome.zoomOut}
             type="button"
           >
-            <MinusIcon aria-hidden className="size-3" />
+            <MinusIcon aria-hidden className="size-3.5" />
           </button>
-          <span className="px-1 text-[10px] font-bold" style={{ fontFamily: headingFont }}>
-            {chrome.zoomPercent}%
-          </span>
+          <span aria-live="polite">{chrome.zoomPercent}%</span>
           <button
             aria-label="Zoom in"
-            className="presence-pixel-press flex size-6 items-center justify-center"
+            className={`${styles.btn} ${styles.btnGhost} ${styles.btnIcon}`}
             onClick={chrome.zoomIn}
             type="button"
           >
-            <PlusIcon aria-hidden className="size-3" />
+            <PlusIcon aria-hidden className="size-3.5" />
           </button>
         </div>
         <button
           aria-label={chrome.isFullscreen ? 'Exit full screen' : 'Enter full screen'}
-          className="presence-pixel-shadow-sm presence-pixel-press flex size-9 items-center justify-center border-2"
+          className={`${styles.btn} ${styles.btnIcon}`}
           onClick={() => chrome.toggleFullscreen(fullscreenTargetRef.current)}
-          style={{ background: panel, borderColor: border }}
           title={chrome.isFullscreen ? 'Exit full screen' : 'Enter full screen'}
           type="button"
         >

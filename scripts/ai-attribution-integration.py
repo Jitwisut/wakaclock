@@ -23,6 +23,7 @@ import os
 import platform
 import queue
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -105,11 +106,13 @@ def base_env(home_dir: Path, server_url: str) -> dict[str, str]:
     env = dict(os.environ)
     env["HOME"] = str(home_dir)
     env["USERPROFILE"] = str(home_dir)
+    env["CODEX_HOME"] = str(home_dir / ".codex")
+    env["CLAUDE_CONFIG_DIR"] = str(home_dir / ".claude")
+    env["XDG_CONFIG_HOME"] = str(home_dir / ".config")
     env["WAKACLOCK_SERVER_URL"] = server_url
     env["WAKACLOCK_API_KEY"] = "integration-test-key"
-    # Skip broker-service discovery; fall back straight to the local durable store,
-    # which still delivers to WAKACLOCK_SERVER_URL. No broker service is running here.
-    env["WAKACLOCK_BROKER_MODE"] = "direct"
+    # Producers persist to the local inbox; a later bounded sync drains work that
+    # was deferred for editor correlation. No background broker is expected.
     # The freshly-built debug binary is not on PATH; the shell hook scripts (see
     # extensions/ai-agents/*/scripts/) all resolve WAKACLOCK_CLI_PATH before falling
     # back to a bare `wakaclock` lookup.
@@ -184,11 +187,28 @@ def scenario_shell_mutation(server_url: str, agent: str, provider: str | None, m
         check(after.returncode == 0, f"[{agent}] ai tool-after failed: {after.stderr}")
 
         heartbeats = drain_heartbeats()
+        if agent == "codex":
+            # A terminal-only Codex event waits briefly for editor evidence. The
+            # hook process has exited; validate durability, then explicitly run
+            # the next sync after the normal capture-drain window above. Do not
+            # wait for a retired daemon or rewrite the queue's retry timestamps.
+            with sqlite3.connect(Path(home_dir) / ".wakaclock" / "broker.db") as store:
+                pending = store.execute(
+                    "SELECT status, editor_wait_until FROM broker_events"
+                ).fetchall()
+            check(len(pending) == 1 and pending[0][1] is not None,
+                  "[codex] terminal event was not durably deferred for editor correlation")
+            sync = run_cli(["sync", "--agent", "codex", "--json"], cwd=repo, env=env)
+            check(sync.returncode == 0, "[codex] bounded sync failed")
+            heartbeats.extend(drain_heartbeats())
+            replay = run_cli(["sync", "--agent", "codex", "--json"], cwd=repo, env=env)
+            check(replay.returncode == 0, "[codex] replay sync failed")
+            heartbeats.extend(drain_heartbeats())
         # ai_change_id groups every file a single tool call touched under one shared
         # id (see tool_snapshot.rs); ai_event_id is a content-hash-derived id that has
         # no relationship to tool_event_id's own spelling.
         matching = [h for h in heartbeats if h.get("ai_change_id") == tool_event_id]
-        check(len(matching) >= 1, f"[{agent}] expected at least one heartbeat, got {len(heartbeats)}: {heartbeats}")
+        check(len(matching) == 1, f"[{agent}] expected exactly one matching heartbeat, got {len(matching)}")
         heartbeat = matching[0]
         # Shell snapshots prove that an AI tool operation changed the file, but
         # they do not provide verified authorship. The client therefore keeps the

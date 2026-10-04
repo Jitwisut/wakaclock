@@ -14,9 +14,9 @@ import {
   createMarketingMetadata,
   localizedPath,
   ORGANIZATION,
+  PUBLIC_EVIDENCE_URL,
   SITE_NAME,
   type SiteLocale,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 import { AnswerGuide, hasAnswerGuide } from './answer-guide';
@@ -76,7 +76,8 @@ function renderBlock(block: MarketingBlock, key: string): ReactNode {
         </CodeBlock>
       );
     }
-    case 'email': {
+    // Email is the remaining member of the closed MarketingBlock union.
+    default: {
       return (
         <p key={key} style={MUTED_TEXT}>
           {block.before}
@@ -86,9 +87,6 @@ function renderBlock(block: MarketingBlock, key: string): ReactNode {
           {block.after}
         </p>
       );
-    }
-    default: {
-      return null;
     }
   }
 }
@@ -157,7 +155,9 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
           ) : null}
           {hasAnswerGuide(copy.breadcrumbs.at(-1)?.path ?? '', locale) ? (
             <li>
-              <a href="#answer-guide">Key takeaways and sources</a>
+              <a href="#answer-guide">
+                {locale === 'th' ? 'สรุปและแหล่งอ้างอิง' : 'Key takeaways and sources'}
+              </a>
             </li>
           ) : null}
         </ol>
@@ -285,8 +285,8 @@ export function LocalizedMarketingPage({
             <a href={localizedPath(locale, '/about')}>
               {locale === 'th' ? 'รู้จักทีมผู้พัฒนา' : 'Meet the team'}
             </a>
-            <a href={SOURCE_REPOSITORY_URL} rel="noopener noreferrer" target="_blank">
-              {locale === 'th' ? 'ดูซอร์สโค้ดผลิตภัณฑ์' : 'Explore the product source'}
+            <a href={localizedPath(locale, PUBLIC_EVIDENCE_URL)}>
+              {locale === 'th' ? 'อ่านเอกสารผลิตภัณฑ์' : 'Read product documentation'}
             </a>
             <a href={localizedPath(locale, '/contact')}>
               {locale === 'th' ? 'สอบถามข้อมูล' : 'Ask a question'}

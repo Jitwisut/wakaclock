@@ -6366,7 +6366,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wakaclock-ast"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dashmap 6.2.1",
  "parking_lot",
@@ -6434,10 +6434,11 @@ dependencies = [
 
 [[package]]
 name = "wakaclock-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
+ "chrono-tz",
  "clap",
  "dirs",
  "fs2",
@@ -6459,7 +6460,7 @@ dependencies = [
 
 [[package]]
 name = "wakaclock-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6475,6 +6476,7 @@ dependencies = [
  "sha2 0.10.9",
  "sysinfo",
  "thiserror 1.0.69",
+ "tokio",
  "toml",
  "tracing",
  "uuid",
@@ -6482,7 +6484,7 @@ dependencies = [
 
 [[package]]
 name = "wakaclock-ls"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "hostname",
@@ -6497,7 +6499,7 @@ dependencies = [
 
 [[package]]
 name = "wakaclock-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "argon2",

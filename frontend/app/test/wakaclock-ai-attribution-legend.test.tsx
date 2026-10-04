@@ -16,6 +16,18 @@ const PERCENTS = {
 };
 
 describe('AiAttributionLegend', () => {
+  it('distinguishes unavailable shares from a measured zero', () => {
+    render(
+      <AiAttributionLegend
+        aiInferredPercent={null}
+        aiVerifiedPercent={0}
+        humanPercent={null}
+        unknownPercent={null}
+      />
+    );
+    expect(screen.getAllByText('Not available')).toHaveLength(3);
+    expect(screen.getByText('0% of heartbeats')).toBeVisible();
+  });
   it('names every attribution class and the evidence rule that produces it', () => {
     render(<AiAttributionLegend {...PERCENTS} />);
 
@@ -26,7 +38,7 @@ describe('AiAttributionLegend', () => {
 
     expect(screen.getByText(/native agent hook or MCP tool/i)).toBeInTheDocument();
     expect(screen.getByText(/inside the correlation window/i)).toBeInTheDocument();
-    expect(screen.getByText(/positive editor keystroke or save/i)).toBeInTheDocument();
+    expect(screen.getByText(/positive editor activity/i)).toBeInTheDocument();
     expect(screen.getByText(/authorship could not be proven/i)).toBeInTheDocument();
   });
 

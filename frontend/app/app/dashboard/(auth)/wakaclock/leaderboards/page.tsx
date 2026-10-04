@@ -14,7 +14,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
-import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
+import { RequiresFeature } from '@/components/wakaclock/requires-feature';
 import {
   addLeaderboardMember,
   createLeaderboard,
@@ -26,7 +26,6 @@ import { formatUnixSeconds } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { Leaderboard } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
-
 
 /** Mirrors the validation in services/leaderboards.rs. */
 const METRICS = [
@@ -47,8 +46,7 @@ function describe(board: Leaderboard): string {
   return [metric, period, board.language, board.country].filter(Boolean).join(' · ');
 }
 
-function MemberList({ board }: { board: Leaderboard }) {
-  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
+function MemberList({ board, userId }: { board: Leaderboard; userId: string }) {
   const queryClient = useQueryClient();
   const [memberId, setMemberId] = React.useState('');
 
@@ -87,7 +85,7 @@ function MemberList({ board }: { board: Leaderboard }) {
       <QueryState
         emptyDescription="No members yet."
         error={error}
-        isEmpty={!isLoading && !error && (data?.length ?? 0) === 0}
+        isEmpty={!isLoading && !error && data?.length === 0}
         isLoading={isLoading}
         skeletonClassName="h-16 w-full"
       >
@@ -258,7 +256,7 @@ function LeaderboardsPanel() {
                 </div>
               </CardHeader>
               <CardContent>
-                <MemberList board={board} />
+                <MemberList board={board} userId={userId} />
               </CardContent>
             </Card>
           ))}
@@ -276,9 +274,9 @@ export default function LeaderboardsPage() {
         title="Leaderboards"
       />
       <RequireUser>
-        <RequiresPostgres feature="Leaderboards">
+        <RequiresFeature feature="Leaderboards" featureKey="private_leaderboards">
           <LeaderboardsPanel />
-        </RequiresPostgres>
+        </RequiresFeature>
       </RequireUser>
     </div>
   );

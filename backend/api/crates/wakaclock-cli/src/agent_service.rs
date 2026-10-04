@@ -1,14 +1,14 @@
-//! Per-user service lifecycle for the always-on AI Activity Broker.
+//! Diagnostics and cleanup for retired per-user AI broker services.
 //!
-//! The watcher deliberately has a small dependency footprint: filesystem scans are
-//! bounded by the broker worker and transcript parsers, while these manifests let the OS
-//! restart the same binary after login/reboot without administrator privileges.
+//! Capture and delivery use bounded sync invocations. Retain status and uninstall
+//! support for manifests left by older releases; do not install a background service.
 
 use fs2::FileExt;
 use serde::Serialize;
+#[cfg(test)]
+use std::io::Write;
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -18,7 +18,6 @@ use std::{
 const SERVICE_LABEL: &str = "com.atoaxis.wakaclock.agent";
 #[cfg(target_os = "windows")]
 const TASK_NAME: &str = "AtoAxis\\WakaclockAgent";
-const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct AgentServiceReport {
@@ -32,6 +31,7 @@ pub struct AgentServiceReport {
     pub last_error: Option<String>,
 }
 
+#[cfg(test)]
 pub struct AgentLock {
     // Keep the descriptor open for the whole broker lifetime.  The OS-level lock
     // is the ownership boundary; a PID text file alone races during launchd/systemd
@@ -39,11 +39,8 @@ pub struct AgentLock {
     _file: fs::File,
 }
 
+#[cfg(test)]
 impl AgentLock {
-    pub fn acquire() -> Result<Self, String> {
-        Self::acquire_at(lock_path())
-    }
-
     /// planai2.md Phase 0.2: the singleton-lock body, parameterised on the lock
     /// path so the "a second broker cannot start while the first holds the lock,
     /// and a crashed broker's stale lock is reclaimed" invariant is unit-testable
@@ -83,28 +80,6 @@ impl AgentLock {
 // `AgentLock` deliberately has no custom Drop implementation: dropping the held
 // `fs::File` closes the descriptor and releases the OS lock, while the path stays
 // in place so a concurrent restart can acquire it without a delete/recreate race.
-
-pub fn append_log(message: &str) {
-    let path = log_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::metadata(&path)
-        .map(|metadata| metadata.len() > MAX_LOG_BYTES)
-        .unwrap_or(false)
-    {
-        let rotated = path.with_extension("log.1");
-        let _ = fs::remove_file(&rotated);
-        let _ = fs::rename(&path, rotated);
-    }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .unwrap_or_default();
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{now} {message}");
-    }
-}
 
 pub fn record_scan(success: bool, heartbeat_at: Option<u64>, error: Option<&str>) {
     let path = state_path();
@@ -155,6 +130,7 @@ pub fn record_heartbeat() {
 /// out to launchctl / systemctl / schtasks. There is exactly one `broker run`
 /// invocation in every platform's output.
 #[cfg(target_os = "macos")]
+#[cfg(test)]
 fn manifest_content(executable: &str, log_path: &str) -> String {
     // LaunchAgents do not inherit HOME reliably (launchd only supplies a small
     // default environment).  The broker resolves all per-user state through
@@ -176,20 +152,23 @@ fn manifest_content(executable: &str, log_path: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!(
-        "[Unit]\nDescription=Wakaclock AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=AtoAxis AI Activity Broker\nAfter=graphical-session.target\n\n[Service]\nType=simple\nExecStart={} broker run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
         shell_escape(executable)
     )
 }
 
 #[cfg(target_os = "windows")]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!("{executable} broker run\r\n")
 }
 
 // A stub so the pure test below still compiles on unsupported targets.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[cfg(test)]
 fn manifest_content(executable: &str, _log_path: &str) -> String {
     format!("{executable} broker run\n")
 }
@@ -201,113 +180,6 @@ fn manifest_content(executable: &str, _log_path: &str) -> String {
 #[cfg(target_os = "macos")]
 fn service_executable_path() -> PathBuf {
     wakaclock_dir().join("bin").join("wakaclock")
-}
-
-fn service_executable() -> Result<PathBuf, String> {
-    let current = std::env::current_exe().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "macos")]
-    {
-        let target = service_executable_path();
-        let current_identity = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
-        let target_identity = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
-        if current_identity != target_identity {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            let permissions = fs::metadata(&current)
-                .map_err(|error| error.to_string())?
-                .permissions();
-            let temporary = target.with_file_name(format!("wakaclock.tmp-{}", std::process::id()));
-            fs::copy(&current, &temporary).map_err(|error| {
-                format!(
-                    "could not copy wakaclock runtime to {}: {error}",
-                    target.display()
-                )
-            })?;
-            fs::set_permissions(&temporary, permissions).map_err(|error| error.to_string())?;
-            fs::rename(&temporary, &target).map_err(|error| {
-                format!(
-                    "could not activate wakaclock runtime at {}: {error}",
-                    target.display()
-                )
-            })?;
-        }
-        Ok(target)
-    }
-    #[cfg(not(target_os = "macos"))]
-    Ok(current)
-}
-
-pub fn install() -> Result<AgentServiceReport, String> {
-    let executable = service_executable()?;
-    let manifest = manifest_path();
-    if let Some(parent) = manifest.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let content = manifest_content(&executable.to_string_lossy(), &log_path().to_string_lossy());
-
-    #[cfg(target_os = "macos")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        let domain = format!("gui/{}", uid());
-        // Idempotent reinstall: an absent prior service is normal. Capture bootout's
-        // stderr so macOS does not print the misleading "Boot-out failed: 5" warning
-        // even though the subsequent bootstrap succeeds.
-        let _ = Command::new("launchctl")
-            .args(["bootout", &domain, manifest.to_string_lossy().as_ref()])
-            .output();
-        let status = Command::new("launchctl")
-            .args(["bootstrap", &domain, manifest.to_string_lossy().as_ref()])
-            .status()
-            .map_err(|error| error.to_string())?;
-        if !status.success() {
-            return Err(format!("launchctl bootstrap failed with {status}"));
-        }
-        let _ = Command::new("launchctl")
-            .args(["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")])
-            .status();
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("macOS", manifest, true, running, None));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        run_command("systemctl", &["--user", "daemon-reload"])?;
-        run_command(
-            "systemctl",
-            &[
-                "--user",
-                "enable",
-                "--now",
-                "atoaxis-wakaclock-agent.service",
-            ],
-        )?;
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("Linux", manifest, true, running, None));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        fs::write(&manifest, &content).map_err(|error| error.to_string())?;
-        let command = format!("\"{}\" broker run", executable.display());
-        run_command(
-            "schtasks",
-            &[
-                "/Create", "/SC", "ONLOGON", "/TN", TASK_NAME, "/TR", &command, "/F",
-            ],
-        )?;
-        let _ = Command::new("schtasks")
-            .args(["/Run", "/TN", TASK_NAME])
-            .status();
-        let running = running_probe().unwrap_or(false);
-        return Ok(report("Windows", manifest, true, running, None));
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    let _ = (&content, &manifest);
-    #[allow(unreachable_code)]
-    Err("unsupported operating system".to_string())
 }
 
 /// planai2.md Phase 0.1: an older CLI wrote this service manifest to invoke the
@@ -330,18 +202,6 @@ pub fn manifest_uses_legacy_alias() -> bool {
     fs::read_to_string(manifest_path())
         .map(|content| content_uses_legacy_alias(&content))
         .unwrap_or(false)
-}
-
-/// Rewrite a legacy-alias service manifest to the current `broker run` form and
-/// re-register it with the OS. Returns `Ok(false)` (a no-op) when the manifest is
-/// already current or absent. Non-destructive: the generated manifest has no user
-/// configuration to preserve, so this is a plain `install()`.
-pub fn migrate_legacy_service_manifest() -> Result<bool, String> {
-    if !manifest_uses_legacy_alias() && !manifest_points_at_stale_binary() {
-        return Ok(false);
-    }
-    install()?;
-    Ok(true)
 }
 
 /// planai2.md Phase 0.2: the executable path baked into a service manifest, so a
@@ -416,7 +276,7 @@ pub fn uninstall() -> Result<AgentServiceReport, String> {
         let domain = format!("gui/{}", uid());
         let _ = Command::new("launchctl")
             .args(["bootout", &domain, manifest.to_string_lossy().as_ref()])
-            .status();
+            .output();
     }
     #[cfg(target_os = "linux")]
     {
@@ -427,53 +287,22 @@ pub fn uninstall() -> Result<AgentServiceReport, String> {
                 "--now",
                 "atoaxis-wakaclock-agent.service",
             ])
-            .status();
+            .output();
     }
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("schtasks")
             .args(["/Delete", "/TN", TASK_NAME, "/F"])
-            .status();
+            .output();
     }
     let _ = fs::remove_file(&manifest);
     Ok(report(platform_name(), manifest, false, false, None))
 }
 
-pub fn start() -> Result<AgentServiceReport, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let domain = format!("gui/{}", uid());
-        run_command(
-            "launchctl",
-            &["kickstart", "-k", &format!("{domain}/{SERVICE_LABEL}")],
-        )?;
-    }
-    #[cfg(target_os = "linux")]
-    run_command(
-        "systemctl",
-        &["--user", "start", "atoaxis-wakaclock-agent.service"],
-    )?;
-    #[cfg(target_os = "windows")]
-    run_command("schtasks", &["/Run", "/TN", TASK_NAME])?;
-    Ok(report(platform_name(), manifest_path(), true, true, None))
-}
-
 pub fn stop() -> Result<AgentServiceReport, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let domain = format!("gui/{}", uid());
-        let _ = Command::new("launchctl")
-            .args(["kill", "SIGTERM", &format!("{domain}/{SERVICE_LABEL}")])
-            .status();
-    }
-    #[cfg(target_os = "linux")]
-    run_command(
-        "systemctl",
-        &["--user", "stop", "atoaxis-wakaclock-agent.service"],
-    )?;
-    #[cfg(target_os = "windows")]
-    run_command("schtasks", &["/End", "/TN", TASK_NAME])?;
-    Ok(report(platform_name(), manifest_path(), true, false, None))
+    let mut retired = uninstall()?;
+    retired.message = Some("legacy background service removed".to_string());
+    Ok(retired)
 }
 
 pub fn status() -> AgentServiceReport {
@@ -669,19 +498,8 @@ fn uid() -> String {
     })
 }
 
-fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .map_err(|error| format!("failed to run {program}: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{program} exited with {status}"))
-    }
-}
-
 #[cfg(target_os = "macos")]
+#[cfg(test)]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -692,6 +510,7 @@ fn xml_escape(value: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg(test)]
 fn shell_escape(value: &str) -> String {
     if value
         .chars()

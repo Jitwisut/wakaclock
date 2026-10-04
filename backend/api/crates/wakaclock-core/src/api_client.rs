@@ -9,14 +9,16 @@ use crate::{
     config::Config,
     error::{AppError, AppResult},
     heartbeat::{Heartbeat, DEDUP_WINDOW_SECONDS},
-    queue::{Queue, QueueScope},
+    queue::{DeliveryFailureRecord, Queue, QueueScope},
 };
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, fs, path::PathBuf};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusBarSnapshot {
@@ -57,6 +59,10 @@ pub struct StatusBarSnapshot {
     pub active_coverage: Option<String>,
     #[serde(default)]
     pub wakatime_compatible_seconds: Option<f64>,
+    /// Opaque, server-issued account identity for queue ownership. Stable across
+    /// API-key rotation and different for every account; older servers omit it.
+    #[serde(default)]
+    pub queue_owner_id: Option<String>,
 }
 
 /// Why the server last refused a heartbeat, and when. Persisted so a refusal outlives the
@@ -65,6 +71,28 @@ pub struct StatusBarSnapshot {
 pub struct DeliveryFailure {
     pub at: f64,
     pub message: String,
+    /// Classified from the typed error when the failure was recorded. Records written
+    /// by older binaries omit it and fall back to [`classify_delivery_failure`]; a
+    /// value this binary does not know (written by a newer one) is read as absent
+    /// rather than discarding the whole record.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_known_failure_kind"
+    )]
+    pub kind: Option<DeliveryFailureKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+}
+
+fn deserialize_known_failure_kind<'de, D>(
+    deserializer: D,
+) -> Result<Option<DeliveryFailureKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// `wakaclock doctor ai` reports a delivery refusal split into `401` (bad/expired
@@ -72,13 +100,17 @@ pub struct DeliveryFailure {
 /// failure), a network/transport problem, and a request the server rejected as
 /// malformed. Collapsing these hides the one case — 402 — where local capture is
 /// working perfectly and only billing is wrong.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryFailureKind {
+    #[serde(rename = "auth_401")]
     Auth401,
+    #[serde(rename = "payment_402")]
     Payment402,
     Network,
     Validation,
+    /// 408, 429 or 5xx: the server answered but asked the client to retry later.
+    ServerError,
     Other,
 }
 
@@ -89,37 +121,155 @@ impl DeliveryFailureKind {
             Self::Payment402 => "payment_402",
             Self::Network => "network",
             Self::Validation => "validation",
+            Self::ServerError => "server_error",
             Self::Other => "other",
+        }
+    }
+
+    /// Classify an HTTP status the server actually returned.
+    pub fn from_http_status(status: u16) -> Self {
+        match status {
+            401 | 403 => Self::Auth401,
+            402 => Self::Payment402,
+            400 | 422 => Self::Validation,
+            408 | 429 | 500..=599 => Self::ServerError,
+            _ => Self::Other,
+        }
+    }
+
+    /// Classify a typed delivery/probe error. This is the source of truth: a
+    /// transport error without an HTTP response is `Network` no matter what its
+    /// URL or message happens to contain.
+    pub fn from_error(error: &AppError) -> Self {
+        match error {
+            AppError::Http(inner) => inner
+                .status()
+                .map(|status| Self::from_http_status(status.as_u16()))
+                .unwrap_or(Self::Network),
+            AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. } => {
+                Self::from_http_status(*status)
+            }
+            AppError::Auth(_) => Self::Auth401,
+            AppError::Validation(_) => Self::Validation,
+            _ => Self::Other,
         }
     }
 }
 
-/// Classify a recorded refusal message. The messages come from `AppError`'s
-/// `Display` (`"HTTP status <code>: <body>"`) and from `reqwest` transport errors,
-/// so this matches on the shapes those produce rather than parsing structured data.
+/// Scope used for a refusal migrated from the pre-scope JSON file. Deliberately not
+/// a real origin/owner so it can never match a live scope's lookup.
+pub const LEGACY_UNSCOPED_DESTINATION: &str = "legacy_unscoped";
+pub const LEGACY_UNSCOPED_OWNER: &str = "legacy_unscoped";
+
+/// Short stable code for a delivery failure. UI decisions use `kind`/`http_status`;
+/// this narrows "why" without exposing a free-form message.
+pub fn delivery_message_code(error: &AppError) -> &'static str {
+    match error {
+        AppError::Http(inner) => {
+            if inner.is_timeout() {
+                "timeout"
+            } else if inner.is_connect() {
+                "connect_failed"
+            } else if inner.status().is_some() {
+                "http_status"
+            } else {
+                "transport_failed"
+            }
+        }
+        AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => "http_status",
+        AppError::Auth(_) => "credential_rejected",
+        AppError::Validation(_) => "payload_rejected",
+        AppError::Protocol(_) => "protocol_mismatch",
+        _ => "unknown",
+    }
+}
+
+/// A server `queue_owner_id` is a lowercase SHA-256 hex digest; anything else is
+/// ignored rather than trusted as ownership proof.
+fn is_valid_queue_owner_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The HTTP status carried by an error, when the server returned one.
+pub fn http_status_of(error: &AppError) -> Option<u16> {
+    match error {
+        AppError::Http(inner) => inner.status().map(|status| status.as_u16()),
+        AppError::HttpStatus { status, .. } | AppError::HttpStatusRetry { status, .. } => {
+            Some(*status)
+        }
+        AppError::Auth(_) => Some(401),
+        _ => None,
+    }
+}
+
+/// User-facing connection state shared by `wakaclock today --json`, `verify` and
+/// editor clients. Decisions are made on this enum, never on free-form messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionState {
+    Online,
+    Offline,
+    AuthRejected,
+    SubscriptionRequired,
+    RetryableServerError,
+    ValidationRejected,
+    UnknownError,
+}
+
+impl ConnectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::AuthRejected => "auth_rejected",
+            Self::SubscriptionRequired => "subscription_required",
+            Self::RetryableServerError => "retryable_server_error",
+            Self::ValidationRejected => "validation_rejected",
+            Self::UnknownError => "unknown_error",
+        }
+    }
+
+    pub fn from_failure_kind(kind: DeliveryFailureKind) -> Self {
+        match kind {
+            DeliveryFailureKind::Network => Self::Offline,
+            DeliveryFailureKind::Auth401 => Self::AuthRejected,
+            DeliveryFailureKind::Payment402 => Self::SubscriptionRequired,
+            DeliveryFailureKind::ServerError => Self::RetryableServerError,
+            DeliveryFailureKind::Validation => Self::ValidationRejected,
+            DeliveryFailureKind::Other => Self::UnknownError,
+        }
+    }
+}
+
+/// Classify a recorded failure message from a record that predates the typed
+/// `kind` field. The messages come from `AppError`'s `Display`
+/// (`"HTTP status <code>: <body>"`, `"HTTP error: <reqwest error>"`), so a status
+/// code is read only from those explicit shapes — never from an arbitrary "402"
+/// substring, which a URL port such as `:40213` would otherwise match.
 pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("402")
-        || lower.contains("trial expired")
-        || lower.contains("subscription inactive")
-    {
+    if let Some(status) = http_status_in_message(&lower) {
+        return DeliveryFailureKind::from_http_status(status);
+    }
+    if lower.contains("trial expired") || lower.contains("subscription inactive") {
         DeliveryFailureKind::Payment402
-    } else if lower.contains("401")
-        || lower.contains("unauthorized")
+    } else if lower.contains("unauthorized")
         || lower.contains("invalid api key")
         || lower.contains("api key was rejected")
         || lower.contains("api key rejected")
         || lower.contains("authentication failed")
     {
         DeliveryFailureKind::Auth401
-    } else if lower.contains("400")
-        || lower.contains("422")
-        || lower.contains("validation")
+    } else if lower.contains("validation")
         || lower.contains("malformed")
         || lower.contains("invalid heartbeat")
     {
         DeliveryFailureKind::Validation
-    } else if lower.contains("dns")
+    } else if lower.contains("error sending request")
+        || lower.contains("dns")
         || lower.contains("timed out")
         || lower.contains("timeout")
         || lower.contains("connection")
@@ -131,6 +281,22 @@ pub fn classify_delivery_failure(message: &str) -> DeliveryFailureKind {
         DeliveryFailureKind::Network
     } else {
         DeliveryFailureKind::Other
+    }
+}
+
+/// Read a status code from `http status 402: ...` (`AppError::HttpStatus`) or
+/// reqwest's `http status client error (402 payment required) ...`.
+fn http_status_in_message(lower: &str) -> Option<u16> {
+    let rest = &lower[lower.find("http status ")? + "http status ".len()..];
+    let digits = rest
+        .strip_prefix("client error (")
+        .or_else(|| rest.strip_prefix("server error ("))
+        .unwrap_or(rest);
+    let code: String = digits.chars().take_while(char::is_ascii_digit).collect();
+    if code.len() == 3 {
+        code.parse().ok()
+    } else {
+        None
     }
 }
 
@@ -197,7 +363,8 @@ pub fn retry_after_seconds(error: &AppError) -> Option<u64> {
 
 impl DeliveryFailure {
     pub fn kind(&self) -> DeliveryFailureKind {
-        classify_delivery_failure(&self.message)
+        self.kind
+            .unwrap_or_else(|| classify_delivery_failure(&self.message))
     }
 }
 
@@ -298,6 +465,7 @@ impl SendReport {
 pub struct ApiClient {
     config: Config,
     client: Client,
+    line_metric_capability: Arc<Mutex<Option<(Instant, bool)>>>,
 }
 
 impl ApiClient {
@@ -315,7 +483,11 @@ impl ApiClient {
             .timeout(Duration::from_secs(30))
             .default_headers(headers)
             .build()?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            line_metric_capability: Arc::new(Mutex::new(None)),
+        })
     }
 
     pub fn queue_scope(&self) -> QueueScope {
@@ -329,6 +501,55 @@ impl ApiClient {
             destination: self.config.server_url.trim_end_matches('/').to_string(),
             owner,
         }
+    }
+
+    /// Capability probes are cached briefly to avoid adding a round trip to every
+    /// editor heartbeat. An unavailable or older server is treated as unsupported;
+    /// versioned line data is retained locally while the time heartbeat still ships.
+    async fn supports_editor_line_metrics(&self) -> bool {
+        {
+            let cache = self.line_metric_capability.lock().await;
+            if let Some((checked_at, supported)) = *cache {
+                // Recheck negative results more often: they can mean a rolling
+                // deployment or a temporary capability endpoint failure.
+                let ttl = if supported { 300 } else { 30 };
+                if checked_at.elapsed() < Duration::from_secs(ttl) {
+                    return supported;
+                }
+            }
+        }
+
+        let url = format!(
+            "{}/api/v2/capabilities",
+            self.config.server_url.trim_end_matches('/')
+        );
+        let probe = async {
+            let response = self
+                .client
+                .get(url)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?;
+            let data = response.json::<Value>().await.ok()?;
+            data.get("data")?
+                .get("line_metric_versions")?
+                .as_array()?
+                .iter()
+                .any(|version| {
+                    version.get("version").and_then(Value::as_str) == Some("editor-before-after-v1")
+                        && version.get("status").and_then(Value::as_str) == Some("supported")
+                })
+                .then_some(())
+        };
+        let supported = tokio::time::timeout(Duration::from_secs(3), probe)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        *self.line_metric_capability.lock().await = Some((Instant::now(), supported));
+        supported
     }
 
     pub async fn send_heartbeat(&self, heartbeat: Heartbeat) -> AppResult<SendReport> {
@@ -349,6 +570,17 @@ impl ApiClient {
             }
         }
         let queue = Queue::open()?;
+        let collector_id = queue.device_id()?;
+        for heartbeat in &mut heartbeats {
+            if heartbeat.session_id.is_some() && heartbeat.ai_agent.is_some() {
+                heartbeat.session_id = Some(crate::ai::usage::scoped_session_id(
+                    &collector_id,
+                    heartbeat.ai_agent.as_deref().unwrap(),
+                    heartbeat.session_id.as_deref().unwrap(),
+                ));
+                heartbeat.machine = collector_id.clone();
+            }
+        }
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 
@@ -357,7 +589,7 @@ impl ApiClient {
             // the server was unreachable. The local cache can call the retry a
             // duplicate, but that must not prevent the durable queue from being
             // drained (otherwise it waits for an unrelated heartbeat).
-            let flush = match self.flush_queue_inner(&queue).await {
+            let flush = match self.flush_queue_inner(&queue, false).await {
                 Ok(flush) => flush,
                 Err(error) => FlushReport {
                     flushed: 0,
@@ -379,15 +611,40 @@ impl ApiClient {
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()?;
 
-        let send_result = if payloads.len() == 1 {
-            self.post_json("/api/v1/heartbeats", &payloads[0]).await
+        let has_versioned_metrics = payloads.iter().any(has_editor_line_metrics);
+        let mut deferred_line_metrics = 0usize;
+        let wire_payloads = if has_versioned_metrics && !self.supports_editor_line_metrics().await {
+            let scope = self.queue_scope();
+            let mut wire_payloads = payloads.clone();
+            for (source, wire) in payloads.iter().zip(&mut wire_payloads) {
+                if !has_editor_line_metrics(source) {
+                    continue;
+                }
+                queue.retain_line_measurement_scoped(&scope, source)?;
+                strip_editor_line_metrics(wire);
+                deferred_line_metrics += 1;
+            }
+            wire_payloads
         } else {
-            self.post_json("/api/v1/heartbeats.bulk", &payloads).await
+            payloads.clone()
+        };
+        let compatibility_warning = (deferred_line_metrics > 0).then(|| {
+            format!(
+                "server does not advertise editor-before-after-v1; retained {deferred_line_metrics} line measurement correction(s) locally"
+            )
+        });
+
+        let send_result = if wire_payloads.len() == 1 {
+            self.post_json("/api/v1/heartbeats", &wire_payloads[0])
+                .await
+        } else {
+            self.post_json("/api/v1/heartbeats.bulk", &wire_payloads)
+                .await
         };
 
         match send_result {
             Ok(()) => {
-                self.clear_delivery_failure();
+                self.clear_delivery_failure(&queue);
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
                 // The server has accepted the current payload at this point. Cache and
@@ -398,34 +655,58 @@ impl ApiClient {
                     .store_last_heartbeats(&last_by_entity)
                     .err()
                     .map(|error| format!("could not persist local dedup cache: {error}"));
-                let flush = match self.flush_queue_inner(&queue).await {
+                let retained_error = payloads
+                    .iter()
+                    .filter_map(|payload| {
+                        payload
+                            .get("heartbeat_id")
+                            .and_then(Value::as_str)
+                            .map(|heartbeat_id| {
+                                queue.mark_line_measurement_base_accepted(
+                                    &self.queue_scope(),
+                                    heartbeat_id,
+                                )
+                            })
+                    })
+                    .find_map(Result::err)
+                    .map(|error| {
+                        format!("could not mark retained line metric base as accepted: {error}")
+                    });
+                let flush = match self.flush_queue_inner(&queue, true).await {
                     Ok(flush) => flush,
                     Err(error) => FlushReport {
                         flushed: 0,
                         stopped_because: Some(format!("could not flush offline queue: {error}")),
                     },
                 };
-                let error = match (cache_error, flush.stopped_because) {
-                    (Some(cache_error), Some(flush_error)) => {
-                        Some(format!("{cache_error}; {flush_error}"))
-                    }
-                    (Some(cache_error), None) => Some(cache_error),
-                    (None, flush_error) => flush_error,
-                };
+                let error = [
+                    cache_error,
+                    retained_error,
+                    flush.stopped_because,
+                    compatibility_warning,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
                 Ok(SendReport {
-                    sent: payloads.len(),
+                    sent: wire_payloads.len(),
                     deduped,
                     queued: 0,
                     flushed: flush.flushed,
-                    error,
+                    error: (!error.is_empty()).then(|| error.join("; ")),
                 })
             }
             Err(error) => {
-                self.record_delivery_failure(&error.to_string());
+                self.record_delivery_failure(&queue, &error);
                 if is_retryable_heartbeat_delivery_error(&error) {
-                    for payload in &payloads {
-                        queue.push_scoped(payload, &self.queue_scope())?;
+                    // A `Retry-After` applies to this first attempt too: without it the
+                    // row is eligible again immediately and the next flush ignores what
+                    // the server just asked for.
+                    let retry_after = retry_after_seconds(&error);
+                    for payload in &wire_payloads {
+                        queue.push_scoped_after(payload, &self.queue_scope(), retry_after)?;
                     }
+                    self.schedule_delivery_snapshot(false);
                     // Do not persist a failed payload in the local last-heartbeat
                     // cache: the stable ID must remain retryable, and the durable
                     // queue already provides the deduplication needed while the
@@ -433,8 +714,14 @@ impl ApiClient {
                     Ok(SendReport::queued(
                         0,
                         deduped,
-                        payloads.len(),
-                        Some(error.to_string()),
+                        wire_payloads.len(),
+                        Some(
+                            [Some(error.to_string()), compatibility_warning]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join("; "),
+                        ),
                     ))
                 } else {
                     // Permanent validation/auth/conflict responses are reported to
@@ -447,7 +734,7 @@ impl ApiClient {
 
     pub async fn flush_queue(&self) -> AppResult<FlushReport> {
         let queue = Queue::open()?;
-        self.flush_queue_inner(&queue).await
+        self.flush_queue_inner(&queue, false).await
     }
 
     pub async fn today(&self) -> AppResult<StatusBarSnapshot> {
@@ -467,7 +754,14 @@ impl ApiClient {
             .send()
             .await?;
         let response = Self::reject_unauthorized(response)?;
-        response.error_for_status()?;
+        let response = response.error_for_status()?;
+        // The body is optional for verification; only the ownership proof is read.
+        let owner_id = response.json::<Value>().await.ok().and_then(|body| {
+            body.get("queue_owner_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        self.on_successful_probe(owner_id.as_deref());
         Ok(())
     }
 
@@ -503,7 +797,68 @@ impl ApiClient {
         let response = request.send().await?;
         let response = Self::reject_unauthorized(response)?;
         let response = response.error_for_status()?;
-        Ok(response.json::<StatusBarSnapshot>().await?)
+        let snapshot = response.json::<StatusBarSnapshot>().await?;
+        self.on_successful_probe(snapshot.queue_owner_id.as_deref());
+        Ok(snapshot)
+    }
+
+    /// An authenticated read succeeded for this scope.
+    ///
+    /// That proves the server is reachable and the credential works, so a recorded
+    /// network/server failure for this scope is stale and is cleared. A 401/402 is
+    /// **not** cleared here: reading today's total keeps working while delivery is
+    /// refused, so only a successful delivery resolves those.
+    fn on_successful_probe(&self, owner_id: Option<&str>) {
+        if let Ok(queue) = Queue::open() {
+            Self::migrate_legacy_delivery_failure(&queue);
+            if let Err(error) = queue.clear_delivery_failure(
+                &self.queue_scope(),
+                Some(&[
+                    DeliveryFailureKind::Network.as_str(),
+                    DeliveryFailureKind::ServerError.as_str(),
+                ]),
+            ) {
+                tracing::warn!(%error, "could not clear a stale delivery failure");
+            }
+        }
+        if let Some(owner_id) = owner_id {
+            self.adopt_verified_owner(owner_id);
+        }
+    }
+
+    /// Record the server's proof of this credential's account and move rows queued
+    /// under an earlier credential of the same account onto it (API-key rotation).
+    ///
+    /// Only called with an owner id from a response the server authenticated with
+    /// this client's own key. Best-effort: a local queue problem must never turn a
+    /// successful probe into a failure.
+    fn adopt_verified_owner(&self, owner_id: &str) {
+        if self.config.api_key.is_none() || !is_valid_queue_owner_id(owner_id) {
+            return;
+        }
+        let queue = match Queue::open() {
+            Ok(queue) => queue,
+            Err(error) => {
+                tracing::warn!(%error, "could not open queue to record credential owner");
+                return;
+            }
+        };
+        let scope = self.queue_scope();
+        if let Err(error) = queue.record_credential_owner(&scope, owner_id) {
+            tracing::warn!(%error, "could not record credential owner");
+            return;
+        }
+        match queue.rebind_same_owner(&scope, owner_id) {
+            Ok(report) if report.rows_moved + report.duplicates_dropped > 0 => {
+                tracing::info!(
+                    rows_moved = report.rows_moved,
+                    duplicates_dropped = report.duplicates_dropped,
+                    "rebound queued heartbeats from a rotated API key of the same account"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "same-account queue rebind failed"),
+        }
     }
 
     /// Upload sanitized token/session usage parsed from an agent transcript. The
@@ -607,19 +962,55 @@ impl ApiClient {
             .await?)
     }
 
+    /// Submit locally reparsed, metadata-only line candidates for an owner-scoped
+    /// server preview. Applying or rolling back the returned job remains a
+    /// first-party session action in Trust Center.
+    pub async fn preview_measurement_repair(
+        &self,
+        repair_id: &str,
+        start: &str,
+        end: &str,
+        timezone: &str,
+        candidates: &[Value],
+    ) -> AppResult<Value> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/v2/me/measurement-repairs",
+                self.config.server_url.trim_end_matches('/')
+            ))
+            .json(&serde_json::json!({
+                "repair_id": repair_id,
+                "start": start,
+                "end": end,
+                "timezone": timezone,
+                "candidates": candidates,
+            }))
+            .send()
+            .await?;
+        let response = Self::reject_unauthorized(response)?;
+        Self::error_for_status_with_body(response)
+            .await?
+            .json::<Value>()
+            .await
+            .map_err(|_| {
+                AppError::Protocol("measurement repair preview could not be decoded".to_string())
+            })
+    }
+
     /// Turns a 401 into a message that actually says what to do about it, instead of
     /// letting it fall through to `error_for_status()` and print as an opaque
     /// `Http(reqwest::Error { kind: Status(401, None), .. })` — which was indistinguishable
     /// from "server unreachable" to a VS Code user (both surfaced as the same generic
     /// wakaclock-cli exit-code-1 toast). The most common real cause: the API key stored
-    /// in the editor's own SecretStorage (set via "Wakaclock: Set API Key") doesn't match
+    /// in the editor's own SecretStorage (set via "AtoAxis: Set API Key") doesn't match
     /// what the server currently recognizes — e.g. it was regenerated on the dashboard,
     /// which invalidates the previous key.
     fn reject_unauthorized(response: reqwest::Response) -> AppResult<reqwest::Response> {
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(AppError::Auth(
                 "API key was rejected by the server. If you regenerated your API key on \
-                 the dashboard, the old one stopped working — run \"Wakaclock: Set API Key\" \
+                 the dashboard, the old one stopped working — run \"AtoAxis: Set API Key\" \
                  again with a fresh key from Settings → API key."
                     .to_string(),
             ));
@@ -638,57 +1029,197 @@ impl ApiClient {
         })
     }
 
-    async fn flush_queue_inner(&self, queue: &Queue) -> AppResult<FlushReport> {
+    async fn flush_queue_inner(
+        &self,
+        queue: &Queue,
+        accepted_direct: bool,
+    ) -> AppResult<FlushReport> {
+        let scope = self.queue_scope();
         let lease_owner = uuid::Uuid::new_v4().to_string();
-        let pending = queue.claim_batch_scoped(&self.queue_scope(), &lease_owner)?;
+        let pending = queue.claim_batch_scoped(&scope, &lease_owner)?;
         let mut flushed = 0;
         let mut stopped_because = None;
 
-        for (id, payload) in pending {
-            // Queue entries may have been written by a pre-policy client. Reapply the
-            // boundary at the broker flush so an upgrade cannot publish a stale inferred
-            // name simply because it was already offline when the client was upgraded.
-            let payload = sanitize_queued_heartbeat_payload(payload);
-            match self.post_json("/api/v1/heartbeats", &payload).await {
-                Ok(()) => {
-                    queue.remove(id)?;
-                    flushed += 1;
+        // Queue entries may have been written by a pre-policy client. Reapply the
+        // boundary at the broker flush so an upgrade cannot publish a stale inferred
+        // name simply because it was already offline when the client was upgraded.
+        let pending: Vec<_> = pending
+            .into_iter()
+            .map(|(id, payload)| (id, sanitize_queued_heartbeat_payload(payload)))
+            .collect();
+        let sidecar_count = queue.status_scoped(&scope)?.line_metrics_pending;
+        let has_versioned_metrics = pending
+            .iter()
+            .any(|(_, payload)| has_editor_line_metrics(payload));
+        let supports_line_metrics = (has_versioned_metrics || sidecar_count > 0)
+            && self.supports_editor_line_metrics().await;
+        let mut wire_pending = pending.clone();
+        if !supports_line_metrics {
+            for ((_, source), (_, wire)) in pending.iter().zip(wire_pending.iter_mut()) {
+                if has_editor_line_metrics(source) {
+                    queue.retain_line_measurement_scoped(&scope, source)?;
+                    strip_editor_line_metrics(wire);
                 }
-                Err(error) => {
-                    stopped_because = Some(error.to_string());
-                    // A queue flush is also a delivery attempt. Persist the latest
-                    // failure so status-bar clients do not keep showing an old
-                    // outage after the queue has recovered, or hide a new one
-                    // behind a previous success.
-                    self.record_delivery_failure(&error.to_string());
+            }
+        }
+        let payloads: Vec<_> = wire_pending
+            .iter()
+            .map(|(_, payload)| payload.clone())
+            .collect();
+
+        let delivery = match payloads.as_slice() {
+            [] => Ok(()),
+            [payload] => self.post_json("/api/v1/heartbeats", payload).await,
+            payloads => self.post_json("/api/v1/heartbeats.bulk", payloads).await,
+        };
+
+        let main_delivery_accepted = delivery.is_ok();
+        match delivery {
+            Ok(()) => {
+                for (id, _) in &pending {
+                    queue.remove(*id)?;
+                }
+                for (_, payload) in &pending {
+                    if let Some(heartbeat_id) = payload
+                        .get("heartbeat_id")
+                        .and_then(Value::as_str)
+                        .filter(|_| has_editor_line_metrics(payload))
+                    {
+                        queue.mark_line_measurement_base_accepted(&scope, heartbeat_id)?;
+                    }
+                }
+                flushed = pending.len();
+            }
+            Err(error)
+                if is_credential_delivery_error(&error)
+                    || is_retryable_heartbeat_delivery_error(&error) =>
+            {
+                stopped_because = Some(error.to_string());
+                self.record_delivery_failure(queue, &error);
+                for (id, _) in &pending {
                     if is_credential_delivery_error(&error) {
                         // Credentials may be repaired. Keep the only durable copy and
                         // pause this owner-bound queue rather than deleting activity.
-                        queue.mark_retry_after(id, Some(300))?;
-                    } else if is_retryable_heartbeat_delivery_error(&error) {
-                        queue.mark_retry_after(id, retry_after_seconds(&error))?;
+                        queue.mark_retry_after(*id, Some(300))?;
                     } else {
-                        queue.dead_letter(id, &error.to_string())?;
+                        queue.mark_retry_after(*id, retry_after_seconds(&error))?;
                     }
-                    queue.release_claim(&lease_owner)?;
-                    break;
+                }
+            }
+            Err(error) if pending.len() > 1 => {
+                // Bulk validation is atomic, but one malformed legacy row must not
+                // dead-letter valid siblings. Isolate permanent failures only; normal
+                // recovery stays one bounded bulk request.
+                self.record_delivery_failure(queue, &error);
+                for (id, payload) in &pending {
+                    match self.post_json("/api/v1/heartbeats", payload).await {
+                        Ok(()) => {
+                            queue.remove(*id)?;
+                            flushed += 1;
+                        }
+                        Err(item_error) => {
+                            stopped_because.get_or_insert_with(|| item_error.to_string());
+                            self.record_delivery_failure(queue, &item_error);
+                            if is_credential_delivery_error(&item_error) {
+                                queue.mark_retry_after(*id, Some(300))?;
+                                break;
+                            } else if is_retryable_heartbeat_delivery_error(&item_error) {
+                                queue.mark_retry_after(*id, retry_after_seconds(&item_error))?;
+                                break;
+                            } else {
+                                queue.dead_letter(*id, &item_error.to_string())?;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                stopped_because = Some(error.to_string());
+                self.record_delivery_failure(queue, &error);
+                if let Some((id, _)) = pending.first() {
+                    queue.dead_letter(*id, &error.to_string())?;
                 }
             }
         }
 
         queue.release_claim(&lease_owner)?;
 
+        // Corrections are separate higher revisions. Send them only after the base
+        // heartbeat is known to exist and the live server advertises this exact
+        // version. Keep failures in the outbox; a retry must never create a second
+        // line-count set or erase the original time heartbeat.
+        if supports_line_metrics {
+            for (id, correction) in queue.pending_line_measurements_scoped(&scope, 500)? {
+                match self.post_json("/api/v1/heartbeats", &correction).await {
+                    Ok(()) => queue.remove_pending_line_measurement(id)?,
+                    Err(error) => {
+                        self.record_delivery_failure(queue, &error);
+                        stopped_because.get_or_insert_with(|| {
+                            format!("retained line metric correction is still pending: {error}")
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
         // `wakaclock status` may be the only command that drains a backlog. Clear
         // the persisted refusal only after every currently eligible row was
         // accepted; a partial flush must continue to show its latest failure.
-        if flushed > 0 && stopped_because.is_none() {
-            self.clear_delivery_failure();
+        let accepted_queued = main_delivery_accepted && flushed > 0;
+        if accepted_queued {
+            self.clear_delivery_failure(queue);
         }
+
+        self.schedule_delivery_snapshot(accepted_direct || accepted_queued);
 
         Ok(FlushReport {
             flushed,
             stopped_because,
         })
+    }
+
+    /// Queue status is ancillary telemetry. Read it synchronously from the local
+    /// queue, reserve at most one upload per minute, and send in the background so
+    /// diagnostics never delays heartbeat collection or delivery.
+    fn schedule_delivery_snapshot(&self, delivery_succeeded: bool) {
+        let scope = self.queue_scope();
+        let client = self.client.clone();
+        let url = format!(
+            "{}/api/v2/me/delivery-status",
+            self.config.server_url.trim_end_matches('/')
+        );
+        tokio::spawn(async move {
+            let snapshot = tokio::task::spawn_blocking(move || {
+                let queue = Queue::open()?;
+                if delivery_succeeded {
+                    queue.record_scope_delivery_success(&scope)?;
+                }
+                queue.capture_delivery_snapshot_scoped(&scope)
+            })
+            .await;
+            let snapshot = match snapshot {
+                Ok(Ok(Some(snapshot))) => snapshot,
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, "could not read local delivery queue for status snapshot");
+                    return;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "delivery status queue probe task failed");
+                    return;
+                }
+            };
+            let result = client
+                .post(url)
+                .json(&snapshot)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status);
+            if let Err(error) = result {
+                tracing::debug!(%error, "delivery status snapshot upload failed");
+            }
+        });
     }
 
     async fn post_json<T: Serialize + ?Sized>(&self, path: &str, payload: &T) -> AppResult<()> {
@@ -789,39 +1320,91 @@ impl ApiClient {
         Ok(home.join(".wakaclock").join("last-delivery-failure.json"))
     }
 
-    /// The last recorded refusal, if the server has not accepted anything since.
+    /// The legacy, unscoped refusal file written by binaries before delivery state
+    /// moved into the queue database. Only read for the one-time migration and for
+    /// diagnostics; it must never drive user-facing state, because it cannot say
+    /// which server or account it was about.
     pub fn last_delivery_failure() -> Option<DeliveryFailure> {
         let path = Self::delivery_failure_path().ok()?;
         let raw = fs::read_to_string(path).ok()?;
         serde_json::from_str(&raw).ok()
     }
 
-    /// Without this, a real 402 (trial/subscription lapsed) or 401 (bad key) shows up
-    /// only as a light day in the dashboard — the heartbeat is captured and durably
-    /// queued, so nothing looks broken locally, but the server keeps refusing it.
-    /// Writing the reason down is what lets `wakaclock status` and `doctor ai` say "the
-    /// server is refusing these" instead of nothing at all. Best-effort: failing to
-    /// record a failure must never turn into a second failure.
-    fn record_delivery_failure(&self, message: &str) {
+    /// This client's own (origin + credential) delivery failure, if unresolved.
+    pub fn delivery_failure(&self) -> Option<DeliveryFailureRecord> {
+        let queue = Queue::open().ok()?;
+        Self::migrate_legacy_delivery_failure(&queue);
+        queue
+            .delivery_failure_for(&self.queue_scope())
+            .ok()
+            .flatten()
+    }
+
+    /// A refusal migrated from the pre-scope file, if one was ever recorded.
+    ///
+    /// Diagnostics only (`wakaclock doctor ai`): it cannot say which server or
+    /// account it was about, so it must never drive user-facing state.
+    pub fn legacy_unscoped_delivery_failure(&self) -> Option<DeliveryFailureRecord> {
+        let queue = Queue::open().ok()?;
+        Self::migrate_legacy_delivery_failure(&queue);
+        queue
+            .delivery_failure_for(&QueueScope {
+                destination: LEGACY_UNSCOPED_DESTINATION.to_string(),
+                owner: LEGACY_UNSCOPED_OWNER.to_string(),
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Move a pre-scope refusal file into the queue database once, under a scope that
+    /// is explicitly not any real origin/account, then delete the file. Nothing reads
+    /// `LEGACY_UNSCOPED_*` for status; it exists so the record is not silently lost.
+    fn migrate_legacy_delivery_failure(queue: &Queue) {
         let Ok(path) = Self::delivery_failure_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let failure = DeliveryFailure {
-            at: chrono::Utc::now().timestamp() as f64,
-            message: message.to_string(),
+        let Some(failure) = Self::last_delivery_failure() else {
+            return;
         };
-        if let Ok(serialized) = serde_json::to_string(&failure) {
-            let _ = fs::write(&path, serialized);
+        let kind = failure.kind();
+        let scope = QueueScope {
+            destination: LEGACY_UNSCOPED_DESTINATION.to_string(),
+            owner: LEGACY_UNSCOPED_OWNER.to_string(),
+        };
+        let record = DeliveryFailureRecord::new(
+            kind.as_str(),
+            failure.http_status,
+            "legacy_unscoped_record",
+        )
+        .with_detail(failure.message.clone());
+        // Delete only after the record is safely persisted.
+        if queue.record_delivery_failure(&scope, &record).is_ok() {
+            let _ = fs::remove_file(path);
         }
     }
 
-    /// A send got through, so whatever was wrong no longer is.
-    fn clear_delivery_failure(&self) {
-        if let Ok(path) = Self::delivery_failure_path() {
-            let _ = fs::remove_file(path);
+    /// Without this, a real 402 (trial/subscription lapsed) or 401 (bad key) shows up
+    /// only as a light day in the dashboard — the heartbeat is captured and durably
+    /// queued, so nothing looks broken locally, but the server keeps refusing it.
+    /// Recorded per origin + credential so one account's refusal never describes
+    /// another's. Best-effort: failing to record a failure must never become a second
+    /// failure.
+    fn record_delivery_failure(&self, queue: &Queue, error: &AppError) {
+        let record = DeliveryFailureRecord::new(
+            DeliveryFailureKind::from_error(error).as_str(),
+            http_status_of(error),
+            delivery_message_code(error),
+        )
+        .with_detail(error.to_string());
+        if let Err(error) = queue.record_delivery_failure(&self.queue_scope(), &record) {
+            tracing::warn!(%error, "could not record delivery failure");
+        }
+    }
+
+    /// A delivery got through for this scope, so nothing about it is failing.
+    fn clear_delivery_failure(&self, queue: &Queue) {
+        if let Err(error) = queue.clear_delivery_failure(&self.queue_scope(), None) {
+            tracing::warn!(%error, "could not clear delivery failure");
         }
     }
 }
@@ -830,6 +1413,34 @@ impl ApiClient {
 /// current client binary. The normal path works with the typed [`Heartbeat`] value; a
 /// queue flush intentionally works with JSON because old queue rows may omit fields that
 /// were added after they were written. Only identity/provenance labels are changed.
+fn has_editor_line_metrics(payload: &Value) -> bool {
+    payload.get("line_metric_version").and_then(Value::as_str) == Some("editor-before-after-v1")
+}
+
+/// Old servers may accept the time heartbeat while silently ignoring fields they do
+/// not know. Strip the entire line-measurement contract from that wire copy; the full
+/// payload is separately held in SQLite until a compatible server is available.
+fn strip_editor_line_metrics(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "line_metric_version",
+        "line_measurement_status",
+        "line_measurement_reason",
+        "measurement_window_id",
+        "ai_lines_added",
+        "ai_lines_deleted",
+        "human_lines_added",
+        "human_lines_deleted",
+        "unattributed_lines_added",
+        "unattributed_lines_deleted",
+        "revision",
+    ] {
+        object.remove(key);
+    }
+}
+
 fn sanitize_queued_heartbeat_payload(mut payload: Value) -> Value {
     let Some(object) = payload.as_object_mut() else {
         return payload;
@@ -1122,6 +1733,32 @@ mod tests {
         hb
     }
 
+    #[test]
+    fn unsupported_line_contract_is_removed_from_wire_copy_but_time_is_preserved() {
+        let mut payload = serde_json::json!({
+            "heartbeat_id": "window-1",
+            "time": 1_000.0,
+            "active_seconds": 42.0,
+            "line_metric_version": "editor-before-after-v1",
+            "line_measurement_status": "measured",
+            "line_measurement_reason": null,
+            "measurement_window_id": "window-1",
+            "ai_lines_added": 0,
+            "human_lines_deleted": 2,
+            "revision": 0
+        });
+        assert!(has_editor_line_metrics(&payload));
+
+        strip_editor_line_metrics(&mut payload);
+
+        assert!(!has_editor_line_metrics(&payload));
+        assert_eq!(payload["heartbeat_id"], "window-1");
+        assert_eq!(payload["time"], 1_000.0);
+        assert_eq!(payload["active_seconds"], 42.0);
+        assert!(payload.get("ai_lines_added").is_none());
+        assert!(payload.get("line_metric_version").is_none());
+    }
+
     /// The bug this per-entity cache exists to fix: with a single shared "last
     /// heartbeat", alternating between two files defeated dedup completely.
     #[test]
@@ -1236,6 +1873,142 @@ mod tests {
         assert_eq!(
             classify_delivery_failure("Authentication failed: API key was rejected by the server"),
             DeliveryFailureKind::Auth401
+        );
+    }
+
+    fn status_error(status: u16) -> AppError {
+        AppError::HttpStatusRetry {
+            status,
+            message: "fixture".to_string(),
+            retry_after_seconds: None,
+        }
+    }
+
+    #[test]
+    fn network_transport_maps_to_offline() {
+        // A real transport error with no HTTP response (nothing listens on port 1).
+        let error = AppError::Http(
+            reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap()
+                .get("http://127.0.0.1:1/api/v1/status_bar/today")
+                .send()
+                .expect_err("port 1 must refuse the connection"),
+        );
+        assert_eq!(
+            DeliveryFailureKind::from_error(&error),
+            DeliveryFailureKind::Network
+        );
+        assert_eq!(http_status_of(&error), None);
+        assert_eq!(
+            ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+            ConnectionState::Offline
+        );
+        // The persisted message form classifies the same way.
+        assert_eq!(
+            classify_delivery_failure(&error.to_string()),
+            DeliveryFailureKind::Network
+        );
+    }
+
+    #[test]
+    fn http_402_maps_only_to_subscription_required() {
+        let kind = DeliveryFailureKind::from_error(&status_error(402));
+        assert_eq!(kind, DeliveryFailureKind::Payment402);
+        assert_eq!(
+            ConnectionState::from_failure_kind(kind),
+            ConnectionState::SubscriptionRequired
+        );
+        for status in [400, 401, 403, 408, 422, 429, 500, 503] {
+            assert_ne!(
+                DeliveryFailureKind::from_http_status(status),
+                DeliveryFailureKind::Payment402,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_401_maps_only_to_auth_rejected() {
+        for error in [
+            status_error(401),
+            status_error(403),
+            AppError::Auth("API key was rejected by the server".into()),
+        ] {
+            assert_eq!(
+                ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+                ConnectionState::AuthRejected
+            );
+        }
+        for status in [402, 408, 429, 500, 503] {
+            assert_ne!(
+                DeliveryFailureKind::from_http_status(status),
+                DeliveryFailureKind::Auth401,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_429_and_503_are_retryable_server_errors() {
+        for status in [408, 429, 500, 503] {
+            let error = status_error(status);
+            assert_eq!(
+                ConnectionState::from_failure_kind(DeliveryFailureKind::from_error(&error)),
+                ConnectionState::RetryableServerError,
+                "{status}"
+            );
+            // The status mapping must agree with the unchanged retry policy.
+            assert!(is_retryable_delivery_error(&error), "{status}");
+        }
+    }
+
+    #[test]
+    fn persisted_failure_prefers_the_recorded_kind_and_reads_legacy_records() {
+        let future: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {}","kind":"a_kind_from_a_newer_binary"}"#,
+        )
+        .expect("an unknown kind must not discard the record");
+        assert_eq!(future.kind, None);
+        assert_eq!(future.kind(), DeliveryFailureKind::Payment402);
+
+        // The persisted names match `as_str()`.
+        for kind in [
+            DeliveryFailureKind::Auth401,
+            DeliveryFailureKind::Payment402,
+            DeliveryFailureKind::Network,
+            DeliveryFailureKind::Validation,
+            DeliveryFailureKind::ServerError,
+            DeliveryFailureKind::Other,
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+
+        let future: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {}","kind":"a_kind_from_a_newer_binary"}"#,
+        )
+        .expect("an unknown kind must not discard the record");
+        assert_eq!(future.kind, None);
+        assert_eq!(future.kind(), DeliveryFailureKind::Payment402);
+
+        let typed: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP error: error sending request for url (http://127.0.0.1:40213/)","kind":"network"}"#,
+        )
+        .unwrap();
+        assert_eq!(typed.kind(), DeliveryFailureKind::Network);
+
+        // Written by an older binary: no `kind`, message-only.
+        let legacy: DeliveryFailure = serde_json::from_str(
+            r#"{"at":1.0,"message":"HTTP status 402: {\"error\":\"trial expired\"}"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.kind(), DeliveryFailureKind::Payment402);
+        assert_eq!(
+            classify_delivery_failure(
+                "HTTP error: HTTP status server error (503 Service Unavailable) for url (http://x/)"
+            ),
+            DeliveryFailureKind::ServerError
         );
     }
 

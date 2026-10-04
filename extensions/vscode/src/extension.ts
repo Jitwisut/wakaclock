@@ -22,6 +22,7 @@ import {
   setStoredApiKey,
 } from "./secrets";
 import { StatusBarController } from "./statusBar";
+import { SingleFlight } from "./singleFlight";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
@@ -63,6 +64,11 @@ export function activate(context: vscode.ExtensionContext): void {
     () => {
       statusBar.handleHeartbeatSent();
       presenceHeartbeat();
+      void cliService.syncAiActivity().catch((error) =>
+        logger.debug("on-demand AI sync after heartbeat was deferred", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     },
     undefined,
     () => statusBar.handleActivity()
@@ -104,10 +110,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // The broker is a separate process and may start before VS Code emits its
-  // first configuration-change event. Persist the initial setting as well so a
-  // user who has disabled automatic hook installation is protected immediately
-  // on activation, including after an extension update or broker restart.
+  // Persist the hook policy on activation so a user who has disabled automatic
+  // hook installation is protected immediately after an extension update.
   void writeHookAutoInstallPolicy(
     os.homedir(),
     configService.getSnapshot().autoInstallAgentHooks ?? true,
@@ -131,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): void {
     bufferManager,
     statusBar,
     aiIntegrations,
-    () => void initializeConnection(context, cliService, aiIntegrations, logger),
+    () => startConnectionBootstrap(context, cliService, aiIntegrations, logger),
   );
   registerEventSubscriptions(context, configService, bufferManager, logger);
   void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
@@ -139,7 +143,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // AI discovery/setup is deliberately detached from the editor heartbeat pipeline.
   // It starts only after an authenticated key is available and never blocks the
   // event listeners or their serialized buffer snapshots.
-  void initializeConnection(context, cliService, aiIntegrations, logger);
+  startConnectionBootstrap(context, cliService, aiIntegrations, logger);
 
   logger.debug("wakaclock extension activated");
 }
@@ -163,9 +167,31 @@ async function warnIgnoredWorkspaceOverrides(
   );
 }
 
+/**
+ * One verification retry loop per extension context.
+ *
+ * The loop below retries an unreachable server with a growing delay and never
+ * returns while the outage lasts. Activation starts one, and the "reconnect"
+ * command starts another — so each invocation used to add a loop that outlived
+ * it, each one spawning its own CLI. A second trigger now queues exactly one
+ * follow-up run instead.
+ */
+const connectionBootstrap = new SingleFlight();
+
+function startConnectionBootstrap(
+  context: vscode.ExtensionContext,
+  cliService: Pick<WakaclockCliService, "verifyApiKey" | "getStatus" | "syncAiActivity">,
+  aiIntegrations: AiIntegrationController,
+  logger: Logger,
+): void {
+  void connectionBootstrap.run(() =>
+    initializeConnection(context, cliService, aiIntegrations, logger),
+  );
+}
+
 async function initializeConnection(
   context: vscode.ExtensionContext,
-  cliService: Pick<WakaclockCliService, "verifyApiKey" | "installAgent" | "getStatus">,
+  cliService: Pick<WakaclockCliService, "verifyApiKey" | "getStatus" | "syncAiActivity">,
   aiIntegrations: AiIntegrationController,
   logger: Logger
 ): Promise<void> {
@@ -194,18 +220,12 @@ async function initializeConnection(
           await setStoredApiKey(context.secrets, verifiedKey);
         }
         await clearPendingApiKey(context.secrets);
-        // Existing consent survives extension updates. Re-installing the per-user
-        // manifest points it at the newly managed binary before an old version can be
-        // removed, without adding a new integration or prompting again.
-        const statuses = await aiIntegrations.getStatus();
-        if (statuses.some((status) => status.enabled)) {
-          void cliService.installAgent().catch((error) =>
-            logger.warn("could not refresh the existing AtoAxis agent service", {
-              error: error instanceof Error ? error.message : String(error)
-            })
-          );
-        }
         void cliService.getStatus().catch(() => undefined);
+        void cliService.syncAiActivity().catch((error) =>
+          logger.debug("on-demand AI sync at extension activation was deferred", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
         await maybeOfferAiSetup(context, aiIntegrations, logger);
         return;
       }

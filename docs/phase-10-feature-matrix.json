@@ -8,6 +8,8 @@
     "client_only",
     "partial",
     "beta",
+    "experimental",
+    "unavailable",
     "production_ready",
     "deprecated"
   ],
@@ -23,7 +25,13 @@
     { "key": "ai_line_attribution", "status": "production_ready", "api": "/api/v1/users/current/ai_stats" },
     { "key": "ai_tokens_and_cost", "status": "production_ready", "api": "/api/v2/me/ai/effectiveness" },
     { "key": "ai_prompt_length", "status": "beta", "api": "/api/v2/me/ai/effectiveness" },
-    { "key": "ai_human_follow_up", "status": "beta", "api": "/api/v2/ai/follow-up" },
+    { "key": "work_session_receipts", "status": "experimental", "api": "/api/v2/me/work-sessions" },
+    { "key": "ai_human_follow_up_events", "status": "beta", "api": "/api/v2/ai/follow-up-events" },
+    { "key": "ai_human_follow_up", "status": "unavailable", "api": "/api/v2/ai/follow-up" },
+    { "key": "measurement_trust_center", "status": "beta", "api": "/api/v2/me/measurement-quality" },
+    { "key": "delivery_queue_status", "status": "beta", "api": "/api/v2/me/delivery-status" },
+    { "key": "measurement_repair", "status": "beta", "api": "/api/v2/me/measurement-repairs" },
+    { "key": "ai_operation_evidence", "status": "beta", "api": "/api/v2/me/ai/operation-evidence" },
     { "key": "oauth_pkce_and_device_flow", "status": "beta", "api": "/oauth/authorize" },
     { "key": "oauth_scope_enforcement", "status": "beta", "api": "/api/v2" },
     { "key": "desktop_tracker", "status": "client_only", "api": "extensions/desktop-tracker" },
@@ -40,6 +48,7 @@
     { "key": "scim", "status": "beta", "api": "/scim/v2" },
     { "key": "seat_billing_entitlements", "status": "partial", "api": "/api/v2/organizations/:id/billing" },
     { "key": "data_exports", "status": "partial", "api": "/api/v2/exports" },
+    { "key": "resumable_wakatime_import", "status": "beta", "api": "/api/v2/imports/wakatime" },
     { "key": "account_deletion", "status": "partial", "api": "/api/v2/me" }
   ]
 }

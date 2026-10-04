@@ -434,6 +434,29 @@ pub enum Category {
     Modeling,
     Meeting,
     Communicating,
+    // The remaining WakaTime categories. A category is only a label: `ai coding`
+    // never promotes a heartbeat's actor or AI attribution.
+    Advising,
+    #[serde(rename = "ai coding")]
+    AiCoding,
+    Browsing,
+    #[serde(rename = "code reviewing")]
+    CodeReviewing,
+    Indexing,
+    Learning,
+    #[serde(rename = "manual testing")]
+    ManualTesting,
+    Notes,
+    Planning,
+    Researching,
+    #[serde(rename = "running tests")]
+    RunningTests,
+    Supporting,
+    Translating,
+    #[serde(rename = "writing docs")]
+    WritingDocs,
+    #[serde(rename = "writing tests")]
+    WritingTests,
 }
 
 impl fmt::Display for Category {
@@ -446,6 +469,21 @@ impl fmt::Display for Category {
             Self::Modeling => "modeling",
             Self::Meeting => "meeting",
             Self::Communicating => "communicating",
+            Self::Advising => "advising",
+            Self::AiCoding => "ai coding",
+            Self::Browsing => "browsing",
+            Self::CodeReviewing => "code reviewing",
+            Self::Indexing => "indexing",
+            Self::Learning => "learning",
+            Self::ManualTesting => "manual testing",
+            Self::Notes => "notes",
+            Self::Planning => "planning",
+            Self::Researching => "researching",
+            Self::RunningTests => "running tests",
+            Self::Supporting => "supporting",
+            Self::Translating => "translating",
+            Self::WritingDocs => "writing docs",
+            Self::WritingTests => "writing tests",
         };
         f.write_str(value)
     }
@@ -463,6 +501,21 @@ impl FromStr for Category {
             "modeling" => Ok(Self::Modeling),
             "meeting" => Ok(Self::Meeting),
             "communicating" => Ok(Self::Communicating),
+            "advising" => Ok(Self::Advising),
+            "ai coding" => Ok(Self::AiCoding),
+            "browsing" => Ok(Self::Browsing),
+            "code reviewing" => Ok(Self::CodeReviewing),
+            "indexing" => Ok(Self::Indexing),
+            "learning" => Ok(Self::Learning),
+            "manual testing" => Ok(Self::ManualTesting),
+            "notes" => Ok(Self::Notes),
+            "planning" => Ok(Self::Planning),
+            "researching" => Ok(Self::Researching),
+            "running tests" => Ok(Self::RunningTests),
+            "supporting" => Ok(Self::Supporting),
+            "translating" => Ok(Self::Translating),
+            "writing docs" => Ok(Self::WritingDocs),
+            "writing tests" => Ok(Self::WritingTests),
             other => Err(format!("unsupported category: {other}")),
         }
     }
@@ -615,6 +668,17 @@ pub struct Heartbeat {
     pub unattributed_lines_added: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unattributed_lines_deleted: Option<u32>,
+    /// Versioned editor line delta contract. Legacy rows intentionally remain
+    /// `None` so analytics can keep them separate from measurements with a known
+    /// definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_metric_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_measurement_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_measurement_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_window_id: Option<String>,
     /// Append-only correction revision for this canonical operation.
     #[serde(default)]
     pub revision: u32,
@@ -704,6 +768,10 @@ impl Heartbeat {
             human_lines_deleted: None,
             unattributed_lines_added: None,
             unattributed_lines_deleted: None,
+            line_metric_version: None,
+            line_measurement_status: None,
+            line_measurement_reason: None,
+            measurement_window_id: None,
             revision: 0,
             created_at: now.to_rfc3339(),
         }
@@ -977,6 +1045,7 @@ impl Heartbeat {
         if self.revision > MAX_HEARTBEAT_REVISION {
             return Err("revision exceeds the supported bound".to_string());
         }
+        self.validate_line_measurement()?;
         self.validate_clipboard_metrics()?;
         for segment in &self.activity_segments {
             if segment.segment_id.trim().is_empty()
@@ -999,6 +1068,56 @@ impl Heartbeat {
                     "activity segment is invalid or exceeds its evidence window".to_string()
                 );
             }
+        }
+        Ok(())
+    }
+
+    fn validate_line_measurement(&self) -> Result<(), String> {
+        let has_metadata = self.line_metric_version.is_some()
+            || self.line_measurement_status.is_some()
+            || self.line_measurement_reason.is_some()
+            || self.measurement_window_id.is_some();
+        if !has_metadata {
+            return Ok(());
+        }
+        if self.line_metric_version.as_deref() != Some("editor-before-after-v1") {
+            return Err("unsupported line_metric_version".to_string());
+        }
+        match self.line_measurement_status.as_deref() {
+            Some("measured") => {
+                if self.line_measurement_reason.is_some() {
+                    return Err(
+                        "measured line metrics cannot include an unavailable reason".to_string()
+                    );
+                }
+            }
+            Some("unavailable") => {
+                if !matches!(
+                    self.line_measurement_reason.as_deref(),
+                    Some(
+                        "baseline_missing"
+                            | "document_unavailable"
+                            | "document_too_large"
+                            | "version_discontinuity"
+                            | "diff_budget_exceeded"
+                    )
+                ) {
+                    return Err("unavailable line metrics require a reason".to_string());
+                }
+            }
+            _ => return Err("line_measurement_status must be measured or unavailable".to_string()),
+        }
+        if self
+            .measurement_window_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+            || self
+                .measurement_window_id
+                .as_ref()
+                .is_some_and(|value| value.len() > MAX_HEARTBEAT_ID_LEN)
+            || self.measurement_window_id != self.heartbeat_id
+        {
+            return Err("measurement_window_id must reuse the bounded heartbeat_id".to_string());
         }
         Ok(())
     }
@@ -1327,6 +1446,41 @@ mod tests {
     }
 
     #[test]
+    fn versioned_line_measurements_preserve_measured_zero_and_unavailable() {
+        let mut measured = Heartbeat::new(
+            Uuid::nil(),
+            "src/main.rs".to_string(),
+            EntityType::File,
+            "wakaclock-vscode/0.2.0".to_string(),
+        );
+        measured.heartbeat_id = Some("window-1".to_string());
+        measured.measurement_window_id = Some("window-1".to_string());
+        measured.line_metric_version = Some("editor-before-after-v1".to_string());
+        measured.line_measurement_status = Some("measured".to_string());
+        measured.unattributed_lines_added = Some(0);
+        measured.unattributed_lines_deleted = Some(0);
+        measured.validate().unwrap();
+        let round_trip: Heartbeat =
+            serde_json::from_slice(&serde_json::to_vec(&measured).unwrap()).unwrap();
+        assert_eq!(round_trip.unattributed_lines_added, Some(0));
+        assert_eq!(
+            round_trip.line_metric_version.as_deref(),
+            Some("editor-before-after-v1")
+        );
+        assert_eq!(round_trip.measurement_window_id, measured.heartbeat_id);
+
+        let mut unavailable = measured;
+        unavailable.unattributed_lines_added = None;
+        unavailable.unattributed_lines_deleted = None;
+        unavailable.line_measurement_status = Some("unavailable".to_string());
+        unavailable.line_measurement_reason = Some("baseline_missing".to_string());
+        unavailable.validate().unwrap();
+
+        unavailable.line_measurement_reason = Some("guess_from_filesystem".to_string());
+        assert!(unavailable.validate().is_err());
+    }
+
+    #[test]
     fn test_new_heartbeat() {
         let hb = Heartbeat::new(
             Uuid::nil(),
@@ -1529,6 +1683,63 @@ mod tests {
             Category::from_str("debugging").unwrap(),
             Category::Debugging
         );
+    }
+
+    #[test]
+    fn every_wakatime_category_round_trips_through_serde_and_from_str() {
+        // The category strings wakatime-cli sends (pkg/heartbeat/category.go).
+        for wire in [
+            "advising",
+            "ai coding",
+            "browsing",
+            "building",
+            "code reviewing",
+            "coding",
+            "communicating",
+            "debugging",
+            "designing",
+            "indexing",
+            "learning",
+            "manual testing",
+            "meeting",
+            "modeling",
+            "notes",
+            "planning",
+            "researching",
+            "running tests",
+            "supporting",
+            "translating",
+            "writing docs",
+            "writing tests",
+        ] {
+            let parsed: Category = serde_json::from_value(serde_json::json!(wire)).unwrap();
+            assert_eq!(parsed.to_string(), wire);
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap(),
+                serde_json::json!(wire)
+            );
+            assert_eq!(Category::from_str(wire).unwrap(), parsed);
+        }
+        assert!(serde_json::from_value::<Category>(serde_json::json!("gaming")).is_err());
+    }
+
+    #[test]
+    fn stored_category_string_is_unchanged_for_the_original_categories() {
+        // The ingest path used to store `format!("{:?}").to_lowercase()`; it now
+        // stores `to_string()`. Existing rows must keep matching new ones.
+        for category in [
+            Category::Coding,
+            Category::Building,
+            Category::Debugging,
+            Category::Designing,
+            Category::Modeling,
+            Category::Meeting,
+            Category::Communicating,
+        ] {
+            assert_eq!(category.to_string(), format!("{category:?}").to_lowercase());
+        }
+        assert_eq!(Category::AiCoding.to_string(), "ai coding");
+        assert_eq!(Category::WritingTests.to_string(), "writing tests");
     }
 
     #[test]

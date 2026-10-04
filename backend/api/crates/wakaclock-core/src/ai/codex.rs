@@ -512,6 +512,11 @@ impl AiActivityParser for CodexParser {
                                 ),
                             );
                         }
+                        // Older Codex CLI builds give the native completion the same
+                        // id as the apply_patch call. The output record below then
+                        // short-circuits on `completed_apply_patch`, so release the
+                        // pending call here or it pins the checkpoint forever.
+                        pending_apply_patch.remove(item_id);
                         completed_apply_patch.insert(item_id.to_string());
                         last_record_id = Some(item_id.to_string());
                         continue;
@@ -1049,9 +1054,9 @@ fn resolve_entity(raw_path: &str, project_root: Option<&Path>) -> PathBuf {
 /// Codex Desktop can keep one conversation alive while the user asks it to edit a
 /// different checkout. In that case the turn/session cwd is stale, while the native
 /// FileChange path is absolute and authoritative. Keeping the stale cwd makes broker
-/// validation reject the event as outside `project_root`. Discover a local project
-/// marker from the changed path instead; if none exists, omit the root so the event is
-/// still delivered without inventing a project name.
+/// validation reject the event as outside `project_root`. Resolve the project that owns
+/// the changed path instead (see `crate::project`); if none exists, omit the root so the
+/// event is still delivered without inventing a project name.
 fn effective_project_root(
     entity: &Path,
     previous_entity: Option<&Path>,
@@ -1066,16 +1071,12 @@ fn effective_project_root(
         }
     }
 
-    let start = if entity.is_dir() {
-        entity
-    } else {
-        entity.parent()?
-    };
-    start
-        .ancestors()
-        .find(|candidate| has_codex_project_marker(candidate))
+    // Resolve from the changed path itself. The repository root wins over any nested
+    // manifest, so an edit under `crates/wakaclock-cli` is bounded by the repository
+    // rather than by that crate's `Cargo.toml`.
+    crate::project::resolve_project(entity, None)
+        .map(|resolved| resolved.root)
         .filter(|root| previous_entity.is_none_or(|previous| previous.starts_with(root)))
-        .map(Path::to_path_buf)
 }
 
 fn has_codex_project_marker(path: &Path) -> bool {
@@ -1687,6 +1688,37 @@ mod tests {
         assert_eq!(
             effective_project_root(&entity, None, Some(stale_root)),
             Some(actual_root.clone())
+        );
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn file_change_in_a_nested_crate_is_bounded_by_the_repository_not_the_crate() {
+        let base = std::env::temp_dir().join(format!(
+            "wakaclock-codex-nested-crate-{}",
+            std::process::id()
+        ));
+        let repo = base.join("wakaclock");
+        let crate_root = repo.join("backend/api/crates/wakaclock-cli");
+        let entity = crate_root.join("src/broker.rs");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(entity.parent().unwrap()).unwrap();
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"wakaclock-cli\"\n",
+        )
+        .unwrap();
+
+        // Missing turn cwd, and a stale cwd from another checkout, both fall back to the
+        // repository root.
+        assert_eq!(
+            effective_project_root(&entity, None, None),
+            Some(repo.clone())
+        );
+        assert_eq!(
+            effective_project_root(&entity, None, Some(base.join("AI-tiktok"))),
+            Some(repo.clone())
         );
 
         fs::remove_dir_all(base).unwrap();
@@ -2809,6 +2841,113 @@ mod tests {
         );
         assert_eq!(batch.events[0].lines_added, Some(0));
         assert_eq!(batch.events[0].lines_deleted, Some(2));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_file_change_with_the_call_id_releases_the_pending_cursor() {
+        // June-July 2026 Codex CLI ordering: apply_patch call -> FileChange completion
+        // carrying the *same* id -> custom_tool_call_output. The native record emits the
+        // event; the call must stop holding the checkpoint, or every later pass rewinds
+        // to it and re-reads the rest of the transcript forever.
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let turn_context = fs::read_to_string(format!("{fixtures}turn_context.json")).unwrap();
+        let call_id = "call_native_shares_call_id";
+        let file_path = "/home/dev/example-project/src/recreated.rs";
+        let call = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.000Z",
+            "payload": {
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "apply_patch",
+                "input": format!(
+                    "*** Begin Patch\n*** Delete File: {file_path}\n*** Add File: {file_path}\n+pub fn recreated() {{}}\n*** End Patch"
+                )
+            }
+        });
+        let native = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-14T09:19:42.100Z",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "018f0000-bbbb-7000-8000-000000000002",
+                "item": {
+                    "type": "FileChange",
+                    "id": call_id,
+                    "status": "completed",
+                    "changes": {
+                        file_path: {
+                            "type": "add",
+                            "content": "pub fn recreated() {}\n"
+                        }
+                    }
+                }
+            }
+        });
+        let output = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.200Z",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": format!(
+                    "Exit code: 0\nWall time: 0.2 seconds\nOutput:\nSuccess. Updated the following files:\nA {file_path}\nD {file_path}\n"
+                )
+            }
+        });
+
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-native-shares-call-id-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = fs::File::create(&path).unwrap();
+        for value in [
+            serde_json::from_str::<serde_json::Value>(&session_meta).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&turn_context).unwrap(),
+            call,
+            native,
+            output,
+        ] {
+            writeln!(file, "{}", serde_json::to_string(&value).unwrap()).unwrap();
+        }
+        let file_len = fs::metadata(&path).unwrap().len();
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert!(batch.events[0].entity.ends_with("recreated.rs"));
+        assert_eq!(batch.next_cursor.byte_offset, file_len);
+        assert!(batch
+            .next_cursor
+            .context
+            .as_ref()
+            .is_some_and(|context| context.pending_calls.is_empty()));
+
+        // A checkpoint saved by the buggy parser (offset rewound to the call, the call
+        // still listed as pending) must also advance once re-read.
+        let stuck = ParserCursor {
+            byte_offset: 0,
+            ..batch.next_cursor.clone()
+        };
+        let resumed = CodexParser::new()
+            .parse_since(&ParseContext::default(), Some(&stuck))
+            .unwrap();
+        assert_eq!(resumed.next_cursor.byte_offset, file_len);
         let _ = fs::remove_file(path);
     }
 

@@ -22,6 +22,15 @@ pub struct HeartbeatVerificationProjection {
     pub revision: u32,
 }
 
+/// Minimal identity used to detect possible collisions with imports created by
+/// the legacy v1 importer. No source text or entity path leaves ClickHouse.
+#[derive(Debug, Clone)]
+pub struct LegacyImportHeartbeatKey {
+    pub time: f64,
+    pub entity: String,
+    pub entity_type: String,
+}
+
 impl HeartbeatRepository {
     pub fn new(client: Arc<ClickHouseClient>) -> Self {
         Self { client }
@@ -128,7 +137,11 @@ impl HeartbeatRepository {
                     paste_same_workspace_actions Nullable(UInt32),
                     paste_external_or_unknown_actions Nullable(UInt32),
                     revision UInt32 DEFAULT 0,
-                    session_id Nullable(String)
+                    session_id Nullable(String),
+                    line_metric_version Nullable(String),
+                    line_measurement_status Nullable(String),
+                    line_measurement_reason Nullable(String),
+                    measurement_window_id Nullable(String)
                 ) ENGINE = MergeTree()
                 ORDER BY (user_id, date, time)
                 "#,
@@ -150,6 +163,10 @@ impl HeartbeatRepository {
         for column in [
             "heartbeat_id Nullable(String)",
             "activity_segments String DEFAULT '[]'",
+            "line_metric_version Nullable(String)",
+            "line_measurement_status Nullable(String)",
+            "line_measurement_reason Nullable(String)",
+            "measurement_window_id Nullable(String)",
             // `active_seconds` is clamped at ingest so the MV path and the canonical
             // timeline measure the same thing; the raw claim lands here instead of
             // being overwritten, so nothing a client sent is lost.
@@ -244,6 +261,10 @@ impl HeartbeatRepository {
             "paste_external_or_unknown_actions Nullable(UInt32)",
             "revision UInt32 DEFAULT 0",
             "session_id Nullable(String)",
+            "line_metric_version Nullable(String)",
+            "line_measurement_status Nullable(String)",
+            "line_measurement_reason Nullable(String)",
+            "measurement_window_id Nullable(String)",
         ] {
             let sql = format!("ALTER TABLE wakaclock.heartbeats ADD COLUMN IF NOT EXISTS {column}");
             ch_client
@@ -361,6 +382,10 @@ impl HeartbeatRepository {
             // The Null replay table is long-lived, so columns added to raw heartbeats
             // after its first CREATE ... AS must be mirrored explicitly.
             "active_seconds_claimed Nullable(Float64)",
+            "line_metric_version Nullable(String)",
+            "line_measurement_status Nullable(String)",
+            "line_measurement_reason Nullable(String)",
+            "measurement_window_id Nullable(String)",
             "clipboard_tracking_version Nullable(UInt8)",
             "copy_actions Nullable(UInt32)",
             "paste_actions Nullable(UInt32)",
@@ -707,6 +732,54 @@ impl HeartbeatRepository {
         Ok(revisions)
     }
 
+    /// Return a bounded set of legacy v1 import identities in a time range.
+    /// The caller treats a truncated scan as requiring explicit user review.
+    pub async fn legacy_import_heartbeat_keys(
+        &self,
+        user_id: uuid::Uuid,
+        start_time: f64,
+        end_time: f64,
+    ) -> Result<(Vec<LegacyImportHeartbeatKey>, bool)> {
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct LegacyRow {
+            time: f64,
+            entity: String,
+            entity_type: String,
+        }
+
+        const SCAN_LIMIT: u64 = 10_001;
+        let rows = self
+            .client
+            .get_client()
+            .query(
+                "SELECT time, entity, entity_type
+                 FROM wakaclock.heartbeats
+                 WHERE user_id = ?
+                   AND heartbeat_id IS NOT NULL
+                   AND startsWith(assumeNotNull(heartbeat_id), 'import:')
+                   AND time >= ? AND time <= ?
+                 ORDER BY time
+                 LIMIT 10001",
+            )
+            .bind(user_id)
+            .bind(start_time)
+            .bind(end_time)
+            .fetch_all::<LegacyRow>()
+            .await
+            .map_err(|error| anyhow::anyhow!("ClickHouse legacy import lookup failed: {error}"))?;
+        let scan_limited = rows.len() >= SCAN_LIMIT as usize;
+        Ok((
+            rows.into_iter()
+                .map(|row| LegacyImportHeartbeatKey {
+                    time: row.time,
+                    entity: row.entity,
+                    entity_type: row.entity_type,
+                })
+                .collect(),
+            scan_limited,
+        ))
+    }
+
     /// Session-scoped revision lookup for AI heartbeats. AI compatibility IDs are
     /// derived from an opaque event id and a producer is allowed to reuse that id
     /// in a new session; grouping by `(heartbeat_id, session_id)` prevents one
@@ -995,7 +1068,9 @@ impl HeartbeatRepository {
                     clipboard_tracking_version, copy_actions, paste_actions,
                     copied_chars, copied_lines, pasted_chars, pasted_lines,
                     paste_same_file_actions, paste_same_workspace_actions,
-                    paste_external_or_unknown_actions, revision, session_id
+                    paste_external_or_unknown_actions, revision, session_id,
+                    line_metric_version, line_measurement_status,
+                    line_measurement_reason, measurement_window_id
                 FROM {relation}
                 ORDER BY time ASC"
         );
@@ -1007,6 +1082,78 @@ impl HeartbeatRepository {
             .fetch_all::<HeartbeatRow>()
             .await
             .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))
+    }
+
+    /// Resolve privacy-safe operation references emitted by the Trust Center. The
+    /// hash intentionally excludes `revision`, so it keeps identifying the same
+    /// logical operation while the canonical winner advances through a repair.
+    pub async fn get_by_measurement_repair_references(
+        &self,
+        user_id: uuid::Uuid,
+        start_epoch: f64,
+        end_epoch: f64,
+        references: &[String],
+    ) -> Result<Vec<HeartbeatRow>> {
+        if references.is_empty() {
+            return Ok(Vec::new());
+        }
+        let relation =
+            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
+        let row_key = "lower(hex(SHA256(concat(
+            toString(length(ifNull(h.session_id, ''))), ':', ifNull(h.session_id, ''),
+            toString(length(coalesce(nullIf(h.ai_event_id, ''), nullIf(h.ai_change_id, ''), nullIf(h.heartbeat_id, ''), ''))), ':',
+                coalesce(nullIf(h.ai_event_id, ''), nullIf(h.ai_change_id, ''), nullIf(h.heartbeat_id, ''), ''),
+            toString(length(h.entity)), ':', h.entity
+        ))))";
+        let query = format!(
+            "SELECT
+                    user_id, entity, entity_type, time, date,
+                    project, project_id, branch, head_revision, repository_id,
+                    language, dependencies,
+                    lines, line_number, cursor_position,
+                    is_write, category, editor, operating_system,
+                    machine, user_agent, machine_name_hash, hostname_hash, timezone,
+                    feature_id, feature_name,
+                    heartbeat_id, ast_language, ast_confidence,
+                    keystrokes, chars_added, chars_deleted,
+                    active_seconds, active_seconds_claimed, activity_segments,
+                    is_ai_generated, ai_agent, ai_provider, ai_model,
+                    identity_status, identity_reason, identity_source,
+                    identity_schema_version, identity_turn_id, identity_message_id,
+                    ai_source,
+                    ai_confidence, ai_event_id, ai_change_id,
+                    prompt_character_count, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens, ai_subscription_plan,
+                    token_source, attribution_source, attribution_confidence,
+                    ai_event_fingerprint,
+                    ai_lines_added, ai_lines_deleted,
+                    human_lines_added, human_lines_deleted,
+                    unattributed_lines_added, unattributed_lines_deleted,
+                    created_at, actor_type, actor_confidence,
+                    clipboard_tracking_version, copy_actions, paste_actions,
+                    copied_chars, copied_lines, pasted_chars, pasted_lines,
+                    paste_same_file_actions, paste_same_workspace_actions,
+                    paste_external_or_unknown_actions, revision, session_id,
+                    line_metric_version, line_measurement_status,
+                    line_measurement_reason, measurement_window_id
+             FROM (
+                SELECT h.*, {row_key} AS repair_reference FROM {relation}
+             ) AS h
+             WHERE h.repair_reference IN ?
+             ORDER BY h.time ASC"
+        );
+        self.client
+            .get_client()
+            .query(&query)
+            .bind(user_id)
+            .bind(start_epoch)
+            .bind(end_epoch)
+            .bind(references)
+            .fetch_all::<HeartbeatRow>()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("ClickHouse measurement repair lookup failed: {error}")
+            })
     }
 
     pub async fn get_by_date(
@@ -1050,7 +1197,9 @@ impl HeartbeatRepository {
                     clipboard_tracking_version, copy_actions, paste_actions,
                     copied_chars, copied_lines, pasted_chars, pasted_lines,
                     paste_same_file_actions, paste_same_workspace_actions,
-                    paste_external_or_unknown_actions, revision, session_id
+                    paste_external_or_unknown_actions, revision, session_id,
+                    line_metric_version, line_measurement_status,
+                    line_measurement_reason, measurement_window_id
                 FROM {relation}
                 ORDER BY time ASC"
         );

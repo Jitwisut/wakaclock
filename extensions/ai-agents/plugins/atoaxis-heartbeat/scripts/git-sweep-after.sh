@@ -48,4 +48,8 @@ jq -cn \
   '{tool_event_id:$tool_event_id,agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),tool:(if $tool=="" then null else $tool end),transport:"shell_hook",cwd:$cwd}' \
   | "$WAKACLOCK_BIN" ai tool-after --json >/dev/null 2>&1 || true
 
+# Claude Code has a transcript parser; reconcile it after each completed tool
+# while keeping the invocation bounded and fail-open.
+"$WAKACLOCK_BIN" sync --agent claude-code --automatic --json >/dev/null 2>&1 || true
+
 exit 0

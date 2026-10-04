@@ -44,7 +44,7 @@ pub struct WakaTimeDumpDay {
     pub grand_total: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WakaTimeHeartbeat {
     pub entity: String,
     #[serde(rename = "type")]

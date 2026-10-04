@@ -108,6 +108,17 @@ pub struct Config {
     pub export_mode: ExportMode,
     /// Explicit gate for accepting destructive account deletion jobs.
     pub account_deletion_mode: AccountDeletionMode,
+    /// Opt-in rollout gate for storing versioned editor line measurements.
+    /// The capability API and ingest route share this flag so writers can retain
+    /// measurements locally until every server replica is ready.
+    #[serde(default)]
+    pub editor_line_metrics_enabled: bool,
+    /// Opt-in rollout gate for historical measurement preview/apply/rollback.
+    #[serde(default)]
+    pub measurement_repair_enabled: bool,
+    /// Personal experimental receipts; independent of capture and analytics ingestion.
+    #[serde(default)]
+    pub work_sessions_enabled: bool,
     /// How long a pause between two *proven* activity intervals may last before the
     /// clock stops. This is WakaTime's per-user timeout, and it exists because a
     /// segment can only ever be as long as the strict 120-second evidence window:
@@ -191,6 +202,14 @@ impl Config {
             postgres_url.is_some(),
             brokers.job_queue.is_some(),
         )?;
+        let editor_line_metrics_enabled = parse_opt_in_feature_flag(
+            std::env::var("ATOAXIS_EDITOR_LINE_METRICS_ENABLED").ok(),
+            "ATOAXIS_EDITOR_LINE_METRICS_ENABLED",
+        )?;
+        let measurement_repair_enabled = parse_opt_in_feature_flag(
+            std::env::var("ATOAXIS_MEASUREMENT_REPAIR_ENABLED").ok(),
+            "ATOAXIS_MEASUREMENT_REPAIR_ENABLED",
+        )?;
 
         Ok(Self {
             server: ServerConfig {
@@ -222,6 +241,10 @@ impl Config {
             presence_v2_enabled: std::env::var("PRESENCE_V2_ENABLED")
                 .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            work_sessions_enabled: parse_opt_in_feature_flag(
+                std::env::var("ATOAXIS_WORK_SESSIONS_ENABLED").ok(),
+                "ATOAXIS_WORK_SESSIONS_ENABLED",
+            )?,
             jwt_secret,
             cors_origins,
             trusted_proxy_ips: std::env::var("TRUSTED_PROXY_IPS")
@@ -241,6 +264,8 @@ impl Config {
                 .filter(|s| !s.trim().is_empty()),
             export_mode,
             account_deletion_mode,
+            editor_line_metrics_enabled,
+            measurement_repair_enabled,
             idle_timeout_seconds,
             duration_combined_v2: parse_duration_mode(
                 std::env::var("DURATION_CALCULATION_MODE").ok(),
@@ -254,6 +279,18 @@ impl Config {
             )?,
             brokers,
         })
+    }
+}
+
+fn parse_opt_in_feature_flag(value: Option<String>, name: &str) -> Result<bool> {
+    match value
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .filter(|raw| !raw.is_empty())
+        .as_deref()
+    {
+        None | Some("0") | Some("false") | Some("off") | Some("disabled") => Ok(false),
+        Some("1") | Some("true") | Some("on") | Some("enabled") => Ok(true),
+        Some(_) => anyhow::bail!("{name} must be a boolean value"),
     }
 }
 
@@ -744,5 +781,14 @@ mod tests {
             parse_cors_origins(None).unwrap(),
             CorsOrigins::List(vec!["http://localhost:3000".to_string()])
         );
+    }
+
+    #[test]
+    fn measurement_feature_flags_are_opt_in_and_reject_unknown_values() {
+        assert!(!parse_opt_in_feature_flag(None, "FLAG").unwrap());
+        assert!(!parse_opt_in_feature_flag(Some("off".to_string()), "FLAG").unwrap());
+        assert!(parse_opt_in_feature_flag(Some("true".to_string()), "FLAG").unwrap());
+        assert!(parse_opt_in_feature_flag(Some("1".to_string()), "FLAG").unwrap());
+        assert!(parse_opt_in_feature_flag(Some("maybe".to_string()), "FLAG").is_err());
     }
 }

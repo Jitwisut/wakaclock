@@ -41,37 +41,34 @@ const agentSetup_1 = require("./agentSetup");
 const aiDetectionSelfTest_1 = require("./aiDetectionSelfTest");
 const secrets_1 = require("./secrets");
 const utils_1 = require("./utils");
-async function ensureBrokerRunning(deps) {
-    let installError;
-    try {
-        await deps.installAgent();
+const singleFlight_1 = require("./singleFlight");
+/**
+ * One pending-key retry loop for the whole extension. "Set API Key" while the
+ * server is down used to start a fresh loop every time it was run, each with
+ * its own growing retry delay and its own CLI calls.
+ */
+const pendingVerification = new singleFlight_1.SingleFlight();
+/** Same typed state the status bar uses, so the popup and the bar never disagree. */
+function connectionNote(state) {
+    switch (state) {
+        case "offline":
+            return " — offline: the server is unreachable; activity stays queued locally.";
+        case "retryable_server_error":
+            return " — the server asked to retry later; activity stays queued locally.";
+        case "auth_rejected":
+            return " — the server rejected this API key.";
+        case "subscription_required":
+            return " — this account needs an active AtoAxis subscription.";
+        default:
+            return "";
     }
-    catch (error) {
-        installError = error instanceof Error ? error.message : String(error);
-    }
-    if (!installError) {
-        try {
-            const status = await deps.getBrokerStatus();
-            if (status.running === true) {
-                return { running: true, viaFallback: false };
-            }
-        }
-        catch {
-            // Status unreadable — treat exactly like "not running" and fall back.
-        }
-    }
-    try {
-        const disposable = await deps.startExtensionOwnedAgent();
-        return { running: true, viaFallback: true, disposable, error: installError };
-    }
-    catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-        return {
-            running: false,
-            viaFallback: false,
-            error: [installError, fallbackMessage].filter(Boolean).join("; "),
-        };
-    }
+}
+async function ensureBrokerRunning(_deps) {
+    return {
+        running: false,
+        viaFallback: false,
+        error: "on-demand mode does not start a background watcher",
+    };
 }
 function registerCommands(context, configService, cliService, bufferManager, statusBar, aiIntegrations, onVerifiedApiKey) {
     function workspaceProject(editor) {
@@ -89,14 +86,15 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             return;
         }
         await configService.updateSetting("cliPath", value.trim());
-        await vscode.window.showInformationMessage("Wakaclock CLI path updated.");
+        await vscode.window.showInformationMessage("AtoAxis CLI path updated.");
     }), vscode.commands.registerCommand("wakaclock.showToday", async () => {
         try {
             // Must match the timezone the status bar passes, or the popup and the
             // status bar describe two different 24-hour windows — which is how the
             // bar could read "0s" while this popup read "11m 46s".
             const today = await cliService.getToday((0, utils_1.localTimezone)());
-            await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)`);
+            await vscode.window.showInformationMessage(`Today: ${today.humanReadable} (${today.heartbeatCount} heartbeats)` +
+                connectionNote(today.connection?.state));
         }
         catch (error) {
             await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to load today's total.");
@@ -113,7 +111,7 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await statusBar.refresh();
     }), vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
         const value = await vscode.window.showInputBox({
-            prompt: "API key generated from the Wakaclock dashboard (Settings → API key)",
+            prompt: "API key generated from the AtoAxis dashboard (Settings → API key)",
             placeHolder: "wcl_...",
             password: true,
             ignoreFocusOut: true
@@ -143,14 +141,14 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         }
         if (result.status === "unreachable" || result.status === "server_error") {
             // A pending identity is useful for offline queueing. It is safe to retain in
-            // SecretStorage, but do not mirror it to the background agent until verified.
+            // SecretStorage, but do not mirror it to hooks until verified.
             const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
             await (0, secrets_1.setPendingApiKey)(context.secrets, trimmed);
             if (!existing) {
                 await (0, secrets_1.setStoredApiKey)(context.secrets, trimmed);
             }
             await statusBar.refresh();
-            void retryPendingVerification(context, cliService, statusBar);
+            void pendingVerification.run(() => retryPendingVerification(context, cliService, statusBar));
             await vscode.window.showWarningMessage("AtoAxis is unreachable right now. The key is stored securely and editor activity will be queued offline; verification will retry automatically.");
             return;
         }
@@ -163,20 +161,20 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await statusBar.refresh();
         // The activation bootstrap may already have returned because no key was
         // available at startup. Re-run it after verification so an existing AI
-        // consent immediately refreshes the broker service, and a newly eligible
+        // consent immediately refreshes CLI-backed status, and a newly eligible
         // integration can receive the normal consent prompt.
         onVerifiedApiKey?.();
         await vscode.window.showInformationMessage("AtoAxis API key verified and saved securely. Time tracking is now active.");
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
         if (!existing) {
-            await vscode.window.showInformationMessage("No Wakaclock API key is currently set.");
+            await vscode.window.showInformationMessage("No AtoAxis API key is currently set.");
             return;
         }
         await (0, secrets_1.clearStoredApiKey)(context.secrets);
         await (0, secrets_1.clearPendingApiKey)(context.secrets);
         await statusBar.refresh();
-        await vscode.window.showInformationMessage("Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again.");
+        await vscode.window.showInformationMessage("AtoAxis API key cleared — heartbeats will use the unauthenticated user_id again.");
         try {
             await cliService.clearApiKey();
         }
@@ -196,13 +194,13 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             const status = await cliService.getBrokerStatus();
             const inbox = status.inbox;
             const lastError = inbox?.last_error_message;
-            await vscode.window.showInformationMessage(`Broker ${status.running ? "running" : "stopped"}; ` +
+            await vscode.window.showInformationMessage(`On-demand AI sync; ` +
                 `pending ${inbox?.pending ?? 0}, retry ${inbox?.retry ?? 0}, ` +
                 `dead-letter ${inbox?.dead_letter ?? 0}, outbound ${status.outbound_queue_count ?? 0}.` +
                 (lastError ? ` Last error: ${lastError}` : ""));
         }
         catch (error) {
-            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect the local AI broker.");
+            await vscode.window.showErrorMessage(error instanceof Error ? error.message : "Unable to inspect on-demand AI sync.");
         }
     }), vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
         return setupAiTracking(aiIntegrations, cliService, context);
@@ -256,25 +254,12 @@ async function setupAiTracking(aiIntegrations, cliService, context, repairing = 
             if (key) {
                 await cliService.persistApiKey(key).catch(() => undefined);
             }
-            const broker = await ensureBrokerRunning(cliService);
-            const serviceInstalled = broker.running;
-            if (broker.disposable) {
-                context.subscriptions.push(broker.disposable);
-            }
-            if (broker.running && broker.viaFallback) {
-                await vscode.window.showInformationMessage(`${prefix}; the Extension Host will keep the transcript watcher running while this workspace is open.`);
-            }
-            if (!broker.running) {
-                await vscode.window.showWarningMessage(`${prefix}, but the always-on transcript agent could not be started. Upgrade wakaclock-cli if this persists: ${broker.error ?? "unknown error"}`);
-            }
             if (failed > 0) {
-                await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed.${serviceInstalled ? "" : " The always-on agent also needs an upgrade or repair."}${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`);
+                await vscode.window.showWarningMessage(`${prefix}: ${configured} configured, ${failed} failed.${suggestedAction ? ` ${suggestedAction}.` : ""} Hooks use on-demand CLI sync. Run “AtoAxis: Show AI Tracking Status” for details.`);
                 return false;
             }
-            if (serviceInstalled) {
-                await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled.`);
-            }
-            return serviceInstalled;
+            await vscode.window.showInformationMessage(`${prefix}: ${configured} AI tool(s) enabled. Hooks use on-demand CLI sync.`);
+            return true;
         }
         else if (failed > 0) {
             await vscode.window.showWarningMessage(`AI setup did not complete.${suggestedAction ? ` ${suggestedAction}.` : ""} Run “AtoAxis: Show AI Tracking Status” for details.`);
@@ -303,7 +288,7 @@ async function chooseAiAgents(aiIntegrations, context, repairing = false) {
     const picked = await vscode.window.showQuickPick(candidates.map((status) => ({
         label: status.label,
         description: status.id,
-        detail: "Adds an AtoAxis hook when supported and enables the background transcript watcher. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
+        detail: "Adds an AtoAxis hook when supported and enables on-demand transcript sync. Only explicit hook/transcript evidence can name an agent; process/filesystem checks are diagnostics-only. Prompts and source code are never uploaded.",
         id: status.id,
     })), {
         title: repairing
@@ -321,7 +306,7 @@ async function chooseAiAgents(aiIntegrations, context, repairing = false) {
         : ["Enable selected", "Not now", "Don't ask again"], {
         title: repairing ? "Confirm AI integration repair" : "Confirm AI tracking setup",
         placeHolder: repairing
-            ? "Reinstall hooks, broker service and token permissions"
+            ? "Repair hooks and token permissions"
             : "Choose when to install the selected integrations",
         ignoreFocusOut: true,
     });

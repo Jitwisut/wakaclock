@@ -3,43 +3,85 @@
 import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
-import { CalendarIcon } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Calendar } from '@/components/ui/calendar';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { getHeartbeats } from '@/lib/wakaclock/endpoints';
 import { todayDateString } from '@/lib/wakaclock/format';
+import {
+  bucketHeartbeatCounts,
+  EMPTY_HEARTBEAT_FILTER,
+  type HeartbeatFilter,
+  summarizeHeartbeats,
+} from '@/lib/wakaclock/heartbeat-stats';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
+import type { HeartbeatItem, HeartbeatListResponse } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
-import { SendHeartbeatDialog } from './components/send-heartbeat-dialog';
+import { CompositionCard, type CompositionFacet } from './components/composition-card';
+import { HeartbeatInspector } from './components/heartbeat-inspector';
+import { HeartbeatStream } from './components/heartbeat-stream';
+import { HourlyRhythm } from './components/hourly-rhythm';
+import { PulseMonitor } from './components/pulse-monitor';
+import { StatTiles } from './components/stat-tiles';
 
-function displayEditor(editor?: null | string) {
-  if (editor === 'vscode') return 'VS Code';
-  if (editor === 'codex-desktop') return 'Codex Desktop';
-  return editor || '—';
+const NO_ROWS: HeartbeatItem[] = [];
+
+/**
+ * `HeartbeatItem` has no unique id from the API, and entity+time+cursor can
+ * genuinely collide (two idle heartbeats in the same file within a second), so
+ * the occurrence count disambiguates. Unlike an array index, these keys survive
+ * a late (offline-queue) heartbeat being inserted mid-list on refetch.
+ */
+function rowKeys(rows: readonly HeartbeatItem[]) {
+  const seen = new Map<string, number>();
+  return rows.map((hb) => {
+    const base = `${hb.entity}|${hb.time}|${hb.cursor_position ?? ''}`;
+    const occurrence = seen.get(base) ?? 0;
+    seen.set(base, occurrence + 1);
+    return `${base}|${occurrence}`;
+  });
 }
 
-function HeartbeatsPanel() {
+interface LiveState {
+  beat: number;
+  data: HeartbeatListResponse | undefined;
+  fresh: ReadonlySet<string>;
+  keys: ReadonlySet<string>;
+  scope: string;
+}
+
+/** Marks rows that arrived since the previous poll of the same day, for the arrival animation. */
+function useArrivals(scope: string, data: HeartbeatListResponse | undefined, keys: string[]) {
+  const [live, setLive] = React.useState<LiveState>({
+    beat: 0,
+    data: undefined,
+    fresh: new Set(),
+    keys: new Set(),
+    scope,
+  });
+
+  if (data !== live.data || scope !== live.scope) {
+    const sameScope = scope === live.scope && live.data !== undefined;
+    const fresh = sameScope ? keys.filter((key) => !live.keys.has(key)) : [];
+    setLive({
+      beat: live.beat + (fresh.length > 0 ? 1 : 0),
+      data,
+      fresh: fresh.length > 0 || !sameScope ? new Set(fresh) : live.fresh,
+      keys: new Set(keys),
+      scope,
+    });
+  }
+
+  return live;
+}
+
+function HeartbeatsWorkspace() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
   const [timezone, setTimezone] = React.useState<null | string>(null);
+  const [filter, setFilter] = React.useState<HeartbeatFilter>(EMPTY_HEARTBEAT_FILTER);
+  const [inspect, setInspect] = React.useState<{ key: string; open: boolean } | null>(null);
 
   React.useEffect(() => {
     setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
@@ -52,104 +94,93 @@ function HeartbeatsPanel() {
     refetchInterval: 5000,
   });
 
-  const rows = data?.data ?? [];
+  const rows = data?.data ?? NO_ROWS;
+  const keys = React.useMemo(() => rowKeys(rows), [rows]);
+  const summary = React.useMemo(() => summarizeHeartbeats(rows), [rows]);
+  const hourly = React.useMemo(() => bucketHeartbeatCounts(rows, 60), [rows]);
+  const live = useArrivals(`${userId}|${date}|${timezone}`, data, keys);
+
+  const facets: Record<CompositionFacet, null | string> = {
+    agent: filter.agent,
+    editor: filter.editor,
+    language: filter.language,
+    project: filter.project,
+  };
+
+  // Looked up by key, not index, so a late heartbeat landing mid-list on refetch
+  // cannot swap the row being inspected.
+  const inspected = inspect ? (rows[keys.indexOf(inspect.key)] ?? null) : null;
+
+  function changeDate(next: string) {
+    setDate(next);
+    setInspect(null);
+  }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <div>
-            <CardTitle>Quest journal — {data?.total ?? 0} entries</CardTitle>
-            <p className="text-muted-foreground mt-1 text-xs">Updates every 5 seconds</p>
+    <div className="flex flex-col gap-4 sm:gap-5">
+      <PulseMonitor
+        beat={live.beat}
+        date={date}
+        isToday={date === todayDateString()}
+        onDateChange={changeDate}
+        rows={rows}
+        summary={summary}
+        timezone={timezone}
+        total={data?.total ?? rows.length}
+      />
+
+      <QueryState
+        emptyDescription="Send a test heartbeat above, or point wakaclock-cli at this backend."
+        emptyTitle="No heartbeats on this day"
+        error={error}
+        isEmpty={timezone !== null && !isLoading && !error && rows.length === 0}
+        isLoading={timezone === null || isLoading}
+        skeletonClassName="h-[520px] w-full rounded-2xl"
+      >
+        <div className="flex flex-col gap-4 sm:gap-5">
+          <StatTiles summary={summary} />
+          <div className="grid gap-4 sm:gap-5 lg:grid-cols-5">
+            <div className="min-w-0 lg:col-span-3">
+              <HourlyRhythm
+                hourly={hourly}
+                onSelect={(hour) => setFilter((f) => ({ ...f, hour }))}
+                selected={filter.hour}
+              />
+            </div>
+            <div className="min-w-0 lg:col-span-2">
+              <CompositionCard
+                active={facets}
+                onToggle={(facet, value) =>
+                  setFilter((f) => ({ ...f, [facet]: f[facet] === value ? null : value }))
+                }
+                summary={summary}
+              />
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button className="gap-1.5" size="sm" variant="outline">
-                  <CalendarIcon className="size-3.5" />
-                  {format(new Date(date), 'MMM d, yyyy')}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-auto p-0">
-                <Calendar
-                  mode="single"
-                  onSelect={(d) => d && setDate(format(d, 'yyyy-MM-dd'))}
-                  selected={new Date(date)}
-                />
-              </PopoverContent>
-            </Popover>
-            <SendHeartbeatDialog date={date} timezone={timezone} />
-          </div>
+          <HeartbeatStream
+            filter={filter}
+            freshKeys={live.fresh}
+            keys={keys}
+            onFilterChange={setFilter}
+            onOpen={(index) => setInspect({ key: keys[index], open: true })}
+            rows={rows}
+          />
         </div>
-      </CardHeader>
-      <CardContent>
-        <QueryState
-          emptyDescription="Send a test heartbeat above, or point wakaclock-cli at this backend."
-          emptyTitle="No heartbeats on this day"
-          error={error}
-          isEmpty={timezone !== null && !isLoading && !error && rows.length === 0}
-          isLoading={timezone === null || isLoading}
-        >
-          <ScrollArea className="h-[520px] rounded-md border">
-            <Table>
-              <TableHeader className="bg-card sticky top-0">
-                <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Entity</TableHead>
-                  <TableHead>Project</TableHead>
-                  <TableHead>Language</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Write</TableHead>
-                  <TableHead>Editor</TableHead>
-                  <TableHead>OS</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((hb, index) => (
-                  // `HeartbeatItem` has no unique id from the API, and entity+time+
-                  // cursor_position can genuinely collide (e.g. two heartbeats in the
-                  // same file within the same second while idle, cursor unchanged) —
-                  // the index disambiguates. Safe here since this list is read-only and
-                  // never reordered client-side; a full refetch just replaces the array.
-                  // eslint-disable-next-line react/no-array-index-key
-                  <TableRow key={`${hb.entity}-${hb.time}-${hb.cursor_position}-${index}`}>
-                    <TableCell className="font-mono text-xs">
-                      {new Date(hb.time * 1000).toLocaleTimeString()}
-                    </TableCell>
-                    <TableCell className="max-w-56 truncate" title={hb.entity}>
-                      {hb.entity}
-                    </TableCell>
-                    <TableCell>{hb.project ?? '—'}</TableCell>
-                    <TableCell>{hb.language ?? '—'}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{hb.category}</Badge>
-                    </TableCell>
-                    <TableCell>{hb.is_write ? 'yes' : 'no'}</TableCell>
-                    <TableCell className="text-muted-foreground">{displayEditor(hb.editor)}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {hb.operating_system || '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </ScrollArea>
-        </QueryState>
-      </CardContent>
-    </Card>
+      </QueryState>
+
+      <HeartbeatInspector
+        heartbeat={inspected}
+        onOpenChange={(open) => setInspect((current) => (current ? { ...current, open } : null))}
+        open={inspect?.open ?? false}
+      />
+    </div>
   );
 }
 
 export default function HeartbeatsPage() {
   return (
-    <div className="flex flex-col gap-4">
-      <WakaclockPageHeader
-        description="The quest journal — every raw event this dashboard's stats are built from."
-        title="Heartbeats"
-      />
-      <RequireUser>
-        <HeartbeatsPanel />
-      </RequireUser>
-    </div>
+    <RequireUser>
+      <HeartbeatsWorkspace />
+    </RequireUser>
   );
 }

@@ -75,7 +75,7 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(warning) Wakaclock: key rejected");
+    expect(item.text).toBe("$(warning) AtoAxis: key rejected");
     expect(item.command).toBe("wakaclock.setApiKey");
     expect(item.backgroundColor).toBeDefined();
     expect(showErrorMessage).toHaveBeenCalledTimes(1);
@@ -136,6 +136,83 @@ describe("StatusBarController", () => {
 
     expect(item.text).toBe("$(clock) 1h 0m 0s");
     expect(item.show).toHaveBeenCalled();
+  });
+
+  it("shows on-demand pending work, last sync, and adapter coverage", async () => {
+    const controller = new StatusBarController(
+      () => createConfig(),
+      {
+        getToday: vi.fn().mockResolvedValue({
+          humanReadable: "2m",
+          totalSeconds: 120,
+          heartbeatCount: 3
+        }),
+        getAiDiagnosticsSnapshot: vi.fn().mockResolvedValue({
+          schema_version: 2,
+          runtime_health: "healthy",
+          broker: {
+            availability: "available",
+            running: { availability: "available", value: false },
+            pending: { availability: "available", value: 4 },
+            retry: { availability: "available", value: 1 },
+            dead_letter: { availability: "available", value: 0 },
+            last_delivery_at: "2026-09-22T01:02:03Z"
+          },
+          adapters: [
+            {
+              agent: "codex",
+              availability: "available",
+              detected: { availability: "available", value: true },
+              enabled: { availability: "available", value: true },
+              runtime_health: "healthy",
+              verification: "verified"
+            },
+            {
+              agent: "claude-code",
+              availability: "available",
+              detected: { availability: "available", value: true },
+              enabled: { availability: "available", value: false },
+              runtime_health: "disabled",
+              verification: "verified"
+            }
+          ]
+        })
+      },
+      new Logger(() => false)
+    );
+
+    await controller.refresh();
+
+    expect(item.tooltip).toContain("AI sync: on-demand · pending 4 · retry 1 · dead-letter 0");
+    expect(item.tooltip).toContain("AI last sync: 2026-09-22T01:02:03Z");
+    expect(item.tooltip).toContain("AI adapter coverage: 1/2 detected adapters enabled · 1 verified");
+  });
+
+  it("falls back to broker status when typed AI diagnostics are unavailable", async () => {
+    const getBrokerStatus = vi.fn().mockResolvedValue({
+      runtime_mode: "on_demand",
+      last_processed_at: 1_795_000_000,
+      inbox: { pending: 2, retry: 0, dead_letter: 0 }
+    });
+    const controller = new StatusBarController(
+      () => createConfig(),
+      {
+        getToday: vi.fn().mockResolvedValue({
+          humanReadable: "0s",
+          totalSeconds: 0,
+          heartbeatCount: 0
+        }),
+        getAiDiagnosticsSnapshot: vi.fn().mockRejectedValue(new Error("legacy CLI")),
+        getBrokerStatus
+      },
+      new Logger(() => false)
+    );
+
+    await controller.refresh();
+
+    expect(getBrokerStatus).toHaveBeenCalledTimes(1);
+    expect(item.tooltip).toContain("AI sync: on-demand · pending 2 · retry 0 · dead-letter 0");
+    expect(item.tooltip).toContain("AI last sync:");
   });
 
   it("keeps the status bar on the CLI total and reports local activity as pending", async () => {
@@ -215,7 +292,7 @@ describe("StatusBarController", () => {
 
     await controller.refresh();
 
-    expect(item.text).toBe("$(clock) Wakaclock");
+    expect(item.text).toBe("$(clock) AtoAxis");
     expect(item.tooltip).toContain("Unable to read today's total");
   });
 });

@@ -32,6 +32,7 @@ pub mod status_bar;
 pub mod summaries;
 pub mod teams;
 pub mod users;
+pub mod wakatime_client;
 pub mod wakatime_import;
 use crate::infrastructure::app::AppState;
 use axum::{
@@ -217,6 +218,19 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/users/:user/summaries", get(summaries::list))
         .route("/users/current/status_bar/today", get(status_bar::today))
         .route("/users/:user/status_bar/today", get(status_bar::today))
+        // wakatime-cli `--today` and the WakaTime web plugins use this spelling.
+        .route("/users/current/statusbar/today", get(status_bar::today))
+        .route("/users/:user/statusbar/today", get(status_bar::today))
+        .route(
+            "/users/current/file_experts",
+            post(wakatime_client::file_experts),
+        )
+        .route("/users/:user/file_experts", post(wakatime_client::file_experts))
+        .route(
+            "/plugins/errors",
+            post(wakatime_client::plugin_errors)
+                .layer(wakatime_client::diagnostics_body_limit()),
+        )
         .route("/users/current/ai_stats", get(ai_stats::get))
         .route("/users/:user/ai_stats", get(ai_stats::get))
         .route(

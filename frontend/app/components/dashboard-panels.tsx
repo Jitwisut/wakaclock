@@ -38,8 +38,7 @@ export function DashboardPanelsProvider({
   );
 
   const persist = React.useCallback((next: ReadonlySet<string>) => {
-    if (typeof window === 'undefined') return;
-
+    // Only the client-side visibility/reset actions write this preference.
     const value = serializeHiddenPanels(next);
 
     if (value) {

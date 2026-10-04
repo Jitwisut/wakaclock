@@ -1,62 +1,163 @@
+//! Real CLI acceptance tests for on-demand capture. Each invocation has a
+//! disposable home, cleared environment, fake API and a hard process deadline.
 use chrono::Utc;
-use reqwest::StatusCode;
 use rusqlite::Connection;
 use std::{
     fs,
-    io::{ErrorKind, Write},
+    io::Write,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::Stdio,
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
+    sync::Mutex,
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use wakaclock_core::{
     ai::{AiConfidence, AiEventSource},
     broker::{
-        BrokerChangeKind, BrokerDiscovery, BrokerEventType, BrokerEventV1, BrokerStore,
-        BROKER_SCHEMA_VERSION,
+        BrokerChangeKind, BrokerEventType, BrokerEventV1, BrokerStore, BROKER_SCHEMA_VERSION,
     },
 };
 
-struct ChildGuard(Child);
-
-impl ChildGuard {
-    fn kill(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-
-    fn terminate(&mut self) {
-        #[cfg(unix)]
-        {
-            let _ = Command::new("kill")
-                .args(["-TERM", &self.0.id().to_string()])
-                .status();
-            let _ = self.0.wait();
-        }
-        #[cfg(not(unix))]
-        self.kill();
-    }
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn temp_home(name: &str) -> PathBuf {
-    let nonce = Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    let path = std::env::temp_dir().join(format!("wakaclock-broker-process-{name}-{nonce}"));
-    fs::create_dir_all(&path).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "wakaclock-demand-{name}-{}",
+        Utc::now().timestamp_nanos_opt().unwrap()
+    ));
+    fs::create_dir_all(path.join(".wakaclock")).unwrap();
     path
 }
 
+async fn cli(
+    home: &Path,
+    server: &str,
+    args: &[&str],
+    input: Option<&BrokerEventV1>,
+) -> serde_json::Value {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_wakaclock"));
+    command
+        .args(args)
+        .env_clear()
+        .current_dir(home)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("WAKACLOCK_SERVER_URL", server)
+        .env("WAKACLOCK_API_KEY", "process-test-key")
+        .env("CODEX_HOME", home.join(".codex"))
+        .env("PATH", home.join("no-system-services"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().unwrap();
+    if let Some(input) = input {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(input).unwrap())
+            .await
+            .unwrap();
+    } else {
+        drop(child.stdin.take());
+    }
+    let output = timeout(Duration::from_secs(30), child.wait_with_output())
+        .await
+        .expect("on-demand CLI did not exit")
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !home.join(".wakaclock/broker.json").exists(),
+        "on-demand command wrote discovery"
+    );
+    assert!(
+        !home.join(".wakaclock/broker.token").exists(),
+        "on-demand command wrote a broker token"
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+}
+
+struct FakeApi {
+    url: String,
+    status: Arc<Mutex<u16>>,
+    heartbeats: Arc<Mutex<Vec<serde_json::Value>>>,
+    task: JoinHandle<()>,
+}
+impl Drop for FakeApi {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+async fn fake_api(status: u16) -> FakeApi {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let status = Arc::new(Mutex::new(status));
+    let heartbeats = Arc::new(Mutex::new(Vec::new()));
+    let state = status.clone();
+    let rows = heartbeats.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let state = state.clone();
+            let rows = rows.clone();
+            tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 8192];
+                let header_end = loop {
+                    let n = stream.read(&mut buffer).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break i + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
+                let length = headers
+                    .lines()
+                    .find_map(|l| {
+                        l.split_once(':')
+                            .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                while bytes.len() < header_end + length {
+                    let n = stream.read(&mut buffer).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&buffer[..n]);
+                }
+                let code = *state.lock().await;
+                if code == 200 && headers.lines().next().unwrap_or("").contains("heartbeats") {
+                    rows.lock().await.push(
+                        serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap(),
+                    );
+                }
+                let body = r#"{"status":"ok","heartbeats_inserted":1}"#;
+                let response=format!("HTTP/1.1 {code} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    FakeApi {
+        url,
+        status,
+        heartbeats,
+        task,
+    }
+}
 fn event(id: &str) -> BrokerEventV1 {
     BrokerEventV1 {
         schema_version: BROKER_SCHEMA_VERSION,
@@ -88,227 +189,23 @@ fn event(id: &str) -> BrokerEventV1 {
         transport: Some("test".to_string()),
         tool: Some("test".to_string()),
         tool_event_id: Some("tool-process".to_string()),
-        editor: None,
+        editor: Some("VS Code".into()),
         producer_surface: None,
     }
 }
 
-fn spawn_broker(home: &Path, server_url: &str) -> ChildGuard {
-    let binary = env!("CARGO_BIN_EXE_wakaclock");
-    let child = Command::new(binary)
-        .args(["broker", "run", "--interval-seconds", "1"])
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("WAKACLOCK_SERVER_URL", server_url)
-        .env("WAKACLOCK_API_KEY", "process-test-key")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn broker process");
-    ChildGuard(child)
-}
-
-async fn wait_for_discovery(home: &Path) -> BrokerDiscovery {
-    let path = home.join(".wakaclock/broker.json");
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(discovery) = serde_json::from_str::<BrokerDiscovery>(&content) {
-                    return discovery;
-                }
-            }
-            sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("broker discovery timeout")
-}
-
-async fn wait_for_new_discovery(home: &Path, old_pid: u32) -> BrokerDiscovery {
-    let path = home.join(".wakaclock/broker.json");
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(discovery) = serde_json::from_str::<BrokerDiscovery>(&content) {
-                    if discovery.pid != old_pid {
-                        return discovery;
-                    }
-                }
-            }
-            sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("new broker discovery timeout")
-}
-
-async fn wait_until_processing(db: &Path) {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(stats) = BrokerStore::open_at(db).and_then(|store| store.stats()) {
-                if stats.processing == 1 {
-                    return;
-                }
-            }
-            sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("broker did not claim event")
-}
-
-async fn post_event(discovery: &BrokerDiscovery, event: &BrokerEventV1, home: &Path) {
-    let token = fs::read_to_string(home.join(".wakaclock/broker.token")).unwrap();
-    let response = reqwest::Client::new()
-        .post(format!("{}/v1/events", discovery.endpoint))
-        .bearer_auth(token.trim())
-        .json(event)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-}
-
-async fn holding_server() -> (String, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        loop {
-            let accepted = listener.accept().await;
-            let Ok((stream, _)) = accepted else { break };
-            tokio::spawn(hold_connection(stream));
-        }
-    });
-    (format!("http://{address}"), task)
-}
-
-async fn hold_connection(mut stream: TcpStream) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match stream.read(&mut buffer).await {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
+fn read_delivery_state(db: &Path) -> Option<(String, Option<i64>)> {
+    if !db.exists() {
+        return None;
     }
-}
-
-fn expire_lease(db: &Path) {
-    let connection = Connection::open(db).unwrap();
-    connection
-        .execute(
-            "UPDATE broker_events SET lease_until = 0 WHERE event_id = 'process-restart'",
-            [],
-        )
-        .unwrap();
-}
-
-fn attempt_count(db: &Path) -> i64 {
-    let connection = Connection::open(db).unwrap();
+    let connection = Connection::open(db).ok()?;
     connection
         .query_row(
-            "SELECT attempt_count FROM broker_events WHERE event_id = 'process-restart'",
+            "SELECT kind, http_status FROM delivery_state LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .unwrap()
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_restart_reclaims_processing_lease_without_duplicate_inbox_row() {
-    let home = temp_home("restart");
-    let db = home.join(".wakaclock/broker.db");
-    let (server_url, server_task) = holding_server().await;
-    let mut first = spawn_broker(&home, &server_url);
-    let discovery = wait_for_discovery(&home).await;
-    let input = event("process-restart");
-    post_event(&discovery, &input, &home).await;
-    wait_until_processing(&db).await;
-
-    first.kill();
-    expire_lease(&db);
-
-    let mut second = spawn_broker(&home, &server_url);
-    let second_discovery = wait_for_new_discovery(&home, discovery.pid).await;
-    assert_ne!(discovery.pid, second_discovery.pid);
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if attempt_count(&db) >= 2 {
-                return;
-            }
-            sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("restarted broker did not reclaim the lease");
-
-    let store = BrokerStore::open_at(&db).unwrap();
-    let stats = store.stats().unwrap();
-    assert_eq!(stats.processing, 1);
-    assert_eq!(
-        stats.pending + stats.processing + stats.retry + stats.processed + stats.dead_letter,
-        1
-    );
-    assert_eq!(input.heartbeat_id(), "broker:process-restart");
-
-    second.kill();
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_process_exits_cleanly_when_stopped_and_removes_owned_discovery() {
-    let home = temp_home("shutdown");
-    let (server_url, server_task) = holding_server().await;
-    let mut broker = spawn_broker(&home, &server_url);
-    let _ = wait_for_discovery(&home).await;
-    broker.terminate();
-
-    timeout(Duration::from_secs(2), async {
-        loop {
-            match fs::metadata(home.join(".wakaclock/broker.json")) {
-                Ok(_) => sleep(Duration::from_millis(20)).await,
-                Err(error) if error.kind() == ErrorKind::NotFound => return,
-                Err(error) => panic!("unexpected discovery error: {error}"),
-            }
-        }
-    })
-    .await
-    .expect("broker discovery was not cleaned up");
-
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
-}
-
-// ---------------------------------------------------------------------------
-// planai2.md Phase 0 acceptance (p0.A1, p0.A3, p0.A4)
-// ---------------------------------------------------------------------------
-
-/// A server that reads the request and always replies with a fixed status line.
-/// Used to drive the broker's delivery path through a real non-2xx (e.g. 402).
-async fn status_server(status_line: &'static str) -> (String, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                break;
-            };
-            tokio::spawn(async move {
-                let mut buffer = [0_u8; 4096];
-                let _ = stream.read(&mut buffer).await;
-                let body = "{\"error\":\"trial expired or subscription inactive\"}";
-                let response = format!(
-                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-                let _ = stream.flush().await;
-            });
-        }
-    });
-    (format!("http://{address}"), task)
+        .ok()
 }
 
 fn total_rows(db: &Path) -> u64 {
@@ -392,232 +289,6 @@ fn write_native_codex_transcript(home: &Path) -> (PathBuf, PathBuf) {
     (path, workspace_root)
 }
 
-async fn wait_for_codex_sidecar(home: &Path, minimum: usize) {
-    let sidecar = home.join(".wakaclock/ai-events.jsonl");
-    timeout(Duration::from_secs(10), async {
-        loop {
-            let count = fs::read_to_string(&sidecar)
-                .ok()
-                .map(|content| {
-                    content
-                        .lines()
-                        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-                        .filter(|value| {
-                            value.get("agent").and_then(|v| v.as_str()) == Some("codex")
-                        })
-                        .count()
-                })
-                .unwrap_or_default();
-            if count >= minimum {
-                return;
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("broker did not auto-scan the Codex transcript");
-}
-
-/// Phase 0.4/0.5 — the always-on broker starts transcript recovery itself.  A
-/// fresh Codex Desktop `item_completed/FileChange` JSONL file is placed in the
-/// isolated HOME before the broker starts; no `wakaclock ai sync` child process is
-/// invoked by this test. The workspace name deliberately contains a hyphen, matching
-/// the real `AI-tiktok` regression. The 402 backend keeps the check local and proves
-/// capture survives delivery refusal with the Codex Desktop fallback editor intact.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_autostarts_codex_transcript_scan_without_manual_sync() {
-    let home = temp_home("auto-scan");
-    let db = home.join(".wakaclock/broker.db");
-    let (_transcript, workspace_root) = write_native_codex_transcript(&home);
-    let (server_url, server_task) = status_server("402 Payment Required").await;
-    let mut broker = spawn_broker(&home, &server_url);
-    let _discovery = wait_for_discovery(&home).await;
-
-    wait_for_codex_sidecar(&home, 2).await;
-    let stats = timeout(Duration::from_secs(5), async {
-        loop {
-            let stats = BrokerStore::open_at(&db).unwrap().stats().unwrap();
-            if stats.processed >= 2 {
-                return stats;
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("auto-scan events were not processed");
-    assert!(
-        stats.processed >= 2,
-        "auto-scan events were not processed: {stats:?}"
-    );
-    assert_eq!(stats.dead_letter, 0);
-    assert_eq!(stats.retry, 0);
-
-    let connection = Connection::open(&db).unwrap();
-    let (event_count, project_root, producer_surface): (i64, String, String) = connection
-        .query_row(
-            "SELECT COUNT(*),
-                    MIN(json_extract(normalized_payload_json, '$.project_root')),
-                    MIN(json_extract(normalized_payload_json, '$.producer_surface'))
-             FROM broker_events
-             WHERE event_id LIKE 'codex-v2:%'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(event_count, 2);
-    assert_eq!(project_root, workspace_root.to_string_lossy());
-    assert_eq!(producer_surface, "codex-desktop");
-
-    let queue = Connection::open(home.join(".wakaclock/queue.db")).unwrap();
-    let (queued_count, editor): (i64, String) = queue
-        .query_row(
-            "SELECT COUNT(*), MIN(json_extract(payload, '$.editor'))
-             FROM heartbeat_queue
-             WHERE json_extract(payload, '$.ai_agent') = 'codex'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(queued_count, 2);
-    assert_eq!(editor, "codex-desktop");
-
-    broker.kill();
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
-}
-
-/// Post to the broker's own HTTP endpoint, tolerating the dedup responses (200 for
-/// a duplicate, 409 for a same-id/different-payload conflict) as well as 202.
-async fn post_event_lenient(discovery: &BrokerDiscovery, event: &BrokerEventV1, home: &Path) {
-    let token = fs::read_to_string(home.join(".wakaclock/broker.token")).unwrap();
-    let response = reqwest::Client::new()
-        .post(format!("{}/v1/events", discovery.endpoint))
-        .bearer_auth(token.trim())
-        .json(event)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        matches!(
-            response.status(),
-            StatusCode::ACCEPTED | StatusCode::OK | StatusCode::CONFLICT
-        ),
-        "unexpected broker ingest status: {}",
-        response.status()
-    );
-}
-
-/// p0.A1 — one Codex-style `apply_patch` event reaches the local broker exactly
-/// once, and re-posting the same `event_id` does not create a second inbox row.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p0_a1_one_apply_patch_event_is_captured_exactly_once() {
-    let home = temp_home("p0a1");
-    let db = home.join(".wakaclock/broker.db");
-    let (server_url, server_task) = holding_server().await;
-    let mut broker = spawn_broker(&home, &server_url);
-    let discovery = wait_for_discovery(&home).await;
-
-    let input = event("codex-apply-patch-1");
-    post_event_lenient(&discovery, &input, &home).await;
-    post_event_lenient(&discovery, &input, &home).await; // duplicate delivery from the hook
-
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if total_rows(&db) >= 1 {
-                return;
-            }
-            sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("event never landed in the broker inbox");
-
-    // A moment for a (wrongly) duplicated row to show up, if it were going to.
-    sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        total_rows(&db),
-        1,
-        "duplicate event_id created a second inbox row"
-    );
-
-    broker.kill();
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
-}
-
-/// p0.A3 — with the backend returning HTTP 402, local capture is unaffected: the
-/// correlation sidecar is written, the heartbeat is durably queued for later
-/// delivery, the refusal is recorded (so it reads as an entitlement problem, not
-/// a detection failure), and nothing is dead-lettered or lost.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p0_a3_offline_402_keeps_the_event_captured_locally() {
-    let home = temp_home("p0a3");
-    let db = home.join(".wakaclock/broker.db");
-    let (server_url, server_task) = status_server("402 Payment Required").await;
-    let mut broker = spawn_broker(&home, &server_url);
-    let discovery = wait_for_discovery(&home).await;
-
-    let input = event("codex-402");
-    post_event_lenient(&discovery, &input, &home).await;
-
-    let failure_file = home.join(".wakaclock/last-delivery-failure.json");
-    timeout(Duration::from_secs(8), async {
-        loop {
-            // The broker claimed and processed the event, and the client recorded
-            // the 402 rather than dropping the work.
-            if failure_file.exists() {
-                return;
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("402 was not recorded as a delivery failure");
-
-    let recorded = fs::read_to_string(&failure_file).unwrap();
-    assert!(
-        recorded.contains("402"),
-        "recorded failure should name the 402"
-    );
-    let sidecar_path = home.join(".wakaclock/ai-events.jsonl");
-    assert!(
-        sidecar_path.exists(),
-        "correlation sidecar is written even when delivery fails"
-    );
-    let sidecar_row = fs::read_to_string(&sidecar_path)
-        .unwrap()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .next()
-        .expect("sidecar should contain one valid metadata row");
-    assert_eq!(sidecar_row["schema_version"], 2);
-    assert!(sidecar_row["stream_id"]
-        .as_str()
-        .is_some_and(|id| !id.is_empty()));
-    assert!(sidecar_row["sequence"]
-        .as_i64()
-        .is_some_and(|sequence| sequence >= 1));
-    assert!(
-        home.join(".wakaclock/queue.db").exists(),
-        "the heartbeat is durably queued for later delivery"
-    );
-
-    let stats = BrokerStore::open_at(&db).unwrap().stats().unwrap();
-    assert_eq!(stats.dead_letter, 0, "a 402 must not dead-letter the event");
-    assert_eq!(total_rows(&db), 1, "the event is still tracked, not lost");
-
-    broker.kill();
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
-}
-
-/// Writes a legacy-alias service manifest at whatever path this platform's
-/// `agent_service::manifest_path()` resolves to, in the shape an old CLI
-/// wrote, so `manifest_uses_legacy_alias()` finds it regardless of which OS
-/// runs the test (CI is Linux; local development is often macOS).
 fn write_legacy_alias_manifest(home: &std::path::Path) {
     #[cfg(target_os = "macos")]
     {
@@ -665,8 +336,10 @@ async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
     .unwrap();
 
     let binary = env!("CARGO_BIN_EXE_wakaclock");
-    let output = Command::new(binary)
+    let output = std::process::Command::new(binary)
         .args(["doctor", "ai", "--json"])
+        .env_clear()
+        .env("PATH", home.join("no-system-services"))
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .output()
@@ -693,53 +366,117 @@ async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
     let _ = fs::remove_dir_all(&home);
 }
 
-/// Regression test for the former ai-coverage gap #4: `wakaclock ai doctor` and
-/// `wakaclock doctor ai` must agree on the running broker. Both commands now expose
-/// the same typed v2 collector snapshot (the legacy doctor fields remain additive).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn f0_02_ai_doctor_and_doctor_ai_disagree_on_broker_running_state() {
-    let home = temp_home("f0-02-doctor-mismatch");
-    let (server_url, server_task) = holding_server().await;
-    let mut broker = spawn_broker(&home, &server_url);
-    let _ = wait_for_discovery(&home).await;
+async fn repeated_emit_across_processes_is_durable_and_idempotent() {
+    let home = temp_home("dedup");
+    let api = fake_api(200).await;
+    let input = event("dedup");
+    let first = cli(&home, &api.url, &["ai", "emit", "--json"], Some(&input)).await;
+    let second = cli(&home, &api.url, &["ai", "emit", "--json"], Some(&input)).await;
+    assert_eq!(first["accepted"], true);
+    assert_eq!(second["duplicate"], true);
+    assert_eq!(total_rows(&home.join(".wakaclock/broker.db")), 1);
+    assert_eq!(api.heartbeats.lock().await.len(), 1);
+    fs::remove_dir_all(home).unwrap();
+}
 
-    let binary = env!("CARGO_BIN_EXE_wakaclock");
-
-    // Ground truth: `doctor ai` (the real collector) sees the broker we just spawned.
-    let doctor_ai_output = Command::new(binary)
-        .args(["doctor", "ai", "--json"])
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .output()
-        .expect("run doctor ai");
-    let doctor_ai_report: serde_json::Value =
-        serde_json::from_slice(&doctor_ai_output.stdout).expect("doctor ai emitted valid json");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn payment_refusal_preserves_capture_and_recovery_drains_once() {
+    let home = temp_home("payment");
+    let api = fake_api(402).await;
+    let input = event("payment");
+    cli(&home, &api.url, &["ai", "emit", "--json"], Some(&input)).await;
+    let db = home.join(".wakaclock/queue.db");
     assert_eq!(
-        doctor_ai_report["broker"]["running"],
-        serde_json::json!(true),
-        "test setup invalid: doctor ai should see the broker this test just spawned"
+        read_delivery_state(&db),
+        Some(("payment_402".into(), Some(402)))
     );
-
-    // Same broker, same HOME, the other command: `ai doctor`.
-    let ai_doctor_output = Command::new(binary)
-        .args(["ai", "doctor", "--json"])
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .output()
-        .expect("run ai doctor");
-    let ai_doctor_report: serde_json::Value =
-        serde_json::from_slice(&ai_doctor_output.stdout).expect("ai doctor emitted valid json");
-
-    // The v2 measurement is explicit so unavailable probes cannot be confused with
-    // a confirmed stopped broker.
+    assert!(home.join(".wakaclock/ai-events.jsonl").exists());
+    let inbox = home.join(".wakaclock/broker.db");
+    assert_eq!(total_rows(&inbox), 1);
     assert_eq!(
-        ai_doctor_report["broker"]["running"]["value"],
-        serde_json::json!(true),
-        "ai doctor and doctor ai must agree on whether the broker is running"
+        BrokerStore::open_at(&inbox)
+            .unwrap()
+            .stats()
+            .unwrap()
+            .dead_letter,
+        0
     );
+    *api.status.lock().await = 200;
+    cli(&home, &api.url, &["sync", "--json"], None).await;
+    cli(&home, &api.url, &["sync", "--json"], None).await;
+    assert_eq!(api.heartbeats.lock().await.len(), 1);
+    assert_eq!(total_rows(&inbox), 1);
+    fs::remove_dir_all(home).unwrap();
+}
 
-    broker.kill();
-    server_task.abort();
-    let _ = server_task.await;
-    let _ = fs::remove_dir_all(&home);
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_process_recovers_an_expired_claim_without_duplicate_capture() {
+    let home = temp_home("lease");
+    let api = fake_api(200).await;
+    let input = event("lease");
+    let db = home.join(".wakaclock/broker.db");
+    {
+        let mut store = BrokerStore::open_at(&db).unwrap();
+        store.ingest_batch(&[input]).unwrap();
+        assert_eq!(store.claim_ready(1).unwrap().len(), 1);
+    }
+    Connection::open(&db)
+        .unwrap()
+        .execute("UPDATE broker_events SET lease_until=0", [])
+        .unwrap();
+    cli(&home, &api.url, &["sync", "--json"], None).await;
+    cli(&home, &api.url, &["sync", "--json"], None).await;
+    let stats = BrokerStore::open_at(&db).unwrap().stats().unwrap();
+    assert_eq!(stats.processed, 1);
+    assert_eq!(total_rows(&db), 1);
+    assert_eq!(api.heartbeats.lock().await.len(), 1);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transcript_sync_across_processes_captures_each_file_once() {
+    let home = temp_home("transcript");
+    let api = fake_api(200).await;
+    write_native_codex_transcript(&home);
+    for _ in 0..3 {
+        cli(
+            &home,
+            &api.url,
+            &["sync", "--agent", "codex", "--from-start", "--json"],
+            None,
+        )
+        .await;
+        // Advance only the fixture's editor-correlation deadline. A new process
+        // must drain deferred metadata even when no editor observation arrives.
+        Connection::open(home.join(".wakaclock/broker.db")).unwrap()
+            .execute("UPDATE broker_events SET next_attempt_at=0, editor_wait_until=0 WHERE status IN ('pending','retry')", []).unwrap();
+    }
+    assert_eq!(total_rows(&home.join(".wakaclock/broker.db")), 2);
+    assert_eq!(api.heartbeats.lock().await.len(), 2);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_run_is_bounded_and_doctors_agree_on_on_demand_mode() {
+    let home = temp_home("migration");
+    let api = fake_api(200).await;
+    write_legacy_alias_manifest(&home);
+    cli(
+        &home,
+        &api.url,
+        &["broker", "run", "--interval-seconds", "1"],
+        None,
+    )
+    .await;
+    let a = cli(&home, &api.url, &["doctor", "ai", "--json"], None).await;
+    let b = cli(&home, &api.url, &["ai", "doctor", "--json"], None).await;
+    assert_eq!(a["broker_running"], false);
+    assert_eq!(a["legacy_service_alias"], false);
+    assert_eq!(a["diagnostics_v2"]["runtime_health"], b["runtime_health"]);
+    assert_eq!(a["diagnostics_v2"]["broker"]["running"]["value"], false);
+    assert_eq!(b["broker"]["running"]["value"], false);
+    assert_eq!(a["runtime_mode"], "on_demand");
+    assert!(a["diagnostics_v2"].is_object());
+    fs::remove_dir_all(home).unwrap();
 }

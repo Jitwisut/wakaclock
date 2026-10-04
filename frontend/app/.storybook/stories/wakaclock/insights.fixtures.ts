@@ -1,0 +1,55 @@
+import type { InsightsResponse, StatsResponse } from '@/lib/wakaclock/types';
+
+export const insightsFixture: InsightsResponse = {
+  type: 'languages',
+  range: 'last_7_days',
+  start: '2026-09-16',
+  end: '2026-09-22',
+  comparable_seconds: 57_600,
+  ai_additional_seconds: 7200,
+  ai_measured_seconds: 21_600,
+  data: [
+    ['Rust', 28_800, 5, 1420],
+    ['TypeScript', 18_000, 6, 910],
+    ['Markdown', 9000, 4, 420],
+    ['Python', 5400, 3, 275],
+    ['JSON', 2400, 2, 150],
+    ['Shell', 1200, 1, 82],
+  ].map(([name, seconds, days, heartbeats]) => ({
+    name: String(name),
+    total_seconds: Number(seconds),
+    hours: Number(seconds) / 3600,
+    days: Number(days),
+    heartbeats: Number(heartbeats),
+    text: '',
+  })),
+};
+export const insightsStatsFixture: StatsResponse = {
+  start: insightsFixture.start,
+  end: insightsFixture.end,
+  range: insightsFixture.range,
+  data: {
+    total_seconds: 64_800,
+    hours: 18,
+    text: '18h',
+    daily_average_seconds: 10_800,
+    daily_average_text: '3h',
+    days_included: 7,
+    days_with_activity: 6,
+    best_day: { date: '2026-09-19', total_seconds: 18_000, text: '5h' },
+    categories: [],
+    editors: [],
+    languages: [],
+    operating_systems: [],
+    projects: [],
+    evidence: {
+      agent_seconds: 0,
+      attended_seconds: 64_800,
+      other_seconds: 0,
+      proven_seconds: 64_800,
+      inferred_seconds: 0,
+      ai_coding_seconds: 0,
+      ai_session_seconds: 0,
+    },
+  },
+};

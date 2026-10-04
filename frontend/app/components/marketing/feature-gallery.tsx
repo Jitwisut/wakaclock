@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Named overflow regions must be keyboard-scrollable. */
+
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 import type { SiteLocale } from '@/lib/seo/site';
@@ -9,8 +11,8 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
   const id = useId();
   const [edges, setEdges] = useState({ start: true, end: false });
   useEffect(() => {
-    const element = rail.current;
-    if (!element) return;
+    // The rail is unconditional; React attaches its ref before running this effect.
+    const element = rail.current!;
     let frame = 0;
     const update = () => {
       frame = 0;
@@ -18,6 +20,11 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
         start: element.scrollLeft <= 2,
         end: element.scrollLeft + element.clientWidth >= element.scrollWidth - 2,
       };
+      const distance = element.scrollWidth - element.clientWidth;
+      element.parentElement?.style.setProperty(
+        '--gallery-progress',
+        String(distance > 0 ? Math.min(1, Math.max(0, element.scrollLeft / distance)) : 1)
+      );
       setEdges((previous) =>
         previous.start === next.start && previous.end === next.end ? previous : next
       );
@@ -36,9 +43,25 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
       observer?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const element = rail.current!;
+    if (typeof IntersectionObserver === 'undefined') return;
+    // The rail is the observer root: cards reveal on horizontal swipes as well
+    // as page scroll, without running a transform loop on every pointer move.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          (entry.target as globalThis.HTMLElement).dataset.inView = String(entry.isIntersecting);
+        }
+      },
+      { root: element, threshold: 0.2 }
+    );
+    [...element.children].forEach((card) => observer.observe(card));
+    return () => observer.disconnect();
+  }, []);
   const move = (direction: number) => {
-    const element = rail.current;
-    if (!element) return;
+    // These controls are mounted alongside the rail for their entire lifetime.
+    const element = rail.current!;
     const width = element.firstElementChild?.getBoundingClientRect().width ?? element.clientWidth;
     element.scrollBy({
       left: direction * (width + 24),
@@ -47,8 +70,18 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
   };
   return (
     <div className="axis-gallery">
-      <div className="axis-feature-list" id={id} ref={rail}>
+      <div
+        aria-label={locale === 'th' ? 'เลื่อนดูฟีเจอร์ AtoAxis' : 'Explore AtoAxis features'}
+        className="axis-feature-list"
+        id={id}
+        ref={rail}
+        role="region"
+        tabIndex={0}
+      >
         {children}
+      </div>
+      <div aria-hidden="true" className="axis-gallery-progress">
+        <span />
       </div>
       <div className="axis-gallery-controls">
         <button

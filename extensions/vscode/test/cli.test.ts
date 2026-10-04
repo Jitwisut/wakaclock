@@ -117,16 +117,44 @@ describe("WakaclockCliService", () => {
     expect(spawnMock.mock.calls[0][1]).toContain("--extra-heartbeats");
   });
 
-  it("passes --project for the primary heartbeat when provided", async () => {
+  it("passes the workspace name as --alternate-project, never as a --project override", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));
 
     await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
-      project: "Daniel"
+      alternate_project: "Daniel"
     });
 
-    expect(spawnMock.mock.calls[0][1]).toContain("--project");
-    expect(spawnMock.mock.calls[0][1]).toContain("Daniel");
+    const args = spawnMock.mock.calls[0][1] as string[];
+    const flagIndex = args.indexOf("--alternate-project");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(args[flagIndex + 1]).toBe("Daniel");
+    expect(args).not.toContain("--project");
+  });
+
+  it("omits --alternate-project when no workspace name is known", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {});
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain("--alternate-project");
+    expect(args).not.toContain("--project");
+  });
+
+  it("sends alternate_project, not project, in extra heartbeat payloads", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await service.sendHeartbeat("C:/project/a.ts", false, "coding", [
+      { entity: "C:/project/b.ts", alternate_project: "Daniel" }
+    ]);
+
+    const child = spawnMock.mock.results[0]?.value as ReturnType<typeof mockChild>;
+    const extras = JSON.parse(child.stdin.read()?.toString() ?? "[]") as Record<string, unknown>[];
+    expect(extras[0]).toMatchObject({ entity: "C:/project/b.ts", alternate_project: "Daniel" });
+    expect(extras[0]).not.toHaveProperty("project");
   });
 
   it("passes the original event timestamp to the CLI", async () => {
@@ -222,6 +250,27 @@ describe("WakaclockCliService", () => {
     expect(spawnMock.mock.calls[1][1]).toContain("--entity");
   });
 
+  it("retries without the fallback project name, never as --project, on a legacy CLI", async () => {
+    spawnMock
+      .mockImplementationOnce(() =>
+        mockChild({ stderr: "error: unexpected argument '--alternate-project' found", exitCode: 2 })
+      )
+      .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(
+      service.sendHeartbeat("C:/project/a.ts", false, "coding", [], {
+        alternate_project: "vscode"
+      })
+    ).resolves.toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+
+    expect(spawnMock.mock.calls[0][1]).toContain("--alternate-project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("--alternate-project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("--project");
+    expect(spawnMock.mock.calls[1][1]).not.toContain("vscode");
+    expect(spawnMock.mock.calls[1][1]).toContain("--entity");
+  });
+
   it("passes stable heartbeat ids and explicit activity segments", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));
@@ -279,6 +328,160 @@ describe("WakaclockCliService", () => {
     });
   });
 
+  // Offline-reliability OFF-02 (baseline in Phase 00, fixed in Phase 01): the text
+  // parser used to drop the `Server error:` line, so an unreachable server read as a
+  // verified idle day. `getToday` now reads `today --json`; the fake answers either.
+  it("offline_today_is_parsed_with_its_connection_state", async () => {
+    spawnMock.mockImplementation((_path: string, args: string[]) =>
+      mockChild({
+        stdout: args.includes("--json")
+          ? JSON.stringify({
+              total_seconds: 0,
+              human_readable: "0s",
+              heartbeat_count: 0,
+              queued_heartbeats: 0,
+              error: "HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)",
+              connection: { state: "offline", reachable: false, last_error_kind: "network" },
+              queue: { depth: 0, seconds_today: 0, eligible_now: 0 }
+            })
+          : "Server error: HTTP error: error sending request for url (http://127.0.0.1:9/api/v1/status_bar/today)\nToday: 0s\nTotal seconds: 0\nConfirmed seconds: 0\nQueued seconds: 0\nHeartbeats: 0\n",
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = (await service.getToday("UTC")) as unknown as {
+      connection?: { state?: string };
+    };
+
+    expect(snapshot.connection?.state).toBe("offline");
+  });
+
+  it("parses_structured_today_json", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({
+          confirmed_seconds: 300,
+          queued_seconds: 4,
+          total_seconds: 304,
+          human_readable: "5m 4s",
+          heartbeat_count: 42,
+          last_heartbeat_at: 1770000000,
+          covered_intervals: [],
+          discarded_seconds: 0,
+          agent_health: { installed: true, running: false },
+          queued_heartbeats: 2,
+          delivery_failure: {
+            at: 1770000000,
+            message: "HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+            category: "network",
+            message_code: "connect_failed"
+          },
+          connection: {
+            state: "offline",
+            reachable: false,
+            authenticated: null,
+            http_status: null,
+            last_error_kind: "network",
+            last_error_at: 1770000001
+          },
+          queue: { depth: 2, seconds_today: 4 }
+        }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = await service.getToday("Asia/Bangkok");
+
+    expect(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok", "--json"]);
+    expect(snapshot).toEqual({
+      humanReadable: "5m 4s",
+      totalSeconds: 304,
+      heartbeatCount: 42,
+      confirmedSeconds: 300,
+      queuedSeconds: 4,
+      lastHeartbeatAt: 1770000000,
+      agentHealth: { state: "installed (stopped)" },
+      discardedSeconds: 0,
+      queuedHeartbeats: 2,
+      delivery:
+        "OFFLINE - HTTP error: error sending request for url (http://127.0.0.1:40213/api/v1/heartbeats)",
+      connection: {
+        state: "offline",
+        reachable: false,
+        authenticated: null,
+        httpStatus: null,
+        lastErrorKind: "network",
+        lastErrorAt: 1770000001
+      }
+    });
+  });
+
+  it("labels a scoped network failure as offline, not a server refusal", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({
+          total_seconds: 0,
+          human_readable: "0s",
+          heartbeat_count: 0,
+          queued_heartbeats: 1,
+          // Phase 03 renamed the classified field to `category`; a pre-Phase-03
+          // binary emits `kind` instead and must keep working.
+          delivery_failure: { message: "connection refused", category: "network" },
+          connection: { state: "offline", reachable: false, last_error_kind: "network" }
+        }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const snapshot = await service.getToday("UTC");
+
+    expect(snapshot.delivery).toBe("OFFLINE - connection refused");
+  });
+
+  it("falls_back_to_legacy_text_without_losing_timezone_behavior", async () => {
+    // A CLI without `today --json`, and an older one without `--timezone` either.
+    spawnMock.mockImplementation((_path: string, args: string[]) => {
+      if (args.includes("--json") || args.includes("--timezone")) {
+        return mockChild({
+          stderr: `error: unexpected argument '${args.includes("--json") ? "--json" : "--timezone"}' found\n\nUsage: wakaclock today`,
+          exitCode: 2
+        });
+      }
+      return mockChild({ stdout: "Today: 1m\nTotal seconds: 60\nHeartbeats: 3\n", exitCode: 0 });
+    });
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(service.getToday("Asia/Bangkok")).resolves.toEqual({
+      humanReadable: "1m",
+      totalSeconds: 60,
+      heartbeatCount: 3,
+      legacyCli: true
+    });
+    expect(spawnMock.mock.calls.map((call) => call[1])).toEqual([
+      ["today", "--timezone", "Asia/Bangkok", "--json"],
+      ["today", "--timezone", "Asia/Bangkok"],
+      ["today"]
+    ]);
+
+    // The unsupported flag is remembered: the next refresh does not retry --json.
+    spawnMock.mockClear();
+    await service.getToday("Asia/Bangkok");
+    expect(spawnMock.mock.calls[0][1]).toEqual(["today", "--timezone", "Asia/Bangkok"]);
+  });
+
+  it("does not retry text mode when today --json fails for another reason", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({ stderr: "Error: API key was rejected by the server.", exitCode: 1 })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await expect(service.getToday("UTC")).rejects.toThrow("API key was rejected");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces missing cli errors", async () => {
     spawnMock.mockImplementation(() =>
       mockChild({
@@ -306,7 +509,29 @@ describe("WakaclockCliService", () => {
 
       expect(result).toEqual({ mirroredToCliConfig: true, verified: true });
       expect(spawnMock.mock.calls[0][1]).toEqual(["config", "set-key", "wcl_good"]);
-      expect(spawnMock.mock.calls[1][1]).toEqual(["today"]);
+      expect(spawnMock.mock.calls[1][1]).toEqual(["today", "--json"]);
+    });
+
+    it("reports not verified when today --json says the key was rejected", async () => {
+      spawnMock
+        .mockImplementationOnce(() => mockChild({ stdout: "ok\n", exitCode: 0 }))
+        .mockImplementationOnce(() =>
+          mockChild({
+            stdout: JSON.stringify({
+              total_seconds: 0,
+              human_readable: "0s",
+              heartbeat_count: 0,
+              connection: { state: "auth_rejected", reachable: true, http_status: 401 }
+            }),
+            exitCode: 0
+          })
+        );
+      const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+      const result = await service.syncAndVerifyApiKey("wcl_revoked");
+
+      expect(result.verified).toBe(false);
+      expect(result.verifyError).toContain("rejected");
     });
 
     // The failure that made a wrong key undetectable: the key saves fine, and only a
@@ -363,6 +588,35 @@ describe("WakaclockCliService", () => {
     await service.clearApiKey();
 
     expect(spawnMock.mock.calls[0][1]).toEqual(["config", "clear-key"]);
+  });
+
+  it("coalesces concurrent broker status probes into one CLI process", async () => {
+    spawnMock.mockImplementation(() =>
+      mockChild({
+        stdout: JSON.stringify({ runtime_mode: "on_demand", inbox: { pending: 2 } }),
+        exitCode: 0
+      })
+    );
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    const [first, second] = await Promise.all([
+      service.getBrokerStatus(),
+      service.getBrokerStatus()
+    ]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(second);
+    expect(first.inbox?.pending).toBe(2);
+  });
+
+  it("coalesces concurrent automatic AI sync passes", async () => {
+    spawnMock.mockImplementation(() => mockChild({ stdout: "{}", exitCode: 0 }));
+    const service = new WakaclockCliService(createConfig, new Logger(() => false));
+
+    await Promise.all([service.syncAiActivity(), service.syncAiActivity()]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0][1]).toEqual(["sync", "--automatic", "--json"]);
   });
 
   it("rejects setApiKey when wakaclock-cli exits non-zero", async () => {

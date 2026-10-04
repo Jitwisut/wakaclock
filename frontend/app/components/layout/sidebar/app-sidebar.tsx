@@ -86,7 +86,7 @@ const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function Ap
   const logout = useWakaclockUserStore((store) => store.logout);
   const isTablet = useIsTablet();
 
-  const appName = labels?.appName ?? 'Wakaclock';
+  const appName = labels?.appName ?? 'AtoAxis';
   const logoAlt = labels?.logoAlt;
 
   React.useEffect(() => {

@@ -26,6 +26,7 @@ pub const SUPPORTED_SCOPES: &[&str] = &[
     "read_external_durations",
     "write_external_durations",
     "read_ai_analytics",
+    "write_ai_outcomes",
     "manage_integrations",
     "export_data",
 ];

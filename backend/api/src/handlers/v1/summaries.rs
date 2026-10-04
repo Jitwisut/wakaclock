@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
-use crate::model::summary::SummariesResponse;
+use crate::model::summary::WakaTimeSummariesResponse;
 
 #[derive(Debug, Deserialize)]
 pub struct SummariesQuery {
@@ -41,7 +41,7 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<SummariesQuery>,
-) -> Result<Json<SummariesResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<WakaTimeSummariesResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_scoped_user(&state, &headers, "read_summaries").await?;
 
     params
@@ -50,7 +50,7 @@ pub async fn list(
 
     let response = state
         .summary_service
-        .get_range_in_timezone(
+        .get_wakatime_compatible(
             user_id,
             &params.start,
             &params.end,

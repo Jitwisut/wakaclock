@@ -16,6 +16,18 @@ use std::path::Path;
 /// ids verbatim so retries remain byte-for-byte stable.
 pub const MAX_USAGE_IDENTIFIER_BYTES: usize = 512;
 
+/// Namespace new native sessions at the capture boundary. Durable retries already
+/// contain this value and must be delivered unchanged, never scoped a second time.
+pub fn scoped_session_id(collector: &str, agent: &str, native_session: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    for part in [collector, agent, native_session] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    format!("ws1_{:x}", hash.finalize())
+}
+
 /// One model request's usage, keyed by the provider's own message id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiUsageRecord {
@@ -23,6 +35,8 @@ pub struct AiUsageRecord {
     /// anything derived, and this is exactly that — which is what makes ingest idempotent.
     pub usage_event_id: String,
     pub ai_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collector_id: Option<String>,
     pub occurred_at: DateTime<Utc>,
     pub agent: String,
     pub provider: Option<String>,
@@ -57,6 +71,13 @@ impl AiUsageRecord {
     /// and the durable client queue.  This intentionally checks byte length without
     /// trimming or normalising the stable usage id.
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .collector_id
+            .as_deref()
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+        {
+            return Err("collector_id must be an installation UUID".into());
+        }
         for (label, value) in [
             ("usage_event_id", self.usage_event_id.as_str()),
             ("ai_session_id", self.ai_session_id.as_str()),
@@ -257,7 +278,138 @@ pub fn parse_codex_usage(transcript: &Path) -> std::io::Result<Vec<AiUsageRecord
 }
 
 pub fn parse_codex_usage_str(contents: &str) -> Vec<AiUsageRecord> {
-    parse_generic_usage_str(contents, "codex", None)
+    let mut records = parse_generic_usage_str(contents, "codex", None);
+    records.extend(parse_codex_rollout_usage(contents));
+    records
+}
+
+/// Native rollout envelopes carry identity in session_meta and model in turn_context.
+/// Prefer response usage over its token_count mirror within the same turn. Never use
+/// thread/turn cumulative totals, or reasoning output already included in output_tokens.
+fn parse_codex_rollout_usage(contents: &str) -> Vec<AiUsageRecord> {
+    use sha2::{Digest, Sha256};
+    let events: Vec<serde_json::Value> = contents
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let response_turns: HashSet<(String, String)> = events
+        .iter()
+        .filter(|event| event["type"] == "token_usage_record")
+        .filter_map(|event| {
+            Some((
+                event["payload"]["thread_id"].as_str()?.to_string(),
+                event["payload"]["turn_id"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    let mut session = None;
+    let mut turn = None;
+    let mut model = None;
+    let mut provider = None;
+    let mut project = None;
+    let mut prompts = 0u32;
+    let mut prompt_chars = 0u64;
+    let mut seen = HashSet::new();
+    let mut records = Vec::new();
+    for event in events {
+        let payload = &event["payload"];
+        let kind = event["type"].as_str().unwrap_or_default();
+        if kind == "session_meta" {
+            session = payload["id"].as_str().map(str::to_string);
+            provider = normalize_identity_provider(payload["model_provider"].as_str());
+            project = payload["cwd"].as_str().and_then(sanitize_project_hint);
+            turn = None;
+            model = None;
+            prompts = 0;
+            prompt_chars = 0;
+            continue;
+        }
+        if kind == "turn_context" {
+            turn = payload["turn_id"].as_str().map(str::to_string);
+            model = normalize_identity_model(payload["model"].as_str());
+            continue;
+        }
+        let Some(session) = session.as_deref() else {
+            continue;
+        };
+        if kind == "event_msg" && payload["type"] == "user_message" {
+            // Only explicit user-submission events count. Response-item context may
+            // include injected instructions and cannot establish a human prompt.
+            if let Some(text) = payload["message"].as_str() {
+                prompts = prompts.saturating_add(1);
+                prompt_chars = prompt_chars.saturating_add(text.chars().count() as u64);
+            }
+            continue;
+        }
+        let Some(at) = first_timestamp_value(&event) else {
+            continue;
+        };
+        let (usage, identity) = if kind == "token_usage_record" {
+            if payload["thread_id"].as_str() != Some(session) {
+                continue;
+            }
+            let Some(response) = payload["response_id"].as_str() else {
+                continue;
+            };
+            (&payload["usage"], format!("{session}:response:{response}"))
+        } else if kind == "event_msg" && payload["type"] == "token_count" {
+            let mirrored = turn.as_ref().map_or_else(
+                || response_turns.iter().any(|(thread, _)| thread == session),
+                |turn| response_turns.contains(&(session.to_string(), turn.clone())),
+            );
+            if mirrored {
+                continue;
+            }
+            (
+                &payload["info"]["last_token_usage"],
+                format!("{session}:token-count:{}", at.to_rfc3339()),
+            )
+        } else {
+            continue;
+        };
+        if !usage.is_object() || !seen.insert(identity.clone()) {
+            continue;
+        }
+        let cache_read = first_u64_value(usage, &["cached_input_tokens"]);
+        let cache_write = first_u64_value(usage, &["cache_write_input_tokens"]);
+        let input = first_u64_value(usage, &["input_tokens"]).and_then(|total| {
+            total
+                .checked_sub(cache_read.unwrap_or(0))?
+                .checked_sub(cache_write.unwrap_or(0))
+        });
+        let output = first_u64_value(usage, &["output_tokens"]);
+        if input.is_none() && output.is_none() && cache_read.is_none() && cache_write.is_none() {
+            continue;
+        }
+        records.push(AiUsageRecord {
+            usage_event_id: format!(
+                "codex-rollout-usage-v2:{:x}",
+                Sha256::digest(identity.as_bytes())
+            ),
+            ai_session_id: session.to_string(),
+            collector_id: None,
+            occurred_at: at,
+            agent: "codex".into(),
+            provider: provider.clone(),
+            model: if kind == "token_usage_record" && payload["turn_id"].as_str() != turn.as_deref()
+            {
+                None
+            } else {
+                model.clone()
+            },
+            prompt_count: prompts,
+            prompt_character_count: (prompts > 0).then_some(prompt_chars),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cache_read,
+            cache_write_tokens: cache_write,
+            token_source: TokenSource::Transcript,
+            project_hint: project.clone(),
+        });
+        prompts = 0;
+        prompt_chars = 0;
+    }
+    records
 }
 
 fn parse_generic_usage_str(
@@ -399,6 +551,7 @@ fn parse_generic_usage_str(
         let prompt_count = pending_prompts.remove(&session).unwrap_or(0);
         let prompt_character_count = pending_prompt_chars.remove(&session);
         records.push(AiUsageRecord {
+            collector_id: None,
             usage_event_id: format!("{agent}-usage-v1:{event_id}"),
             ai_session_id: session.clone(),
             occurred_at,
@@ -551,6 +704,7 @@ pub fn parse_claude_usage_str(contents: &str) -> Vec<AiUsageRecord> {
         let prompt_character_count = pending_prompt_chars.remove(&session_id);
 
         records.push(AiUsageRecord {
+            collector_id: None,
             usage_event_id: id,
             ai_session_id: session_id,
             occurred_at,
@@ -728,6 +882,59 @@ mod tests {
     }
 
     #[test]
+    fn codex_rollout_uses_response_usage_once_and_excludes_cached_input() {
+        let meta =
+            r#"{"type":"session_meta","payload":{"id":"native-session","cwd":"/private/fixture"}}"#;
+        let context = r#"{"type":"turn_context","payload":{"turn_id":"turn-a","model":"gpt-5.4"}}"#;
+        let usage = r#"{"type":"token_usage_record","timestamp":"2026-09-30T10:00:00Z","payload":{"thread_id":"native-session","session_id":"native-session","turn_id":"turn-a","response_id":"response-a","usage":{"input_tokens":100,"cached_input_tokens":80,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":3},"thread_token_usage":{"input_tokens":999}}}"#;
+        let mirror = r#"{"type":"event_msg","timestamp":"2026-09-30T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":5},"total_token_usage":{"input_tokens":999}}}}"#;
+        let parsed =
+            parse_codex_usage_str(&format!("{meta}\n{context}\n{usage}\n{mirror}\n{usage}"));
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].ai_session_id, "native-session");
+        assert_eq!(parsed[0].input_tokens, Some(20));
+        assert_eq!(parsed[0].cache_read_tokens, Some(80));
+        assert_eq!(parsed[0].cache_write_tokens, Some(0));
+        assert_eq!(parsed[0].output_tokens, Some(5));
+        assert_eq!(parsed[0].model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(parsed[0].prompt_character_count, None);
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("/private/"));
+    }
+
+    #[test]
+    fn codex_legacy_rollout_requires_session_and_preserves_missing_usage() {
+        let meta = r#"{"type":"session_meta","payload":{"id":"native-old"}}"#;
+        let event = r#"{"type":"event_msg","timestamp":"2026-09-30T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0},"total_token_usage":{"input_tokens":999}}}}"#;
+        assert!(parse_codex_usage_str(event).is_empty());
+        let parsed = parse_codex_usage_str(&format!("{meta}\n{event}\n{event}"));
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].input_tokens, Some(0));
+        assert_eq!(parsed[0].output_tokens, None);
+        assert_eq!(parsed[0].model, None);
+        assert_eq!(parsed[0].ai_session_id, "native-old");
+    }
+
+    #[test]
+    fn codex_resume_keeps_older_turn_usage_and_rejects_foreign_thread_context() {
+        let transcript = [
+            r#"{"type":"session_meta","payload":{"id":"native"}}"#,
+            r#"{"type":"turn_context","payload":{"turn_id":"old","model":"gpt-5.4"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-09-30T10:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10}}}}"#,
+            r#"{"type":"turn_context","payload":{"turn_id":"new","model":"gpt-5.4"}}"#,
+            r#"{"type":"token_usage_record","timestamp":"2026-09-30T10:01:00Z","payload":{"thread_id":"native","turn_id":"new","response_id":"r2","usage":{"input_tokens":3,"cached_input_tokens":5,"output_tokens":0}}}"#,
+            r#"{"type":"token_usage_record","timestamp":"2026-09-30T10:02:00Z","payload":{"thread_id":"foreign","turn_id":"new","response_id":"r3","usage":{"input_tokens":100}}}"#,
+        ].join("\n");
+        let records = parse_codex_usage_str(&transcript);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].input_tokens, Some(10));
+        assert_eq!(records[1].input_tokens, None); // Invalid subtraction is unknown, not zero.
+        assert_eq!(records[1].output_tokens, Some(0));
+        assert_ne!(records[0].usage_event_id, records[1].usage_event_id);
+    }
+
+    #[test]
     fn repeated_message_ids_are_counted_once() {
         let line = record("msg_1", r#""input_tokens":10,"output_tokens":20"#);
         let doubled = format!("{line}\n{line}\n{line}");
@@ -853,5 +1060,18 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].prompt_count, 1);
         assert_eq!(parsed[1].prompt_count, 0);
+    }
+}
+
+#[cfg(test)]
+mod session_scope_tests {
+    use super::scoped_session_id;
+    #[test]
+    fn native_session_collisions_are_isolated_by_collector_and_agent() {
+        let a = scoped_session_id("device-a", "codex", "native");
+        assert_eq!(a, scoped_session_id("device-a", "codex", "native"));
+        assert_ne!(a, scoped_session_id("device-b", "codex", "native"));
+        assert_ne!(a, scoped_session_id("device-a", "claude-code", "native"));
+        assert!(!a.contains("native"));
     }
 }

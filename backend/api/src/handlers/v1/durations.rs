@@ -54,6 +54,8 @@ pub async fn list(
             start: row.start,
             end: row.end,
             duration_seconds: row.duration_seconds,
+            time: row.start,
+            duration: row.duration_seconds,
             heartbeat_count: row.heartbeat_count,
             project: row.project,
             language: row.language,
@@ -71,6 +73,8 @@ pub async fn list(
         range_end,
         total_seconds,
         data,
+        start: rfc3339(range_start),
+        end: rfc3339(range_end - 1.0),
         comparable_seconds: Some(comparable_seconds),
         ai_measured_seconds: Some(ai_measured_seconds),
         ai_additional_seconds: Some(ai_additional_seconds),
@@ -88,6 +92,12 @@ pub async fn list(
         active_coverage: Some(result.active_coverage),
         wakatime_compatible_seconds: Some(result.wakatime_compatible_seconds),
     }))
+}
+
+fn rfc3339(unix: f64) -> String {
+    chrono::DateTime::from_timestamp(unix as i64, 0)
+        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
 }
 
 fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {

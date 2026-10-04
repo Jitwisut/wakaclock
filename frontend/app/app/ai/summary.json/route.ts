@@ -4,7 +4,6 @@ import {
   ORGANIZATION,
   SITE_MODIFIED,
   SITE_NAME,
-  SOURCE_REPOSITORY_URL,
 } from '@/lib/seo/site';
 
 export const dynamic = 'force-static';
@@ -17,7 +16,6 @@ export function GET(): Response {
       canonicalUrl: absoluteUrl('/'),
       publisher: ORGANIZATION.legalName,
       lastModified: SITE_MODIFIED,
-      sourceRepository: SOURCE_REPOSITORY_URL,
       languages: {
         en: {
           summary: EN_HOME.heroLead,

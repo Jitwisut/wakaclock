@@ -36,12 +36,12 @@ export function SourceSummary({
     {
       key: 'ai_verified' as const,
       label: 'AI verified',
-      value: data.summary.ai_verified_seconds ?? 0,
+      value: data.summary.ai_verified_seconds,
     },
     {
       key: 'ai_inferred' as const,
       label: 'AI inferred',
-      value: data.summary.ai_inferred_seconds ?? 0,
+      value: data.summary.ai_inferred_seconds,
     },
     { key: 'unknown' as const, label: 'Unknown', value: data.summary.unknown_seconds },
   ];

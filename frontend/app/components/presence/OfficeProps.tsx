@@ -22,12 +22,12 @@ function mirrorRow(left: string): string {
 }
 
 function pixelGrid(
-  rows: readonly string[],
+  rows: readonly [string, ...string[]],
   colorFor: Record<string, string>,
   cell: number,
   extra?: React.ReactNode
 ) {
-  const cols = rows[0]?.length ?? 0;
+  const cols = rows[0].length;
   const pixels: React.ReactNode[] = [];
 
   for (const [y, row] of rows.entries()) {
@@ -55,12 +55,17 @@ function pixelGrid(
 }
 
 function pixelGridSvg(
-  leftHalves: readonly string[],
+  leftHalves: readonly [string, ...string[]],
   colorFor: Record<string, string>,
   cell: number,
   extra?: React.ReactNode
 ) {
-  return pixelGrid(leftHalves.map(mirrorRow), colorFor, cell, extra);
+  return pixelGrid(
+    [mirrorRow(leftHalves[0]), ...leftHalves.slice(1).map(mirrorRow)],
+    colorFor,
+    cell,
+    extra
+  );
 }
 
 /* -------------------------------------------------------------------------- */

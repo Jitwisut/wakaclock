@@ -364,7 +364,7 @@ impl HeartbeatService {
                     project_id: hb.project_id,
                     branch: hb.branch.clone(),
                     language: hb.language.clone(),
-                    category: format!("{:?}", hb.category).to_lowercase(),
+                    category: hb.category.to_string(),
                     editor: hb.editor.clone(),
                     operating_system: hb.operating_system.clone(),
                     actor_type: hb.actor_type.as_str().to_string(),
@@ -420,7 +420,7 @@ impl HeartbeatService {
                 line_number: hb.line_number,
                 cursor_position: hb.cursor_position,
                 is_write: hb.is_write,
-                category: format!("{:?}", hb.category).to_lowercase(),
+                category: hb.category.to_string(),
                 editor: hb.editor,
                 operating_system: hb.operating_system,
                 machine: hb.machine,
@@ -485,6 +485,10 @@ impl HeartbeatService {
                 paste_external_or_unknown_actions: hb.paste_external_or_unknown_actions,
                 revision: hb.revision,
                 session_id: hb.session_id,
+                line_metric_version: hb.line_metric_version,
+                line_measurement_status: hb.line_measurement_status,
+                line_measurement_reason: hb.line_measurement_reason,
+                measurement_window_id: hb.measurement_window_id,
             };
 
             if !duplicate_raw {
