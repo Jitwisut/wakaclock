@@ -512,6 +512,11 @@ impl AiActivityParser for CodexParser {
                                 ),
                             );
                         }
+                        // Older Codex CLI builds give the native completion the same
+                        // id as the apply_patch call. The output record below then
+                        // short-circuits on `completed_apply_patch`, so release the
+                        // pending call here or it pins the checkpoint forever.
+                        pending_apply_patch.remove(item_id);
                         completed_apply_patch.insert(item_id.to_string());
                         last_record_id = Some(item_id.to_string());
                         continue;
@@ -2836,6 +2841,113 @@ mod tests {
         );
         assert_eq!(batch.events[0].lines_added, Some(0));
         assert_eq!(batch.events[0].lines_deleted, Some(2));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn native_file_change_with_the_call_id_releases_the_pending_cursor() {
+        // June-July 2026 Codex CLI ordering: apply_patch call -> FileChange completion
+        // carrying the *same* id -> custom_tool_call_output. The native record emits the
+        // event; the call must stop holding the checkpoint, or every later pass rewinds
+        // to it and re-reads the rest of the transcript forever.
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ai/fixtures/codex/");
+        let session_meta = fs::read_to_string(format!("{fixtures}session_meta.json")).unwrap();
+        let turn_context = fs::read_to_string(format!("{fixtures}turn_context.json")).unwrap();
+        let call_id = "call_native_shares_call_id";
+        let file_path = "/home/dev/example-project/src/recreated.rs";
+        let call = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.000Z",
+            "payload": {
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "apply_patch",
+                "input": format!(
+                    "*** Begin Patch\n*** Delete File: {file_path}\n*** Add File: {file_path}\n+pub fn recreated() {{}}\n*** End Patch"
+                )
+            }
+        });
+        let native = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-08-14T09:19:42.100Z",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "018f0000-bbbb-7000-8000-000000000002",
+                "item": {
+                    "type": "FileChange",
+                    "id": call_id,
+                    "status": "completed",
+                    "changes": {
+                        file_path: {
+                            "type": "add",
+                            "content": "pub fn recreated() {}\n"
+                        }
+                    }
+                }
+            }
+        });
+        let output = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-08-14T09:19:42.200Z",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": format!(
+                    "Exit code: 0\nWall time: 0.2 seconds\nOutput:\nSuccess. Updated the following files:\nA {file_path}\nD {file_path}\n"
+                )
+            }
+        });
+
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-core-codex-native-shares-call-id-{}.jsonl",
+            std::process::id()
+        ));
+        let mut file = fs::File::create(&path).unwrap();
+        for value in [
+            serde_json::from_str::<serde_json::Value>(&session_meta).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&turn_context).unwrap(),
+            call,
+            native,
+            output,
+        ] {
+            writeln!(file, "{}", serde_json::to_string(&value).unwrap()).unwrap();
+        }
+        let file_len = fs::metadata(&path).unwrap().len();
+
+        let batch = CodexParser::new()
+            .parse_since(
+                &ParseContext::default(),
+                Some(&ParserCursor {
+                    source_path: path.to_string_lossy().into_owned(),
+                    file_identity: None,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(batch.events.len(), 1);
+        assert!(batch.events[0].entity.ends_with("recreated.rs"));
+        assert_eq!(batch.next_cursor.byte_offset, file_len);
+        assert!(batch
+            .next_cursor
+            .context
+            .as_ref()
+            .is_some_and(|context| context.pending_calls.is_empty()));
+
+        // A checkpoint saved by the buggy parser (offset rewound to the call, the call
+        // still listed as pending) must also advance once re-read.
+        let stuck = ParserCursor {
+            byte_offset: 0,
+            ..batch.next_cursor.clone()
+        };
+        let resumed = CodexParser::new()
+            .parse_since(&ParseContext::default(), Some(&stuck))
+            .unwrap();
+        assert_eq!(resumed.next_cursor.byte_offset, file_len);
         let _ = fs::remove_file(path);
     }
 
