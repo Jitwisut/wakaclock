@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: atoaxis-test
       POSTGRES_DB: atoaxis_k0
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - k0_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,9 +27,9 @@ services:
       - --check=false
       - --node-id=0
       - --kafka-addr=PLAINTEXT://0.0.0.0:19092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+      - --advertise-kafka-addr=PLAINTEXT://127.0.0.1:19092
     ports:
-      - "19092:19092"
+      - "127.0.0.1:19092:19092"
     volumes:
       - k0_redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -49,7 +49,7 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       CLICKHOUSE_PASSWORD: default
     ports:
-      - "18123:8123"
+      - "127.0.0.1:18123:8123"
     volumes:
       - k0_clickhouse_data:/var/lib/clickhouse
     healthcheck:
@@ -64,8 +64,8 @@ services:
       RABBITMQ_DEFAULT_USER: atoaxis
       RABBITMQ_DEFAULT_PASS: atoaxis-test
     ports:
-      - "15673:5672"
-      - "15672:15672"
+      - "127.0.0.1:15673:5672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - k0_rabbitmq_data:/var/lib/rabbitmq
     healthcheck:

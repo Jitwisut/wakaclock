@@ -15,9 +15,9 @@ vi.mock('@/lib/wakaclock/endpoints', () => ({
   revokeApiKey: () => revokeApiKey(),
 }));
 
+const session = vi.hoisted(() => ({ userId: 'user-1' as null | string }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (selector: (s: { userId: string }) => unknown) =>
-    selector({ userId: 'user-1' }),
+  useWakaclockUserStore: (selector: (s: typeof session) => unknown) => selector(session),
 }));
 
 vi.mock('sonner', () => ({
@@ -36,12 +36,39 @@ function renderPanel() {
 }
 
 beforeEach(() => {
+  session.userId = 'user-1';
   // Vitest resets mock implementations between tests. Keep the read query a valid
   // Promise in every case; individual tests override it when they need a stored key.
   getCurrentApiKey.mockResolvedValue({ data: { api_key: null, user_id: 'user-1' } });
 });
 
 describe('ApiKeyPanel', () => {
+  it('does not fetch a key without an owner', () => {
+    session.userId = null;
+    renderPanel();
+    expect(getCurrentApiKey).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Copy API key' })).toBeNull();
+  });
+  it('hides a revealed key immediately when switching accounts', async () => {
+    getCurrentApiKey
+      .mockResolvedValueOnce({ data: { api_key: 'fixture-key-owner-1', user_id: 'user-1' } })
+      .mockReturnValue(new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = () => (
+      <QueryClientProvider client={client}>
+        <ApiKeyPanel />
+      </QueryClientProvider>
+    );
+    const rendered = render(view());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /reveal/i }));
+    expect(screen.getByDisplayValue('fixture-key-owner-1')).toBeVisible();
+    session.userId = 'user-2';
+    rendered.rerender(view());
+    expect(screen.queryByDisplayValue('fixture-key-owner-1')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy API key' })).toBeNull();
+    await waitFor(() => expect(getCurrentApiKey).toHaveBeenCalledTimes(2));
+  });
   it('shows the generated key so it can be copied', async () => {
     // The freshly generated key must appear immediately, without waiting for a refetch.
     generateApiKey.mockResolvedValue({
@@ -101,20 +128,23 @@ describe('ApiKeyPanel inside the Settings tabs', () => {
 });
 
 describe('ApiKeyPanel when the response has no key', () => {
-  it('reports an error instead of a silent success', async () => {
-    // Generating replaces the old key server-side, so a "success" with nothing shown
-    // would leave the account with a key nobody holds.
-    generateApiKey.mockResolvedValue({ data: { user_id: 'user-1' } });
-    const { toast } = await import('sonner');
-    const user = userEvent.setup();
-    renderPanel();
+  it.each([undefined, {}, { data: { user_id: 'user-1' } }])(
+    'reports an error instead of a silent success for %j',
+    async (response) => {
+      // Generating replaces the old key server-side, so a "success" with nothing shown
+      // would leave the account with a key nobody holds.
+      generateApiKey.mockResolvedValue(response);
+      const { toast } = await import('sonner');
+      const user = userEvent.setup();
+      renderPanel();
 
-    await user.click(screen.getByRole('button', { name: /generate key/i }));
-    await user.click(screen.getByRole('button', { name: /^generate$/i }));
+      await user.click(screen.getByRole('button', { name: /generate key/i }));
+      await user.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-    expect(toast.success).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(toast.success).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('ApiKeyPanel on load', () => {

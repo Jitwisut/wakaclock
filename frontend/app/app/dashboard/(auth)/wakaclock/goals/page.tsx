@@ -49,9 +49,8 @@ const DIRECTIONS = [
   { label: 'At most this much', value: 'maximum' },
 ] as const;
 
-function GoalProgressBar({ goal }: { goal: Goal }) {
-  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
-  const { data, isLoading } = useQuery({
+function GoalProgressBar({ goal, userId }: { goal: Goal; userId: string }) {
+  const { data, error, isLoading, refetch } = useQuery({
     enabled: Boolean(userId),
     queryFn: () => getGoalProgress(goal.id),
     queryKey: wakaclockKeys.goalProgress(userId, goal.id),
@@ -59,6 +58,17 @@ function GoalProgressBar({ goal }: { goal: Goal }) {
 
   if (isLoading) {
     return <p className="text-muted-foreground text-xs">Measuring…</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="text-muted-foreground flex items-center gap-2 text-xs" role="alert">
+        <span>Progress unavailable.</span>
+        <Button onClick={() => void refetch()} size="sm" variant="ghost">
+          Retry progress
+        </Button>
+      </div>
+    );
   }
 
   // `coverage` is 0 when no heartbeat fell inside the period. Rendering that as "0% of
@@ -99,7 +109,7 @@ function GoalProgressBar({ goal }: { goal: Goal }) {
   );
 }
 
-function GoalForm({ onCreated }: { onCreated: () => void }) {
+function GoalForm({ onCreated, userId }: { onCreated: () => void; userId: string }) {
   const [name, setName] = React.useState('');
   const [metric, setMetric] = React.useState<string>('time');
   const [filterKind, setFilterKind] = React.useState<string>('all');
@@ -111,7 +121,6 @@ function GoalForm({ onCreated }: { onCreated: () => void }) {
   // A goal filtered to a project name that does not exist measures zero forever and
   // renders as "no activity yet", which is indistinguishable from not having started.
   // Suggesting the names actually present in the data makes that typo hard to make.
-  const userId = useWakaclockUserStore((state) => state.userId) ?? '';
   const { data: projects } = useQuery({
     enabled: Boolean(userId) && filterKind === 'project',
     queryFn: () => getProjects(userId, daysAgoDateString(90), todayDateString()),
@@ -298,7 +307,7 @@ function GoalsPanel() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <GoalForm onCreated={() => void invalidate()} />
+          <GoalForm onCreated={() => void invalidate()} userId={userId} />
         </CardContent>
       </Card>
 
@@ -340,7 +349,7 @@ function GoalsPanel() {
                       </Button>
                     </div>
                   </div>
-                  <GoalProgressBar goal={goal} />
+                  <GoalProgressBar goal={goal} userId={userId} />
                 </li>
               ))}
             </ul>

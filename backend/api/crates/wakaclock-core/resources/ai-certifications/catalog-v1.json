@@ -2,6 +2,7 @@
   "catalog_version": "2026-09-06.1",
   "entries": [
     {
+      "artifact_ref": "historical/claude-code-2026-09-03.json",
       "artifact_sha256": "07bd4dddf275170c03c083d741773572bc34e5fbc589d375591f5c0c3d149284",
       "build_sha256": null,
       "certificate_id": "claude-code-historical-2026-09-03",
@@ -34,6 +35,7 @@
       }
     },
     {
+      "artifact_ref": "historical/codex-2026-09-03.json",
       "artifact_sha256": "efcd346d4e15bb0f59a85b0b05a3d132a744d87b33cdeaedbf912ccbcfc97f15",
       "build_sha256": null,
       "certificate_id": "codex-historical-2026-09-03",
@@ -66,6 +68,7 @@
       }
     },
     {
+      "artifact_ref": "historical/deep-code-2026-09-03.json",
       "artifact_sha256": "2ad36922dcbec284b9e7a48f21956e7f5fc695cef675c53eb42ef91078cfb2f1",
       "build_sha256": null,
       "certificate_id": "deep-code-historical-2026-09-03",
@@ -98,6 +101,7 @@
       }
     },
     {
+      "artifact_ref": "historical/kilo-code-2026-09-03.json",
       "artifact_sha256": "985270259360ae4f7f6436c44419e74d40a08d91e72c44d3b640968add8f4929",
       "build_sha256": null,
       "certificate_id": "kilo-code-historical-2026-09-03",
@@ -130,6 +134,7 @@
       }
     },
     {
+      "artifact_ref": "historical/kimi-code-cli-2026-09-03.json",
       "artifact_sha256": "461fc7c25b89c79261676801ff9662b639f655bfa7a3f82b767fe51be9c18b9f",
       "build_sha256": null,
       "certificate_id": "kimi-code-cli-historical-2026-09-03",

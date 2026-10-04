@@ -54,7 +54,7 @@ kafka-spike-infra-down: ## Stop K0 and remove only its test volumes
 
 .PHONY: kafka-spike
 kafka-spike: ## Run the feature-gated K0 harness against the isolated stack
-	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@localhost:15432/atoaxis_k0}" $(CARGO) run --bin kafka-spike --features kafka-spike
+	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-127.0.0.1:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@127.0.0.1:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@127.0.0.1:15432/atoaxis_k0}" $(CARGO) run --bin kafka-spike --features kafka-spike
 
 .PHONY: k5-ai-usage-infra-up
 k5-ai-usage-infra-up: ## Start the isolated Kafka/ClickHouse/PostgreSQL/RabbitMQ K5 stack
@@ -66,7 +66,7 @@ k5-ai-usage-infra-down: ## Stop K5 infrastructure and remove only its test volum
 
 .PHONY: k5-ai-usage-spike
 k5-ai-usage-spike: ## Run the feature-gated K5 full-stack harness against explicit isolated endpoints
-	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-localhost:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@localhost:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@localhost:15432/atoaxis_k0}" RABBITMQ_TEST_URL="$${RABBITMQ_TEST_URL:-amqp://atoaxis:atoaxis-test@localhost:15673/%2f}" $(CARGO) run --bin ai-usage-spike --features ai-usage-spike
+	@cd $(BACKEND_DIR) && KAFKA_TEST_URL="$${KAFKA_TEST_URL:-127.0.0.1:19092}" CLICKHOUSE_TEST_URL="$${CLICKHOUSE_TEST_URL:-http://default:default@127.0.0.1:18123/wakaclock}" POSTGRES_TEST_URL="$${POSTGRES_TEST_URL:-postgres://atoaxis:atoaxis-test@127.0.0.1:15432/atoaxis_k0}" RABBITMQ_TEST_URL="$${RABBITMQ_TEST_URL:-amqp://atoaxis:atoaxis-test@127.0.0.1:15673/%2f}" $(CARGO) run --bin ai-usage-spike --features ai-usage-spike
 
 .PHONY: k5-integration
 k5-integration: ## Run K0 and K5 isolated broker acceptance harnesses

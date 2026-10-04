@@ -76,7 +76,8 @@ const POD_TINTS = [
 function podTint(zoneId: string): string {
   let hash = 0;
   for (const char of zoneId) {
-    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
+    // A for-of character always contains a code point.
+    hash = (hash * 31 + (char.codePointAt(0) as number)) >>> 0;
   }
   return POD_TINTS[hash % POD_TINTS.length];
 }
@@ -223,7 +224,16 @@ export function PresencePlayground({
   zones = [],
 }: PresencePlaygroundProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const me = users.find((user) => user.id === currentUserId);
+  // Snapshot flags can lag an account switch; the current account ID owns editability.
+  const roster = React.useMemo(
+    () =>
+      users.map((user) => ({
+        ...user,
+        isCurrentUser: user.id === currentUserId,
+      })),
+    [users, currentUserId]
+  );
+  const me = roster.find((user) => user.id === currentUserId);
   const myDeskZone = me ? zoneAt(zones, me) : undefined;
 
   const nearbyIds = React.useMemo(() => {
@@ -239,18 +249,18 @@ export function PresencePlayground({
   const seatedByZone = React.useMemo(() => {
     const map = new Map<string, PresenceUser[]>();
     for (const zone of zones) {
-      const zoneOccupants = users.filter((user) => user.zoneId === zone.id && !user.isCurrentUser);
+      const zoneOccupants = roster.filter((user) => user.zoneId === zone.id && !user.isCurrentUser);
       map.set(zone.id, zoneOccupants);
     }
     return map;
-  }, [users, zones]);
+  }, [roster, zones]);
 
   const seatedIds = React.useMemo(() => {
     const ids = new Set<string>();
-    for (const [zoneId, list] of seatedByZone) {
-      const zone = zones.find((candidate) => candidate.id === zoneId);
-      if (!zone) continue;
-      const capacity = deskSlotOffsets(zone.width).length - (myDeskZone?.id === zoneId ? 1 : 0);
+    for (const zone of zones) {
+      // The map is built from these same zones, including empty occupant lists.
+      const list = seatedByZone.get(zone.id) as PresenceUser[];
+      const capacity = deskSlotOffsets(zone.width).length - (myDeskZone?.id === zone.id ? 1 : 0);
       for (const user of list.slice(0, Math.max(0, capacity))) ids.add(user.id);
     }
     return ids;
@@ -277,36 +287,42 @@ export function PresencePlayground({
     [zones]
   );
 
-  const handleLeaveDesk = React.useCallback(() => {
-    if (!me) return;
-    handleMove(standingSpotNear(zones, me));
-  }, [handleMove, me, zones]);
+  const handleLeaveDesk = React.useCallback(
+    (currentUser: PresenceUser) => {
+      handleMove(standingSpotNear(zones, currentUser));
+    },
+    [handleMove, zones]
+  );
 
-  const handleEnterZone = React.useCallback(() => {
-    if (!me) return;
-    if (zoneAt(zones, me)) {
-      handleLeaveDesk();
-      return;
-    }
-    const nearest = zones.reduce<null | PresenceZoneView>((candidate, zone) => {
-      if (!candidate) return zone;
-      const candidateDistance = (candidate.center_x - me.x) ** 2 + (candidate.center_y - me.y) ** 2;
-      const zoneDistance = (zone.center_x - me.x) ** 2 + (zone.center_y - me.y) ** 2;
-      return zoneDistance < candidateDistance ? zone : candidate;
-    }, null);
-    if (nearest) {
-      const occupants = seatedByZone.get(nearest.id) ?? [];
-      handleMove(seatAnchor(nearest, freeSlotIndex(nearest, occupants.length)));
-    }
-  }, [handleLeaveDesk, handleMove, me, seatedByZone, zones]);
+  const handleEnterZone = React.useCallback(
+    (currentUser: PresenceUser) => {
+      if (zoneAt(zones, currentUser)) {
+        handleLeaveDesk(currentUser);
+        return;
+      }
+      const nearest = zones.reduce<null | PresenceZoneView>((candidate, zone) => {
+        if (!candidate) return zone;
+        const candidateDistance =
+          (candidate.center_x - currentUser.x) ** 2 + (candidate.center_y - currentUser.y) ** 2;
+        const zoneDistance =
+          (zone.center_x - currentUser.x) ** 2 + (zone.center_y - currentUser.y) ** 2;
+        return zoneDistance < candidateDistance ? zone : candidate;
+      }, null);
+      if (nearest) {
+        const occupants = seatedByZone.get(nearest.id) as PresenceUser[];
+        handleMove(seatAnchor(nearest, freeSlotIndex(nearest, occupants.length)));
+      }
+    },
+    [handleLeaveDesk, handleMove, seatedByZone, zones]
+  );
 
   // Render order is sorted by id and never filtered, so an SSE snapshot that hands the
   // roster back in a different order cannot make React reorder these nodes. Moving the
   // current user's button mid-drag used to cancel the gesture outright (see the note in
   // `PresencePlayer`), which is why seated members struggled to drag themselves out.
   const orderedUsers = React.useMemo(
-    () => [...users].sort((left, right) => left.id.localeCompare(right.id)),
-    [users]
+    () => [...roster].sort((left, right) => left.id.localeCompare(right.id)),
+    [roster]
   );
 
   const minHeight = Math.round(460 * Math.max(0.6, Math.min(1.4, heightScale)));
@@ -332,9 +348,9 @@ export function PresencePlayground({
 
       {zones.map((zone) => {
         const session = sessions.find((candidate) => candidate.zoneId === zone.id);
-        const occupants = users.filter((user) => user.zoneId === zone.id).length;
+        const occupants = roster.filter((user) => user.zoneId === zone.id).length;
         const tint = podTint(zone.id);
-        const seated = seatedByZone.get(zone.id) ?? [];
+        const seated = seatedByZone.get(zone.id) as PresenceUser[];
         const selfSlot = me && myDeskZone?.id === zone.id ? nearestSlotIndex(zone, me) : null;
         return (
           <div
@@ -385,7 +401,7 @@ export function PresencePlayground({
             isDeskPosition={(position) => zones.some((zone) => zoneContains(zone, position))}
             isNearby={nearbyIds.has(user.id)}
             key={user.id}
-            onEnterZone={user.isCurrentUser ? handleEnterZone : undefined}
+            onEnterZone={user.isCurrentUser ? () => handleEnterZone(user) : undefined}
             onMove={user.isCurrentUser ? handleMove : undefined}
             reducedMotion={reducedMotion}
             resolveDrop={user.isCurrentUser ? resolveDrop : undefined}
@@ -397,7 +413,7 @@ export function PresencePlayground({
       {myDeskZone ? (
         <button
           className="presence-pixel-shadow-sm presence-pixel-press absolute top-3 right-3 z-40 flex items-center gap-1.5 border-2 px-2.5 py-1.5 text-[10px] font-bold"
-          onClick={handleLeaveDesk}
+          onClick={() => handleLeaveDesk(me!)}
           style={{ background: panel, borderColor: border, fontFamily: headingFont }}
           type="button"
         >

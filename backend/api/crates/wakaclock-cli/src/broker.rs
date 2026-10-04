@@ -1,11 +1,12 @@
 //! Local AI Activity Broker runtime.
 //!
 //! The shared event contract and inbox live in `wakaclock-core::broker`.  This
-//! module owns the legacy HTTP server (kept only for migration compatibility),
+//! module keeps legacy HTTP contracts as test fixtures and owns
 //! the durable inbox, and the adapter that turns a broker event into the existing
 //! normalized heartbeat path. Producers always use the on-demand SQLite path;
 //! no producer discovers or contacts a local broker process.
 
+#[cfg(test)]
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path as AxumPath, State},
@@ -17,26 +18,27 @@ use axum::{
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
     error::Error,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
 };
-use tokio::{net::TcpListener, sync::watch};
-use uuid::Uuid;
+#[cfg(test)]
+use wakaclock_core::broker::{
+    QuarantineDiagnostic, MAX_BATCH_BYTES, MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
+};
 use wakaclock_core::{
     ai::{AiAttributionState, AiEditEvent},
     api_client::ApiClient,
     broker::{
-        broker_discovery_path, broker_runtime_dir, broker_token_path, BrokerBatchAck,
-        BrokerDiscovery, BrokerEventAck, BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome,
-        BrokerStore, BrokerStoreStats, EditorObservationAck, EditorObservationIngestOutcome,
-        EditorObservationV1, QuarantineDiagnostic, TransportKind, AI_SIDECAR_SCHEMA_VERSION,
-        BROKER_SCHEMA_VERSION, EDITOR_WAIT_SECONDS, MAX_BATCH_BYTES,
-        MAX_BATCH_EVENTS as CORE_MAX_BATCH_EVENTS, MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
+        broker_discovery_path, broker_runtime_dir, BrokerBatchAck, BrokerDiscovery, BrokerEventAck,
+        BrokerEventStatus, BrokerEventV1, BrokerIngestOutcome, BrokerStore, BrokerStoreStats,
+        EditorObservationAck, EditorObservationIngestOutcome, EditorObservationV1, TransportKind,
+        AI_SIDECAR_SCHEMA_VERSION, BROKER_SCHEMA_VERSION, EDITOR_WAIT_SECONDS,
+        MAX_BATCH_EVENTS as CORE_MAX_BATCH_EVENTS,
     },
     config::Config,
     error::AppError,
@@ -53,7 +55,6 @@ pub(crate) const MAX_BATCH_EVENTS: usize = CORE_MAX_BATCH_EVENTS;
 
 use crate::agent_service;
 
-const BROKER_POLL_SECONDS: u64 = 1;
 const BROKER_AI_ACTIVITY_STREAM: &str = "broker-ai";
 const MAX_SIDECAR_FINGERPRINT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -65,6 +66,7 @@ pub(crate) struct BrokerProcessReport {
     pub dead_lettered: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 struct BrokerHttpState {
     token: Arc<str>,
@@ -601,66 +603,7 @@ fn content_fingerprint_for_path(path: &Path) -> Option<String> {
     Some(format!("sha256:{hex}"))
 }
 
-pub(crate) async fn run(config: Config, interval_seconds: u64) -> Result<(), Box<dyn Error>> {
-    let _lock = agent_service::AgentLock::acquire().map_err(std::io::Error::other)?;
-    // Run migrations before binding the port. A producer must never receive a
-    // transport-level success while the durable inbox is unavailable.
-    let _store = BrokerStore::open()?;
-    let api_client = Arc::new(ApiClient::new(config.clone())?);
-    let token = load_or_create_token()?;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}", listener.local_addr()?);
-    let started_at = Utc::now().timestamp();
-    write_discovery(&BrokerDiscovery {
-        endpoint: endpoint.clone(),
-        pid: std::process::id(),
-        schema_version: BROKER_SCHEMA_VERSION,
-        started_at,
-    })?;
-    agent_service::append_log(&format!(
-        "broker started pid={} endpoint={} interval={}s",
-        std::process::id(),
-        endpoint,
-        interval_seconds.max(BROKER_POLL_SECONDS)
-    ));
-
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let worker_config = config.clone();
-    let worker_api = api_client.clone();
-    // `ApiClient::flush_queue` holds a `rusqlite::Connection`-backed `Queue` across an
-    // `.await` (see `wakaclock-ls`'s `spawn_heartbeat_worker` for the same issue spelled
-    // out) which makes `worker_loop`'s future `!Send` — `tokio::spawn` requires `Send`.
-    // A dedicated OS thread with its own current-thread runtime sidesteps the bound the
-    // same way, since `Runtime::block_on` drives the future on the calling thread only.
-    let worker = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("wakaclock broker: failed to start worker runtime");
-        runtime.block_on(worker_loop(
-            worker_config,
-            worker_api,
-            interval_seconds,
-            stop_rx,
-        ));
-    });
-
-    let state = BrokerHttpState {
-        token: Arc::from(token),
-        store_path: None,
-    };
-    let app = router(state);
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    let _ = stop_tx.send(true);
-    let _ = worker.join();
-    remove_owned_discovery(std::process::id());
-    agent_service::append_log("broker stopped");
-    Ok(())
-}
-
+#[cfg(test)]
 fn router(state: BrokerHttpState) -> Router {
     Router::new()
         .route("/v1/health", get(health_handler))
@@ -676,27 +619,12 @@ fn router(state: BrokerHttpState) -> Router {
         .with_state(state)
 }
 
+#[cfg(test)]
 fn open_store(state: Option<&BrokerHttpState>) -> Result<BrokerStore, AppError> {
     match state.and_then(|value| value.store_path.as_deref()) {
         Some(path) => BrokerStore::open_at(path),
         None => BrokerStore::open(),
     }
-}
-
-pub(crate) fn rotate_token() -> Result<(), Box<dyn Error>> {
-    let token = format!(
-        "{}{}{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
-    write_private_atomic(&broker_token_path(), &token)
-}
-
-pub(crate) fn ensure_token() -> Result<(), Box<dyn Error>> {
-    let _ = load_or_create_token()?;
-    Ok(())
 }
 
 pub(crate) fn status_for_cli() -> Result<serde_json::Value, AppError> {
@@ -727,112 +655,7 @@ pub(crate) fn status_for_cli() -> Result<serde_json::Value, AppError> {
     Ok(status)
 }
 
-async fn worker_loop(
-    mut config: Config,
-    api_client: Arc<ApiClient>,
-    interval_seconds: u64,
-    mut stop_rx: watch::Receiver<bool>,
-) {
-    let mut api_client = api_client;
-    // Transcript parsers perform synchronous filesystem/SQLite work internally.
-    // Keep their bounded pass off the async runtime worker so a large transcript
-    // cannot block editor observations or the durable heartbeat inbox.
-    let mut ai_sync_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut interval = tokio::time::interval(Duration::from_secs(
-        interval_seconds.max(BROKER_POLL_SECONDS),
-    ));
-    loop {
-        tokio::select! {
-            changed = stop_rx.changed() => {
-                if changed.is_err() || *stop_rx.borrow() {
-                    break;
-                }
-            }
-            _ = interval.tick() => {
-                if let Some(updated) = crate::reloaded_agent_config(&config) {
-                    if let Ok(client) = ApiClient::new(updated.clone()) {
-                        config = updated;
-                        api_client = Arc::new(client);
-                        agent_service::append_log("broker reloaded API identity");
-                    }
-                }
-                // Legacy service loop retained only for old test fixtures and
-                // explicit migration diagnostics. Supported producers never enter
-                // this path: hooks invoke the one-shot CLI directly. The parser
-                // performs blocking work, so run it on Tokio's blocking pool.
-                let sync_finished = ai_sync_task
-                    .as_ref()
-                    .map(|task| task.is_finished())
-                    .unwrap_or(true);
-                if sync_finished {
-                    if let Some(task) = ai_sync_task.take() {
-                        let _ = task.await;
-                    }
-                    let sync_config = config.clone();
-                    let sync_api_client = api_client.clone();
-                    let runtime_handle = tokio::runtime::Handle::current();
-                    ai_sync_task = Some(tokio::task::spawn_blocking(move || {
-                        runtime_handle.block_on(crate::run_bounded_ai_sync(
-                            &sync_config,
-                            &sync_api_client,
-                        ));
-                    }));
-                }
-                match process_pending(&config, &api_client, MAX_BATCH_EVENTS).await {
-                    Ok(report) if report.claimed > 0 => agent_service::append_log(&format!(
-                        "broker processed={} retried={} dead_lettered={}",
-                        report.processed, report.retried, report.dead_lettered
-                    )),
-                    Ok(_) => {},
-                    Err(error) => agent_service::append_log(&format!(
-                        "broker processing failed code={}",
-                        error_code(&error)
-                    )),
-                }
-                match api_client.flush_queue().await {
-                    Ok(report) => {
-                        if report.flushed > 0 {
-                            agent_service::record_heartbeat();
-                            agent_service::append_log(&format!("broker flushed {} queued heartbeat(s)", report.flushed));
-                        }
-                        if report.stopped_because.is_some() {
-                            // Log the classified kind for this scope, never the raw
-                            // message: it can carry a URL and server response body.
-                            let kind = api_client
-                                .delivery_failure()
-                                .map(|failure| failure.kind)
-                                .unwrap_or_else(|| "unknown".to_string());
-                            agent_service::append_log(&format!(
-                                "broker queue flush stopped code=delivery kind={kind}"
-                            ));
-                        }
-                    }
-                    Err(_) => agent_service::append_log("broker queue flush failed code=delivery"),
-                }
-                agent_service::record_scan(true, None, None);
-            }
-        }
-    }
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let ctrl_c = tokio::signal::ctrl_c();
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
-        tokio::select! {
-            _ = ctrl_c => {}
-            _ = terminate.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
+#[cfg(test)]
 async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
@@ -841,6 +664,7 @@ async fn health_handler() -> impl IntoResponse {
     }))
 }
 
+#[cfg(test)]
 async fn status_handler(headers: HeaderMap, State(state): State<BrokerHttpState>) -> Response {
     if !authorize(&headers, &state) {
         return error_response(StatusCode::UNAUTHORIZED, "broker token is invalid");
@@ -883,6 +707,7 @@ fn status_json(
     })
 }
 
+#[cfg(test)]
 async fn event_handler(
     headers: HeaderMap,
     State(state): State<BrokerHttpState>,
@@ -937,6 +762,7 @@ async fn event_handler(
         .into_response()
 }
 
+#[cfg(test)]
 async fn batch_handler(
     headers: HeaderMap,
     State(state): State<BrokerHttpState>,
@@ -1026,6 +852,7 @@ async fn batch_handler(
     (status, Json(ack)).into_response()
 }
 
+#[cfg(test)]
 async fn editor_observation_handler(
     headers: HeaderMap,
     State(state): State<BrokerHttpState>,
@@ -1073,6 +900,7 @@ async fn editor_observation_handler(
     (status, Json(result.1)).into_response()
 }
 
+#[cfg(test)]
 async fn editor_observation_status_handler(
     headers: HeaderMap,
     State(state): State<BrokerHttpState>,
@@ -1093,6 +921,7 @@ async fn editor_observation_status_handler(
     }
 }
 
+#[cfg(test)]
 fn authorize(headers: &HeaderMap, state: &BrokerHttpState) -> bool {
     headers
         .get(header::AUTHORIZATION)
@@ -1101,6 +930,7 @@ fn authorize(headers: &HeaderMap, state: &BrokerHttpState) -> bool {
         .is_some_and(|token| token == state.token.as_ref())
 }
 
+#[cfg(test)]
 fn store_error_response(error: AppError) -> Response {
     match error {
         AppError::Conflict(message) => error_response(StatusCode::CONFLICT, &message),
@@ -1114,54 +944,9 @@ fn store_error_response(error: AppError) -> Response {
     }
 }
 
+#[cfg(test)]
 fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
-}
-
-fn load_or_create_token() -> Result<String, Box<dyn Error>> {
-    let path = broker_token_path();
-    fs::create_dir_all(broker_runtime_dir())?;
-    if let Ok(token) = fs::read_to_string(&path) {
-        let token = token.trim().to_string();
-        if token.len() >= 64 {
-            set_private_permissions(&path)?;
-            return Ok(token);
-        }
-    }
-    let token = format!(
-        "{}{}{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
-    write_private_atomic(&path, &token)?;
-    Ok(token)
-}
-
-fn write_discovery(discovery: &BrokerDiscovery) -> Result<(), Box<dyn Error>> {
-    let json = serde_json::to_string_pretty(discovery)?;
-    write_private_atomic(&broker_discovery_path(), &json)
-}
-
-fn write_private_atomic(path: &Path, content: &str) -> Result<(), Box<dyn Error>> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    fs::write(&temporary, content)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(windows)]
-    {
-        let _ = fs::remove_file(path);
-    }
-    fs::rename(temporary, path)?;
-    set_private_permissions(path)?;
-    Ok(())
 }
 
 fn set_private_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
@@ -1200,27 +985,17 @@ fn set_private_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_discovery() -> Option<BrokerDiscovery> {
-    fs::read_to_string(broker_discovery_path())
-        .ok()
-        .and_then(|json| serde_json::from_str::<BrokerDiscovery>(&json).ok())
-        .filter(|discovery| discovery.schema_version == BROKER_SCHEMA_VERSION)
-}
-
 /// Remove stale discovery metadata without touching the durable inbox or token.
 pub(crate) fn cleanup_discovery() {
     let _ = fs::remove_file(broker_discovery_path());
 }
 
-fn remove_owned_discovery(pid: u32) {
-    let path = broker_discovery_path();
-    let owned = fs::read_to_string(&path)
+#[cfg(test)]
+fn read_discovery() -> Option<BrokerDiscovery> {
+    fs::read_to_string(broker_discovery_path())
         .ok()
         .and_then(|json| serde_json::from_str::<BrokerDiscovery>(&json).ok())
-        .is_some_and(|discovery| discovery.pid == pid);
-    if owned {
-        let _ = fs::remove_file(path);
-    }
+        .filter(|discovery| discovery.schema_version == BROKER_SCHEMA_VERSION)
 }
 
 #[cfg(test)]

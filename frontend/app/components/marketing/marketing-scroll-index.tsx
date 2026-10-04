@@ -16,16 +16,21 @@ export function MarketingScrollIndex({ locale }: { locale: SiteLocale }) {
 
   useEffect(() => {
     const root = marker.current?.closest('.wakaclock-marketing');
-    const sections = [
+    const chapters = [
       ...(root?.querySelectorAll<globalThis.HTMLElement>('main section[id]') ?? []),
-    ].filter((section) => section.querySelector('h2'));
+    ].flatMap((section) => {
+      const title = section.querySelector('h2')?.textContent?.trim();
+      return title ? [{ section, title }] : [];
+    });
+    const sections = chapters.map(({ section }) => section);
     setItems(
-      sections.map((section) => ({
+      chapters.map(({ section, title }) => ({
         id: section.id,
-        title: section.querySelector('h2')?.textContent?.trim() ?? '',
+        title,
       }))
     );
-    if (panel.current) panel.current.open = false;
+    // The details element is unconditional and its ref is attached before the effect.
+    panel.current!.open = false;
     let frame = 0;
     const update = () => {
       frame = 0;
@@ -87,7 +92,7 @@ export function MarketingScrollIndex({ locale }: { locale: SiteLocale }) {
                   aria-current={item.id === active ? 'location' : undefined}
                   href={`#${item.id}`}
                   onClick={() => {
-                    if (panel.current) panel.current.open = false;
+                    panel.current!.open = false;
                   }}
                 >
                   <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>

@@ -11,8 +11,8 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
   const id = useId();
   const [edges, setEdges] = useState({ start: true, end: false });
   useEffect(() => {
-    const element = rail.current;
-    if (!element) return;
+    // The rail is unconditional; React attaches its ref before running this effect.
+    const element = rail.current!;
     let frame = 0;
     const update = () => {
       frame = 0;
@@ -44,8 +44,8 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
     };
   }, []);
   useEffect(() => {
-    const element = rail.current;
-    if (!element || typeof IntersectionObserver === 'undefined') return;
+    const element = rail.current!;
+    if (typeof IntersectionObserver === 'undefined') return;
     // The rail is the observer root: cards reveal on horizontal swipes as well
     // as page scroll, without running a transform loop on every pointer move.
     const observer = new IntersectionObserver(
@@ -60,8 +60,8 @@ export function FeatureGallery({ children, locale }: { children: ReactNode; loca
     return () => observer.disconnect();
   }, []);
   const move = (direction: number) => {
-    const element = rail.current;
-    if (!element) return;
+    // These controls are mounted alongside the rail for their entire lifetime.
+    const element = rail.current!;
     const width = element.firstElementChild?.getBoundingClientRect().width ?? element.clientWidth;
     element.scrollBy({
       left: direction * (width + 24),

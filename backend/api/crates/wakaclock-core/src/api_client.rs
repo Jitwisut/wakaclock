@@ -15,9 +15,10 @@ use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, fs, path::PathBuf};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusBarSnapshot {
@@ -506,7 +507,8 @@ impl ApiClient {
     /// editor heartbeat. An unavailable or older server is treated as unsupported;
     /// versioned line data is retained locally while the time heartbeat still ships.
     async fn supports_editor_line_metrics(&self) -> bool {
-        if let Ok(cache) = self.line_metric_capability.lock() {
+        {
+            let cache = self.line_metric_capability.lock().await;
             if let Some((checked_at, supported)) = *cache {
                 // Recheck negative results more often: they can mean a rolling
                 // deployment or a temporary capability endpoint failure.
@@ -546,9 +548,7 @@ impl ApiClient {
             .ok()
             .flatten()
             .is_some();
-        if let Ok(mut cache) = self.line_metric_capability.lock() {
-            *cache = Some((Instant::now(), supported));
-        }
+        *self.line_metric_capability.lock().await = Some((Instant::now(), supported));
         supported
     }
 

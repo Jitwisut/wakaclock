@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { HeartbeatStream } from '@/app/dashboard/(auth)/wakaclock/heartbeats/components/heartbeat-stream';
 import { EMPTY_HEARTBEAT_FILTER, type HeartbeatFilter } from '@/lib/wakaclock/heartbeat-stats';
 import type { HeartbeatItem } from '@/lib/wakaclock/types';
 
-vi.mock('@/hooks/use-reduced-motion', () => ({ useReducedMotion: () => true }));
+const motion = vi.hoisted(() => ({ reduced: true }));
+vi.mock('@/hooks/use-reduced-motion', () => ({ useReducedMotion: () => motion.reduced }));
+beforeEach(() => {
+  motion.reduced = true;
+});
 function fixture(index: number): HeartbeatItem {
   return {
     active_seconds: null,
@@ -50,17 +54,31 @@ function setup(rows: HeartbeatItem[], initial = EMPTY_HEARTBEAT_FILTER) {
 }
 it('paginates newest first, preserves the API row index and resets the page on search', () => {
   const open = setup(Array.from({ length: 121 }, (_, i) => fixture(i)));
-  expect(screen.getAllByRole('listitem')).toHaveLength(120);
+  // Count rendered rows without computing 120 full ancestor visibility trees.
+  // Visibility is asserted on the selected row and the pagination control below.
+  expect(screen.getAllByRole('listitem', { hidden: true })).toHaveLength(120);
   expect(screen.queryByText('file-0.ts')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /Show 1 more/ }));
-  expect(screen.getAllByRole('listitem')).toHaveLength(121);
+  const more = screen.getByText(/Show 1 more/);
+  expect(more).toBeVisible();
+  expect(more).toHaveAccessibleName(/Show 1 more/);
+  fireEvent.click(more);
+  expect(screen.getAllByRole('listitem', { hidden: true })).toHaveLength(121);
+  expect(screen.getByText('file-0.ts')).toBeVisible();
   fireEvent.click(screen.getByText('file-0.ts'));
   expect(open).toHaveBeenCalledWith(0);
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'file-120' } });
   expect(screen.getAllByRole('listitem')).toHaveLength(1);
   expect(screen.getByText('1 of 121 heartbeats match')).toBeVisible();
   fireEvent.click(screen.getByText('Clear all'));
-  expect(screen.getAllByRole('listitem')).toHaveLength(120);
+  expect(screen.getAllByRole('listitem', { hidden: true })).toHaveLength(120);
+});
+
+it('keeps fresh and existing rows interactive when motion is enabled', () => {
+  motion.reduced = false;
+  const open = setup([fixture(0), fixture(1)]);
+  fireEvent.click(screen.getByText('file-0.ts'));
+  fireEvent.click(screen.getByText('file-1.ts'));
+  expect(open.mock.calls).toEqual([[0], [1]]);
 });
 it('filters writes and AI independently and clears each dimension chip', () => {
   setup([fixture(0), fixture(1)], {

@@ -63,10 +63,10 @@ export function splitWakaTimeExport(raw: string): string[] {
 
   const flush = () => {
     if (current.length === 0) return;
+    // Admission below bounds baseSize + every serialized heartbeat + one comma
+    // each to 800 KB. That overcounts the first comma, so the actual chunk is
+    // already below the server's 1 MiB limit without encoding the whole body again.
     const chunk = JSON.stringify({ user, days: [{ heartbeats: current }] });
-    if (encoder.encode(chunk).length > 1024 * 1024) {
-      throw new Error('One export chunk exceeds the server limit.');
-    }
     chunks.push(chunk);
     current = [];
     currentBytes = baseSize;

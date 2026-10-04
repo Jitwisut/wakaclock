@@ -86,7 +86,7 @@ function registerCommands(context, configService, cliService, bufferManager, sta
             return;
         }
         await configService.updateSetting("cliPath", value.trim());
-        await vscode.window.showInformationMessage("Wakaclock CLI path updated.");
+        await vscode.window.showInformationMessage("AtoAxis CLI path updated.");
     }), vscode.commands.registerCommand("wakaclock.showToday", async () => {
         try {
             // Must match the timezone the status bar passes, or the popup and the
@@ -111,7 +111,7 @@ function registerCommands(context, configService, cliService, bufferManager, sta
         await statusBar.refresh();
     }), vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
         const value = await vscode.window.showInputBox({
-            prompt: "API key generated from the Wakaclock dashboard (Settings → API key)",
+            prompt: "API key generated from the AtoAxis dashboard (Settings → API key)",
             placeHolder: "wcl_...",
             password: true,
             ignoreFocusOut: true
@@ -168,13 +168,13 @@ function registerCommands(context, configService, cliService, bufferManager, sta
     }), vscode.commands.registerCommand("wakaclock.clearApiKey", async () => {
         const existing = await (0, secrets_1.getStoredApiKey)(context.secrets);
         if (!existing) {
-            await vscode.window.showInformationMessage("No Wakaclock API key is currently set.");
+            await vscode.window.showInformationMessage("No AtoAxis API key is currently set.");
             return;
         }
         await (0, secrets_1.clearStoredApiKey)(context.secrets);
         await (0, secrets_1.clearPendingApiKey)(context.secrets);
         await statusBar.refresh();
-        await vscode.window.showInformationMessage("Wakaclock API key cleared — heartbeats will use the unauthenticated user_id again.");
+        await vscode.window.showInformationMessage("AtoAxis API key cleared — heartbeats will use the unauthenticated user_id again.");
         try {
             await cliService.clearApiKey();
         }

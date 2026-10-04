@@ -33,7 +33,8 @@ const OUTFITS: SpriteOutfit[] = ['hoodie', 'jacket', 'overalls'];
 function hashUserId(userId: string): number {
   let hash = 2_166_136_261;
   for (const char of userId) {
-    hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 16_777_619) >>> 0;
+    // A for-of character is always a nonempty Unicode code point.
+    hash = Math.imul(hash ^ (char.codePointAt(0) as number), 16_777_619) >>> 0;
   }
   return hash;
 }

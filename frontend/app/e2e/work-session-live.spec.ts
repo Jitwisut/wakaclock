@@ -138,6 +138,7 @@ test('loads more than 25 real evidence rows on desktop and mobile without duplic
         agent: 'codex',
         provider: 'openai',
         model: 'receipt-pagination-fixture',
+        prompt_count: 1,
         input_tokens: 0,
         token_source: 'transcript',
       },
@@ -158,6 +159,8 @@ test('loads more than 25 real evidence rows on desktop and mobile without duplic
         machine: collector,
         is_write: true,
         is_ai_generated: true,
+        actor_type: 'ai_verified',
+        actor_confidence: 1,
         ai_agent: 'codex',
         ai_provider: 'openai',
         identity_status: 'confirmed',
@@ -187,5 +190,10 @@ test('loads more than 25 real evidence rows on desktop and mobile without duplic
     await expect(evidence.getByRole('button', { name: 'More evidence' })).toHaveCount(0);
     const rows = await evidence.getByRole('listitem').allTextContents();
     expect(new Set(rows).size).toBe(26);
+    await page
+      .getByRole('dialog')
+      .getByRole('link', { name: 'Open Trust Center and correction history' })
+      .click();
+    await expect(page).toHaveURL(/analytics\/trust/);
   }
 });

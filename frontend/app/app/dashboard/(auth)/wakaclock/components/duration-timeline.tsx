@@ -66,7 +66,8 @@ export function DurationTimeline() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: wakaclockKeys.durations(userId, date, timezone ?? undefined),
-    queryFn: () => getDurations(userId, date, timezone ?? undefined),
+    // The query stays disabled until the browser timezone has been resolved.
+    queryFn: () => getDurations(userId, date, timezone as string),
     enabled: Boolean(userId && timezone),
   });
 
@@ -120,7 +121,8 @@ export function DurationTimeline() {
             <PopoverContent align="end" className="w-auto p-0">
               <Calendar
                 mode="single"
-                onSelect={(d) => d && setDate(format(d, 'yyyy-MM-dd'))}
+                onSelect={(d) => setDate(format(d, 'yyyy-MM-dd'))}
+                required
                 selected={parseISO(date)}
               />
             </PopoverContent>
@@ -188,7 +190,8 @@ export function DurationTimeline() {
                       const projectSessions = sessions.filter(
                         (block) => timelineProjectLabel(block.project) === project
                       );
-                      const projectTotal = projectTotals.get(project) ?? 0;
+                      // Both collections come from the same labeled sessions.
+                      const projectTotal = projectTotals.get(project) as number;
                       const projectColor = timelineProjectColor(project);
 
                       return (

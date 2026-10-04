@@ -25,6 +25,7 @@ import type { Goal, Leaderboard } from '@/lib/wakaclock/types';
  */
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const session = vi.hoisted(() => ({ userId: 'user-1' as null | string }));
 
 const v2 = vi.hoisted(() => ({
   getCapabilities: vi.fn(),
@@ -57,8 +58,8 @@ vi.mock('@/components/wakaclock/require-user', () => ({
 }));
 
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (selector: (state: { userId: string }) => unknown) =>
-    selector({ userId: 'user-1' }),
+  useWakaclockUserStore: (selector: (state: { userId: null | string }) => unknown) =>
+    selector(session),
 }));
 
 const goal: Goal = {
@@ -99,6 +100,7 @@ function renderPage(page: React.ReactElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  session.userId = 'user-1';
   v2.getCapabilities.mockResolvedValue({
     features: [
       {
@@ -112,7 +114,56 @@ beforeEach(() => {
   });
 });
 
+it.each([
+  ['goals', <GoalsPage />],
+  ['leaderboards', <LeaderboardsPage />],
+])('does not query private %s without an authenticated owner', async (_name, page) => {
+  session.userId = null;
+  renderPage(page as React.ReactElement);
+  await screen.findByText(_name === 'goals' ? 'New goal' : 'New leaderboard');
+  expect(v2.listGoals).not.toHaveBeenCalled();
+  expect(v2.getGoalProgress).not.toHaveBeenCalled();
+  expect(v2.listLeaderboards).not.toHaveBeenCalled();
+  expect(v2.listLeaderboardMembers).not.toHaveBeenCalled();
+  expect(getProjects).not.toHaveBeenCalled();
+});
+
+it('uses UTC for new goals when the browser cannot resolve a timezone', async () => {
+  const options = Intl.DateTimeFormat().resolvedOptions();
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    ...options,
+    timeZone: '',
+  });
+  v2.listGoals.mockResolvedValue([]);
+  vi.mocked(createGoal).mockResolvedValue(goal);
+  renderPage(<GoalsPage />);
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'UTC goal' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create goal' }));
+  await waitFor(() =>
+    expect(createGoal).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }))
+  );
+  expect(await screen.findByText('No goals yet. Create one above.')).toBeVisible();
+});
+
 describe('Goals page', () => {
+  it('reports a failed progress read as unavailable rather than claiming no recorded activity', async () => {
+    v2.listGoals.mockResolvedValue([goal]);
+    v2.getGoalProgress.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({
+      coverage: 1,
+      current_seconds: 3600,
+      target_seconds: 7200,
+      percentage: 50,
+      on_track: false,
+    });
+    renderPage(<GoalsPage />);
+    expect(await screen.findByText('Progress unavailable.')).toBeVisible();
+    expect(screen.queryByText(/No activity recorded/)).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry progress' }));
+    await waitFor(() => expect(v2.getGoalProgress).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('1h 0m of 2h 0m')).toBeVisible();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
   it('renders a goal with its measured progress', async () => {
     v2.listGoals.mockResolvedValue([goal]);
     v2.getGoalProgress.mockResolvedValue({

@@ -54,7 +54,7 @@ def main():
             evidence = args.evidence.resolve()
             if not evidence.is_relative_to((ROOT / 'evidence').resolve()):
                 raise ValueError('evidence_must_be_local_lab_artifact')
-            item.update({'evidence': str(evidence.relative_to(ROOT / 'evidence')),
+            item.update({'evidence': str(evidence.relative_to((ROOT / 'evidence').resolve())),
                          'sha256': file_digest(evidence)})
         if args.status == 'passed' and (not args.reviewed or not args.evidence):
             raise ValueError('passed_requires_reviewed_evidence')

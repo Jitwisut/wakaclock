@@ -6,6 +6,7 @@ import {
   EMPTY_HEARTBEAT_FILTER,
   facetLabel,
   heartbeatHour,
+  heartbeatAgentLabel,
   isAiHeartbeat,
   isFilterActive,
   matchesHeartbeatFilter,
@@ -43,6 +44,9 @@ function hb(overrides: Partial<HeartbeatItem> = {}): HeartbeatItem {
 }
 
 describe('summarizeHeartbeats', () => {
+  it('does not infer an agent when legacy rows have no actor evidence', () => {
+    expect(heartbeatAgentLabel({ ai_agent: 'codex' })).toBe('Unknown authorship');
+  });
   it('keeps Codex attribution distinct from VS Code and never infers it from an editor', () => {
     const codex = hb({ actor_type: 'ai_verified', ai_agent: 'codex', editor: 'vscode' });
     const unknown = hb({ actor_type: 'unknown', ai_agent: 'codex', editor: 'codex-desktop' });

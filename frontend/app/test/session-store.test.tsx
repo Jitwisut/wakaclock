@@ -25,6 +25,16 @@ function mount() {
 }
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
+it('never overwrites the stored session with anonymous state while hydrating', () => {
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  const writes = vi.spyOn(Storage.prototype, 'setItem');
+  mount();
+  expect(screen.getByText('Ada')).toBeVisible();
+  expect(writes).toHaveBeenCalled();
+  for (const [key, value] of writes.mock.calls) {
+    if (key === 'wakaclock-session') expect(JSON.parse(value)).toEqual(session);
+  }
+});
 it('hydrates a valid session, mirrors its token and clears both persistence and token on logout or rejection', () => {
   localStorage.setItem('wakaclock-session', JSON.stringify(session));
   mount();

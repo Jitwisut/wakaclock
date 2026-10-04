@@ -45,18 +45,15 @@ function renderBlock(block: MarketingBlock): string {
       const label = block.label ? `${block.label}:` : '';
       return [label, '```', block.value, '```'].filter(Boolean).join('\n');
     }
-    case 'email': {
-      return `${block.before}${ORGANIZATION.email}${block.after ?? ''}`;
-    }
+    // Email is the remaining member of the closed MarketingBlock union.
     default: {
-      return '';
+      return `${block.before}${ORGANIZATION.email}${block.after ?? ''}`;
     }
   }
 }
 
-function renderPage(path: string, locale: SiteLocale): string {
-  const copy = PAGE_COPY[path as (typeof MARKETING_PAGE_KEYS)[number]]?.[locale];
-  if (!copy) return '';
+function renderPage(path: (typeof MARKETING_PAGE_KEYS)[number], locale: SiteLocale): string {
+  const copy = PAGE_COPY[path][locale];
 
   const sections = copy.sections
     .map(

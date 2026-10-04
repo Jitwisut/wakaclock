@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DurationTimeline } from '@/app/dashboard/(auth)/wakaclock/components/duration-timeline';
 import { getDurations } from '@/lib/wakaclock/endpoints';
@@ -9,10 +9,79 @@ import { formatEpochRange, formatEpochTime, todayDateString } from '@/lib/wakacl
 import type { DurationBlock } from '@/lib/wakaclock/types';
 
 vi.mock('@/lib/wakaclock/endpoints', () => ({ getDurations: vi.fn() }));
+const session = vi.hoisted(() => ({ userId: 'test-user' as null | string }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (select: (state: { userId: string }) => unknown) =>
-    select({ userId: 'test-user' }),
+  useWakaclockUserStore: (select: (state: { userId: null | string }) => unknown) => select(session),
 }));
+beforeEach(() => {
+  session.userId = 'test-user';
+});
+
+it('uses UTC when the browser cannot resolve a timezone', async () => {
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    ...Intl.DateTimeFormat().resolvedOptions(),
+    timeZone: '',
+  });
+  vi.mocked(getDurations).mockResolvedValue({ date: todayDateString(), total: 0, data: [] });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  await screen.findByText('No sessions on this day');
+  expect(getDurations).toHaveBeenCalledWith('test-user', todayDateString(), 'UTC');
+});
+
+it('does not fetch private timeline data without an owner', () => {
+  session.userId = null;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  expect(getDurations).not.toHaveBeenCalled();
+  expect(screen.getByText('No sessions on this day')).toBeVisible();
+});
+
+it('shows measured duration values and missing additional AI time independently', async () => {
+  const start = 1_790_899_200;
+  vi.mocked(getDurations).mockResolvedValue({
+    date: '2026-10-02',
+    total: 1,
+    data: [
+      {
+        start,
+        end: start + 3600,
+        duration_seconds: 3600,
+        project: 'Measured',
+        entity: 'main.rs',
+        language: 'Rust',
+        category: 'coding',
+        heartbeat_count: 2,
+      },
+    ],
+    active_coverage: 'measured',
+    active_seconds: 0,
+    comparable_seconds: 3600,
+    ai_additional_seconds: undefined,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  await screen.findByText('Active coding (primary)');
+  expect(screen.getByText('Active coding (primary)').nextElementSibling).toHaveTextContent('0m');
+  expect(screen.getByText('WakaTime-comparable activity').nextElementSibling).toHaveTextContent(
+    '1h'
+  );
+  expect(screen.getByText('Additional measured AI time').nextElementSibling).toHaveTextContent(
+    'Not available'
+  );
+});
 
 describe('DurationTimeline sessions', () => {
   it('renders one solid bar and table row per session with a whole-session tooltip', async () => {

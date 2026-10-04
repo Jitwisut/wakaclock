@@ -79,10 +79,9 @@ export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone
     onError: (error: Error) => toast.error(error.message),
   });
 
-  function handleSingleSubmit() {
-    if (!userId) return;
+  function handleSingleSubmit(owner: string) {
     const payload: HeartbeatPayload = {
-      user_id: userId,
+      user_id: owner,
       entity,
       entity_type: entityType,
       time: Date.now() / 1000,
@@ -101,7 +100,8 @@ export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone
       if (!Array.isArray(value)) throw new Error('Expected a JSON array');
       parsed = value as HeartbeatPayload[];
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Invalid JSON');
+      // JSON.parse and the array check above both throw Error instances.
+      toast.error((error as Error).message);
       return;
     }
     bulkMutation.mutate(parsed);
@@ -200,7 +200,7 @@ export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone
             <DialogFooter>
               <Button
                 disabled={singleMutation.isPending || !userId || !timezone}
-                onClick={handleSingleSubmit}
+                onClick={userId ? () => handleSingleSubmit(userId) : undefined}
               >
                 {singleMutation.isPending ? 'Sending…' : 'Send'}
               </Button>
@@ -222,7 +222,10 @@ export function SendHeartbeatDialog({ date, timezone }: { date: string; timezone
               value={bulkJson}
             />
             <DialogFooter>
-              <Button disabled={bulkMutation.isPending} onClick={handleBulkSubmit}>
+              <Button
+                disabled={bulkMutation.isPending || !userId || !timezone}
+                onClick={handleBulkSubmit}
+              >
                 {bulkMutation.isPending ? 'Sending…' : 'Send batch'}
               </Button>
             </DialogFooter>

@@ -67,6 +67,21 @@ it('exports visible Thai answers and their canonical URL in the AI text resource
   expect(text).toContain(PAGE_COPY['/docs'].en.lead);
 });
 
+it.each(['en', 'th'] as const)(
+  'keeps %s pricing chapter copy identical in the page and text export',
+  async (locale) => {
+    const chapter = PAGE_COPY['/pricing'][locale].sections[1];
+    render(<LocalizedMarketingPage locale={locale} path="/pricing" />);
+    const text = await GET().text();
+    for (const block of chapter.blocks) {
+      if (block.kind === 'paragraph') {
+        expect(screen.getByText(block.text)).toBeVisible();
+        expect(text).toContain(block.text);
+      }
+    }
+  }
+);
+
 it('pairs every sitemap entry with published English and Thai counterparts', () => {
   const entries = sitemap();
   const urls = new Set(entries.map((entry) => entry.url));

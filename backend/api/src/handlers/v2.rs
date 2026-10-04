@@ -968,7 +968,7 @@ pub async fn measurement_quality(
             .map_err(ApiError::internal)?;
         let coverage = coverage_from_metric_groups(&line_metric_coverage, "editor-before-after-v1")
             .or_else(|| coverage_from_metric_groups(&line_metric_coverage, "legacy_unversioned"))
-            .unwrap_or_else(|| empty_project_coverage());
+            .unwrap_or_else(empty_project_coverage);
         let mut data = build_measurement_quality(summary, coverage);
         data.days = timeline
             .days
@@ -3544,8 +3544,11 @@ mod capability_tests {
     #[test]
     fn requested_range_over_limit_is_a_client_error_before_stats_query() {
         let error = super::resolve_range(
-            Some("2025-01-01".into()), Some("2026-09-30".into()), Some("Asia/Bangkok"),
-        ).unwrap_err();
+            Some("2025-01-01".into()),
+            Some("2026-09-30".into()),
+            Some("Asia/Bangkok"),
+        )
+        .unwrap_err();
         assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
     }
 

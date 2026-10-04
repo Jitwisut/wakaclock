@@ -7,6 +7,7 @@ const route = vi.hoisted(() => ({ pathname: '/' }));
 vi.mock('next/navigation', () => ({ usePathname: () => route.pathname }));
 
 const originalObserver = window.IntersectionObserver;
+const originalResizeObserver = window.ResizeObserver;
 
 it('pins only a hero that fits the viewport and releases it when the viewport no longer fits', () => {
   vi.stubGlobal('CSS', { supports: () => true });
@@ -46,6 +47,7 @@ it('pins only a hero that fits the viewport and releases it when the viewport no
 afterEach(() => {
   route.pathname = '/';
   window.IntersectionObserver = originalObserver;
+  window.ResizeObserver = originalResizeObserver;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -279,4 +281,72 @@ it('keeps readable content when observers or the marketing container are unavail
     </>
   );
   expect(screen.getByText('Standalone content')).toBeVisible();
+});
+
+it('keeps the hero readable without resize or CSS timeline APIs and uses the default nav offset', () => {
+  window.ResizeObserver = undefined as unknown as typeof ResizeObserver;
+  vi.stubGlobal('CSS', undefined);
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query) =>
+      ({
+        matches: query.includes('min-width'),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList
+  );
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    height: 400,
+    top: 0,
+  } as DOMRect);
+  const view = render(
+    <div className="wakaclock-marketing">
+      <MarketingMotion />
+      <section className="axis-hero" data-testid="hero">
+        <div className="axis-hero-stage">Fallback hero</div>
+      </section>
+    </div>
+  );
+  const hero = screen.getByTestId('hero');
+  expect(hero).toHaveAttribute('data-pinned', 'false');
+  expect(hero.style.getPropertyValue('--hero-top')).toBe('82px');
+  expect(hero.style.getPropertyValue('--hero-stage-height')).toBe('400px');
+  fireEvent.resize(window);
+  expect(hero.style.getPropertyValue('--hero-top')).toBe('82px');
+  expect(screen.getByText('Fallback hero')).toBeVisible();
+  view.unmount();
+  expect(hero.style.getPropertyValue('--hero-top')).toBe('');
+});
+
+it('leaves CSS-timeline artwork and visible content alone while observing below-fold text', () => {
+  const observe = vi.fn();
+  vi.stubGlobal('CSS', { supports: () => true });
+  window.IntersectionObserver = class {
+    observe = observe;
+    disconnect = vi.fn();
+    unobserve = vi.fn();
+  } as unknown as typeof IntersectionObserver;
+  vi.spyOn(window, 'matchMedia').mockReturnValue({
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  } as unknown as MediaQueryList);
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return { top: this.textContent === 'Visible heading' ? 0 : 2000 } as DOMRect;
+  });
+  render(
+    <div className="wakaclock-marketing">
+      <MarketingMotion />
+      <main>
+        <h2>Visible heading</h2>
+        <figure className="mkt-reveal mkt-page-art">Timeline art</figure>
+        <h2>Below-fold heading</h2>
+      </main>
+    </div>
+  );
+  expect(observe).not.toHaveBeenCalledWith(screen.getByText('Visible heading'));
+  expect(observe).not.toHaveBeenCalledWith(screen.getByText('Timeline art'));
+  expect(observe).toHaveBeenCalledWith(screen.getByText('Below-fold heading'));
+  expect(screen.getByText('Timeline art')).toBeVisible();
 });
