@@ -270,7 +270,7 @@
     ]
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "overrides": {
     "handlebars": "^4.7.9"
