@@ -1,0 +1,82 @@
+name: Browser extension validation
+on:
+  pull_request:
+    paths: ["extensions/browser/**", ".github/workflows/browser-extension.yml"]
+  push:
+    paths: ["extensions/browser/**", ".github/workflows/browser-extension.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packages:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: extensions/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extensions/browser/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm run validate
+      - run: npm run lint:firefox
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-packages-${{ matrix.os }}
+          path: extensions/browser/dist/packages/*.zip*
+  chromium-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extensions/browser/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-integration-evidence
+          path: |
+            extensions/browser/dist/smoke-report-*.json
+            extensions/browser/dist/screenshots/
+  safari-build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: extensions/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extensions/browser/package-lock.json
+      - run: npm ci
+      - run: npm run safari:project
+      - name: Build unsigned archive
+        run: >-
+          xcodebuild -project 'dist/safari-xcode/AtoAxis Browser/AtoAxis Browser.xcodeproj'
+          -scheme 'AtoAxis Browser' -configuration Release
+          -derivedDataPath "$RUNNER_TEMP/atoaxis-safari"
+          -archivePath "$PWD/dist/packages/AtoAxis Browser.xcarchive"
+          CODE_SIGNING_ALLOWED=NO archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safari-unsigned-archive
+          path: extensions/browser/dist/packages/AtoAxis Browser.xcarchive

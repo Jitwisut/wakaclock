@@ -661,6 +661,9 @@ pub fn clamp_to_evidence_window(
             Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
                 MAX_AI_TOOL_DURATION_SECONDS
             }
+            Some(source) if source.eq_ignore_ascii_case("browser_foreground_v1") => {
+                wakaclock_core::heartbeat::MAX_BROWSER_INTERVAL_SECONDS
+            }
             _ => MAX_ACTIVITY_GAP_SECONDS,
         };
         let clamped_start = segment.start.max(segment.end - max_span);

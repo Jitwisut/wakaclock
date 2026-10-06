@@ -14,10 +14,10 @@ use uuid::Uuid;
 
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::dashboard_analytics::{
-    AttributionCoverageStatus, DailyAttribution, DailyAttributionRow, DailyTotalRow,
-    DashboardAnalyticsResponse, DashboardBreakdowns, DashboardCoverage, DashboardEstimatedSpend,
-    DashboardSummary, DashboardTokenTotals, DashboardUsageSummary, MostActiveDay, NamedTotalRow,
-    UsageSummaryRow, DASHBOARD_SCHEMA_VERSION,
+    AttributionCoverageStatus, BrowsingTotal, DailyAttribution, DailyAttributionRow, DailyTotalRow,
+    DashboardAnalyticsResponse, DashboardBreakdowns, DashboardBrowsing, DashboardCoverage,
+    DashboardEstimatedSpend, DashboardSummary, DashboardTokenTotals, DashboardUsageSummary,
+    MostActiveDay, NamedTotalRow, UsageSummaryRow, DASHBOARD_SCHEMA_VERSION,
 };
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
@@ -53,6 +53,7 @@ struct DurationMetrics {
 struct DailyTotalsResult {
     rows: Vec<DailyTotalRow>,
     metrics: DurationMetrics,
+    browsing: DashboardBrowsing,
 }
 
 impl DashboardAnalyticsService {
@@ -71,6 +72,7 @@ impl DashboardAnalyticsService {
         let current_totals = self.daily_totals(user_id, range).await?;
         let daily = current_totals.rows;
         let duration_metrics = current_totals.metrics;
+        let browsing = current_totals.browsing;
         let daily_attribution = self.daily_attribution(user_id, range).await?;
         let usage = self.usage_summary(user_id, range).await?;
 
@@ -120,6 +122,7 @@ impl DashboardAnalyticsService {
             // Reads directly from authoritative raw facts while rebuilds are asynchronous;
             // no snapshot version has been selected for this response.
             data_version: 0,
+            browsing,
             daily_attribution: daily_attribution
                 .iter()
                 .map(|row| DailyAttribution {
@@ -224,6 +227,7 @@ impl DashboardAnalyticsService {
             .collect::<Vec<_>>();
         Ok(DailyTotalsResult {
             rows: zero_fill_totals(rows, range),
+            browsing: browsing_summary(&timeline.browsing, range),
             metrics: DurationMetrics {
                 comparable_seconds: timeline.comparable_seconds,
                 ai_measured_seconds: timeline.ai_measured_seconds,
@@ -645,6 +649,67 @@ mod tests {
     use crate::config::DEFAULT_IDLE_TIMEOUT_MINUTES;
 
     #[test]
+    fn browsing_breakdowns_preserve_measured_seconds_across_local_midnight() {
+        use crate::services::activity_timeline::CanonicalInterval;
+        use wakaclock_core::heartbeat::ActorType;
+
+        let boundary = chrono::DateTime::parse_from_rfc3339("2026-10-06T17:00:00Z")
+            .unwrap()
+            .timestamp() as f64;
+        let interval = |start, end, entity: &str, project: Option<&str>| CanonicalInterval {
+            segment_id: "segment".into(),
+            heartbeat_id: "heartbeat".into(),
+            start,
+            end,
+            source: "browser_foreground_v1".into(),
+            actor_type: ActorType::Unknown,
+            actor_confidence: 0.0,
+            entity: entity.into(),
+            project: project.map(str::to_string),
+            project_id: None,
+            branch: None,
+            language: None,
+            category: "browsing".into(),
+            editor: "AtoAxis Browser".into(),
+            operating_system: "macOS".into(),
+            machine: "fixture".into(),
+        };
+        let range = ResolvedRange {
+            start: NaiveDate::from_ymd_opt(2026, 10, 6).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(),
+            timezone: chrono_tz::Asia::Bangkok,
+        };
+        let summary = browsing_summary(
+            &[
+                interval(boundary - 30.0, boundary + 30.0, "example.com", None),
+                interval(
+                    boundary + 30.0,
+                    boundary + 120.0,
+                    "docs.example.com",
+                    Some("Docs"),
+                ),
+            ],
+            &range,
+        );
+        assert_eq!(summary.total_seconds, 150.0);
+        assert_eq!(
+            summary.domains.iter().map(|row| row.seconds).sum::<f64>(),
+            150.0
+        );
+        assert_eq!(
+            summary.projects.iter().map(|row| row.seconds).sum::<f64>(),
+            150.0
+        );
+        assert_eq!(summary.daily[0].name, "2026-10-06");
+        assert_eq!(summary.daily[0].seconds, 30.0);
+        assert_eq!(summary.daily[1].name, "2026-10-07");
+        assert_eq!(summary.daily[1].seconds, 120.0);
+        assert_eq!(summary.domains[0].name, "docs.example.com");
+        assert_eq!(summary.projects[1].name, "Unassigned");
+        assert_eq!(summary.calculation_version, "browser_foreground_v1");
+    }
+
+    #[test]
     fn nullable_dimensions_are_normalized_to_a_non_nullable_string_expression() {
         assert_eq!(
             normalized_dimension("ai_model"),
@@ -845,5 +910,64 @@ mod tests {
         assert_eq!(summary.priced_tokens, 135);
         assert_eq!(summary.estimated_cost_microusd, 123);
         assert_eq!(summary.priced_events, 1);
+    }
+}
+
+/// Input has already been canonicalized and clipped: overlap belongs to one domain
+/// and project, so every breakdown sums to the same measured union.
+fn browsing_summary(
+    intervals: &[crate::services::activity_timeline::CanonicalInterval],
+    range: &ResolvedRange,
+) -> DashboardBrowsing {
+    let mut domains = HashMap::<String, f64>::new();
+    let mut projects = HashMap::<String, f64>::new();
+    let mut daily = Vec::new();
+    for interval in intervals {
+        let seconds = interval.end - interval.start;
+        *domains.entry(interval.entity.clone()).or_default() += seconds;
+        *projects
+            .entry(
+                interval
+                    .project
+                    .clone()
+                    .unwrap_or_else(|| "Unassigned".into()),
+            )
+            .or_default() += seconds;
+    }
+    for offset in 0..range.days_included() {
+        let day = range.start + Duration::days(offset);
+        let (start, end) = ResolvedRange {
+            start: day,
+            end: day,
+            timezone: range.timezone,
+        }
+        .unix_bounds();
+        let seconds = intervals
+            .iter()
+            .map(|i| (i.end.min(end) - i.start.max(start)).max(0.0))
+            .sum();
+        daily.push(BrowsingTotal {
+            name: day.to_string(),
+            seconds,
+        });
+    }
+    fn sorted(map: HashMap<String, f64>) -> Vec<BrowsingTotal> {
+        let mut rows: Vec<_> = map
+            .into_iter()
+            .map(|(name, seconds)| BrowsingTotal { name, seconds })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.seconds
+                .total_cmp(&a.seconds)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rows
+    }
+    DashboardBrowsing {
+        total_seconds: intervals.iter().map(|i| i.end - i.start).sum(),
+        domains: sorted(domains),
+        projects: sorted(projects),
+        daily,
+        calculation_version: "browser_foreground_v1",
     }
 }

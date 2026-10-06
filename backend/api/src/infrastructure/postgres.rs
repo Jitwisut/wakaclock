@@ -228,6 +228,10 @@ impl PostgresClient {
             .await?;
         for (name, sql) in [
             ("foundation", FOUNDATION_MIGRATION),
+            (
+                "browser OAuth clients",
+                include_str!("../../migrations/postgres/029_browser_oauth_clients.sql"),
+            ),
             ("presence", PRESENCE_MIGRATION),
             (
                 "presence office",

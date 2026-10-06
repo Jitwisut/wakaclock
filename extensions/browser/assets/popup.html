@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width" />
+        <title>AtoAxis Activity Tracker</title>
+        <link rel="stylesheet" href="ui.css" />
+    </head>
+    <body class="popup">
+        <header>
+            <img src="icons/icon-48.png" width="32" height="32" alt="" />
+            <h1>AtoAxis</h1>
+        </header>
+        <p id="connection"></p>
+        <p id="state" class="badge"></p>
+        <dl>
+            <dt>Active website</dt>
+            <dd id="domain">—</dd>
+            <dt>Project</dt>
+            <dd id="project">Unassigned</dd>
+            <dt>Today · this browser</dt>
+            <dd id="seconds">0h 0m</dd>
+        </dl>
+        <p id="pending"></p>
+        <p id="device" role="status"></p>
+        <p id="error" role="alert"></p>
+        <p id="privacy">
+            Enable tracking to send website domains, project names and measured
+            browsing time to AtoAxis. Paths stay on this device. Private windows
+            are excluded. AFK stops after 5 minutes by default.
+        </p>
+        <div class="actions">
+            <button id="connect">Connect account</button
+            ><button id="disconnect" hidden>Disconnect</button
+            ><button id="toggle">Enable tracking</button
+            ><button id="exclude">Do not track this website</button
+            ><button id="retry">Retry delivery</button
+            ><button id="options">Settings</button
+            ><button id="dashboard">Open dashboard</button>
+        </div>
+        <footer>
+            Browser time is separate from Coding and AI Active time.
+        </footer>
+        <script src="ui.js"></script>
+    </body>
+</html>
