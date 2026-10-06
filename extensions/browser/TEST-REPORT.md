@@ -6,11 +6,40 @@ Host: macOS 27.0.1 (26A434), arm64. Fixture report timestamps are UTC.
 
 ## Result
 
-The Chrome implementation works against an isolated local API with a synthetic account.
+The Chrome implementation works against the fixture API and, in the subsequent local
+run below, the actual Rust backend with an isolated test account and fresh databases.
 Production account connection is currently blocked: `api.atoaxis.com` returns NXDOMAIN
 from both Google DNS and Cloudflare DNS. Neither browser public client registration nor
 real account authorization/ingestion can be verified until the API hostname resolves and
 the backend is reachable. This is not a production end-to-end acceptance result.
+
+## Actual local backend run
+
+On the same Mac, Chrome loaded `dist/local/chromium` through **Load unpacked**.
+The real Rust server ran on `127.0.0.1:8080`, the Next.js dashboard on
+`localhost:3000`, and PostgreSQL/ClickHouse in a separate `atoaxis-browser-local`
+Compose project with fresh volumes and loopback-only ports. Existing environment files
+and database volumes were not modified. A synthetic `browser-local-test` account was
+created in this database; no production account was used.
+
+- Device authorization opened the local login page, sign-in succeeded, **Approve device**
+  succeeded, and the extension reported **Connected to AtoAxis**.
+- Reloading the unpacked extension preserved its connection.
+- The local build's **Open dashboard** opened `localhost:3000/dashboard/wakaclock`.
+- After explicitly enabling tracking, real foreground browsing produced 8 heartbeats
+  accepted by the actual backend. The queue returned to zero.
+- Every stored record was `category=browsing`, `entity_type=domain`, non-write, with
+  `actor_type=unknown` and a `browser_foreground_v1` activity segment. Website entities
+  contained only hostnames. No page path, query, fragment or title was recorded.
+- The measured segment union and analytics both totalled **35.430 seconds**. Coding,
+  comparable time and AI measured/additional time remained zero. The dashboard rendered
+  the Browsing total and domain breakdown from the real API.
+- **Pause tracking** returned Settings to **Paused** with the default AFK value still
+  **5 minutes**. Backend/frontend and the local extension remain available for manual testing.
+
+This run verifies the local authorization → browser → persistent backend → dashboard
+path. It does not extend the earlier fixture results to physical AFK/lock/sleep tests,
+production connectivity, or the full browser/OS acceptance matrix.
 
 | Check                             | Result                                | Evidence / scope                                                                                                                               |
 | --------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -5,7 +5,7 @@ import {
     type BrowserTrackerOptions,
 } from "../shared/tracker";
 import { Api } from "./api";
-import { API_URL, CLIENT_ID, FAMILY, MAX_QUEUE } from "./config";
+import { API_URL, APP_URL, CLIENT_ID, FAMILY, MAX_QUEUE } from "./config";
 import { Database, enqueue } from "./database";
 import { deliver } from "./delivery";
 import { advance, localDay, type Observation } from "./tracking";
@@ -271,7 +271,7 @@ async function command(raw: unknown): Promise<unknown> {
     }
     if (m.type === "dashboard") {
         await browser.tabs.create({
-            url: "https://atoaxis.com/dashboard/wakaclock",
+            url: APP_URL + "/dashboard/wakaclock",
         });
         return { ok: true };
     }

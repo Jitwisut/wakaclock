@@ -100,6 +100,21 @@ Default server: `https://api.atoaxis.com`. An isolated development API can be se
 `ATOAXIS_BROWSER_API_URL=http://127.0.0.1:PORT npm run build`; packaged host permissions
 follow that origin. The build rejects non-HTTPS non-loopback API URLs. Never submit a fixture build.
 
+For a real local backend and dashboard, set the backend's `SERVER_PORT=8080` and
+`ATOAXIS_APP_URL=http://localhost:3000`, and run the frontend with
+`NEXT_PUBLIC_WAKACLOCK_API_URL=http://localhost:8080`. Build a separate local extension:
+
+```sh
+ATOAXIS_BROWSER_API_URL=http://localhost:8080 \
+ATOAXIS_BROWSER_APP_URL=http://localhost:3000 \
+ATOAXIS_BROWSER_BUILD_DIR=dist/local npm run build
+```
+
+Load `dist/local/chromium` through Chrome's **Load unpacked**, connect and approve the
+device code while signed into the local dashboard, then explicitly enable tracking.
+The local build's **Open dashboard** opens localhost; release builds use atoaxis.com.
+Test on a public website: localhost and private networks are always excluded.
+
 ## Validation and release evidence
 
 `npm run test:smoke` launches a temporary Chromium profile and a localhost fixture API;
