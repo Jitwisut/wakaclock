@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "AtoAxis Activity Tracker",
+  "version": "0.1.0",
+  "description": "Measure focused browsing time and connect websites to your AtoAxis projects.",
+  "permissions": ["storage", "tabs", "alarms", "nativeMessaging"],
+  "host_permissions": ["https://api.atoaxis.com/*"],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "AtoAxis",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

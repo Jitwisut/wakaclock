@@ -8,7 +8,7 @@ use crate::model::metrics::{Breakdown, DailyAverages, PeriodComparison};
 
 /// Schema version, so the frontend can migrate without guessing which shape it received
 /// (plan.md 9.8). Bump on any breaking or semantic contract change to this response.
-pub const DASHBOARD_SCHEMA_VERSION: u32 = 3;
+pub const DASHBOARD_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardAnalyticsResponse {
@@ -18,9 +18,25 @@ pub struct DashboardAnalyticsResponse {
     pub generated_at: String,
     pub range: RangeInfo,
     pub summary: DashboardSummary,
+    pub browsing: DashboardBrowsing,
     pub breakdowns: DashboardBreakdowns,
     pub coverage: DashboardCoverage,
     pub usage: DashboardUsageSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardBrowsing {
+    pub total_seconds: f64,
+    pub domains: Vec<BrowsingTotal>,
+    pub projects: Vec<BrowsingTotal>,
+    pub daily: Vec<BrowsingTotal>,
+    pub calculation_version: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrowsingTotal {
+    pub name: String,
+    pub seconds: f64,
 }
 
 #[derive(Debug, Serialize)]

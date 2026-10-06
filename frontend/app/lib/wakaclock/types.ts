@@ -792,6 +792,14 @@ export interface DashboardAnalyticsResponse {
     operating_systems: Breakdown;
     weekdays: Breakdown;
   };
+  /** Additive field: older API deployments omit browser metrics. */
+  browsing?: {
+    calculation_version: 'browser_foreground_v1';
+    daily: Array<{ name: string; seconds: number }>;
+    domains: Array<{ name: string; seconds: number }>;
+    projects: Array<{ name: string; seconds: number }>;
+    total_seconds: number;
+  };
   coverage: {
     attributed_changes: number;
     attribution_data_coverage_percent: null | number;

@@ -125,7 +125,9 @@ impl ReprocessService {
         let rules = self.compile_rules(user_id).await?;
 
         for row in &mut rows {
-            row.project = resolve_project_with_rules(&rules, &row.entity, row.project.clone());
+            if !has_explicit_browser_mapping(row) {
+                row.project = resolve_project_with_rules(&rules, &row.entity, row.project.clone());
+            }
         }
         // A rule can legitimately recover a heartbeat whose original project was NULL.
         // That row cannot participate in the source-project backfill map (there is no
@@ -397,6 +399,9 @@ impl ReprocessService {
                      WHERE user_id = ?
                        AND toDate(date) BETWEEN toDate(?) AND toDate(?)
                        AND match(entity, ?)
+                       AND NOT (category = 'browsing' AND notEmpty(ifNull(project, ''))
+                           AND arrayExists(segment -> lower(JSONExtractString(segment, 'source')) = 'browser_foreground_v1',
+                               JSONExtractArrayRaw(activity_segments)))
                      SETTINGS mutations_sync = 1",
                 )
                 .bind(&rule.project_name)
@@ -589,6 +594,25 @@ impl CompiledRule {
             regex,
         }
     }
+}
+
+fn has_explicit_browser_mapping(row: &HeartbeatRow) -> bool {
+    row.category == "browsing"
+        && row
+            .project
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+        && serde_json::from_str::<Vec<wakaclock_core::heartbeat::ActivitySegment>>(
+            &row.activity_segments,
+        )
+        .is_ok_and(|segments| {
+            segments.iter().any(|segment| {
+                segment
+                    .source
+                    .as_deref()
+                    .is_some_and(|source| source.eq_ignore_ascii_case("browser_foreground_v1"))
+            })
+        })
 }
 
 fn resolve_project_with_rules(

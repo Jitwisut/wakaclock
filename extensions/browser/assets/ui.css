@@ -1,0 +1,136 @@
+:root {
+    color-scheme: light dark;
+    font-family: system-ui, sans-serif;
+    color: #dcebe7;
+    background: #101e1a;
+}
+* {
+    box-sizing: border-box;
+}
+body {
+    margin: 0;
+    padding: 22px;
+}
+.popup {
+    width: 370px;
+}
+.options {
+    max-width: 780px;
+    margin: auto;
+}
+header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+h1 {
+    font-size: 22px;
+    margin: 8px 0;
+}
+h2 {
+    font-size: 18px;
+}
+p,
+footer {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #b2c8bf;
+}
+section {
+    border-top: 1px solid #344a41;
+    padding-top: 18px;
+    margin-top: 24px;
+}
+dl {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    font-size: 14px;
+}
+dt {
+    color: #b2c8bf;
+}
+dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+.badge {
+    color: #88e6b3;
+    font-weight: 600;
+}
+button {
+    border: 1px solid #506e5e;
+    background: #20392d;
+    color: #e8fff0;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font: inherit;
+    cursor: pointer;
+}
+button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+button:hover:not(:disabled) {
+    background: #2e513e;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: 3px solid #88e6b3;
+    outline-offset: 2px;
+}
+.primary {
+    background: #1a6640;
+}
+.actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+label {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin: 16px 0;
+    font-size: 14px;
+}
+input,
+textarea,
+select {
+    padding: 10px;
+    border: 1px solid #506e5e;
+    border-radius: 6px;
+    background: #162b21;
+    color: #e8fff0;
+    font: inherit;
+}
+label.check {
+    flex-direction: row;
+    align-items: center;
+}
+li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin: 12px 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+ul {
+    padding: 0;
+}
+#error {
+    color: #ffbdad;
+    white-space: pre-wrap;
+}
+footer {
+    margin-top: 20px;
+    border-top: 1px solid #344a41;
+    padding-top: 14px;
+}
+img {
+    border-radius: 8px;
+}

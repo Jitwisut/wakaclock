@@ -2,6 +2,7 @@ import { DashboardPanel } from '@/components/dashboard-panels';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { RequireUser } from '@/components/wakaclock/require-user';
 
+import { BrowsingPanel } from './components/browsing-panel';
 import { CharacterSheetHero } from './components/character-sheet-hero';
 import { DurationTimeline } from './components/duration-timeline';
 import { OverviewInsights } from './components/overview-insights';
@@ -71,6 +72,13 @@ export default function WakaclockOverviewPage() {
                 </Reveal>
               </DashboardPanel>
             </section>
+
+            <DashboardPanel id="overview.browsing">
+              <section className={styles.section}>
+                <h2 className={styles.sectionLabel}>Browsing</h2>
+                <BrowsingPanel />
+              </section>
+            </DashboardPanel>
 
             <DashboardPanel id="overview.analytics">
               <Reveal className={styles.section}>
