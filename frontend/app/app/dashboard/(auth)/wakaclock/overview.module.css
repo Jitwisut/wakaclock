@@ -9,17 +9,18 @@
  */
 .overview {
   --ov-radius: calc(var(--radius) * 1.6);
-  --ov-line: color-mix(in oklch, var(--border) 75%, transparent);
-  --ov-surface: color-mix(in oklch, var(--card) 92%, transparent);
-  --ov-surface-strong: color-mix(in oklch, var(--card) 96%, transparent);
-  --ov-glow: color-mix(in oklch, var(--primary) 22%, transparent);
+  /* Cartesian color mixing preserves low-chroma hues when fading to transparent. */
+  --ov-line: color-mix(in oklab, var(--border) 75%, transparent);
+  --ov-surface: color-mix(in oklab, var(--card) 92%, transparent);
+  --ov-surface-strong: color-mix(in oklab, var(--card) 96%, transparent);
+  --ov-glow: color-mix(in oklab, var(--primary) 22%, transparent);
   --ov-depth:
-    0 1px 0 0 color-mix(in oklch, white 7%, transparent) inset, 0 1px 2px -1px oklch(0 0 0 / 0.08),
+    0 1px 0 0 color-mix(in oklab, white 7%, transparent) inset, 0 1px 2px -1px oklch(0 0 0 / 0.08),
     0 14px 36px -18px oklch(0 0 0 / 0.28);
   --ov-depth-hover:
-    0 1px 0 0 color-mix(in oklch, white 9%, transparent) inset, 0 2px 4px -2px oklch(0 0 0 / 0.1),
+    0 1px 0 0 color-mix(in oklab, white 9%, transparent) inset, 0 2px 4px -2px oklch(0 0 0 / 0.1),
     0 24px 48px -20px oklch(0 0 0 / 0.36),
-    0 0 0 1px color-mix(in oklch, var(--primary) 26%, transparent);
+    0 0 0 1px color-mix(in oklab, var(--primary) 26%, transparent);
   --ov-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   position: relative;
@@ -34,7 +35,7 @@
   --ov-depth: inset 2px 2px 0 #ffffff26, inset -2px -2px 0 #00000014, 4px 4px 0 var(--retro-shadow);
   --ov-depth-hover:
     inset 2px 2px 0 #ffffff26, inset -2px -2px 0 #00000014, 6px 6px 0 var(--retro-shadow),
-    0 0 0 2px color-mix(in oklch, var(--primary) 40%, transparent);
+    0 0 0 2px color-mix(in oklab, var(--primary) 40%, transparent);
 }
 
 /* Ambient light behind the whole page: two soft pools in the preset's own hues. */
@@ -48,12 +49,12 @@
   background:
     radial-gradient(
       48% 60% at 12% 0%,
-      color-mix(in oklch, var(--primary) 16%, transparent),
+      color-mix(in oklab, var(--primary) 16%, transparent),
       transparent 70%
     ),
     radial-gradient(
       40% 50% at 92% 8%,
-      color-mix(in oklch, var(--chart-2) 14%, transparent),
+      color-mix(in oklab, var(--chart-2) 14%, transparent),
       transparent 70%
     );
   filter: blur(8px);
@@ -71,7 +72,7 @@
   background:
     linear-gradient(
       180deg,
-      color-mix(in oklch, var(--foreground) 2.5%, transparent),
+      color-mix(in oklab, var(--foreground) 2.5%, transparent),
       transparent 42%
     ),
     var(--ov-surface);
@@ -83,7 +84,7 @@
 }
 /* Nested cards read as recessed wells, not a second floating layer. */
 .overview.overview [data-slot='card'] [data-slot='card'] {
-  background: color-mix(in oklch, var(--muted) 45%, transparent);
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
   box-shadow: none;
 }
 .overview [data-slot='card-title'] {
@@ -161,7 +162,7 @@
   padding: 8px 8px 8px 16px;
   border: 1px solid var(--ov-line);
   border-radius: calc(var(--ov-radius) + 4px);
-  background: color-mix(in oklch, var(--background) 72%, transparent);
+  background: color-mix(in oklab, var(--background) 72%, transparent);
   backdrop-filter: blur(16px) saturate(1.3);
   box-shadow: var(--ov-depth);
 }
@@ -263,17 +264,17 @@
   background:
     radial-gradient(
       420px circle at var(--mx) var(--my),
-      color-mix(in oklch, var(--primary) 34%, transparent),
+      color-mix(in oklab, var(--primary) 34%, transparent),
       transparent 65%
     ),
     radial-gradient(
       60% 80% at 100% 100%,
-      color-mix(in oklch, var(--chart-2) 26%, transparent),
+      color-mix(in oklab, var(--chart-2) 26%, transparent),
       transparent 70%
     ),
     radial-gradient(
       50% 70% at 0% 100%,
-      color-mix(in oklch, var(--chart-4) 18%, transparent),
+      color-mix(in oklab, var(--chart-4) 18%, transparent),
       transparent 70%
     );
   transition: background-position 400ms var(--ov-ease);
@@ -434,7 +435,7 @@
   border-radius: 999px;
   background: radial-gradient(
     circle at 35% 30%,
-    color-mix(in oklch, var(--hero-accent) 40%, transparent),
+    color-mix(in oklab, var(--hero-accent) 40%, transparent),
     transparent 70%
   );
   filter: blur(18px);
@@ -456,7 +457,7 @@
 }
 .orbProgress {
   stroke: var(--hero-accent);
-  filter: drop-shadow(0 0 10px color-mix(in oklch, var(--hero-accent) 70%, transparent));
+  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--hero-accent) 70%, transparent));
 }
 .orbCenter {
   position: absolute;
@@ -536,8 +537,8 @@
   height: 34px;
   border-radius: calc(var(--radius) * 1.2);
   color: var(--insight-color, var(--primary));
-  background: color-mix(in oklch, var(--insight-color, var(--primary)) 14%, transparent);
-  border: 1px solid color-mix(in oklch, var(--insight-color, var(--primary)) 26%, transparent);
+  background: color-mix(in oklab, var(--insight-color, var(--primary)) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--insight-color, var(--primary)) 26%, transparent);
 }
 .insightIcon svg {
   width: 17px;
@@ -592,7 +593,7 @@
   padding: 14px 16px;
   border: 1px solid var(--ov-line);
   border-radius: var(--ov-radius);
-  background: color-mix(in oklch, var(--muted) 38%, transparent);
+  background: color-mix(in oklab, var(--muted) 38%, transparent);
   transition:
     border-color 240ms var(--ov-ease),
     background 240ms var(--ov-ease);
@@ -627,7 +628,7 @@
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--muted) 80%, transparent);
+  background: color-mix(in oklab, var(--muted) 80%, transparent);
 }
 .barFill {
   height: 100%;
@@ -655,9 +656,9 @@
     repeating-linear-gradient(
       0deg,
       transparent 0 43px,
-      color-mix(in oklch, var(--border) 45%, transparent) 43px 44px
+      color-mix(in oklab, var(--border) 45%, transparent) 43px 44px
     ),
-    color-mix(in oklch, var(--muted) 25%, transparent);
+    color-mix(in oklab, var(--muted) 25%, transparent);
 }
 .chartEmpty svg {
   color: var(--muted-foreground);
