@@ -2,6 +2,8 @@
 
 Date/time in reports is UTC; user-facing release dates use Asia/Bangkok.
 Never replace a pending cell with Passed based solely on another browser's engine.
+See [the 7 October test report](TEST-REPORT.md) for the current production DNS blocker
+and the expanded Chrome integration assertions.
 
 ## Local evidence
 
@@ -13,6 +15,13 @@ Never replace a pending cell with Passed based solely on another browser's engin
   Exact current report: `dist/smoke-report-chromium.json`.
 - Google Chrome 154.0.8037.98 on macOS arm64: isolated profile fixture integration passed;
   `dist/smoke-report-chrome.json` records the exact result. Real OS idle/lock/sleep remains pending.
+- Expanded fixture checks include access-token rotation, SPA project switching, frozen
+  totals during Pause/exclusion and internal page exclusion.
+- Firefox 157.0.1: runtime attempt blocked at browser startup (`Could not find profile folder`),
+  including a standalone run without the extension. This does not certify Firefox runtime support.
+- Production API hostname `api.atoaxis.com`: NXDOMAIN on Google and Cloudflare DNS in this run.
+- GitHub CI jobs did not start due to an account billing/spending-limit restriction;
+  see the linked run and annotation in TEST-REPORT.md. Cross-OS results remain pending.
 - Headless fixtures verify the default 5-minute AFK setting, then use a 24-hour deadline
   to isolate navigation/delivery checks from physical input on the host computer.
 - Safari Xcode 27: unsigned archive compilation passed. Regenerate/archive after native changes.

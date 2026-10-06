@@ -109,7 +109,8 @@ version/platform in `dist/smoke-report-chromium.json`, with screenshots in `dist
 Set `ATOAXIS_BROWSER_CHANNEL=chrome` or `msedge` to test an installed browser with
 CDP unpacked installation in a temporary profile. Brave requires its own installed binary
 and manual release checks. See [release checklist](RELEASE-CHECKLIST.md) and
-[Store materials](STORE.md). CI builds on Windows/macOS/Linux and archives Safari on macOS;
+[Store materials](STORE.md). The [latest test report](TEST-REPORT.md) distinguishes fixture
+success from production readiness. CI builds on Windows/macOS/Linux and archives Safari on macOS;
 a green build does not replace real focus/AFK/lock tests on each browser/OS.
 The fixture verifies the default 5-minute setting, then uses 24 hours so a headless run
 does not depend on physical input to the host computer. Real AFK is a separate acceptance check.

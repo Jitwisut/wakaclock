@@ -8,6 +8,7 @@ import path from "node:path";
 const received = [],
     requests = [];
 let available = true;
+let fixtureToken = "fixture-access";
 const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -23,14 +24,26 @@ const server = createServer(async (req, res) => {
                 interval: 5,
             }),
         );
-    if (req.url === "/oauth/device/token" || req.url === "/oauth/token")
+    if (req.url === "/oauth/device/token" || req.url === "/oauth/token") {
+        if (req.url === "/oauth/token") fixtureToken = "fixture-rotated-access";
         return res.end(
             JSON.stringify({
-                access_token: "fixture-access",
-                refresh_token: "fixture-refresh",
-                expires_in: 3600,
+                access_token: fixtureToken,
+                refresh_token:
+                    req.url === "/oauth/token"
+                        ? "fixture-rotated-refresh"
+                        : "fixture-refresh",
+                expires_in: req.url === "/oauth/device/token" ? 31 : 3600,
             }),
         );
+    }
+    if (
+        req.url.startsWith("/api/") &&
+        req.headers.authorization !== "Bearer " + fixtureToken
+    ) {
+        res.statusCode = 401;
+        return res.end("{}");
+    }
     if (req.url === "/oauth/revoke") return res.end("{}");
     if (req.url === "/api/v1/users/current/projects")
         return res.end(JSON.stringify({ data: [{ name: "Documentation" }] }));
@@ -178,6 +191,60 @@ try {
     expect(JSON.stringify(received)).not.toMatch(
         /secret|private|\/docs|title|cookie/,
     );
+    expect(requests).toContain("/oauth/token");
+    const status = () =>
+        ui.evaluate(() => chrome.runtime.sendMessage({ type: "status" }));
+    // A history-only SPA transition must split the current project without a page reload.
+    await site.evaluate(() => history.pushState({}, "", "/unmapped"));
+    await expect.poll(status).toMatchObject({ tracking: true, project: null });
+    await site.evaluate(() => history.pushState({}, "", "/docs/spa"));
+    await expect
+        .poll(status)
+        .toMatchObject({ tracking: true, project: "Documentation" });
+    // Pause must freeze the local total, even while navigation continues.
+    const trackingSettings = (await status()).settings;
+    await ui.evaluate(
+        (settings) =>
+            chrome.runtime.sendMessage({
+                type: "settings",
+                settings: { ...settings, enabled: false },
+            }),
+        trackingSettings,
+    );
+    const paused = await status();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await site.goto("https://example.com/docs/paused");
+    expect(await status()).toMatchObject({
+        tracking: false,
+        seconds: paused.seconds,
+    });
+    await ui.evaluate(
+        (settings) =>
+            chrome.runtime.sendMessage({ type: "settings", settings }),
+        trackingSettings,
+    );
+    await expect.poll(status).toMatchObject({ tracking: true });
+    // Exclusion outranks a matching project rule.
+    await ui.evaluate(() => chrome.runtime.sendMessage({ type: "exclude" }));
+    await site.goto("https://example.com/docs/excluded");
+    await expect.poll(status).toMatchObject({ tracking: false });
+    const excluded = await status();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await site.goto("https://example.com/docs/still-excluded");
+    expect(await status()).toMatchObject({
+        tracking: false,
+        seconds: excluded.seconds,
+    });
+    await ui.evaluate(
+        (settings) =>
+            chrome.runtime.sendMessage({ type: "settings", settings }),
+        trackingSettings,
+    );
+    await expect.poll(status).toMatchObject({ tracking: true });
+    await site.goto("about:blank");
+    await expect.poll(status).toMatchObject({ tracking: false });
+    await site.goto("https://example.com/docs/back");
+    await expect.poll(status).toMatchObject({ tracking: true });
     available = false;
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await site.goto("https://example.com/docs/offline");
@@ -272,9 +339,14 @@ try {
         fixture_afk_minutes: 1440,
         passed: [
             "device-login",
+            "token-refresh-rotation",
             "project-mapping",
             "domain-only-payload",
             "foreground-navigation",
+            "spa-project-transition",
+            "pause-freezes-time",
+            "exclusion-overrides-project",
+            "internal-page-excluded",
             "offline-replay",
             "browser-restart",
             "pause",
