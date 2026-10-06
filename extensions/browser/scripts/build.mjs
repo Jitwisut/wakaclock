@@ -4,14 +4,21 @@ import { deflateSync } from "node:zlib";
 const api = new URL(
     process.env.ATOAXIS_BROWSER_API_URL ?? "https://api.atoaxis.com",
 );
-if (
-    api.protocol !== "https:" &&
-    !(
-        api.protocol === "http:" &&
-        ["localhost", "127.0.0.1"].includes(api.hostname)
+const app = new URL(
+    process.env.ATOAXIS_BROWSER_APP_URL ?? "https://atoaxis.com",
+);
+for (const [name, url] of [
+    ["API", api],
+    ["App", app],
+])
+    if (
+        url.protocol !== "https:" &&
+        !(
+            url.protocol === "http:" &&
+            ["localhost", "127.0.0.1"].includes(url.hostname)
+        )
     )
-)
-    throw new Error("API URL must use HTTPS");
+        throw new Error(name + " URL must use HTTPS or HTTP loopback");
 const crc = (bytes) => {
     let c = 0xffffffff;
     for (const b of bytes) {
@@ -77,6 +84,7 @@ for (const family of ["chromium", "firefox", "safari"]) {
         target: "es2022",
         define: {
             __API_URL__: JSON.stringify(api.origin),
+            __APP_URL__: JSON.stringify(app.origin),
             __FAMILY__: JSON.stringify(family),
         },
     });
