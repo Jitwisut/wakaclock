@@ -59,6 +59,7 @@ await archive(".", "atoaxis-browser-source-" + version + ".zip", [
     "README.md",
     "STORE.md",
     "RELEASE-CHECKLIST.md",
+    "TEST-REPORT.md",
     "assets",
     "chromium",
     "firefox",
