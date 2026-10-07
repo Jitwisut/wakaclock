@@ -19,6 +19,8 @@ use uuid::Uuid;
 mod agent_service;
 mod ai_setup;
 mod broker;
+mod capture_service;
+mod delivery_service;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
@@ -343,6 +345,16 @@ enum Commands {
         #[command(subcommand)]
         action: AiAction,
     },
+    /// Durable queue delivery, independent of activity capture.
+    Delivery {
+        #[command(subcommand)]
+        action: DeliveryAction,
+    },
+    /// Codex metadata activity collection, independent of delivery.
+    Capture {
+        #[command(subcommand)]
+        action: CaptureAction,
+    },
     Broker {
         #[command(subcommand)]
         action: BrokerAction,
@@ -390,6 +402,39 @@ enum DoctorTarget {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum DeliveryAction {
+    Run {
+        #[arg(long)]
+        once: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Install {
+        #[arg(long)]
+        recovery_probe: bool,
+    },
+    Status,
+    Uninstall,
+}
+
+#[derive(Subcommand)]
+enum CaptureAction {
+    Run {
+        #[arg(long)]
+        once: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long)]
+        transcript: Option<PathBuf>,
+    },
+    Status,
+    Install,
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -1529,6 +1574,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     "{}",
                     serde_json::json!({
                         "schema_version": 2,
+                        "capture": capture_service::status(),
                         "runtime_mode": "on_demand",
                         "status": if deferred {
                             "deferred"
@@ -1646,7 +1692,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 },
                 Err(error) => (None, None, Some(error.to_string())),
             };
-            let queued = queue_status.map(|status| status.pending);
+
             let identity = build_identity();
             let cli_paths = cli_path_report();
             let legacy_service = agent_service::status();
@@ -1670,6 +1716,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     stopped_because: Some(format!("queue unavailable: {error}")),
                 },
             };
+            let queue_status = queue
+                .as_ref()
+                .and_then(|q| q.status_scoped(&api_client.queue_scope()).ok())
+                .or(queue_status);
+            let queued = queue_status.map(|s| s.pending);
             // After the key check: a verified same-account key has already rebound
             // its older rows, so only rows that still lack proof are counted.
             let orphaned = queue
@@ -1705,6 +1756,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                                 chrono::DateTime::from_timestamp(seconds, 0)
                             })
                         }),
+                        "capture": capture_service::status(),
                         "runtime_mode": "on_demand",
                         "service_installed": legacy_service.installed,
                         "service_running": legacy_service.running,
@@ -1940,6 +1992,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     // Typed state for editor clients. Queue depth/seconds are reported
                     // separately and never decide whether the server is reachable.
                     "connection": connection,
+                    "delivery_worker": delivery_service::status(),
+                    "capture": capture_service::status(),
+                    "delivery_details": queue.delivery_details_scoped(&queue_scope).ok(),
+                    "oldest_pending_at": queue.status_scoped(&queue_scope).ok().and_then(|s|s.oldest_pending_at).and_then(|t|chrono::DateTime::from_timestamp(t,0)),
+                    "dead_letter": queue.status_scoped(&queue_scope).ok().map(|s|s.dead_letter),
+                    "data_incomplete": queued_heartbeats > 0 || queue.status_scoped(&queue_scope).is_ok_and(|s|s.dead_letter>0) || capture_service::status()["incomplete"].as_bool().unwrap_or(true),
                     "queue": {
                         "depth": queued_heartbeats,
                         "seconds_today": displayed_queued_seconds,
@@ -1978,16 +2036,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     };
                     println!(
                         "Delivery: {label} - {}",
-                        failure.detail.as_deref().unwrap_or(&failure.message_code)
+                        failure
+                            .http_status
+                            .map(|status| format!(
+                                "HTTP status {status} · {}",
+                                failure.message_code
+                            ))
+                            .unwrap_or_else(|| failure.message_code.clone())
                     );
                     println!(
-                        "  No heartbeat accepted since {}. Queued activity stays local until one is.",
+                        "  Backlog failure recorded at {}. Queued activity stays local until acknowledged.",
                         chrono::DateTime::from_timestamp(failure.recorded_at, 0)
                             .map(|at| at.to_rfc3339())
                             .unwrap_or_else(|| "an earlier time".to_string())
                     );
                 } else if queued_heartbeats > 0 {
-                    println!("Delivery: ok - the queue is draining");
+                    println!("Delivery: pending — data is incomplete until all queued heartbeats are acknowledged");
                 }
                 println!(
                     "Agent: {}",
@@ -2187,6 +2251,37 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .await?
             }
         },
+        Commands::Delivery { action } => {
+            let report = match action {
+                DeliveryAction::Run { once, json } => {
+                    let report = delivery_service::run(once).await?;
+                    if json {
+                        println!("{}", report);
+                    }
+                    return Ok(());
+                }
+                DeliveryAction::Install { recovery_probe } => {
+                    delivery_service::install(recovery_probe)?
+                }
+                DeliveryAction::Status => delivery_service::status(),
+                DeliveryAction::Uninstall => delivery_service::uninstall()?,
+            };
+            println!("{}", report);
+        }
+        Commands::Capture { action } => {
+            let report = match action {
+                CaptureAction::Run {
+                    once,
+                    dry_run,
+                    date,
+                    transcript,
+                } => capture_service::run(once, dry_run, date, transcript).await?,
+                CaptureAction::Status => capture_service::status(),
+                CaptureAction::Install => capture_service::install()?,
+                CaptureAction::Uninstall => capture_service::uninstall()?,
+            };
+            println!("{}", report);
+        }
         Commands::Broker { action } => match action {
             BrokerAction::Run { .. } => {
                 // Keep the old command as a compatibility entry point for stale
@@ -2241,7 +2336,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                         serde_json::json!({
                             "rotated": false,
                             "deprecated": true,
-                            "runtime_mode": "on_demand",
+                            "capture": capture_service::status(),
+                        "runtime_mode": "on_demand",
                         })
                     );
                 } else {
@@ -2392,7 +2488,8 @@ fn print_agent_report(report: &agent_service::AgentServiceReport, json: bool, qu
             "{}",
             serde_json::json!({
                 "platform": report.platform,
-                "runtime_mode": "on_demand",
+                "capture": capture_service::status(),
+                        "runtime_mode": "on_demand",
                 "installed": report.installed,
                 "running": report.running,
                 "queue_count": queue_count,
@@ -4139,7 +4236,8 @@ struct AiDoctorReportParts {
 fn build_ai_doctor_report(parts: AiDoctorReportParts) -> serde_json::Value {
     serde_json::json!({
         "cli_identity": parts.cli_identity,
-        "runtime_mode": "on_demand",
+        "capture": capture_service::status(),
+                        "runtime_mode": "on_demand",
         "legacy_service_alias": parts.legacy_service_alias,
         "stale_service_binary": parts.stale_service_binary,
         "broker_installed": parts.broker_installed,
@@ -5595,7 +5693,7 @@ async fn drain_on_demand_delivery(
         if !repeat_until_stable
             || flush.stopped_because.is_some()
             || !made_progress
-            || report.claimed == 0
+            || Queue::open()?.eligible_len_scoped(&api_client.queue_scope())? == 0
         {
             break;
         }
@@ -6609,6 +6707,20 @@ async fn run_ai_emit(
 ) -> Result<(), Box<dyn Error>> {
     let mut stdin = String::new();
     io::stdin().read_to_string(&mut stdin)?;
+    // New project activity never passes through the file-edit v1 adapter.
+    // Older envelopes retain their original validation and field semantics.
+    let wire: serde_json::Value = serde_json::from_str(&stdin)?;
+    if wire.get("schema_version").and_then(|v| v.as_u64()) == Some(2) {
+        let event: wakaclock_core::ai::activity::BrokerActivityEventV2 =
+            serde_json::from_value(wire).map_err(|_| "invalid activity v2 envelope")?;
+        let ack = capture_service::submit_activity(config, api_client, event).await?;
+        if json {
+            println!("{ack}");
+        } else {
+            println!("AI activity: {} (durable inbox)", ack["status"]);
+        }
+        return Ok(());
+    }
     let parsed = parse_broker_event_input_with_context(&stdin)?;
     let event = parsed.event.clone();
     let mut handoff = match parsed.topology.as_ref() {

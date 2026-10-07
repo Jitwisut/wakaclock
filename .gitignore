@@ -14,3 +14,7 @@ apps/desktop/src-tauri/gen/
 # SwiftPM build cache
 /.build/
 /.local/receipt-validation/
+
+# Private incident evidence: databases, runtime binaries, IDs, paths and local logs.
+# Keep the shareable recovery runbook in docs/ instead.
+/output/heartbeat-recovery-2026-10-07/

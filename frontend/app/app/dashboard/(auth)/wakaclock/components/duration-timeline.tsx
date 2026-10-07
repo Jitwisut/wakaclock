@@ -19,7 +19,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tooltip, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { useDeliveryHealth } from '@/hooks/use-delivery-health';
 import { getDurations } from '@/lib/wakaclock/endpoints';
 import { formatEpochRange, todayDateString } from '@/lib/wakaclock/format';
 import {
@@ -55,6 +57,7 @@ const DAY_SECONDS = 24 * 3600;
 const PROJECT_ROW_HEIGHT = 48;
 
 export function DurationTimeline() {
+  const delivery = useDeliveryHealth();
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [date, setDate] = React.useState(todayDateString());
   const [activeSession, setActiveSession] = React.useState<null | string>(null);
@@ -130,46 +133,61 @@ export function DurationTimeline() {
         </div>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 space-y-3">
+          <IncompleteTimeBadge />
+          {(hasDurationV2 || activeAvailable) && (
+            <>
+              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+                <div className="bg-primary/5 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">Measured Active</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {data?.active_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.active_seconds)}
+                  </dd>
+                </div>
+                <div className="bg-muted/30 rounded-lg border px-3 py-2">
+                  <dt className="text-muted-foreground text-xs">Activity with timeout</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {data?.wakatime_compatible_seconds == null
+                      ? 'Not available'
+                      : formatProjectDuration(data.wakatime_compatible_seconds)}
+                  </dd>
+                </div>
+              </dl>
+              <p className="text-muted-foreground text-xs">
+                {date} · {data?.timezone ?? timezone} · Timeout:{' '}
+                {data?.timeout_seconds == null
+                  ? 'Details not available'
+                  : `${data.timeout_seconds / 60} minutes`}
+                . The two metrics overlap and are never added together.
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Editor-only activity:{' '}
+                {data?.comparable_seconds == null
+                  ? 'Not available'
+                  : formatProjectDuration(data.comparable_seconds)}
+                . Excludes all AI Coding, so it can be zero while Measured Active is positive.
+              </p>
+            </>
+          )}
+        </div>
         <QueryState
-          emptyTitle="No sessions on this day"
+          emptyTitle={
+            delivery.incomplete
+              ? 'No received sessions yet — data incomplete'
+              : 'No recorded sessions on this day'
+          }
           error={error}
           isEmpty={timezone !== null && !isLoading && !error && visibleBlocks.length === 0}
           isLoading={timezone === null || isLoading}
         >
           <div className="space-y-4">
-            {(hasDurationV2 || activeAvailable) && (
-              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
-                {activeAvailable && (
-                  <div className="bg-primary/5 rounded-lg border px-3 py-2">
-                    <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
-                    <dd className="mt-1 text-lg font-semibold">
-                      {data?.active_seconds == null
-                        ? 'Not available'
-                        : formatProjectDuration(data.active_seconds)}
-                    </dd>
-                  </div>
-                )}
-                <div className="bg-muted/30 rounded-lg border px-3 py-2">
-                  <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
-                  <dd className="mt-1 text-lg font-semibold">
-                    {data?.comparable_seconds == null
-                      ? 'Not available'
-                      : formatProjectDuration(data.comparable_seconds)}
-                  </dd>
-                </div>
-                <div className="bg-muted/30 rounded-lg border px-3 py-2">
-                  <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
-                  <dd className="mt-1 text-lg font-semibold">
-                    {data?.ai_additional_seconds == null
-                      ? 'Not available'
-                      : formatProjectDuration(data.ai_additional_seconds)}
-                  </dd>
-                </div>
-              </dl>
-            )}
             <p className="text-muted-foreground text-xs">
-              Each block groups a project’s activity within 5 minutes. Recorded time excludes the
-              gaps.
+              Project totals and sessions use Activity with timeout. Blocks group nearby project
+              activity within 5 minutes. Timeout bridges already included in the metric remain
+              counted; presentation grouping adds no time for other gaps. Heartbeats count distinct
+              contributing IDs.
             </p>
             <TooltipProvider>
               <div className="overflow-x-auto pb-1">

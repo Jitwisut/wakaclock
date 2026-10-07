@@ -70,8 +70,30 @@ export interface OperationEvidencePage {
 export interface DeliveryStatusResponse {
   devices: Array<{
     age_seconds: number;
+    capture?: {
+      captured_at: string;
+      enabled: boolean;
+      last_scan_success_at: null | string;
+      parser_errors: number;
+      pending: number;
+      schema_version: number;
+      status: string;
+    } | null;
     captured_at: string;
     dead_letter: null | number;
+    details?: {
+      accepted_total: number;
+      backlog_error: {
+        failed_at: string;
+        http_status: null | number;
+        kind: string;
+        message_code: string;
+      } | null;
+      eligible: number;
+      leased: number;
+      next_retry_at: null | string;
+      oldest_event_at: null | string;
+    } | null;
     device_id: string;
     last_successful_delivery_at: null | string;
     oldest_pending_at: null | string;
@@ -79,6 +101,7 @@ export interface DeliveryStatusResponse {
     queue_id: string;
     received_at: string;
     retry: null | number;
+    schema_version?: number;
     sequence: number;
     status: 'fresh' | 'stale' | 'unavailable';
   }>;

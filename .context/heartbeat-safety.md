@@ -19,7 +19,7 @@ commit หรือ push ที่เกี่ยวข้องกับงา�
 
 ## Locked time-counting baseline — ห้ามแก้เด็ดขาดโดยไม่ได้รับอนุญาต
 
-สถานะ: **LOCKED by the project owner (2026-10-04)**
+สถานะ: **LOCKED by the project owner (2026-10-04); delivery recovery exception approved 2026-10-07**
 
 เจ้าของโปรเจกต์ตรวจแล้วว่าอัลกอริทึมชุดนี้ให้ผลตรงกับ WakaTime จริง (วันที่ 4 ต.ค. 2026
 AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช้งาน editor ชุดเดียวกัน รวม heartbeat
@@ -39,7 +39,7 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 | 4. เชื่อมช่วงพัก | `IDLE_TIMEOUT_MINUTES` default **15**: ช่องว่าง ≤ 15 นาทีนับเป็นเวลาทำงาน, เกินไม่นับ; เวลาพักยกให้ช่วง**ก่อนหน้า**; ช่วงท้ายหลังกิจกรรมสุดท้าย**ไม่นับ**; anchor (heartbeat ที่ไม่มี duration) ใช้ต่อ chain ได้ | `bridge_idle_gaps_with_anchors`, `bridge_by_attendance` ใน `activity_timeline.rs`, `config/mod.rs` |
 | 5. แยกคนกับ AI | `AGENT_IDLE_TIMEOUT_MINUTES` default = ค่าเดียวกับ `IDLE_TIMEOUT_MINUTES`; ค่า `off` คือรวมทุก source ไว้ timeline เดียว | `config/mod.rs`, `BridgeConfig` |
 | 6. ค่าที่แสดงหลัก | `DURATION_PRIMARY_MODE` default **`wakatime_compatible`**; `DURATION_CALCULATION_MODE` default **`legacy`**; `active_v1` / `combined_v2` เป็น canary ที่ต้องเปิดเองเท่านั้น | `config/mod.rs`, `services/duration.rs` |
-| 7. คิวออฟไลน์ | error แบบต่อไม่ติด/retry ได้ **ไม่มีเพดานจำนวนครั้งและไม่มีเพดานอายุ** (ห้ามทิ้ง heartbeat); backoff 60s → 120 → 240 → 480 → 960 → 1920 → สูงสุด **3600s**; `Retry-After` สูงสุด 86,400s; dead-letter เฉพาะ error ที่ retry ไม่ได้ | `wakaclock-core/src/queue.rs`, `wakaclock-core/src/api_client.rs` |
+| 7. คิวออฟไลน์ | error แบบต่อไม่ติด/retry ได้ **ไม่มีเพดานจำนวนครั้งและไม่มีเพดานอายุ** (ห้ามทิ้ง heartbeat); backoff 60s → 120 → 240 → 480 → 960 → 1920 → สูงสุด **3600s**; `Retry-After` สูงสุด 86,400s; dead-letter เฉพาะ error ที่ retry ไม่ได้; ข้อยกเว้นที่อนุมัติ 2026-10-07: recovery probe เฉพาะ network/5xx ที่ทราบเหตุผล หลัง POST จริงสำเร็จ, สูงสุดหนึ่ง probe ต่อ scope ต่อ 60s; เคารพ `Retry-After` และ legacy ที่ไม่ทราบเหตุผลต้องรอ due เดิม | `wakaclock-core/src/queue.rs`, `wakaclock-core/src/api_client.rs` |
 
 เป้าหมายที่ล็อกไว้: ยอดแบบ `wakatime_compatible` ต้องห่างจาก WakaTime **ไม่เกิน 1%**
 บนข้อมูลชุดเดียวกัน การเปลี่ยนใดๆ ที่อาจทำให้ยอดนี้ขยับ ถือว่าแตะ baseline นี้
@@ -52,7 +52,13 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ถ้าได้รับอนุญาตให้เปลี่ยน ต้องอัปเดตตารางนี้และวันที่ใน commit เดียวกัน
 
+การอนุมัติ 2026-10-07: ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ durable queue, delivery-only worker, snapshot v2, UI และ canary 7 วันทำงาน โดยรักษาแถว 1–6 และสูตร duration เดิม; ไม่ครอบคลุม commit/push หรือการขยายกฎ capture.
+
 ## Approval gate — ต้องถามก่อนแก้
+
+การอนุมัติเพิ่มเติม 2026-10-07: ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ capture กิจกรรม Codex จาก task/tool/message metadata, collector 15s พร้อม durable cursor/inbox, replay event จริง, capture health และ supervision ของบริการเดิมเมื่อ login. เพิ่มข้อมูลนำเข้าโดยรักษาค่าทุกแถวของ baseline และสูตรเดิม; ไม่ครอบคลุม commit/push หรือสร้างฐานข้อมูลใหม่แทน volume เดิม.
+
+การอนุมัติ 2026-10-08: ผู้ใช้สั่ง “แก้ code ส่วนไหนไปบ้าง commit แล้ว push ให้หน่อย” อนุญาต commit/push งาน delivery, capture และ service recovery ตามสองแผนข้างต้น โดยไม่รวม credential, backup ฐานข้อมูล, runtime binary และหลักฐาน incident ส่วนตัว.
 
 ก่อนแก้ protected scope ให้ส่งคำขอที่ระบุครบทุกข้อ:
 

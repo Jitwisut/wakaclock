@@ -8,6 +8,7 @@ import { motion } from 'motion/react';
 import Link from 'next/link';
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { XpBar } from '@/components/wakaclock/rpg/xp-bar';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getAllTime, getBrowserTimezone, getStatusBar } from '@/lib/wakaclock/endpoints';
@@ -219,6 +220,7 @@ export function CharacterSheetHero() {
           )}
         </div>
 
+        <IncompleteTimeBadge />
         <div className={styles.todayMeta}>
           <span className={styles.chip}>
             <HeartPulseIcon aria-hidden className="size-3.5" />

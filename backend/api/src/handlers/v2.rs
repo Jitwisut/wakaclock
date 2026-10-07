@@ -89,6 +89,9 @@ pub struct AccountDeletionConfirmation {
 #[derive(Debug, Serialize)]
 pub struct CapabilityData {
     pub api_version: &'static str,
+    pub delivery_snapshot_versions: Vec<u8>,
+    pub capture_activity_versions: Vec<u8>,
+    pub capture_status_supported: bool,
     pub product: &'static str,
     pub transactional_store: &'static str,
     pub analytics_store: &'static str,
@@ -766,6 +769,9 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
     Json(envelope(
         CapabilityData {
             api_version: "2",
+            delivery_snapshot_versions: vec![1, 2],
+            capture_activity_versions: vec![2],
+            capture_status_supported: true,
             product: "AtoAxis",
             transactional_store: if state.postgres.is_some() {
                 "postgresql"
@@ -1197,7 +1203,7 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
     const MAX_COUNTER: u32 = 1_000_000;
     const MAX_SEQUENCE: u64 = 9_000_000_000_000_000_000;
     let now = Utc::now();
-    if snapshot.schema_version != 1
+    if ![1, 2].contains(&snapshot.schema_version)
         || snapshot.device_id.trim().is_empty()
         || snapshot.device_id.len() > 128
         || !snapshot.device_id.is_ascii()
@@ -1218,6 +1224,7 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
                 || snapshot.retry.is_some()
                 || snapshot.dead_letter.is_some()
                 || snapshot.oldest_pending_at.is_some()
+                || snapshot.details.is_some()
             {
                 return Err(ApiError::bad_request(
                     "unavailable queue snapshots must not contain counts",
@@ -1244,6 +1251,42 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
             }
         }
     }
+    if snapshot.schema_version == 1 && snapshot.details.is_some() {
+        return Err(ApiError::bad_request(
+            "v1 snapshots cannot contain v2 details",
+        ));
+    }
+    if snapshot.schema_version == 2 && snapshot.read_status == QueueReadStatus::Available {
+        let details = snapshot
+            .details
+            .as_ref()
+            .ok_or_else(|| ApiError::bad_request("v2 snapshots require queue details"))?;
+        if details.eligible.saturating_add(details.leased) > snapshot.pending.unwrap_or(0)
+            || details.accepted_total > MAX_SEQUENCE
+            || details.backlog_error.as_ref().is_some_and(|error| {
+                ![
+                    "auth_401",
+                    "payment_402",
+                    "network",
+                    "validation",
+                    "server_error",
+                    "other",
+                ]
+                .contains(&error.kind.as_str())
+                    || error.message_code.len() > 80
+                    || !error
+                        .message_code
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                    || error
+                        .http_status
+                        .is_some_and(|status| !(400..=599).contains(&status))
+                    || error.failed_at > snapshot.captured_at
+            })
+        {
+            return Err(ApiError::bad_request("invalid delivery queue details"));
+        }
+    }
     if snapshot
         .oldest_pending_at
         .is_some_and(|value| value > snapshot.captured_at)
@@ -1254,6 +1297,21 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
         return Err(ApiError::bad_request(
             "delivery timestamps cannot be later than captured_at",
         ));
+    }
+    if let Some(capture) = &snapshot.capture {
+        if snapshot.schema_version != 2
+            || capture.schema_version != 1
+            || !["fresh", "unavailable", "parser_failure", "disabled"]
+                .contains(&capture.status.as_str())
+            || capture.pending > MAX_COUNTER
+            || capture.parser_errors > MAX_COUNTER
+            || capture.captured_at > now + Duration::minutes(5)
+            || capture
+                .last_scan_success_at
+                .is_some_and(|v| v > capture.captured_at)
+        {
+            return Err(ApiError::bad_request("invalid capture health snapshot"));
+        }
     }
     Ok(())
 }
@@ -4057,5 +4115,90 @@ mod organization_error_tests {
             organization_error(anyhow::anyhow!("PostgreSQL is not configured")).status,
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+}
+
+#[cfg(test)]
+mod delivery_snapshot_tests {
+    use super::*;
+    use wakaclock_core::queue::{DeliveryErrorSummary, DeliveryQueueDetails};
+    fn available(version: u8) -> DeliveryQueueSnapshot {
+        DeliveryQueueSnapshot {
+            schema_version: version,
+            capture: None,
+            device_id: "device".into(),
+            queue_id: "a".repeat(64),
+            sequence: 1,
+            captured_at: Utc::now(),
+            read_status: QueueReadStatus::Available,
+            pending: Some(1191),
+            retry: Some(1191),
+            dead_letter: Some(0),
+            oldest_pending_at: Some(Utc::now() - Duration::hours(1)),
+            last_successful_delivery_at: None,
+            details: (version == 2).then_some(DeliveryQueueDetails {
+                eligible: 100,
+                leased: 0,
+                next_retry_at: Some(Utc::now() + Duration::minutes(1)),
+                oldest_event_at: Some(Utc::now() - Duration::days(2)),
+                accepted_total: 1,
+                backlog_error: Some(DeliveryErrorSummary {
+                    kind: "network".into(),
+                    http_status: None,
+                    message_code: "connect_failed".into(),
+                    failed_at: Utc::now() - Duration::minutes(1),
+                }),
+            }),
+        }
+    }
+    #[test]
+    fn v1_and_v2_are_supported_and_missing_details_are_not_zero() {
+        assert!(validate_delivery_snapshot(&available(1)).is_ok());
+        assert!(validate_delivery_snapshot(&available(2)).is_ok());
+        let mut invalid = available(2);
+        invalid.details = None;
+        assert!(validate_delivery_snapshot(&invalid).is_err());
+        let unavailable = DeliveryQueueSnapshot::unavailable("device".into(), "a".repeat(64), 2);
+        assert!(validate_delivery_snapshot(&unavailable).is_ok());
+        assert_eq!(unavailable.pending, None);
+    }
+    #[test]
+    fn capture_health_is_additive_bounded_and_metadata_only() {
+        let mut snapshot = available(2);
+        let at = snapshot.captured_at;
+        snapshot.capture = Some(wakaclock_core::queue::CaptureHealthSnapshot {
+            schema_version: 1,
+            captured_at: at,
+            enabled: true,
+            status: "fresh".into(),
+            last_scan_success_at: Some(at),
+            parser_errors: 0,
+            pending: 0,
+        });
+        assert!(validate_delivery_snapshot(&snapshot).is_ok());
+        let mut value = serde_json::to_value(&snapshot).unwrap();
+        value["capture"]["prompt"] = serde_json::json!("secret");
+        assert!(serde_json::from_value::<DeliveryQueueSnapshot>(value).is_err());
+        snapshot.capture.as_mut().unwrap().status = "free form secret".into();
+        assert!(validate_delivery_snapshot(&snapshot).is_err());
+        snapshot.capture.as_mut().unwrap().status = "fresh".into();
+        snapshot.schema_version = 1;
+        assert!(validate_delivery_snapshot(&snapshot).is_err());
+    }
+    #[test]
+    fn diagnostics_refuse_freeform_content_and_invalid_counts() {
+        let mut invalid = available(2);
+        invalid
+            .details
+            .as_mut()
+            .unwrap()
+            .backlog_error
+            .as_mut()
+            .unwrap()
+            .message_code = "secret file contents".into();
+        assert!(validate_delivery_snapshot(&invalid).is_err());
+        invalid = available(2);
+        invalid.details.as_mut().unwrap().leased = 1191;
+        assert!(validate_delivery_snapshot(&invalid).is_err());
     }
 }

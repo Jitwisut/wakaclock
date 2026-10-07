@@ -10,6 +10,7 @@ pub struct DurationBlock {
     pub time: f64,
     pub duration: f64,
     pub heartbeat_count: u64,
+    pub heartbeat_ids: Vec<String>,
     pub project: Option<String>,
     pub language: Option<String>,
     pub category: String,
@@ -21,6 +22,7 @@ pub struct DurationsResponse {
     pub date: String,
     /// IANA timezone used to resolve this calendar day.
     pub timezone: String,
+    pub timeout_seconds: f64,
     /// Exact UTC epoch bounds of the requested local day. Clients should position
     /// timeline blocks against these instead of reinterpreting epochs in another zone.
     pub range_start: f64,
@@ -64,6 +66,7 @@ pub struct DurationBlockRow {
     pub end: f64,
     pub duration_seconds: f64,
     pub heartbeat_count: u64,
+    pub heartbeat_ids: Vec<String>,
     pub project: Option<String>,
     pub language: Option<String>,
     pub category: String,

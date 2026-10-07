@@ -119,6 +119,7 @@ export class StatusBarController implements vscode.Disposable {
   private authFailureReported = false;
   private deliveryFailureReported = false;
   private legacyCliReported = false;
+  private deliveryHealthState?: string;
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
   private lastBrokerStatus?: BrokerStatusSnapshot;
   private lastAiDiagnostics?: AiDiagnosticsSnapshot;
@@ -164,6 +165,7 @@ export class StatusBarController implements vscode.Disposable {
    */
   public invalidateScope(): void {
     this.inFlight.invalidate();
+    this.deliveryHealthState = undefined;
   }
 
   public handleHeartbeatSent(): void {
@@ -248,6 +250,23 @@ export class StatusBarController implements vscode.Disposable {
       }
       if (!subscription) {
         this.deliveryFailureReported = false;
+      }
+      const details = snapshot.deliveryDetails;
+      const age = snapshot.oldestPendingAt ? (Date.now() - Date.parse(snapshot.oldestPendingAt)) / 1000 : 0;
+      const capture = snapshot.capture;
+      const captureAge = capture?.checked_at ? (Date.now() - Date.parse(capture.checked_at)) / 1000 : Infinity;
+      const captureState = !capture ? "unknown" : captureAge > 300 ? "stale" : capture.parser_errors || capture.status === "parser_failure" ? "critical" : capture.status !== "fresh" || capture.pending ? "warning" : "complete";
+      const deliveryHealth = !details ? "unknown" : snapshot.deadLetter || ["auth_401", "payment_402"].includes(details.backlog_error?.kind ?? "") || (backlog > 0 && age > 1800)
+        ? "critical" : backlog > 0 && age > 300 ? "warning" : backlog > 0 ? "pending" : "complete";
+      const health = deliveryHealth === "complete" ? captureState : deliveryHealth;
+      if (this.deliveryHealthState !== health) {
+        const previous = this.deliveryHealthState;
+        this.deliveryHealthState = health;
+        if (health === "warning" || health === "critical" || health === "stale") {
+          void vscode.window.showWarningMessage(`AtoAxis data is incomplete: ${backlog} pending heartbeat(s), ${snapshot.deadLetter ?? 0} recoverable dead letter(s). Capture: ${capture?.status ?? "unknown"}. Check capture and delivery status.`);
+        } else if (health === "complete" && previous && previous !== "unknown") {
+          void vscode.window.showInformationMessage("AtoAxis capture and delivery recovered.");
+        }
       }
       this.render(snapshot);
       if (snapshot.legacyCli && !this.legacyCliReported) {
@@ -357,7 +376,9 @@ export class StatusBarController implements vscode.Disposable {
     ) {
       this.item.text = `$(cloud-offline) AtoAxis: ${humanReadable}`;
     } else {
-      this.item.text = `$(clock) ${humanReadable}`;
+      this.item.text = snapshot.dataIncomplete || snapshot.queuedHeartbeats
+        ? `$(cloud-upload) ${humanReadable} · pending`
+        : `$(clock) ${humanReadable}`;
     }
     const stateLine =
       this.connectionState === "offline" || this.connectionState === "offline-queued"
@@ -384,6 +405,9 @@ export class StatusBarController implements vscode.Disposable {
       (snapshot.queuedHeartbeats
         ? `\nHeld locally: ${snapshot.queuedHeartbeats} heartbeat(s)`
         : "") +
+      (snapshot.dataIncomplete ? "\nData incomplete: check capture and delivery." : "") +
+      (snapshot.capture ? `\nCapture: ${snapshot.capture.status} · pending ${snapshot.capture.pending ?? "unknown"} · parser failures ${snapshot.capture.parser_errors ?? "unknown"}\nLast successful scan: ${snapshot.capture.last_scan_success_at ?? "unknown"}` : "\nCapture details unavailable.") +
+      (snapshot.deliveryDetails ? `\nQueue ready: ${snapshot.deliveryDetails.eligible} · leased: ${snapshot.deliveryDetails.leased}\nNext retry: ${snapshot.deliveryDetails.next_retry_at ?? "—"}\nOldest event: ${snapshot.deliveryDetails.oldest_event_at ?? "—"}\nAccepted deliveries: ${snapshot.deliveryDetails.accepted_total}` : "\nDelivery details not available.") +
       (snapshot.delivery ? `\nDelivery: ${snapshot.delivery}` : "") +
       (agentState ? `\nAgent: ${agentState}` : "") +
       (brokerState ? `\nAI sync: ${brokerState}` : "") +

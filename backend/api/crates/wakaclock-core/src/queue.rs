@@ -95,6 +95,42 @@ pub struct DeliveryQueueSnapshot {
     pub dead_letter: Option<u32>,
     pub oldest_pending_at: Option<DateTime<Utc>>,
     pub last_successful_delivery_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<DeliveryQueueDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<CaptureHealthSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureHealthSnapshot {
+    pub schema_version: u8,
+    pub captured_at: DateTime<Utc>,
+    pub enabled: bool,
+    pub status: String,
+    pub last_scan_success_at: Option<DateTime<Utc>>,
+    pub parser_errors: u32,
+    pub pending: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryQueueDetails {
+    pub eligible: u32,
+    pub leased: u32,
+    pub next_retry_at: Option<DateTime<Utc>>,
+    pub oldest_event_at: Option<DateTime<Utc>>,
+    pub accepted_total: u64,
+    pub backlog_error: Option<DeliveryErrorSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryErrorSummary {
+    pub kind: String,
+    pub http_status: Option<u16>,
+    pub message_code: String,
+    pub failed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +156,8 @@ impl DeliveryQueueSnapshot {
             dead_letter: None,
             oldest_pending_at: None,
             last_successful_delivery_at: None,
+            details: None,
+            capture: None,
         }
     }
 }
@@ -307,6 +345,11 @@ impl Queue {
             ("revision", "INTEGER NOT NULL DEFAULT 0"),
             ("lease_owner", "TEXT"),
             ("lease_until", "INTEGER NOT NULL DEFAULT 0"),
+            ("failure_kind", "TEXT"),
+            ("failure_http_status", "INTEGER"),
+            ("failure_code", "TEXT"),
+            ("failed_at", "INTEGER"),
+            ("retry_after_until", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             let exists = conn
                 .prepare("PRAGMA table_info(heartbeat_queue)")
@@ -323,6 +366,16 @@ impl Queue {
                 .map_err(AppError::Queue)?;
             }
         }
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS delivery_recovery_state (
+            destination TEXT NOT NULL, owner_scope TEXT NOT NULL,
+            last_probe_at INTEGER NOT NULL DEFAULT 0,
+            accepted_total INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(destination, owner_scope)
+        );",
+        )
+        .map_err(AppError::Queue)?;
 
         // Backfill identities for rows written by pre-id clients. When the old payload
         // has no identity at all, derive one from the exact JSON bytes and persist it
@@ -532,6 +585,220 @@ impl Queue {
             .map_err(AppError::Queue)?;
 
         Ok(())
+    }
+
+    /// Persist the whole producer batch before acquiring its transport lease.
+    /// The transaction also keeps another process from claiming half a batch.
+    pub fn persist_and_claim_scoped(
+        &self,
+        payloads: &[serde_json::Value],
+        scope: &QueueScope,
+        owner: &str,
+    ) -> Result<Vec<(i64, serde_json::Value)>, AppError> {
+        let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        for payload in payloads {
+            self.push_scoped(payload, scope)?;
+            self.conn
+                .execute(
+                    "UPDATE heartbeat_queue SET lease_owner=?1,
+                lease_until=strftime('%s','now')+?2
+                WHERE destination=?3 AND owner_scope=?4 AND heartbeat_id=?5
+                AND session_id=?6 AND entity=?7 AND revision=?8
+                AND next_retry_at<=strftime('%s','now')
+                AND (lease_owner IS NULL OR lease_until<=strftime('%s','now'))",
+                    params![
+                        owner,
+                        FLUSH_LEASE_SECONDS,
+                        scope.destination,
+                        scope.owner,
+                        payload
+                            .get("heartbeat_id")
+                            .and_then(serde_json::Value::as_str),
+                        payload
+                            .get("session_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                        payload
+                            .get("entity")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                        payload
+                            .get("revision")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(0)
+                    ],
+                )
+                .map_err(AppError::Queue)?;
+        }
+        let rows = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id,payload FROM heartbeat_queue WHERE lease_owner=?1 ORDER BY id")
+                .map_err(AppError::Queue)?;
+            let raw = stmt
+                .query_map([owner], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(AppError::Queue)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(AppError::Queue)?;
+            raw.into_iter()
+                .map(|(id, p)| Ok((id, serde_json::from_str(&p).map_err(AppError::Serde)?)))
+                .collect::<Result<Vec<_>, AppError>>()?
+        };
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(rows)
+    }
+
+    pub fn contains_id(&self, id: i64) -> Result<bool, AppError> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM heartbeat_queue WHERE id=?1)",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(AppError::Queue)
+    }
+
+    pub fn renew_claim(&self, owner: &str) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "UPDATE heartbeat_queue SET lease_until=strftime('%s','now')+?2
+            WHERE lease_owner=?1",
+                params![owner, FLUSH_LEASE_SECONDS],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Preserve the pre-existing first-attempt schedule (immediately eligible,
+    /// unless the server supplied Retry-After/auth deferral). Exponential retries
+    /// start when a queued transport attempt fails.
+    pub fn record_initial_failure(
+        &self,
+        id: i64,
+        kind: &str,
+        status: Option<u16>,
+        code: &str,
+        delay: Option<u64>,
+    ) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "UPDATE heartbeat_queue SET failure_kind=?2,failure_http_status=?3,failure_code=?4,
+            failed_at=strftime('%s','now'),next_retry_at=strftime('%s','now')+?5,
+            retry_after_until=CASE WHEN ?5>0 THEN strftime('%s','now')+?5 ELSE 0 END WHERE id=?1",
+                params![id, kind, status, code, delay.unwrap_or(0).min(86400) as i64],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    pub fn record_row_failure(
+        &self,
+        id: i64,
+        kind: &str,
+        status: Option<u16>,
+        code: &str,
+        delay: Option<u64>,
+    ) -> Result<(), AppError> {
+        let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        self.mark_retry_after(id, delay)?;
+        self.conn
+            .execute(
+                "UPDATE heartbeat_queue SET failure_kind=?2,failure_http_status=?3,
+            failure_code=?4,failed_at=strftime('%s','now'),retry_after_until=?5 WHERE id=?1",
+                params![
+                    id,
+                    kind,
+                    status,
+                    code,
+                    delay
+                        .map(|s| Utc::now().timestamp() + s.min(86400) as i64)
+                        .unwrap_or(0)
+                ],
+            )
+            .map_err(AppError::Queue)?;
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(())
+    }
+
+    /// Only a confirmed heartbeat POST unlocks a bounded network recovery probe.
+    /// Unknown legacy deferrals, auth, throttling and Retry-After stay untouched.
+    pub fn prepare_recovery_scoped(&self, scope: &QueueScope) -> Result<bool, AppError> {
+        let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        self.conn.execute("INSERT OR IGNORE INTO delivery_recovery_state(destination,owner_scope) VALUES (?1,?2)",params![scope.destination,scope.owner]).map_err(AppError::Queue)?;
+        let changed=self.conn.execute("UPDATE delivery_recovery_state SET last_probe_at=strftime('%s','now')
+            WHERE destination=?1 AND owner_scope=?2 AND last_probe_at<=strftime('%s','now')-60
+            AND EXISTS(SELECT 1 FROM heartbeat_queue q JOIN delivery_queue_state s ON s.queue_id=?3
+                WHERE q.destination=?1 AND q.owner_scope=?2 AND s.last_successful_delivery_at>=q.failed_at
+                AND q.failure_kind IN ('network','server_error') AND (q.failure_http_status IS NULL OR q.failure_http_status>=500)
+                AND q.retry_after_until<=strftime('%s','now') AND q.next_retry_at>strftime('%s','now')
+                AND (q.lease_owner IS NULL OR q.lease_until<=strftime('%s','now')))",params![scope.destination,scope.owner,opaque_queue_id(scope)]).map_err(AppError::Queue)?;
+        let promoted = if changed > 0 {
+            self.conn.execute("UPDATE heartbeat_queue SET next_retry_at=strftime('%s','now') WHERE id IN (
+                SELECT q.id FROM heartbeat_queue q JOIN delivery_queue_state s ON s.queue_id=?3
+                WHERE q.destination=?1 AND q.owner_scope=?2 AND s.last_successful_delivery_at>=q.failed_at
+                AND q.failure_kind IN ('network','server_error') AND (q.failure_http_status IS NULL OR q.failure_http_status>=500)
+                AND q.retry_after_until<=strftime('%s','now') AND q.next_retry_at>strftime('%s','now')
+                AND (q.lease_owner IS NULL OR q.lease_until<=strftime('%s','now')) ORDER BY q.created_at,q.id LIMIT 100)",params![scope.destination,scope.owner,opaque_queue_id(scope)]).map_err(AppError::Queue)?
+        } else {
+            0
+        };
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(promoted > 0)
+    }
+
+    pub fn record_accepted(
+        &self,
+        scope: &QueueScope,
+        count: usize,
+        recovery: bool,
+    ) -> Result<(), AppError> {
+        self.record_scope_delivery_success(scope)?;
+        self.conn.execute("INSERT INTO delivery_recovery_state(destination,owner_scope,accepted_total) VALUES (?1,?2,?3)
+            ON CONFLICT(destination,owner_scope) DO UPDATE SET accepted_total=accepted_total+excluded.accepted_total",
+            params![scope.destination,scope.owner,count as i64]).map_err(AppError::Queue)?;
+        if recovery {
+            self.conn.execute("UPDATE heartbeat_queue SET next_retry_at=strftime('%s','now') WHERE destination=?1 AND owner_scope=?2
+                AND failure_kind IN ('network','server_error') AND (failure_http_status IS NULL OR failure_http_status>=500)
+                AND retry_after_until<=strftime('%s','now') AND (lease_owner IS NULL OR lease_until<=strftime('%s','now'))
+                AND EXISTS(SELECT 1 FROM delivery_recovery_state WHERE destination=?1 AND owner_scope=?2
+                    AND last_probe_at>0 AND last_probe_at>=strftime('%s','now')-60)",params![scope.destination,scope.owner]).map_err(AppError::Queue)?;
+        }
+        Ok(())
+    }
+
+    pub fn delivery_details_scoped(
+        &self,
+        scope: &QueueScope,
+    ) -> Result<DeliveryQueueDetails, AppError> {
+        let status = self.status_scoped(scope)?;
+        let (next,event):(Option<i64>,Option<f64>)=self.conn.query_row("SELECT MIN(CASE WHEN next_retry_at>strftime('%s','now') THEN next_retry_at END),
+            MIN(json_extract(payload,'$.time')) FROM heartbeat_queue WHERE destination=?1 AND owner_scope=?2",
+            params![scope.destination,scope.owner],|r|Ok((r.get(0)?,r.get(1)?))).map_err(AppError::Queue)?;
+        let accepted=self.conn.query_row("SELECT accepted_total FROM delivery_recovery_state WHERE destination=?1 AND owner_scope=?2",params![scope.destination,scope.owner],|r|r.get::<_,i64>(0)).optional().map_err(AppError::Queue)?.unwrap_or(0);
+        let row_failure = self.conn.query_row("SELECT failure_kind,failure_http_status,failure_code,failed_at FROM heartbeat_queue
+            WHERE destination=?1 AND owner_scope=?2 AND failure_kind IS NOT NULL ORDER BY failed_at DESC,id DESC LIMIT 1",
+            params![scope.destination,scope.owner],|r|Ok(DeliveryErrorSummary { kind:r.get(0)?,http_status:r.get(1)?,message_code:r.get(2)?,failed_at:DateTime::from_timestamp(r.get(3)?,0).unwrap_or_else(Utc::now) }))
+            .optional().map_err(AppError::Queue)?;
+        let failure =
+            row_failure.or(self
+                .delivery_failure_for(scope)?
+                .map(|f| DeliveryErrorSummary {
+                    kind: f.kind,
+                    http_status: f.http_status,
+                    message_code: f.message_code,
+                    failed_at: DateTime::from_timestamp(f.last_attempt_at, 0)
+                        .unwrap_or_else(Utc::now),
+                }));
+        Ok(DeliveryQueueDetails {
+            eligible: status.eligible.min(u32::MAX as usize) as u32,
+            leased: status.leased.min(u32::MAX as usize) as u32,
+            next_retry_at: next.and_then(|t| DateTime::from_timestamp(t, 0)),
+            oldest_event_at: event.and_then(|t| DateTime::from_timestamp(t as i64, 0)),
+            accepted_total: accepted.max(0) as u64,
+            backlog_error: failure,
+        })
     }
 
     /// ดึง heartbeats ทั้งหมดที่ค้างอยู่
@@ -960,6 +1227,25 @@ impl Queue {
         &self,
         scope: &QueueScope,
     ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
+        self.capture_delivery_snapshot(scope, false)
+    }
+
+    pub fn capture_delivery_snapshot_force_scoped(
+        &self,
+        scope: &QueueScope,
+    ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
+        self.capture_delivery_snapshot(scope, true)
+    }
+
+    fn capture_delivery_snapshot(
+        &self,
+        scope: &QueueScope,
+        force: bool,
+    ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
+        let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        // Acquire the writer reservation before reading counters: all fields and
+        // the sequence then describe one consistent SQLite snapshot.
+        let device_id = self.device_id()?;
         let queue_id = opaque_queue_id(scope);
         let status = self.status_scoped(scope)?;
         let now = Utc::now();
@@ -989,7 +1275,6 @@ impl Queue {
             .map_err(AppError::Queue)?
             .flatten();
 
-        let device_id = self.device_id()?;
         let now_seconds = now.timestamp();
         self.conn
             .execute(
@@ -1003,8 +1288,13 @@ impl Queue {
             .execute(
                 "UPDATE delivery_queue_state
                  SET sequence = sequence + 1, last_attempt_at = ?2
-                 WHERE queue_id = ?1 AND last_attempt_at <= ?3",
-                params![&queue_id, now_seconds, now_seconds.saturating_sub(60)],
+                 WHERE queue_id = ?1 AND (last_attempt_at <= ?3 OR ?4)",
+                params![
+                    &queue_id,
+                    now_seconds,
+                    now_seconds.saturating_sub(60),
+                    force
+                ],
             )
             .map_err(AppError::Queue)?;
         if reserved == 0 {
@@ -1019,8 +1309,8 @@ impl Queue {
             )
             .map_err(AppError::Queue)?;
 
-        Ok(Some(DeliveryQueueSnapshot {
-            schema_version: 1,
+        let snapshot = DeliveryQueueSnapshot {
+            schema_version: 2,
             device_id,
             queue_id,
             sequence: sequence.max(0) as u64,
@@ -1033,7 +1323,11 @@ impl Queue {
                 .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
             last_successful_delivery_at: last_successful
                 .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
-        }))
+            details: Some(self.delivery_details_scoped(scope)?),
+            capture: None,
+        };
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(Some(snapshot))
     }
 
     /// Persist the local confirmation time after a server accepts all rows in the
@@ -2369,5 +2663,114 @@ mod tests {
         assert!(snapshot.last_successful_delivery_at.is_some());
         assert_eq!(snapshot.pending, Some(0));
         assert_eq!(snapshot.oldest_pending_at, None);
+    }
+    #[test]
+    fn recovery_probe_is_scoped_bounded_and_respects_unknown_and_retry_after() {
+        let temp = TempQueue::new();
+        let mine = scope(ORIGIN, "mine");
+        let other = scope(ORIGIN, "other");
+        for index in 0..1191 {
+            temp.queue
+                .push_scoped(
+                    &row(
+                        &format!("recovery-{index}"),
+                        1_800_000_000.0 - (index % 3) as f64 * 86400.0,
+                        0,
+                    ),
+                    &mine,
+                )
+                .unwrap();
+        }
+        temp.queue.conn.execute("UPDATE heartbeat_queue SET retry_count=7+(id%9),next_retry_at=strftime('%s','now')+3600,failure_kind='network',failed_at=strftime('%s','now')-10",[]).unwrap();
+        temp.queue
+            .push_scoped(&row("legacy-unknown", 1_800_000_000.0, 0), &mine)
+            .unwrap();
+        temp.queue.conn.execute("UPDATE heartbeat_queue SET next_retry_at=strftime('%s','now')+3600 WHERE heartbeat_id='legacy-unknown'",[]).unwrap();
+        temp.queue
+            .push_scoped(&row("retry-after", 1_800_000_000.0, 0), &mine)
+            .unwrap();
+        let delayed = temp
+            .queue
+            .conn
+            .query_row(
+                "SELECT id FROM heartbeat_queue WHERE heartbeat_id='retry-after'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        temp.queue
+            .record_row_failure(delayed, "server_error", Some(503), "http_5xx", Some(600))
+            .unwrap();
+        assert!(
+            !temp.queue.prepare_recovery_scoped(&mine).unwrap(),
+            "GET success alone cannot unlock recovery"
+        );
+        temp.queue.record_accepted(&mine, 1, false).unwrap();
+        assert!(!temp.queue.prepare_recovery_scoped(&other).unwrap());
+        assert!(temp.queue.prepare_recovery_scoped(&mine).unwrap());
+        assert_eq!(temp.queue.eligible_len_scoped(&mine).unwrap(), 100);
+        assert!(
+            !temp.queue.prepare_recovery_scoped(&mine).unwrap(),
+            "one probe per minute"
+        );
+        let claimed = temp.queue.claim_batch_scoped(&mine, "probe").unwrap();
+        for (id, _) in claimed {
+            temp.queue.remove(id).unwrap();
+        }
+        temp.queue.record_accepted(&mine, 100, true).unwrap();
+        assert_eq!(temp.queue.eligible_len_scoped(&mine).unwrap(), 1091);
+        let details = temp.queue.delivery_details_scoped(&mine).unwrap();
+        assert_eq!(details.accepted_total, 101);
+        assert!(details.next_retry_at.is_some());
+        let deferred: i64 = temp
+            .queue
+            .conn
+            .query_row(
+                "SELECT count(*) FROM heartbeat_queue WHERE next_retry_at>strftime('%s','now')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(deferred, 2, "unknown reasons and Retry-After are preserved");
+    }
+
+    #[test]
+    fn durable_batch_is_atomic_and_lease_cannot_be_stolen() {
+        let temp = TempQueue::new();
+        let mine = scope(ORIGIN, "mine");
+        let payload = row("durable-revision", 1_800_000_000.0, 3);
+        let claimed = temp
+            .queue
+            .persist_and_claim_scoped(&[payload.clone()], &mine, "producer")
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].1, payload);
+        assert!(temp
+            .queue
+            .claim_batch_scoped(&mine, "worker")
+            .unwrap()
+            .is_empty());
+        temp.queue.renew_claim("producer").unwrap();
+        temp.queue.release_claim("producer").unwrap();
+        assert_eq!(
+            temp.queue
+                .claim_batch_scoped(&mine, "worker")
+                .unwrap()
+                .len(),
+            1
+        );
+        temp.queue
+            .conn
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        assert!(temp
+            .queue
+            .persist_and_claim_scoped(
+                &[row("write-failed", 1_800_000_001.0, 0)],
+                &mine,
+                "producer"
+            )
+            .is_err());
+        assert_eq!(temp.queue.len_scoped(&mine).unwrap(), 1);
     }
 }

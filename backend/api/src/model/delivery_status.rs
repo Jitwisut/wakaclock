@@ -12,6 +12,9 @@ pub struct DeliveryStatusResponse {
 
 #[derive(Debug, Serialize)]
 pub struct DeliveryStatusDevice {
+    pub schema_version: u8,
+    pub details: Option<wakaclock_core::queue::DeliveryQueueDetails>,
+    pub capture: Option<wakaclock_core::queue::CaptureHealthSnapshot>,
     pub device_id: String,
     pub queue_id: String,
     pub sequence: u64,
@@ -54,6 +57,9 @@ impl DeliveryStatusDevice {
         status: &'static str,
     ) -> Self {
         Self {
+            schema_version: snapshot.schema_version,
+            details: snapshot.details,
+            capture: snapshot.capture,
             device_id: snapshot.device_id,
             queue_id: snapshot.queue_id,
             sequence: snapshot.sequence,

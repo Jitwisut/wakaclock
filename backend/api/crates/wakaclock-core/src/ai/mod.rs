@@ -37,6 +37,7 @@
 //! instead, so `canonical.rs` itself has no path to the excluded engine.
 
 pub mod adapter;
+pub mod activity;
 pub mod canonical;
 pub mod certification;
 pub mod claude;

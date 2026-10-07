@@ -1,0 +1,30 @@
+# Recovery is bound to pre-existing volumes; Compose must never create replacements.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${HEARTBEAT_PG_DATABASE:?}
+      POSTGRES_USER: ${HEARTBEAT_PG_USER:?}
+      POSTGRES_PASSWORD: ${HEARTBEAT_PG_PASSWORD:?}
+    volumes: [postgres:/var/lib/postgresql/data]
+    ports: ['127.0.0.1:5432:5432']
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${HEARTBEAT_CH_USER:?}
+      CLICKHOUSE_PASSWORD: ${HEARTBEAT_CH_PASSWORD:?}
+    volumes: [clickhouse:/var/lib/clickhouse, clickhouse_logs:/var/log/clickhouse-server]
+    ports: ['127.0.0.1:8123:8123', '127.0.0.1:9000:9000']
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [redis-server, --appendonly, 'yes']
+    volumes: [redis:/data]
+    ports: ['127.0.0.1:6379:6379']
+volumes:
+  postgres: {external: true, name: wakaclock_postgres_data}
+  clickhouse: {external: true, name: wakaclock_clickhouse_data}
+  clickhouse_logs: {external: true, name: wakaclock_clickhouse_logs}
+  redis: {external: true, name: wakaclock_redis_data}

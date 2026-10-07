@@ -1,0 +1,1155 @@
+//! Codex activity evidence, separate from file mutations. No transcript contents
+//! or tool arguments enter the durable v2 envelope or cursor context.
+use super::jsonl::JsonlCursorReader;
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerActivityEventV2 {
+    pub schema_version: u8,
+    pub event_id: String,
+    pub revision: u32,
+    pub session_id: String,
+    pub project_root: PathBuf,
+    pub kind: ActivityKind,
+    pub operation_id: String,
+    pub occurred_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub provenance: String,
+    pub tool: Option<String>,
+    pub status: Option<String>,
+    pub producer_surface: String,
+    #[serde(default)]
+    pub monitoring_only: bool,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    TaskStart,
+    TaskEnd,
+    ToolStart,
+    ToolEnd,
+    MessageComplete,
+}
+
+impl BrokerActivityEventV2 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 2
+            || self.event_id.is_empty()
+            || !self.project_root.is_absolute()
+            || self.session_id.is_empty()
+        {
+            return Err("invalid_activity_metadata".into());
+        }
+        let token = |s: &str, limit: usize| {
+            !s.is_empty()
+                && s.len() <= limit
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-.:/".contains(c))
+        };
+        if !token(&self.event_id, 256)
+            || !token(&self.operation_id, 256)
+            || !token(&self.session_id, 256)
+            || !token(&self.producer_surface, 80)
+            || !matches!(self.provenance.as_str(), "native" | "wrapper")
+            || self.tool.as_deref().is_some_and(|v| !token(v, 160))
+            || self.status.as_deref().is_some_and(|v| !token(v, 80))
+            || self.revision > 1_000_000
+            || self.tool.as_deref().is_some_and(waits_for_user) && self.started_at.is_some()
+        {
+            return Err("invalid_activity_metadata".into());
+        }
+        if self.occurred_at > Utc::now() + chrono::Duration::minutes(5)
+            || self.started_at.is_some_and(|s| s > self.occurred_at)
+        {
+            return Err("invalid_activity_timestamp".into());
+        }
+        if self.started_at.is_some() && self.kind != ActivityKind::ToolEnd {
+            return Err("only_tools_carry_measured_intervals".into());
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActivityCursor {
+    #[serde(default)]
+    pub capture_since: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub capture_until: Option<DateTime<Utc>>,
+    pub offset: u64,
+    pub file_identity: String,
+    pub context: ActivityContext,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActivityContext {
+    session: String,
+    root: PathBuf,
+    surface: String,
+    turn: String,
+    native_stream: bool,
+    #[serde(default)]
+    monitoring_only: bool,
+    calls: BTreeMap<String, PendingTool>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingTool {
+    started: DateTime<Utc>,
+    completed: Option<DateTime<Utc>>,
+    tool: String,
+    native_seen: bool,
+    fallback_emitted: bool,
+}
+pub struct ActivityBatch {
+    pub events: Vec<BrokerActivityEventV2>,
+    pub cursor: ActivityCursor,
+    pub records: usize,
+}
+pub fn opaque(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+fn instant(value: &Value) -> Option<DateTime<Utc>> {
+    value
+        .as_str()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|v| v.with_timezone(&Utc))
+}
+fn millis(value: &Value) -> Option<DateTime<Utc>> {
+    value.as_i64().and_then(DateTime::from_timestamp_millis)
+}
+fn make(
+    c: &ActivityContext,
+    kind: ActivityKind,
+    op: &str,
+    at: DateTime<Utc>,
+    started: Option<DateTime<Utc>>,
+    native: bool,
+    tool: Option<String>,
+    status: Option<String>,
+    revision: u32,
+) -> Option<BrokerActivityEventV2> {
+    if c.session.is_empty() || !c.root.is_absolute() {
+        return None;
+    }
+    let operation_id = opaque(&format!("{}\0{}", c.session, op));
+    // Native corrections of a fallback deliberately keep the fallback ID.
+    let event_id = opaque(&format!(
+        "codex-activity-v2\0{}\0{:?}\0{}",
+        c.session, kind, op
+    ));
+    Some(BrokerActivityEventV2 {
+        schema_version: 2,
+        event_id,
+        revision: (if native { revision + 1 } else { revision })
+            + u32::from(tool.as_deref().is_some_and(waits_for_user)),
+        session_id: c.session.clone(),
+        project_root: c.root.clone(),
+        kind,
+        operation_id,
+        occurred_at: at,
+        started_at: if tool.as_deref().is_some_and(waits_for_user) {
+            None
+        } else {
+            started
+        },
+        provenance: if native { "native" } else { "wrapper" }.into(),
+        tool,
+        status,
+        producer_surface: c.surface.clone(),
+        monitoring_only: c.monitoring_only,
+    })
+}
+fn waits_for_user(tool: &str) -> bool {
+    let name = tool.rsplit('.').next().unwrap_or(tool).to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "request_user_input"
+            | "request_user_input_async"
+            | "askuserquestion"
+            | "ask_user"
+            | "ask_user_question"
+    )
+}
+fn emit(events: &mut Vec<BrokerActivityEventV2>, event: Option<BrokerActivityEventV2>) {
+    if let Some(e) = event {
+        events.push(e);
+    }
+}
+/// Parse only complete records, bounding work per tick. Cursor and events are
+/// committed together by ActivityStore; failure leaves the previous offset intact.
+pub fn parse_activity(
+    path: &Path,
+    previous: &ActivityCursor,
+    now: DateTime<Utc>,
+) -> Result<ActivityBatch, String> {
+    let metadata = std::fs::metadata(path).map_err(|_| "transcript_unavailable")?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = format!("{:?}", metadata.created().ok());
+    let mut cursor = if previous.file_identity == identity && previous.offset <= metadata.len() {
+        previous.clone()
+    } else {
+        ActivityCursor {
+            capture_since: previous.capture_since,
+            capture_until: previous.capture_until,
+            ..ActivityCursor::default()
+        }
+    };
+    cursor.file_identity = identity;
+    let mut reader =
+        JsonlCursorReader::open(path, cursor.offset).map_err(|_| "transcript_unavailable")?;
+    let mut events = Vec::new();
+    let mut records = 0;
+    while records < 2000 {
+        let Some(line) = reader
+            .next_line(4 * 1024 * 1024)
+            .map_err(|_| "transcript_read_failed")?
+        else {
+            break;
+        };
+        if line.too_large {
+            return Err("transcript_record_too_large".into());
+        }
+        let r: Value = serde_json::from_str(&line.text).map_err(|_| "transcript_invalid_json")?;
+        cursor.offset = line.offset_after;
+        records += 1;
+        let p = &r["payload"];
+        let c = &mut cursor.context;
+        let Some(at) = instant(&r["timestamp"]) else {
+            continue;
+        };
+        let inspect = cursor.capture_since.is_none_or(|since| at >= since)
+            && cursor.capture_until.is_none_or(|until| at < until);
+        match r["type"].as_str().unwrap_or("") {
+            "session_meta" => {
+                c.session = p["session_id"]
+                    .as_str()
+                    .or(p["id"].as_str())
+                    .unwrap_or("")
+                    .into();
+                if let Some(root) = p["cwd"].as_str() {
+                    c.root = PathBuf::from(root);
+                }
+                c.monitoring_only = p["source"]
+                    .as_str()
+                    .is_some_and(|v| matches!(v, "automation" | "heartbeat"))
+                    || p["thread_source"]
+                        .as_str()
+                        .is_some_and(|v| matches!(v, "automation" | "heartbeat"));
+                c.surface = if p["originator"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("desktop"))
+                {
+                    "codex-desktop"
+                } else {
+                    "codex"
+                }
+                .into();
+            }
+            "turn_context" => {
+                c.turn = p["turn_id"].as_str().unwrap_or("").into();
+                if let Some(root) = p["cwd"].as_str() {
+                    c.root = PathBuf::from(root);
+                }
+            }
+            "event_msg" => match p["type"].as_str().unwrap_or("") {
+                "task_started" | "task_complete" => {
+                    let start = p["type"] == "task_started";
+                    let op = p["turn_id"].as_str().unwrap_or(&c.turn);
+                    emit(
+                        &mut events,
+                        make(
+                            c,
+                            if start {
+                                ActivityKind::TaskStart
+                            } else {
+                                ActivityKind::TaskEnd
+                            },
+                            op,
+                            at,
+                            None,
+                            true,
+                            None,
+                            None,
+                            1,
+                        ),
+                    );
+                }
+                "item_completed" => {
+                    c.native_stream = true;
+                    let item = &p["item"];
+                    let typ = item["type"].as_str().unwrap_or("");
+                    // Unknown native variants must not silently look like a complete scan.
+                    // Returning an opaque code leaves this batch's durable cursor unchanged.
+                    if inspect
+                        && !matches!(
+                            typ,
+                            "CommandExecution"
+                                | "McpToolCall"
+                                | "Extension"
+                                | "ImageView"
+                                | "AgentMessage"
+                                | "FileChange"
+                                | "UserMessage"
+                                | "Reasoning"
+                                | "ContextCompaction"
+                                | "Plan"
+                        )
+                    {
+                        return Err("unsupported_native_item".into());
+                    }
+                    if inspect
+                        && matches!(
+                            typ,
+                            "CommandExecution"
+                                | "McpToolCall"
+                                | "Extension"
+                                | "ImageView"
+                                | "AgentMessage"
+                        )
+                        && item["id"].as_str().is_none_or(str::is_empty)
+                    {
+                        return Err("activity_operation_id_missing".into());
+                    }
+                    let end = millis(&p["completed_at_ms"]).unwrap_or(at);
+                    let start = millis(&p["started_at_ms"]);
+                    if matches!(
+                        typ,
+                        "CommandExecution"
+                            | "McpToolCall"
+                            | "FileChange"
+                            | "Extension"
+                            | "ImageView"
+                    ) {
+                        // Matching operation IDs permit a native correction. Generic
+                        // outer wrappers remain markers once a native stream is
+                        // known; timestamp overlap alone is not identity proof.
+                        let mut corrections = Vec::new();
+                        for (id, call) in &mut c.calls {
+                            if (item["id"].as_str() == Some(id.as_str())
+                                || (call.fallback_emitted
+                                    && matches!(
+                                        call.tool.as_str(),
+                                        "exec"
+                                            | "functions.exec"
+                                            | "code_mode_exec"
+                                            | "unified_exec"
+                                            | "apply_patch"
+                                    )))
+                                && call.started <= end
+                                && call.completed.is_none_or(|v| start.unwrap_or(end) <= v)
+                                && start.unwrap_or(end) >= call.started
+                            {
+                                call.native_seen = true;
+                                if call.fallback_emitted {
+                                    call.fallback_emitted = false;
+                                    corrections.push((
+                                        id.clone(),
+                                        call.completed.unwrap_or(end),
+                                        call.tool.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                        for (id, end, tool) in corrections {
+                            emit(
+                                &mut events,
+                                make(
+                                    c,
+                                    ActivityKind::ToolEnd,
+                                    &id,
+                                    end,
+                                    None,
+                                    true,
+                                    Some(tool),
+                                    Some("native_children".into()),
+                                    2,
+                                ),
+                            );
+                        }
+                    }
+                    let op = item["id"].as_str();
+                    if let Some(op) = op {
+                        if matches!(
+                            typ,
+                            "CommandExecution" | "McpToolCall" | "Extension" | "ImageView"
+                        ) {
+                            let tool = Some(
+                                match typ {
+                                    "CommandExecution" => "exec_command",
+                                    "McpToolCall" => item["tool"]
+                                        .as_str()
+                                        .filter(|v| {
+                                            v.len() <= 128
+                                                && v.chars().all(|ch| {
+                                                    ch.is_ascii_alphanumeric() || "_.-".contains(ch)
+                                                })
+                                        })
+                                        .unwrap_or("mcp"),
+                                    "ImageView" => "view_image",
+                                    _ => "extension",
+                                }
+                                .into(),
+                            );
+                            if let Some(start) = start.filter(|s| *s <= end) {
+                                emit(
+                                    &mut events,
+                                    make(
+                                        c,
+                                        ActivityKind::ToolStart,
+                                        op,
+                                        start,
+                                        None,
+                                        true,
+                                        tool.clone(),
+                                        None,
+                                        1,
+                                    ),
+                                );
+                            }
+                            let status = item["status"]
+                                .as_str()
+                                .filter(|v| matches!(*v, "completed" | "failed" | "interrupted"))
+                                .map(str::to_owned);
+                            emit(
+                                &mut events,
+                                make(
+                                    c,
+                                    ActivityKind::ToolEnd,
+                                    op,
+                                    end,
+                                    start.filter(|s| *s <= end),
+                                    true,
+                                    tool,
+                                    status,
+                                    1,
+                                ),
+                            );
+                        } else if typ == "AgentMessage" {
+                            emit(
+                                &mut events,
+                                make(
+                                    c,
+                                    ActivityKind::MessageComplete,
+                                    op,
+                                    end,
+                                    None,
+                                    true,
+                                    None,
+                                    None,
+                                    1,
+                                ),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            },
+            "response_item" => match p["type"].as_str().unwrap_or("") {
+                "function_call" | "custom_tool_call" => {
+                    if inspect
+                        && (p["call_id"].as_str().is_none_or(str::is_empty)
+                            || p["name"].as_str().is_none_or(str::is_empty))
+                    {
+                        return Err("activity_tool_metadata_missing".into());
+                    }
+                    if let (Some(id), Some(tool)) = (p["call_id"].as_str(), p["name"].as_str()) {
+                        // Whitelist tool identifiers, never serialize arguments/input.
+                        let tool = if tool.len() <= 128
+                            && tool
+                                .chars()
+                                .all(|ch| ch.is_ascii_alphanumeric() || "_.-".contains(ch))
+                        {
+                            tool.to_owned()
+                        } else {
+                            "tool".into()
+                        };
+                        c.calls.insert(
+                            id.into(),
+                            PendingTool {
+                                started: at,
+                                completed: None,
+                                tool: tool.clone(),
+                                native_seen: false,
+                                fallback_emitted: false,
+                            },
+                        );
+                        emit(
+                            &mut events,
+                            make(
+                                c,
+                                ActivityKind::ToolStart,
+                                id,
+                                at,
+                                None,
+                                false,
+                                Some(tool),
+                                None,
+                                1,
+                            ),
+                        );
+                    }
+                }
+                "function_call_output" | "custom_tool_call_output" => {
+                    if inspect && p["call_id"].as_str().is_none_or(str::is_empty) {
+                        return Err("activity_operation_id_missing".into());
+                    }
+                    if let Some(id) = p["call_id"].as_str() {
+                        if let Some(call) = c.calls.get_mut(id) {
+                            call.completed = Some(at);
+                        }
+                    }
+                }
+                "message" if !c.native_stream && p["role"] == "assistant" => {
+                    let op = p["id"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("message:{}", at.timestamp_micros()));
+                    emit(
+                        &mut events,
+                        make(
+                            c,
+                            ActivityKind::MessageComplete,
+                            &op,
+                            at,
+                            None,
+                            false,
+                            None,
+                            None,
+                            1,
+                        ),
+                    );
+                }
+                typ if inspect
+                    && (typ.contains("tool")
+                        || typ.ends_with("_call")
+                        || typ.ends_with("_call_output")) =>
+                {
+                    return Err("unsupported_tool_record".into());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    // Allow native records to arrive in the next append before using a wrapper.
+    let c = &mut cursor.context;
+    let mut fallback = Vec::new();
+    for (id, call) in &mut c.calls {
+        if let Some(end) = call.completed {
+            if records < 2000
+                && !call.fallback_emitted
+                && now - end >= chrono::Duration::seconds(30)
+                && end >= call.started
+            {
+                call.fallback_emitted = true;
+                fallback.push((
+                    id.clone(),
+                    if call.native_seen
+                        || (c.native_stream
+                            && matches!(
+                                call.tool.as_str(),
+                                "exec"
+                                    | "functions.exec"
+                                    | "code_mode_exec"
+                                    | "unified_exec"
+                                    | "apply_patch"
+                            ))
+                    {
+                        None
+                    } else {
+                        Some(call.started)
+                    },
+                    end,
+                    call.tool.clone(),
+                ));
+            }
+        }
+    }
+    for (id, start, end, tool) in fallback {
+        emit(
+            &mut events,
+            make(
+                c,
+                ActivityKind::ToolEnd,
+                &id,
+                end,
+                start,
+                false,
+                Some(tool),
+                None,
+                1,
+            ),
+        );
+    }
+    if records < 2000 {
+        c.calls
+            .retain(|_, v| v.completed.is_none() || now - v.started < chrono::Duration::hours(6));
+    }
+    if c.calls.len() > 2000 {
+        return Err("too_many_pending_tools".into());
+    }
+    for e in &events {
+        e.validate()?;
+    }
+    Ok(ActivityBatch {
+        events,
+        cursor,
+        records,
+    })
+}
+
+pub struct ActivityStore {
+    conn: Connection,
+}
+impl ActivityStore {
+    pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+        CREATE TABLE IF NOT EXISTS activity_cursor(scope TEXT, source TEXT, cursor TEXT NOT NULL, PRIMARY KEY(scope,source));
+        CREATE TABLE IF NOT EXISTS activity_inbox_v2(scope TEXT,event_id TEXT,revision INTEGER,wire_revision INTEGER NOT NULL,payload TEXT NOT NULL,handed_off INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,event_id,revision));")?;
+        Ok(Self { conn })
+    }
+    pub fn cursor(&self, scope: &str, source: &str) -> Result<ActivityCursor, rusqlite::Error> {
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT cursor FROM activity_cursor WHERE scope=?1 AND source=?2",
+                params![scope, source],
+                |r| r.get(0),
+            )
+            .optional()?;
+        raw.map(|s| {
+            serde_json::from_str(&s)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        })
+        .transpose()
+        .map(|v| v.unwrap_or_default())
+    }
+    pub fn commit(
+        &self,
+        scope: &str,
+        source: &str,
+        batch: &ActivityBatch,
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        for e in &batch.events {
+            let raw = serde_json::to_string(e)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let existing: Option<String> = tx.query_row(
+                "SELECT payload FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2 AND revision=?3",
+                params![scope, e.event_id, e.revision],
+                |r| r.get(0),
+            ).optional()?;
+            if existing.as_ref().is_some_and(|v| v != &raw) {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "activity_revision_conflict".into(),
+                ));
+            }
+            // Evidence revisions order native over wrapper; transport revisions
+            // are dense from zero and preserve every accepted correction. Keeping
+            // each version prevents a crash during handoff from replacing a base.
+            let latest: Option<u32> = tx.query_row(
+                "SELECT max(revision) FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2",
+                params![scope, e.event_id],
+                |r| r.get(0),
+            )?;
+            if latest.is_none_or(|v| e.revision > v) {
+                let wire: u32 = tx.query_row(
+                    "SELECT count(*) FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2",
+                    params![scope, e.event_id],
+                    |r| r.get(0),
+                )?;
+                tx.execute("INSERT INTO activity_inbox_v2(scope,event_id,revision,wire_revision,payload) VALUES(?1,?2,?3,?4,?5)",params![scope,e.event_id,e.revision,wire,raw])?;
+            }
+        }
+        let raw = serde_json::to_string(&batch.cursor)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        tx.execute("INSERT INTO activity_cursor VALUES(?1,?2,?3) ON CONFLICT(scope,source) DO UPDATE SET cursor=excluded.cursor",params![scope,source,raw])?;
+        tx.commit()
+    }
+    pub fn pending(&self, scope: &str) -> Result<Vec<BrokerActivityEventV2>, rusqlite::Error> {
+        let mut q=self.conn.prepare("SELECT payload FROM activity_inbox_v2 WHERE scope=?1 AND handed_off=0 ORDER BY event_id,wire_revision LIMIT 500")?;
+        let result = q
+            .query_map([scope], |r| r.get::<_, String>(0))?
+            .map(|r| {
+                r.and_then(|s| {
+                    serde_json::from_str(&s)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+                })
+            })
+            .collect();
+        result
+    }
+    pub fn evidence_revision(&self, scope: &str, id: &str) -> Result<Option<u32>, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT max(revision) FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2",
+            params![scope, id],
+            |r| r.get(0),
+        )
+    }
+    pub fn wire_revision(
+        &self,
+        scope: &str,
+        id: &str,
+        revision: u32,
+    ) -> Result<u32, rusqlite::Error> {
+        self.conn.query_row("SELECT wire_revision FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2 AND revision=?3",params![scope,id,revision],|r|r.get(0))
+    }
+    pub fn mark_handed_off(
+        &self,
+        scope: &str,
+        id: &str,
+        revision: u32,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute("UPDATE activity_inbox_v2 SET handed_off=1 WHERE scope=?1 AND event_id=?2 AND revision=?3",params![scope,id,revision])?;
+        Ok(())
+    }
+    pub fn pending_count(&self, scope: &str) -> Result<u32, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT count(*) FROM activity_inbox_v2 WHERE scope=?1 AND handed_off=0",
+            [scope],
+            |r| r.get(0),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn file(rows: &[Value]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("activity-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+        path
+    }
+    fn record(at: &str, kind: &str, payload: Value) -> Value {
+        json!({"timestamp":at,"type":kind,"payload":payload})
+    }
+    fn meta() -> Value {
+        record(
+            "2026-10-06T17:00:00Z",
+            "session_meta",
+            json!({"id":"session-one","cwd":"/workspace/wakaclock","originator":"codex-desktop","base_instructions":"SECRET_PROMPT"}),
+        )
+    }
+    fn native(at: &str, id: &str, start: i64, end: i64, typ: &str) -> Value {
+        record(
+            at,
+            "event_msg",
+            json!({"type":"item_completed","started_at_ms":start,"completed_at_ms":end,"item":{"type":typ,"id":id,"status":"failed","command":"SECRET_COMMAND","content":"SECRET_RESPONSE"}}),
+        )
+    }
+    #[test]
+    fn real_gap_markers_and_tools_do_not_invent_task_or_reasoning_time() {
+        let rows = vec![
+            meta(),
+            record(
+                "2026-10-06T18:18:09.005Z",
+                "event_msg",
+                json!({"type":"task_started","turn_id":"turn-one"}),
+            ),
+            native(
+                "2026-10-06T18:18:50.191Z",
+                "read",
+                1791307129883,
+                1791307130191,
+                "CommandExecution",
+            ),
+            record(
+                "2026-10-06T18:19:59.850Z",
+                "event_msg",
+                json!({"type":"task_complete","turn_id":"turn-one"}),
+            ),
+            native(
+                "2026-10-06T19:56:22.574Z",
+                "write",
+                1791312982500,
+                1791312982574,
+                "CommandExecution",
+            ),
+            native(
+                "2026-10-06T19:56:30.674Z",
+                "message",
+                1791312990000,
+                1791312990674,
+                "AgentMessage",
+            ),
+            native(
+                "2026-10-06T19:56:31Z",
+                "thinking",
+                1791312980000,
+                1791312991000,
+                "Reasoning",
+            ),
+        ];
+        let path = file(&rows);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        assert_eq!(
+            b.events
+                .iter()
+                .filter(|e| e.kind == ActivityKind::ToolEnd)
+                .count(),
+            2
+        );
+        assert!(b
+            .events
+            .iter()
+            .filter(|e| matches!(
+                e.kind,
+                ActivityKind::TaskStart | ActivityKind::TaskEnd | ActivityKind::MessageComplete
+            ))
+            .all(|e| e.started_at.is_none()));
+        assert!(!b
+            .events
+            .iter()
+            .any(|e| e.tool.as_deref() == Some("Reasoning")));
+        let raw =
+            serde_json::to_string(&b.cursor).unwrap() + &serde_json::to_string(&b.events).unwrap();
+        assert!(!raw.contains("SECRET"));
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn file_change_and_native_children_suppress_outer_wrapper_measurement() {
+        let start = DateTime::parse_from_rfc3339("2026-10-06T17:51:33.220Z")
+            .unwrap()
+            .timestamp_millis();
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-06T17:51:33.220Z",
+                "response_item",
+                json!({"type":"custom_tool_call","name":"exec","call_id":"outer","input":"SECRET_PATCH"}),
+            ),
+            native(
+                "2026-10-06T17:51:33.276Z",
+                "file-operation",
+                start + 9,
+                start + 56,
+                "FileChange",
+            ),
+            native(
+                "2026-10-06T17:51:39.702Z",
+                "child",
+                start + 700,
+                start + 6482,
+                "CommandExecution",
+            ),
+            record(
+                "2026-10-06T17:51:40.140Z",
+                "response_item",
+                json!({"type":"custom_tool_call_output","call_id":"outer","output":"SECRET_OUTPUT"}),
+            ),
+        ]);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        assert_eq!(
+            b.events
+                .iter()
+                .filter(|e| e.kind == ActivityKind::ToolEnd && e.started_at.is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            b.events
+                .iter()
+                .find(|e| e.kind == ActivityKind::ToolEnd && e.started_at.is_some())
+                .unwrap()
+                .tool
+                .as_deref(),
+            Some("exec_command")
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn wrapper_fallback_is_revised_when_native_arrives_late() {
+        use std::io::Write;
+        let start = DateTime::parse_from_rfc3339("2026-10-06T18:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-06T18:00:00Z",
+                "response_item",
+                json!({"type":"function_call","call_id":"outer","name":"exec"}),
+            ),
+            record(
+                "2026-10-06T18:00:05Z",
+                "response_item",
+                json!({"type":"function_call_output","call_id":"outer"}),
+            ),
+        ]);
+        let now = DateTime::parse_from_rfc3339("2026-10-06T18:00:40Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let b = parse_activity(&path, &ActivityCursor::default(), now).unwrap();
+        let fallback = b
+            .events
+            .iter()
+            .find(|e| e.kind == ActivityKind::ToolEnd)
+            .unwrap();
+        assert!(fallback.started_at.is_some());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            f,
+            "{}",
+            native(
+                "2026-10-06T18:00:04Z",
+                "child",
+                start + 1000,
+                start + 4000,
+                "CommandExecution"
+            )
+        )
+        .unwrap();
+        let b2 = parse_activity(&path, &b.cursor, now).unwrap();
+        let correction = b2
+            .events
+            .iter()
+            .find(|e| e.event_id == fallback.event_id)
+            .unwrap();
+        assert!(correction.started_at.is_none());
+        assert!(correction.revision > fallback.revision);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn partial_append_restart_rotation_and_malformed_json_preserve_cursor() {
+        use std::io::Write;
+        let path = file(&[meta()]);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        write!(f, "{{\"timestamp\":").unwrap();
+        let partial = parse_activity(&path, &b.cursor, Utc::now()).unwrap();
+        assert_eq!(partial.cursor.offset, b.cursor.offset);
+        writeln!(f,"\"2026-10-06T18:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"t\"}}}}").unwrap();
+        let next = parse_activity(&path, &partial.cursor, Utc::now()).unwrap();
+        assert_eq!(next.events.len(), 1);
+        writeln!(f, "invalid json").unwrap();
+        assert!(parse_activity(&path, &next.cursor, Utc::now()).is_err());
+        drop(f);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, format!("{}\n", meta())).unwrap();
+        let rotated = parse_activity(&path, &next.cursor, Utc::now()).unwrap();
+        assert_eq!(rotated.records, 1);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn waiting_for_user_is_a_marker_never_measured_time() {
+        let start = DateTime::parse_from_rfc3339("2026-10-07T01:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-07T01:00:00Z",
+                "response_item",
+                json!({"type":"function_call","call_id":"ask","name":"request_user_input"}),
+            ),
+            record(
+                "2026-10-07T01:30:00Z",
+                "event_msg",
+                json!({"type":"item_completed","started_at_ms":start,"completed_at_ms":start+1800000,"item":{"type":"McpToolCall","id":"ask","tool":"request_user_input","status":"completed"}}),
+            ),
+        ]);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        assert!(b.events.iter().all(|e| e.started_at.is_none()));
+        assert!(b.events.iter().any(|e| e.kind == ActivityKind::ToolEnd));
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn sqlite_transaction_scope_dedup_and_write_failure_are_recoverable() {
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-06T18:00:00Z",
+                "event_msg",
+                json!({"type":"task_started","turn_id":"turn"}),
+            ),
+        ]);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        let db = path.with_extension("db");
+        let store = ActivityStore::open(&db).unwrap();
+        store.commit("account-one", "source", &b).unwrap();
+        store.commit("account-one", "source", &b).unwrap();
+        assert_eq!(store.pending_count("account-one").unwrap(), 1);
+        assert_eq!(store.pending_count("account-two").unwrap(), 0);
+        let event = store.pending("account-one").unwrap().pop().unwrap();
+        store
+            .mark_handed_off("account-one", &event.event_id, event.revision)
+            .unwrap();
+        store.commit("account-one", "source", &b).unwrap();
+        assert_eq!(store.pending_count("account-one").unwrap(), 0);
+        store.conn.execute_batch("PRAGMA query_only=ON;").unwrap();
+        assert!(store.commit("account-two", "source", &b).is_err());
+        assert_eq!(store.cursor("account-two", "source").unwrap().offset, 0);
+        drop(store);
+        let reopened = ActivityStore::open(&db).unwrap();
+        assert_eq!(
+            reopened.cursor("account-one", "source").unwrap().offset,
+            b.cursor.offset
+        );
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(db).unwrap();
+    }
+    #[test]
+    fn native_same_id_overrides_wrapper_start_and_wire_rejects_contents() {
+        let start = DateTime::parse_from_rfc3339("2026-10-06T18:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-06T18:00:00Z",
+                "response_item",
+                json!({"type":"function_call","name":"mcp","call_id":"operation"}),
+            ),
+            native(
+                "2026-10-06T18:00:02Z",
+                "operation",
+                start + 10,
+                start + 2000,
+                "McpToolCall",
+            ),
+        ]);
+        let b = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        let db = path.with_extension("db");
+        let store = ActivityStore::open(&db).unwrap();
+        store.commit("scope", "source", &b).unwrap();
+        let events = store.pending("scope").unwrap();
+        let start = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::ToolStart)
+            .unwrap();
+        let latest = events
+            .iter()
+            .filter(|e| e.kind == ActivityKind::ToolStart)
+            .max_by_key(|e| e.revision)
+            .unwrap();
+        assert_eq!(latest.provenance, "native");
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            store
+                .wire_revision("scope", &start.event_id, start.revision)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .wire_revision("scope", &latest.event_id, latest.revision)
+                .unwrap(),
+            1
+        );
+        let mut raw = serde_json::to_value(start).unwrap();
+        raw["prompt"] = json!("secret");
+        assert!(serde_json::from_value::<BrokerActivityEventV2>(raw).is_err());
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(db).unwrap();
+    }
+    #[test]
+    fn unsupported_activity_retains_cursor_and_exposes_only_static_error() {
+        let path = file(&[
+            meta(),
+            record(
+                "2026-10-06T18:00:00Z",
+                "event_msg",
+                json!({"type":"task_started","turn_id":"turn"}),
+            ),
+        ]);
+        let store = ActivityStore::open(&path.with_extension("db")).unwrap();
+        let batch = parse_activity(&path, &ActivityCursor::default(), Utc::now()).unwrap();
+        store.commit("scope", "source", &batch).unwrap();
+        let before = store.cursor("scope", "source").unwrap();
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            f,
+            "{}",
+            native(
+                "2026-10-06T18:01:00Z",
+                "private-id",
+                0,
+                0,
+                "FuturePrivateTool"
+            )
+        )
+        .unwrap();
+        assert_eq!(
+            parse_activity(&path, &before, Utc::now()).err().unwrap(),
+            "unsupported_native_item"
+        );
+        assert_eq!(
+            store.cursor("scope", "source").unwrap().offset,
+            before.offset
+        );
+        assert_eq!(store.pending("scope").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn compatibility_guard_respects_replay_window_and_known_non_activity() {
+        let start = instant(&json!("2026-10-06T18:00:00Z")).unwrap();
+        let rows = [
+            meta(),
+            native("2026-10-06T17:59:00Z", "old", 0, 0, "FutureTool"),
+            native("2026-10-06T18:00:01Z", "reasoning", 0, 0, "Reasoning"),
+            native("2026-10-06T18:00:02Z", "plan", 0, 0, "Plan"),
+            native("2026-10-06T18:00:03Z", "compact", 0, 0, "ContextCompaction"),
+            native("2026-10-06T18:01:00Z", "later", 0, 0, "FutureTool"),
+        ];
+        let path = file(&rows);
+        let cursor = ActivityCursor {
+            capture_since: Some(start),
+            capture_until: Some(start + chrono::Duration::minutes(1)),
+            ..Default::default()
+        };
+        let batch = parse_activity(&path, &cursor, Utc::now()).unwrap();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.cursor.capture_until, cursor.capture_until);
+        for typ in ["remote_tool_call", "function_call"] {
+            let payload = if typ == "function_call" {
+                json!({"type":typ,"name":"exec"})
+            } else {
+                json!({"type":typ,"input":"PRIVATE_INPUT"})
+            };
+            let path = file(&[
+                meta(),
+                record("2026-10-06T18:00:01Z", "response_item", payload),
+            ]);
+            let code = parse_activity(&path, &cursor, Utc::now()).err().unwrap();
+            assert_eq!(
+                code,
+                if typ == "function_call" {
+                    "activity_tool_metadata_missing"
+                } else {
+                    "unsupported_tool_record"
+                }
+            );
+        }
+    }
+}

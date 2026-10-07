@@ -97,3 +97,12 @@ it('unions simultaneous starts deterministically without inventing activity', ()
     { start: 0, end: 120, duration_seconds: 120, heartbeat_count: 3 },
   ]);
 });
+
+it('counts distinct contributing heartbeats across disjoint intervals and revisions', () => {
+  const sessions = buildTimelineSessions([
+    block(0, 60, { heartbeat_ids: ['hb-a'] }),
+    block(120, 180, { heartbeat_ids: ['hb-a', 'hb-b'], heartbeat_count: 2 }),
+    block(180, 240, { heartbeat_ids: ['hb-b'] }),
+  ]);
+  expect(sessions[0]).toMatchObject({ heartbeat_count: 2, duration_seconds: 180 });
+});

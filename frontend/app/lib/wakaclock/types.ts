@@ -282,6 +282,7 @@ export interface DurationBlock {
   end: number;
   entity: string;
   heartbeat_count: number;
+  heartbeat_ids?: string[];
   language: null | string;
   project: null | string;
   start: number;
@@ -303,6 +304,7 @@ export interface DurationsResponse {
   date: string;
   range_end?: number;
   range_start?: number;
+  timeout_seconds?: number;
   timezone?: string;
   total: number;
   total_seconds?: number;

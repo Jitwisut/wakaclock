@@ -246,8 +246,13 @@ class WakaclockCliService {
         assign("lastIncrementSource", json.last_increment_source ?? undefined);
         assign("discardedSeconds", optionalNumber(json.discarded_seconds));
         assign("queuedHeartbeats", optionalNumber(json.queued_heartbeats));
+        assign("deliveryDetails", json.delivery_details ?? undefined);
+        assign("dataIncomplete", json.data_incomplete);
+        assign("capture", json.capture ?? undefined);
+        assign("deadLetter", optionalNumber(json.dead_letter));
+        assign("oldestPendingAt", json.oldest_pending_at ?? undefined);
         assign("delivery", failure?.message || failure?.message_code
-            ? `${deliveryLabel(failure.category ?? failure.kind)} - ${failure.message}`
+            ? `${deliveryLabel(failure.category ?? failure.kind)} - ${failure.message ?? failure.message_code}`
             : undefined);
         assign("connection", connection);
         return snapshot;

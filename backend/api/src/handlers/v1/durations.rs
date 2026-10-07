@@ -57,6 +57,7 @@ pub async fn list(
             time: row.start,
             duration: row.duration_seconds,
             heartbeat_count: row.heartbeat_count,
+            heartbeat_ids: row.heartbeat_ids,
             project: row.project,
             language: row.language,
             category: row.category,
@@ -67,6 +68,7 @@ pub async fn list(
 
     Ok(Json(DurationsResponse {
         total: data.len(),
+        timeout_seconds: result.timeout_seconds,
         date,
         timezone: range.timezone.to_string(),
         range_start,
