@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
 
-import { localizedPath, SITE_URL, type SiteLocale } from '@/lib/seo/site';
+import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { COMPATIBLE_EDITORS } from '../editor-wall.data';
 
@@ -8,38 +8,10 @@ import { AttributionFocus } from './attribution-focus';
 import { CountUp } from './count-up';
 import { Scramble } from './scramble';
 import { TIME_COPY } from './time-copy';
-import { TimeNav } from './time-nav';
 import { TimeStage } from './time-stage';
 import { TimeStill } from './time-still';
 
-import type { Metadata } from 'next';
-
 export const TIME_ROOT_ID = 'tx-experience';
-export const TIME_PATHS: Record<SiteLocale, string> = { en: '/time', th: '/time/th' };
-
-export function timePageMetadata(locale: SiteLocale): Metadata {
-  const copy = TIME_COPY[locale];
-  return {
-    metadataBase: new URL(SITE_URL),
-    title: copy.meta.title,
-    description: copy.meta.description,
-    alternates: {
-      canonical: TIME_PATHS[locale],
-      languages: { en: TIME_PATHS.en, th: TIME_PATHS.th, 'x-default': TIME_PATHS.en },
-    },
-    openGraph: {
-      type: 'website',
-      title: copy.meta.title,
-      description: copy.meta.description,
-      url: TIME_PATHS[locale],
-    },
-    // The homepage already carries these claims for search; keep this experience out of
-    // the index so the two do not compete as duplicates.
-    robots: { index: false, follow: true },
-    icons: { icon: { url: '/atoaxis-symbol-v2.png', type: 'image/png' } },
-  };
-}
-
 function Kicker({ children }: { children: string }) {
   return (
     <p className="tx-kicker" data-reveal>
@@ -94,32 +66,23 @@ function EditorMarquee({ editors, label }: { editors: readonly string[]; label: 
   );
 }
 
-export function TimePage({ locale }: { locale: SiteLocale }) {
+/**
+ * The homepage's opening: the time-ring experience. A dark, scroll-driven story over a
+ * sticky 3D stage, server-rendered in full (every chapter, the editor list, the worked
+ * example and the feature list are plain HTML), handing over to the light page below.
+ */
+export function TimeExperience({ locale }: { locale: SiteLocale }) {
   const copy = TIME_COPY[locale];
   const earlyAccess = localizedPath(locale, '/early-access');
 
   return (
-    <div className="tx-root" id={TIME_ROOT_ID}>
-      <a className="tx-skip" href="#tx-main">
-        {copy.skip}
-      </a>
-      <TimeNav
-        copy={copy.nav}
-        earlyAccessHref={earlyAccess}
-        homeHref={localizedPath(locale, '/')}
-        links={[
-          { href: localizedPath(locale, '/'), label: copy.nav.home },
-          { href: localizedPath(locale, '/docs'), label: copy.nav.docs },
-          { href: localizedPath(locale, '/pricing'), label: copy.nav.pricing },
-        ]}
-        otherLocaleHref={TIME_PATHS[locale === 'en' ? 'th' : 'en']}
-        otherLocaleLang={locale === 'en' ? 'th' : 'en'}
-      />
+    // The site-wide reveal animations stay out: this experience choreographs its own.
+    <div className="tx-root" data-motion-owner="experience" id={TIME_ROOT_ID}>
       <TimeStage copy={copy} rootId={TIME_ROOT_ID}>
         <TimeStill />
       </TimeStage>
 
-      <main className="tx-chapters" id="tx-main">
+      <div className="tx-chapters" id="tx-chapters">
         <section
           aria-labelledby="tx-hero-title"
           className="tx-chapter tx-hero"
@@ -231,6 +194,16 @@ export function TimePage({ locale }: { locale: SiteLocale }) {
                 </li>
               ))}
             </ul>
+            <div className="tx-example" data-reveal id="worked-example">
+              <h3 className="tx-h3">{copy.ring.example.heading}</h3>
+              <p className="tx-body">{copy.ring.example.body}</p>
+              {copy.ring.example.interpretation.split('\n\n').map((paragraph) => (
+                <p className="tx-body" key={paragraph}>
+                  {paragraph}
+                </p>
+              ))}
+              <p className="tx-note">{copy.ring.example.source}</p>
+            </div>
           </div>
         </section>
 
@@ -261,6 +234,14 @@ export function TimePage({ locale }: { locale: SiteLocale }) {
             <p className="tx-note" data-reveal>
               {copy.humanAi.caution}
             </p>
+            <p className="tx-evidence" data-reveal>
+              {copy.humanAi.evidence.text} {copy.humanAi.evidence.sourceLabel}:{' '}
+              <cite>
+                <a href={copy.humanAi.evidence.href} rel="noopener noreferrer" target="_blank">
+                  {copy.humanAi.evidence.sourceTitle}
+                </a>
+              </cite>
+            </p>
           </div>
         </section>
 
@@ -271,6 +252,7 @@ export function TimePage({ locale }: { locale: SiteLocale }) {
           data-pin
           id="tx-c4"
         >
+          <span aria-hidden="true" className="tx-anchor" id="features" />
           <div className="tx-pin">
             <div className="tx-track-head">
               <Kicker>{copy.product.kicker}</Kicker>
@@ -280,6 +262,10 @@ export function TimePage({ locale }: { locale: SiteLocale }) {
               <p className="tx-lead" data-reveal>
                 {copy.product.body}
               </p>
+              <h3 className="tx-track-title" data-reveal>
+                {copy.product.featuresHeading}
+                <span>{copy.product.featuresIntro}</span>
+              </h3>
             </div>
             <ol className="tx-track">
               {[
@@ -336,20 +322,19 @@ export function TimePage({ locale }: { locale: SiteLocale }) {
             </p>
             <nav aria-label={copy.begin.navLabel} className="tx-links" data-reveal>
               {copy.begin.links.map((link) => (
-                <a href={localizedPath(locale, link.href)} key={link.href}>
+                <a
+                  href={link.href.startsWith('/') ? localizedPath(locale, link.href) : link.href}
+                  key={link.href}
+                >
                   {link.label}
                 </a>
               ))}
             </nav>
           </div>
         </section>
-      </main>
-
-      <footer className="tx-footer">
-        <p className="tx-footer-brand">AtoAxis</p>
-        <p>{copy.footer.tagline}</p>
-        <p className="tx-footer-dim">{copy.footer.rights}</p>
-      </footer>
+      </div>
+      {/* Dusk to daylight: the dark story hands over to the light page below. */}
+      <div aria-hidden="true" className="tx-handoff" />
     </div>
   );
 }

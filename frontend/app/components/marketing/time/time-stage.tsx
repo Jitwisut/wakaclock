@@ -75,11 +75,13 @@ export function TimeStage({
     if (!root) return;
     root.dataset.scene = status;
     root.dataset.midnight = String(midnight);
-  }, [midnight, rootId, status]);
+    // Lets the host page (the site nav, its floating index) dress for the dark story.
+    root.dataset.onstage = String(visible);
+  }, [midnight, rootId, status, visible]);
 
   // Stop rendering entirely once the visitor has scrolled past the experience.
   useEffect(() => {
-    const main = document.querySelector('#tx-main');
+    const main = document.querySelector('#tx-chapters');
     if (!main) return;
     const observer = new IntersectionObserver(([entry]) =>
       setVisible(Boolean(entry?.isIntersecting))

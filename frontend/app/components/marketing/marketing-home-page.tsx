@@ -18,12 +18,12 @@ import {
 import { AnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { CtaSection } from './cta-section';
-import { CinematicHome } from './experience/cinematic-home';
 import { FaqSection } from './faq-section';
 import { EN_HOME, TH_HOME } from './marketing-copy';
 import { PricingSection } from './pricing-section';
 import { Bullets, MUTED_TEXT, Section } from './prose';
 import { QuickStartSection } from './quick-start-section';
+import { TimeExperience } from './time/time-experience';
 
 const HOME_COPY = { en: EN_HOME, th: TH_HOME } as const;
 
@@ -84,13 +84,13 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
   return (
     <>
       {/*
-        The six-chapter experience replaces the previous hero, editor wall, workspace
-        illustration, feature list and worked example. Their indexable content moved with
-        them: the category eyebrow and answer paragraph (hero), the compatible-editor list
-        (chapter 2), the worked example's id and interpretation (chapter 4) and the feature
-        list with its #features anchor (chapter 5). Everything below is unchanged.
+        The time-ring experience opens the page. It carries the indexable content of the
+        previous hero and chapters: the category eyebrow and answer paragraph (hero), the
+        compatible-editor list (chapter 2), the worked example with its #worked-example id
+        (chapter 3) and the feature list with its #features anchor (chapter 5). Everything
+        below is unchanged.
       */}
-      <CinematicHome locale={locale} />
+      <TimeExperience locale={locale} />
       <QuickStartSection locale={locale} />
       <div className="axis-briefing mkt-story-grid">
         {/*

@@ -2,10 +2,6 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ThaiTimeLayout from '@/app/(time-th)/layout';
-import ThaiTimeRoute, { metadata as thaiMetadata } from '@/app/(time-th)/time/th/page';
-import TimeLayout from '@/app/(time-en)/layout';
-import TimeRoute, { metadata as englishMetadata } from '@/app/(time-en)/time/page';
 import { AttributionFocus } from '@/components/marketing/time/attribution-focus';
 import { ClockReadout } from '@/components/marketing/time/clock-readout';
 import { CountUp } from '@/components/marketing/time/count-up';
@@ -61,8 +57,7 @@ import {
   TRAIL_MINUTES,
   warpTarget,
 } from '@/components/marketing/time/time-keyframes';
-import { TimeNav } from '@/components/marketing/time/time-nav';
-import { TimePage, timePageMetadata } from '@/components/marketing/time/time-page';
+import { TimeExperience } from '@/components/marketing/time/time-experience';
 import {
   chooseTimeQuality,
   type DeviceSignals,
@@ -78,9 +73,6 @@ import {
   useTimeUi,
 } from '@/components/marketing/time/time-store';
 import { useTimeScroll } from '@/components/marketing/time/use-time-scroll';
-
-// next/font is a build-time transform with no runtime implementation under Vitest.
-vi.mock('@/lib/fonts', () => ({ fontVariables: 'font-vars' }));
 
 // The WebGL scene never enters the test graph: the dynamic loader resolves to a stub.
 vi.mock('@/components/marketing/time/scene/time-canvas', () => ({ default: () => null }));
@@ -571,14 +563,14 @@ describe('time-copy', () => {
 
   it('keeps the Thai copy structurally identical to the English copy', () => {
     expect(shape(TIME_COPY.th)).toEqual(shape(TIME_COPY.en));
-    expect(TIME_COPY.en.begin.links.every((link) => link.href.startsWith('/'))).toBe(true);
+    expect(TIME_COPY.en.begin.links.every((link) => /^[/#]/.test(link.href))).toBe(true);
   });
 });
 
-describe('TimePage', () => {
+describe('TimeExperience', () => {
   it('server-renders every chapter with one h1, in both languages', () => {
     for (const locale of ['en', 'th'] as const) {
-      const { unmount } = render(<TimePage locale={locale} />);
+      const { unmount } = render(<TimeExperience locale={locale} />);
       const copy = TIME_COPY[locale];
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
       for (const heading of [
@@ -592,111 +584,47 @@ describe('TimePage', () => {
       }
       expect(document.querySelectorAll('[data-chapter]')).toHaveLength(CHAPTER_COUNT);
       expect(document.querySelector('.tx-still')).not.toBeNull();
+      expect(document.querySelector('[data-motion-owner="experience"]')).not.toBeNull();
       unmount();
     }
   });
 
-  it('routes each locale and links the other language', () => {
-    render(<TimeRoute />);
-    expect(screen.getByRole('link', { name: TIME_COPY.en.nav.languageLabel })).toHaveAttribute(
+  it('keeps the homepage content that search and the table of contents rely on', () => {
+    render(<TimeExperience locale="en" />);
+    const copy = TIME_COPY.en;
+    const example = document.querySelector('#worked-example') as HTMLElement;
+    expect(
+      within(example).getByRole('heading', { name: copy.ring.example.heading })
+    ).toBeInTheDocument();
+    expect(example).toHaveTextContent(copy.ring.example.source);
+    expect(document.querySelector('#features')).not.toBeNull();
+    for (const feature of copy.product.features) {
+      expect(screen.getByRole('heading', { name: feature.title })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('link', { name: copy.humanAi.evidence.sourceTitle })).toHaveAttribute(
       'href',
-      '/time/th'
+      copy.humanAi.evidence.href
     );
     expect(screen.getAllByRole('link', { name: /Join early access/ })[0]).toHaveAttribute(
       'href',
       '/early-access'
     );
-  });
-
-  it('localises the Thai route and its links', () => {
-    render(<ThaiTimeRoute />);
-    expect(screen.getByRole('link', { name: TIME_COPY.th.nav.languageLabel })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: copy.hero.secondary })).toHaveAttribute(
       'href',
-      '/time'
-    );
-    const nav = screen.getByRole('navigation', { name: TIME_COPY.th.nav.label });
-    expect(within(nav).getByRole('link', { name: TIME_COPY.th.nav.docs })).toHaveAttribute(
-      'href',
-      '/th/docs'
+      '/wakatime-alternative'
     );
   });
 
-  it('declares canonical, hreflang and noindex metadata', () => {
-    expect(englishMetadata).toEqual(timePageMetadata('en'));
-    expect(thaiMetadata.alternates?.canonical).toBe('/time/th');
-    expect(englishMetadata.alternates?.languages).toEqual({
-      en: '/time',
-      th: '/time/th',
-      'x-default': '/time',
-    });
-    expect(englishMetadata.robots).toEqual({ index: false, follow: true });
-  });
-
-  it('wraps each locale in its own dark document', () => {
-    const en = renderToStaticMarkup(
-      <TimeLayout>
-        <p>child</p>
-      </TimeLayout>
-    );
-    const th = renderToStaticMarkup(
-      <ThaiTimeLayout>
-        <p>child</p>
-      </ThaiTimeLayout>
-    );
-    expect(en).toContain('lang="en"');
-    expect(th).toContain('lang="th"');
-    expect(en).toContain('class="tx-body"');
-  });
-});
-
-describe('TimeNav', () => {
-  const props = {
-    copy: TIME_COPY.en.nav,
-    earlyAccessHref: '/early-access',
-    homeHref: '/',
-    links: [{ href: '/docs', label: 'Docs' }],
-    otherLocaleHref: '/time/th',
-    otherLocaleLang: 'th' as const,
-  };
-
-  it('darkens on scroll, batching events per frame', () => {
-    const { container, unmount } = render(<TimeNav {...props} />);
-    const header = container.querySelector('header') as HTMLElement;
-    expect(header.dataset.scrolled).toBe('false');
-    Object.defineProperty(window, 'scrollY', { configurable: true, value: 300 });
-    fireEvent.scroll(window);
-    fireEvent.scroll(window);
-    expect(frames.size).toBe(1);
-    act(() => {
-      for (const callback of frames.values()) callback(0);
-    });
-    expect(header.dataset.scrolled).toBe('true');
-    fireEvent.scroll(window);
-    unmount();
-    expect(window.cancelAnimationFrame).toHaveBeenCalled();
-  });
-
-  it('unmounts without a pending frame', () => {
-    const { unmount } = render(<TimeNav {...props} />);
-    frames.clear();
-    unmount();
-  });
-
-  it('opens and closes the menu by button, Escape and links', () => {
-    render(<TimeNav {...props} />);
-    const toggle = screen.getByRole('button', { name: props.copy.open });
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(window, { key: 'Enter' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(window, { key: 'Escape' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-    for (const name of ['Docs', props.copy.languageLabel, props.copy.join]) {
-      fireEvent.click(toggle);
-      fireEvent.click(screen.getByRole('link', { name }));
-      expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    }
+  it('localises paths in Thai and leaves in-page anchors alone', () => {
+    render(<TimeExperience locale="th" />);
+    const nav = screen.getByRole('navigation', { name: TIME_COPY.th.begin.navLabel });
+    const hrefs = within(nav)
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('#features');
+    expect(
+      hrefs.filter((href) => href?.startsWith('/')).every((href) => href?.startsWith('/th/'))
+    ).toBe(true);
   });
 });
 
@@ -749,7 +677,7 @@ describe('TimeStage', () => {
   function mountRoot() {
     const root = document.createElement('div');
     root.id = 'tx-root-test';
-    root.innerHTML = `<main id="tx-main"><section data-chapter="0"></section><section data-chapter="1"></section></main>`;
+    root.innerHTML = `<div id="tx-chapters"><section data-chapter="0"></section><section data-chapter="1"></section></div>`;
     document.body.append(root);
     return root;
   }
@@ -771,7 +699,10 @@ describe('TimeStage', () => {
 
   it('loads the scene when idle, pauses it off screen and tracks the chapter', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as RenderingContext);
-    Object.assign(window, { requestIdleCallback: (run: () => void) => (run(), 1) });
+    Object.assign(window, {
+      requestIdleCallback: (run: () => void) => (run(), 1),
+      cancelIdleCallback: () => {},
+    });
     Object.defineProperty(document, 'readyState', { configurable: true, value: 'complete' });
     const root = mountRoot();
     render(
@@ -783,7 +714,7 @@ describe('TimeStage', () => {
     expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-active', 'true');
     expect(screen.getByRole('status')).toHaveTextContent(TIME_COPY.en.loader.label);
 
-    const visibility = observers.find((record) => record.targets[0]?.id === 'tx-main');
+    const visibility = observers.find((record) => record.targets[0]?.id === 'tx-chapters');
     intersect(visibility as ObserverRecord, root, false);
     expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-active', 'false');
     act(() => {
