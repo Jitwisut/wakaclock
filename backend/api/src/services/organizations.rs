@@ -935,6 +935,12 @@ impl OrganizationsService {
             .await?;
         let mut client = self.required()?.transaction_client().await?;
         let tx = client.transaction().await?;
+        // Serialize the first opt-in and its upsert before the versioning trigger.
+        tx.query_one(
+            "SELECT id FROM organizations WHERE id=$1 FOR UPDATE",
+            &[&organization_id],
+        )
+        .await?;
         let row = tx
             .query_opt(
                 "INSERT INTO organization_analytics_consents
@@ -975,6 +981,7 @@ impl OrganizationsService {
         )
         .await?;
         tx.commit().await?;
+        self.mirror_team_privacy().await?;
         Ok(saved)
     }
 
@@ -1029,7 +1036,7 @@ impl OrganizationsService {
             .client()
             .query(
                 "SELECT id, actor_user_id, action, resource_type, resource_id, metadata, created_at
-                 FROM audit_logs WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 200",
+                 FROM audit_logs WHERE organization_id = $1 AND created_at >= now() - interval '12 months' ORDER BY created_at DESC LIMIT 200",
                 &[&organization_id],
             )
             .await
@@ -1077,6 +1084,20 @@ impl OrganizationsService {
             )
             .await
             .context("failed to write immutable organization audit log")?;
+        self.mirror_team_privacy().await?;
+        Ok(())
+    }
+
+    async fn mirror_team_privacy(&self) -> Result<()> {
+        if let Ok(path) = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH") {
+            let pg = self
+                .postgres
+                .as_ref()
+                .context("Team privacy requires PostgreSQL")?;
+            crate::repository::team_trust::TeamTrustRepository::new(pg.clone())
+                .export_registry(std::path::Path::new(&path)).await
+                .context("Team sharing/access changed; independent privacy ledger update must be retried")?;
+        }
         Ok(())
     }
 

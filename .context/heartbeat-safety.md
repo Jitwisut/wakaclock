@@ -56,6 +56,11 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-08 (Team Phase 2): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ closed-week privacy registry, consent/read concurrency, Team-only retention/restore guard, measurement health/Trust UI และ canary day-scoped revisions พร้อม isolated fixtures. ไม่เปลี่ยน heartbeat/capture/duration baseline และไม่อนุญาต push/merge เข้า main.
+
+การอนุมัติเผยแพร่ 2026-10-08 (Team Phase 2): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” หลังการส่งมอบ Phase 2 อนุญาต commit/push source, migration, tests และเอกสารของงานนี้ไปยัง `codex/atoaxis-team` รวม lifecycle/recovery และ canary ที่อยู่ในแผนที่อนุมัติไว้ ไม่รวม credential, incident output, backup หรือ runtime/build artifacts; ไม่อนุญาต push/merge เข้า main และไม่ใช่การอนุมัติ production release.
+
+
 การอนุมัติ 2026-10-08 (Team): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ AtoAxis Team: metadata-only, consent มีเวอร์ชัน/เวลาเริ่มแชร์, tenant/team/repository scope, suppression ขั้นต่ำ 5 ผู้ร่วมข้อมูลจริง, GitHub durable inbox, confirmed work links, provider certification และ billing ที่ปิดจนมี configuration/evidence. รักษา heartbeat ID/timestamp และ baseline ทุกแถว; ทำบน branch `codex/...` เท่านั้น. ไม่อนุญาต push/merge เข้า main และไม่ถือว่า external release gates ผ่านโดยไม่มีผลทดสอบจริง.
 
 การอนุมัติเผยแพร่ 2026-10-08 (Team): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” อนุญาต commit/push งาน Team foundation ที่ทำเสร็จไปยัง `codex/atoaxis-team` พร้อมบันทึกกฎห้าม push เข้า main. ไม่รวม credential, ข้อมูล incident ส่วนตัว, backup หรือ runtime/build artifacts; ไม่อนุญาต push/merge เข้า main และไม่ใช่การอนุมัติ production release.
@@ -211,3 +216,5 @@ Reference หลักสำหรับ semantics คือ [docs/current-syste
 - รายงานว่า default production mode และ rollback behavior ยังเหมือนเดิม
 
 ห้ามสรุปว่า time-counting ถูกต้องจาก compile ผ่านอย่างเดียว.
+
+Phase 2 lifecycle continuation: ตรวจพบ LaunchAgent เดิมทั้งสามมี persisted disabled override; แก้ explicit installer ให้ enable ก่อน bootstrap และเพิ่ม fixture จำลอง disabled state ภายในขอบเขต lifecycle/recovery ที่ผู้ใช้อนุมัติ ไม่เปลี่ยน producer/capture/duration/timeout หรือส่ง event สังเคราะห์เข้า account จริง.

@@ -26,9 +26,18 @@ impl TeamWebhookRepository {
             !id.is_empty() && id.len() <= 200 && !id.chars().any(char::is_control),
             "invalid delivery identity"
         );
+        let mut client = self.postgres.transaction_client().await?;
+        let tx = client.transaction().await?;
+        // Serialize redelivery with retention disposition + deletion, even across processes.
+        tx.query_one("SELECT pg_advisory_xact_lock(74103032)", &[])
+            .await?;
+        if let Some(row)=tx.query_opt("SELECT payload_hash FROM team_webhook_dispositions WHERE provider='github' AND delivery_id=$1",&[&id]).await? {
+            anyhow::ensure!(row.get::<_,String>(0)==hash,"delivery identity conflict");
+            tx.commit().await?;
+            return Ok(());
+        }
         let value = serde_json::to_value(metadata)?;
-        let row = self
-            .postgres
+        let row = tx
             .query_opt(
                 "INSERT INTO team_webhook_inbox(provider, delivery_id, payload_hash, metadata)
              VALUES ('github', $1, $2, $3) ON CONFLICT(provider, delivery_id)
@@ -39,6 +48,7 @@ impl TeamWebhookRepository {
             .await
             .context("durable webhook acceptance failed")?;
         anyhow::ensure!(row.is_some(), "delivery identity conflict");
+        tx.commit().await?;
         Ok(())
     }
 

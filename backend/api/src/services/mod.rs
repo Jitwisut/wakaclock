@@ -45,8 +45,8 @@ pub mod reprocess;
 pub mod stats;
 pub mod summary;
 pub mod team;
-pub mod team_insights;
 pub mod team_billing;
+pub mod team_insights;
 pub mod team_release;
 pub mod team_webhooks;
 pub mod user;
@@ -135,3 +135,5 @@ mod tests {
         }
     }
 }
+
+pub mod team_trust;

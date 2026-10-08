@@ -146,6 +146,13 @@ export function TeamInsightsPanel({
     onMutate: async () => {
       await client.cancelQueries({ queryKey: insightsKey });
       client.removeQueries({ queryKey: insightsKey });
+      await client.cancelQueries({
+        queryKey: [...wakaclockKeys.all, 'team-receipt', userId, organizationId],
+      });
+      client.removeQueries({
+        queryKey: [...wakaclockKeys.all, 'team-receipt', userId, organizationId],
+      });
+      client.removeQueries({ queryKey: wakaclockKeys.teamHealth(userId, organizationId) });
     },
     onSettled: async () => {
       await Promise.all([
@@ -154,9 +161,29 @@ export function TeamInsightsPanel({
       ]);
     },
   });
+  const exportScope = `${userId}:${organizationId}:${teamId ?? ''}:${start}:${end}:${timezone}:${consent.data?.version}:${insights.data?.generation}`;
+  const currentExportScope = React.useRef<null | string>(exportScope);
+  currentExportScope.current =
+    sharing.isPending ||
+    consent.isFetching ||
+    consent.isError ||
+    insights.isFetching ||
+    insights.isError
+      ? null
+      : exportScope;
+  React.useEffect(
+    () => () => {
+      currentExportScope.current = null;
+    },
+    []
+  );
   const download = useMutation({
-    mutationFn: () => exportTeamInsights(organizationId, start, end, timezone, teamId),
-    onSuccess: (csv) => {
+    mutationFn: async () => ({
+      scope: exportScope,
+      csv: await exportTeamInsights(organizationId, start, end, timezone, teamId),
+    }),
+    onSuccess: ({ csv, scope }) => {
+      if (currentExportScope.current !== scope) return;
       const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -165,15 +192,16 @@ export function TeamInsightsPanel({
       URL.revokeObjectURL(url);
     },
   });
-  const report = insights.isError || insights.isFetching ? undefined : insights.data;
-  const workItems = work.isError || work.isFetching ? undefined : work.data;
+  const report =
+    sharing.isPending || insights.isError || insights.isFetching ? undefined : insights.data;
+  const workItems = sharing.isPending || work.isError || work.isFetching ? undefined : work.data;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" key={`${userId}:${organizationId}`}>
       <section aria-label="Sharing preview" className="rounded-md border p-3">
         <p className="font-medium">Your sharing choices</p>
         <QueryState error={consent.error} isLoading={consent.isLoading}>
-          {consent.data && (
+          {!consent.isError && !consent.isFetching && consent.data && (
             <div className="mt-2 space-y-2">
               <p>Preview: {consent.data.preview.metadata.join(', ')}.</p>
               <p className="text-muted-foreground">
@@ -281,7 +309,7 @@ export function TeamInsightsPanel({
           {workItems?.map((item) => (
             <WorkReceiptPanel
               item={item}
-              key={`${item.repository_id}:${item.external_id}`}
+              key={`${userId}:${organizationId}:${teamId}:${item.repository_id}:${item.external_id}`}
               organizationId={organizationId}
               teamId={teamId}
               userId={userId}

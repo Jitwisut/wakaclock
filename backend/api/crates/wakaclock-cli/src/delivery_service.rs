@@ -148,9 +148,26 @@ pub(crate) fn bootstrap_launch_agent(
     label: &str,
     path: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    bootstrap_launch_agent_using(std::path::Path::new("launchctl"), uid, label, path)
+}
+fn bootstrap_launch_agent_using(
+    launcher: &std::path::Path,
+    uid: &str,
+    label: &str,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     let domain = format!("gui/{uid}");
+    // Only an explicit install reaches this helper. Clear the persistent launchd override.
+    if !Command::new(launcher)
+        .args(["enable", &format!("{domain}/{label}")])
+        .output()?
+        .status
+        .success()
+    {
+        return Err("launchctl enable failed".into());
+    }
     for _ in 0..30 {
-        if !Command::new("launchctl")
+        if !Command::new(launcher)
             .args(["print", &format!("{domain}/{label}")])
             .output()?
             .status
@@ -161,7 +178,7 @@ pub(crate) fn bootstrap_launch_agent(
         std::thread::sleep(Duration::from_millis(500));
     }
     for _ in 0..3 {
-        if Command::new("launchctl")
+        if Command::new(launcher)
             .args(["bootstrap", &domain])
             .arg(path)
             .output()?
@@ -217,4 +234,43 @@ pub fn install(recovery_probe: bool) -> Result<Value, Box<dyn std::error::Error>
         }
     }
     Ok(status())
+}
+
+#[cfg(all(test, unix))]
+mod launchd_recovery_tests {
+    #[test]
+    fn explicit_install_clears_persisted_disabled_state_before_bootstrap() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("atoaxis-launchd-fixture-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let launcher = directory.join("launchctl-fixture");
+        std::fs::write(
+            &launcher,
+            br#"#!/bin/sh
+case "$1" in
+  enable) touch "$0.enabled"; exit 0 ;;
+  print) exit 1 ;;
+  bootstrap) test -f "$0.enabled"; exit $? ;;
+  *) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Simulated persisted-disabled job: bootstrap fails until the enable action runs.
+        assert!(!std::process::Command::new(&launcher)
+            .arg("bootstrap")
+            .status()
+            .unwrap()
+            .success());
+        super::bootstrap_launch_agent_using(
+            &launcher,
+            "fixture-user",
+            "fixture-service",
+            &directory.join("fixture.plist"),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

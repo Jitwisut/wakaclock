@@ -15,6 +15,26 @@ spec.loader.exec_module(runtime)
 
 
 class RecoveryBindingTests(unittest.TestCase):
+    def test_reinstall_enables_persistently_disabled_service_before_bootstrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); home=root/'home'; runtime_dir=home/'.wakaclock/runtime'
+            runtime_dir.mkdir(parents=True); (home/'Library/LaunchAgents').mkdir(parents=True)
+            for name in ['backend/api/.env','deployment/heartbeat-local/compose.yaml','backend/api/target/debug/wakaclock-server']:
+                source=root/name; source.parent.mkdir(parents=True,exist_ok=True); source.write_text('fixture-only')
+            manifest=home/'.wakaclock/backend-runtime-binding.json'; manifest.write_text('{}')
+            disabled=True
+            def control(command, **kwargs):
+                nonlocal disabled
+                if command[1]=='enable': disabled=False
+                code=1 if command[1]=='print' else (5 if command[1]=='bootstrap' and disabled else 0)
+                return types.SimpleNamespace(returncode=code)
+            with patch.object(runtime,'ROOT',root), patch.object(runtime,'RUNTIME',runtime_dir), \
+                    patch.object(runtime,'MANIFEST',manifest), patch.object(runtime,'verify_binding'), \
+                    patch.object(runtime.pathlib.Path,'home',return_value=home), \
+                    patch.object(runtime.subprocess,'run',side_effect=control), patch.object(runtime.time,'sleep'):
+                runtime.install()
+            self.assertFalse(disabled)
+
     def test_missing_volume_blocks_start_without_creating_a_database(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

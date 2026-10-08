@@ -1,6 +1,12 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
-import type { TeamConsent, TeamInsights, TeamWorkItem, WorkReceipt } from './team-types';
+import type {
+  TeamConsent,
+  TeamInsights,
+  TeamMeasurementHealth,
+  TeamWorkItem,
+  WorkReceipt,
+} from './team-types';
 import type { V2Envelope } from './types';
 
 export async function getTeamConsent(organizationId: string) {
@@ -61,4 +67,12 @@ export async function exportTeamInsights(
     { params: { start, end, timezone, team_id: teamId }, responseType: 'text' }
   );
   return response.data;
+}
+
+export async function getTeamMeasurementHealth(organizationId: string) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<TeamMeasurementHealth>>(
+      `/organizations/${organizationId}/measurement-health`
+    )
+  );
 }

@@ -113,6 +113,24 @@ async fn projection(
         .map_err(error)
 }
 
+async fn final_projection_gate(
+    state: &AppState,
+    headers: &HeaderMap,
+    report: &TeamInsights,
+) -> Result<(), ApiError> {
+    let actor = require_scope(state, headers, "read_org_dashboards").await?;
+    state
+        .team_insights_service
+        .validate_response(
+            actor,
+            report.organization_id,
+            report.team_id,
+            report.generation,
+        )
+        .await
+        .map_err(error)
+}
+
 pub async fn insights(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -121,6 +139,7 @@ pub async fn insights(
 ) -> Result<(HeaderMap, Json<V2Envelope<TeamInsights>>), ApiError> {
     let report = projection(&state, &headers, org, query).await?;
     let timezone = report.timezone.clone();
+    final_projection_gate(&state, &headers, &report).await?;
     let mut cache = HeaderMap::new();
     cache.insert("cache-control", "private, no-store".parse().unwrap());
     Ok((
@@ -141,11 +160,12 @@ pub async fn export(
 ) -> Result<axum::response::Response, ApiError> {
     // No independent export SQL and no stored signed download to bypass withdrawal.
     let report = projection(&state, &headers, org, query).await?;
-    let metric = report.estimated_ai_cost_microusd;
+    let metric = &report.estimated_ai_cost_microusd;
     let csv = format!("start,end,timezone,currency,estimated_ai_cost_microusd,status,coverage,calculation_version\n{},{},{},USD,{},{},{},{}\n",
         report.start, report.end, report.timezone,
         metric.value.map(|v| v.to_string()).unwrap_or_default(), metric.status,
         metric.coverage.map(|v| v.to_string()).unwrap_or_default(), metric.calculation_version);
+    final_projection_gate(&state, &headers, &report).await?;
     Ok((
         [
             ("content-type", "text/csv; charset=utf-8"),
@@ -233,4 +253,20 @@ pub async fn decide(
         "UTC",
         None,
     )))
+}
+
+pub async fn measurement_health(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
+    let data = state
+        .team_insights_service
+        .measurement_health(actor, org, &state.delivery_status_service)
+        .await
+        .map_err(error)?;
+    let mut cache = HeaderMap::new();
+    cache.insert("cache-control", "private, no-store".parse().unwrap());
+    Ok((cache, Json(envelope(data, "UTC", None))))
 }

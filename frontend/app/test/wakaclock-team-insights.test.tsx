@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -113,6 +113,49 @@ describe('Team privacy and freshness presentation', () => {
     expect(
       screen.queryByRole('button', { name: 'Export consent-filtered CSV' })
     ).not.toBeInTheDocument();
+  });
+
+  it('does not download an export that finishes after the organization changes', async () => {
+    api.insights.mockResolvedValue({
+      generation: 1,
+      start: '2026-09-28',
+      end: '2026-10-04',
+      timezone: 'Asia/Bangkok',
+      estimated_ai_cost_microusd: { ...metric, value: 10, status: 'partial' },
+      merged_pr_cost_microusd: metric,
+      measurement_health: [],
+      provider_breakdown: [],
+    });
+    let finish!: (csv: string) => void;
+    api.export.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const blob = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: blob, revokeObjectURL: vi.fn() });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (org: string) => (
+      <QueryClientProvider client={client}>
+        <TeamInsightsPanel
+          organizationId={org}
+          start="2026-09-28"
+          end="2026-10-04"
+          timezone="Asia/Bangkok"
+        />
+      </QueryClientProvider>
+    );
+    const view = render(ui('org-a'));
+    const button = await screen.findByRole('button', { name: 'Export consent-filtered CSV' });
+    fireEvent.click(button);
+    await act(async () => {});
+    view.rerender(ui('org-b'));
+    await act(async () => {
+      finish('private CSV');
+    });
+    expect(blob).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it('separates account, tenant, team, dates and timezone in cache keys', () => {
