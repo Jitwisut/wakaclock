@@ -23,6 +23,8 @@ export const wakaclockKeys = {
       itemId,
       teamId,
     ] as const,
+  teamHealth: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'team-health', userId, organizationId] as const,
   teamConsent: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'team-consent', userId, organizationId] as const,
   teamInsights: (

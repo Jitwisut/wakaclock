@@ -58,7 +58,25 @@ impl TeamInsightsService {
         if !self.enabled || !repo.enabled(org).await? {
             return Err(TeamError::Disabled.into());
         }
+        crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+            .guard(org)
+            .await?;
         Ok(repo)
+    }
+
+    /// Final gate after response/CSV construction, shared with every projection channel.
+    pub async fn validate_response(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        team: Option<Uuid>,
+        generation: i64,
+    ) -> Result<()> {
+        let repo = self.readable(actor, org, team).await?;
+        if repo.generation(org).await? != generation {
+            return Err(TeamError::ProjectionChanged.into());
+        }
+        Ok(())
     }
 
     pub async fn consent(&self, actor: Uuid, org: Uuid) -> Result<TeamConsent> {
@@ -74,12 +92,19 @@ impl TeamInsightsService {
             .require(actor, org, OrganizationAction::ManageSecurity, None)
             .await?;
         let evidence = self.repo()?.release_evidence(org).await?;
+        let local = self.repo()?.postgres.query("SELECT gate,passed,evidence_ref,checked_at,build FROM team_release_evidence WHERE organization_id=$1 AND evidence_scope='local' ORDER BY gate",&[&org]).await?.into_iter().map(|row|serde_json::json!({"gate":row.get::<_,String>(0),"passed":row.get::<_,bool>(1),"evidence_ref":row.get::<_,String>(2),"checked_at":row.get::<_,DateTime<Utc>>(3),"build":row.get::<_,Option<String>>(4)})).collect::<Vec<_>>();
         Ok(serde_json::json!({
             "receiver_enabled": self.enabled,
             "organization_enabled": self.repo()?.enabled(org).await?,
             "production_ready": false,
             "checkout_available": false,
-            "implementation_stage": "privacy_and_metadata_receiver",
+            "implementation_stage": "team_trust_local_verification",
+            "evidence_scope": {"local": local, "external": "unconfirmed"},
+            "evaluated_at": Utc::now(),
+            "build": option_env!("ATOAXIS_BUILD_REVISION"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "weekly_aggregates": true,
+            "report_timezone": crate::repository::team_trust::TeamTrustRepository::new(self.repo()?.postgres.clone()).policy(org).await?,
             "gates": crate::services::team_release::release_gates(&evidence),
             "billing_packages": crate::services::team_billing::PACKAGES,
             "trial_days": crate::services::team_billing::TRIAL_DAYS,
@@ -100,6 +125,15 @@ impl TeamInsightsService {
             range.days_included() <= 90,
             TeamError::Invalid("Team range exceeds 90 days")
         );
+        let trust = crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone());
+        let timezone = trust.policy(org).await?;
+        crate::services::team_trust::validate_week(&range, &timezone, Utc::now()).map_err(
+            |_| {
+                TeamError::Invalid(
+                    "request one closed Monday-Sunday week in the organization timezone",
+                )
+            },
+        )?;
         let (from, to) = range.unix_bounds();
         anyhow::ensure!(
             from >= 0.0 && to <= u32::MAX as f64,
@@ -113,6 +147,45 @@ impl TeamInsightsService {
         let users: Vec<_> = scope.contributors.iter().map(|c| c.user_id).collect();
         let facts = repo.facts(&users, from as u32, to as u32).await?;
         let mut projection = project_cost(&facts, &scope, &range)?;
+        // Hash metadata in memory only. The registry stores no raw usage or credentials.
+        use sha2::{Digest, Sha256};
+        let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&facts)?));
+        let people = facts
+            .iter()
+            .filter(|f| {
+                scope
+                    .projects
+                    .contains(&f.project_id.unwrap_or(Uuid::nil()))
+                    && f.project_attribution_method.as_deref() == Some("explicit_project_hint")
+                    && scope.contributors.iter().any(|c| {
+                        c.user_id == f.user_id
+                            && DateTime::from_timestamp(f.event_time as i64, 0)
+                                .is_some_and(|at| at >= c.aggregate_from)
+                    })
+            })
+            .map(|f| f.user_id)
+            .collect();
+        if projection.0.value.is_some()
+            && !trust
+                .release(
+                    org,
+                    range.start,
+                    &team.map_or_else(|| "organization".into(), |id| id.to_string()),
+                    scope.generation,
+                    &fingerprint,
+                    &people,
+                )
+                .await?
+        {
+            projection = (Metric::unavailable("privacy_suppressed"), vec![]);
+        }
+
+        // No numeric publication is acknowledged before its independent history is durable.
+        if projection.0.value.is_some() {
+            let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")?;
+            trust.export_registry(std::path::Path::new(&path)).await?;
+        }
+
         // Read-time checks are shared by API and CSV, no stale report cache can bypass consent.
         self.authorization
             .require_team_read(actor, org, team)
@@ -120,6 +193,7 @@ impl TeamInsightsService {
         if !repo.enabled(org).await? || repo.generation(org).await? != scope.generation {
             return Err(TeamError::ProjectionChanged.into());
         }
+        self.readable(actor, org, team).await?;
         // Capture and delivery coverage are independent from token/pricing coverage.
         // Until those are projected with contributor suppression, completeness is unconfirmed.
         if projection.0.value.is_some() {
@@ -152,6 +226,52 @@ impl TeamInsightsService {
         })
     }
 
+    pub async fn measurement_health(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        delivery: &crate::services::delivery_status::DeliveryStatusService,
+    ) -> Result<serde_json::Value> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        let now = Utc::now();
+        let devices = delivery
+            .latest(actor)
+            .await?
+            .into_iter()
+            .map(|entry| {
+                crate::model::delivery_status::DeliveryStatusDevice::from_received(entry, now)
+            })
+            .collect::<Vec<_>>();
+        let own_capture = crate::services::team_trust::device_health(&devices, true, now);
+        let own_delivery = crate::services::team_trust::device_health(&devices, false, now);
+        let trust =
+            crate::repository::team_trust::TeamTrustRepository::new(self.repo()?.postgres.clone());
+        let registry_ready = trust.guard(org).await.is_ok();
+        let retention = trust
+            .postgres
+            .query_opt(
+                "SELECT CASE WHEN s.generation=r.generation AND s.error_code IS NULL AND j.error_code IS NULL AND j.completed_at IS NOT NULL AND s.completed_at IS NOT NULL THEN LEAST(j.completed_at,s.completed_at) ELSE NULL END AS completed_at FROM team_cleanup_jobs j LEFT JOIN team_store_cleanup s USING(organization_id) JOIN team_rollouts r USING(organization_id) WHERE j.organization_id=$1",
+                &[&org],
+            )
+            .await?;
+        let at = retention
+            .as_ref()
+            .and_then(|r| r.get::<_, Option<DateTime<Utc>>>("completed_at"));
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        Ok(
+            serde_json::json!({"checked_at":now,"report_timezone":trust.policy(org).await?,"own":{"capture":own_capture,"delivery":own_delivery},
+            "team":{"capture":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
+              "delivery":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
+              "integration":{"status":"unconfirmed","reason":"github_reconciliation_not_implemented","scope":"organization"},
+              "retention":{"status":if at.is_some_and(|t|(0..=7200).contains(&now.signed_duration_since(t).num_seconds())) {"observed"}else{"unconfirmed"},"updated_at":at,"reason":"postgres_and_clickhouse_team_cleanup_checkpoints","scope":"organization"}},
+            "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_registry_guard"}}),
+        )
+    }
+
     pub async fn work_items(
         &self,
         actor: Uuid,
@@ -167,6 +287,7 @@ impl TeamInsightsService {
         if repo.generation(org).await? != generation {
             return Err(TeamError::ProjectionChanged.into());
         }
+        self.readable(actor, org, team).await?;
         Ok(items)
     }
 
@@ -249,6 +370,7 @@ impl TeamInsightsService {
         if !repo.enabled(org).await? || repo.generation(org).await? != scope.generation {
             return Err(TeamError::ProjectionChanged.into());
         }
+        self.readable(actor, org, team).await?;
         let sharing = if sessions.is_empty() {
             "withheld_or_unlinked"
         } else {
@@ -303,7 +425,8 @@ impl TeamInsightsService {
         let consent = repo.consent(org, actor).await?;
         let from = consent
             .aggregate_from
-            .ok_or(TeamError::Invalid("aggregate consent required"))?;
+            .ok_or(TeamError::Invalid("aggregate consent required"))?
+            .max(crate::services::team_trust::cutoff(Utc::now()));
         let facts = repo.session_facts(actor, &request.session_id).await?;
         anyhow::ensure!(
             !facts.is_empty() && facts.len() <= 10_000,

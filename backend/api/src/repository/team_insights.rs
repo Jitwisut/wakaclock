@@ -59,7 +59,7 @@ impl TeamInsightsRepository {
             .postgres
             .query(
                 "SELECT gate, passed, evidence_ref FROM team_release_evidence
-            WHERE organization_id = $1",
+            WHERE organization_id = $1 AND evidence_scope='external'",
                 &[&org],
             )
             .await?
@@ -149,7 +149,7 @@ impl TeamInsightsRepository {
              input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
              estimated_cost_microusd, pricing_version, token_source, version, received_at
              FROM (SELECT * FROM wakaclock.ai_usage_events FINAL WHERE user_id IN ?)
-             WHERE event_time >= ? AND event_time < ? ORDER BY event_time, usage_event_id LIMIT 100001")
+             WHERE event_time >= ? AND event_time < ? ORDER BY event_time, user_id, usage_event_id LIMIT 100001")
             .bind(users).bind(from).bind(to).fetch_all::<AiUsageEventRow>().await
             .context("Team canonical usage query unavailable")?;
         anyhow::ensure!(
@@ -185,7 +185,7 @@ impl TeamInsightsRepository {
             .query(
                 "SELECT w.* FROM team_work_items w JOIN team_repository_scopes s
              ON s.organization_id = w.organization_id AND s.repository_id = w.repository_id
-             WHERE w.organization_id = $1 AND s.enabled AND ($2::uuid IS NULL OR s.team_id = $2)
+             WHERE w.organization_id = $1 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months' AND ($2::uuid IS NULL OR s.team_id = $2)
              ORDER BY w.provider_updated_at DESC LIMIT 200",
                 &[&org, &team],
             )
@@ -226,7 +226,7 @@ impl TeamInsightsRepository {
              JOIN organization_analytics_consents c ON c.organization_id = m.organization_id AND c.user_id = m.user_id
              JOIN users u ON u.id = l.user_id
              WHERE l.organization_id = $1 AND l.repository_id = $2 AND l.work_item_id = $3
-               AND l.status = 'confirmed' AND s.enabled AND ($4::uuid IS NULL OR s.team_id = $4)
+               AND l.status = 'confirmed' AND l.created_at >= now() - interval '12 months' AND s.enabled AND ($4::uuid IS NULL OR s.team_id = $4)
                AND m.deactivated_at IS NULL AND m.seat_type = 'developer' AND m.role <> 'viewer'
                AND u.is_active AND u.deleted_at IS NULL AND c.share_individual AND c.individual_from IS NOT NULL
              ORDER BY l.id LIMIT 201", &[&org, &repo, &item, &team]).await?.into_iter().map(|r| {
@@ -241,7 +241,7 @@ impl TeamInsightsRepository {
             .query(
                 "SELECT l.* FROM team_session_links l JOIN team_repository_scopes s
              ON s.organization_id = l.organization_id AND s.repository_id = l.repository_id
-             WHERE l.organization_id = $1 AND l.user_id = $2 AND s.enabled
+             WHERE l.organization_id = $1 AND l.user_id = $2 AND s.enabled AND l.created_at >= now() - interval '12 months'
              ORDER BY l.updated_at DESC LIMIT 200",
                 &[&org, &user],
             )
@@ -262,7 +262,7 @@ impl TeamInsightsRepository {
             .query_opt(
                 "SELECT s.team_id FROM team_repository_scopes s JOIN team_work_items w
             ON w.organization_id=s.organization_id AND w.repository_id=s.repository_id
-            WHERE s.organization_id=$1 AND s.repository_id=$2 AND w.external_id=$3 AND s.enabled",
+            WHERE s.organization_id=$1 AND s.repository_id=$2 AND w.external_id=$3 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months'",
                 &[&org, &repository, &work_item],
             )
             .await?
@@ -278,7 +278,7 @@ impl TeamInsightsRepository {
         Ok(self.postgres.query_opt(
             "SELECT s.project_id FROM team_repository_scopes s JOIN team_work_items w
              ON w.organization_id = s.organization_id AND w.repository_id = s.repository_id
-             WHERE s.organization_id = $1 AND s.repository_id = $2 AND w.external_id = $3 AND s.enabled",
+             WHERE s.organization_id = $1 AND s.repository_id = $2 AND w.external_id = $3 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months'",
             &[&org, &repository, &work_item]).await?.map(|r| r.get("project_id")))
     }
 
@@ -327,7 +327,7 @@ impl TeamInsightsRepository {
                 &[&org, &user, &id, &status],
             )
             .await?;
-        if row.is_some() {
+        if let Some(ref changed) = row {
             // Every link change invalidates allocations. Multiple confirmed links stay unallocated.
             tx.execute(
                 "DELETE FROM team_usage_allocations WHERE link_id = $1",
@@ -343,12 +343,7 @@ impl TeamInsightsRepository {
             tx.execute(
                 "SELECT team_bump_generation(organization_id) FROM team_session_links
                 WHERE user_id = $1 AND session_id = $2 GROUP BY organization_id",
-                &[
-                    &user,
-                    &row.as_ref()
-                        .expect("present")
-                        .get::<_, String>("session_id"),
-                ],
+                &[&user, &changed.get::<_, String>("session_id")],
             )
             .await?;
         }

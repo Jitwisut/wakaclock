@@ -192,3 +192,10 @@ Reference contracts: [GitHub signatures](https://docs.github.com/en/webhooks/usi
 [Stripe events](https://docs.stripe.com/billing/subscriptions/webhooks),
 [Copilot metrics](https://docs.github.com/en/copilot/reference/copilot-usage-metrics/copilot-usage-metrics),
 [Cursor hooks](https://prod.cursor.com/docs/hooks).
+
+## Phase 2 continuation
+
+See [atoaxis-team-phase2.md](atoaxis-team-phase2.md) for weekly publication privacy,
+independent restore guard, Team-only retention, Trust and day-scoped canary revisions.
+Local synthetic verification is separate from seven actual working days and Cloud gates.
+Production/checkout remain closed.

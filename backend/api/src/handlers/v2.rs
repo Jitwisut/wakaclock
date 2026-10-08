@@ -93,6 +93,8 @@ pub struct CapabilityData {
     pub delivery_snapshot_versions: Vec<u8>,
     pub capture_activity_versions: Vec<u8>,
     pub capture_status_supported: bool,
+    pub team_weekly_aggregates_supported: bool,
+    pub team_measurement_health_supported: bool,
     pub product: &'static str,
     pub transactional_store: &'static str,
     pub analytics_store: &'static str,
@@ -376,6 +378,7 @@ pub struct WakaTimeImportJob {
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/team/webhooks/github", post(team_webhooks::github))
+        .route("/organizations/:organization_id/measurement-health", get(team_insights::measurement_health))
         .route("/organizations/:organization_id/launch-readiness", get(team_insights::readiness))
         .route("/organizations/:organization_id/work-items/:repository_id/:work_item_id/receipt", get(team_insights::receipt))
         .route("/organizations/:organization_id/insights", get(team_insights::insights))
@@ -781,6 +784,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             delivery_snapshot_versions: vec![1, 2],
             capture_activity_versions: vec![2],
             capture_status_supported: true,
+            team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
+            team_measurement_health_supported: state.postgres.is_some(),
             product: "AtoAxis",
             transactional_store: if state.postgres.is_some() {
                 "postgresql"

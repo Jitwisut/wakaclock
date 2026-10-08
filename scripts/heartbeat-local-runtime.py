@@ -125,6 +125,7 @@ def run(once=False):
             child.terminate()
             try:child.wait(timeout=15)
             except subprocess.TimeoutExpired:child.kill();child.wait()
+        lock.close()
 
 def install():
     import shutil
@@ -149,6 +150,9 @@ def install():
         if subprocess.run(['launchctl','print',f'gui/{uid}/{LABEL}'],capture_output=True).returncode:
             break
         time.sleep(.5)
+    # Explicit reinstall must clear launchd's persisted disabled override; KeepAlive cannot.
+    if subprocess.run(['launchctl','enable',f'gui/{uid}/{LABEL}'],capture_output=True).returncode:
+        raise RuntimeError('backend_service_enable_failed')
     for attempt in range(3):
         result=subprocess.run(['launchctl','bootstrap',f'gui/{uid}',str(path)],capture_output=True)
         if result.returncode==0:break

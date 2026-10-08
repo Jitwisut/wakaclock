@@ -90,3 +90,14 @@ GitHub Actions gates.
 lint-staged on commit, commitlint on commit-msg, `check:strict` on pre-push.
 Conventional Commits are enforced
 ([../frontend/app/commitlint.config.cjs](../frontend/app/commitlint.config.cjs)).
+
+## Team Phase 2 isolated verification
+
+See [../docs/atoaxis-team-phase2.md](../docs/atoaxis-team-phase2.md).
+`python3 scripts/team-restore-drill.py` uses only disposable synthetic PostgreSQL/ClickHouse
+containers; it does not use application credential/config files. The two source fixtures
+remain available for regression tests; stop only those named fixtures when finished.
+`cargo run --bin team-privacy-worker -- --initialize-ledger` requires rollout disabled
+and a missing independent ledger. `--reconcile-restore` requires a verified fresh existing
+ledger and leaves sharing disabled. Normal worker and `--once` must not initialize missing state.
+No command here authorizes a production rollout, schema rollback, main push or merge.

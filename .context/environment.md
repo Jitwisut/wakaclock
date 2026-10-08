@@ -15,6 +15,8 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` | no | |
 | `CLICKHOUSE_DATABASE` / `CLICKHOUSE_DB` | no | Both names are read; defaults exist. |
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
+| `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
+| `ATOAXIS_BUILD_REVISION` | build metadata | Compile-time revision for Team readiness; unset is unavailable, never inferred from runtime checkout. |
 | `POSTGRES_MAX_CONNECTIONS` | no | |
 | `DATABASE_URL` | no | Also read; overlaps with `POSTGRES_URL` — `Unknown / Needs verification` which wins. |
 | `CORS_ORIGINS` | no | Comma-separated allowlist, or `*` for permissive. `*` is only safe single-tenant. |

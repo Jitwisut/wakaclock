@@ -9,14 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
-import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
-import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-import { getBrowserTimezone } from '@/lib/wakaclock/endpoints';
 import { createOrganization, listOrganizations } from '@/lib/wakaclock/endpoints-v2';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
+import { getTeamMeasurementHealth } from '@/lib/wakaclock/team-endpoints';
+import { closedWeeks } from '@/lib/wakaclock/team-weeks';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 import {
@@ -26,18 +25,21 @@ import {
 } from './components/organization-invites';
 import { OrganizationTeamsPanel } from './components/organization-teams-panel';
 import { TeamInsightsPanel } from './components/team-insights-panel';
+import { TeamTrustPanel } from './components/team-trust-panel';
 
-function OrganizationCard({
-  end,
-  organization,
-  start,
-  timezone,
-}: {
-  end: string;
-  organization: Organization;
-  start: string;
-  timezone: string;
-}) {
+function OrganizationCard({ organization }: { organization: Organization }) {
+  const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const health = useQuery({
+    queryKey: wakaclockKeys.teamHealth(userId, organization.id),
+    queryFn: () => getTeamMeasurementHealth(organization.id),
+    enabled: Boolean(userId),
+    retry: false,
+    gcTime: 0,
+  });
+  const timezone = health.isError ? undefined : health.data?.report_timezone;
+  const weeks = timezone ? closedWeeks(timezone) : [];
+  const [selected, setSelected] = React.useState('');
+  const week = weeks.find((w) => w.start === selected) ?? weeks[0];
   return (
     <Card>
       <CardHeader>
@@ -46,12 +48,32 @@ function OrganizationCard({
       <CardContent className="space-y-4 text-sm">
         <OrganizationTeamsPanel organizationId={organization.id} />
         <OrganizationInvitesPanel organizationId={organization.id} />
-        <TeamInsightsPanel
-          end={end}
-          organizationId={organization.id}
-          start={start}
-          timezone={timezone}
-        />
+        <TeamTrustPanel organizationId={organization.id} />
+        <QueryState error={health.error} isLoading={health.isLoading}>
+          {week && timezone && (
+            <>
+              <select
+                aria-label="Completed report week"
+                className="rounded border p-2"
+                onChange={(e) => setSelected(e.target.value)}
+                value={week.start}
+              >
+                {weeks.map((w) => (
+                  <option key={w.start} value={w.start}>
+                    {w.start}–{w.end} · {timezone}
+                  </option>
+                ))}
+              </select>
+              <TeamInsightsPanel
+                end={week.end}
+                key={`${userId}:${organization.id}:${timezone}`}
+                organizationId={organization.id}
+                start={week.start}
+                timezone={timezone}
+              />
+            </>
+          )}
+        </QueryState>
       </CardContent>
     </Card>
   );
@@ -61,8 +83,6 @@ export default function TeamsPage() {
   const client = useQueryClient();
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const [name, setName] = React.useState('');
-  const { start, end, setRange } = useWakaclockRange(7);
-  const timezone = getBrowserTimezone() ?? 'UTC';
   const organizations = useQuery({
     queryKey: wakaclockKeys.organizations(userId),
     queryFn: listOrganizations,
@@ -78,7 +98,6 @@ export default function TeamsPage() {
   return (
     <div className="space-y-4">
       <WakaclockPageHeader
-        actions={<RangePicker onChange={setRange} value={{ start, end }} />}
         description="Team reports include only members who choose to share. Individual totals need a second opt-in."
         title="Teams"
       />
@@ -104,15 +123,14 @@ export default function TeamsPage() {
           </Card>
           <QueryState error={organizations.error} isLoading={organizations.isLoading}>
             <div className="grid gap-4 lg:grid-cols-2">
-              {organizations.data?.map((organization) => (
-                <OrganizationCard
-                  end={end}
-                  key={organization.id}
-                  organization={organization}
-                  start={start}
-                  timezone={timezone}
-                />
-              ))}
+              {!organizations.isError &&
+                !organizations.isFetching &&
+                organizations.data?.map((organization) => (
+                  <OrganizationCard
+                    key={`${userId}:${organization.id}`}
+                    organization={organization}
+                  />
+                ))}
             </div>
           </QueryState>
         </RequiresPostgres>

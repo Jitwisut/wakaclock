@@ -67,3 +67,22 @@ export interface WorkReceipt {
   sharing: string;
   work_item_id: number;
 }
+
+export interface TeamHealthState {
+  reason: string;
+  scope?: string;
+  status: string;
+  updated_at?: null | string;
+}
+export interface TeamMeasurementHealth {
+  checked_at: string;
+  own: { capture: TeamHealthState; delivery: TeamHealthState };
+  report_timezone: string;
+  restore: TeamHealthState;
+  team: {
+    capture: TeamHealthState;
+    delivery: TeamHealthState;
+    integration: TeamHealthState;
+    retention: TeamHealthState;
+  };
+}
