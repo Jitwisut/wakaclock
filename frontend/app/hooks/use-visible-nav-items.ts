@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { type NavGroup, navItems } from '@/components/layout/sidebar/nav-main';
+import { type NavGroup, navItems } from '@/components/layout/sidebar/nav-items';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
