@@ -37,9 +37,10 @@ export function whenIdle(callback: () => void) {
 }
 
 /**
- * The sticky backdrop behind the chapters: the still drawing (server-rendered, passed in
- * as children), the WebGL scene once it is ready, the reading veil, the chapter rail and
- * the loader. Everything here is decorative or duplicated in the HTML chapters.
+ * The fixed backdrop behind the homepage: the still drawing (server-rendered, passed in as
+ * children), the WebGL scene once it is ready and the reading veils; plus, sticky over the
+ * story only, the chapter rail, the clock and the loader. Everything here is decorative or
+ * duplicated in the HTML.
  */
 export function TimeStage({
   children,
@@ -79,7 +80,8 @@ export function TimeStage({
     root.dataset.onstage = String(visible);
   }, [midnight, rootId, status, visible]);
 
-  // Stop rendering entirely once the visitor has scrolled past the experience.
+  // The story leaving the screen turns the site nav light again and drops the canvas to
+  // on-demand frames; the scene itself carries on behind the page.
   useEffect(() => {
     const main = document.querySelector('#tx-chapters');
     if (!main) return;
@@ -92,15 +94,19 @@ export function TimeStage({
 
   return (
     <>
+      {/* Fixed behind the whole page: the story above, then the light page below it. */}
       <div aria-hidden="true" className="tx-stage">
-        {children}
+        <div className="tx-dayfill" />
+        <div className="tx-night">{children}</div>
         {quality ? (
           <div className="tx-canvas">
-            <TimeCanvas active={visible} quality={quality} />
+            {/* Continuous while the story is on screen; below it, frames only on change. */}
+            <TimeCanvas mode={visible ? 'always' : 'demand'} quality={quality} />
           </div>
         ) : null}
-        {/* One reading veil per layout; the active chapter fades the right ones in. */}
-        {['left', 'right', 'center', 'bottom', 'band', 'full'].map((side) => (
+        {/* One reading veil per layout; the active chapter fades the right ones in. The
+            'day' veil washes the scene pale under the light page's text. */}
+        {['left', 'right', 'center', 'bottom', 'band', 'full', 'day'].map((side) => (
           <div className="tx-veil" data-veil={side} key={side} />
         ))}
         <div className="tx-vignette" />

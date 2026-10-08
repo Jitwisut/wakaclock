@@ -7,6 +7,7 @@ import { ClockReadout } from '@/components/marketing/time/clock-readout';
 import { CountUp } from '@/components/marketing/time/count-up';
 import { HoverTip } from '@/components/marketing/time/hover-tip';
 import { Scramble, scrambleFrame } from '@/components/marketing/time/scramble';
+import { SmoothScroll } from '@/components/marketing/time/smooth-scroll';
 import {
   MIDNIGHT_DURATION,
   MIDNIGHT_FIRE_AT,
@@ -35,8 +36,12 @@ import {
 } from '@/components/marketing/time/time-data';
 import {
   arcLevel,
+  bloomFade,
   CAMERA_KEYS,
   CHAPTER_COUNT,
+  DAY_CAMERA_KEYS,
+  dayCameraParameterAt,
+  daylightAt,
   cameraParameterAt,
   chapterAt,
   dampFactor,
@@ -79,32 +84,89 @@ vi.mock('@/components/marketing/time/scene/time-canvas', () => ({ default: () =>
 vi.mock('next/dynamic', () => ({
   default: (loader: () => Promise<unknown>) => {
     void loader();
-    return function DynamicCanvas({ active }: { active: boolean }) {
-      return <div data-active={String(active)} data-testid="time-canvas" />;
+    return function DynamicCanvas({ mode }: { mode: string }) {
+      return <div data-mode={mode} data-testid="time-canvas" />;
     };
   },
 }));
 
 type TriggerConfig = {
   end: string;
-  onRefresh: (self: { progress: number }) => void;
-  onUpdate: (self: { progress: number }) => void;
+  onRefresh: (self: TriggerSelf) => void;
+  onUpdate: (self: TriggerSelf) => void;
   start: string;
   trigger: Element;
 };
+type TriggerSelf = { progress: number; trigger?: Element };
 const scroll = vi.hoisted(() => ({
+  refreshes: 0,
   registered: 0,
   triggers: [] as { config: TriggerConfig; killed: boolean }[],
+  ticks: new Set<(time: number) => void>(),
+  lag: [] as number[][],
 }));
 vi.mock('gsap', () => ({
   gsap: {
     registerPlugin: () => {
       scroll.registered += 1;
     },
+    ticker: {
+      add: (tick: (time: number) => void) => {
+        scroll.ticks.add(tick);
+      },
+      remove: (tick: (time: number) => void) => {
+        scroll.ticks.delete(tick);
+      },
+      lagSmoothing: (...values: number[]) => {
+        scroll.lag.push(values);
+      },
+    },
+  },
+}));
+
+type LenisOptions = { autoRaf: boolean; lerp: number };
+const smooth = vi.hoisted(() => ({
+  instances: [] as {
+    destroyed: boolean;
+    listeners: Record<string, () => void>;
+    options: LenisOptions;
+    rafs: number[];
+    scrolls: { options: unknown; target: unknown }[];
+  }[],
+}));
+vi.mock('lenis', () => ({
+  default: class {
+    record;
+    constructor(options: LenisOptions) {
+      this.record = {
+        destroyed: false,
+        listeners: {} as Record<string, () => void>,
+        options,
+        rafs: [] as number[],
+        scrolls: [] as { options: unknown; target: unknown }[],
+      };
+      smooth.instances.push(this.record);
+    }
+    on(event: string, listener: () => void) {
+      this.record.listeners[event] = listener;
+    }
+    raf(time: number) {
+      this.record.rafs.push(time);
+    }
+    scrollTo(target: unknown, options: unknown) {
+      this.record.scrolls.push({ target, options });
+    }
+    destroy() {
+      this.record.destroyed = true;
+    }
   },
 }));
 vi.mock('gsap/ScrollTrigger', () => ({
   ScrollTrigger: {
+    update: () => {},
+    refresh: () => {
+      scroll.refreshes += 1;
+    },
     create: (config: TriggerConfig) => {
       const record = { config, killed: false };
       scroll.triggers.push(record);
@@ -164,6 +226,9 @@ const baseSignals: DeviceSignals = {
 beforeEach(() => {
   observers.length = 0;
   scroll.triggers.length = 0;
+  scroll.ticks.clear();
+  scroll.lag.length = 0;
+  smooth.instances.length = 0;
   frames.clear();
   resetTimeUi();
   window.IntersectionObserver =
@@ -315,6 +380,22 @@ describe('time-keyframes', () => {
     expect(onRingBand(RING_RADIUS, 0)).toBe(true);
     expect(onRingBand(0, RING_RADIUS + 0.5)).toBe(false);
     expect(onRingBand(1, 1)).toBe(false);
+  });
+});
+
+describe('daylight', () => {
+  it('starts the day path on the last story shot and eases dusk into day', () => {
+    expect(DAY_CAMERA_KEYS[0]).toEqual(CAMERA_KEYS.at(-1));
+    expect(dayCameraParameterAt(-1)).toBe(0);
+    expect(dayCameraParameterAt(0.4)).toBe(0.4);
+    expect(dayCameraParameterAt(3)).toBe(1);
+    expect(daylightAt(0)).toBe(0);
+    expect(daylightAt(0.5)).toBeCloseTo(0.5);
+    expect(daylightAt(2)).toBe(1);
+    expect(daylightAt(0.25)).toBeLessThan(0.25);
+    expect(bloomFade(0)).toBe(1);
+    expect(bloomFade(0.5)).toBeCloseTo(1 / 16);
+    expect(bloomFade(9)).toBe(0);
   });
 });
 
@@ -711,12 +792,12 @@ describe('TimeStage', () => {
       </TimeStage>,
       { container: root.appendChild(document.createElement('div')) }
     );
-    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-active', 'true');
+    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-mode', 'always');
     expect(screen.getByRole('status')).toHaveTextContent(TIME_COPY.en.loader.label);
 
     const visibility = observers.find((record) => record.targets[0]?.id === 'tx-chapters');
     intersect(visibility as ObserverRecord, root, false);
-    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-active', 'false');
+    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-mode', 'demand');
     act(() => {
       (visibility as ObserverRecord).callback([], {} as IntersectionObserver);
     });
@@ -826,5 +907,168 @@ describe('useTimeScroll', () => {
   it('does nothing without its root element', () => {
     render(<Hook rootId="nowhere" />);
     expect(scroll.triggers).toHaveLength(0);
+  });
+});
+
+describe('useTimeScroll — after the story', () => {
+  function Hook() {
+    useTimeScroll('dawn-root');
+    return null;
+  }
+
+  function mountPage() {
+    const root = document.createElement('div');
+    root.id = 'dawn-root';
+    root.innerHTML = '<section data-chapter="0"></section><div id="tx-dawn"></div>';
+    const day = document.createElement('div');
+    day.id = 'tx-day';
+    day.innerHTML = '<section id="first"></section><section id="second"></section>';
+    document.body.append(root, day);
+    return { root, day };
+  }
+
+  it('turns dusk to day, moves the day camera and tilts sections in', () => {
+    const { root, day } = mountPage();
+    const { unmount } = render(<Hook />);
+    const byTrigger = (element: Element) =>
+      scroll.triggers.find((record) => record.config.trigger === element) as {
+        config: TriggerConfig;
+      };
+
+    const dawn = byTrigger(root.querySelector('#tx-dawn') as Element);
+    act(() => dawn.config.onUpdate({ progress: 0.25 }));
+    expect(timeMotion.dawnTarget).toBe(0.25);
+    expect(root.style.getPropertyValue('--tx-day')).toBe(daylightAt(0.25).toFixed(3));
+    expect(root.dataset.dawn).toBe('false');
+    act(() => dawn.config.onRefresh({ progress: 0.9 }));
+    expect(root.dataset.dawn).toBe('true');
+
+    const dayTrigger = byTrigger(day);
+    act(() => dayTrigger.config.onUpdate({ progress: 0.4 }));
+    expect(timeMotion.dayTarget).toBe(0.4);
+    act(() => dayTrigger.config.onRefresh({ progress: 0.5 }));
+    expect(timeMotion.dayTarget).toBe(0.5);
+
+    const section = day.querySelector('#first') as HTMLElement;
+    const rise = byTrigger(section);
+    act(() => rise.config.onUpdate({ progress: 0.3, trigger: section }));
+    expect(section.dataset.rising).toBe('true');
+    expect(section.style.getPropertyValue('--rise')).toBe('0.300');
+    act(() => rise.config.onRefresh({ progress: 1, trigger: section }));
+    expect(section.dataset.rising).toBeUndefined();
+    expect(section.style.getPropertyValue('--rise')).toBe('');
+
+    unmount();
+    expect(scroll.triggers.every((trigger) => trigger.killed)).toBe(true);
+  });
+
+  it('leaves the sections still under reduced motion', () => {
+    setMedia(['reduce']);
+    const { day } = mountPage();
+    render(<Hook />);
+    expect(scroll.triggers.some((record) => record.config.trigger === day)).toBe(true);
+    expect(scroll.triggers.some((record) => record.config.trigger === day.firstElementChild)).toBe(
+      false
+    );
+  });
+});
+
+describe('SmoothScroll', () => {
+  async function settle() {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it('stays off for reduced motion and touch screens', async () => {
+    setMedia(['reduce']);
+    render(<SmoothScroll />);
+    setMedia(['coarse']);
+    render(<SmoothScroll />);
+    await settle();
+    expect(smooth.instances).toHaveLength(0);
+  });
+
+  it('drives Lenis from the shared ticker and routes in-page links through it', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const target = document.createElement('section');
+    target.id = 'faq';
+    const link = document.createElement('a');
+    link.href = '#faq';
+    const elsewhere = document.createElement('a');
+    elsewhere.href = '#missing';
+    document.body.append(target, link, elsewhere);
+
+    const { unmount } = render(<SmoothScroll />);
+    await settle();
+    const [lenis] = smooth.instances as [(typeof smooth.instances)[number]];
+    expect(lenis.options).toMatchObject({ autoRaf: false });
+    expect(typeof lenis.listeners.scroll).toBe('function');
+    for (const tick of scroll.ticks) tick(2);
+    expect(lenis.rafs).toEqual([2000]);
+
+    fireEvent.click(elsewhere);
+    fireEvent.click(document.body);
+    expect(lenis.scrolls).toHaveLength(0);
+
+    fireEvent.click(link);
+    expect(lenis.scrolls).toEqual([{ target, options: { offset: -64, duration: 1.6 } }]);
+    expect(target).toHaveAttribute('tabindex', '-1');
+    expect(document.activeElement).toBe(target);
+    expect(pushState).toHaveBeenCalledWith(null, '', '#faq');
+
+    // An element that is already focusable keeps its own tabindex.
+    target.setAttribute('tabindex', '0');
+    fireEvent.click(link);
+    expect(target).toHaveAttribute('tabindex', '0');
+
+    unmount();
+    expect(lenis.destroyed).toBe(true);
+    expect(scroll.ticks.size).toBe(0);
+    expect(scroll.lag.at(-1)).toEqual([500, 33]);
+  });
+
+  it('does not start if it unmounts before Lenis has loaded', async () => {
+    const { unmount } = render(<SmoothScroll />);
+    unmount();
+    await settle();
+    expect(smooth.instances).toHaveLength(0);
+  });
+});
+
+describe('useTimeScroll — page height changes', () => {
+  it('re-measures the triggers, debounced, when the page height changes', () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const disconnects: number[] = [];
+    window.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {
+        disconnects.push(1);
+      }
+    } as unknown as typeof ResizeObserver;
+    vi.useFakeTimers();
+    const root = document.createElement('div');
+    root.id = 'height-root';
+    root.innerHTML = '<section data-chapter="0"></section>';
+    document.body.append(root);
+    function Hook() {
+      useTimeScroll('height-root');
+      return null;
+    }
+    const { unmount } = render(<Hook />);
+    const before = scroll.refreshes;
+    const notify = callbacks.at(-1) as ResizeObserverCallback;
+    notify([], {} as ResizeObserver);
+    notify([], {} as ResizeObserver);
+    vi.advanceTimersByTime(200);
+    expect(scroll.refreshes - before).toBe(1);
+    unmount();
+    expect(disconnects.length).toBeGreaterThan(0);
+    vi.useRealTimers();
   });
 });

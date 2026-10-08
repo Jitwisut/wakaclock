@@ -35,6 +35,12 @@ export const timeMotion = {
   burst: 0,
   /** Seconds since the last chapter pulse started (large = none running). */
   pulseAge: 99,
+  /** Progress through the light page below the story (camera), target and eased. */
+  dayTarget: 0,
+  dayCurrent: 0,
+  /** Dusk-to-daylight blend, 0–1 (palette, glow, veils). */
+  dawnTarget: 0,
+  daylight: 0,
 };
 
 const MOTION_DEFAULTS = { ...timeMotion };

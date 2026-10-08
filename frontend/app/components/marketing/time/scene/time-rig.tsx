@@ -9,6 +9,9 @@ import {
   CAMERA_KEYS,
   cameraParameterAt,
   dampFactor,
+  DAY_CAMERA_KEYS,
+  dayCameraParameterAt,
+  daylightAt,
   handMinuteAt,
   warpTarget,
 } from '../time-keyframes';
@@ -25,6 +28,21 @@ const BASE_FOV = 36;
  */
 export function TimeRig({ parallax }: { parallax: boolean }) {
   const { camera, size } = useThree();
+  const day = useMemo(
+    () => ({
+      path: new CatmullRomCurve3(
+        DAY_CAMERA_KEYS.map((key) => new Vector3(...key.pos)),
+        false,
+        'centripetal'
+      ),
+      target: new CatmullRomCurve3(
+        DAY_CAMERA_KEYS.map((key) => new Vector3(...key.look)),
+        false,
+        'centripetal'
+      ),
+    }),
+    []
+  );
   const { path, target } = useMemo(
     () => ({
       path: new CatmullRomCurve3(
@@ -49,11 +67,19 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
     const teleported = timeMotion.teleport;
     if (teleported) {
       timeMotion.current = timeMotion.target;
+      timeMotion.dayCurrent = timeMotion.dayTarget;
+      timeMotion.daylight = daylightAt(timeMotion.dawnTarget);
       timeMotion.teleport = false;
       timeMotion.velocity = 0;
       timeMotion.warp = 0;
     } else {
-      timeMotion.current += (timeMotion.target - timeMotion.current) * dampFactor(delta);
+      const ease = dampFactor(delta);
+      timeMotion.current += (timeMotion.target - timeMotion.current) * ease;
+      // The light page eases a little more slowly: a long, calm camera move.
+      timeMotion.dayCurrent +=
+        (timeMotion.dayTarget - timeMotion.dayCurrent) * dampFactor(delta, 2.2);
+      const light = daylightAt(timeMotion.dawnTarget);
+      timeMotion.daylight += (light - timeMotion.daylight) * ease;
     }
     // Warp follows scroll speed, quick to rise and slower to settle; the speed itself decays
     // between scroll events so a stopped page relaxes back to rest.
@@ -76,9 +102,17 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
       lens.fov = fov;
       lens.updateProjectionMatrix();
     }
-    const u = cameraParameterAt(timeMotion.current);
-    path.getPoint(u, position);
-    target.getPoint(u, look);
+    // Below the story the camera follows the day path, which starts on the story's last
+    // composition, so the two join without a jump.
+    if (timeMotion.dayCurrent > 1e-4) {
+      const u = dayCameraParameterAt(timeMotion.dayCurrent);
+      day.path.getPoint(u, position);
+      day.target.getPoint(u, look);
+    } else {
+      const u = cameraParameterAt(timeMotion.current);
+      path.getPoint(u, position);
+      target.getPoint(u, look);
+    }
 
     // Portrait screens put the text above the scene: centre the ring and step back.
     if (size.width < size.height) {

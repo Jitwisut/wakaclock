@@ -188,7 +188,6 @@
 }
 
 /* ---------- stage ---------- */
-.tx-root .tx-stage,
 .tx-root .tx-overlay {
   position: sticky;
   top: 0;
@@ -198,10 +197,28 @@
   margin-bottom: -100svh;
 }
 
+/* Fixed behind the whole homepage. Everything that must sit above it is positioned with
+   a higher z-index: the chapters, the overlay, the light page and the footer. */
 .tx-root .tx-stage {
+  position: fixed;
+  inset: 0;
   z-index: 0;
   overflow: hidden;
   background: radial-gradient(ellipse 70% 60% at 68% 48%, #0f2219 0%, var(--tx-bg) 70%);
+}
+
+/* Dawn: --tx-day (0–1, from the scroll hook) lightens every dark layer of the stage. */
+.tx-root .tx-dayfill {
+  position: absolute;
+  inset: 0;
+  background: #f1efe7;
+  opacity: var(--tx-day, 0);
+}
+
+.tx-root .tx-night {
+  position: absolute;
+  inset: 0;
+  opacity: calc(1 - var(--tx-day, 0));
 }
 
 .tx-root .tx-still {
@@ -251,8 +268,15 @@
 .tx-root .tx-veil {
   position: absolute;
   inset: 0;
-  opacity: 0;
+  opacity: calc(var(--veil-on, 0) * (1 - var(--tx-day, 0)));
   transition: opacity 0.9s var(--tx-ease);
+}
+
+/* A pale wash under the light page's text: the ring stays visible but quiet. */
+.tx-root .tx-veil[data-veil='day'] {
+  background: rgb(250 249 246 / 0.72);
+  opacity: var(--tx-day, 0);
+  transition: none;
 }
 
 .tx-root .tx-veil[data-veil='left'] {
@@ -309,12 +333,13 @@
 .tx-root[data-chapter='3'] .tx-veil:is([data-veil='left'], [data-veil='bottom']),
 .tx-root[data-chapter='4'] .tx-veil[data-veil='band'],
 .tx-root[data-chapter='5'] .tx-veil[data-veil='center'] {
-  opacity: 1;
+  --veil-on: 1;
 }
 
 .tx-root .tx-vignette {
   position: absolute;
   inset: 0;
+  opacity: calc(1 - var(--tx-day, 0));
   background: radial-gradient(ellipse 85% 80% at 55% 50%, transparent 55%, rgb(3 8 6 / 0.85) 100%);
   pointer-events: none;
 }
@@ -329,12 +354,14 @@
   }
 
   /* Phones stack text over the scene everywhere: one even veil. */
-  .tx-root .tx-veil {
-    opacity: 0;
+  .tx-root[data-chapter] .tx-veil:not([data-veil='day']),
+  .tx-root .tx-veil:not([data-veil='day']) {
+    --veil-on: 0;
   }
 
+  .tx-root[data-chapter] .tx-veil[data-veil='full'],
   .tx-root .tx-veil[data-veil='full'] {
-    opacity: 1;
+    --veil-on: 1;
   }
 }
 
@@ -406,6 +433,8 @@
 /* ---------- overlay: rail, badge, loader ---------- */
 .tx-root .tx-overlay {
   z-index: 5;
+  /* The rail and the clock belong to the story: they fade out with the dusk. */
+  opacity: calc(1 - var(--tx-day, 0));
   pointer-events: none;
 }
 
@@ -1334,7 +1363,7 @@
 
 /* Over the dark story the site's nav goes dark too, and the site's floating index steps
    aside for the chapter rail. Both return as soon as the story scrolls away. */
-.wakaclock-marketing:has(.tx-root[data-onstage='true']) .axis-nav {
+.wakaclock-marketing:has(.tx-root[data-onstage='true']:not([data-dawn='true'])) .axis-nav {
   --mkt-fg: #e4efe7;
   --mkt-fg-muted: #a6b9ad;
   --mkt-accent: #c3ee8a;
@@ -1352,7 +1381,7 @@
     border-color 0.5s ease;
 }
 
-.wakaclock-marketing:has(.tx-root[data-onstage='true']) .axis-scroll-index {
+.wakaclock-marketing:has(.tx-root[data-onstage='true']:not([data-dawn='true'])) .axis-scroll-index {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -1366,15 +1395,9 @@
 
 .tx-root .tx-handoff {
   position: relative;
-  /* Above the rail and the clock, so the overlay fades out with the scene. */
+  /* Over the overlay, so the rail and the clock leave with the story. */
   z-index: 6;
-  height: 50vh;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    var(--tx-bg) 38%,
-    var(--mkt-bg, #faf9f6) 100%
-  );
+  height: 70vh;
 }
 
 .tx-root .tx-anchor {
@@ -1431,6 +1454,51 @@
   letter-spacing: 0;
   text-transform: none;
   color: var(--tx-muted);
+}
+
+/* ---------- the light page over the scene (homepage only) ---------- */
+/* The frame stops painting its own ivory so the fixed scene shows; the content and the
+   footer sit above it. Section bands turn translucent so the ring stays in view. */
+.wakaclock-marketing:has(.tx-root) {
+  background: transparent;
+}
+
+.wakaclock-marketing:has(.tx-root) .tx-day,
+.wakaclock-marketing:has(.tx-root) .axis-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.wakaclock-marketing:has(.tx-root) .axis-briefing {
+  background: rgb(239 244 239 / 0.72);
+}
+
+.wakaclock-marketing:has(.tx-root) .axis-pricing {
+  background: rgb(240 243 239 / 0.72);
+}
+
+/* Sections tilt up out of depth as they scroll in (--rise 0 → 1, set while moving). */
+.wakaclock-marketing .tx-day > [data-rising] {
+  opacity: calc(0.15 + 0.85 * var(--rise, 1));
+  transform: perspective(1600px) translateY(calc((1 - var(--rise, 1)) * 90px))
+    rotateX(calc((1 - var(--rise, 1)) * 16deg)) scale(calc(0.94 + 0.06 * var(--rise, 1)));
+  transform-origin: 50% 0%;
+  will-change: transform, opacity;
+}
+
+/* Lenis drives the scroll on the homepage; the page's own smooth behaviour would fight
+   it. (Lenis's stylesheet rules, inlined.) */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+html.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-stopped {
+  overflow: clip;
 }
 
 /* ---------- keyframes ---------- */

@@ -22,7 +22,10 @@ import { type ActivitySlice, pointOnRing, seededRandom, SLICE_MINUTES } from '..
 import { RING_RADIUS, RING_SPACING } from '../time-keyframes';
 import { timeMotion } from '../time-store';
 
-import { SCENE } from './scene-palette';
+import { DAY, SCENE } from './scene-palette';
+
+const DUST_NIGHT = new Color(SCENE.ink);
+const DUST_DAY = new Color(DAY.ink);
 
 /** Soft round sprite so points read as glowing dots rather than squares. */
 function dotTexture() {
@@ -87,7 +90,8 @@ export function Heartbeats({ count, slices }: { count: number; slices: ActivityS
       const [x, y] = pointOnRing(slice.minute + SLICE_MINUTES / 2, radius);
       position.setXYZ(index, x, y, (1 - eased) * seed.drift);
       // Fade in quickly, glow on approach, fade as it lands.
-      const brightness = Math.min(1, t * 6) * (1 - t ** 4);
+      // Additive points vanish on the light page: they fade out with the dusk.
+      const brightness = Math.min(1, t * 6) * (1 - t ** 4) * (1 - timeMotion.daylight);
       color.setXYZ(index, tint.r * brightness, tint.g * brightness, tint.b * brightness);
     });
     position.needsUpdate = true;
@@ -153,7 +157,11 @@ export function Dust({
   useFrame(() => {
     const length = 0.03 + timeMotion.warp * 2.2;
     const material = lines.current?.material as LineBasicMaterial | undefined;
-    if (material) material.opacity = 0.28 + timeMotion.warp * 0.45;
+    if (material) {
+      const { daylight, warp } = timeMotion;
+      material.opacity = (0.28 + warp * 0.45) * (1 - daylight * 0.4);
+      material.color.copy(DUST_NIGHT).lerp(DUST_DAY, daylight);
+    }
     const last = state.current;
     const moved = interactive && (timeMotion.pointerX !== last.x || timeMotion.pointerY !== last.y);
     const stretched = Math.abs(length - last.stretch) >= 0.002;

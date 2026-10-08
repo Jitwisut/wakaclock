@@ -7,6 +7,7 @@ import { COMPATIBLE_EDITORS } from '../editor-wall.data';
 import { AttributionFocus } from './attribution-focus';
 import { CountUp } from './count-up';
 import { Scramble } from './scramble';
+import { SmoothScroll } from './smooth-scroll';
 import { TIME_COPY } from './time-copy';
 import { TimeStage } from './time-stage';
 import { TimeStill } from './time-still';
@@ -78,6 +79,7 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
   return (
     // The site-wide reveal animations stay out: this experience choreographs its own.
     <div className="tx-root" data-motion-owner="experience" id={TIME_ROOT_ID}>
+      <SmoothScroll />
       <TimeStage copy={copy} rootId={TIME_ROOT_ID}>
         <TimeStill />
       </TimeStage>
@@ -333,8 +335,9 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
           </div>
         </section>
       </div>
-      {/* Dusk to daylight: the dark story hands over to the light page below. */}
-      <div aria-hidden="true" className="tx-handoff" />
+      {/* Dawn: scrolling through here turns the scene from dusk to daylight before the
+          light page below begins. */}
+      <div aria-hidden="true" className="tx-handoff" id="tx-dawn" />
     </div>
   );
 }

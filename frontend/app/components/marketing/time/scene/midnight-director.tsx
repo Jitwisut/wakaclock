@@ -4,6 +4,7 @@ import { type RefObject, useRef } from 'react';
 
 import { useFrame } from '@react-three/fiber';
 
+import { bloomFade } from '../time-keyframes';
 import { MIDNIGHT_START, midnightFrame, nextMidnight } from '../time-midnight';
 import { getTimeUi, setTimeUi, timeMotion } from '../time-store';
 
@@ -38,7 +39,9 @@ export function MidnightDirector({ bloom }: { bloom: RefObject<BloomEffect | nul
     else timeMotion.pulseAge += delta;
     lastChapter.current = chapter;
 
-    if (bloom.current) bloom.current.intensity = BLOOM_BASE + frame.flash * 2.4;
+    if (bloom.current) {
+      bloom.current.intensity = (BLOOM_BASE + frame.flash * 2.4) * bloomFade(timeMotion.daylight);
+    }
   }, -0.5);
 
   return null;

@@ -141,3 +141,34 @@ export function minuteAtPoint(x: number, y: number): number {
 export function onRingBand(x: number, y: number, tolerance = 0.3): boolean {
   return Math.abs(Math.hypot(x, y) - RING_RADIUS) <= tolerance;
 }
+
+/* ---------- after midnight: daylight over the rest of the page ---------- */
+
+/**
+ * The camera keeps travelling while the visitor reads the light page below the story. The
+ * path starts exactly on the story's last composition, so the hand-off has no jump, then
+ * drifts around the merged ring: above it, beside it, and back out.
+ */
+export const DAY_CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
+  CAMERA_KEYS[CAMERA_KEYS.length - 1] as { look: Vec3; pos: Vec3 },
+  { pos: [7.5, 3.5, 10], look: [1.5, 0, -2] },
+  { pos: [-8.5, 1.5, 7], look: [-1, 0.5, -3] },
+  { pos: [1.5, 12.5, 5], look: [2.5, 0, -2] },
+  { pos: [9, -2.5, 13], look: [3, 0, -4] },
+];
+
+/** Spline parameter along the day path for a 0–1 progress through the lower page. */
+export function dayCameraParameterAt(progress: number): number {
+  return clamp01(progress);
+}
+
+/** How far dusk has turned to daylight, 0–1, eased so the hand-over reads as a dawn. */
+export function daylightAt(progress: number): number {
+  const t = clamp01(progress);
+  return t * t * (3 - 2 * t);
+}
+
+/** Glow fades out well before the background lightens: light pixels would all bloom. */
+export function bloomFade(daylight: number): number {
+  return (1 - clamp01(daylight)) ** 4;
+}

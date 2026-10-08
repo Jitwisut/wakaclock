@@ -2,21 +2,21 @@
 
 /* eslint-disable react/no-unknown-property -- React Three Fiber elements take three.js props. */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { PerformanceMonitor } from '@react-three/drei';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
-import { NoToneMapping, SRGBColorSpace } from 'three';
+import { Color, type Fog, NoToneMapping, SRGBColorSpace } from 'three';
 
 import { generateDemoDays } from '../time-data';
-import { setTimeUi } from '../time-store';
+import { setTimeUi, timeMotion } from '../time-store';
 
 import { Burst } from './burst';
 import { Dust, Heartbeats } from './heartbeats';
 import { BLOOM_BASE, MidnightDirector } from './midnight-director';
 import { PointerProbe } from './pointer-probe';
-import { SCENE } from './scene-palette';
+import { DAY, SCENE } from './scene-palette';
 import { Shockwaves } from './shockwaves';
 import { TimeRig } from './time-rig';
 import { TimeRings } from './time-rings';
@@ -35,15 +35,65 @@ function FirstFrame() {
   return null;
 }
 
+const NIGHT_BG = new Color(SCENE.bg);
+const DAY_BG = new Color(DAY.bg);
+
+/** Lerps the scene's background and fog from dusk to daylight. */
+function DaylightGrade() {
+  const { scene } = useThree();
+  const last = useRef(-1);
+  useFrame(() => {
+    const t = Math.round(timeMotion.daylight * 200) / 200;
+    if (t === last.current) return;
+    last.current = t;
+    if (scene.background instanceof Color) scene.background.copy(NIGHT_BG).lerp(DAY_BG, t);
+    (scene.fog as Fog | null)?.color.copy(NIGHT_BG).lerp(DAY_BG, t);
+  });
+  return null;
+}
+
+/**
+ * In on-demand mode, asks for a frame whenever something could change the picture: a
+ * scroll, the pointer, a resize, or an animation that has not come to rest yet.
+ */
+function Invalidator() {
+  const { invalidate } = useThree();
+  useFrame(() => {
+    const m = timeMotion;
+    const settling =
+      Math.abs(m.target - m.current) > 1e-4 ||
+      Math.abs(m.dayTarget - m.dayCurrent) > 1e-4 ||
+      Math.abs(m.dawnTarget - m.daylight) > 1e-3 ||
+      m.warp > 1e-3 ||
+      Math.abs(m.handSpeed) > 0.5 ||
+      (m.collapse > 0 && m.collapse < 1) ||
+      (m.wave > 0 && m.wave < 1) ||
+      m.pulseAge < 1.2;
+    if (settling) invalidate();
+  });
+  useEffect(() => {
+    const wake = () => invalidate();
+    for (const type of ['scroll', 'pointermove', 'resize'] as const) {
+      window.addEventListener(type, wake, { passive: true });
+    }
+    return () => {
+      for (const type of ['scroll', 'pointermove', 'resize'] as const) {
+        window.removeEventListener(type, wake);
+      }
+    };
+  }, [invalidate]);
+  return null;
+}
+
 /**
  * The time ring: today's 24-hour dial with the week receding behind it. Loaded with
  * `next/dynamic` after first paint, so none of three.js is on the critical path.
  */
 export default function TimeCanvas({
-  active,
+  mode,
   quality,
 }: {
-  active: boolean;
+  mode: 'always' | 'demand';
   quality: TimeSceneQuality;
 }) {
   const slices = useMemo(() => generateDemoDays(quality.days), [quality.days]);
@@ -55,7 +105,7 @@ export default function TimeCanvas({
     <Canvas
       camera={{ fov: 36, near: 0.1, far: 80, position: [1.4, 0.6, 8.2] }}
       dpr={dpr}
-      frameloop={active ? 'always' : 'never'}
+      frameloop={mode}
       gl={{
         antialias: true,
         alpha: false,
@@ -80,6 +130,8 @@ export default function TimeCanvas({
         }}
       />
       <TimeRig parallax={quality.parallax} />
+      <DaylightGrade />
+      <Invalidator />
       <MidnightDirector bloom={bloomEffect} />
       <TimeRings bloom={bloom} days={quality.days} slices={slices} />
       <Shockwaves />

@@ -15,9 +15,11 @@ import { SCENE } from './scene-palette';
 
 function apply(mesh: Mesh | null, shape: { opacity: number; scale: number }) {
   if (!mesh) return;
-  mesh.visible = shape.opacity > 0.005;
+  // Additive light: invisible against daylight, so it fades out with the dusk.
+  const opacity = shape.opacity * (1 - timeMotion.daylight);
+  mesh.visible = opacity > 0.005;
   mesh.scale.setScalar(shape.scale);
-  (mesh.material as MeshBasicMaterial).opacity = shape.opacity;
+  (mesh.material as MeshBasicMaterial).opacity = opacity;
 }
 
 /** The midnight shockwave and the per-chapter pulse: thin rings racing out from the dial. */

@@ -5,9 +5,25 @@ import { useEffect } from 'react';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
-import { chapterAt, handMinuteAt } from './time-keyframes';
+import { chapterAt, daylightAt, handMinuteAt } from './time-keyframes';
 import { MIDNIGHT_FIRE_AT } from './time-midnight';
 import { getTimeUi, setTimeUi, timeMotion } from './time-store';
+
+/**
+ * A section of the light page tilting up out of depth as it scrolls in (and back as it
+ * leaves upward). The transform only exists while it moves; at rest nothing is applied,
+ * so the section never becomes a containing block for fixed or sticky content.
+ */
+function applyRise(self: ScrollTrigger) {
+  const element = self.trigger as HTMLElement;
+  if (self.progress >= 1) {
+    delete element.dataset.rising;
+    element.style.removeProperty('--rise');
+    return;
+  }
+  element.dataset.rising = 'true';
+  element.style.setProperty('--rise', self.progress.toFixed(3));
+}
 
 /**
  * Converts page scroll into the story position (0 → chapters - 1), the same way the
@@ -83,6 +99,69 @@ export function useTimeScroll(rootId: string) {
       });
     });
 
+    // Dusk to daylight across the hand-off below the story; the CSS layers (veils, the
+    // still drawing, the light wash) read the same number, so it works without WebGL too.
+    const dawn = root.querySelector<HTMLElement>('#tx-dawn');
+    const dayTriggers: ScrollTrigger[] = [];
+    if (dawn) {
+      const update = (self: ScrollTrigger) => {
+        timeMotion.dawnTarget = self.progress;
+        const daylight = daylightAt(self.progress);
+        root.style.setProperty('--tx-day', daylight.toFixed(3));
+        // Past the middle of the dawn the page is light: the site nav follows.
+        root.dataset.dawn = String(daylight > 0.5);
+      };
+      dayTriggers.push(
+        ScrollTrigger.create({
+          trigger: dawn,
+          start: 'top bottom',
+          end: 'bottom 35%',
+          onUpdate: update,
+          onRefresh: update,
+        })
+      );
+    }
+    // The camera keeps travelling through the light page that follows.
+    const day = document.querySelector<HTMLElement>('#tx-day');
+    if (day) {
+      const update = (self: ScrollTrigger) => {
+        timeMotion.dayTarget = self.progress;
+      };
+      dayTriggers.push(
+        ScrollTrigger.create({
+          trigger: day,
+          start: 'top bottom',
+          end: 'bottom bottom',
+          onUpdate: update,
+          onRefresh: update,
+        })
+      );
+      // Each section below tilts up out of depth as it scrolls in, and back as it leaves
+      // upward. The transform only exists while it is moving: at rest nothing is applied.
+      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        for (const section of day.children) {
+          dayTriggers.push(
+            ScrollTrigger.create({
+              trigger: section,
+              start: 'top bottom',
+              end: 'top 62%',
+              onUpdate: applyRise,
+              onRefresh: applyRise,
+            })
+          );
+        }
+      }
+    }
+
+    // Trigger positions are measured once; anything that changes the page's height later
+    // (fonts arriving, an FAQ answer opening) would leave every trigger below it stale.
+    let refreshTimer = 0;
+    const heights = new ResizeObserver(() => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => ScrollTrigger.refresh(), 150);
+    });
+    heights.observe(document.body);
+
     const reveal = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -103,8 +182,10 @@ export function useTimeScroll(rootId: string) {
     root.dataset.scroll = 'ready';
 
     return () => {
-      for (const trigger of [...triggers, ...pins]) trigger.kill();
+      for (const trigger of [...triggers, ...pins, ...dayTriggers]) trigger.kill();
       reveal.disconnect();
+      heights.disconnect();
+      window.clearTimeout(refreshTimer);
       window.removeEventListener('pointermove', onPointer);
       delete root.dataset.scroll;
     };

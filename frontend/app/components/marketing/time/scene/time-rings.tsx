@@ -44,14 +44,23 @@ import {
 import { pulseShape } from '../time-midnight';
 import { getTimeUi, type TimeFocus, timeMotion } from '../time-store';
 
-import { SCENE } from './scene-palette';
+import { DAY, SCENE } from './scene-palette';
 
 const KIND_COLOR: Record<SliceKind, Color> = {
   human: new Color(SCENE.human),
   ai: new Color(SCENE.ai),
   unattributed: new Color(SCENE.unattributed),
 };
+const KIND_COLOR_DAY: Record<SliceKind, Color> = {
+  human: new Color(DAY.human),
+  ai: new Color(DAY.ai),
+  unattributed: new Color(DAY.unattributed),
+};
 const HIGHLIGHT = new Color(SCENE.highlight);
+const HIGHLIGHT_DAY = new Color(DAY.highlight);
+const INK = new Color(SCENE.ink);
+const INK_DAY = new Color(DAY.ink);
+const glow = new Color();
 const GROW_SECONDS = 2.6;
 const dummy = new Object3D();
 const scratch = new Color();
@@ -66,6 +75,7 @@ function circleGeometry(radius: number, segments = 256) {
 }
 
 interface Paint {
+  daylight: number;
   flash: number;
   focus: TimeFocus;
   hand: number;
@@ -75,17 +85,19 @@ interface Paint {
 
 /** Per-slice colour for this frame: kind, focus, midnight flash and (today) hand and hover. */
 function sliceColor(slice: ActivitySlice, paint: Paint) {
-  const { flash: strike, focus, hand, hover, sweep } = paint;
-  scratch.copy(KIND_COLOR[slice.kind]);
+  const { daylight, flash: strike, focus, hand, hover, sweep } = paint;
+  // Dusk colours lerp to the day palette once the story hands over to the light page.
+  scratch.copy(KIND_COLOR[slice.kind]).lerp(KIND_COLOR_DAY[slice.kind], daylight);
+  glow.copy(HIGHLIGHT).lerp(HIGHLIGHT_DAY, daylight);
   if (focus !== 'all' && focus !== slice.kind) scratch.multiplyScalar(0.16);
-  if (strike > 0) scratch.lerp(HIGHLIGHT, strike * 0.7).multiplyScalar(1 + strike);
+  if (strike > 0) scratch.lerp(glow, strike * 0.7).multiplyScalar(1 + strike);
   if (slice.day !== 0) return scratch;
-  if (slice.minute === hover) return scratch.lerp(HIGHLIGHT, 0.55).multiplyScalar(1.7);
+  if (slice.minute === hover) return scratch.lerp(glow, 0.55).multiplyScalar(1.7);
   const middle = slice.minute + SLICE_MINUTES / 2;
   scratch.multiplyScalar(arcLevel(middle, hand));
   // The hand's passing lights each slice up briefly, stronger the faster it turns.
   const flash = trailAt(middle, hand, timeMotion.handSpeed) * sweep;
-  if (flash > 0) scratch.lerp(HIGHLIGHT, flash * 0.6).multiplyScalar(1 + flash * 0.5);
+  if (flash > 0) scratch.lerp(glow, flash * 0.6).multiplyScalar(1 + flash * 0.5);
   return scratch;
 }
 
@@ -97,6 +109,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
   const halo = useRef<InstancedMesh>(null);
   const ticks = useRef<InstancedMesh>(null);
   const ring = useRef<LineBasicMaterial>(null);
+  const inner = useRef<LineBasicMaterial>(null);
   const painted = useRef<null | Paint>(null);
   const grow = useRef(0);
 
@@ -141,12 +154,21 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
       const { throb } = pulseShape(timeMotion.pulseAge);
       group.current.scale.setScalar((1 + day * 0.045 * collapse) * (1 + throb));
     }
-    if (ring.current) ring.current.opacity = (isToday ? 0.55 : 0.32) * opacity;
+    const { daylight } = timeMotion;
+    if (ring.current) {
+      ring.current.opacity = (isToday ? 0.55 : 0.32) * opacity;
+      ring.current.color.copy(INK).lerp(INK_DAY, daylight);
+    }
+    if (inner.current) inner.current.color.copy(INK).lerp(INK_DAY, daylight);
+    if (ticks.current) {
+      (ticks.current.material as MeshBasicMaterial).color.copy(INK).lerp(INK_DAY, daylight);
+    }
     const layers: [InstancedMesh | null, number][] = [
       [ticks.current, 0.5],
       [arcs.current, 1],
       // Bloom already glows; the halo backs off so the two do not blow out together.
-      [halo.current, (bloom ? 0.06 : 0.14) + warp * 0.18],
+      // Additive glow vanishes on a light ground, so it fades out with the dusk.
+      [halo.current, ((bloom ? 0.06 : 0.14) + warp * 0.18) * (1 - daylight)],
     ];
     for (const [mesh, base] of layers) {
       if (!mesh) continue;
@@ -176,6 +198,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
     // Colours only upload when something that affects them changed.
     const ui = getTimeUi();
     const paint: Paint = {
+      daylight: Math.round(daylight * 100) / 100,
       flash: Math.round(timeMotion.flash * 100) / 100,
       focus: ui.focus,
       hand: isToday ? timeMotion.hand : 0,
@@ -188,6 +211,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
       last.focus === paint.focus &&
       last.hover === paint.hover &&
       last.flash === paint.flash &&
+      last.daylight === paint.daylight &&
       Math.abs(last.hand - paint.hand) < 0.5 &&
       Math.abs(last.sweep - paint.sweep) < 0.01;
     if (idle) return;
@@ -210,7 +234,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
       </lineLoop>
       {isToday ? (
         <lineLoop geometry={innerGeometry}>
-          <lineBasicMaterial color={SCENE.ink} opacity={0.35} transparent />
+          <lineBasicMaterial color={SCENE.ink} opacity={0.35} ref={inner} transparent />
         </lineLoop>
       ) : null}
       <instancedMesh args={[tickGeometry, undefined, tickCount]} ref={ticks}>
@@ -269,6 +293,8 @@ function useSweepGeometry() {
  */
 function ClockHand() {
   const hand = useRef<Group>(null);
+  const handMaterial = useRef<MeshBasicMaterial>(null);
+  const hubMaterial = useRef<MeshBasicMaterial>(null);
   const sweep = useRef<Mesh>(null);
   const sweepGeometry = useSweepGeometry();
   // Pivot at the centre: the box extends outward from the hub.
@@ -282,7 +308,10 @@ function ClockHand() {
     if (hand.current) hand.current.rotation.z = angle;
     const mesh = sweep.current;
     if (!mesh) return;
-    const strength = sweepStrength(timeMotion.handSpeed);
+    glow.copy(HIGHLIGHT).lerp(HIGHLIGHT_DAY, timeMotion.daylight);
+    handMaterial.current?.color.copy(glow);
+    hubMaterial.current?.color.copy(glow);
+    const strength = sweepStrength(timeMotion.handSpeed) * (1 - timeMotion.daylight);
     mesh.visible = strength > 0.01;
     (mesh.material as MeshBasicMaterial).opacity = strength * 0.3;
     // Mirroring across the hand (flip about its own axis) puts the fan on the other side.
@@ -307,12 +336,12 @@ function ClockHand() {
       </mesh>
       <group ref={hand}>
         <mesh geometry={geometry}>
-          <meshBasicMaterial color={SCENE.highlight} toneMapped={false} />
+          <meshBasicMaterial color={SCENE.highlight} ref={handMaterial} toneMapped={false} />
         </mesh>
       </group>
       <mesh>
         <circleGeometry args={[0.06, 32]} />
-        <meshBasicMaterial color={SCENE.highlight} toneMapped={false} />
+        <meshBasicMaterial color={SCENE.highlight} ref={hubMaterial} toneMapped={false} />
       </mesh>
     </group>
   );
