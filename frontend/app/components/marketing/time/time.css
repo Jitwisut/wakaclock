@@ -1477,6 +1477,24 @@
   background: rgb(240 243 239 / 0.72);
 }
 
+.tx-root .tx-daybadge {
+  position: fixed;
+  left: clamp(16px, 3vw, 40px);
+  bottom: 20px;
+  z-index: 30;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid rgb(27 52 41 / 0.18);
+  border-radius: 999px;
+  background: rgb(250 249 246 / 0.86);
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #4b5a51;
+  opacity: var(--tx-day, 0);
+  pointer-events: none;
+}
+
 /* Sections tilt up out of depth as they scroll in (--rise 0 → 1, set while moving). */
 .wakaclock-marketing .tx-day > [data-rising] {
   opacity: calc(0.15 + 0.85 * var(--rise, 1));

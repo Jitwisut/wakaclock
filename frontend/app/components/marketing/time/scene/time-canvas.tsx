@@ -13,11 +13,14 @@ import { generateDemoDays } from '../time-data';
 import { setTimeUi, timeMotion } from '../time-store';
 
 import { Burst } from './burst';
+import { CodeFragments } from './code-fragments';
 import { Dust, Heartbeats } from './heartbeats';
+import { Helix } from './helix';
 import { BLOOM_BASE, MidnightDirector } from './midnight-director';
 import { PointerProbe } from './pointer-probe';
 import { DAY, SCENE } from './scene-palette';
 import { Shockwaves } from './shockwaves';
+import { TimeCity } from './time-city';
 import { TimeRig } from './time-rig';
 import { TimeRings } from './time-rings';
 
@@ -135,6 +138,9 @@ export default function TimeCanvas({
       <MidnightDirector bloom={bloomEffect} />
       <TimeRings bloom={bloom} days={quality.days} slices={slices} />
       <Shockwaves />
+      <CodeFragments count={quality.parallax ? 8 : 4} dim={bloom} slices={slices} />
+      <Helix count={quality.particles} dim={bloom} />
+      <TimeCity days={quality.days} slices={slices} />
       <Heartbeats count={quality.particles} slices={slices} />
       <Burst count={quality.particles + 60} />
       <Dust count={quality.particles * 2} days={quality.days} interactive={quality.parallax} />

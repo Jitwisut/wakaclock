@@ -28,7 +28,7 @@ const DUST_NIGHT = new Color(SCENE.ink);
 const DUST_DAY = new Color(DAY.ink);
 
 /** Soft round sprite so points read as glowing dots rather than squares. */
-function dotTexture() {
+export function dotTexture() {
   const size = 64;
   const canvas = document.createElement('canvas');
   canvas.width = size;

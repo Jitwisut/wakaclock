@@ -111,6 +111,10 @@ export function TimeStage({
         ))}
         <div className="tx-vignette" />
       </div>
+      {/* The city under the ring is drawn from demo data: say so wherever it can be seen. */}
+      <p aria-hidden="true" className="tx-daybadge">
+        {copy.demoBadge}
+      </p>
       <div className="tx-overlay">
         <nav aria-label={copy.railLabel} className="tx-rail">
           <ol>

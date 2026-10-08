@@ -151,10 +151,14 @@ export function onRingBand(x: number, y: number, tolerance = 0.3): boolean {
  */
 export const DAY_CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
   CAMERA_KEYS[CAMERA_KEYS.length - 1] as { look: Vec3; pos: Vec3 },
-  { pos: [7.5, 3.5, 10], look: [1.5, 0, -2] },
-  { pos: [-8.5, 1.5, 7], look: [-1, 0.5, -3] },
-  { pos: [1.5, 12.5, 5], look: [2.5, 0, -2] },
-  { pos: [9, -2.5, 13], look: [3, 0, -4] },
+  // Out and above: the ring with the week's city rising beneath it.
+  { pos: [8.5, 1.5, 9], look: [0, -2.6, -3] },
+  // A low pass along the city, still above its tallest block.
+  { pos: [-9, -0.6, 4], look: [0.5, -2.8, -3.5] },
+  // Straight down over the rooftops.
+  { pos: [1.5, 9.5, 3.5], look: [0, -3.4, -3.5] },
+  // Pull back to take it all in.
+  { pos: [10, 0.5, 13], look: [1, -2.2, -3] },
 ];
 
 /** Spline parameter along the day path for a 0–1 progress through the lower page. */
