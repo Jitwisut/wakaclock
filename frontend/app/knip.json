@@ -39,9 +39,7 @@
     "@fullcalendar/react",
     "@fullcalendar/timegrid",
     "@hello-pangea/dnd",
-    "@tanstack/react-query",
     "@tanstack/react-virtual",
-    "axios",
     "conventional-changelog-conventionalcommits",
     "dotenv",
     "dotenv-cli",
@@ -50,7 +48,8 @@
     "tailwindcss",
     "tailwindcss-animate",
     "zustand",
-    "eslint-config-next"
+    "eslint-config-next",
+    "baseline-browser-mapping"
   ],
   "ignoreBinaries": [],
   "next": {
