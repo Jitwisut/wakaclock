@@ -119,6 +119,9 @@ pub struct Config {
     /// Personal experimental receipts; independent of capture and analytics ingestion.
     #[serde(default)]
     pub work_sessions_enabled: bool,
+    /// Receiver rollout only; each organization must independently opt into Team.
+    #[serde(default)]
+    pub team_enabled: bool,
     /// How long a pause between two *proven* activity intervals may last before the
     /// clock stops. This is WakaTime's per-user timeout, and it exists because a
     /// segment can only ever be as long as the strict 120-second evidence window:
@@ -244,6 +247,10 @@ impl Config {
             work_sessions_enabled: parse_opt_in_feature_flag(
                 std::env::var("ATOAXIS_WORK_SESSIONS_ENABLED").ok(),
                 "ATOAXIS_WORK_SESSIONS_ENABLED",
+            )?,
+            team_enabled: parse_opt_in_feature_flag(
+                std::env::var("ATOAXIS_TEAM_ENABLED").ok(),
+                "ATOAXIS_TEAM_ENABLED",
             )?,
             jwt_secret,
             cors_origins,

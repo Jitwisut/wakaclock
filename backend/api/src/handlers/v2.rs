@@ -13,7 +13,6 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, NaiveDate, Utc};
 use clickhouse::Row;
-use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -47,6 +46,8 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod team_insights;
+mod team_webhooks;
 mod work_sessions;
 
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
@@ -374,6 +375,15 @@ pub struct WakaTimeImportJob {
 
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/team/webhooks/github", post(team_webhooks::github))
+        .route("/organizations/:organization_id/launch-readiness", get(team_insights::readiness))
+        .route("/organizations/:organization_id/work-items/:repository_id/:work_item_id/receipt", get(team_insights::receipt))
+        .route("/organizations/:organization_id/insights", get(team_insights::insights))
+        .route("/organizations/:organization_id/exports/team.csv", get(team_insights::export))
+        .route("/organizations/:organization_id/me/consent", get(team_insights::consent))
+        .route("/organizations/:organization_id/work-items", get(team_insights::work_items))
+        .route("/organizations/:organization_id/me/session-links", get(team_insights::links).post(team_insights::propose))
+        .route("/organizations/:organization_id/me/session-links/:link_id", put(team_insights::decide))
         .route("/capabilities", get(capabilities))
         .route("/me", get(me).delete(account_delete))
         .route("/me/analytics", get(analytics))
@@ -688,7 +698,7 @@ fn feature_available(
     }
 
     match key {
-        "ai_human_follow_up" => false,
+        "ai_human_follow_up" | "organization_analytics" => false,
         "ai_human_follow_up_events" | "work_session_receipts" => true,
         "data_exports" => export_available && postgres,
         "postgres_transactional_store"
@@ -696,7 +706,6 @@ fn feature_available(
         | "goals_crud"
         | "oauth_pkce_and_device_flow"
         | "git_commit_pr_analytics"
-        | "organization_analytics"
         | "resumable_wakatime_import"
         | "delivery_queue_status"
         | "measurement_repair" => postgres,
@@ -2824,99 +2833,21 @@ pub async fn organization_analytics(
         .analytics(user_id, organization_id)
         .await
         .map_err(ApiError::service_unavailable)?;
-    let members = state
-        .organizations_service
-        .consenting_analytics_members(user_id, organization_id)
-        .await
-        .map_err(ApiError::service_unavailable)?;
-    let consenting_members = members.len();
-    let results = stream::iter(members.into_iter().map(|(member_id, share_individual)| {
-        let state = state.clone();
-        let start = start.clone();
-        let end = end.clone();
-        let timezone = query.timezone.clone();
-        async move {
-            let summary = state
-                .summary_service
-                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
-                .await?;
-            let stats = state
-                .ai_stats_service
-                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
-                .await?;
-            let seconds = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.total_seconds)
-                .sum::<f64>();
-            let proven = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.evidence.proven_seconds)
-                .sum::<f64>();
-            let inferred = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.evidence.inferred_seconds)
-                .sum::<f64>();
-            Ok::<_, anyhow::Error>((
-                member_id,
-                share_individual,
-                seconds,
-                proven,
-                inferred,
-                stats.data.coverage.attributed_line_changes,
-                stats.data.coverage.line_change_denominator,
-            ))
-        }
-    }))
-    .buffer_unordered(8)
-    .collect::<Vec<_>>()
-    .await;
-    let mut total_seconds = 0.0;
-    let mut proven_seconds = 0.0;
-    let mut inferred_seconds = 0.0;
-    let mut attributed_line_changes = 0;
-    let mut line_change_denominator = 0;
-    let mut individual = Vec::new();
-    for result in results {
-        let (member_id, share_individual, seconds, proven, inferred, attributed, denominator) =
-            result.map_err(ApiError::internal)?;
-        total_seconds += seconds;
-        proven_seconds += proven;
-        inferred_seconds += inferred;
-        attributed_line_changes += attributed;
-        line_change_denominator += denominator;
-        if share_individual {
-            individual.push(IndividualMeasurement {
-                user_id: member_id,
-                total_seconds: seconds,
-                attributed_line_changes: attributed,
-                line_change_denominator: denominator,
-            });
-        }
-    }
-    individual.sort_by_key(|entry| entry.user_id);
-    let status = if consenting_members == 0 {
-        "no_consented_members"
-    } else if total_seconds == 0.0 && line_change_denominator == 0 {
-        "no_observed_activity"
-    } else {
-        "observed"
-    };
+    // This legacy report has no event-time consent projection or complementary
+    // suppression. Preserve its wire shape while closing the alternate read path.
     let measurement = OrganizationMeasurement {
         start,
         end,
         timezone: query.timezone.clone().unwrap_or_else(|| "UTC".to_string()),
-        status,
-        consenting_members,
-        total_seconds: (consenting_members > 0).then_some(total_seconds),
-        proven_seconds: (consenting_members > 0).then_some(proven_seconds),
-        inferred_seconds: (consenting_members > 0).then_some(inferred_seconds),
-        attributed_line_changes,
-        line_change_denominator,
-        individual,
-        small_team_inference_warning: consenting_members < 3 && consenting_members > 0,
+        status: "unavailable_privacy_projection",
+        consenting_members: 0,
+        total_seconds: None,
+        proven_seconds: None,
+        inferred_seconds: None,
+        attributed_line_changes: 0,
+        line_change_denominator: 0,
+        individual: vec![],
+        small_team_inference_warning: false,
     };
     Ok(Json(envelope(
         OrganizationAnalyticsData {
@@ -2925,7 +2856,7 @@ pub async fn organization_analytics(
         },
         query.timezone.as_deref().unwrap_or("UTC"),
         Some(
-            json!({ "analytics": "consented_members_only", "attribution_date_basis": "heartbeat_timestamp_in_requested_timezone" }),
+            json!({ "analytics": "unavailable_privacy_projection", "reason": "use_team_insights_when_enabled" }),
         ),
     )))
 }

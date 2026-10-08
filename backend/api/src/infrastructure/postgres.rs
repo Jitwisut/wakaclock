@@ -293,6 +293,10 @@ impl PostgresClient {
                 "organization user invites",
                 ORGANIZATION_USER_INVITES_MIGRATION,
             ),
+            (
+                "Team privacy and work evidence",
+                include_str!("../../migrations/postgres/030_team_privacy.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)
